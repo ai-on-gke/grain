@@ -365,17 +365,17 @@ jobs:
             exit 0
           fi
           if ! command -v cosign >/dev/null 2>&1; then
-            cosign_version="v2.4.1"
+            cosign_version="v2.6.5"
             if ! curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
               "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
               -o /usr/local/bin/cosign; then
               rm -f /usr/local/bin/cosign
-              cosign_image="gcr.io/projectsigstore/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31"
+              cosign_image="ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca"
               docker pull "$cosign_image"
               cid="$(docker create "$cosign_image")"
               docker cp "$cid:/ko-app/cosign" /usr/local/bin/cosign
               docker rm "$cid" >/dev/null
-              echo "6255c3c7146a8f1c3e71d542a9bc21412da7c23a2561adce02381bdbebaff413  /usr/local/bin/cosign" | sha256sum -c -
+              echo "8d5b7d0097b61a89161ef7ac4f169879bf6de798af1be431b595bb552b235d48  /usr/local/bin/cosign" | sha256sum -c -
             fi
             chmod +x /usr/local/bin/cosign
           fi
