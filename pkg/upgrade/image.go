@@ -74,7 +74,7 @@ type ImageConfig struct {
 	// in something that needs no docker daemon.
 	PullCmd []string
 	// RunCmd runs an image, with the ref and then HealthCheckArgs
-	// appended; {"docker", "run", "--rm"} when left nil. The image's
+	// appended; {"docker", "run", "--rm", "--pull=never"} when left nil. The image's
 	// own ENTRYPOINT is `grain` (Dockerfile), so appending
 	// HealthCheckArgs -- {"schema-version"} on a real deployment -- runs
 	// exactly the same subcommand the binary path's health check runs,
@@ -600,6 +600,21 @@ func (u *Upgrader) pinImage(ctx context.Context, p *progress, step, ref string) 
 // imageRunTimeout's tail.
 const imageInspectTimeout = time.Minute
 
+// dockerRunArgs builds the default `docker run --rm --pull=never` argv when
+// ImageConfig.RunCmd is unset. Every container run in ModeImage executes an
+// image already expected in the local Docker store (either just pulled,
+// digest-pinned and verified, or the host's previous image when still
+// present), so Docker must never implicitly pull a missing ref -- in
+// particular a hostless `grain/*` ref left in RefFile by an earlier
+// release-asset install, which Docker would resolve on Docker Hub.
+func (u *Upgrader) dockerRunArgs(extra ...string) []string {
+	argv := u.cfg.Image.RunCmd
+	if len(argv) == 0 {
+		argv = []string{"docker", "run", "--rm", "--pull=never"}
+	}
+	return append(append([]string{}, argv...), extra...)
+}
+
 // healthCheckImage runs the just-pulled image with HealthCheckArgs, the
 // image-mode counterpart of healthCheck's run of the just-installed
 // binary -- and, unlike that one, it runs *before* anything cuts over,
@@ -611,11 +626,7 @@ const imageInspectTimeout = time.Minute
 func (u *Upgrader) healthCheckImage(ctx context.Context, p *progress, ref string) error {
 	ctx, cancel := context.WithTimeout(ctx, imageRunTimeout)
 	defer cancel()
-	argv := u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), ref)
+	argv := append(u.dockerRunArgs(), ref)
 	argv = append(argv, u.cfg.HealthCheckArgs...)
 	return runLogged(ctx, p, stepHealthCheck, "", argv)
 }
@@ -645,11 +656,7 @@ func (u *Upgrader) healthCheckImage(ctx context.Context, p *progress, ref string
 // the question from a deployment that has just silently stopped keeping
 // its guest in step.
 func (u *Upgrader) sandboxImage(ctx context.Context, p *progress, ref string) (sandbox, why string, err error) {
-	argv := u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), ref)
+	argv := append(u.dockerRunArgs(), ref)
 	argv = append(argv, u.cfg.Image.SandboxImageArgs...)
 	out, err := runAsked(ctx, p, stepSandbox, imageRunTimeout, argv)
 	if err != nil {
@@ -707,11 +714,7 @@ func (u *Upgrader) sandboxImage(ctx context.Context, p *progress, ref string) (s
 // check that could not run is no reason to refuse a build that has
 // already proved it runs.
 func (u *Upgrader) checkImageFlags(ctx context.Context, p *progress, ref string) ([]string, error) {
-	argv := u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), ref)
+	argv := append(u.dockerRunArgs(), ref)
 	argv = append(argv, u.cfg.Image.FlagNamesArgs...)
 	out, err := runAsked(ctx, p, stepFlags, imageRunTimeout, argv)
 	if err != nil {
@@ -761,12 +764,7 @@ type imageRunner struct {
 // itself, before the image ref; args go to the image, whose ENTRYPOINT
 // is `grain` (Dockerfile).
 func (r imageRunner) run(extra, args []string) []string {
-	argv := r.u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), extra...)
-	argv = append(argv, r.ref)
+	argv := append(r.u.dockerRunArgs(extra...), r.ref)
 	return append(argv, args...)
 }
 

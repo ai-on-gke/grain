@@ -220,3 +220,135 @@ func TestPullImageRefusesLocalReleaseAssetRefWithoutRegistryHost(t *testing.T) {
 		t.Fatalf("Status = (%q, %q), want failed with 'names no registry host'", st.Phase, st.Detail)
 	}
 }
+
+// A host installed from release assets by an earlier release still names
+// grain/grain:<tag> in RefFile, which stageImage inspects for prevSandbox
+// before pulling the candidate image. When RunCmd is left at its production
+// default, every `docker run` in ModeImage must pass `--pull=never` so a
+// missing local release-asset ref (or an image evicted after verification)
+// fails locally instead of implicitly pulling from Docker Hub.
+func TestDockerRunNeverImplicitlyPullsMissingOrLocalReleaseAssetRef(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerLog := filepath.Join(dir, "docker.log")
+	const (
+		grainDigest   = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		sandboxDigest = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	)
+	fakeDocker := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "` + dockerLog + `"
+case "$1" in
+  pull) exit 0 ;;
+  image)
+    if [ "${2:-}" = inspect ]; then
+      case "$*" in
+        *sandbox*) printf 'docker.io/grainai/sandbox@` + sandboxDigest + `\n' ;;
+        *) printf 'docker.io/grainai/grain@` + grainDigest + `\n' ;;
+      esac
+      exit 0
+    fi
+    exit 0
+    ;;
+  run)
+    has_pull_never=0
+    ref=""
+    subcmd=""
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --rm) shift ;;
+        --pull=never) has_pull_never=1; shift ;;
+        --volume) shift 2 ;;
+        *)
+          ref="$1"; shift
+          subcmd="${1:-}"
+          break
+          ;;
+      esac
+    done
+    if [ "$has_pull_never" != 1 ]; then
+      echo "missing --pull=never in docker run args" >&2
+      exit 99
+    fi
+    case "$ref" in
+      grain/*)
+        echo "Unable to find image '$ref' locally" >&2
+        exit 125
+        ;;
+    esac
+    case "$subcmd" in
+      sandbox-image) printf 'docker.io/grainai/sandbox:main\n' ;;
+      daemon) printf 'data-dir\n' ;;
+      release-notes) printf '{"entries":[]}\n' ;;
+      *) printf '1\n' ;;
+    esac
+    exit 0
+    ;;
+  ps) exit 0 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(fakeDocker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	refFile := filepath.Join(dir, "image.env")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=grain/grain:sha-0123456789ab\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	u := New(Config{
+		StatusFile:       filepath.Join(dir, "status.json"),
+		HealthCheckArgs:  []string{"schema-version"},
+		ReleaseNotesArgs: []string{"release-notes", "--json"},
+		Image: &ImageConfig{
+			Repository:       "docker.io/grainai/grain",
+			RefFile:          refFile,
+			SandboxImageArgs: []string{"sandbox-image"},
+			FlagNamesArgs:    []string{"daemon", "-flag-names"},
+			UnitFlags:        []string{"-data-dir"},
+		},
+	})
+
+	if _, err := u.ReleaseNotes(t.Context(), "main"); err != nil {
+		t.Fatalf("ReleaseNotes(main): %v", err)
+	}
+	if err := u.Start("main"); err != nil {
+		t.Fatalf("Start(main): %v", err)
+	}
+	<-u.Done()
+	st, err := u.Status()
+	if err != nil {
+		t.Fatalf("Status(): %v", err)
+	}
+	if st.Phase != PhaseOK {
+		t.Fatalf("Status = (%q, %q), want %q", st.Phase, st.Detail, PhaseOK)
+	}
+
+	rawLog, err := os.ReadFile(dockerLog)
+	if err != nil {
+		t.Fatalf("reading docker log: %v", err)
+	}
+	sawPrevRun := false
+	for _, line := range strings.Split(strings.TrimSpace(string(rawLog)), "\n") {
+		if strings.HasPrefix(line, "pull ") && strings.Contains(line, "grain/grain") {
+			t.Errorf("docker pull called on local release-asset ref: %s", line)
+		}
+		if strings.HasPrefix(line, "run ") {
+			if !strings.Contains(line, "--pull=never") {
+				t.Errorf("docker run called without --pull=never: %s", line)
+			}
+			if strings.Contains(line, "grain/grain:sha-0123456789ab") {
+				sawPrevRun = true
+			}
+		}
+	}
+	if !sawPrevRun {
+		t.Errorf("expected stageImage to inspect prevRef grain/grain:sha-0123456789ab with --pull=never; log:\n%s", rawLog)
+	}
+}

@@ -54,6 +54,12 @@ if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 command -v docker >/dev/null || { echo "install-grain.sh: needs docker to pull the release image" >&2; exit 1; }
 
+host="${image%%/*}"
+if [ "$host" = "$image" ] || { [[ "$host" != *.* ]] && [[ "$host" != *:* ]] && [ "$host" != localhost ]; }; then
+  echo "install-grain.sh: -image '${image}' names no registry host, and docker would fetch it from Docker Hub; name its registry (for example docker.io/grainai/grain)" >&2
+  exit 2
+fi
+
 docker pull -q "${image}:${version}" >/dev/null
 pinned="$(docker inspect --format '{{index .RepoDigests 0}}' "${image}:${version}")"
 echo "image: ${pinned}"
