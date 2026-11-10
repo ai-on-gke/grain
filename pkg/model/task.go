@@ -1433,6 +1433,18 @@ const (
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
 	LinkPathTriggersRead LinkKind = "path-triggers-read"
+	// LinkPathTriggerReviewed records the last review of one kind grain
+	// filed for this task's pull request from its pull-request triggers
+	// (-> "<review template>=<review task ID>@<head sha>"), one per kind:
+	// what the next push's review starts its incremental diff from
+	// (orchestrator's pathtriggerreview.go).
+	LinkPathTriggerReviewed LinkKind = "path-trigger-reviewed"
+	// LinkReviewCommentsOnly marks a review that posts its findings and
+	// fixes nothing (-> the reviewed task's ID): its run never opens a
+	// pull request, whatever it pushed. Grain files every review that
+	// way unless what asked for it asked for fixes
+	// (docs/path-triggers.md#reviews-post-findings).
+	LinkReviewCommentsOnly LinkKind = "review-comments-only"
 	// LinkApprovalRequired records that a rule this task's change matched
 	// lets only named people release it (-> "<rule>=<approver>,..."),
 	// and LinkApprovedBy that one of them has (-> "<rule>=<user>"). A

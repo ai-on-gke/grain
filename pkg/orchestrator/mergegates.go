@@ -38,8 +38,8 @@ func reviewGateOf(reviewed model.Task, reviewID string) string {
 	if reviewID != "" && linkTarget(reviewed, model.LinkSecurityReviewTask) == reviewID {
 		return model.GateSecurityReview
 	}
-	if trigger, ok := gatingTaskIDs(reviewed)[reviewID]; ok && trigger != "" {
-		return "trigger:" + trigger
+	if triggers := gatingTaskIDs(reviewed)[reviewID]; len(triggers) > 0 && triggers[0] != "" {
+		return "trigger:" + triggers[0]
 	}
 	return model.GateReview
 }
