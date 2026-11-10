@@ -1,7 +1,7 @@
 # Walkthrough: token usage and budgets
 
 - **Plan:** [`docs/test-plans/2026-11-10.md`](../test-plans/2026-11-10.md) §1, "What is NOT proved" items 1–6.
-- **Date:** 2026-11-10, 07:12–08:10 UTC.
+- **Date:** 2026-11-10, 07:12–08:50 UTC.
 - **Task:** 3948, branch `grain/098073e4/task-3948-walkthrough-token-usage-and` on `ai-on-gke/grain`, base `main` at `c7651098` (PR #1079).
 - **Scripts, SQL and captured output:** [`2026-11-10-token-usage/`](2026-11-10-token-usage/). `out/` holds every captured file named below.
 
@@ -29,7 +29,7 @@
 | 3. Learned capacity from a stub refusal | **Pass.** `refuse` mode answers agy's "Individual quota reached … Resets in 1h0m0s". It opened a pause on `agy-walk/fake-model` until 08:28:26, and `usage_capacity` recorded `70830` tokens: the sum of the window's three runs, 15530 + 19570 + 35730. `reset_at` is exactly the pause's `until_at`. `grain usage` shows `71k~` and `paused` ([`out/item1.txt`](2026-11-10-token-usage/out/item1.txt), last block). The learned window is the 5 h default rather than the 1 h the provider named (O2). |
 | 4. `auto` caps dispatch | **Fail → fixed (F1).** Before the fix, `-mode auto -min-workers 2` plus a budget sustaining ≈1 dispatched **four** runs at once (`6-1…9-1`, all started 07:29:06), because the cap cached under the previous settings was still in force. After the fix, 5 × 20 s tasks ran **at most 2 at once**, and the daemon logged `usage: automatic worker cap 2 of max_workers 4 (sustainable 1)`. `-mode advisory` ran 4 at once and logged `the automatic cap is lifted`. `-mode off` reports no scopes and no estimate. `-mode auto` with no budget and no learned capacity left the cap at 4. |
 | 5. Settings round trip and refusals | **Fail → fixed (F2, F3).** Every change is in `GET /api/deployment/config-audit` (`surface: usage`). Malformed tokens, negative or zero windows, negative tokens and unknown modes answer 400 with a clear message. A **budget on an unknown connection was stored** (200) (F2). The CLI **exited 1, not 2**, for malformed flags (F3). A reader (external-agent token with `deployment:read`) reads `GET /api/usage` (200), and gets **403** on PUT and exit 3 from `grain usage -mode auto`. Retention pruned the row seeded 8 days back and kept the one seeded 6 days back under `-retention-days 7` (`usage: pruned 1 run usage row(s) past retention`). |
-| 6. UI | **Looked at, no defect found.** See [Item 6](#item-6-ui). |
+| 6. UI | **Rendered, not inspected.** All 8 shots rendered (Settings → Models and a demo task, 1440 px and 390 px, light and dark), and the contact sheet is attached to the closing note. This sandbox's file reader returns PNGs as raw bytes, and `LOOK=1` has no Gemini key here, so nobody looked at them in this run. The empty, many-models and exhausted-budget states were not set up. See [Item 6](#item-6-ui). |
 
 ## Findings
 
@@ -83,7 +83,7 @@ The pre-fix run is kept as [`out/item4-before-fix-runs.txt`](2026-11-10-token-us
 
 ### Item 6: UI
 
-`make ui-screenshots PAGES=/settings/models,/tasks/2 OUT=screenshots/walk` was run over `grain demo`, which seeds usage, a configured budget and a learned capacity (`pkg/demo/demo_token_usage.go`), at 1440 px and 390 px in light and dark. This branch makes no `ui/` change, so there is no before/after pair. The result of the look is in the closing note on task 3948.
+`make ui-screenshots PAGES=/settings/models,/tasks/2 OUT=screenshots/walk` was run over `grain demo`, which seeds usage, a configured budget and a learned capacity (`pkg/demo/demo_token_usage.go`), at 1440 px and 390 px in light and dark. This branch makes no `ui/` change, so there is no before/after pair. The shots were rendered but not inspected (see the Outcome table), so item 6 still needs a person, or a run that can view images, to look at the attached contact sheet. The layout itself stays pinned by `ui/e2e/usage-settings-layout.spec.js`.
 
 ## Reproduce
 
