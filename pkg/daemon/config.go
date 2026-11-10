@@ -47,6 +47,10 @@ type Config struct {
 	DbDSN           string
 	SecretsBackend  string
 	SecretsSMPrefix string
+	// ReleaseApprovalKMSKey is the Cloud KMS key version release
+	// approvals are signed with (-release-approval-kms-key), or "" for
+	// the key the secrets store holds (ui.Config.ReleaseApprovalKMSKey).
+	ReleaseApprovalKMSKey string
 	// WriterLockWaitTimeout, WriterLockKeepAlive, and WriterLockReacquireWindow
 	// configure the PostgreSQL session-level single-writer advisory lock
 	// acquired at daemon startup when DbDriver is "postgres". Zero values use

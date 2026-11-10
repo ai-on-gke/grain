@@ -13,16 +13,21 @@
 // limitations under the License.
 
 // Package kmsfake is a stand-in for Cloud KMS's encrypt and decrypt
-// REST methods, for tests of the KMS-wrapped secrets key. Start points
+// REST methods, for tests of the KMS-wrapped secrets key, and for its
+// asymmetricSign and getPublicKey, for tests of a KMS-held signing key. Start points
 // GRAIN_KMS_ENDPOINT and GRAIN_KMS_TOKEN at it for the test's duration,
 // so a store, a daemon or a CLI subprocess reaches it unconfigured.
 package kmsfake
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +47,10 @@ type Server struct {
 	corrupt  bool
 	decrypts int
 	encrypts int
+	signs    int
+	// signing is each key version's EC_SIGN_P256_SHA256 key pair,
+	// made the first time the version is asked for.
+	signing map[string]*ecdsa.PrivateKey
 }
 
 type blob struct {
@@ -52,7 +61,7 @@ type blob struct {
 // Start runs a fake and points this process's KMS client at it.
 func Start(t testing.TB) *Server {
 	t.Helper()
-	f := &Server{primary: 1, blobs: map[string]blob{}}
+	f := &Server{primary: 1, blobs: map[string]blob{}, signing: map[string]*ecdsa.PrivateKey{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	t.Setenv("GRAIN_KMS_ENDPOINT", f.URL())
@@ -81,9 +90,32 @@ func (f *Server) CorruptDecrypts(on bool) { f.mu.Lock(); f.corrupt = on; f.mu.Un
 func (f *Server) Decrypts() int { f.mu.Lock(); defer f.mu.Unlock(); return f.decrypts }
 func (f *Server) Encrypts() int { f.mu.Lock(); defer f.mu.Unlock(); return f.encrypts }
 
+// Signs counts the asymmetricSign calls that reached the fake.
+func (f *Server) Signs() int { f.mu.Lock(); defer f.mu.Unlock(); return f.signs }
+
+// SigningKey is the public half of the key version name signs with.
+func (f *Server) SigningKey(name string) *ecdsa.PublicKey {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &f.signingKey(name).PublicKey
+}
+
+func (f *Server) signingKey(name string) *ecdsa.PrivateKey {
+	k, ok := f.signing[name]
+	if !ok {
+		k, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		f.signing[name] = k
+	}
+	return k
+}
+
 func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 	name, method, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/"), ":")
-	if !ok || r.Method != http.MethodPost {
+	wantVerb := http.MethodPost
+	if method == "getPublicKey" {
+		wantVerb = http.MethodGet
+	}
+	if !ok || r.Method != wantVerb {
 		apiError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -92,9 +124,23 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		apiError(w, http.StatusBadRequest, "bad body")
-		return
+	var signIn struct {
+		Digest struct {
+			SHA256 string `json:"sha256"`
+		} `json:"digest"`
+	}
+	switch method {
+	case "getPublicKey":
+	case "asymmetricSign":
+		if err := json.NewDecoder(r.Body).Decode(&signIn); err != nil {
+			apiError(w, http.StatusBadRequest, "bad body")
+			return
+		}
+	default:
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			apiError(w, http.StatusBadRequest, "bad body")
+			return
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -103,12 +149,30 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 		f.encrypts++
 	case "decrypt":
 		f.decrypts++
+	case "asymmetricSign":
+		f.signs++
 	}
 	if f.deny {
 		apiError(w, http.StatusForbidden, "Permission 'cloudkms.cryptoKeyVersions.useToDecrypt' denied on resource '"+name+"'")
 		return
 	}
 	switch method {
+	case "getPublicKey":
+		der, _ := x509.MarshalPKIXPublicKey(&f.signingKey(name).PublicKey)
+		writeJSON(w, map[string]any{"name": name, "algorithm": "EC_SIGN_P256_SHA256",
+			"pem": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))})
+	case "asymmetricSign":
+		digest, err := base64.StdEncoding.DecodeString(signIn.Digest.SHA256)
+		if err != nil || len(digest) != 32 {
+			apiError(w, http.StatusBadRequest, "digest.sha256 is not a base64 SHA-256 digest")
+			return
+		}
+		sig, err := ecdsa.SignASN1(rand.Reader, f.signingKey(name), digest)
+		if err != nil {
+			apiError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"name": name, "signature": base64.StdEncoding.EncodeToString(sig)})
 	case "encrypt":
 		var id [16]byte
 		_, _ = rand.Read(id[:])
