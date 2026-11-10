@@ -42,6 +42,7 @@ import {
 import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
+import CommentDeepLink from "./CommentDeepLink.jsx";
 import WriteReposField from "./WriteReposField.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import ModelPicker from "./ModelPicker.jsx";
@@ -838,6 +839,7 @@ export default function ConsoleSessionPage({
       </PageHeaderActions>
 
       <div className="console-session-body">
+        {task && <CommentDeepLink key={task.id} t={task} />}
         {task ? (
           <TaskChat
             // Keyed by task so switching sessions remounts the composer:
