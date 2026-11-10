@@ -105,6 +105,29 @@ func AccountID(prefix, deployment, project, set string, n int) string {
 	return prefix + "-" + d + "-" + s + "-" + num
 }
 
+// SingleAccountID is the account id of a managed token-mode set's one service
+// account: <prefix>-<deployment>-<set>, e.g. grain-049f1e09-ar-writer. When
+// that exceeds GCP's 30 characters it is shortened the same way AccountID is;
+// when it would be shorter than GCP's 6-character minimum (a 1-character
+// prefix, deployment and set), it falls back to AccountID(..., 1).
+func SingleAccountID(prefix, deployment, project, set string) string {
+	// prefix-D-S: two hyphens around what D and S may use.
+	avail := MaxAccountIDLen - len(prefix) - 2
+	var id string
+	if len(deployment)+len(set) <= avail {
+		id = prefix + "-" + deployment + "-" + set
+	} else {
+		keep := min(len(set), minSetChars) + 1 + nameHashLen
+		s := shorten(set, nameHash(project+"/"+set), max(avail-len(deployment), keep))
+		d := shorten(deployment, nameHash(deployment), avail-len(s))
+		id = prefix + "-" + d + "-" + s
+	}
+	if len(id) < MinAccountIDLen {
+		return AccountID(prefix, deployment, project, set, 1)
+	}
+	return id
+}
+
 // shorten is s when it fits in max, otherwise as much of s as fits with
 // "-" and h after it.
 func shorten(s, h string, max int) string {
@@ -154,18 +177,20 @@ func Email(accountID, project string) string {
 const ownerTag = "grain-gcp-key "
 
 var (
-	ownerPattern  = regexp.MustCompile(`\[grain-gcp-key deployment=([a-z0-9-]+) instance=([a-z0-9]*) set=([a-z][a-z0-9-]*)\]`)
+	ownerPattern  = regexp.MustCompile(`\[grain-gcp-key deployment=([a-z0-9-]+) instance=([a-z0-9]*) set=([a-z][a-z0-9-]*)(?: scope=([^\]]+))?\]`)
 	legacyPattern = regexp.MustCompile(`\[grain-gcp-key set=([a-z][a-z0-9-]*)\]`)
 )
 
 // Owner is what a service account's ownership marker says: which
-// deployment and installation created it, for which set. A Legacy owner
-// is the marker written before deployments were recorded, which names
-// only the set.
+// deployment and installation created it, for which set, and -- when the
+// set bound on a resource_scope -- which scope to unbind when the set is
+// removed. A Legacy owner is the marker written before deployments were
+// recorded, which names only the set.
 type Owner struct {
 	Deployment string
 	Instance   string
 	Set        string
+	Scope      string
 	Legacy     bool
 }
 
@@ -178,6 +203,29 @@ func OwnerDescription(deployment, instance, set string) string {
 		ownerTag + "deployment=" + deployment + " instance=" + InstanceTag(instance) + " set=" + set + "]"
 }
 
+// OwnerDescriptionWithScope is OwnerDescription carrying the set's
+// resource_scope when non-empty so DeleteOrphans and Reconcile can unbind a
+// bucket or Artifact Registry repository before deleting or re-scoping the
+// account, staying within GCP's 256-character description bound.
+func OwnerDescriptionWithScope(deployment, instance, set, scope string) string {
+	if scope == "" {
+		return OwnerDescription(deployment, instance, set)
+	}
+	marker := "[" + ownerTag + "deployment=" + deployment + " instance=" + InstanceTag(instance) + " set=" + set + " scope=" + scope + "]"
+	full := "Managed by grain gcp-key for set " + set + " of deployment " + deployment + "; do not edit. " + marker
+	if len(full) <= 256 {
+		return full
+	}
+	short := "Managed by grain; do not edit. " + marker
+	if len(short) <= 256 {
+		return short
+	}
+	if len(marker) <= 256 {
+		return marker
+	}
+	return OwnerDescription(deployment, instance, set)
+}
+
 // LegacyOwnerDescription is the description accounts were created with
 // before the marker named the deployment.
 func LegacyOwnerDescription(set string) string {
@@ -187,7 +235,7 @@ func LegacyOwnerDescription(set string) string {
 // OwnedBy is who a service account's description says created it.
 func OwnedBy(description string) (Owner, bool) {
 	if m := ownerPattern.FindStringSubmatch(description); m != nil {
-		return Owner{Deployment: m[1], Instance: m[2], Set: m[3]}, true
+		return Owner{Deployment: m[1], Instance: m[2], Set: m[3], Scope: m[4]}, true
 	}
 	if m := legacyPattern.FindStringSubmatch(description); m != nil {
 		return Owner{Set: m[1], Legacy: true}, true

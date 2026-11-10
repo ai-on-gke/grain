@@ -260,18 +260,21 @@ func TestATasksAPIGrantIsNotTheCIProvider(t *testing.T) {
 	}
 }
 
-func TestTheDeploymentRegistersReleaseGateRead(t *testing.T) {
-	reg := model.NewCapabilityRegistry(CapabilityProviders(Config{}, nil, nil, nil, nil)...)
-	provider, ok := reg.Lookup(model.ReleaseGateReadCapability)
-	if !ok {
-		t.Fatalf("%s has no provider in the deployment's registry", model.ReleaseGateReadCapability)
-	}
-	if !provider.Spec().SupportsCI() {
-		t.Errorf("%s is not offered to CI", model.ReleaseGateReadCapability)
+func TestTheDeploymentServesReleaseGateReadToCIOnly(t *testing.T) {
+	// Slice 4 of design/design/unified-grants.design.md retired the static
+	// release-gate-read provider: the bare name and its api reference both
+	// resolve through ciapi.DynamicProvider, for a CI job only.
+	if got := CapabilityProviders(Config{}, nil, nil, nil, nil); len(got) != 0 {
+		t.Errorf("CapabilityProviders = %d providers, want none (release-gate-read is a CI alias, not a provider)", len(got))
 	}
 	full := newCapabilityRegistryWithStore(nil)
-	if p, ok := full.LookupFor("api:ci:read", true); !ok || !p.Spec().SupportsCI() {
-		t.Errorf("api:ci:read has no CI provider in the deployment's registry")
+	for _, name := range []string{model.ReleaseGateReadCapability, model.APIRef(model.ReleaseGateReadCapability), "api:ci:read"} {
+		if p, ok := full.LookupFor(name, true); !ok || !p.Spec().SupportsCI() {
+			t.Errorf("%s has no CI provider in the deployment's registry", name)
+		}
+	}
+	if _, ok := full.Lookup(model.ReleaseGateReadCapability); ok {
+		t.Errorf("%s resolves outside CI; it is a CI job's alias only", model.ReleaseGateReadCapability)
 	}
 }
 

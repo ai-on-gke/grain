@@ -966,7 +966,14 @@ Who the caller is decides what `grain_explore_scope` shows and
   allows (every non-internal route for the access code or
   `grain/operator`; limited roles see and invoke only the scopes and
   repositories their role covers, with refusals naming the missing
-  scope).
+  scope). A harness using the access code should name its person in
+  `X-Grain-Access-Name`, so its calls are recorded as
+  `access-code:<name>` rather than as nobody. In the code's recovery
+  mode it reaches only access and settings routes, and with the code
+  off it is refused
+  ([access-code.md](access-code.md#bootstrap-and-recovery-only-grain-access-code-mode)).
+  Runs are unaffected: their requests carry `X-Grain-Acting-Task` and
+  are held to their task's grants in every mode.
 
 Every `grain_invoke` re-enters the route table through the same gate
 the REST call would, so the attribution, audit row and rails are the
