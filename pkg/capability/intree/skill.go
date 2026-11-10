@@ -605,19 +605,13 @@ func hasSkillMD(sk *skill) bool {
 }
 
 // skillDescription is a SKILL.md's front-matter description, or its first
-// non-empty line, cut to one short line.
+// prose paragraph / heading, cut to one short line.
 func skillDescription(md string) string {
-	lines := strings.Split(md, "\n")
-	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
-		for _, l := range lines[1:] {
-			if strings.TrimSpace(l) == "---" {
-				break
-			}
-			if v, ok := strings.CutPrefix(strings.TrimSpace(l), "description:"); ok {
-				return clip(strings.Trim(strings.TrimSpace(v), `"'`))
-			}
-		}
+	meta, err := ParseSkillMD([]byte(md), "", 160)
+	if err == nil {
+		return meta.Description
 	}
+	lines := strings.Split(md, "\n")
 	for _, l := range lines {
 		if l = strings.TrimSpace(strings.TrimLeft(l, "# ")); l != "" && l != "---" {
 			return clip(l)

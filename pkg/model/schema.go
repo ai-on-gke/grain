@@ -622,7 +622,10 @@ import "strconv"
 // run that reported its provider usage; `usage_capacity`, the usage a
 // (connection, model) window had consumed when its provider refused it;
 // and `usage_setting`, the operator's budgets and concurrency mode.
-const SchemaVersion = 130
+// 131 adds repository skill discovery configuration (`skills` on
+// `grain_config`, `repo_config`, `task` and `template`, and `declared_skills`
+// on `repo_config`).
+const SchemaVersion = 131
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -1053,6 +1056,7 @@ var Tables = []string{
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
   ` + "`admission`" + `             TEXT     NOT NULL DEFAULT 'standard',
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT 'unattended',
+  ` + "`skills`" + `                TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -2168,6 +2172,7 @@ var Tables = []string{
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`skills`" + `             TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2656,6 +2661,7 @@ var Tables = []string{
   ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
   ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
+  ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3411,6 +3417,8 @@ var Tables = []string{
   ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   ` + "`default_admission`" + `        TEXT NOT NULL DEFAULT '',
   ` + "`default_hosting`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`skills`" + `                   TEXT NOT NULL DEFAULT '',
+  ` + "`declared_skills`" + `          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

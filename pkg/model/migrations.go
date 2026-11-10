@@ -930,6 +930,17 @@ var Migrations = []Migration{
 			usageSettingTable,
 		},
 	},
+	{
+		Version:     131,
+		Description: "add repository skill discovery configuration columns (skills on grain_config, repo_config, task and template, and declared_skills on repo_config)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `declared_skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `template` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

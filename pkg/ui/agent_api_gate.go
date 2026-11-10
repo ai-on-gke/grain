@@ -3478,6 +3478,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.NoPort != nil, "noPort")
 	add(req.FixesBaseBranch != nil, "fixesBaseBranch")
 	add(req.PromptExtension != nil, "promptExtension")
+	add(req.Skills != nil, "skills")
 	add(req.ReviewTemplateID != nil, "reviewTemplateId")
 	add(req.Reads != nil, "reads")
 	add(req.Writes != nil, "writes")

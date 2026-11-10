@@ -69,6 +69,7 @@ export default function PromptOverlay({ taskId, onClose }) {
   const [prompt, setPrompt] = useState(null);
   const [attempt, setAttempt] = useState(0);
   const [size, setSize] = useState(null);
+  const [skills, setSkills] = useState([]);
   // Reported in the pane itself rather than through App.jsx's own
   // showError banner: an error about the prompt belongs where the prompt
   // was going to be, in the pane the reader just opened, rather than in
@@ -86,6 +87,7 @@ export default function PromptOverlay({ taskId, onClose }) {
         setPrompt(res.prompt || "");
         setAttempt(res.attempt || 0);
         setSize(promptSize(res));
+        setSkills(Array.isArray(res.skills) ? res.skills : []);
       } catch (err) {
         if (!cancelled) setError(err);
       }
@@ -102,6 +104,27 @@ export default function PromptOverlay({ taskId, onClose }) {
         {attempt > 0 && <span className="hint"> · attempt #{attempt}</span>}
         {size && <span className="hint"> · {size}</span>}
       </h2>
+      {skills.length > 0 && (
+        <div
+          className="prompt-skills-summary"
+          data-testid="prompt-skills"
+          style={{ marginBottom: 12 }}
+        >
+          <div className="hint" style={{ marginBottom: 4 }}>
+            Skills shown ({skills.length}):
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {skills.map((sk) => (
+              <li key={`${sk.source}:${sk.path}:${sk.name}`}>
+                <code>{sk.name}</code>{" "}
+                <span className="hint">
+                  ({sk.source} · <code>{sk.path}</code>)
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <pre className="logs-view">
         {error
           ? `Could not load this task's prompt: ${error.message}`

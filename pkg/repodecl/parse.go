@@ -151,6 +151,9 @@ type rawTemplate struct {
 	// Hosting is model.Template.Hosting: "unattended" or "console"
 	// (empty for unset).
 	Hosting string `yaml:"hosting"`
+	// Skills is model.Template.Skills: optional per-task skill discovery
+	// override for tasks filed from this template.
+	Skills *rawSkills `yaml:"skills"`
 	// Priority is model.Template.Priority: optional default priority for
 	// tasks filed from this template.
 	Priority *int `yaml:"priority"`
@@ -284,6 +287,10 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err != nil {
 		return model.Template{}, raw, fmt.Errorf("%s: %w", f.path, err)
 	}
+	skills, err := parseRawSkills(f.path, raw.Skills)
+	if err != nil {
+		return model.Template{}, raw, err
+	}
 	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, raw.Capabilities)
 	if err != nil {
 		return model.Template{}, raw, err
@@ -323,6 +330,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		KeepRunning:         raw.KeepRunning,
 		Admission:           admission,
 		Hosting:             hosting,
+		Skills:              skills,
 		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}

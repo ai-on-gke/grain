@@ -503,6 +503,7 @@ export default function RepoPage({
   // which is a real and different answer.
   const [setup, setSetup] = useState(null);
   const [setupText, setSetupText] = useState("");
+  const [skillsFoldersText, setSkillsFoldersText] = useState("");
   // And whether grain reads this repository's own `.grain` directory for
   // the templates, suites and schedules it declares (grain/task-60):
   // what GET /api/repos/{owner}/{name}/declarations last said -- the
@@ -657,6 +658,11 @@ export default function RepoPage({
       const loaded = await api(`${root}/prompt-extension`);
       setPrompt(loaded);
       setPromptText(loaded.promptExtension || "");
+      setSkillsFoldersText(
+        Array.isArray(loaded.skills?.folders)
+          ? loaded.skills.folders.join(", ")
+          : "",
+      );
     } catch (err) {
       showError(err);
     }
@@ -1017,6 +1023,33 @@ export default function RepoPage({
       refuseSave("setup", err);
     } finally {
       blurSaving.current.delete("setup");
+    }
+  };
+
+  const saveRepoSkills = async (nextSkills) => {
+    blurSaving.current.add("skills");
+    try {
+      const updated = await api(`${root}/settings`, {
+        method: "PUT",
+        body: JSON.stringify({ skills: nextSkills }),
+      });
+      settleSave("skills");
+      setPrompt(updated);
+      setSkillsFoldersText(
+        Array.isArray(updated.skills?.folders)
+          ? updated.skills.folders.join(", ")
+          : "",
+      );
+      await onRefreshConfig();
+    } catch (err) {
+      setSkillsFoldersText(
+        Array.isArray(prompt?.skills?.folders)
+          ? prompt.skills.folders.join(", ")
+          : "",
+      );
+      refuseSave("skills", err);
+    } finally {
+      blurSaving.current.delete("skills");
     }
   };
 
@@ -2568,6 +2601,130 @@ export default function RepoPage({
                   </Typography>
                 ) : null}
               </Stack>
+            )}
+          </Box>
+
+          <Box sx={{ mt: 3 }} data-testid="repo-skills-section">
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Repository skills
+            </Typography>
+            {prompt === null ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading repository skills…
+              </Typography>
+            ) : (
+              (() => {
+                const effFolders = Array.isArray(prompt.effectiveSkillFolders)
+                  ? prompt.effectiveSkillFolders
+                  : [
+                      ".claude/skills",
+                      ".agents/skills",
+                      ".codex/skills",
+                      ".gemini/skills",
+                      "skills",
+                    ];
+                const storedFolders = Array.isArray(prompt.skills?.folders)
+                  ? prompt.skills.folders.join(", ")
+                  : "";
+                const enabledChecked =
+                  prompt.skills?.enabled !== undefined
+                    ? Boolean(prompt.skills.enabled)
+                    : effFolders.length > 0;
+                return (
+                  <Stack spacing={1}>
+                    <FormControlLabel
+                      sx={{ m: 0 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={enabledChecked}
+                          disabled={readOnly}
+                          onChange={(e) => {
+                            const on = e.target.checked;
+                            const next = { enabled: on };
+                            if (Array.isArray(prompt.skills?.folders)) {
+                              next.folders = prompt.skills.folders;
+                            }
+                            saveRepoSkills(next);
+                          }}
+                          inputProps={{
+                            "aria-label": `Discover SKILL.md folders in ${repo}`,
+                          }}
+                        />
+                      }
+                      label={
+                        <Typography variant="body2">
+                          Discover <code>*/SKILL.md</code> folders from {repo}
+                          &apos;s base branch at run start
+                        </Typography>
+                      }
+                    />
+                    <TextField
+                      id={`${refusalId}-skills-folders`}
+                      name="repoSkillFolders"
+                      label={`Skill folders for ${repo}`}
+                      placeholder=".claude/skills, .agents/skills, .codex/skills, .gemini/skills, skills"
+                      helperText="Comma-separated folders relative to the repository root, scanned one level deep for */SKILL.md on the base branch. Leave empty to inherit the deployment or built-in defaults."
+                      value={skillsFoldersText}
+                      onChange={(e) => setSkillsFoldersText(e.target.value)}
+                      onBlur={(e) => {
+                        const raw = e.target.value.trim();
+                        if (raw === storedFolders) return;
+                        if (raw === "") {
+                          const next =
+                            prompt.skills?.enabled !== undefined
+                              ? { enabled: prompt.skills.enabled }
+                              : {};
+                          saveRepoSkills(next);
+                          return;
+                        }
+                        const folders = raw
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter(Boolean);
+                        const next = { folders };
+                        if (prompt.skills?.enabled !== undefined) {
+                          next.enabled = prompt.skills.enabled;
+                        }
+                        saveRepoSkills(next);
+                      }}
+                      autoComplete="off"
+                      inputProps={{
+                        ...identifierField,
+                        "aria-describedby": refusedBy(
+                          readOnly,
+                          `${refusalId}-skills-folders-helper-text`,
+                        ),
+                      }}
+                      fullWidth
+                      size="small"
+                      disabled={readOnly}
+                    />
+                    <Typography variant="body2" color="text.secondary">
+                      Effective folders for {repo}:{" "}
+                      {effFolders.length > 0 ? (
+                        <code>{effFolders.join(", ")}</code>
+                      ) : (
+                        "off"
+                      )}
+                    </Typography>
+                    {prompt.declaredSkills ? (
+                      <Typography variant="body2" color="text.secondary">
+                        Declared by {repo} in .grain/settings.yml:{" "}
+                        <code>
+                          {prompt.declaredSkills.enabled === false
+                            ? "enabled: false"
+                            : Array.isArray(prompt.declaredSkills.folders)
+                              ? prompt.declaredSkills.folders.length > 0
+                                ? prompt.declaredSkills.folders.join(", ")
+                                : "folders: [] (off)"
+                              : "enabled: true"}
+                        </code>
+                      </Typography>
+                    ) : null}
+                  </Stack>
+                );
+              })()
             )}
           </Box>
           <Box sx={{ mt: 3 }}>

@@ -608,22 +608,23 @@ type DeploymentRepoConfigResponse struct {
 // /api/deployment/repos/{owner}/{name}/config changes on the repository's
 // repo_config row. A field left out keeps what the row holds.
 type SetDeploymentRepoConfigRequest struct {
-	SetupCommand                 *string   `json:"setupCommand,omitempty"`
-	PromptExtension              *string   `json:"promptExtension,omitempty"`
-	DefaultCapabilities          *[]string `json:"defaultCapabilities,omitempty"`
-	DefaultAdmission             *string   `json:"defaultAdmission,omitempty"`
-	DefaultHosting               *string   `json:"defaultHosting,omitempty"`
-	CICapabilities               *[]string `json:"ciCapabilities,omitempty"`
-	CIMode                       *string   `json:"ciMode,omitempty"`
-	RepairTemplateID             *string   `json:"repairTemplateId,omitempty"`
-	CloneURL                     *string   `json:"cloneUrl,omitempty"`
-	GitCredential                *string   `json:"gitCredential,omitempty"`
-	RequireBranchUpToDate        *bool     `json:"requireBranchUpToDate,omitempty"`
-	WatchDefaultBranch           *bool     `json:"watchDefaultBranch,omitempty"`
-	MergeOnGreen                 *bool     `json:"mergeOnGreen,omitempty"`
-	BaseRepairBypassesHumanGates *bool     `json:"baseRepairBypassesHumanGates,omitempty"`
-	ReleaseSecrets               *[]string `json:"releaseSecrets,omitempty"`
-	User                         string    `json:"user,omitempty"`
+	SetupCommand                 *string             `json:"setupCommand,omitempty"`
+	PromptExtension              *string             `json:"promptExtension,omitempty"`
+	Skills                       *model.SkillsConfig `json:"skills,omitempty"`
+	DefaultCapabilities          *[]string           `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission             *string             `json:"defaultAdmission,omitempty"`
+	DefaultHosting               *string             `json:"defaultHosting,omitempty"`
+	CICapabilities               *[]string           `json:"ciCapabilities,omitempty"`
+	CIMode                       *string             `json:"ciMode,omitempty"`
+	RepairTemplateID             *string             `json:"repairTemplateId,omitempty"`
+	CloneURL                     *string             `json:"cloneUrl,omitempty"`
+	GitCredential                *string             `json:"gitCredential,omitempty"`
+	RequireBranchUpToDate        *bool               `json:"requireBranchUpToDate,omitempty"`
+	WatchDefaultBranch           *bool               `json:"watchDefaultBranch,omitempty"`
+	MergeOnGreen                 *bool               `json:"mergeOnGreen,omitempty"`
+	BaseRepairBypassesHumanGates *bool               `json:"baseRepairBypassesHumanGates,omitempty"`
+	ReleaseSecrets               *[]string           `json:"releaseSecrets,omitempty"`
+	User                         string              `json:"user,omitempty"`
 }
 
 // existingTeam is the deployment in the team shape when id names the
@@ -722,6 +723,13 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 	}
 	if req.PromptExtension != nil {
 		cfg.PromptExtension = strings.TrimSpace(*req.PromptExtension)
+	}
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return DeploymentRepoConfigResponse{}, validationErrorf("skills: %v", err)
+		}
+		cfg.Skills = norm
 	}
 	if req.DefaultAdmission != nil {
 		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
