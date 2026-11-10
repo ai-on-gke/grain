@@ -386,6 +386,11 @@ OPENAI_API_KEY="$(secret openai-api-key)"
 # to -- and normally unset on a first deploy, where the host minting its
 # own is exactly right.
 SECRETS_KEY="$(secret secrets-key)"
+# The Cloud KMS key kms.tf made for wrapping that one (empty when
+# secrets_key_kms is off). setup.sh wraps the host's key with it once the
+# daemon is up, and escrow_wrapped_secrets_key below then keeps the
+# secrets-key secret holding the wrapped form instead of the plaintext.
+SECRETS_KMS_KEY="$(cfg secrets_kms_key)"
 # Only needed for a private image package; docker.io/grainai's is
 # public and pulls anonymously (variables.tf's own
 # grain_image_pull_user).
@@ -495,6 +500,7 @@ env \
   GRAIN_SECRETS_REPO_URL="$SECRETS_REPO_URL" \
   GRAIN_SECRETS_REPO_BRANCH="$SECRETS_REPO_BRANCH" \
   GRAIN_SECRETS_KEY="$SECRETS_KEY" \
+  GRAIN_SECRETS_KMS_KEY="$SECRETS_KMS_KEY" \
   GRAIN_TARGET_REPO="$DEFAULT_TARGET_REPO" \
   GRAIN_TARGET_REPOS="$TARGET_REPOS" \
   GRAIN_IAP_AUDIENCE="$IAP_AUDIENCE" \
@@ -507,3 +513,45 @@ env \
   GRAIN_GRANULE_BASE_IP="$GRANULE_BASE_IP" \
   GRAIN_GRANULE_BASE_PORT="$GRANULE_BASE_PORT" \
   "$SRC_DIR/scripts/setup.sh"
+
+# --- escrow the wrapped secrets key ---------------------------------
+#
+# Once setup.sh has wrapped the host's key with the KMS key kms.tf made,
+# the copy worth keeping off the host is that wrapped file: it restores
+# a rebuilt host exactly as the plaintext did (setup.sh seeds it, and the
+# daemon unwraps it with this host's account), and it is useless to
+# anyone without decrypt on that key. So the secrets-key secret gets it
+# as a new version whenever what is there differs. The plaintext
+# versions an operator pushed before are left for them to destroy -- the
+# daemon's `grain state key wrap` output says so, and the README's
+# "Cloud KMS-wrapped secrets key" names the command. secrets.tf grants
+# the host account secretVersionAdder on this one secret for it.
+escrow_wrapped_secrets_key() {
+  [ -n "$SECRETS_KMS_KEY" ] || return 0
+  local data_dir key_file wrapped name code body
+  data_dir="$(sed -n 's/^GRAIN_DATA_DIR=//p' /etc/grain/cli.env 2>/dev/null | tail -n1)"
+  key_file="${data_dir:-/var/lib/grain/data}/secrets/secrets.key"
+  [ -s "$key_file" ] || return 0
+  wrapped="$(cat "$key_file")"
+  case "$wrapped" in
+    grain-secret-key-kms-v1:*) ;;
+    *) return 0 ;;
+  esac
+  [ "$wrapped" = "$SECRETS_KEY" ] && return 0
+  name="$(printf '%s' "$CONFIG_JSON" | jq -r '.secret_ids["secrets-key"] // ""')"
+  [ -n "$name" ] || return 0
+  # The body is the wrapped key, which opens nothing on its own; the
+  # token goes to curl on stdin, as secret() sends it.
+  body="$(mktemp)"
+  jq -n --arg d "$(printf '%s\n' "$wrapped" | base64 -w0)" '{payload: {data: $d}}' > "$body"
+  code="$(printf 'Authorization: Bearer %s' "$SM_TOKEN" | curl -sS -o /dev/null -w '%{http_code}' -H @- \
+    -H 'Content-Type: application/json' --data-binary "@$body" \
+    "https://secretmanager.googleapis.com/v1/$name:addVersion")" || code=000
+  rm -f "$body"
+  if [ "$code" = "200" ]; then
+    log "escrowed the KMS-wrapped secrets key as a new version of $name -- destroy its older plaintext versions (README, \"Cloud KMS-wrapped secrets key\")"
+  else
+    log "WARNING: could not escrow the wrapped secrets key to $name (HTTP $code); the host's key file is wrapped and keeps working"
+  fi
+}
+escrow_wrapped_secrets_key

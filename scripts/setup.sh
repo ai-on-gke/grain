@@ -644,6 +644,16 @@ GRAIN_SECRETS_REPO_BRANCH="${GRAIN_SECRETS_REPO_BRANCH:-main}"
 # is the key the secrets file on this host was encrypted to.
 GRAIN_SECRETS_KEY="${GRAIN_SECRETS_KEY:-}"
 
+# A Cloud KMS key (projects/P/locations/L/keyRings/R/cryptoKeys/K) to
+# wrap that private key with once the daemon is up (`grain state key
+# wrap`; design/design/secrets-key-protection.design.md, Phase 2). A
+# wrapped key file is useless without decrypt on that key, so a disk
+# snapshot or a stray copy of it opens nothing. deploy/terraform/gcp sets
+# it to the key it creates. Empty (the default) leaves the key file as it
+# is; set, a key already wrapped is left alone, and a failure to wrap is
+# a warning, not a failed install -- the plaintext key keeps working.
+GRAIN_SECRETS_KMS_KEY="${GRAIN_SECRETS_KMS_KEY:-}"
+
 GRAIN_TARGET_REPO="${GRAIN_TARGET_REPO:-}"
 GRAIN_TARGET_BRANCH="${GRAIN_TARGET_BRANCH:-main}"
 GRAIN_TARGET_REPOS="${GRAIN_TARGET_REPOS:-}"
@@ -1205,6 +1215,11 @@ Recognized variables:
                              itself a key cannot read the secrets file put back
                              beside it. Back the file up when this script reports
                              it (see "Readiness" at the end of a run)
+  GRAIN_SECRETS_KMS_KEY     Cloud KMS key (projects/P/locations/L/keyRings/R/
+                             cryptoKeys/K) to wrap that key with once the daemon
+                             is up (`grain state key wrap`). Needs the host's
+                             account to hold cryptoKeyEncrypterDecrypter on it.
+                             Empty (the default) leaves the key file plaintext
 
   GRAIN_TARGET_REPO         owner/name: the UI's default target for a task with
                              no repo of its own, and the repo this script pushes
@@ -5890,6 +5905,31 @@ json_escape() {
 # way an install gives grain its connections. The seed file is written, imported and deleted here;
 # grain never reads it. The marker keeps a connection an operator later
 # removes in Settings removed.
+# wrap_secrets_key_with_kms wraps the secrets key with GRAIN_SECRETS_KMS_KEY
+# when it is set and the key file is still plaintext. The daemon does the
+# wrapping (it holds the key, and reaches KMS with the host's own
+# metadata token), and checks the round trip before it replaces the file.
+# A key file already wrapped -- by an earlier run, or seeded wrapped from
+# an escrow -- is left alone, so this is a no-op on every run but the
+# first.
+wrap_secrets_key_with_kms() {
+  [ -n "$GRAIN_SECRETS_KMS_KEY" ] || return 0
+  local key_file="$GRAIN_DATA_DIR/secrets/secrets.key"
+  [ -s "$key_file" ] || return 0
+  if head -c 24 "$key_file" | grep -q '^grain-secret-key-kms-v1:'; then
+    return 0
+  fi
+  step_start "Wrapping the secrets key with Cloud KMS"
+  if grain_cli state -data-dir "$GRAIN_DATA_DIR" key wrap -kms "$GRAIN_SECRETS_KMS_KEY"; then
+    step_done "wrapped by $GRAIN_SECRETS_KMS_KEY"
+  else
+    log "  WARNING: could not wrap $key_file with $GRAIN_SECRETS_KMS_KEY; it stays a plaintext key"
+    log "  file, which keeps working. Check the host account holds"
+    log "  roles/cloudkms.cryptoKeyEncrypterDecrypter on that key, then run:"
+    log "    grain state -data-dir $GRAIN_DATA_DIR key wrap -kms $GRAIN_SECRETS_KMS_KEY"
+  fi
+}
+
 seed_git_connections() {
   local marker="$GRAIN_DATA_DIR/secrets/.connections-seeded"
   [ -e "$marker" ] && return 0
@@ -9481,6 +9521,8 @@ main() {
   # (`grain connections import` refuses them until it exists).
   seed_git_connections
   retire_imported_agent_key_files
+  # After enable_services: the daemon holds the key, and wraps it.
+  wrap_secrets_key_with_kms
   # After enable_services: `tailscale serve` publishes the port the
   # daemon listens on, so pointing it at a service that is already up
   # means a failure here is about tailscale rather than about a UI that

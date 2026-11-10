@@ -455,7 +455,9 @@ export default function StateRepoPanel({
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mt: 1 }}
+          // A KMS key name is one long word; it wraps rather than
+          // running off a phone.
+          sx={{ mt: 1, overflowWrap: "anywhere" }}
           data-testid="secrets-key-protection"
         >
           {status.secretsKeyProtection === "kms" ? (
