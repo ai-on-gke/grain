@@ -528,13 +528,19 @@ func (s *Store) load() (*contents, error) {
 		return nil, err
 	}
 	data, err := os.ReadFile(s.cfg.File)
-	if os.IsNotExist(err) {
-		return &contents{Version: 1, Secrets: map[string]map[string]string{}}, nil
-	}
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("secrets: reading %s: %w", s.cfg.File, err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
+		// No ciphertext to check the cached key against, so nothing
+		// would notice if another process (`grain state key import`
+		// on an empty store, with the daemon running) had installed a
+		// different key since: the next save would seal the file to
+		// the replaced one, which the key file no longer is, and the
+		// store would not open after a restart. Drop the cache so that
+		// save loads the key afresh. A store is empty only until its
+		// first write, so this costs a source nothing in steady state.
+		s.forgetKey()
 		return &contents{Version: 1, Secrets: map[string]map[string]string{}}, nil
 	}
 	key, err := s.currentKey()

@@ -113,6 +113,33 @@ func TestStoreReloadsAKeyAnotherProcessInstalled(t *testing.T) {
 	}
 }
 
+// A key installed over an empty store while another Store has the old
+// one cached: that Store's first write must be sealed to the key now in
+// the file, or the store would not open again after a restart.
+func TestFirstWriteAfterAnotherProcessImportedSealsToTheNewKey(t *testing.T) {
+	dir := t.TempDir()
+	daemon := New(dir)
+	if _, err := daemon.PublicKey(); err != nil { // cache the minted key
+		t.Fatal(err)
+	}
+	other := New(dir)
+	k, _ := GenerateKey()
+	if err := other.ImportKey(k); err != nil {
+		t.Fatal(err)
+	}
+	seedSecret(t, daemon, "db", map[string]string{"password": "p"})
+	data, err := os.ReadFile(filepath.Join(dir, DefaultFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Recipient(data); err != nil || got != k.Public() {
+		t.Fatalf("secrets file sealed to %s (%v), want the imported key %s", got, err, k.Public())
+	}
+	if got, err := New(dir).Resolve(context.Background(), "db/password"); err != nil || got != "p" {
+		t.Fatalf("Resolve after a restart = %q, %v", got, err)
+	}
+}
+
 func TestDeleteRetiredKeyRefusesTheLiveKeyAndOtherFiles(t *testing.T) {
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, DefaultKeyFileName)
