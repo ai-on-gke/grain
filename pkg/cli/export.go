@@ -61,8 +61,11 @@ Flags:
   -data-dir DIR           root directory of the grain installation (required; defaults to $GRAIN_DATA_DIR)
   -out, -output, -file F  path to write the migration bundle (default: grain-export-<timestamp>.tar.gz or .enc)
 
-Encryption (AES-256-GCM, optional; the bundle holds every secret, so encrypt it):
-` + bundleSecretFlagsUsage
+Encryption (AES-256-GCM; the bundle holds every secret, so encrypt it):
+` + bundleSecretFlagsUsage + `  -plaintext              write an unencrypted bundle even though it carries
+                          secrets/secrets.key, the key that opens every secret.
+                          Without a passphrase or key, export refuses unless set
+`
 
 const (
 	EncryptedBundleMagic = "GRAIN_MIGRATE_ENC_V1"
@@ -130,6 +133,7 @@ func runExport(ctx context.Context, args []string, out io.Writer) error {
 	fs.StringVar(outPath, "output", "", "output bundle path (alias)")
 	fs.StringVar(outPath, "file", "", "output bundle path (alias)")
 	secretFlags := addBundleSecretFlags(fs)
+	plaintext := fs.Bool("plaintext", false, "allow an unencrypted bundle that carries the secrets private key")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -149,6 +153,9 @@ func runExport(ctx context.Context, args []string, out io.Writer) error {
 
 	pass, key, err := secretFlags.resolve(os.Stderr)
 	if err != nil {
+		return err
+	}
+	if err := refusePlaintextKeyExport(*dataDir, pass != "" || key != nil, *plaintext); err != nil {
 		return err
 	}
 
@@ -309,6 +316,25 @@ func bundleStateRepo(ctx context.Context, dataDir, stageDir string) (headSHA str
 		return "", "", fmt.Errorf("creating state repo bundle: %w", err)
 	}
 	return headSHA, branchName, nil
+}
+
+// refusePlaintextKeyExport refuses an unencrypted bundle that would
+// carry the secrets private key, unless -plaintext says that is meant.
+// The key sits beside the ciphertext it opens in every bundle, so an
+// unencrypted one is every secret this deployment holds in a file that
+// is about to be copied somewhere (design/design/secrets-key-
+// protection.design.md, T1).
+func refusePlaintextKeyExport(dataDir string, encrypted, plaintext bool) error {
+	if encrypted || plaintext {
+		return nil
+	}
+	keyFile := daemon.SecretsConfig(dataDir).KeyFile
+	if _, err := os.Stat(keyFile); err != nil {
+		return nil
+	}
+	return fmt.Errorf("refusing to write an unencrypted bundle: it would carry %s, the private key "+
+		"that opens every secret in it. Encrypt it with -passphrase-file or -key-file, or pass "+
+		"-plaintext if an unencrypted bundle is really what you want", keyFile)
 }
 
 func stageSecrets(dataDir, stageDir string) error {

@@ -2022,6 +2022,18 @@ func (c *HTTPClient) GetHubInstanceStatus(ctx context.Context) (api.InstanceStat
 	return status, nil
 }
 
+// RedactSecrets has the daemon cut every value in its secret store out
+// of lines -- POST /api/secrets/redact -- so a caller never needs the
+// secrets key, or the values, to redact them.
+func (c *HTTPClient) RedactSecrets(ctx context.Context, lines []string) (SecretsRedactResponse, error) {
+	var out SecretsRedactResponse
+	if lines == nil {
+		lines = []string{}
+	}
+	err := c.do(ctx, http.MethodPost, "/api/secrets/redact", SecretsRedactRequest{Lines: lines}, &out)
+	return out, err
+}
+
 // SetSecret writes one secret key in the daemon's secrets store --
 // PUT /api/secrets/{secret}/{key}.
 func (c *HTTPClient) SetSecret(ctx context.Context, secret, key, value string) error {

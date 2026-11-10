@@ -337,7 +337,9 @@ fi
 
 # R1 export and import round trip
 stop_daemon
-if cli export -data-dir "$DIR" -out "$WORK/bundle.tar.gz" >"$WORK/export.log" 2>&1; then
+# -plaintext: a throwaway dir whose bundle never leaves $WORK, so the
+# refusal of an unencrypted bundle carrying secrets.key does not apply.
+if cli export -data-dir "$DIR" -out "$WORK/bundle.tar.gz" -plaintext >"$WORK/export.log" 2>&1; then
   # A SQLite bundle carries the database. A Postgres bundle carries only
   # db-config.json and leaves the rows in the database it names (the
   # source daemon is stopped), so the imported dir runs on that.

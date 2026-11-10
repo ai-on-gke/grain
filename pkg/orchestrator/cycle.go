@@ -1962,7 +1962,13 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 				gc.TemplateName = tmpl.Name
 			}
 		}
-		if _, err := cat.ValidateGrants(gc); err != nil {
+		verdict, err := cat.ValidateGrants(gc)
+		if err == nil && len(verdict.RequiresPerson) > 0 {
+			if why := catalogueRequiresPersonHold(ctx, deps, *task, verdict.RequiresPerson); why != "" {
+				return why
+			}
+		}
+		if err != nil {
 			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
 				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
 			}); serr != nil {
@@ -1981,6 +1987,35 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 		}
 		return ""
 	}
+}
+
+// catalogueRequiresPersonHold holds task when the capability catalogue
+// says only a person may give grants it holds and nobody stands behind
+// its approval (model.Store.PersonStandsBehind): a review, a suite pass,
+// a repository's declared schedule whose acceptance does not cover them,
+// anything an agent or automation approved (task 3971). The approval is
+// withdrawn, so the task waits in the proposals for a person -- whose
+// Approve the catalogue already asks for a person (catalogueApprovalRefusal)
+// -- with the reason on its row. "" when it may run.
+func catalogueRequiresPersonHold(ctx context.Context, deps Deps, task model.Task, needsPerson []string) string {
+	ok, err := deps.Store.PersonStandsBehind(ctx, task, needsPerson)
+	if err != nil {
+		log.Printf("orchestrator: checking who approved %s for the capability catalogue: %v", task.ID, err)
+		return "held by settings/capabilities.yml: who approved the task could not be read to check it"
+	}
+	if ok {
+		return ""
+	}
+	why := model.CatalogueRequiresPersonNote(needsPerson) + ", and nobody approved it"
+	if err := deps.Store.WithdrawApproval(ctx, task.ID); err != nil {
+		log.Printf("orchestrator: returning %s to the proposals for a person: %v", task.ID, err)
+	}
+	if err := deps.Store.SetGrantWait(ctx, model.GrantWait{
+		TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: why, WaitingAt: deps.Config.now(),
+	}); err != nil {
+		log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", task.ID, err)
+	}
+	return "held by settings/capabilities.yml: " + why
 }
 
 // changeTargetHold holds a queued task whose change target refuses it as it
