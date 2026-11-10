@@ -369,8 +369,8 @@ and the command that removes each. Run them as root, in this order.
 
 `grain init` does not install a sleep or suspend policy, a metadata-server
 block, or a `/usr/local/bin/grain` wrapper. Those are `scripts/setup.sh`'s,
-and `setup.sh --uninstall` removes them (see the
-[README](../README.md#uninstalling)). On the two Kubernetes platforms,
+and `setup.sh --uninstall` removes them (see
+[host-setup.md](host-setup.md#uninstalling)). On the two Kubernetes platforms,
 remove what it applied from the cluster with `kubectl delete -f` of the
 manifest it was given (`-k8s-manifest`) instead.
 
