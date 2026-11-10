@@ -1660,7 +1660,7 @@ done
 # a fail drops it and cuts the next from a newer known-good commit in the
 # same run; with no newer commit the train waits rather than re-cut; and a
 # day may release any number of times.
-loop() { train RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none RELEASE_TRAIN_OUTPUT="$work/train.out" "$@"; }
+loop() { train RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none RELEASE_TRAIN_OUTPUT="$work/train.out"; }
 setup "" c1 c2 c3 c4 c5
 c5="${c[5]}"
 qualified_rc v2.3.0-rc.1 "$c2"
