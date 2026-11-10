@@ -67,9 +67,11 @@ func declaredAdmissionItem(adm Admission) string { return "admission: " + string
 // CIJobDeclarationID is the declaration id of job (a workflow job's
 // name, as grain CI reports it) in repo, the key its acceptance is kept
 // under. The job's name rather than its file: a job moved between files
-// asks for the same thing, and a job renamed is a new declaration.
+// asks for the same thing, and a job renamed is a new declaration. The
+// repository is lowercased, as RepoDeclaredID's is, so a respelling of
+// it is the same declaration.
 func CIJobDeclarationID(repo RepoRef, job string) string {
-	return "ci:" + repo.String() + ":" + strings.TrimSpace(job)
+	return "ci:" + strings.ToLower(repo.String()) + ":" + strings.TrimSpace(job)
 }
 
 // DeclaredCompositionHold is every item in comp that a repository's
