@@ -116,6 +116,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/pull-requests/adopt":                                        "merge:write",
 	"POST /api/pull-requests/review":                                       "tasks:write",
 	"GET /api/pull-requests/status":                                        "ci:read",
+	"POST /api/pull-requests/submit":                                       "tasks:write",
 	"POST /api/tasks/{id}/sandbox/recreate":                                "tasks:admin",
 	"POST /api/tasks/{id}/activity":                                        "internal",
 	"PUT /api/tasks/{id}/session-title":                                    "internal",

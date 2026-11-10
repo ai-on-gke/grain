@@ -1448,6 +1448,20 @@ const (
 	// trust-boundary auto-merge withdrawal) under
 	// RepoConfig.BaseRepairBypassesHumanGates while the base branch was red.
 	LinkBaseRepairBypass LinkKind = "base-repair-bypass"
+	// LinkReviewFindings records that a required review of this task's pull
+	// request failed its gate -- left findings or open questions, had fixes
+	// closed without merging, or could not be filed (-> ReviewFindingsRecord
+	// JSON). Cleared only by a clean re-review after fixes or an explicit
+	// merge:force gate override, never by Submit.
+	LinkReviewFindings LinkKind = "review-findings"
+	// LinkGateOverride records an operator's explicit merge:force override
+	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
+	LinkGateOverride LinkKind = "gate-override"
+	// LinkHumanApproved records a person's persisted Submit approval of a
+	// pull request head (-> HumanSubmittedByTarget), kept after
+	// LinkHumanSubmitted is consumed so the UI and merge gates know who
+	// approved which commit.
+	LinkHumanApproved LinkKind = "human-approved"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was

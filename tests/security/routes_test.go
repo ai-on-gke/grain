@@ -161,6 +161,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/pull-request":                             trusted,
 	"POST /api/pull-requests/adopt":                                 trusted,
 	"POST /api/pull-requests/review":                                trusted,
+	"POST /api/pull-requests/submit":                                trusted,
 	"GET /api/pull-requests/status":                                 trusted,
 	"POST /api/tasks/{id}/sandbox/recreate":                         trusted,
 	"POST /api/tasks/{id}/activity":                                 trusted,
@@ -1231,7 +1232,7 @@ func TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes(t *testing.T)
 
 	bodyFor := func(pattern, fragment string) string {
 		prefix := `"repo":"acme/widgets",`
-		if pattern == "POST /api/pull-requests/review" {
+		if pattern == "POST /api/pull-requests/review" || pattern == "POST /api/pull-requests/submit" {
 			prefix += `"pr":"acme/widgets#1",`
 		}
 		return `{` + prefix + fragment + `}`

@@ -33,7 +33,7 @@ import (
 // the task's own branch.
 func cmdPR(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return usageErrorf("usage: grain pr adopt|review|status <pr-url|owner/name#n> [flags]")
+		return usageErrorf("usage: grain pr adopt|review|status|submit <pr-url|owner/name#n> [flags]")
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
@@ -43,8 +43,10 @@ func cmdPR(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) e
 		return cmdPRReview(ctx, c, out, args)
 	case "status":
 		return cmdPRStatus(ctx, c, out, args)
+	case "submit":
+		return cmdPRSubmit(ctx, c, out, args)
 	}
-	return usageErrorf("unknown \"grain pr\" subcommand %q: one of adopt, review, status", sub)
+	return usageErrorf("unknown \"grain pr\" subcommand %q: one of adopt, review, status, submit", sub)
 }
 
 // prArg is the one pull request a `grain pr` verb names, checked here so
@@ -188,6 +190,16 @@ func printPRStatus(w io.Writer, r model.PullRequestReport) {
 		fmt.Fprintln(w, "ci:          no grain CI run")
 	}
 	fmt.Fprintf(w, "merge queue: %s\n", r.MergeQueue)
+	if len(r.Gates) > 0 {
+		fmt.Fprintln(w, "gates:")
+		for _, g := range r.Gates {
+			detail := g.Detail
+			if detail == "" {
+				detail = string(g.State)
+			}
+			fmt.Fprintf(w, "  %-16s  %-10s  %s\n", g.ID, g.State, detail)
+		}
+	}
 	if len(r.Reviews) == 0 {
 		fmt.Fprintln(w, "reviews:     none")
 	} else {
@@ -221,4 +233,64 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func cmdPRSubmit(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	fs := flag.NewFlagSet("grain pr submit", flag.ContinueOnError)
+	overrideGates := fs.String("override-gates", "",
+		"comma-separated unsatisfied gates to override under merge:force (e.g. security-review, review, ci); never implied")
+	reason := fs.String("reason", "", "required reason when -override-gates is set, recorded on the task and pull request")
+	head := fs.String("head", "", "the head commit SHA reviewed when overriding gates")
+	asJSON := fs.Bool("json", false, "print the submit result as JSON")
+	pos, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	pr, err := prArg(fs, pos)
+	if err != nil {
+		return err
+	}
+	var gates []string
+	if strings.TrimSpace(*overrideGates) != "" {
+		gates, err = model.NormalizeOverrideGates([]string{*overrideGates})
+		if err != nil {
+			return usageErrorf("grain pr submit -override-gates: %v", err)
+		}
+		if strings.TrimSpace(*reason) == "" {
+			return usageErrorf("grain pr submit: -override-gates requires -reason explaining why the gate is skipped")
+		}
+	} else if strings.TrimSpace(*reason) != "" {
+		return usageErrorf("grain pr submit: -reason requires -override-gates naming each skipped gate explicitly")
+	}
+	got, err := c.SubmitPullRequest(ctx, ui.SubmitPullRequestRequest{
+		PR: pr, OverrideGates: gates, Reason: *reason, Head: *head,
+	})
+	if err != nil {
+		return err
+	}
+	if *asJSON || out.json {
+		out.encode(got)
+		return nil
+	}
+	printPRSubmit(os.Stdout, got)
+	return nil
+}
+
+func printPRSubmit(w io.Writer, r ui.SubmitPullRequestResult) {
+	if len(r.Overridden) > 0 {
+		fmt.Fprintf(w, "%s (task %s): overrode gate(s) %s\n", r.PR, r.TaskID, strings.Join(r.Overridden, ", "))
+	} else {
+		fmt.Fprintf(w, "%s (task %s): approval recorded (merges once all required gates pass)\n", r.PR, r.TaskID)
+	}
+	fmt.Fprintf(w, "state: %s\n", r.State)
+	if len(r.Gates) > 0 {
+		fmt.Fprintln(w, "gates:")
+		for _, g := range r.Gates {
+			detail := g.Detail
+			if detail == "" {
+				detail = string(g.State)
+			}
+			fmt.Fprintf(w, "  %-16s  %-10s  %s\n", g.ID, g.State, detail)
+		}
+	}
 }

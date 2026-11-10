@@ -288,6 +288,7 @@ Calls `POST /api/tasks/{id}/force-merge` with the reason. It overrides the merge
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-head` | string |  |  | the head commit you reviewed; the override is for it alone |
+| `-override-gates` | string |  |  | comma-separated unsatisfied gates to override (e.g. security-review, review, ci); required when any review gate is pending or has findings |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/force_merge_is_not_a_tool_test.go`: `TestNoAgentFacingToolCanForceAMerge`.
@@ -1147,13 +1148,14 @@ _No flags._
 
 ---
 
-### 4.15 `grain pr adopt|review|status <pr>` {#CLI-65}
+### 4.15 `grain pr adopt|review|status|submit <pr>` {#CLI-65}
 
 The external half of pull-request coordination ([`external-cli.spec.md`](../external-cli/external-cli.spec.md) #XC-28, #XC-29). `<pr>` is `owner/name#n` or the pull request's GitHub URL; anything else **MUST** fail with a usage error before any request is sent. Every verb takes `-json` and the global `-json`. The in-sandbox `grain pr` ([`sandbox.spec.md`](sandbox.spec.md)) is a different command about the task's own branch.
 
 1. `grain pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]` calls `POST /api/pull-requests/adopt` (scope `merge:write`, and `tasks:write` on the pull request's repository) and prints the shepherd task's ID, state and mode. `-mode` defaults to `review-only`; `finish` on a pull request a review-only shepherd already holds upgrades that task in place. A filing that lands `proposed` says it waits for a person.
 2. `grain pr review <pr> [-design] [-spec <path>]` calls `POST /api/pull-requests/review` (scope `tasks:write`, and `repos:read` on the repository) and prints the review task. `-design` asks for a design review: `design/spec/contributions/contributions.spec.md` conventions and overlapping designs under `design/`.
-3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each merge gate and its state, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+4. `grain pr submit <pr> [-override-gates <gates> -reason <why> [-head <sha>]]` calls `POST /api/pull-requests/submit`. Without `-override-gates`, it needs `tasks:write` on the repository, records the caller's Submit approval only, and never skips or cancels any required review gate. With `-override-gates`, it needs `merge:force` on the repository and a non-empty `-reason`, explicitly names every unsatisfied gate being skipped (such as `security-review`, `review`, `ci`), and records the audited override on the task and pull request while keeping any running reviews alive post-merge.
 
 #### `grain pr`
 
@@ -1189,6 +1191,17 @@ _No flags._
 |---|---|---|---|---|
 | `-json` | bool |  |  | print the status as JSON |
 | `-threads` | bool |  |  | list every inline review thread's file, line and body |
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr submit`
+
+<!-- BEGIN GENERATED FLAGS: grain pr submit -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-head` | string |  |  | the head commit SHA reviewed when overriding gates |
+| `-json` | bool |  |  | print the submit result as JSON |
+| `-override-gates` | string |  |  | comma-separated unsatisfied gates to override under merge:force (e.g. security-review, review, ci); never implied |
+| `-reason` | string |  |  | required reason when -override-gates is set, recorded on the task and pull request |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/prcmd_test.go`, `pkg/ui/pull_requests_api_test.go`: `TestGrainPRReviewDesignAndPRStatusThreadsJSON`; `pkg/orchestrator/takeover_adopt_test.go`: `TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace`, `TestAdoptPullRequestLinksSpecAndDesignIntoConformanceReviewAndProposalGate`, `TestPullRequestReviewDesignAndStatusThreads`.

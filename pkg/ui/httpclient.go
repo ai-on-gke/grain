@@ -1033,8 +1033,13 @@ func (c *HTTPClient) RetryMerge(ctx context.Context, id string) error {
 // end -- there is no spelling of this call without one. head is the
 // commit reviewed, "" for the pull request's head as it is now.
 func (c *HTTPClient) ForceMerge(ctx context.Context, id, reason, head string) error {
+	return c.ForceMergeWithGates(ctx, id, reason, head, nil)
+}
+
+// ForceMergeWithGates is Client.ForceMergeWithGates over the wire.
+func (c *HTTPClient) ForceMergeWithGates(ctx context.Context, id, reason, head string, overrideGates []string) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/force-merge",
-		forceMergeRequest{Reason: reason, Head: head}, nil)
+		forceMergeRequest{Reason: reason, Head: head, OverrideGates: overrideGates}, nil)
 }
 
 // RunNow is Client.RunNow over the wire: ask for an agent to be put on
