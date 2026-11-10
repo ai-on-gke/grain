@@ -36,6 +36,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -146,6 +147,42 @@ func install(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		step("installed %s", p.Bin)
+	}
+
+	// 1b. Pin the embedded release public key at ~/.config/grain/agentd-release.pub.
+	if st, err := os.Lstat(p.ReleasePub); errors.Is(err, os.ErrNotExist) {
+		pub, err := release.EmbeddedPublicKey()
+		if err != nil {
+			fmt.Fprintf(stderr, "%s install: embedded release key: %v\n", Program, err)
+			return 1
+		}
+		pubPEM, err := release.FormatPublicKeyPEM(pub)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s install: formatting release key: %v\n", Program, err)
+			return 1
+		}
+		if err := os.MkdirAll(filepath.Dir(p.ReleasePub), 0o700); err != nil {
+			fmt.Fprintln(stderr, Program+" install: "+err.Error())
+			return 1
+		}
+		if err := writeFileAtomic(p.ReleasePub, pubPEM, 0o644); err != nil {
+			fmt.Fprintln(stderr, Program+" install: writing the release key: "+err.Error())
+			return 1
+		}
+		step("wrote %s (key %s)", p.ReleasePub, release.KeyID(pub))
+	} else if err != nil {
+		fmt.Fprintln(stderr, Program+" install: "+err.Error())
+		return 1
+	} else {
+		if st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
+			fmt.Fprintf(stderr, "%s install: %s must be a regular file, not a symlink\n", Program, p.ReleasePub)
+			return 1
+		}
+		if _, err := PinnedReleasePublicKey(home); err != nil {
+			fmt.Fprintln(stderr, Program+" install: "+err.Error())
+			return 1
+		}
+		step("keeping %s as it is", p.ReleasePub)
 	}
 
 	// 2. The allowlist (prepared before enrollment so any -join request

@@ -69,6 +69,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity/hook"
 	"github.com/ai-on-gke/grain/pkg/agent/claude/stophook"
+	"github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -112,19 +113,50 @@ func Main(args []string) int {
 
 // paths is where grain-agentd keeps everything, under the user's home.
 type paths struct {
-	Bin, Token, Key, Allowlist, StateDir, Stage, UnitDir string
+	Bin, Token, Key, ReleasePub, Allowlist, StateDir, Stage, UnitDir string
 }
 
 func pathsFor(home string) paths {
 	return paths{
-		Bin:       filepath.Join(home, ".local", "bin", Program),
-		Token:     filepath.Join(home, ".config", "grain", "agentd-token"),
-		Key:       filepath.Join(home, ".config", "grain", "agentd-key"),
-		Allowlist: filepath.Join(home, ".config", "grain", "agentd.yaml"),
-		StateDir:  filepath.Join(home, ".local", "state", Program),
-		Stage:     filepath.Join(home, ".grain", "hostd-stage"),
-		UnitDir:   filepath.Join(home, ".config", "systemd", "user"),
+		Bin:        filepath.Join(home, ".local", "bin", Program),
+		Token:      filepath.Join(home, ".config", "grain", "agentd-token"),
+		Key:        filepath.Join(home, ".config", "grain", "agentd-key"),
+		ReleasePub: filepath.Join(home, ".config", "grain", release.DefaultConfigFileName),
+		Allowlist:  filepath.Join(home, ".config", "grain", "agentd.yaml"),
+		StateDir:   filepath.Join(home, ".local", "state", Program),
+		Stage:      filepath.Join(home, ".grain", "hostd-stage"),
+		UnitDir:    filepath.Join(home, ".config", "systemd", "user"),
 	}
+}
+
+// PinnedReleasePublicKey loads the release public key pinned at
+// ~/.config/grain/agentd-release.pub, falling back to the public key embedded
+// in this grain-agentd binary when the file is absent. Symlinks and group- or
+// world-writable files are refused.
+func PinnedReleasePublicKey(home string) (ed25519.PublicKey, error) {
+	path := pathsFor(home).ReleasePub
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return release.EmbeddedPublicKey()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must be a regular file, not a symlink", path)
+	}
+	if st.Mode().Perm()&0o022 != 0 {
+		return nil, fmt.Errorf("%s is writable by group or others (mode %04o)", path, st.Mode().Perm())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	pub, err := release.ParsePublicKey(string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return pub, nil
 }
 
 // owners are the uids grain-agentd accepts as its allowlist's owner: the

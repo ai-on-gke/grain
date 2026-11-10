@@ -242,6 +242,7 @@ ARG RELEASE=
 # grain, unless a build with a main of its own says otherwise (the
 # Makefile's MAIN_grain).
 ARG MAIN_GRAIN=./cmd/grain
+ARG MAIN_GRAIN_AGENTD=./cmd/grain-agentd
 RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_IMAGE=${K8S_SANDBOX_IMAGE} GRAIN_IMAGE_REF=${GRAIN_IMAGE_REF} RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN} \
 	&& setcap cap_net_bind_service=+ep /src/bin/grain
 
@@ -263,7 +264,8 @@ RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_I
 RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/granule github.com/gke-labs/granule/cmd/granule \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/github-webhook ./cmd/github-webhook \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/grain-sandbox ./cmd/grain-sandbox
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/grain-sandbox ./cmd/grain-sandbox \
+	&& BUILDVCS="${BUILDVCS}" RELEASE="${RELEASE}" GRAIN_AGENTD_MAIN="${MAIN_GRAIN_AGENTD}" ./scripts/build-agentd.sh /out/agentd
 
 # kubectl, for a deployment running -k8s-sandboxes: pkg/k8s creates,
 # inspects and deletes sandbox pods through it, pkg/mcp's kubectl-exec
@@ -467,6 +469,7 @@ COPY --from=build /out/github-webhook /usr/local/bin/github-webhook
 # sandbox CLI it carries learned a command still answers with this
 # daemon's.
 COPY --from=build /out/grain-sandbox /usr/local/bin/grain-sandbox
+COPY --from=build /out/agentd /usr/local/share/grain/agentd
 COPY --from=build /out/kubectl /usr/local/bin/kubectl
 COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
 # pkg/cli/daemon.go's defaultSourceDir -- keep the two in step.

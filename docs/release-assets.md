@@ -23,3 +23,23 @@ holds those four archives and `checksums.txt`, and `scripts/release-assets.sh
 cli-publish <release> DIR` uploads the archives and then `checksums.txt` to an
 existing GitHub release. A release carrying `checksums.txt` is not overwritten;
 partial archive uploads left without `checksums.txt` are replaced.
+
+## `grain-agentd`
+
+`vX.Y.Z` and `vX.Y.Z-rc.N` GitHub releases also carry per-platform static
+(`CGO_ENABLED=0`) `grain-agentd` binaries and their signed manifests
+([agentd-release-signing.md](agentd-release-signing.md)):
+
+- `grain-agentd-linux-amd64` and `grain-agentd-linux-amd64.manifest.json`
+- `grain-agentd-linux-arm64` and `grain-agentd-linux-arm64.manifest.json`
+
+`scripts/build-agentd.sh` builds both binaries stamped with the release and
+writes their manifests (`version`, `platform`, `sha256`, `size`,
+`min_contract_features`, `features`). In the release workflows, the `agentd`
+job builds them with `contents: read` and no secrets, and `agentd-assets` signs
+the manifests with `AGENTD_RELEASE_SIGNING_KEY` (`scripts/release-assets.sh
+agentd-sign`), checks them (`agentd-validate`), and uploads the binaries
+followed by the manifests (`agentd-publish`). The controller image also bundles
+`/usr/local/share/grain/agentd` and serves `/api/hostd/agentd/linux/<arch>` and
+`/api/hostd/agentd/linux/<arch>/manifest.json` for hosts that cannot reach
+GitHub.

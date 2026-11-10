@@ -591,6 +591,36 @@ start_unit() {
   fi
 }
 
+download_agentd() {
+  [ "$(uname -s)" = Linux ] || return 1
+  case "$(uname -m)" in
+    x86_64|amd64) agentd_arch=amd64 ;;
+    aarch64|arm64) agentd_arch=arm64 ;;
+    *) return 1 ;;
+  esac
+  agentd_base="${SERVER%/}/api/hostd/agentd/linux/$agentd_arch"
+  log "downloading grain-agentd (linux/$agentd_arch) from $SERVER"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 -o "$WORK/manifest.json" -- "$agentd_base/manifest.json" || return 1
+    curl -fsSL --retry 2 -o "$WORK/grain-agentd" -- "$agentd_base" || return 1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$WORK/manifest.json" -- "$agentd_base/manifest.json" || return 1
+    wget -q -O "$WORK/grain-agentd" -- "$agentd_base" || return 1
+  else
+    die "neither curl nor wget is installed to download grain-agentd"
+  fi
+  agentd_want="$(tr -d ' \t\r\n' < "$WORK/manifest.json" | sed -n 's/.*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p')"
+  if [ "${#agentd_want}" -ne 64 ]; then
+    die "$agentd_base/manifest.json carries no valid 64-digit SHA-256"
+  fi
+  agentd_got="$(sha256_of "$WORK/grain-agentd")"
+  if [ "$agentd_got" != "$agentd_want" ]; then
+    die "$agentd_base has SHA-256 ${agentd_got:-<empty>}, not $agentd_want: not installing it"
+  fi
+  chmod 0755 "$WORK/grain-agentd"
+  return 0
+}
+
 run_agentd_install() {
   [ "$(id -u)" != 0 ] || die "--agentd installs a rootless user service: run this as yourself, not root"
   check_join_code
@@ -603,6 +633,8 @@ run_agentd_install() {
       -*) die "$value holds a leading '-': give a plain value" ;;
     esac
   done
+  make_work_dir
+  trap 'rm -rf "$WORK"' EXIT
   if [ -n "$AGENTD_BIN" ]; then
     [ -x "$AGENTD_BIN" ] || die "--agentd-bin $AGENTD_BIN is not an executable"
     AGENTD_CMD="$AGENTD_BIN"
@@ -610,8 +642,10 @@ run_agentd_install() {
     AGENTD_CMD="$(command -v grain-agentd)"
   elif [ -n "${HOME:-}" ] && [ -x "$HOME/.local/bin/grain-agentd" ]; then
     AGENTD_CMD="$HOME/.local/bin/grain-agentd"
+  elif download_agentd; then
+    AGENTD_CMD="$WORK/grain-agentd"
   else
-    die "grain-agentd not found on \$PATH or ~/.local/bin (pass --agentd-bin PATH, or omit --agentd to install the host agent)"
+    die "grain-agentd not found on \$PATH or ~/.local/bin, and could not download it from $SERVER (pass --agentd-bin PATH, or omit --agentd to install the host agent)"
   fi
 
   set -- "$AGENTD_CMD" install -server "$SERVER"
@@ -619,10 +653,10 @@ run_agentd_install() {
   [ -z "$NAME" ] || set -- "$@" -name "$NAME"
   [ -z "$IAP_AUDIENCE" ] || set -- "$@" -iap-audience "$IAP_AUDIENCE"
   [ "$START" = 1 ] || set -- "$@" -no-start
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    exec "$@" </dev/tty
+  if ( : </dev/tty ) 2>/dev/null; then
+    "$@" </dev/tty
   else
-    exec "$@"
+    "$@"
   fi
 }
 

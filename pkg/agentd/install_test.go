@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
@@ -77,6 +78,21 @@ func TestInstall(t *testing.T) {
 	if st, err := os.Stat(p.Bin); err != nil || st.Mode()&0o111 == 0 {
 		t.Errorf("the binary at %s: %v", p.Bin, err)
 	}
+	// The pinned release public key (~/.config/grain/agentd-release.pub), mode 0644.
+	wantPub, err := release.EmbeddedPublicKey()
+	if err != nil {
+		t.Fatalf("EmbeddedPublicKey: %v", err)
+	}
+	gotPub, err := PinnedReleasePublicKey(h.home)
+	if err != nil {
+		t.Fatalf("PinnedReleasePublicKey: %v", err)
+	}
+	if !bytes.Equal(gotPub, wantPub) {
+		t.Errorf("pinned release key %x != embedded %x", gotPub, wantPub)
+	}
+	if st, _ := os.Stat(p.ReleasePub); st == nil || st.Mode().Perm() != 0o644 {
+		t.Errorf("release key file mode = %v, want 0644", st)
+	}
 	// The token, 0600, in a 0700 directory.
 	if got, err := os.ReadFile(p.Token); err != nil || strings.TrimSpace(string(got)) != "ghd_install" {
 		t.Errorf("token file = %q, %v", got, err)
@@ -122,7 +138,7 @@ func TestInstall(t *testing.T) {
 	if code := install([]string{"-server", "https://grain.example.com", "-no-start"}, &out, &errOut); code != 0 {
 		t.Fatalf("install again = %d: %s", code, errOut.String())
 	}
-	for _, want := range []string{"keeping the token in " + p.Token, "keeping " + p.Allowlist + " as it is", "-no-start"} {
+	for _, want := range []string{"keeping " + p.ReleasePub + " as it is", "keeping the token in " + p.Token, "keeping " + p.Allowlist + " as it is", "-no-start"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("second install's output lacks %q:\n%s", want, out.String())
 		}

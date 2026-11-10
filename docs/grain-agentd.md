@@ -24,13 +24,20 @@ you can edit it. That is acceptable only because this allowlist can name
 agent CLIs and nothing else, and an agent CLI already runs as you with your
 shell.
 
-## Build it
+## Build or download it
 
 ```sh
 make grain-agentd        # bin/grain-agentd, static
+make dist-agentd         # bin/dist-agentd/grain-agentd-linux-{amd64,arm64} + .manifest.json
 ```
 
-`make build` does not build it, and no release ships it yet.
+`vX.Y.Z` and `vX.Y.Z-rc.N` releases publish signed static binaries and
+manifests for `linux/amd64` and `linux/arm64`
+([agentd-release-signing.md](agentd-release-signing.md)), and the controller
+serves them at `GET /api/hostd/agentd/linux/{amd64,arm64}` (and
+`.../manifest.json`) for hosts that cannot reach the internet. The hosted
+installer (`/hostd/install --agentd`) downloads `grain-agentd` from the
+controller automatically when none is on `$PATH` or `~/.local/bin`.
 
 ## Enroll and install it (`--join`, recommended)
 
@@ -85,7 +92,9 @@ GRAIN_HOSTD_TOKEN=<token> ./bin/grain-agentd install -server https://grain.examp
 With no `$GRAIN_HOSTD_TOKEN` it asks for the token on the terminal without
 echoing it (and puts the terminal back if you interrupt it). `install`:
 
-1. copies the binary to `~/.local/bin/grain-agentd`;
+1. copies the binary to `~/.local/bin/grain-agentd` and writes its embedded
+   release public key to `~/.config/grain/agentd-release.pub` (mode `0644`, kept
+   as it is on re-runs; see [agentd-release-signing.md](agentd-release-signing.md));
 2. writes the token to `~/.config/grain/agentd-token` (mode 0600, in a 0700
    directory), or keeps the one already there;
 3. writes `~/.config/grain/agentd.yaml` with an `agy` entry -- agy found on

@@ -66,6 +66,8 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/hostd/renew":                                         scopeSignedIn,
 	"GET /api/hostd/install.sh":                                     scopeSignedIn,
 	"GET /hostd/install":                                            scopeSignedIn,
+	"GET /api/hostd/agentd/{os}/{arch}":                             scopeSignedIn,
+	"GET /api/hostd/agentd/{os}/{arch}/manifest.json":               scopeSignedIn,
 	"GET /cli/install.sh":                                           scopeSignedIn,
 	"POST /api/mcp":                                                 scopeSignedIn,
 	"POST /mcp":                                                     scopeSignedIn,
