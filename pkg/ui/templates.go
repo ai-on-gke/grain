@@ -1329,7 +1329,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		}
 		list.Paged = true
 	}
-	writeList(w, templates, list)
+	writeListBy(w, templates, list, func(t Template) string { return t.ID })
 }
 
 func templateAllowedForGrants(t Template, grants APIGrantSet) bool {
