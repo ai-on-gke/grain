@@ -889,7 +889,7 @@ func TestADumpAt22FoldsTheDefaultTeamsRepoSettingsAndGCPKeys(t *testing.T) {
 		t.Fatalf("acme/widgets, which had no repo_config row, did not arrive: %+v, %v", got, err)
 	}
 	if got.CloneURL != "https://git.example.com/acme/widgets.git" || got.RepairTemplateID != "widgets-repair" ||
-		!got.RequireBranchUpToDate || !slices.Equal(got.CICapabilities, []string{"repo-read:acme/docs"}) ||
+		!got.RequireBranchUpToDate || !slices.Equal(got.CICapabilities, []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "docs"})}) ||
 		!slices.Equal(got.ReleaseSecrets, []string{"NPM_TOKEN"}) {
 		t.Errorf("acme/widgets arrived as %+v", got)
 	}

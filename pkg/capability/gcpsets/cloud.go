@@ -27,6 +27,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/artifactregistry/v1"
 	"google.golang.org/api/cloudresourcemanager/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iam/v1"
@@ -60,7 +61,9 @@ type Policy struct {
 var ErrConflict = errors.New("the IAM policy changed underneath this write")
 
 // Cloud is everything the server does on GCP, as one admin. Resource is
-// "projects/<id>" or "buckets/<name>". Tests substitute a fake.
+// "projects/<id>", "buckets/<name>",
+// "projects/<id>/locations/<location>/repositories/<repo>", or
+// "projects/<id>/serviceAccounts/<email>". Tests substitute a fake.
 type Cloud interface {
 	gcpkey.Minter
 	ListServiceAccounts(ctx context.Context, project string) ([]ServiceAccount, error)
@@ -173,6 +176,10 @@ func (g GoogleConnector) Connect(ctx context.Context, a Admin) (Cloud, error) {
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building a Storage client: %w", a.Name, err)
 	}
+	ar, err := artifactregistry.NewService(ctx, opt...)
+	if err != nil {
+		return nil, fmt.Errorf("admin %s: building an Artifact Registry client: %w", a.Name, err)
+	}
 	credsSvc, err := iamcredentials.NewService(ctx, opt...)
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building an IAM Credentials client: %w", a.Name, err)
@@ -181,7 +188,7 @@ func (g GoogleConnector) Connect(ctx context.Context, a Admin) (Cloud, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &googleCloud{Minter: minter, iam: iamSvc, iamcreds: credsSvc, crm: crm, st: st, tokens: creds.TokenSource}, nil
+	return &googleCloud{Minter: minter, iam: iamSvc, iamcreds: credsSvc, crm: crm, st: st, ar: ar, tokens: creds.TokenSource}, nil
 }
 
 var impersonationEmail = regexp.MustCompile(`serviceAccounts/([^/:]+@[^/:]+):generateAccessToken`)
@@ -263,11 +270,11 @@ func identityFromJSON(raw []byte) (email, kind string, ok bool) {
 type googleCloud struct {
 	gcpkey.Minter
 	iam *iam.Service
-	// iamcreds mints impersonated tokens for a set over an existing
-	// service account (Impersonator).
+	// iamcreds mints impersonated tokens for token-mode sets (Impersonator).
 	iamcreds *iamcredentials.Service
 	crm      *cloudresourcemanager.Service
 	st       *storage.Service
+	ar       *artifactregistry.Service
 	// tokens is the token source the clients authenticate with.
 	tokens oauth2.TokenSource
 }
@@ -315,11 +322,47 @@ func (c *googleCloud) DeleteServiceAccount(ctx context.Context, project, email s
 	return nil
 }
 
+func isServiceAccountResource(resource string) bool {
+	return strings.HasPrefix(resource, "projects/") && strings.Contains(resource, "/serviceAccounts/")
+}
+
+func isArtifactRegistryResource(resource string) bool {
+	return strings.HasPrefix(resource, "projects/") && strings.Contains(resource, "/locations/") && strings.Contains(resource, "/repositories/")
+}
+
 func (c *googleCloud) GetPolicy(ctx context.Context, resource string) (*Policy, error) {
 	if b, ok := bucketOf(resource); ok {
 		p, err := c.st.Buckets.GetIamPolicy(b).Context(ctx).Do()
 		if err != nil {
 			return nil, fmt.Errorf("reading the IAM policy of bucket %s: %w", b, err)
+		}
+		out := &Policy{Etag: p.Etag}
+		for _, bd := range p.Bindings {
+			if bd.Condition != nil {
+				continue
+			}
+			out.Bindings = append(out.Bindings, Binding{Role: bd.Role, Members: bd.Members})
+		}
+		return out, nil
+	}
+	if isArtifactRegistryResource(resource) {
+		p, err := c.ar.Projects.Locations.Repositories.GetIamPolicy(resource).Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("reading the IAM policy of Artifact Registry repository %s: %w", resource, err)
+		}
+		out := &Policy{Etag: p.Etag}
+		for _, bd := range p.Bindings {
+			if bd.Condition != nil {
+				continue
+			}
+			out.Bindings = append(out.Bindings, Binding{Role: bd.Role, Members: bd.Members})
+		}
+		return out, nil
+	}
+	if isServiceAccountResource(resource) {
+		p, err := c.iam.Projects.ServiceAccounts.GetIamPolicy(resource).Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("reading the IAM policy of service account %s: %w", resource, err)
 		}
 		out := &Policy{Etag: p.Etag}
 		for _, bd := range p.Bindings {
@@ -369,6 +412,48 @@ func (c *googleCloud) SetPolicy(ctx context.Context, resource string, p *Policy)
 		_, err = c.st.Buckets.SetIamPolicy(b, cur).Context(ctx).Do()
 		return conflictOr(err, "bucket "+b)
 	}
+	if isArtifactRegistryResource(resource) {
+		cur, err := c.ar.Projects.Locations.Repositories.GetIamPolicy(resource).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("reading the IAM policy of Artifact Registry repository %s: %w", resource, err)
+		}
+		if cur.Etag != p.Etag {
+			return ErrConflict
+		}
+		var bindings []*artifactregistry.Binding
+		for _, bd := range cur.Bindings {
+			if bd.Condition != nil {
+				bindings = append(bindings, bd)
+			}
+		}
+		for _, bd := range p.Bindings {
+			bindings = append(bindings, &artifactregistry.Binding{Role: bd.Role, Members: bd.Members})
+		}
+		cur.Bindings = bindings
+		_, err = c.ar.Projects.Locations.Repositories.SetIamPolicy(resource, &artifactregistry.SetIamPolicyRequest{Policy: cur}).Context(ctx).Do()
+		return conflictOr(err, "Artifact Registry repository "+resource)
+	}
+	if isServiceAccountResource(resource) {
+		cur, err := c.iam.Projects.ServiceAccounts.GetIamPolicy(resource).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("reading the IAM policy of service account %s: %w", resource, err)
+		}
+		if cur.Etag != p.Etag {
+			return ErrConflict
+		}
+		var bindings []*iam.Binding
+		for _, bd := range cur.Bindings {
+			if bd.Condition != nil {
+				bindings = append(bindings, bd)
+			}
+		}
+		for _, bd := range p.Bindings {
+			bindings = append(bindings, &iam.Binding{Role: bd.Role, Members: bd.Members})
+		}
+		cur.Bindings = bindings
+		_, err = c.iam.Projects.ServiceAccounts.SetIamPolicy(resource, &iam.SetIamPolicyRequest{Policy: cur}).Context(ctx).Do()
+		return conflictOr(err, "service account "+resource)
+	}
 	project := strings.TrimPrefix(resource, "projects/")
 	cur, err := c.crm.Projects.GetIamPolicy(project, &cloudresourcemanager.GetIamPolicyRequest{}).Context(ctx).Do()
 	if err != nil {
@@ -408,6 +493,27 @@ func (c *googleCloud) TestPermissions(ctx context.Context, project string, perms
 		return nil, fmt.Errorf("testing permissions on %s: %w", project, err)
 	}
 	return r.Permissions, nil
+}
+
+// TestResourcePermissions tests perms directly on a scoped bucket or Artifact
+// Registry repository so an admin granted permissions on that resource alone
+// (rather than project-wide) passes Test.
+func (c *googleCloud) TestResourcePermissions(ctx context.Context, resource string, perms []string) ([]string, error) {
+	if b, ok := bucketOf(resource); ok {
+		r, err := c.st.Buckets.TestIamPermissions(b, perms).Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("testing permissions on bucket %s: %w", b, err)
+		}
+		return r.Permissions, nil
+	}
+	if isArtifactRegistryResource(resource) {
+		r, err := c.ar.Projects.Locations.Repositories.TestIamPermissions(resource, &artifactregistry.TestIamPermissionsRequest{Permissions: perms}).Context(ctx).Do()
+		if err != nil {
+			return nil, fmt.Errorf("testing permissions on Artifact Registry repository %s: %w", resource, err)
+		}
+		return r.Permissions, nil
+	}
+	return nil, nil
 }
 
 // identityTimeout bounds one identity lookup in a report.

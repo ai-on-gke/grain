@@ -289,7 +289,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 		}
 		setArg[protocol.PersonGrantedArgKey] = vals
 	}
-	desc := "Mint a per-attempt key for a service account of one of this deployment's GCP permission sets, deleted at release or past the attempt's deadline -- or, for a set over an existing service account with credential: token, short-lived access tokens for it by impersonation, and no key at all."
+	desc := "Mint per-attempt GCP credentials for one of this deployment's permission sets: short-lived access tokens by impersonation with no key at all (credential: token -- either on a grain-managed service account whose roles grain binds, or on an existing service_account), or a per-attempt service-account key deleted at release or past the attempt's deadline (credential: key)."
 	if report != "" {
 		desc += "\n\n" + report
 	}
@@ -394,8 +394,19 @@ func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Le
 		"credential: short-lived access tokens by impersonation (no key exists); " + keyPath + " is an external_account config\n" +
 		"id_token: " + idScript + " AUDIENCE\n"
 	roles := ""
-	if len(ps.Roles) > 0 {
-		roles = " (listed roles " + strings.Join(ps.Roles, ", ") + "; the account's own permissions are what apply)"
+	promptAccount := "service account " + lease.Account + " in project " + ps.Project
+	if ps.Existing() {
+		promptAccount = "existing service account " + lease.Account + ", project " + ps.Project
+		if len(ps.Roles) > 0 {
+			roles = " (listed roles " + strings.Join(ps.Roles, ", ") + "; the account's own permissions are what apply)"
+		}
+	} else {
+		if len(ps.Roles) > 0 {
+			roles = ", roles " + strings.Join(ps.Roles, ", ")
+			if ps.ResourceScope != "" {
+				roles += " on " + ps.ResourceScope
+			}
+		}
 	}
 	resp := &protocol.MintResponse{
 		Status: protocol.StatusOK,
@@ -406,8 +417,8 @@ func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Le
 			{Path: idScript, Mode: "0700", Content: gcpIDTokenScript(port, attemptID, subject)},
 			{Path: aboutPath, Mode: "0644", Content: about},
 		},
-		PromptSection: fmt.Sprintf("GCP permission set %s: existing service account %s, project %s%s. %s is an external_account credential config, not a key: clients that read it get short-lived access tokens for that account, refreshed as they expire, until this attempt ends. `%s AUDIENCE` prints an ID token for it. %s names the set, the account and the project.",
-			set, lease.Account, ps.Project, roles, keyPath, idScript, aboutPath),
+		PromptSection: fmt.Sprintf("GCP permission set %s: %s%s. %s is an external_account credential config, not a key: clients that read it get short-lived access tokens for that account, refreshed as they expire, until this attempt ends. `%s AUDIENCE` prints an ID token for it. %s names the set, the account and the project.",
+			set, promptAccount, roles, keyPath, idScript, aboutPath),
 	}
 	if primary && keyPath == GCPKeyPath {
 		resp.PromptSection += " gcloud uses it (auth/credential_file_override) with the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find it there."

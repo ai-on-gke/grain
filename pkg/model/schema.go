@@ -625,12 +625,17 @@ import "strconv"
 // 131 adds `schedule`.`grain_ci` (model.Schedule.GrainCI): a schedule's
 // `workflow:` firing runs on grain CI even on a ci_mode: github
 // repository (grain/task-3878).
-// 132 adds `schedule`.`overlap_group` (model.Schedule.OverlapGroup) and
+// 132 changes no table: it rewrites every grant still stored as
+// `api:<what>[@repo]` (or a non-canonical api reference), `repo-read:` or
+// `repo-write:` to its canonical `https://grain.dev/capabilities/api#…` /
+// `…/repo#read|#write` reference, slice 4 of
+// design/design/unified-grants.design.md (canonical_grant_migration.go).
+// 133 adds `schedule`.`overlap_group` (model.Schedule.OverlapGroup) and
 // `scheduled_firing_skip`.`held_by_schedule_id`
 // (model.ScheduleSkip.HeldByScheduleID): an overlap group shared by the
 // schedules of one repository, and the schedule that held a skipped
 // firing when it was another one in that group (grain/task-3895).
-const SchemaVersion = 132
+const SchemaVersion = 133
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

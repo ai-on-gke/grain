@@ -71,13 +71,18 @@ export async function writeAccessCode(file) {
   await fs.writeFile(file, `${accessCode()}\n`, { mode: 0o600 });
 }
 
-// signIn posts code to url's sign-in route and resolves to a Playwright
-// storage state holding the session cookie it sets.
-export async function signIn(url, code = accessCode()) {
+// signIn posts code to url's sign-in route, as name (who the session
+// is recorded as), and resolves to a Playwright storage state holding the
+// session cookie it sets.
+export async function signIn(
+  url,
+  code = accessCode(),
+  name = "alice@example.com",
+) {
   const res = await fetch(`${url}/api/auth/access-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, name }),
   });
   if (!res.ok) {
     throw new Error(

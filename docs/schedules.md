@@ -1491,7 +1491,7 @@ same template, such as experimental/grain's release sync and its
 `sync-oss-release-safety-net`, could run concurrently, and that
 repository had to add a template step to notice.
 
-`Schedule.OverlapGroup` (`schedule.overlap_group`, schema version 132),
+`Schedule.OverlapGroup` (`schedule.overlap_group`, schema version 133),
 written `overlap: {skip: true, group: <name>}` or `overlap-group: <name>`
 in a schedule file (the plain `overlap: skip|allow` still parses) and
 `overlap-group:` on a settings row, widens the question to every schedule

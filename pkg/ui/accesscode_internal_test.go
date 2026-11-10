@@ -357,3 +357,28 @@ func TestLocalReturnPath(t *testing.T) {
 		t.Errorf("localReturnPath of a %d-byte path = %d bytes, want it unchanged", len(long), len(got))
 	}
 }
+
+// A named session's name is under its MAC: it reads back, and editing it
+// breaks the session rather than renaming it.
+func TestNamedAccessSessionsCarryAnUnforgeableName(t *testing.T) {
+	code, now := "ABCD-EFGH-IJKL", time.Now()
+	tok := accessSessionTokenFor(code, "alice@example.com", now)
+	sess, ok := verifyAccessSession(tok, code, time.Hour, now)
+	if !ok || sess.Name != "alice@example.com" {
+		t.Fatalf("named session = %+v, %v; want alice@example.com", sess, ok)
+	}
+	other := accessSessionTokenFor(code, "mallory@example.com", now)
+	parts, otherParts := strings.Split(tok, "."), strings.Split(other, ".")
+	parts[2] = otherParts[2]
+	if _, ok := verifyAccessSession(strings.Join(parts, "."), code, time.Hour, now); ok {
+		t.Error("a session whose name was swapped still verifies")
+	}
+	if sess, ok := verifyAccessSession(accessSessionToken(code, now), code, time.Hour, now); !ok || sess.Name != "" {
+		t.Errorf("unnamed v1 session = %+v, %v; want it to verify with no name", sess, ok)
+	}
+	for _, bad := range []string{"a b@example.com", "x\n@example.com", "user:alice@example.com", strings.Repeat("a", 200)} {
+		if _, ok := cleanAccessName(bad); ok {
+			t.Errorf("cleanAccessName(%q) accepted", bad)
+		}
+	}
+}

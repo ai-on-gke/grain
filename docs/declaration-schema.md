@@ -51,8 +51,9 @@ What the two contexts do *not* share is size, and that stays:
 |---|---|---|
 | carries | every field | the subset a repository may say about itself |
 | identity | the row's id | the file's own name |
-| `grants`, `reads`, `writes`, `target` | yes | **refused, loudly** |
+| `reads`, `writes`, `target` | yes | **refused, loudly** |
 | a template's `capabilities: [repo-read:..., repo-write:...]` | as `reads`/`writes` | accepted, and only those two (task 1780) |
+| a template's or schedule's `grants:` | the grant rows | accepted as the unified spelling of `capabilities:`, read as one list with it and held to exactly its rule (unified-grants §3) |
 | a schedule's own `title`/`body`/`auto-merge` | yes | **refused, loudly** |
 
 ## The thing that must not be got wrong

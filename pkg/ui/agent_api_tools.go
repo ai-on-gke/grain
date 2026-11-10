@@ -306,7 +306,7 @@ var routeDocs = map[string]string{
 	"POST /api/host/shutdown":                                              "Power off the machine grain runs on; it does not come back on its own.",
 	"POST /api/host/restart":                                               "Restart the grain service, without touching the machine it runs on.",
 	"POST /api/upgrade":                                                    "Start or schedule upgrading grain to a branch or image; set afterTasksFinish: true to drain running tasks and CI jobs first (your own run counts, so finish rather than polling), as false restarts grain immediately and discards in-flight work.",
-	"PUT /api/upgrade/source":                                              "Configure where container-image upgrades fetch candidate images from (release-assets or registry, plus optional release repository and fallback) when not locked by a daemon flag or environment variable.",
+	"PUT /api/upgrade/source":                                              "Configure container-image upgrade source settings (registry) when not locked by a daemon flag or environment variable.",
 	"DELETE /api/upgrade/scheduled":                                        "Cancel an upgrade waiting for running tasks to finish.",
 	"POST /api/persistent-sandboxes/{name}/{action}":                       "Act on a persistent sandbox: action is stop, start, restart or rebuild.",
 	"DELETE /api/pause":                                                    "Lift agent pauses: those of a connection (query connection, and model), of a team (team, and framework), or every pause the caller may lift.",

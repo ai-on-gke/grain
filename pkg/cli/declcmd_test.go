@@ -171,7 +171,7 @@ func TestDeclarationsCheckPrintsWhatATreeDeclares(t *testing.T) {
 func TestDeclarationsCheckReportsEveryProblemAtOnce(t *testing.T) {
 	dir := declarationTree(t)
 	if err := os.WriteFile(filepath.Join(dir, ".grain/templates/docs.yml"),
-		[]byte("title: Tidy the docs\ngrants: [github-sandbox]\n"), 0o644); err != nil {
+		[]byte("title: Tidy the docs\nwrites: [somebody/else]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".grain/schedules/release.yml"),

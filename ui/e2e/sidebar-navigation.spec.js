@@ -138,7 +138,7 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     // §4.3).
     await expect(aside.getByTestId("user-tile")).toHaveAttribute(
       "title",
-      /^operator \((access code|local)\)$/,
+      /^(operator|alice@example\.com) \((access code|local)\)$/,
     );
     const stamp = aside.getByTestId("build-stamp");
     await expect(stamp).toBeVisible();

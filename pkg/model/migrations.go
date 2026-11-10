@@ -939,6 +939,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version: 132,
+		Description: "rewrite every stored grant still spelled api:<what>[@repo] (or a non-canonical api reference), repo-read:<repo> or repo-write:<repo> " +
+			"to https://grain.dev/capabilities/api#<what>[{repo}] and repo#read / #write {repo} across the grant tables, task_grant_wait, " +
+			"default and CI capability lists and console sessions (unified-grants slice 4)",
+		Up: migrateCanonicalGrants,
+	},
+	{
+		Version: 133,
 		Description: "add schedule.overlap_group and scheduled_firing_skip.held_by_schedule_id, " +
 			"an overlap group shared by one repository's schedules (grain/task-3895)",
 		Statements: []string{
