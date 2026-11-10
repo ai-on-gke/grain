@@ -180,6 +180,9 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      # The reviewed-merge gate reads the commit's pull request and its
+      # reviews (scripts/release-images.sh check_reviewed_merge).
+      pull-requests: read
     concurrency:
       # An on-demand build is a group of its own, so it neither cancels nor
       # is cancelled by the branch's runs, and a second dispatch of the same
@@ -571,6 +574,14 @@ jobs:
           retention-days: 1
 
       - name: Publish the images
+        env:
+          # Refuse a commit that did not reach the branch through a reviewed
+          # merge: one grain made (vars.GRAIN_MERGE_LOGINS, the forge logins
+          # grain merges as) or one the forge's review record covers
+          # (pkg/reviewedmerge). vars.REQUIRE_REVIEWED_MERGE=false skips it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRAIN_MERGE_LOGINS: ${{ vars.GRAIN_MERGE_LOGINS }}
+          REQUIRE_REVIEWED_MERGE: ${{ vars.REQUIRE_REVIEWED_MERGE }}
         run: |
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ]; then
