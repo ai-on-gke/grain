@@ -47,7 +47,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type fakeRegistryServer struct {
+type fakeHubServer struct {
 	mu          sync.Mutex
 	entries     map[string]api.CreateEntryRequest
 	updates     []api.UpdateEntryRequest
@@ -60,9 +60,9 @@ type fakeRegistryServer struct {
 	nextInterval   int
 }
 
-func newFakeRegistryServer(t *testing.T) (*fakeRegistryServer, *httptest.Server) {
+func newFakeHubServer(t *testing.T) (*fakeHubServer, *httptest.Server) {
 	t.Helper()
-	f := &fakeRegistryServer{
+	f := &fakeHubServer{
 		entries: make(map[string]api.CreateEntryRequest),
 	}
 	mux := http.NewServeMux()
@@ -188,9 +188,9 @@ func newFakeRegistryServer(t *testing.T) (*fakeRegistryServer, *httptest.Server)
 	return f, srv
 }
 
-func TestRegistryManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) {
+func TestHubManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) {
 	t.Parallel()
-	fake, srv := newFakeRegistryServer(t)
+	fake, srv := newFakeHubServer(t)
 
 	dataDir := t.TempDir()
 	store, db, err := OpenStore("sqlite", "", dataDir)
@@ -242,16 +242,16 @@ func TestRegistryManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) 
 
 	cfg := model.DefaultConfig()
 	cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "grain/config"}
-	cfg.Registry = model.RegistryConfig{
+	cfg.Hub = model.HubConfig{
 		URL:         srv.URL,
 		Entry:       "dev-workstation",
-		AuthMode:    model.RegistryAuthOIDC,
+		AuthMode:    model.HubAuthOIDC,
 		DisplayName: "Dev Workstation",
 		Purpose:     "Autoscaler development",
 		HostKind:    api.HostKindWorkstation,
 		Listed:      true,
 		Tags:        []string{"autoscaler", "team-infra"},
-		Scopes: []model.RegistryScopeRule{
+		Scopes: []model.HubScopeRule{
 			{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler"},
 		},
 	}
@@ -259,7 +259,7 @@ func TestRegistryManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) 
 		t.Fatalf("PutConfig: %v", err)
 	}
 
-	mgr := NewRegistryManager(RegistryManagerOptions{
+	mgr := NewHubManager(HubManagerOptions{
 		Store:      store,
 		HTTPClient: srv.Client(),
 		LiveConfig: func() Config { return Config{GranuleSandboxes: true} },
@@ -283,8 +283,8 @@ func TestRegistryManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) 
 	if err != nil {
 		t.Fatalf("TriggerHeartbeat: %v", err)
 	}
-	if snap.State != model.RegistryStateConnected {
-		t.Fatalf("Snapshot.State = %q, want %q (err=%q)", snap.State, model.RegistryStateConnected, snap.LastError)
+	if snap.State != model.HubStateConnected {
+		t.Fatalf("Snapshot.State = %q, want %q (err=%q)", snap.State, model.HubStateConnected, snap.LastError)
 	}
 	if !snap.Registered || snap.LastHeartbeatAt == nil {
 		t.Fatalf("expected Registered=true and non-nil LastHeartbeatAt, got %+v", snap)
@@ -328,7 +328,7 @@ func TestRegistryManagerOIDCSelfRegistersAndSendsHeartbeatPayload(t *testing.T) 
 	}
 
 	// Updating catalog metadata triggers PATCH /api/entries/{name} on next heartbeat.
-	cfg.Registry.Purpose = "Updated purpose"
+	cfg.Hub.Purpose = "Updated purpose"
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig update: %v", err)
 	}
@@ -352,9 +352,9 @@ func (c *countingAuditLogger) RecordSecretResolution(_ context.Context, _ secret
 	return nil
 }
 
-func TestRegistryManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
+func TestHubManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
 	t.Parallel()
-	fake, srv := newFakeRegistryServer(t)
+	fake, srv := newFakeHubServer(t)
 	// Pre-create entry as `grain hub register` would do.
 	fake.mu.Lock()
 	fake.entries["ci-runner"] = api.CreateEntryRequest{Name: "ci-runner", Kind: api.KindConnected}
@@ -374,16 +374,16 @@ func TestRegistryManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
 
 	cfg := model.DefaultConfig()
 	cfg.TargetRepos = []string{"acme/runner"}
-	cfg.Registry = model.RegistryConfig{
+	cfg.Hub = model.HubConfig{
 		URL:      srv.URL,
 		Entry:    "ci-runner",
-		AuthMode: model.RegistryAuthToken,
+		AuthMode: model.HubAuthToken,
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig: %v", err)
 	}
 
-	mgr := NewRegistryManager(RegistryManagerOptions{
+	mgr := NewHubManager(HubManagerOptions{
 		Store:          store,
 		Secrets:        secretStore,
 		HTTPClient:     srv.Client(),
@@ -396,22 +396,22 @@ func TestRegistryManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
 
 	// 1. Missing registration secret fails cleanly without hitting the server.
 	snap, err := mgr.TriggerHeartbeat(ctx)
-	if err == nil || !strings.Contains(err.Error(), secrets.RegistryRegistrationTokenSecret) {
-		t.Fatalf("expected missing-credential error mentioning %s, got %v", secrets.RegistryRegistrationTokenSecret, err)
+	if err == nil || !strings.Contains(err.Error(), secrets.HubRegistrationTokenSecret) {
+		t.Fatalf("expected missing-credential error mentioning %s, got %v", secrets.HubRegistrationTokenSecret, err)
 	}
-	if snap.State != model.RegistryStateError || snap.TokenConfigured {
+	if snap.State != model.HubStateError || snap.TokenConfigured {
 		t.Fatalf("expected error state with TokenConfigured=false, got %+v", snap)
 	}
 
 	// 2. Setting secret in secrets.Store works immediately without daemon restart.
-	if err := secretStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_first_token")); err != nil {
+	if err := secretStore.Set(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_first_token")); err != nil {
 		t.Fatalf("secretStore.Set: %v", err)
 	}
 	snap, err = mgr.TriggerHeartbeat(ctx)
 	if err != nil {
 		t.Fatalf("TriggerHeartbeat after setting secret: %v", err)
 	}
-	if snap.State != model.RegistryStateConnected || !snap.TokenConfigured || snap.EffectiveHostKind != api.HostKindKubernetes {
+	if snap.State != model.HubStateConnected || !snap.TokenConfigured || snap.EffectiveHostKind != api.HostKindKubernetes {
 		t.Fatalf("unexpected snapshot after connect: %+v", snap)
 	}
 	// Sending a second heartbeat without changing secrets.age must not add another audit row.
@@ -423,7 +423,7 @@ func TestRegistryManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
 	}
 
 	// 3. Rotating the secret in secrets.Store reloads the new token on the next heartbeat.
-	if err := secretStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_rotated_token")); err != nil {
+	if err := secretStore.Set(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_rotated_token")); err != nil {
 		t.Fatalf("secretStore.Set rotated: %v", err)
 	}
 	if _, err := mgr.TriggerHeartbeat(ctx); err != nil {
@@ -449,7 +449,7 @@ func TestRegistryManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TriggerHeartbeat with warning conflicts: %v", err)
 	}
-	if snap.State != model.RegistryStateDegraded || len(snap.ScopeConflicts) != 1 {
+	if snap.State != model.HubStateDegraded || len(snap.ScopeConflicts) != 1 {
 		t.Fatalf("expected degraded state with 1 conflict, got state=%q conflicts=%+v", snap.State, snap.ScopeConflicts)
 	}
 
@@ -483,7 +483,7 @@ func TestRegistryManagerTokenSecretRefreshBackoffAndConflicts(t *testing.T) {
 	fake.nextRetryAfter = ""
 	fake.mu.Unlock()
 	snap, err = mgr.TriggerHeartbeat(ctx)
-	if err != nil || snap.State != model.RegistryStateConnected || snap.ConsecutiveFailures != 0 || snap.LastError != "" {
+	if err != nil || snap.State != model.HubStateConnected || snap.ConsecutiveFailures != 0 || snap.LastError != "" {
 		t.Fatalf("expected clean recovery, got err=%v snap=%+v", err, snap)
 	}
 }
@@ -511,9 +511,9 @@ func (f *fakeTunnelConnector) RunTunnel(ctx context.Context, cfg api.ConnectConf
 	return ctx.Err()
 }
 
-func TestRegistryManagerOIDCRefreshAndTunnelSeam(t *testing.T) {
+func TestHubManagerOIDCRefreshAndTunnelSeam(t *testing.T) {
 	t.Parallel()
-	fake, srv := newFakeRegistryServer(t)
+	fake, srv := newFakeHubServer(t)
 	fake.mu.Lock()
 	fake.entries["edge-grain"] = api.CreateEntryRequest{Name: "edge-grain", Kind: api.KindConnected}
 	fake.mu.Unlock()
@@ -527,10 +527,10 @@ func TestRegistryManagerOIDCRefreshAndTunnelSeam(t *testing.T) {
 	ctx := context.Background()
 
 	cfg := model.DefaultConfig()
-	cfg.Registry = model.RegistryConfig{
+	cfg.Hub = model.HubConfig{
 		URL:      srv.URL,
 		Entry:    "edge-grain",
-		AuthMode: model.RegistryAuthOIDC,
+		AuthMode: model.HubAuthOIDC,
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig: %v", err)
@@ -545,7 +545,7 @@ func TestRegistryManagerOIDCRefreshAndTunnelSeam(t *testing.T) {
 		stopped: make(chan struct{}),
 	}
 
-	mgr := NewRegistryManager(RegistryManagerOptions{
+	mgr := NewHubManager(HubManagerOptions{
 		Store:      store,
 		HTTPClient: srv.Client(),
 		Now: func() time.Time {
@@ -601,7 +601,7 @@ func TestRegistryManagerOIDCRefreshAndTunnelSeam(t *testing.T) {
 	}
 }
 
-func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T) {
+func TestHubManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T) {
 	t.Parallel()
 
 	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -621,23 +621,23 @@ func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T)
 	// 1. Unnormalized/invalid Registry URL stored directly in grain_config is
 	// rejected before any network call.
 	cfg := model.DefaultConfig()
-	cfg.Registry = model.RegistryConfig{
+	cfg.Hub = model.HubConfig{
 		URL:      "http://insecure.example.com",
 		Entry:    "edge-grain",
-		AuthMode: model.RegistryAuthToken,
+		AuthMode: model.HubAuthToken,
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig: %v", err)
 	}
 
 	secretStore := secrets.New(t.TempDir())
-	if err := secretStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_AbCdEfGhIjKlMnOpQrStUvWxYz0123")); err != nil {
+	if err := secretStore.Set(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_AbCdEfGhIjKlMnOpQrStUvWxYz0123")); err != nil {
 		t.Fatalf("secretStore.Set: %v", err)
 	}
 
 	var logged []string
 	var logMu sync.Mutex
-	mgr := NewRegistryManager(RegistryManagerOptions{
+	mgr := NewHubManager(HubManagerOptions{
 		Store:          store,
 		Secrets:        secretStore,
 		HTTPClient:     errSrv.Client(),
@@ -655,7 +655,7 @@ func TestRegistryManagerValidatesStoredConfigAndRedactsFailureLogs(t *testing.T)
 
 	// 2. When the remote server echoes a grc_ token in its error body, both
 	// Snapshot().LastError and daemon logs shape-redact the token.
-	cfg.Registry.URL = errSrv.URL
+	cfg.Hub.URL = errSrv.URL
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig valid: %v", err)
 	}
@@ -704,9 +704,9 @@ func (r *rotatingTunnelConnector) RunTunnel(ctx context.Context, cfg api.Connect
 	return ctx.Err()
 }
 
-func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testing.T) {
+func TestHubManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testing.T) {
 	t.Parallel()
-	fake, srv := newFakeRegistryServer(t)
+	fake, srv := newFakeHubServer(t)
 	fake.mu.Lock()
 	fake.entries["edge-grain"] = api.CreateEntryRequest{Name: "edge-grain", Kind: api.KindConnected}
 	fake.mu.Unlock()
@@ -720,24 +720,24 @@ func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testin
 	ctx := context.Background()
 
 	cfg := model.DefaultConfig()
-	cfg.Registry = model.RegistryConfig{
+	cfg.Hub = model.HubConfig{
 		URL:      srv.URL,
 		Entry:    "edge-grain",
-		AuthMode: model.RegistryAuthToken,
+		AuthMode: model.HubAuthToken,
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig: %v", err)
 	}
 
 	secStore := secrets.New(t.TempDir())
-	if err := secStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_first_static_token_123456")); err != nil {
+	if err := secStore.Set(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_first_static_token_123456")); err != nil {
 		t.Fatalf("secStore.Set: %v", err)
 	}
 
 	tun := &rotatingTunnelConnector{started: make(chan string, 4)}
 	var logMu sync.Mutex
 	var logged []string
-	mgr := NewRegistryManager(RegistryManagerOptions{
+	mgr := NewHubManager(HubManagerOptions{
 		Store:           store,
 		Secrets:         secStore,
 		HTTPClient:      srv.Client(),
@@ -775,7 +775,7 @@ func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testin
 	// request context (as POST /api/registry/heartbeat does): the next heartbeat
 	// must tear down the old tunnel, reconnect with the new token rooted in
 	// Run's lifecycle context, and redact any token echoed in tunnel errors.
-	if err := secStore.Set(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_second_static_token_654321")); err != nil {
+	if err := secStore.Set(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, []byte("grc_second_static_token_654321")); err != nil {
 		t.Fatalf("secStore.Set rotated: %v", err)
 	}
 	tun.setFailErr(fmt.Errorf("tunnel rejected credential grc_second_static_token_654321"))
@@ -811,36 +811,36 @@ func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testin
 	t.Fatal("timed out waiting for redacted tunnel stop log")
 }
 
-func TestCheckRegistryConnectFailsClosedWithoutVerifierFlags(t *testing.T) {
+func TestCheckHubConnectFailsClosedWithoutVerifierFlags(t *testing.T) {
 	t.Parallel()
-	if err := CheckRegistryConnect(Config{RegistryConnect: false}); err != nil {
-		t.Fatalf("CheckRegistryConnect(false) = %v, want nil", err)
+	if err := CheckHubConnect(Config{HubConnect: false}); err != nil {
+		t.Fatalf("CheckHubConnect(false) = %v, want nil", err)
 	}
-	if err := CheckRegistryConnect(Config{RegistryConnect: true}); err == nil ||
+	if err := CheckHubConnect(Config{HubConnect: true}); err == nil ||
 		!strings.Contains(err.Error(), "-ui-hub-issuer") ||
 		!strings.Contains(err.Error(), "-ui-hub-audience") ||
 		!strings.Contains(err.Error(), "-ui-hub-keys-url") {
-		t.Fatalf("CheckRegistryConnect(missing all) = %v, want missing flags error", err)
+		t.Fatalf("CheckHubConnect(missing all) = %v, want missing flags error", err)
 	}
-	if err := CheckRegistryConnect(Config{
-		RegistryConnect:  true,
-		UiRegistryIssuer: "https://grain.example.com",
+	if err := CheckHubConnect(Config{
+		HubConnect:  true,
+		UiHubIssuer: "https://grain.example.com",
 	}); err == nil || !strings.Contains(err.Error(), "-ui-hub-audience") {
-		t.Fatalf("CheckRegistryConnect(partial) = %v, want missing audience error", err)
+		t.Fatalf("CheckHubConnect(partial) = %v, want missing audience error", err)
 	}
-	if err := CheckRegistryConnect(Config{
-		RegistryConnect:    true,
-		UiRegistryIssuer:   "https://grain.example.com",
-		UiRegistryAudience: "https://my-grain.grain.example.com",
-		UiRegistryKeysURL:  "https://grain.example.com/.well-known/jwks.json",
+	if err := CheckHubConnect(Config{
+		HubConnect:    true,
+		UiHubIssuer:   "https://grain.example.com",
+		UiHubAudience: "https://my-grain.grain.example.com",
+		UiHubKeysURL:  "https://grain.example.com/.well-known/jwks.json",
 	}); err != nil {
-		t.Fatalf("CheckRegistryConnect(complete) = %v, want nil", err)
+		t.Fatalf("CheckHubConnect(complete) = %v, want nil", err)
 	}
 }
 
-func TestRegistryTunnelSupervisorBackoffAndStableReset(t *testing.T) {
+func TestHubTunnelSupervisorBackoffAndStableReset(t *testing.T) {
 	t.Parallel()
-	sup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+	sup := NewHubTunnelSupervisor(HubTunnelSupervisorOptions{
 		Handler:       http.NotFoundHandler(),
 		BaseBackoff:   250 * time.Millisecond,
 		MaxBackoff:    30 * time.Second,
@@ -868,7 +868,7 @@ func TestRegistryTunnelSupervisorBackoffAndStableReset(t *testing.T) {
 	}
 
 	// 2. With ±25% jitter enabled, backoff stays within [0.75*base, 1.25*base].
-	jitterSup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+	jitterSup := NewHubTunnelSupervisor(HubTunnelSupervisorOptions{
 		Handler:        http.NotFoundHandler(),
 		BaseBackoff:    250 * time.Millisecond,
 		MaxBackoff:     30 * time.Second,
@@ -899,7 +899,7 @@ func TestRegistryTunnelSupervisorBackoffAndStableReset(t *testing.T) {
 	// and 401 triggers OnUnauthorized.
 	var dialAttempt atomic.Int32
 	var unauthorizedCalls atomic.Int32
-	registryTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	hubTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := dialAttempt.Add(1)
 		switch n {
 		case 1:
@@ -920,13 +920,13 @@ func TestRegistryTunnelSupervisorBackoffAndStableReset(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 	}))
-	defer registryTLS.Close()
+	defer hubTLS.Close()
 
 	rootPool := x509.NewCertPool()
-	rootPool.AddCert(registryTLS.Certificate())
+	rootPool.AddCert(hubTLS.Certificate())
 
 	connectedCh := make(chan string, 2)
-	runSup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+	runSup := NewHubTunnelSupervisor(HubTunnelSupervisorOptions{
 		Handler:        http.NotFoundHandler(),
 		BaseBackoff:    10 * time.Millisecond,
 		MaxBackoff:     100 * time.Millisecond,
@@ -947,7 +947,7 @@ func TestRegistryTunnelSupervisorBackoffAndStableReset(t *testing.T) {
 	defer cancel()
 	go func() {
 		_ = runSup.RunTunnel(ctx, api.ConnectConfig{
-			BaseURL:           registryTLS.URL,
+			BaseURL:           hubTLS.URL,
 			Entry:             "alice",
 			RegistrationToken: "grc_test_token_12345",
 		})
@@ -966,7 +966,7 @@ func TestRegistryTunnelSupervisorBackoffAndStableReset(t *testing.T) {
 	}
 }
 
-func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
+func TestHubTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
 
@@ -1004,7 +1004,7 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 	}
 	sessionsCh := make(chan acceptedSession, 4)
 
-	registryTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	hubTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/entries/alice/connect":
 			if r.Header.Get(api.HeaderConnectProtocol) != api.ConnectProtocolVersion ||
@@ -1034,7 +1034,7 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer registryTLS.Close()
+	defer hubTLS.Close()
 
 	// Forward HTTP CONNECT proxy for HTTPS_PROXY verification.
 	var proxyConnects atomic.Int32
@@ -1096,21 +1096,21 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 
 	uiClient := ui.NewClient(ui.Config{
 		LocalAPIToken:     accessCode,
-		RegistryIssuer:    issuer,
-		RegistryAudience:  audience,
-		RegistryKeysURL:   jwksSrv.URL,
+		HubIssuer:         issuer,
+		HubAudience:       audience,
+		HubKeysURL:        jwksSrv.URL,
 		AllowedPrincipals: []string{"user:alice@example.com"},
 	}, store)
 	uiSrv := ui.NewServerWithClient(uiClient)
 
-	// Wrap RegistryTunnelHandler so we can also pause one slow request on sess-1
+	// Wrap HubTunnelHandler so we can also pause one slow request on sess-1
 	// across the graceful session rotation boundary.
 	slowEntered := make(chan struct{})
 	slowRelease := make(chan struct{})
-	baseTunnelHandler := uiSrv.RegistryTunnelHandler()
+	baseTunnelHandler := uiSrv.HubTunnelHandler()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/registry/status" && r.URL.Query().Get("slow") == "1" {
-			// Still goes through the full RegistryTunnelHandler verifier gate first!
+			// Still goes through the full HubTunnelHandler verifier gate first!
 			rec := httptest.NewRecorder()
 			baseTunnelHandler.ServeHTTP(rec, r)
 			if rec.Code != http.StatusOK {
@@ -1133,11 +1133,11 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 	})
 
 	rootPool := x509.NewCertPool()
-	rootPool.AddCert(registryTLS.Certificate())
+	rootPool.AddCert(hubTLS.Certificate())
 	proxyURL, _ := url.Parse("http://" + proxyLn.Addr().String())
 
 	rotatedCh := make(chan string, 2)
-	sup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+	sup := NewHubTunnelSupervisor(HubTunnelSupervisorOptions{
 		Handler:         handler,
 		BaseBackoff:     20 * time.Millisecond,
 		MaxBackoff:      100 * time.Millisecond,
@@ -1155,7 +1155,7 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 	go func() {
 		defer close(supDone)
 		_ = sup.RunTunnel(runCtx, api.ConnectConfig{
-			BaseURL:           registryTLS.URL,
+			BaseURL:           hubTLS.URL,
 			Entry:             "alice",
 			RegistrationToken: "grc_live_tunnel_secret",
 		})
@@ -1175,7 +1175,7 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 
 	mintAssertion := func() string {
 		now := time.Now()
-		claims := webauth.RegistryClaims{
+		claims := webauth.HubClaims{
 			RegisteredClaims: jwt.RegisteredClaims{
 				Issuer:    issuer,
 				Audience:  jwt.ClaimStrings{audience},
@@ -1303,9 +1303,9 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 	<-supDone
 }
 
-func TestRegistryManagerPreservesRemoteMetadataAndHostKindWhenUnsetLocally(t *testing.T) {
+func TestHubManagerPreservesRemoteMetadataAndHostKindWhenUnsetLocally(t *testing.T) {
 	t.Parallel()
-	fake, srv := newFakeRegistryServer(t)
+	fake, srv := newFakeHubServer(t)
 	fake.mu.Lock()
 	fake.entries["conn-alice"] = api.CreateEntryRequest{
 		Name:        "conn-alice",
@@ -1328,16 +1328,16 @@ func TestRegistryManagerPreservesRemoteMetadataAndHostKindWhenUnsetLocally(t *te
 	// infers HostKindWorkstation: neither PATCH nor Heartbeat may overwrite
 	// existing remote metadata or CLI-declared HostKind.
 	cfg := model.DefaultConfig()
-	cfg.Registry = model.RegistryConfig{
+	cfg.Hub = model.HubConfig{
 		URL:      srv.URL,
 		Entry:    "conn-alice",
-		AuthMode: model.RegistryAuthOIDC,
+		AuthMode: model.HubAuthOIDC,
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig: %v", err)
 	}
 
-	mgr := NewRegistryManager(RegistryManagerOptions{
+	mgr := NewHubManager(HubManagerOptions{
 		Store:      store,
 		HTTPClient: srv.Client(),
 		LiveConfig: func() Config { return Config{HostSandboxes: true} },
@@ -1367,7 +1367,7 @@ func TestRegistryManagerPreservesRemoteMetadataAndHostKindWhenUnsetLocally(t *te
 	}
 
 	// Explicitly configuring HostKind on the daemon sends it on both PATCH and Heartbeat.
-	cfg.Registry.HostKind = api.HostKindKubernetes
+	cfg.Hub.HostKind = api.HostKindKubernetes
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatalf("PutConfig explicit host_kind: %v", err)
 	}

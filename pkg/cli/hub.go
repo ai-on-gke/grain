@@ -34,7 +34,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const registryUsage = `usage: grain hub <subcommand> [args]
+const hubUsage = `usage: grain hub <subcommand> [args]
 
   status
   list              [-hub-url <url>] [-all] [-owner <email>] [-owner-group <group>]
@@ -82,14 +82,14 @@ const registryUsage = `usage: grain hub <subcommand> [args]
 Self-registration, directory discovery, path routing, and control-plane management
 for a Grain Hub (Settings -> Hub; design/design/hub.design.md).`
 
-// registryHTTPClient and registryOIDCToken are seams for unit tests so tests
+// hubHTTPClient and hubOIDCToken are seams for unit tests so tests
 // never touch the network or host gcloud/ADC credentials.
 var (
-	registryHTTPClient *http.Client
-	registryOIDCToken  func(ctx context.Context, registryURL, audience string) (string, error)
+	hubHTTPClient *http.Client
+	hubOIDCToken  func(ctx context.Context, hubURL, audience string) (string, error)
 )
 
-type registryDaemonFlags struct {
+type hubDaemonFlags struct {
 	url          *string
 	entry        *string
 	authMode     *string
@@ -102,19 +102,19 @@ type registryDaemonFlags struct {
 	connect      *bool
 }
 
-func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
+func registerHubFlags(fs *flag.FlagSet) hubDaemonFlags {
 	const seedNote = " (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)"
-	return registryDaemonFlags{
+	return hubDaemonFlags{
 		url: fs.String("hub-url", "",
 			"base URL of the Grain Hub this daemon self-registers with ($"+daemon.HubURLEnv+"; empty disables heartbeats)"+seedNote),
 		entry: fs.String("hub-entry", "",
 			"entry name this daemon registers and heartbeats as in the Grain Hub ($"+daemon.HubEntryEnv+")"+seedNote),
 		authMode: fs.String("hub-auth-mode", "",
-			"credential mode for registry heartbeats: \"token\" (secret "+secrets.RegistryRegistrationTokenSecret+", -hub-token-file, or $"+daemon.HubTokenEnv+") or \"oidc\" (ID token for -hub-oidc-audience)"+seedNote),
+			"credential mode for registry heartbeats: \"token\" (secret "+secrets.HubRegistrationTokenSecret+", -hub-token-file, or $"+daemon.HubTokenEnv+") or \"oidc\" (ID token for -hub-oidc-audience)"+seedNote),
 		oidcAudience: fs.String("hub-oidc-audience", "",
 			"OIDC ID token audience when -hub-auth-mode=oidc (defaults to -hub-url)"+seedNote),
 		tokenFile: fs.String("hub-token-file", "",
-			"fallback file holding a grc_... registration credential when secret "+secrets.RegistryRegistrationTokenSecret+" is unset ($"+daemon.HubTokenEnv+" is also consulted)"),
+			"fallback file holding a grc_... registration credential when secret "+secrets.HubRegistrationTokenSecret+" is unset ($"+daemon.HubTokenEnv+" is also consulted)"),
 		displayName: fs.String("hub-display-name", "",
 			"human-readable display name advertised in the hub directory"+seedNote),
 		purpose: fs.String("hub-purpose", "",
@@ -128,7 +128,7 @@ func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
 	}
 }
 
-func (f registryDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
+func (f hubDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
 	urlVal := strings.TrimSpace(*f.url)
 	if !passed["hub-url"] && urlVal == "" {
 		urlVal = strings.TrimSpace(hubenv.Get(daemon.HubURLEnv))
@@ -143,12 +143,12 @@ func (f registryDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
 			connectVal = env == "1" || strings.EqualFold(env, "true") || strings.EqualFold(env, "yes")
 		}
 	}
-	cfg.RegistryTokenFile = strings.TrimSpace(*f.tokenFile)
-	cfg.RegistryConnect = connectVal
-	cfg.Registry = model.RegistryConfig{
+	cfg.HubTokenFile = strings.TrimSpace(*f.tokenFile)
+	cfg.HubConnect = connectVal
+	cfg.Hub = model.HubConfig{
 		URL:          urlVal,
 		Entry:        entryVal,
-		AuthMode:     model.RegistryAuthMode(strings.TrimSpace(*f.authMode)),
+		AuthMode:     model.HubAuthMode(strings.TrimSpace(*f.authMode)),
 		OIDCAudience: strings.TrimSpace(*f.oidcAudience),
 		DisplayName:  strings.TrimSpace(*f.displayName),
 		Purpose:      strings.TrimSpace(*f.purpose),
@@ -157,11 +157,11 @@ func (f registryDaemonFlags) apply(cfg *daemon.Config, passed map[string]bool) {
 	}
 }
 
-func checkRegistryConfig(cfg daemon.Config) error {
-	if err := daemon.CheckRegistryConnect(cfg); err != nil {
+func checkHubConfig(cfg daemon.Config) error {
+	if err := daemon.CheckHubConnect(cfg); err != nil {
 		return err
 	}
-	r := cfg.Registry
+	r := cfg.Hub
 	anySet := r.URL != "" || r.Entry != "" || r.AuthMode != "" || r.OIDCAudience != "" ||
 		r.DisplayName != "" || r.Purpose != "" || r.HostKind != ""
 	if !anySet {
@@ -170,70 +170,70 @@ func checkRegistryConfig(cfg daemon.Config) error {
 	if (r.URL == "") != (r.Entry == "") {
 		return errors.New("-hub-url and -hub-entry must be set together")
 	}
-	if _, err := model.NormalizeRegistryConfig(r, false); err != nil {
+	if _, err := model.NormalizeHubConfig(r, false); err != nil {
 		return fmt.Errorf("registry configuration: %w", err)
 	}
 	return nil
 }
 
-// cmdRegistry implements `grain hub <subcommand>`.
-func cmdRegistry(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+// cmdHub implements `grain hub <subcommand>`.
+func cmdHub(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {
 		args = []string{"status"}
 	}
 	sub, subArgs := args[0], args[1:]
 	switch sub {
 	case "-h", "-help", "--help", "help":
-		fmt.Println(registryUsage)
+		fmt.Println(hubUsage)
 		return nil
 	case "status":
-		return cmdRegistryStatus(ctx, c, out, subArgs)
+		return cmdHubStatus(ctx, c, out, subArgs)
 	case "list":
-		return cmdRegistryList(ctx, c, out, subArgs)
+		return cmdHubList(ctx, c, out, subArgs)
 	case "directory":
-		return cmdRegistryDirectory(ctx, c, out, subArgs)
+		return cmdHubDirectory(ctx, c, out, subArgs)
 	case "route":
-		return cmdRegistryRoute(ctx, c, out, subArgs)
+		return cmdHubRoute(ctx, c, out, subArgs)
 	case "show":
-		return cmdRegistryShow(ctx, c, out, subArgs)
+		return cmdHubShow(ctx, c, out, subArgs)
 	case "create":
-		return cmdRegistryCreate(ctx, c, out, subArgs)
+		return cmdHubCreate(ctx, c, out, subArgs)
 	case "register":
-		return cmdRegistryRegister(ctx, c, out, subArgs)
+		return cmdHubRegister(ctx, c, out, subArgs)
 	case "unregister":
-		return cmdRegistryUnregister(ctx, c, out, subArgs)
+		return cmdHubUnregister(ctx, c, out, subArgs)
 	case "update":
-		return cmdRegistryUpdate(ctx, c, out, subArgs)
+		return cmdHubUpdate(ctx, c, out, subArgs)
 	case "scopes":
-		return cmdRegistryScopes(ctx, c, out, subArgs)
+		return cmdHubScopes(ctx, c, out, subArgs)
 	case "rotate-credential":
-		return cmdRegistryRotateCredential(ctx, c, out, subArgs)
+		return cmdHubRotateCredential(ctx, c, out, subArgs)
 	case "upgrade":
-		return cmdRegistryUpgrade(ctx, c, out, subArgs)
+		return cmdHubUpgrade(ctx, c, out, subArgs)
 	case "resize":
-		return cmdRegistryResize(ctx, c, out, subArgs)
+		return cmdHubResize(ctx, c, out, subArgs)
 	case "delete":
-		return cmdRegistryDelete(ctx, c, out, subArgs)
+		return cmdHubDelete(ctx, c, out, subArgs)
 	case "restore":
-		return cmdRegistryRestore(ctx, c, out, subArgs)
+		return cmdHubRestore(ctx, c, out, subArgs)
 	case "stop":
-		return cmdRegistryStop(ctx, c, out, subArgs)
+		return cmdHubStop(ctx, c, out, subArgs)
 	case "start":
-		return cmdRegistryStart(ctx, c, out, subArgs)
+		return cmdHubStart(ctx, c, out, subArgs)
 	case "transfer":
-		return cmdRegistryTransfer(ctx, c, out, subArgs)
+		return cmdHubTransfer(ctx, c, out, subArgs)
 	case "accept-transfer":
-		return cmdRegistryAcceptTransfer(ctx, c, out, subArgs)
+		return cmdHubAcceptTransfer(ctx, c, out, subArgs)
 	case "delegating-apps":
-		return cmdRegistryDelegatingApps(ctx, c, out, subArgs)
+		return cmdHubDelegatingApps(ctx, c, out, subArgs)
 	case "grants":
-		return cmdRegistryGrants(ctx, c, out, subArgs)
+		return cmdHubGrants(ctx, c, out, subArgs)
 	default:
-		return fmt.Errorf("unknown registry subcommand %q\n%s", sub, registryUsage)
+		return fmt.Errorf("unknown registry subcommand %q\n%s", sub, hubUsage)
 	}
 }
 
-func cmdRegistryStatus(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubStatus(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub status", flag.ContinueOnError)
 	rest, err := parseArgs(fs, args)
 	if err != nil {
@@ -242,15 +242,15 @@ func cmdRegistryStatus(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	if len(rest) != 0 {
 		return errors.New("usage: grain hub status")
 	}
-	snap, err := c.GetRegistry(ctx)
+	snap, err := c.GetHub(ctx)
 	if err != nil {
 		return err
 	}
-	printRegistrySnapshot(out, snap)
+	printHubSnapshot(out, snap)
 	return nil
 }
 
-func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub register", flag.ContinueOnError)
 	regURLFlag := fs.String("hub-url", "", "base URL of the Grain Hub ($"+daemon.HubURLEnv+")")
 	entryFlag := fs.String("entry", "", "entry name in the Grain Hub ($"+daemon.HubEntryEnv+"; or positional <entry>)")
@@ -276,12 +276,12 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		return err
 	}
 	if len(rest) > 1 {
-		return errors.New(registryUsage)
+		return errors.New(hubUsage)
 	}
 	passed := visitedFlags(fs)
 
-	var existingCfg model.RegistryConfig
-	var existingSnap model.RegistrySnapshot
+	var existingCfg model.HubConfig
+	var existingSnap model.HubSnapshot
 	var daemonHasSecret bool
 	var configRepoOnly bool
 	if !*standalone {
@@ -292,7 +292,7 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		existingCfg = settings.Registry
 		daemonHasSecret = settings.RegistryTokenSet
 		configRepoOnly = settings.ConfigRepoOnly
-		if snap, snapErr := c.GetRegistry(ctx); snapErr == nil {
+		if snap, snapErr := c.GetHub(ctx); snapErr == nil {
 			existingSnap = snap
 		}
 	}
@@ -317,9 +317,9 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	newCfg.URL = regURL
 	newCfg.Entry = entryName
 	if *oidcFlag {
-		newCfg.AuthMode = model.RegistryAuthOIDC
+		newCfg.AuthMode = model.HubAuthOIDC
 	} else if passed["oidc"] || newCfg.AuthMode == "" {
-		newCfg.AuthMode = model.RegistryAuthToken
+		newCfg.AuthMode = model.HubAuthToken
 	}
 	if passed["oidc-audience"] {
 		newCfg.OIDCAudience = strings.TrimSpace(*oidcAudFlag)
@@ -350,13 +350,13 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 			return scErr
 		}
 	}
-	normCfg, err := model.NormalizeRegistryConfig(newCfg, false)
+	normCfg, err := model.NormalizeHubConfig(newCfg, false)
 	if err != nil {
 		return err
 	}
 	cfgChanged := !reflect.DeepEqual(existingCfg, normCfg)
 	if !*standalone && configRepoOnly && cfgChanged {
-		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &normCfg}); err != nil {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &normCfg}); err != nil {
 			return fmt.Errorf("updating daemon registry settings: %w", err)
 		}
 	}
@@ -370,7 +370,7 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		}
 	}
 
-	bearer, err := resolveRegistryCLIBearer(ctx, normCfg.URL, normCfg.EffectiveAudience(), *regTokenFlag)
+	bearer, err := resolveHubCLIBearer(ctx, normCfg.URL, normCfg.EffectiveAudience(), *regTokenFlag)
 	if err != nil {
 		return err
 	}
@@ -386,11 +386,11 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		}
 		mintedToken = bearer
 	} else {
-		regClient, clientErr := newRegistryAPIClient(normCfg.URL, bearer)
+		regClient, clientErr := newHubAPIClient(normCfg.URL, bearer)
 		if clientErr != nil {
 			return clientErr
 		}
-		wantMint := normCfg.EffectiveAuthMode() == model.RegistryAuthToken || *mintToken
+		wantMint := normCfg.EffectiveAuthMode() == model.HubAuthToken || *mintToken
 		retargeting := (existingCfg.URL != "" && existingCfg.URL != normCfg.URL) ||
 			(existingCfg.Entry != "" && !strings.EqualFold(existingCfg.Entry, normCfg.Entry))
 		hasStoredEntryCfg := !*standalone && existingCfg.Entry != "" && !retargeting
@@ -451,44 +451,44 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		// token to the new URL or the new registry's token to the old URL.
 		// Running UpdateSettings first also enforces human-principal, RBAC and
 		// config-repo lock checks before touching secrets.Store.
-		empty := model.RegistryConfig{}
-		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &empty}); err != nil {
+		empty := model.HubConfig{}
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &empty}); err != nil {
 			return fmt.Errorf("clearing previous daemon registry target before retargeting: %w", err)
 		}
 		if mintedToken != "" {
-			if err := c.SetSecret(ctx, secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
-				return fmt.Errorf("storing %s in daemon secrets: %w", secrets.RegistryRegistrationTokenSecret, err)
+			if err := c.SetSecret(ctx, secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
+				return fmt.Errorf("storing %s in daemon secrets: %w", secrets.HubRegistrationTokenSecret, err)
 			}
 		} else if daemonHasSecret {
-			if delErr := c.DeleteSecret(ctx, secrets.RegistryRegistrationTokenSecret); delErr != nil {
+			if delErr := c.DeleteSecret(ctx, secrets.HubRegistrationTokenSecret); delErr != nil {
 				var notFound *ui.NotFoundError
 				if !errors.As(delErr, &notFound) {
-					return fmt.Errorf("deleting previous %s secret: %w", secrets.RegistryRegistrationTokenSecret, delErr)
+					return fmt.Errorf("deleting previous %s secret: %w", secrets.HubRegistrationTokenSecret, delErr)
 				}
 			}
 		}
-		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &normCfg}); err != nil {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &normCfg}); err != nil {
 			return fmt.Errorf("updating daemon registry settings: %w", err)
 		}
 	} else {
-		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &normCfg}); err != nil {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &normCfg}); err != nil {
 			return fmt.Errorf("updating daemon registry settings: %w", err)
 		}
 		if mintedToken != "" {
-			if err := c.SetSecret(ctx, secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
-				return fmt.Errorf("storing %s in daemon secrets: %w", secrets.RegistryRegistrationTokenSecret, err)
+			if err := c.SetSecret(ctx, secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
+				return fmt.Errorf("storing %s in daemon secrets: %w", secrets.HubRegistrationTokenSecret, err)
 			}
 		}
 	}
-	snap, hbErr := c.TriggerRegistryHeartbeat(ctx)
+	snap, hbErr := c.TriggerHubHeartbeat(ctx)
 	if hbErr != nil {
 		return fmt.Errorf("initial registry heartbeat failed: %w", hbErr)
 	}
-	printRegistrySnapshot(out, snap)
+	printHubSnapshot(out, snap)
 	return nil
 }
 
-func inheritExistingEntryConfig(cfg *model.RegistryConfig, remote *api.Entry, passed map[string]bool) {
+func inheritExistingEntryConfig(cfg *model.HubConfig, remote *api.Entry, passed map[string]bool) {
 	if !passed["listed"] {
 		cfg.Listed = remote.Listed
 	}
@@ -509,7 +509,7 @@ func inheritExistingEntryConfig(cfg *model.RegistryConfig, remote *api.Entry, pa
 func upsertConnectedEntry(
 	ctx context.Context,
 	client *api.Client,
-	cfg model.RegistryConfig,
+	cfg model.HubConfig,
 	hostKind api.HostKind,
 	connectedPrincipal string,
 	scopes []api.ScopeInput,
@@ -618,7 +618,7 @@ func upsertConnectedEntry(
 	return updated, minted, nil
 }
 
-func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub unregister", flag.ContinueOnError)
 	regURLFlag := fs.String("hub-url", "", "base URL of the Grain Hub ($"+daemon.HubURLEnv+")")
 	entryFlag := fs.String("entry", "", "entry name in the Grain Hub ($"+daemon.HubEntryEnv+"; or positional <entry>)")
@@ -633,10 +633,10 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 		return err
 	}
 	if len(rest) > 1 {
-		return errors.New(registryUsage)
+		return errors.New(hubUsage)
 	}
 
-	var existingCfg model.RegistryConfig
+	var existingCfg model.HubConfig
 	var configRepoOnly bool
 	if !*standalone {
 		settings, sErr := c.GetSettings(ctx)
@@ -646,9 +646,9 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 		existingCfg = settings.Registry
 		configRepoOnly = settings.ConfigRepoOnly
 	}
-	if !*standalone && configRepoOnly && !reflect.DeepEqual(existingCfg, model.RegistryConfig{}) {
-		empty := model.RegistryConfig{}
-		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &empty}); err != nil {
+	if !*standalone && configRepoOnly && !reflect.DeepEqual(existingCfg, model.HubConfig{}) {
+		empty := model.HubConfig{}
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &empty}); err != nil {
 			return fmt.Errorf("clearing daemon registry settings: %w", err)
 		}
 	}
@@ -667,17 +667,17 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 			return errors.New("-standalone unregister requires -hub-url and <entry>")
 		}
 		if regURL != "" && entryName != "" {
-			normURL, urlErr := api.ValidateRegistryURL(regURL, false)
+			normURL, urlErr := api.ValidateHubURL(regURL, false)
 			if urlErr != nil {
 				return urlErr
 			}
 			regURL = normURL
 			aud = firstNonEmptyTrimmed(*oidcAudFlag, existingCfg.OIDCAudience, regURL)
-			bearer, bErr := resolveRegistryCLIBearer(ctx, regURL, aud, *regTokenFlag)
+			bearer, bErr := resolveHubCLIBearer(ctx, regURL, aud, *regTokenFlag)
 			if bErr != nil && (*standalone || *oidcFlag || *regTokenFlag != "") {
 				return bErr
 			}
-			regClient, cErr := newRegistryAPIClient(regURL, bearer)
+			regClient, cErr := newHubAPIClient(regURL, bearer)
 			if cErr != nil {
 				return cErr
 			}
@@ -689,14 +689,14 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 	}
 
 	if !*standalone {
-		empty := model.RegistryConfig{}
-		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &empty}); err != nil {
+		empty := model.HubConfig{}
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &empty}); err != nil {
 			return fmt.Errorf("clearing daemon registry settings: %w", err)
 		}
-		if delErr := c.DeleteSecret(ctx, secrets.RegistryRegistrationTokenSecret); delErr != nil {
+		if delErr := c.DeleteSecret(ctx, secrets.HubRegistrationTokenSecret); delErr != nil {
 			var notFound *ui.NotFoundError
 			if !errors.As(delErr, &notFound) {
-				return fmt.Errorf("deleting %s secret: %w", secrets.RegistryRegistrationTokenSecret, delErr)
+				return fmt.Errorf("deleting %s secret: %w", secrets.HubRegistrationTokenSecret, delErr)
 			}
 		}
 	}
@@ -723,22 +723,22 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 	return nil
 }
 
-func resolveRegistryCLIBearer(ctx context.Context, registryURL, audience, flagToken string) (string, error) {
+func resolveHubCLIBearer(ctx context.Context, hubURL, audience, flagToken string) (string, error) {
 	if tok := firstNonEmptyTrimmed(flagToken, hubenv.Get(daemon.HubTokenEnv)); tok != "" {
 		return tok, nil
 	}
-	if registryOIDCToken != nil {
-		return registryOIDCToken(ctx, registryURL, audience)
+	if hubOIDCToken != nil {
+		return hubOIDCToken(ctx, hubURL, audience)
 	}
-	rc := ui.NewHTTPClient(registryURL)
-	rc.Audience = firstNonEmptyTrimmed(audience, registryURL)
+	rc := ui.NewHTTPClient(hubURL)
+	rc.Audience = firstNonEmptyTrimmed(audience, hubURL)
 	return rc.GoogleIDToken(ctx)
 }
 
-func newRegistryAPIClient(registryURL, bearer string) (*api.Client, error) {
+func newHubAPIClient(hubURL, bearer string) (*api.Client, error) {
 	cfg := api.ClientConfig{
-		BaseURL:    registryURL,
-		HTTPClient: registryHTTPClient,
+		BaseURL:    hubURL,
+		HTTPClient: hubHTTPClient,
 	}
 	if strings.HasPrefix(bearer, api.RegistrationTokenPrefix) {
 		cfg.RegistrationToken = bearer
@@ -748,7 +748,7 @@ func newRegistryAPIClient(registryURL, bearer string) (*api.Client, error) {
 	return api.NewClient(cfg)
 }
 
-func printRegistrySnapshot(out *printer, snap model.RegistrySnapshot) {
+func printHubSnapshot(out *printer, snap model.HubSnapshot) {
 	if out.json {
 		out.encode(snap)
 		return

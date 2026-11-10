@@ -47,10 +47,40 @@ type fakeQualificationForge struct {
 	checks   []github.CheckRun
 	branches map[string]bool
 	nextID   int64
+	messages map[string]string // annotated tag -> its message
 }
 
 func (f *fakeQualificationForge) ListTags(owner, repo string) ([]github.Tag, error) {
 	return f.tags, nil
+}
+
+func (f *fakeQualificationForge) ListMatchingTags(owner, repo, prefix string) ([]github.TagRef, error) {
+	var out []github.TagRef
+	for _, t := range f.tags {
+		if !strings.HasPrefix(t.Name, prefix) {
+			continue
+		}
+		if _, ok := f.messages[t.Name]; ok {
+			out = append(out, github.TagRef{Name: t.Name, ObjectSHA: "tag-object:" + t.Name, ObjectType: "tag"})
+		} else {
+			out = append(out, github.TagRef{Name: t.Name, ObjectSHA: t.SHA, ObjectType: "commit"})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeQualificationForge) GetAnnotatedTag(owner, repo, sha string) (*github.AnnotatedTag, error) {
+	name, ok := strings.CutPrefix(sha, "tag-object:")
+	msg, annotated := f.messages[name]
+	if !ok || !annotated {
+		return nil, nil
+	}
+	for _, t := range f.tags {
+		if t.Name == name {
+			return &github.AnnotatedTag{Commit: t.SHA, Message: msg}, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *fakeQualificationForge) ListCheckRuns(owner, repo, ref string) ([]github.CheckRun, error) {

@@ -363,9 +363,9 @@ func TestClassifyHostAndSubdomainRouting(t *testing.T) {
 		wantKind HostRouteKind
 		wantName string
 	}{
-		{"registry.example.com", HostRouteRegistry, ""},
-		{"REGISTRY.EXAMPLE.COM:8443", HostRouteRegistry, ""},
-		{"127.0.0.1:41234", HostRouteRegistry, ""},
+		{"registry.example.com", HostRouteHub, ""},
+		{"REGISTRY.EXAMPLE.COM:8443", HostRouteHub, ""},
+		{"127.0.0.1:41234", HostRouteHub, ""},
 		{"alice-vm.instances.example.com", HostRouteInstance, "alice-vm"},
 		{"ALICE-VM.instances.example.com:443", HostRouteInstance, "alice-vm"},
 		{"a.b.instances.example.com", HostRouteInvalidInstance, "a.b"},
@@ -456,7 +456,7 @@ func TestReverseProxyHeadersCookiesCSRFStreamingAndUpgrades(t *testing.T) {
 	}
 	signer := newTestAssertionSigner(t)
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		IAPAudience:    "/projects/123/global/backendServices/456",
 		Admitter:       admitter,
@@ -809,7 +809,7 @@ func TestStatePagesHTMLAndJSONAndDBFailoverGrace(t *testing.T) {
 		t.Fatalf("NewAdmitter: %v", err)
 	}
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		Store:          st,
 		Admitter:       admitter,
@@ -987,7 +987,7 @@ func TestOutboundTunnelConnectPeerForwardingReconnectGraceAndImmediateRevocation
 	// Start two replicas (Replica A and Replica B), each with its own :8080, :8081 public, and :8082 peer server.
 	makeReplica := func(id string) (*Router, *httptest.Server, *httptest.Server, *httptest.Server) {
 		rt, err := NewRouter(RouterOptions{
-			RegistryHost:   "registry.example.com",
+			HubHost:        "registry.example.com",
 			InstanceDomain: "instances.example.com",
 			ReplicaID:      id,
 			DatabaseURL:    pgURL,
@@ -1155,7 +1155,7 @@ func TestOutboundTunnelConnectPeerForwardingReconnectGraceAndImmediateRevocation
 		}
 		reqLoop, _ := http.NewRequest(http.MethodGet, peerA.URL+"/internal/tunnel/alice-tunnel", nil)
 		reqLoop.Header.Set(HeaderPeerAuth, peerTok)
-		reqLoop.Header.Set(HeaderRegistryHop, "2")
+		reqLoop.Header.Set(HeaderHubHop, "2")
 		resLoop, err := http.DefaultClient.Do(reqLoop)
 		if err != nil {
 			t.Fatalf("Do peerA loop: %v", err)
@@ -1292,7 +1292,7 @@ func TestReconnectGraceSurvivesAStaleWake(t *testing.T) {
 	}
 	const grace = 10 * time.Second
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		ReplicaID:      "replica-a",
 		ReconnectGrace: grace,
@@ -1383,7 +1383,7 @@ func TestReconnectGraceIsOneWindowAcrossStaleWakes(t *testing.T) {
 	}
 	const grace = 400 * time.Millisecond
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		ReplicaID:      "replica-a",
 		ReconnectGrace: grace,
@@ -1482,7 +1482,7 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 
 	// 2. Test X-Grain-On-Behalf-Of delegation (registry host -> 400 delegation_not_supported; human caller -> 400 delegation_requires_service_caller; browser headers -> 403 delegation_from_browser; upgrade -> 403 not_delegable; unauthorized service principal -> 403 delegation_refused; read_only_grant POST -> 403 read_only_grant).
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		Admitter:       admitter,
 		Signer:         signer,
@@ -1503,14 +1503,14 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 	})
 	h := rt.WrapMainHandler(http.NotFoundHandler())
 
-	reqRegistryOBO := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/directory", nil)
-	reqRegistryOBO.Host = "registry.example.com"
-	reqRegistryOBO.Header.Set("X-Test-Email", "board@proj.iam.gserviceaccount.com")
-	reqRegistryOBO.Header.Set(HeaderOnBehalfOf, "alice@example.com")
-	recRegistryOBO := httptest.NewRecorder()
-	h.ServeHTTP(recRegistryOBO, reqRegistryOBO)
-	if recRegistryOBO.Code != http.StatusBadRequest || !strings.Contains(recRegistryOBO.Body.String(), "delegation_not_supported") {
-		t.Fatalf("expected 400 delegation_not_supported on registry host, got %d %s", recRegistryOBO.Code, recRegistryOBO.Body.String())
+	reqHubOBO := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/directory", nil)
+	reqHubOBO.Host = "registry.example.com"
+	reqHubOBO.Header.Set("X-Test-Email", "board@proj.iam.gserviceaccount.com")
+	reqHubOBO.Header.Set(HeaderOnBehalfOf, "alice@example.com")
+	recHubOBO := httptest.NewRecorder()
+	h.ServeHTTP(recHubOBO, reqHubOBO)
+	if recHubOBO.Code != http.StatusBadRequest || !strings.Contains(recHubOBO.Body.String(), "delegation_not_supported") {
+		t.Fatalf("expected 400 delegation_not_supported on registry host, got %d %s", recHubOBO.Code, recHubOBO.Body.String())
 	}
 
 	reqHumanOBO := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/", nil)
@@ -1733,7 +1733,7 @@ func TestStopStartStatePagesAndAutoWakeOnVisit(t *testing.T) {
 		t.Fatalf("NewAdmitter: %v", err)
 	}
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		ReplicaID:      "replica-step17",
 		Store:          st,
@@ -1814,7 +1814,7 @@ func TestStopStartStatePagesAndAutoWakeOnVisit(t *testing.T) {
 	}
 }
 
-func TestServeInstanceHostAssertionAcceptedByWebauthRegistryVerifier(t *testing.T) {
+func TestServeInstanceHostAssertionAcceptedByWebauthHubVerifier(t *testing.T) {
 	signer := newTestAssertionSigner(t)
 	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		pub := signer.priv.PublicKey
@@ -1849,7 +1849,7 @@ func TestServeInstanceHostAssertionAcceptedByWebauthRegistryVerifier(t *testing.
 		t.Fatalf("NewAdmitter: %v", err)
 	}
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		IAPAudience:    "/projects/123/global/backendServices/456",
 		Admitter:       admitter,
@@ -1886,18 +1886,18 @@ func TestServeInstanceHostAssertionAcceptedByWebauthRegistryVerifier(t *testing.
 		t.Fatal("expected non-empty X-Grain-Registry-Assertion")
 	}
 
-	verifyCtx := webauth.WithRegistryConfig(context.Background(), webauth.RegistryConfig{
+	verifyCtx := webauth.WithHubConfig(context.Background(), webauth.HubConfig{
 		Issuer:   "grain-registry",
 		Audience: "https://alice-vm.instances.example.com",
 		KeysURL:  jwksSrv.URL,
 	})
-	claims, err := webauth.ValidateRegistryToken(verifyCtx, gotAssertion, "https://alice-vm.instances.example.com")
+	claims, err := webauth.ValidateHubToken(verifyCtx, gotAssertion, "https://alice-vm.instances.example.com")
 	if err != nil {
-		t.Fatalf("ValidateRegistryToken: %v", err)
+		t.Fatalf("ValidateHubToken: %v", err)
 	}
-	id, err := webauth.IdentityFromRegistryClaims(claims)
+	id, err := webauth.IdentityFromHubClaims(claims)
 	if err != nil {
-		t.Fatalf("IdentityFromRegistryClaims failed on IAP numeric sub: %v", err)
+		t.Fatalf("IdentityFromHubClaims failed on IAP numeric sub: %v", err)
 	}
 	if id.Email != "alice@example.com" || id.Kind != webauth.PrincipalHuman {
 		t.Fatalf("unexpected verified identity: %+v", id)

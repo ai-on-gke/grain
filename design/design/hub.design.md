@@ -696,7 +696,7 @@ After IAP verifies, the registry signs a JWT for the single target instance and 
 
 | Claim | Value |
 |---|---|
-| `iss` | The fixed issuer `grain-registry` (`registry.RegistryAssertionIssuer`; never taken from the request). Earlier drafts named `https://<registry-host>`; the shipped signer and verifier both pin `grain-registry`. |
+| `iss` | The fixed issuer `grain-registry` (`hub.HubAssertionIssuer`; never taken from the request). Earlier drafts named `https://<registry-host>`; the shipped signer and verifier both pin `grain-registry`. |
 | `aud` | The instance's origin URL, `https://<name>.<instance-domain>`. Exactly one audience. |
 | `sub` | The verified email, lower-cased. On a delegated request, the **person** named in `X-Grain-On-Behalf-Of` once `DelegationPolicy` has allowed it |
 | `email` | The same email, reusing `pkg/webauth`'s `NormalizeIdentityEmail` (extracted from `pkg/ui/principal.go`) |

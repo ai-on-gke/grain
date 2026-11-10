@@ -524,7 +524,7 @@ grain daemon \
 How the outbound tunnel operates:
 
 1. **WebSocket upgrade and stream multiplexing.** The daemon's
-   `RegistryTunnelSupervisor` dials
+   `HubTunnelSupervisor` dials
    `wss://<registry-host>/api/entries/<name>/connect` with
    `Sec-WebSocket-Protocol: grain.registry.connect.v1` and
    `X-Grain-Entry: <name>` (`pkg/tunnel/wsupgrade`), then runs a
@@ -540,7 +540,7 @@ How the outbound tunnel operates:
 3. **In-process `MuxListener` and mandatory verifier gate.** On the
    grain, accepted `mux` streams are served in-process over a
    `MuxListener` whose `RemoteAddr()` is `stream-<id>-remote` (network
-   `"mux"`, never `127.0.0.1`), wrapped in `RegistryTunnelHandler`.
+   `"mux"`, never `127.0.0.1`), wrapped in `HubTunnelHandler`.
    Every request arriving over the tunnel **must** carry a valid
    `X-Grain-Registry-Assertion` JWT; `grain_access` cookies,
    `X-Grain-Access-Code`, and bearer access codes are unconditionally
@@ -580,7 +580,7 @@ How the outbound tunnel operates:
 
 ### Periodic heartbeats (`PUT /api/entries/<name>/heartbeat`)
 
-Alongside the tunnel, `RegistryManager` pushes a JSON heartbeat every
+Alongside the tunnel, `HubManager` pushes a JSON heartbeat every
 `catalog.heartbeat_interval` (default `15 s`, and immediately whenever
 configured repositories or `WorkOwnership` settings change):
 

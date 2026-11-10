@@ -30,7 +30,7 @@ import (
 )
 
 func TestUnknownShapeReturnsCleanBadRequestWithoutSQLLeak(t *testing.T) {
-	dsn := startEphemeralPostgresForRegistryTest(t)
+	dsn := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 
 	st, err := store.Open(ctx, dsn, store.DefaultThresholds())
@@ -262,7 +262,7 @@ catalog:` + badYAML.block))
 }
 
 func TestDefaultScopeClaimsWalkthroughAndSecondaryRoute(t *testing.T) {
-	dsn := startEphemeralPostgresForRegistryTest(t)
+	dsn := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 
@@ -450,7 +450,7 @@ compute:
 }
 
 func TestCatalogScopeOwnersEnforcesPrimaryClaimsAndDemotesHeartbeats(t *testing.T) {
-	dsn := startEphemeralPostgresForRegistryTest(t)
+	dsn := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	now := time.Date(2026, 11, 7, 13, 0, 0, 0, time.UTC)
 

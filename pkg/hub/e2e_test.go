@@ -94,11 +94,11 @@ func buildRealGrainBinary(t *testing.T) string {
 // e2ePostgresCluster manages a shared ephemeral PostgreSQL server hosting both the
 // registry database (`grain_registry_e2e`) and per-instance databases (`grain_inst_<name>`).
 type e2ePostgresCluster struct {
-	t           *testing.T
-	adminDB     *sql.DB
-	user        string
-	port        int
-	RegistryDSN string
+	t       *testing.T
+	adminDB *sql.DB
+	user    string
+	port    int
+	HubDSN  string
 }
 
 func startE2EPostgresCluster(t *testing.T) *e2ePostgresCluster {
@@ -121,7 +121,7 @@ func startE2EPostgresCluster(t *testing.T) *e2ePostgresCluster {
 			user:    uname,
 			port:    p,
 		}
-		c.RegistryDSN = c.EnsureDatabase("grain_registry_e2e_" + randomHex(4))
+		c.HubDSN = c.EnsureDatabase("grain_registry_e2e_" + randomHex(4))
 		return c
 	}
 
@@ -207,7 +207,7 @@ func startE2EPostgresCluster(t *testing.T) *e2ePostgresCluster {
 		user:    pgUser,
 		port:    port,
 	}
-	c.RegistryDSN = c.EnsureDatabase("grain_registry_e2e")
+	c.HubDSN = c.EnsureDatabase("grain_registry_e2e")
 	return c
 }
 
@@ -881,7 +881,7 @@ func (c *e2eCompute) CreateInstance(ctx context.Context, spec hub.InstanceSpec) 
 		"-ui-addr=" + daemonAddr,
 		"-ui-allowed-hosts=" + entryHost + ",127.0.0.1,localhost",
 		"-ui-require-verifier=registry",
-		"-ui-hub-issuer=" + hub.RegistryAssertionIssuer,
+		"-ui-hub-issuer=" + hub.HubAssertionIssuer,
 		"-ui-hub-audience=" + audience,
 		"-ui-hub-keys-url=" + c.jwksURL(),
 	}
@@ -1236,7 +1236,7 @@ type e2eConnectedGrainConfig struct {
 	OwnerEmail     string
 	OwnerGroup     string
 	InstanceDomain string
-	RegistryURL    string
+	HubURL         string
 	JWKSURL        string
 	Token          string // for grc_... token auth
 	AuthMode       string // "token" (default) or "oidc"
@@ -1288,10 +1288,10 @@ func startE2EConnectedGrain(t *testing.T, grainBin string, cfg e2eConnectedGrain
 		"-ui-addr=" + daemonAddr,
 		"-ui-allowed-hosts=" + entryHost + ",127.0.0.1,localhost",
 		"-ui-require-verifier=registry",
-		"-ui-hub-issuer=" + hub.RegistryAssertionIssuer,
+		"-ui-hub-issuer=" + hub.HubAssertionIssuer,
 		"-ui-hub-audience=" + audience,
 		"-ui-hub-keys-url=" + cfg.JWKSURL,
-		"-hub-url=" + cfg.RegistryURL,
+		"-hub-url=" + cfg.HubURL,
 		"-hub-entry=" + cfg.EntryName,
 		"-hub-connect",
 		"-hub-host-kind=" + hostKind,
@@ -1364,12 +1364,12 @@ func startE2EConnectedGrain(t *testing.T, grainBin string, cfg e2eConnectedGrain
 	return proc
 }
 
-// TestRegistryEndToEndStep15 implements Step 15 of design/design/hub.design.md:
+// TestHubEndToEndStep15 implements Step 15 of design/design/hub.design.md:
 // Two in-process registry replicas (Replica A and Replica B, exercising cross-replica :8082
 // forwarding and rolling-restart reconnect_grace) running against in-process fakes for
 // Compute, shared PostgreSQL, Secret Manager, object storage, GroupResolver, and local bare
 // Git remotes driving real `grain` processes.
-func TestRegistryEndToEndStep15(t *testing.T) {
+func TestHubEndToEndStep15(t *testing.T) {
 	rootT := t
 	grainBin := buildRealGrainBinary(t)
 	pg := startE2EPostgresCluster(t)
@@ -1381,7 +1381,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	st, err := store.Open(ctx, pg.RegistryDSN, store.DefaultThresholds())
+	st, err := store.Open(ctx, pg.HubDSN, store.DefaultThresholds())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -1432,17 +1432,17 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 	sharedSigner := hub.NewCachingSigner(localSigner, 30*time.Second)
 
 	const (
-		registryHost   = "registry.example.com"
+		hubHost        = "registry.example.com"
 		instanceDomain = "instances.example.com"
 		iapAudience    = "/projects/123/global/backendServices/e2e-reg"
 	)
 
 	regCfg := hub.Config{
-		Host:           registryHost,
+		Host:           hubHost,
 		InstanceDomain: instanceDomain,
 		Listen:         "127.0.0.1:8080",
 		JWKSListen:     "127.0.0.1:8081",
-		Database:       hub.DatabaseConfig{URL: pg.RegistryDSN},
+		Database:       hub.DatabaseConfig{URL: pg.HubDSN},
 		Auth: hub.AuthConfig{
 			Provider:          "iap",
 			IAPAudience:       iapAudience,
@@ -1619,7 +1619,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 	// =========================================================================
 	t.Run("HostedInstanceLifecycleAndExternalState", func(t *testing.T) {
 		// Create hosted instance `hosted-alpha` owned by alice@example.com, co-managed by group:eng-team@example.com.
-		code, body, _ := doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "alice@example.com", map[string]any{
+		code, body, _ := doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "alice@example.com", map[string]any{
 			"name":         "hosted-alpha",
 			"kind":         api.KindInstance,
 			"shape":        "standard",
@@ -1647,7 +1647,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 			t.Fatalf("GetEntryByName hosted-alpha: %v", err)
 		}
 		if entryRow.LifecycleState != api.StateRunning {
-			probeTok, _ := sharedSigner.SignAssertion(ctx, hub.RegistryClaims{
+			probeTok, _ := sharedSigner.SignAssertion(ctx, hub.HubClaims{
 				Audience: "https://hosted-alpha." + instanceDomain,
 				Subject:  "alice@example.com",
 				Email:    "alice@example.com",
@@ -1754,7 +1754,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 
 		// 7) Co-owner `bob@example.com` (member of `group:eng-team@example.com`) resizes `hosted-alpha` from `standard` (1 unit)
 		// to `large` (2 units) via POST /api/entries/hosted-alpha/replace, triggering VM replacement, while quota attribution stays on `alice@example.com`!
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries/hosted-alpha/replace", "bob@example.com", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries/hosted-alpha/replace", "bob@example.com", map[string]any{
 			"shape": "large",
 		}, nil)
 		if code != http.StatusAccepted {
@@ -1763,7 +1763,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 
 		// Verify quota attribution: alice@example.com is charged 2 instance quota units (her full cap of 2),
 		// so alice cannot create another standard instance (403 quota_exceeded), while bob@example.com has 0 units charged!
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "alice@example.com", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "alice@example.com", map[string]any{
 			"name":  "alice-over-quota",
 			"kind":  api.KindInstance,
 			"shape": "standard",
@@ -1811,7 +1811,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 
 		// 8) Delete `hosted-alpha` (`DELETE /api/entries/hosted-alpha`), reconcile VM deletion into `deleted` state
 		// with 30-day retention, verify name reservation blocks other users, and then restore (`POST /api/entries/hosted-alpha/restore`)!
-		code, body, _ = doMainJSON(repA, http.MethodDelete, registryHost, "/api/entries/hosted-alpha", "alice@example.com", nil, nil)
+		code, body, _ = doMainJSON(repA, http.MethodDelete, hubHost, "/api/entries/hosted-alpha", "alice@example.com", nil, nil)
 		if code != http.StatusOK && code != http.StatusAccepted {
 			t.Fatalf("DELETE /api/entries/hosted-alpha = %d: %s", code, string(body))
 		}
@@ -1824,7 +1824,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 
 		// Another user (`charlie@example.com`) cannot claim `hosted-alpha` during the 30-day retention window.
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "charlie@example.com", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "charlie@example.com", map[string]any{
 			"name": "hosted-alpha",
 			"kind": api.KindConnected,
 		}, nil)
@@ -1833,7 +1833,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 
 		// Restore `hosted-alpha` (`POST /api/entries/hosted-alpha/restore`) and reconcile back to `running`.
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries/hosted-alpha/restore", "alice@example.com", nil, nil)
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries/hosted-alpha/restore", "alice@example.com", nil, nil)
 		if code != http.StatusAccepted && code != http.StatusOK {
 			t.Fatalf("POST /api/entries/hosted-alpha/restore = %d: %s", code, string(body))
 		}
@@ -1866,7 +1866,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 	var connOIDCProc *e2eConnectedGrainProc
 	t.Run("ConnectedGrainTunnelRollingDrainRevocationAndOffline503", func(t *testing.T) {
 		// 1) Reserve connected entry `conn-workstation` owned by alice@example.com with owner_group `group:eng-team@example.com`.
-		code, body, _ := doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "alice@example.com", map[string]any{
+		code, body, _ := doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "alice@example.com", map[string]any{
 			"name":         "conn-workstation",
 			"kind":         api.KindConnected,
 			"owner_group":  "group:eng-team@example.com",
@@ -1894,7 +1894,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 			OwnerEmail:     "alice@example.com",
 			OwnerGroup:     "group:eng-team@example.com",
 			InstanceDomain: instanceDomain,
-			RegistryURL:    pubLB.URL,
+			HubURL:         pubLB.URL,
 			JWKSURL:        jwksURL(),
 			Token:          grcToken,
 			AuthMode:       "token",
@@ -2046,7 +2046,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		// 6) Credential revocation immediate disconnect:
 		// Revoke `credID` via `DELETE /api/entries/conn-workstation/credentials/{credId}` on Replica B.
 		// Verify the active tunnel on Replica B is disconnected immediately!
-		code, body, _ = doMainJSON(repB, http.MethodDelete, registryHost, "/api/entries/conn-workstation/credentials/"+credID, "alice@example.com", nil, nil)
+		code, body, _ = doMainJSON(repB, http.MethodDelete, hubHost, "/api/entries/conn-workstation/credentials/"+credID, "alice@example.com", nil, nil)
 		if code != http.StatusOK && code != http.StatusNoContent {
 			t.Fatalf("DELETE credential %s = %d: %s", credID, code, string(body))
 		}
@@ -2085,7 +2085,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		// 8) FrontIdentity / OIDC auth (`-hub-auth-mode=oidc`) on a real `grain daemon` subprocess:
 		// Reserve `conn-oidc` with `connected_principal: "user:alice@example.com"` and start a real `grain daemon`
 		// with `-hub-auth-mode=oidc` dialing `mainLB.URL` (:8080 main listener).
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "alice@example.com", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "alice@example.com", map[string]any{
 			"name":                "conn-oidc",
 			"kind":                api.KindConnected,
 			"connected_principal": "user:alice@example.com",
@@ -2104,11 +2104,11 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 			OwnerEmail:     "alice@example.com",
 			OwnerGroup:     "group:eng-team@example.com",
 			InstanceDomain: instanceDomain,
-			RegistryURL:    mainLB.URL,
+			HubURL:         mainLB.URL,
 			JWKSURL:        jwksURL(),
 			AuthMode:       "oidc",
 			OIDCEmail:      "alice@example.com",
-			OIDCAudience:   "https://" + registryHost,
+			OIDCAudience:   "https://" + hubHost,
 			Listed:         true,
 			DisplayName:    "Connected OIDC Grain",
 			Purpose:        "OIDC FrontIdentity tunnel grain",
@@ -2214,11 +2214,11 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 		_ = jwksResp.Body.Close()
 
-		verifiedClaims, err := hub.VerifyRegistryAssertion(mintedAssertion, &jwksDoc, "https://"+hostedHost, time.Now().UTC())
+		verifiedClaims, err := hub.VerifyHubAssertion(mintedAssertion, &jwksDoc, "https://"+hostedHost, time.Now().UTC())
 		if err != nil {
-			t.Fatalf("VerifyRegistryAssertion against /.well-known/jwks.json failed: %v", err)
+			t.Fatalf("VerifyHubAssertion against /.well-known/jwks.json failed: %v", err)
 		}
-		if verifiedClaims.Issuer != hub.RegistryAssertionIssuer || verifiedClaims.Email != "alice@example.com" {
+		if verifiedClaims.Issuer != hub.HubAssertionIssuer || verifiedClaims.Email != "alice@example.com" {
 			t.Fatalf("unexpected verified JWT claims: %+v", verifiedClaims)
 		}
 
@@ -2247,7 +2247,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 
 		// C. Loopback-bypass refusal on tunnel streams:
 		// Open raw mux streams on Replica B's active tunnel to `conn-oidc` (real `grain daemon` running with `-hub-connect`)
-		// and verify `RegistryTunnelHandler()` refuses:
+		// and verify `HubTunnelHandler()` refuses:
 		//  1) Requests without `X-Grain-Registry-Assertion` (even on open routes `/`, `/api/config`, `/api/auth/whoami`, `/api/hostd/connect`) -> 401
 		//  2) Requests carrying `X-Grain-Access-Code`, `Cookie: grain_access=...`, or `Authorization: Bearer <access-code>`
 		//     EVEN when accompanied by a valid `X-Grain-Registry-Assertion` and loopback headers -> 401!
@@ -2282,7 +2282,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 			}
 		}
 
-		validOIDCAssertion, err := sharedSigner.SignAssertion(ctx, hub.RegistryClaims{
+		validOIDCAssertion, err := sharedSigner.SignAssertion(ctx, hub.HubClaims{
 			Audience: "https://" + connOIDCHost,
 			Subject:  "alice@example.com",
 			Email:    "alice@example.com",
@@ -2491,7 +2491,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		// while the connected peer initiates an even-numbered stream (`OpenStream` -> streamID=2) toward the registry.
 		// Verify the registry immediately sends `FrameReset` on the even stream and increments `PeerStreamRejectedTotal`
 		// WITHOUT dropping the tunnel session or disturbing the in-flight odd request stream!
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "alice@example.com", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "alice@example.com", map[string]any{
 			"name": "conn-even-iso",
 			"kind": api.KindConnected,
 		}, nil)
@@ -2601,7 +2601,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 	t.Run("UnlistedPrivacyConflictsCoManagementRankingAndPrefixEscape", func(t *testing.T) {
 		// A. Unlisted privacy (`listed` omitted -> defaults to false):
 		// Create an unlisted entry `secret-box` owned by alice@example.com with scopes on `acme/stealth`.
-		code, body, _ := doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "alice@example.com", map[string]any{
+		code, body, _ := doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "alice@example.com", map[string]any{
 			"name":    "secret-box",
 			"kind":    api.KindConnected,
 			"purpose": "Unlisted private workstation",
@@ -2619,7 +2619,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 
 		// Send heartbeat so `secret-box` is online with reported scopes on `acme/stealth`.
-		code, body, _ = doMainJSON(repA, http.MethodPut, registryHost, "/api/entries/secret-box/heartbeat", "", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPut, hubHost, "/api/entries/secret-box/heartbeat", "", map[string]any{
 			"grain_version": "v2.5.0",
 			"health":        api.HealthOK,
 			"scopes": []map[string]any{
@@ -2637,25 +2637,25 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		// Verify `secret-box` is excluded from `/api/directory` and `/api/route` for all callers
 		// (regular users, admins, and service principals)!
 		for _, caller := range []string{"charlie@example.com", "admin@example.com", "ci-bot@test-proj.iam.gserviceaccount.com"} {
-			cDir, bDir, _ := doMainJSON(repA, http.MethodGet, registryHost, "/api/directory?include_unhealthy=true", caller, nil, nil)
+			cDir, bDir, _ := doMainJSON(repA, http.MethodGet, hubHost, "/api/directory?include_unhealthy=true", caller, nil, nil)
 			if cDir != http.StatusOK || strings.Contains(string(bDir), "secret-box") || strings.Contains(string(bDir), "acme/stealth") {
 				t.Fatalf("unlisted entry secret-box leaked in /api/directory for caller %s: %d %s", caller, cDir, string(bDir))
 			}
-			cRoute, bRoute, _ := doMainJSON(repA, http.MethodGet, registryHost, "/api/route?repo=acme/stealth", caller, nil, nil)
+			cRoute, bRoute, _ := doMainJSON(repA, http.MethodGet, hubHost, "/api/route?repo=acme/stealth", caller, nil, nil)
 			if cRoute != http.StatusOK || strings.Contains(string(bRoute), "secret-box") {
 				t.Fatalf("unlisted entry secret-box leaked in /api/route for caller %s: %d %s", caller, cRoute, string(bRoute))
 			}
 		}
 
 		// Verify `GET /api/entries` for charlie@example.com never returns alice's entries or `backend_url`.
-		cList, bList, _ := doMainJSON(repA, http.MethodGet, registryHost, "/api/entries", "charlie@example.com", nil, nil)
+		cList, bList, _ := doMainJSON(repA, http.MethodGet, hubHost, "/api/entries", "charlie@example.com", nil, nil)
 		if cList != http.StatusOK || strings.Contains(string(bList), "secret-box") || strings.Contains(string(bList), "hosted-alpha") || strings.Contains(string(bList), "127.0.0.1") {
 			t.Fatalf("GET /api/entries for charlie leaked another owner's entries or backend_url: %d %s", cList, string(bList))
 		}
 
 		// B. Listed primary-prefix synchronous `409 Conflict` and async heartbeat `conflict_with` handling:
 		// 1) Create listed entry `rank-primary-root` by charlie@example.com with declared primary scope on `acme/monorepo` (`/pkg/api`).
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "charlie@example.com", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "charlie@example.com", map[string]any{
 			"name":   "rank-primary-root",
 			"kind":   api.KindConnected,
 			"listed": true,
@@ -2670,7 +2670,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		_ = json.Unmarshal(body, &rootCreate)
 
 		// Synchronously creating another listed entry declaring the same `(repo, path_prefix, role="primary")` must return 409 Conflict!
-		code409, body409, _ := doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "dave@example.com", map[string]any{
+		code409, body409, _ := doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "dave@example.com", map[string]any{
 			"name":   "rank-conflict-sync",
 			"kind":   api.KindConnected,
 			"listed": true,
@@ -2687,7 +2687,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		// then have both `rank-primary-root` and `rank-late-claimant` send heartbeats reporting `(acme/monorepo, /pkg/api, primary)`.
 		// The heartbeat from `rank-late-claimant` must be accepted with 200 OK, return `conflicts` (`conflict_with: "rank-primary-root"`),
 		// mark `rank-late-claimant` degraded, and preserve clean primary routing for `rank-primary-root`!
-		code, body, _ = doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", "dave@example.com", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", "dave@example.com", map[string]any{
 			"name":   "rank-late-claimant",
 			"kind":   api.KindConnected,
 			"listed": true,
@@ -2699,7 +2699,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		_ = json.Unmarshal(body, &lateCreate)
 
 		// Heartbeat 1: `rank-primary-root` reports `/pkg/api` primary (`active_tasks: 2`).
-		code, body, _ = doMainJSON(repA, http.MethodPut, registryHost, "/api/entries/rank-primary-root/heartbeat", "", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPut, hubHost, "/api/entries/rank-primary-root/heartbeat", "", map[string]any{
 			"grain_version": "v2.5.0",
 			"health":        api.HealthOK,
 			"active_tasks":  2,
@@ -2716,7 +2716,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 
 		// Heartbeat 2: `rank-late-claimant` reports overlapping `/pkg/api` primary (`active_tasks: 0`).
-		code, body, _ = doMainJSON(repA, http.MethodPut, registryHost, "/api/entries/rank-late-claimant/heartbeat", "", map[string]any{
+		code, body, _ = doMainJSON(repA, http.MethodPut, hubHost, "/api/entries/rank-late-claimant/heartbeat", "", map[string]any{
 			"grain_version": "v2.5.0",
 			"health":        api.HealthOK,
 			"active_tasks":  0,
@@ -2731,7 +2731,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		if code != http.StatusOK || !strings.Contains(string(body), `"conflicting_entry":"rank-primary-root"`) {
 			t.Fatalf("expected 200 OK with conflicting_entry:rank-primary-root on async conflicting heartbeat, got %d: %s", code, string(body))
 		}
-		code, body, _ = doMainJSON(repA, http.MethodGet, registryHost, "/api/entries/rank-late-claimant", "dave@example.com", nil, nil)
+		code, body, _ = doMainJSON(repA, http.MethodGet, hubHost, "/api/entries/rank-late-claimant", "dave@example.com", nil, nil)
 		if code != http.StatusOK || !strings.Contains(string(body), `"conflict_with":"rank-primary-root"`) {
 			t.Fatalf("expected rank-late-claimant scope to carry conflict_with:rank-primary-root, got %d: %s", code, string(body))
 		}
@@ -2758,7 +2758,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 
 		createAndHeartbeat := func(owner, name, prefix string, role api.ScopeRole, activeTasks int) {
 			t.Helper()
-			c, b, _ := doMainJSON(repA, http.MethodPost, registryHost, "/api/entries", owner, map[string]any{
+			c, b, _ := doMainJSON(repA, http.MethodPost, hubHost, "/api/entries", owner, map[string]any{
 				"name":   name,
 				"kind":   api.KindConnected,
 				"listed": true,
@@ -2768,7 +2768,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 			}
 			var cr api.CreateEntryResponse
 			_ = json.Unmarshal(b, &cr)
-			c, b, _ = doMainJSON(repB, http.MethodPut, registryHost, "/api/entries/"+name+"/heartbeat", "", map[string]any{
+			c, b, _ = doMainJSON(repB, http.MethodPut, hubHost, "/api/entries/"+name+"/heartbeat", "", map[string]any{
 				"grain_version": "v2.5.0",
 				"health":        api.HealthOK,
 				"active_tasks":  activeTasks,
@@ -2796,7 +2796,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		// - Clean `primary` (`rank-primary-root`) wins #1 (and is `Primary`), while conflicting `rank-late-claimant` is excluded.
 		// - Longest segment-boundary `path_prefix` match (`/pkg/api/v2` on `rank-subpath-secondary`, specificity 10) ranks ahead of shorter `/pkg/api` secondaries (specificity 7) despite higher `active_tasks`.
 		// - Between equal-specificity `/pkg/api` secondaries, lower `active_tasks` (`rank-api-secondary`, 0) ranks ahead of higher `active_tasks` (`rank-api-secondary-busy`, 4).
-		code, body, _ = doMainJSON(repA, http.MethodGet, registryHost, "/api/route?repo=acme/monorepo&path=pkg/api/v2/handler.go", "charlie@example.com", nil, nil)
+		code, body, _ = doMainJSON(repA, http.MethodGet, hubHost, "/api/route?repo=acme/monorepo&path=pkg/api/v2/handler.go", "charlie@example.com", nil, nil)
 		if code != http.StatusOK {
 			t.Fatalf("GET /api/route v2 = %d: %s", code, string(body))
 		}
@@ -2815,7 +2815,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		// 2) Query `/api/route?repo=acme/monorepo&path=pkg/api/v1/server.go`:
 		// Clean `primary` (`rank-primary-root`) ranks ahead of `secondary` (`rank-api-secondary`, `rank-api-secondary-busy`),
 		// and `/pkg/api/v2` (`rank-subpath-secondary`) does not match `pkg/api/v1/server.go`!
-		code, body, _ = doMainJSON(repA, http.MethodGet, registryHost, "/api/route?repo=acme/monorepo&path=pkg/api/v1/server.go", "charlie@example.com", nil, nil)
+		code, body, _ = doMainJSON(repA, http.MethodGet, hubHost, "/api/route?repo=acme/monorepo&path=pkg/api/v1/server.go", "charlie@example.com", nil, nil)
 		if code != http.StatusOK {
 			t.Fatalf("GET /api/route v1 = %d: %s", code, string(body))
 		}
@@ -2831,7 +2831,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 
 		// 3) Segment-boundary check: `/pkg/api-extra/foo.go` must NOT match `/pkg/api`!
-		code, body, _ = doMainJSON(repA, http.MethodGet, registryHost, "/api/route?repo=acme/monorepo&path=pkg/api-extra/foo.go", "charlie@example.com", nil, nil)
+		code, body, _ = doMainJSON(repA, http.MethodGet, hubHost, "/api/route?repo=acme/monorepo&path=pkg/api-extra/foo.go", "charlie@example.com", nil, nil)
 		if code != http.StatusOK {
 			t.Fatalf("GET /api/route segment boundary = %d: %s", code, string(body))
 		}
@@ -2842,7 +2842,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 
 		// 4) `/api/directory?repo=acme/monorepo` lists the public catalog entries for `acme/monorepo`.
-		code, body, _ = doMainJSON(repA, http.MethodGet, registryHost, "/api/directory?repo=acme/monorepo", "charlie@example.com", nil, nil)
+		code, body, _ = doMainJSON(repA, http.MethodGet, hubHost, "/api/directory?repo=acme/monorepo", "charlie@example.com", nil, nil)
 		if code != http.StatusOK || !strings.Contains(string(body), "rank-primary-root") || !strings.Contains(string(body), "rank-subpath-secondary") {
 			t.Fatalf("GET /api/directory?repo=acme/monorepo missing expected entries: %d %s", code, string(body))
 		}
@@ -2853,14 +2853,14 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 			"/api/route?repo=acme/monorepo&path=pkg/../../etc/passwd",
 			"/api/route?repo=acme/monorepo&path=/pkg/api/..",
 		} {
-			cBad, bBad, _ := doMainJSON(repA, http.MethodGet, registryHost, badPath, "charlie@example.com", nil, nil)
+			cBad, bBad, _ := doMainJSON(repA, http.MethodGet, hubHost, badPath, "charlie@example.com", nil, nil)
 			if cBad != http.StatusBadRequest {
 				t.Fatalf("expected 400 Bad Request for prefix-escape query %s, got %d: %s", badPath, cBad, string(bBad))
 			}
 		}
 
 		// Also verify declaring a scope with `..` in `path_prefix` is rejected with 400 Bad Request.
-		cBadScope, bBadScope, _ := doMainJSON(repA, http.MethodPut, registryHost, "/api/entries/rank-primary-root/scopes", "charlie@example.com", map[string]any{
+		cBadScope, bBadScope, _ := doMainJSON(repA, http.MethodPut, hubHost, "/api/entries/rank-primary-root/scopes", "charlie@example.com", map[string]any{
 			"scopes": []map[string]any{
 				{"repo": "acme/monorepo", "path_prefix": "/pkg/../secret", "role": api.RolePrimary},
 			},
@@ -2880,7 +2880,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	st, err := store.Open(ctx, pg.RegistryDSN, store.DefaultThresholds())
+	st, err := store.Open(ctx, pg.HubDSN, store.DefaultThresholds())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -2913,7 +2913,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	}
 
 	const (
-		registryHost   = "registry.example.com"
+		hubHost        = "registry.example.com"
 		instanceDomain = "instances.example.com"
 		iapAudience    = "/projects/123/global/backendServices/e2e-delegation"
 		adminEmail     = "admin@example.com"
@@ -2957,11 +2957,11 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 		DelegationPolicy:  "consent",
 	}
 	regCfg := hub.Config{
-		Host:           registryHost,
+		Host:           hubHost,
 		InstanceDomain: instanceDomain,
 		Listen:         "127.0.0.1:8080",
 		JWKSListen:     "127.0.0.1:8081",
-		Database:       hub.DatabaseConfig{URL: pg.RegistryDSN},
+		Database:       hub.DatabaseConfig{URL: pg.HubDSN},
 		Auth:           authCfg,
 		Signing: hub.SigningConfig{
 			Provider: "local",
@@ -3096,12 +3096,12 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 		{Name: "planner", Principal: plannerSA, MaxAccess: "write"},
 		{Name: "triage", Principal: triageSA, MaxAccess: "read"},
 	} {
-		if code, body := doJSON(repA, http.MethodPost, registryHost, "/api/admin/delegating-apps", adminEmail, appSpec, nil); code != http.StatusCreated {
+		if code, body := doJSON(repA, http.MethodPost, hubHost, "/api/admin/delegating-apps", adminEmail, appSpec, nil); code != http.StatusCreated {
 			t.Fatalf("POST delegating-apps %s = %d %s", appSpec.Name, code, body)
 		}
 	}
 
-	code, body := doJSON(repA, http.MethodPost, registryHost, "/api/delegation-grants", aliceEmail,
+	code, body := doJSON(repA, http.MethodPost, hubHost, "/api/delegation-grants", aliceEmail,
 		api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"alice-vm"}, Access: "read"}, nil)
 	if code != http.StatusOK {
 		t.Fatalf("POST grant planner = %d %s", code, body)
@@ -3111,7 +3111,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 		t.Fatalf("unmarshal plannerGrant1: %v", err)
 	}
 
-	code, body = doJSON(repA, http.MethodPost, registryHost, "/api/delegation-grants", aliceEmail,
+	code, body = doJSON(repA, http.MethodPost, hubHost, "/api/delegation-grants", aliceEmail,
 		api.CreateDelegationGrantRequest{App: "triage", Entries: []string{"alice-vm"}, Access: "read"}, nil)
 	if code != http.StatusOK {
 		t.Fatalf("POST grant triage = %d %s", code, body)
@@ -3130,7 +3130,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	if plannerTokB1 == "" {
 		t.Fatal("backend did not receive X-Grain-Registry-Assertion from repB")
 	}
-	claims1, err := hub.VerifyRegistryAssertion(plannerTokB1, jwksDoc, entryAud, time.Now().UTC())
+	claims1, err := hub.VerifyHubAssertion(plannerTokB1, jwksDoc, entryAud, time.Now().UTC())
 	if err != nil || claims1.Actor == nil || claims1.Actor.Grant != plannerGrant1.ID || claims1.Actor.App != "planner" {
 		t.Fatalf("unexpected delegated assertion claims: %+v (err=%v)", claims1, err)
 	}
@@ -3158,11 +3158,11 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	// 3. Revoke Alice's planner grant on Replica A (`DELETE /api/delegation-grants/<id>`).
 	// Replica B must refuse subsequent delegated requests AND evict plannerTokB1 from its
 	// CachingSigner via `LISTEN registry_delegations` (`grant:<id>`), while keeping triage cached.
-	if code, body := doJSON(repA, http.MethodDelete, registryHost, "/api/delegation-grants/"+plannerGrant1.ID, aliceEmail, nil, nil); code != http.StatusOK {
+	if code, body := doJSON(repA, http.MethodDelete, hubHost, "/api/delegation-grants/"+plannerGrant1.ID, aliceEmail, nil, nil); code != http.StatusOK {
 		t.Fatalf("DELETE grant on repA = %d %s", code, body)
 	}
 
-	plannerClaims1 := hub.RegistryClaims{
+	plannerClaims1 := hub.HubClaims{
 		Audience: entryAud,
 		Subject:  aliceEmail,
 		Email:    aliceEmail,
@@ -3213,7 +3213,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	// Both Replica A (locally in handleAdminSetDelegatingAppDisabled) and Replica B (via
 	// `LISTEN registry_delegations` `app:planner`) must evict their cached assertions, so
 	// re-enabling "planner" within the 30s window mints fresh assertions on both replicas.
-	code, body = doJSON(repA, http.MethodPost, registryHost, "/api/delegation-grants", aliceEmail,
+	code, body = doJSON(repA, http.MethodPost, hubHost, "/api/delegation-grants", aliceEmail,
 		api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"alice-vm"}, Access: "read"}, nil)
 	if code != http.StatusOK {
 		t.Fatalf("POST re-grant planner = %d %s", code, body)
@@ -3246,12 +3246,12 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	}
 
 	// Admin disables "planner" on Replica A.
-	if code, body := doJSON(repA, http.MethodPatch, registryHost, "/api/admin/delegating-apps/planner", adminEmail,
+	if code, body := doJSON(repA, http.MethodPatch, hubHost, "/api/admin/delegating-apps/planner", adminEmail,
 		api.SetDelegatingAppDisabledRequest{Disabled: true}, nil); code != http.StatusOK {
 		t.Fatalf("PATCH disable planner on repA = %d %s", code, body)
 	}
 
-	plannerClaims2 := hub.RegistryClaims{
+	plannerClaims2 := hub.HubClaims{
 		Audience: entryAud,
 		Subject:  aliceEmail,
 		Email:    aliceEmail,
@@ -3301,7 +3301,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	// Re-enable "planner" on Replica A within the 30s cache window: Replica A (untouched by
 	// SignAssertion probes above) and Replica B must both mint fresh assertions rather than
 	// serving pre-disable cached tokens.
-	if code, body := doJSON(repA, http.MethodPatch, registryHost, "/api/admin/delegating-apps/planner", adminEmail,
+	if code, body := doJSON(repA, http.MethodPatch, hubHost, "/api/admin/delegating-apps/planner", adminEmail,
 		api.SetDelegatingAppDisabledRequest{Disabled: false}, nil); code != http.StatusOK {
 		t.Fatalf("PATCH enable planner on repA = %d %s", code, body)
 	}

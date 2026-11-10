@@ -31,7 +31,8 @@ import (
 
 // ReleaseMaxRCAttempts is scripts/release.conf's RELEASE_MAX_RC_ATTEMPTS:
 // how many candidates one version may use before a red one escalates
-// (FamilyReleaseEscalated) instead of being fixed and cut again.
+// (FamilyReleaseEscalated). It is a threshold, not a stop: the train keeps
+// cutting rc.(N+1) from main past it (playbook §5).
 const ReleaseMaxRCAttempts = 3
 
 // ReleaseHoldCheckName is the check run the reconciler posts on a red
@@ -167,4 +168,18 @@ func (s *Store) HasTasksTitled(ctx context.Context, marker string) (bool, error)
 		return false, fmt.Errorf("counting the tasks titled %s: %w", marker, err)
 	}
 	return n > 0, nil
+}
+
+// unreleasedDropPattern is the trailer scripts/release-from-trunk.sh puts
+// on a `-discarded` tag when it drops a candidate without judging it.
+var unreleasedDropPattern = regexp.MustCompile(`(?m)^Discard-Reason: (daily-cap|held-over)\r?$`)
+
+// UnreleasedDrop reports whether a `-discarded` tag's message says the
+// train dropped the candidate for the daily cap (`Discard-Reason:
+// daily-cap`) or as held over from an earlier day (`Discard-Reason:
+// held-over`), playbook §7, rather than for failing qualification. Such
+// a candidate is not red: it raises no pipeline.rc-failed, holds no next
+// cut, and counts toward no escalation.
+func UnreleasedDrop(tagMessage string) bool {
+	return unreleasedDropPattern.MatchString(tagMessage)
 }

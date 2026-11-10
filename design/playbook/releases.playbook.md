@@ -4,11 +4,13 @@
 
 [`contributions.playbook.md`](contributions.playbook.md) defines how designs, specifications, tasks, and code land on `main`, and [`merging.design.md`](../design/merging.design.md) defines how pull requests merge independently once they are clean, green, and through their gates. This playbook design defines how landed commits on `main` become official releases.
 
-**The core rule:** grain releases continuously from `main`—cutting a release candidate `vX.Y.Z-rc.N` from the newest known-good trunk commit, running the deterministic CI and agent qualification suite against it, promoting `vX.Y.Z` and `latest` as soon as qualification passes, with no person's approval (§1), or triaging, fixing, and cutting `vX.Y.Z-rc.(N+1)` when qualification fails. Releases go out as fast as qualification passes, with no long-lived stabilization branch and no timed staging soak.
+**The core rule:** grain releases continuously from `main`—cutting a release candidate `vX.Y.Z-rc.N` from the newest known-good trunk commit, running the deterministic CI and agent qualification suite against it, promoting `vX.Y.Z` and `latest` as soon as qualification passes, with no person's approval (§1), or triaging, fixing, and cutting `vX.Y.Z-rc.(N+1)` when qualification fails. Releases go out at most once a calendar day (§7, 2026-11-09), with no long-lived stabilization branch and no timed staging soak.
 
 **The one-action rule (operator, 2026-11-02):** a release takes **at most one action from a person, always**, and that action is **approving the release**. Everything before and after the approval — cutting the RC, qualification, release notes, promotion, the Google edition's sync, merge and image publishing, and upgrading the deployment — is grain's. Where this rule and an older section disagree, this rule wins; [§0](#0-at-most-one-person-action-per-release) lays out the flow, who owns each step and the file that enforces it.
 
 **The continuous-train rule (operator, 2026-11-04):** the core release train runs **continuously** and **promotes automatically**. It tags a build `vX.Y.Z-rc.N`, qualifies it (Stage 1 `nightly.yml` on the rc tag, Stage 2 `grain/release-qualification`), and on a pass tags it `vX.Y.Z` and moves `latest` with **no person's Approve**; on a fail it drops it (`-rc.N-discarded`) and cuts the next rc once a fix lands (§5, §12). A routine release now takes **no** person action. The person's Approve (§0.2) remains only for what the train may not release itself: the first release of a new `RELEASE_MAJOR`, a release carrying breaking changes, and every release while `RELEASE_AUTO_PROMOTE=false`. This amends §0 and §1.
+
+**The daily-release rule (operator, 2026-11-09):** "Let's not release more than once a day, but let's keep cutting rcs until we get one that day." The train releases at most `RELEASE_MAX_PER_DAY` (1) times per calendar day in `RELEASE_DAY_TZ` (`America/Los_Angeles`). From the first tick after midnight there it cuts `rc.1` of the next version from the newest known-good `main`. A red rc is re-cut from `main` at once, with no interval and no attempt limit, until one qualifies and releases. After that release the train cuts nothing more that day. It never releases an rc held over from an earlier day, and it drops an rc that can no longer release today rather than hold it (refinement, 2026-11-09). This avoids a release followed a few hours later by another with only a few hours' changes. A person's approve can go past the cap. This amends §1, §5 and §7.
 
 ---
 
@@ -21,7 +23,7 @@ This playbook supersedes the staging-soak and human-staging flow in [`release-fr
 | **Release from trunk (`main`)** | **Survives** | Ordinary development and bug fixes land on `main` through normal pull requests. There is no long-lived stabilization branch, no `candidate -> main` back-merge, and no owed-ports ledger. |
 | **LKG commit selection (`select-lkg` in `scripts/candidate-gate.sh`)** | **Survives (narrowed)** | `select-lkg` picks the newest `main` commit after the floor whose per-push `tests.yml` and `release.yml` runs are green (with `:sha-<short>` images already published). `nightly.yml` moves out of pre-cut LKG selection and runs as Stage 1 of RC qualification itself. |
 | **Tag and channel conventions (`vX.Y.Z-rc.N`, `-discarded`, `vX.Y.Z`, `latest`, `candidate`/`rc`)** | **Survives** | Every RC is an annotated `vX.Y.Z-rc.N` tag; failed RCs receive `vX.Y.Z-rc.N-discarded` markers without moving `:candidate`/`:rc` backwards; promoted releases receive immutable `vX.Y.Z` tags and advance `latest`; `scripts/build-version.sh` orders all builds monotonically. |
-| **Operator controls in `scripts/release.conf`** | **Survives (extended)** | `RELEASE_MAJOR`, `RELEASE_FLOOR_MINOR`, and `RELEASE_NEVER_PROMOTE` remain authoritative, joined by `RELEASE_MIN_INTERVAL_MINUTES` and `RELEASE_MAX_RC_ATTEMPTS`. |
+| **Operator controls in `scripts/release.conf`** | **Survives (extended)** | `RELEASE_MAJOR`, `RELEASE_FLOOR_MINOR`, and `RELEASE_NEVER_PROMOTE` remain authoritative, joined by `RELEASE_MAX_PER_DAY`, `RELEASE_DAY_TZ`, `RELEASE_MAX_RC_ATTEMPTS` and `RELEASE_MIN_INTERVAL_MINUTES` (§5, §7). |
 | **`infra` verdict classification** | **Survives (extended)** | Cancelled, timed-out, capacity-starved, quota-paused, or restart-interrupted runs classify as `infra` and re-run without counting against the RC, across both CI jobs and agent qualification tasks. |
 | **Mechanical release notes (`scripts/release-notes.sh`)** | **Survives (automated)** | `scripts/release-notes.sh` generates `docs/releases/vX.Y.Z.md` and the GitHub Release body deterministically during promotion, extended to flag breaking changes, replacing the per-release `.grain/templates/release-notes.yml` agent task. |
 | **24-hour staging soak (`check-soak`, `RELEASE_STAGING_URL`, persistent staging sandbox, `staging-ui-exploration`)** | **Superseded** | Retired. Qualification is an active, deterministic two-stage suite run against the RC commit rather than a 24-hour wall-clock wait on a staging sandbox. |
@@ -36,7 +38,7 @@ At most one release candidate qualifies at a time. Each candidate moves through 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CutRC: New LKG on main (past min interval)
+    [*] --> CutRC: New LKG on main (the day has not released yet)
 
     state "rc cut (vX.Y.Z-rc.N)" as CutRC
     state "qualifying (Stage 1 CI -> Stage 2 Agent Suite)" as Qualifying
@@ -46,6 +48,7 @@ stateDiagram-v2
     state "fixing (steward triage & high-priority fixes)" as Fixing
     state "next rc (vX.Y.Z-rc.N+1)" as NextRC
     state "escalated (human inbox)" as Escalated
+    state "dropped by the daily cap (vX.Y.Z-rc.N-discarded, not red)" as Dropped
 
     CutRC --> Qualifying: Tag vX.Y.Z-rc.N, publish :rc images, start Stage 1
     Qualifying --> Qualifying: infra (capacity / quota / restart) -> re-run
@@ -55,13 +58,15 @@ stateDiagram-v2
     Released --> [*]
 
     Qualifying --> Failed: Confirmed failure after single retry (or superseded)
-    Failed --> Escalated: Attempt count N >= RELEASE_MAX_RC_ATTEMPTS (3)
+    Qualifying --> Dropped: The day has already released, or the rc was cut on an earlier day
+    Dropped --> NextRC: The next day's first tick, from the newest LKG on main
+    Failed --> Escalated: Attempt count N >= RELEASE_MAX_RC_ATTEMPTS (3); a report, the train goes on
     Failed --> Fixing: Wake pipeline steward (pipeline.rc-failed)
-    Fixing --> NextRC: Blocking fixes merged & LKG green (main, or release/vX.Y.Z on rc.3)
+    Fixing --> NextRC: The next tick, from the newest LKG on main (unless grain/rc-hold holds it for a blocker)
     NextRC --> Qualifying: Tag vX.Y.Z-rc.(N+1), publish :rc images
 ```
 
-1. **Cut RC (`rc cut`):** When no RC is in qualification and at least `RELEASE_MIN_INTERVAL_MINUTES` has elapsed since the previous promotion, the train selects the newest `main` commit after the current `latest` release whose `tests.yml` and `release.yml` runs are green (`:sha-<short>` images verified and published). It tags `vX.Y.Z-rc.1`, force-moves `refs/heads/candidate` onto that commit, and publishes `:vX.Y.Z-rc.1`, `:candidate`, and `:rc` container images stamped with `RELEASE=vX.Y.Z-rc.1`.
+1. **Cut RC (`rc cut`):** When no RC is in qualification and the day (`RELEASE_DAY_TZ`) has not had its release yet (§7), the train selects the newest `main` commit after the current `latest` release whose `tests.yml` and `release.yml` runs are green (`:sha-<short>` images verified and published). It tags `vX.Y.Z-rc.1`, force-moves `refs/heads/candidate` onto that commit, and publishes `:vX.Y.Z-rc.1`, `:candidate`, and `:rc` container images stamped with `RELEASE=vX.Y.Z-rc.1`.
 2. **Qualify (`qualifying`):** Qualification runs in two sequential stages against `vX.Y.Z-rc.N` (§2, §13):
    - **Stage 1 (CI qualification):** `.github/workflows/nightly.yml` runs against `vX.Y.Z-rc.N`.
    - **Stage 2 (Agent qualification):** Only after Stage 1 passes, the deployment starts the `release-qualification` suite against `vX.Y.Z-rc.N` and reports the verdict back to the commit as check run `grain/release-qualification`.
@@ -151,7 +156,7 @@ push:
     force: true
 ```
 
-`refs/heads/release/v*` is the rc.3 convergence branch (§5). The train creates it once from rc.2's commit, with no force and no delete; a person's approval run deletes it, and after a train release it stays until somebody deletes it (patch branches stay anyway, §9 of `docs/release-candidate-management.md`).
+`refs/heads/release/v*` was the rc.3 convergence branch (§5). Since 2026-11-09 the train no longer makes it, because every rc is cut from `main`. The grant still names it, so a release cut from a person's branch can be verified, and that is all it is used for. A person's approval run deletes it, and after a train release it stays until somebody deletes it (patch branches stay anyway, §9 of `docs/release-candidate-management.md`).
 
 `vM.Y.0` and `latest` joined the list on 2026-11-04, when the operator made promotion automatic (§1). `path.Match` can't say "digits", so the release tags are spelt by length; no `-rc`, `-pending`, `-retracted` or patch tag (`vM.Y.Z`, `Z ≥ 1`) matches, and a release can be created but never moved or deleted. Five checks keep the train to releasing **only the commit of an rc that qualified**:
 
@@ -192,7 +197,7 @@ Upgrading the deployment that runs grain is part of the release, not a separate 
 > - `RELEASE_AUTO_PROMOTE=false` in `scripts/release.conf` stages every qualified rc as `vX.Y.0-pending` for a person instead (the 2026-11-02 behaviour);
 > - `RELEASE_NEVER_PROMOTE` drops a named rc and skips a named version: neither is ever released;
 > - the first release of a new `RELEASE_MAJOR` (a major bump) and a release with breaking changes since the last (`release-notes.sh check-breaking`, §8) are always staged as `-pending` for a person;
-> - `RELEASE_MIN_INTERVAL_MINUTES` since the newest release holds a qualified rc, and a later tick releases it;
+> - at most `RELEASE_MAX_PER_DAY` (1) releases per calendar day in `RELEASE_DAY_TZ`. Once the day has released, a qualified rc is dropped, not released or staged as `-pending`, and so is an rc cut on an earlier day (§7). A person's approve of a `-pending` release goes past the cap and records that on the release tag;
 > - the train never pushes `vX.Y.0` or `latest` for any commit but the qualified rc's (§0.4).
 >
 > `-pending` is kept only as that person's queue. `promote-release.yml` keeps a person's manual promote of it, rollback (§11) and major bumps.
@@ -289,13 +294,22 @@ Environmental failures must never discard a healthy RC, burn a version retry att
 
 While `vX.Y.Z-rc.1` runs qualification (~60–90 minutes), `main` keeps accepting merges. Cutting every retry blindly from `main` risks non-convergence when trunk is busy; cutting every RC onto a release branch re-introduces cherry-pick toil on happy paths.
 
-**Decision:** **Trunk-first for `rc.1` and `rc.2`, automatic short-lived branch lock (`release/vX.Y.Z`) on `rc.3`, bounded at 3 RC attempts before steward escalation.**
+> **Amended 2026-11-09 (the daily-release rule): every rc is cut from `main`, and nothing stops a day that has not released.** The train used to cut `rc.3` from a `release/vX.Y.Z` convergence branch and stop after `RELEASE_MAX_RC_ATTEMPTS` (3) red rcs until a person reset it. Both are retired from the train:
+>
+> 1. **Every rc is cut from the newest known-good `main` commit**, `rc.(N+1)` on the tick after `rc.N` is dropped, with no interval between attempts. The convergence branch waited for somebody to cherry-pick a fix onto it, and the attempt limit waited for a person. Either could stall the day the operator wants a release from. The cap itself bounds what trunk churn costs: an rc that misses today is replaced by a fresh cut tomorrow, so the release never falls more than a day behind `main`. Fixes land on `main` first anyway, and the next cut picks them up without a backport.
+> 2. **`RELEASE_MAX_RC_ATTEMPTS` (3) is an escalation threshold.** When the first rc past it is cut, the train emits `escalated_version=vX.Y.Z` (`release-train-actions.sh` reports it) and grain raises `pipeline.release-escalated:vX.Y.Z`. The train still cuts `rc.(N+1)`. A person is asked why the version keeps failing; the train does not wait for that answer.
+> 3. **The steward's hold still counts.** While `[rc-blocker vX.Y.Z-rc.N]` tasks are open, `grain/rc-hold` on the red rc's commit holds the next cut (§12). The rc after a known blocker waits for the fix, and only for the fix. Neither a cap drop nor a held-over drop (§7) was red, so neither has a hold, and the next cut may reuse that rc's commit.
+> 4. **`release/vX.Y.Z` is now made only by a person.** That covers patch hotfixes (`scripts/release-patch.sh`) and a branch made by hand. Approval, verification and the train's tag grant still accept a release cut from one (§0.4), and approval deletes it.
+>
+> Points 2 and 3 of the original decision below are superseded.
+
+**Original decision (2026-11-01):** **Trunk-first for `rc.1` and `rc.2`, automatic short-lived branch lock (`release/vX.Y.Z`) on `rc.3`, bounded at 3 RC attempts before steward escalation.**
 
 1. **`rc.1` and `rc.2` cut directly from `main`:** When `vX.Y.Z-rc.1` fails, the fix lands on `main` as a high-priority PR. Once that fix (and any concurrent trunk merges) passes `tests.yml` and `release.yml`, `vX.Y.Z-rc.2` is cut directly from the new `main` LKG commit. Under normal merge rates, `rc.2` converges cleanly with zero cherry-picking and ships the latest trunk state.
-2. **`rc.3` isolates on short-lived `release/vX.Y.Z` if `main` introduced a new regression:** If `rc.2` fails—especially on a regression absent from `rc.1`, showing trunk churn outpaced stabilization—the steward branches `release/vX.Y.Z` from `rc.2`'s commit, allows **only** targeted `fix:` commits cherry-picked from `main` (`Backported-from: <main_sha>`—fixes always land on `main` first so trunk never regresses), lets `release.yml` (which already runs on `release/v*`) build `:sha-<short>` images, and cuts `vX.Y.Z-rc.3` from `release/vX.Y.Z`. Once `vX.Y.Z` promotes, `release/vX.Y.Z` is deleted immediately; `main` already carries every fix.
-3. **Hard bound of 3 attempts (`RELEASE_MAX_RC_ATTEMPTS=3`):** If `vX.Y.Z-rc.3` also fails qualification, automatic RC cutting pauses for `vX.Y.Z` and the steward raises `pipeline.release-escalated:vX.Y.Z` to the human Inbox with the three failure summaries and suspect commits. A human (or steward wake after human reply) resets or advances the train.
+2. **(Superseded 2026-11-09) `rc.3` isolates on short-lived `release/vX.Y.Z` if `main` introduced a new regression:** If `rc.2` fails—especially on a regression absent from `rc.1`, showing trunk churn outpaced stabilization—the steward branches `release/vX.Y.Z` from `rc.2`'s commit, allows **only** targeted `fix:` commits cherry-picked from `main` (`Backported-from: <main_sha>`—fixes always land on `main` first so trunk never regresses), lets `release.yml` (which already runs on `release/v*`) build `:sha-<short>` images, and cuts `vX.Y.Z-rc.3` from `release/vX.Y.Z`. Once `vX.Y.Z` promotes, `release/vX.Y.Z` is deleted immediately; `main` already carries every fix.
+3. **(Superseded 2026-11-09) Hard bound of 3 attempts (`RELEASE_MAX_RC_ATTEMPTS=3`):** If `vX.Y.Z-rc.3` also fails qualification, automatic RC cutting pauses for `vX.Y.Z` and the steward raises `pipeline.release-escalated:vX.Y.Z` to the human Inbox with the three failure summaries and suspect commits. A human (or steward wake after human reply) resets or advances the train.
 
-- **Trade-off:** When `rc.3` uses `release/vX.Y.Z`, the resulting `vX.Y.Z` tag sits on a 1–2 commit cherry-pick spur off `rc.2` rather than `main`'s first-parent line (identical to hotfix patch branches today). `scripts/build-version.sh` and `scripts/release-notes.sh` already support `release/v*` ancestry, and reserving the branch strictly for `rc.3` keeps >90% of releases purely linear on `main` while guaranteeing convergence under heavy trunk traffic.
+- **Trade-off (original):** When `rc.3` uses `release/vX.Y.Z`, the resulting `vX.Y.Z` tag sits on a 1–2 commit cherry-pick spur off `rc.2` rather than `main`'s first-parent line (identical to hotfix patch branches today). `scripts/build-version.sh` and `scripts/release-notes.sh` already support `release/v*` ancestry, and reserving the branch strictly for `rc.3` keeps >90% of releases purely linear on `main` while guaranteeing convergence under heavy trunk traffic. Since 2026-11-09 every release is on `main`'s line. The cost is that on a day `main` keeps breaking, the train keeps cutting from it. The escalation and the steward's holds are what bring a person in.
 
 ---
 
@@ -322,9 +336,14 @@ While `vX.Y.Z-rc.1` runs qualification (~60–90 minutes), `main` keeps acceptin
 - **`RELEASE_MAJOR` and breaking changes:**
   - `RELEASE_MAJOR` in `scripts/release.conf` is human-owned. Raising `RELEASE_MAJOR` advances the next target to `v{RELEASE_MAJOR}.{RELEASE_FLOOR_MINOR}.0`.
   - Commits and PR titles carrying Conventional Commit breaking markers (`feat!:`, `fix!:`, `<type>(<scope>)!:`, or a `BREAKING CHANGE:` trailer) are **gated in PR CI (`tests.yml`) and review**: a breaking change may merge to `main` only when `RELEASE_MAJOR` in `scripts/release.conf` already exceeds the highest promoted major tag (indicating `main` is actively accumulating a planned major release), or when accompanied by a human-approved bump to `RELEASE_MAJOR`. This prevents continuous auto-promotion from silently shipping breaking changes inside an ordinary minor release.
-- **Minimum cut interval (`RELEASE_MIN_INTERVAL_MINUTES`):**
-  - Default **`RELEASE_MIN_INTERVAL_MINUTES=120` (2 hours)** measured from the previous promoted release's timestamp (`FORCE=true` or rollback-fix priority bypasses the floor; setting `0` runs strictly back-to-back).
-  - A 2-hour floor batches rapid bursts of trunk merges into cohesive releases (~6–8 releases/day ceiling) and bounds qualification spend (§13), while **decoupling release cadence from deployment restarts**: deployments do not restart on every release tag unless configured to, because `autoUpgradeChannel: latest` runs on a daily schedule (§10).
+- **At most one release per calendar day (`RELEASE_MAX_PER_DAY`, `RELEASE_DAY_TZ`; operator, 2026-11-09):**
+  - **Cadence.** The day is the calendar day in `RELEASE_DAY_TZ` (default `America/Los_Angeles`). It is not a rolling 24h window, so the release time does not drift later each day. The train ticks every 20 minutes (§0.4). The first tick after midnight there cuts `rc.1` of the next version from the newest known-good `main`. Qualification takes ~60–90 minutes. A red rc is re-cut from `main` on the next tick (§5), until one qualifies and is released: the day's release, typically in the early hours Pacific. After it, nothing more is cut that day. On a day `main` never produces a qualifying rc, nothing is released and `latest` stands.
+  - **What counts.** A day's releases are the `vX.Y.Z` tags dated that day, whether the train made them or a person approved them, plus a `vX.Y.Z-pending` the train staged that day. A placeholder named in `RELEASE_NEVER_PROMOTE` does not count. Default `RELEASE_MAX_PER_DAY=1`; `0` turns the cap off.
+  - **No carry-over (refinement, 2026-11-09).** An rc is never released, or staged for a person, on a later day than the one it was cut on. The first tick of a new day drops a held-over rc (`-discarded`, `Discard-Reason: held-over`) and cuts a fresh one in the same run. An rc still in qualification when the day releases is dropped too (`Discard-Reason: daily-cap`); normally there is none, because nothing is cut after the day's release. Neither drop is a failure, so nothing holds the next cut and it may reuse the commit. `RELEASE_DAY_CAP_EXEMPT` names rcs the cap spares: `v3.4.0-rc.1` was in qualification when the cap came in on 2026-11-09, a day that had already released `v3.3.0`, and it releases under the rules it was cut under.
+  - **A person can go past the cap.** `grain release approve` of a `-pending` release (§0.2) is never refused for the cap. It logs that it went past it (`day_cap_bypassed=`), and the release tag says so. The release then counts as the day's. Breaking-change and first-major releases are still staged for a person (§1), within the cap.
+  - **Why once a day.** Deployments on `autoUpgradeChannel: latest` upgrade once a day (§10). Several releases a day mostly produce versions nobody runs, plus the qualification spend of each (§13). One release a day ships everything that was known-good by the start of the day, and the next day's release carries a full day's changes.
+- **Minimum interval (`RELEASE_MIN_INTERVAL_MINUTES`), kept only for a day that may release more than once:**
+  - It used to be the cadence, at 120 minutes between releases. It now applies only when `RELEASE_MAX_PER_DAY` is `0` or above `1` and the day has already released: then it is the time from the newest release to the next version's `rc.1` cut, and to releasing the next qualified rc. It never delays the day's first release, and it never delays the rc after a dropped one. Under `RELEASE_MAX_PER_DAY=1` it can never apply, so `scripts/release.conf` sets it to `0` (also the default). `FORCE=true` skips it for a cut. `FORCE=true` never goes past the daily cap, because an rc cut after the day's release would only be dropped.
 
 ---
 
@@ -409,9 +428,9 @@ Following [`merging.design.md`](../design/merging.design.md) and [`docs/pipeline
 | **Promote passing RC** | Verify Stage 1 + Stage 2 green and `RELEASE_NEVER_PROMOTE` clear; push `vX.Y.Z` & `latest`, publish images & mechanical release notes | — |
 | **Discard red RC** | Tag `vX.Y.Z-rc.N-discarded`, publish discarded image marker, cancel remaining jobs/tasks on `rc.N`, raise **`pipeline.rc-failed:vX.Y.Z-rc.N`** with failing logs and commit range `<floor>..<rc_sha>`, place an `rc-hold` cursor until cleared | Woken immediately by `pipeline.rc-failed:vX.Y.Z-rc.N` |
 | **Triage & fix red RC** | — | Inspect failing logs and commits in `<floor>..<rc_sha>`; identify suspect PR(s); propose a revert or file high-priority fix task(s) (`priority` above normal backlog, `fixes_base_branch: true` when `main` is also broken) |
-| **Gate next RC (`rc.N+1`)** | Wait while steward's `rc-hold` / linked `rc-blocker` tasks remain open; cut `vX.Y.Z-rc.(N+1)` automatically as soon as blockers merge and pass Stage 0 | Link blocking fix tasks to the RC hold (so the train never wastes `rc.2` on an unfixed tree); pivot `rc.3` onto short-lived `release/vX.Y.Z` if `rc.2` broke on unrelated trunk churn (§5); escalate to human Inbox (`notify_operator`) if `rc.3` fails |
+| **Gate next RC (`rc.N+1`)** | Wait while steward's `rc-hold` / linked `rc-blocker` tasks remain open; cut `vX.Y.Z-rc.(N+1)` automatically as soon as blockers merge and pass Stage 0 | Link blocking fix tasks to the RC hold (so the train never wastes `rc.2` on an unfixed tree); fixes land on `main` only, since every rc is cut from it (§5); add triage to `pipeline.release-escalated` once `rc.3` fails, while the train keeps cutting |
 
-Notice the crucial rule: **the steward still never promotes a release** (`releases:write` is not needed to promote, because promotion is purely deterministic on green qualification). What the steward controls on a red RC is *diagnosis, fix filing/reverts, holding `rc.(N+1)` until the fix lands, and `rc.3` branch isolation / human escalation*.
+Notice the crucial rule: **the steward still never promotes a release** (`releases:write` is not needed to promote, because promotion is purely deterministic on green qualification). What the steward controls on a red RC is *diagnosis, fix filing/reverts, holding `rc.(N+1)` until the fix lands, and triage for the human escalation*.
 
 ---
 
@@ -424,7 +443,7 @@ Every run of the four-item `release-qualification` agent suite boots multiple sa
    - **Stage 1 (`nightly.yml` on GitHub Actions):** Costs **zero model tokens** and zero deployment sandboxes. Any Go race, soak, stress, installer, or upgrade regression fails in Stage 1 and discards the RC **before a single qualification agent task is filed**.
    - **Stage 2 (`release-qualification` agent suite):** Starts **only after Stage 1 is 100% green**. Inside Stage 2, the three targeted functional items (`qualification-mergequeue`, `-ci-diagnostics`, `-base-triage`) run first; `qualification-system-smoke` depends on them, and fail-fast cancellation stops remaining items if any item confirms red after its retry.
 2. **Acceptable cadence and quota ceiling:**
-   - With `RELEASE_MIN_INTERVAL_MINUTES=120` and ~60–90 minutes per full qualification cycle, Stage 2 runs **0 times when `main` is idle** and **at most 6–8 times per 24 hours** during sustained commit activity (~24–32 agent tasks/day maximum, comparable to ordinary background review load).
+   - With `RELEASE_MAX_PER_DAY=1` and ~60–90 minutes per full qualification cycle, Stage 2 runs **once a day** when the day's first rc qualifies. It runs again only for each red rc before that, **0 times when `main` is idle**, and never after the day's release. That is ~4 agent tasks a day, plus ~4 per red rc. (Before 2026-11-09, `RELEASE_MIN_INTERVAL_MINUTES=120` allowed up to 6–8 cycles per 24 hours.)
 3. **Admission priority & quota awareness:**
    - Qualification suite tasks dispatch ahead of normal backlog tasks (`PriorityReleaseGate` / elevated task priority) so full worker queues do not starve releases for 14 hours, while remaining below `priority-dispatch` interactive console and steward sessions and respecting hard host sandbox RAM caps.
    - If all configured model pools are in active quota-reset pause, Stage 2 waits in `queued` (classified as `pending`/`infra`, never `failed`) rather than burning task retries into empty quota windows.

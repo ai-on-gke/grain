@@ -43,9 +43,9 @@ func TestHubAssertionReadsTheNewHeaderAndThePreRenameOne(t *testing.T) {
 		t.Fatalf("HubAssertion(none) = %q", got)
 	}
 	// Whatever strips a caller's own identity headers strips both.
-	h := (&RegistryVerifier{}).Headers()
+	h := (&HubVerifier{}).Headers()
 	if !slices.Contains(h, "X-Grain-Hub-Assertion") || !slices.Contains(h, "X-Grain-Registry-Assertion") {
-		t.Fatalf("RegistryVerifier.Headers() = %v, want both names", h)
+		t.Fatalf("HubVerifier.Headers() = %v, want both names", h)
 	}
 }
 
@@ -56,15 +56,15 @@ func TestHubAssertionReadsTheNewHeaderAndThePreRenameOne(t *testing.T) {
 // two headers carry different values (for example a smuggled
 // X-Grain-Hub-Assertion arriving through an un-upgraded grain-registry) or
 // where either header has multiple distinct values.
-func TestRegistryVerifierRefusesConflictingHubAndRegistryAssertions(t *testing.T) {
-	v := &RegistryVerifier{
+func TestHubVerifierRefusesConflictingHubAndRegistryAssertions(t *testing.T) {
+	v := &HubVerifier{
 		audience: "https://alpha.grain.example.com",
-		validator: func(_ context.Context, tok, _ string) (*RegistryClaims, error) {
+		validator: func(_ context.Context, tok, _ string) (*HubClaims, error) {
 			switch tok {
 			case "alice-jwt":
-				return &RegistryClaims{Email: "alice@example.com", Kind: PrincipalHuman}, nil
+				return &HubClaims{Email: "alice@example.com", Kind: PrincipalHuman}, nil
 			case "mallory-jwt":
-				return &RegistryClaims{Email: "mallory@example.com", Kind: PrincipalHuman}, nil
+				return &HubClaims{Email: "mallory@example.com", Kind: PrincipalHuman}, nil
 			default:
 				return nil, errors.New("invalid token")
 			}
