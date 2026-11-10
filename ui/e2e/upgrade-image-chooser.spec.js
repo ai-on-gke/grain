@@ -39,9 +39,7 @@ test.describe("the upgrade image chooser", () => {
       const image = page.getByLabel("Image (optional)");
       await expect(image).toBeVisible();
       await branch.fill("main");
-      // The ref an upgrade installs; the line may also name the release
-      // repository it loads from in a code element of its own.
-      const willPull = page.locator(".upgrade-image-ref code.upgrade-will-ref");
+      const willPull = page.locator(".upgrade-image-ref code");
       await expect(willPull).toHaveText(`${DOCKERHUB}:main`);
 
       // Same column as the branch field, below it.

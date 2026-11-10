@@ -209,35 +209,14 @@ type ImageConfig struct {
 	// installtrack.TrackOSS; when Repository is empty, DefaultRepository(Track)
 	// supplies the default image repository.
 	Track installtrack.Track
-	// Source chooses where candidate container images are fetched from:
-	// ImageSourceRegistry (`docker pull`, the default) or
-	// ImageSourceReleaseAssets (tarballs on GitHub / GitHub Enterprise
-	// releases loaded with `docker load`). When empty, TrackDefaultsFor(Track)
-	// supplies any edition default before falling back to ImageSourceRegistry.
+	// Source is kept for config compatibility; container upgrades always pull
+	// from ImageSourceRegistry, and any legacy "release-assets" value logs a
+	// one-time warning and falls back to ImageSourceRegistry.
 	Source ImageSource
-	// SourceLocked marks Source as fixed by a daemon command-line flag or
-	// environment variable rather than editable configuration, so the UI
-	// displays it read-only.
-	SourceLocked bool
-	// SourceOverrideFile optionally persists UI-configured image source
-	// overrides across restarts when SourceLocked is false.
+	// SourceOverrideFile, when set, is inspected once on startup so any legacy
+	// stored "release-assets" override (<data-dir>/upgrade-image-source.json)
+	// is migrated to the registry source with a one-time warning.
 	SourceOverrideFile string
-	// Fallback optionally names a secondary image source (ImageSourceRegistry
-	// or ImageSourceReleaseAssets) tried when Source fails to fetch the
-	// candidate daemon image.
-	Fallback ImageSource
-	// FallbackExplicit records that Fallback was explicitly set (including to
-	// empty/"none" to override a track default).
-	FallbackExplicit bool
-	// ReleaseAssets configures ImageSourceReleaseAssets (and fallback to it).
-	ReleaseAssets ReleaseAssetsConfig
-	// LoadCmd loads an image tarball appended as its last argument;
-	// {"docker", "load", "-i"} when left nil. Overridable for tests.
-	LoadCmd []string
-	// InspectIDCmd prints the local Docker image ID (`sha256:...`) of an image
-	// reference appended as its last argument;
-	// {"docker", "image", "inspect", "--format", "{{.Id}}"} when left nil.
-	InspectIDCmd []string
 }
 
 // imageRefEnvKey is the variable name written into ImageConfig.RefFile,

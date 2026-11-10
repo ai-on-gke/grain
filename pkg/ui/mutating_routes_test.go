@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +27,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
-	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // attributedRoute is one write path's row in operator-attribution spec
@@ -363,27 +360,6 @@ func ciClient(t *testing.T) *ui.Client {
 	return client
 }
 
-// imageSourceClient is testClient's deployment on the image upgrade
-// pipeline, whose image source an operator may still change.
-func imageSourceClient(t *testing.T) *ui.Client {
-	t.Helper()
-	client, _, _ := testClient(t)
-	dir := t.TempDir()
-	refFile := filepath.Join(dir, "image-ref")
-	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/acme/grain:main\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	client.Config.Upgrader = upgrade.New(upgrade.Config{
-		StatusFile: filepath.Join(dir, "upgrade-status.json"),
-		Image: &upgrade.ImageConfig{
-			Repository:         "ghcr.io/acme/grain",
-			RefFile:            refFile,
-			SourceOverrideFile: filepath.Join(dir, "upgrade-image-source.json"),
-		},
-	})
-	return client
-}
-
 // cancelledBy is who the fake runner's last cancel was asked for by.
 func cancelledBy(t *testing.T, _ context.Context, client *ui.Client, _, _ string) model.Principal {
 	t.Helper()
@@ -604,14 +580,6 @@ var attributedRoutes = map[string]attributedRoute{
 		path:     "/api/ci/runs/run-7",
 		bareID:   true,
 		recorded: cancelledBy,
-	},
-	// Where image upgrades come from: an override in a file of the
-	// upgrader's, so the handler writes the config_audit row itself.
-	"PUT /api/upgrade/source": {
-		client:      imageSourceClient,
-		body:        `{"mode":"registry"}`,
-		agentGrants: []string{"api:deployment-ops"},
-		recorded:    lastConfigAudit,
 	},
 	"PUT /api/memory": {
 		body:        `{"text":"remember this"}`,

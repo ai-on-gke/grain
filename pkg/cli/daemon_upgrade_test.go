@@ -247,7 +247,6 @@ exit 0
 	deployment := daemon.Config{
 		DataDir:             dataDir,
 		UpgradeImage:        "docker.io/grainai/grain",
-		UpgradeImageSource:  "registry",
 		UpgradeImageRefFile: refFile,
 		UpgradeRestartCmd:   []string{"touch", restartMarker},
 		// What -upgrade-allowed-branches=main,grain/* parses to: the

@@ -80,12 +80,8 @@ sudo \
   ./scripts/setup.sh
 ```
 
-A new deployment runs the last promoted release, the `latest` channel, the
-core build -- installed from the assets of GitHub's latest release on this
-repository (`images.json` and `docker save` tarballs, checksum-verified and
-`docker load`ed; [docs/release-assets.md](docs/release-assets.md)), so the
-host needs no registry or registry credential. Set `GRAIN_IMAGE` to pull a
-registry image instead (`docker.io/grainai/grain`). On a machine an
+A new deployment runs the last promoted release, the `latest` channel
+(`docker.io/grainai/grain:latest`, the core build). On a machine an
 edition's install track claims (`pkg/installtrack`, where an edition linked
 into grain registers its track) the installer pulls that edition's build
 instead. The images are published with the same tags, and

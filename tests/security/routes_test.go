@@ -429,7 +429,6 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/upgrade":                   trusted,
 	"POST /api/upgrade":                  trusted,
 	"DELETE /api/upgrade/scheduled":      trusted,
-	"PUT /api/upgrade/source":            trusted,
 	"GET /api/upgrade/targets":           trusted,
 	"GET /api/upgrade/release-notes":     trusted,
 	"GET /api/database":                  trusted,

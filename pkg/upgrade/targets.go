@@ -493,81 +493,29 @@ func (u *Upgrader) registryRepository() string {
 	return ""
 }
 
-func (u *Upgrader) tagCacheKey(repository string) string {
-	if u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageSource() == ImageSourceReleaseAssets {
-		return "release-assets:" + strings.TrimSpace(u.EffectiveReleaseAssets().Repository)
-	}
-	return repository
-}
-
-// registryTags lists the tags upgrades can reach, from the release
-// repository or the image registry, and reports whether they came from a
-// dedicated edition release repository (dedicatedReleaseRepository) --
-// where a bare vX.Y.Z is this edition's own release -- rather than from a
-// registry that may be shared between editions.
+// registryTags lists the tags upgrades can reach from the image registry.
 func (u *Upgrader) registryTags(ctx context.Context, repository string) (tags []string, dedicated bool, err error) {
-	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	defer u.tags.mu.Unlock()
-	if u.tags.repo == key && time.Since(u.tags.fetched) < tagListTTL {
-		return u.tags.tags, u.tags.dedicated, nil
+	if u.tags.repo == repository && time.Since(u.tags.fetched) < tagListTTL {
+		return u.tags.tags, false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
-		tags, err = u.listReleaseTags(ctx)
-		dedicated = err == nil && u.dedicatedReleaseRepository()
-		if u.EffectiveImageFallback() == ImageSourceRegistry && repository != "" && (err != nil || (!u.IsImageSourceExplicit() && len(tags) == 0)) {
-			if regTags, regErr := ListRegistryTags(ctx, repository); regErr == nil || err != nil {
-				tags, err, dedicated = regTags, regErr, false
-			}
-		}
-	} else {
-		list := u.cfg.ListTags
-		if list == nil {
-			list = ListRegistryTags
-		}
-		tags, err = list(ctx, repository)
-		if err != nil && u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
-			if relTags, relErr := u.listReleaseTags(ctx); relErr == nil {
-				tags, err, dedicated = relTags, nil, u.dedicatedReleaseRepository()
-			}
-		}
+	list := u.cfg.ListTags
+	if list == nil {
+		list = ListRegistryTags
 	}
+	tags, err = list(ctx, repository)
 	if err != nil {
 		return nil, false, err
 	}
-	u.tags.repo, u.tags.tags, u.tags.fetched, u.tags.dedicated = key, tags, time.Now(), dedicated
-	return tags, dedicated, nil
+	u.tags.repo, u.tags.tags, u.tags.fetched, u.tags.dedicated = repository, tags, time.Now(), false
+	return tags, false, nil
 }
 
-// sharedReleaseRepositories are the release repositories whose tags are
-// shared between editions: core's own, which the open-source and legacy
-// pre-split image repositories map to (ReleaseRepositoryForImage), and the
-// legacy pre-split one. A bare vX.Y.Z there is a core build, and an
-// edition's builds carry its suffix (v2.0.0-google).
-var sharedReleaseRepositories = []string{
-	"github.com/ai-on-gke/grain",
-	"github.com/bwsalmon/grain",
-}
-
-// dedicatedReleaseRepository reports whether the release repository this
-// deployment lists release tags from belongs to its edition alone -- one an
-// edition registered for its track (RegisterTrackDefaults), one the operator
-// named (-upgrade-release-repo or the image-source override), or one
-// inferred from a post-split image repository -- rather than one of the
-// sharedReleaseRepositories. A dedicated repository publishes the edition's
-// releases under bare vX.Y.Z / vX.Y.Z-rc.N tags, never vX.Y.Z-<edition>.
-func (u *Upgrader) dedicatedReleaseRepository() bool {
-	if u.cfg.Image == nil {
-		return false
-	}
-	host, owner, repo, err := ParseReleaseRepository(u.EffectiveReleaseAssets().Repository)
-	if err != nil {
-		return false
-	}
-	name := strings.ToLower(hostNameOnly(host) + "/" + owner + "/" + repo)
-	return !slices.Contains(sharedReleaseRepositories, name)
+func (u *Upgrader) tagCacheKey(repository string) string {
+	return repository
 }
 
 // tagFilter is which editions' tags a deployment accepts from one tag
