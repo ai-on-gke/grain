@@ -423,6 +423,41 @@ daily:
 `},
 			want: "runs no `workflow:`",
 		},
+		{
+			name: "grain-ci on a schedule that runs no workflow",
+			files: map[string]string{
+				".grain/templates/t.yml": "title: T\nbody: b\n",
+				".grain/schedules/x.yml": `
+template: t
+grain-ci: true
+daily:
+  at: "14:11"
+`},
+			want: "`grain-ci:` says",
+		},
+		{
+			name: "grain-ci false on a schedule that runs no workflow",
+			files: map[string]string{
+				".grain/templates/t.yml": "title: T\nbody: b\n",
+				".grain/schedules/x.yml": `
+template: t
+grain-ci: false
+daily:
+  at: "14:11"
+`},
+			want: "`grain-ci:` says",
+		},
+		{
+			name: "grain-ci on a github_workflow_run schedule",
+			files: map[string]string{
+				".grain/schedules/x.yml": `
+trigger:
+  github_workflow_run:
+    workflow: ci.yml
+grain-ci: true
+`},
+			want: "`grain-ci:` says",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if msg := loadErr(t, tc.files); !strings.Contains(msg, tc.want) {

@@ -335,15 +335,6 @@ func (w *deliveryWorld) settle(taskID string, wantRuns int) deliverySnapshot {
 	}
 }
 
-func (w *deliveryWorld) prompt(taskID string, n int) string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(w.prompts[taskID]) < n {
-		return ""
-	}
-	return w.prompts[taskID][n-1]
-}
-
 func (w *deliveryWorld) createTask(body string) string {
 	w.t.Helper()
 	resp, err := accessPost(w.url+"/api/tasks", "application/json", strings.NewReader(body))

@@ -932,6 +932,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     131,
+		Description: "add schedule.grain_ci, a schedule whose workflow firing runs on grain CI even on a ci_mode: github repository",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `grain_ci` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     132,
 		Description: "add repository skill discovery configuration columns (skills on grain_config, repo_config, task and template, and declared_skills on repo_config)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",

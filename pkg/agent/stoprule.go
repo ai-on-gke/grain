@@ -79,12 +79,6 @@ func DecideStop(interactive bool, finalText string, calls []ToolCall) StopDecisi
 	return stoprule.Decide(interactive, finalText, stopCalls(calls))
 }
 
-// MadeClosingMove reports whether calls include a move a background run
-// may end on (stoprule.MadeClosingMove).
-func MadeClosingMove(calls []ToolCall) bool {
-	return stoprule.MadeClosingMove(stopCalls(calls))
-}
-
 // PromisesMoreWork reports whether an agent's final message promises
 // further work it has not done (stoprule.PromisesMoreWork).
 func PromisesMoreWork(text string) bool { return stoprule.PromisesMoreWork(text) }

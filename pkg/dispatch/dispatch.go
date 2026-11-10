@@ -1105,13 +1105,6 @@ func taskShape(ctx context.Context, store *model.Store, limits model.Limits, tas
 	return limits.TaskShape(*task)
 }
 
-// sandboxShapeShort reports whether an agent sandbox cannot fit in the
-// host resource budget because of its CPU/memory shape rather than a
-// host-wide disk floor violation.
-func sandboxShapeShort(limits model.Limits) bool {
-	return sandboxShapeShortFor(limits, false, limits.AgentShape)
-}
-
 func sandboxShapeShortFor(limits model.Limits, priority bool, want model.Commitment) bool {
 	if priority {
 		if limits.DirectorSandboxVerdictFor(want).OK {

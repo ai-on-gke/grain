@@ -256,14 +256,6 @@ func cachedActions[T any](c *Client, key string, ttl func(T) time.Duration, fetc
 
 func listTTL[T any](T) time.Duration { return actionsListTTL }
 
-// actionsRunListing is what wantsActions decided for a list request.
-type actionsRunListing struct {
-	repo model.RepoRef
-	// note says why the rows came from grain's own record, or why there
-	// are none, when the forge could not be asked.
-	note string
-}
-
 // wantsActions reports whether a GET /api/ci/runs answers with Actions
 // rows: a request naming one repository whose Actions are listed, that
 // either asked for a provider or comes from an agent rather than the CI
@@ -283,15 +275,6 @@ func (s *Server) wantsActions(r *http.Request, filter ci.RunFilter) (model.RepoR
 		return model.RepoRef{}, false
 	}
 	return repo, true
-}
-
-// listActionsRuns is repo's Actions runs matching filter, newest first,
-// at most limit of them: the forge's own listing where it can be asked,
-// with what grain recorded of each run's jobs folded in, and grain's
-// record alone where it cannot. note says which, when it was the record.
-func (c *Client) listActionsRuns(ctx context.Context, repo model.RepoRef, filter ci.RunFilter, limit int) (runs []ci.Run, note string) {
-	runs, _, note = c.listActionsRunsCounted(ctx, repo, filter, limit)
-	return runs, note
 }
 
 func (c *Client) listActionsRunsCounted(ctx context.Context, repo model.RepoRef, filter ci.RunFilter, limit int) (runs []ci.Run, matched int, note string) {
