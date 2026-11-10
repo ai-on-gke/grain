@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
+	"github.com/ai-on-gke/grain/pkg/trustboundary"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -102,9 +104,40 @@ func (m *StateManager) ProposeConfigChange(ctx context.Context, proposal ui.Conf
 		Summary:     proposal.Summary,
 		Description: proposal.Description,
 		Files:       files,
+		Columns:     changedColumns(dir, mergeBase, head, files),
 		Diff:        diff,
 		Validation:  m.validateConfigMerge(ctx, dir, baseSHA, head),
 	}, nil
+}
+
+// changedColumns is, for tables/grain_config.json when files names it,
+// the columns head changes there against mergeBase
+// (trustboundary.ChangedColumns), so approving a plain settings edit in
+// that file is not judged as the capabilities:admin grant an mcp_servers
+// edit is. A side that cannot be read leaves the file out, and the path
+// alone judges it.
+func changedColumns(dir, mergeBase, head string, files []string) map[string][]string {
+	if !slices.Contains(files, trustboundary.GrainConfigPath) {
+		return nil
+	}
+	show := func(rev string) ([]byte, bool) {
+		spec := rev + ":" + trustboundary.GrainConfigPath
+		if exec.Command("git", "-C", dir, "cat-file", "-e", "--end-of-options", spec).Run() != nil {
+			return nil, true // absent on this side: every row added or removed
+		}
+		out, err := exec.Command("git", "-C", dir, "cat-file", "blob", spec).Output()
+		return out, err == nil
+	}
+	before, okBefore := show(mergeBase)
+	after, okAfter := show(head)
+	if !okBefore || !okAfter {
+		return nil
+	}
+	cols, ok := trustboundary.ChangedColumns(before, after)
+	if !ok {
+		return nil
+	}
+	return map[string][]string{trustboundary.GrainConfigPath: cols}
 }
 
 // validateConfigMerge runs the pre-review suite over head merged onto
