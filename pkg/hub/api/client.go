@@ -54,12 +54,12 @@ func (e *APIError) Error() string {
 		msg = http.StatusText(e.StatusCode)
 	}
 	if e.Ref != "" {
-		return fmt.Sprintf("registry API %d (%s, ref %s): %s", e.StatusCode, e.Code, e.Ref, msg)
+		return fmt.Sprintf("hub API %d (%s, ref %s): %s", e.StatusCode, e.Code, e.Ref, msg)
 	}
 	if e.Code != "" {
-		return fmt.Sprintf("registry API %d (%s): %s", e.StatusCode, e.Code, msg)
+		return fmt.Sprintf("hub API %d (%s): %s", e.StatusCode, e.Code, msg)
 	}
-	return fmt.Sprintf("registry API %d: %s", e.StatusCode, msg)
+	return fmt.Sprintf("hub API %d: %s", e.StatusCode, msg)
 }
 
 // IsNotFound reports whether err is an HTTP 404 APIError.
@@ -167,34 +167,34 @@ func isForbiddenMetadataHost(host string) bool {
 func validateBaseURL(raw string, allowInsecureHTTP bool) (*url.URL, error) {
 	trimmed := strings.TrimSpace(raw)
 	if len(trimmed) > 2048 {
-		return nil, fmt.Errorf("registry URL exceeds 2048 bytes")
+		return nil, fmt.Errorf("hub URL exceeds 2048 bytes")
 	}
 	u, err := url.Parse(trimmed)
 	if err != nil {
-		return nil, fmt.Errorf("invalid registry URL %q: %w", raw, err)
+		return nil, fmt.Errorf("invalid hub URL %q: %w", raw, err)
 	}
 	if u.User != nil {
-		return nil, fmt.Errorf("registry URL must not include userinfo credentials")
+		return nil, fmt.Errorf("hub URL must not include userinfo credentials")
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
-		return nil, fmt.Errorf("registry URL must not include query parameters or fragments")
+		return nil, fmt.Errorf("hub URL must not include query parameters or fragments")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	switch scheme {
 	case "https":
 	case "http":
 		if !allowInsecureHTTP && !isLoopbackHost(u.Host) {
-			return nil, fmt.Errorf("refusing insecure http:// registry URL %q for non-loopback host", u.Redacted())
+			return nil, fmt.Errorf("refusing insecure http:// hub URL %q for non-loopback host", u.Redacted())
 		}
 	default:
-		return nil, fmt.Errorf("registry URL %q must use https:// (or http:// on loopback)", raw)
+		return nil, fmt.Errorf("hub URL %q must use https:// (or http:// on loopback)", raw)
 	}
 	host := u.Hostname()
 	if host == "" {
-		return nil, fmt.Errorf("registry URL %q is missing host", raw)
+		return nil, fmt.Errorf("hub URL %q is missing host", raw)
 	}
 	if isForbiddenMetadataHost(host) {
-		return nil, fmt.Errorf("registry URL host %q is not permitted", host)
+		return nil, fmt.Errorf("hub URL host %q is not permitted", host)
 	}
 	u.Scheme = scheme
 	u.Path = strings.TrimRight(u.Path, "/")
@@ -278,7 +278,7 @@ func applyAuthHeaders(ctx context.Context, h http.Header, regToken, bearerToken 
 	if idTokenFn != nil {
 		tok, err := idTokenFn(ctx)
 		if err != nil {
-			return fmt.Errorf("obtaining registry ID token: %w", err)
+			return fmt.Errorf("obtaining hub ID token: %w", err)
 		}
 		proxyBearer = strings.TrimSpace(tok)
 	} else if bearerToken != "" {

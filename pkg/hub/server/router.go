@@ -173,10 +173,10 @@ type Router struct {
 // NewRouter constructs a Router from RouterOptions.
 func NewRouter(opts RouterOptions) (*Router, error) {
 	if opts.Admitter == nil {
-		return nil, errors.New("registry router: Admitter is required")
+		return nil, errors.New("hub router: Admitter is required")
 	}
 	if opts.Signer == nil {
-		return nil, errors.New("registry router: Signer is required")
+		return nil, errors.New("hub router: Signer is required")
 	}
 	if opts.ReplicaHeartbeat <= 0 {
 		opts.ReplicaHeartbeat = 5 * time.Second
@@ -513,7 +513,7 @@ func (rt *Router) PublicHandler(jwksHandler, healthzHandler http.HandlerFunc) ht
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		match := ClassifyHost(r.Host, rt.opts.HubHost, rt.opts.InstanceDomain)
 		if match.Kind != HostRouteHub {
-			writeJSONError(w, http.StatusNotFound, "not_found", "public endpoint only serves registry host")
+			writeJSONError(w, http.StatusNotFound, "not_found", "public endpoint only serves hub host")
 			return
 		}
 		if strings.TrimSpace(r.Header.Get(HeaderOnBehalfOf)) != "" {
