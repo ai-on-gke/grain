@@ -1777,13 +1777,14 @@ image_id() {
   docker image inspect --format '{{.Id}}' "$1" 2>/dev/null || true
 }
 
-# release_asset_ref succeeds when $1 is one of the local refs a release
-# asset's `docker load` leaves behind -- images.json's "ref":
-# grain/grain:sha-..., grain/guest:sha-..., grain/k8s-sandbox:sha-...
-# (docs/release-assets.md). Such a name has no registry host, so docker
-# reads it as docker.io/grain/..., a Docker Hub namespace this project
-# does not control: it is only ever loaded and checked against
-# images.json, never pulled -- not by an explicit `docker pull`, and not
+# release_asset_ref succeeds when $1 is one of the local refs an earlier
+# release's release-asset install (`docker load` of images.json's "ref")
+# left behind: grain/grain:sha-..., grain/guest:sha-...,
+# grain/k8s-sandbox:sha-... This script no longer installs from release
+# assets, but hosts installed that way still name them. Such a name has
+# no registry host, so docker reads it as docker.io/grain/..., a Docker
+# Hub namespace this project does not control: it is never pulled -- not
+# by an explicit `docker pull` (pull_image), and not
 # by the implicit pull `docker run` and `docker create` make of an image
 # that is missing. The same rule as pkg/orchestrator's
 # releaseAssetImageRef, which starts sandboxes from it with --pull=never.
@@ -3450,8 +3451,9 @@ image_repo_can_transition() {
     [ -n "$repo" ] && known+=("$repo")
   done
   local from_ok=0 to_ok=0
-  # A release-asset install records the local grain/grain ref it loaded
-  # (install_release_assets): a re-run keeps its tag. Only ever a "from":
+  # A host installed from release assets by an earlier release records
+  # the local grain/grain ref it loaded: a re-run keeps its tag, now
+  # pulled from GRAIN_IMAGE's registry. Only ever a "from":
   # grain/grain is never a repository to pull from.
   [ "$from" = grain/grain ] && from_ok=1
   for repo in "${known[@]}"; do
@@ -4037,6 +4039,24 @@ pull_image() {
     log "No container engine on this host: nothing to pull"
     return 0
   fi
+  # A grain/<image>:<tag> ref names no registry host, so docker would
+  # fetch it from Docker Hub's grain/ namespace, which this project does
+  # not control (release_asset_ref). setup.sh no longer loads release
+  # assets, so such a ref is only ever a copy an earlier release left on
+  # this host: deploy it if it is still here, and never pull it.
+  if release_asset_ref "$GRAIN_IMAGE_REF"; then
+    if docker image inspect "$GRAIN_IMAGE_REF" >/dev/null 2>&1; then
+      log "Using $GRAIN_IMAGE_REF, already on this host (a grain/ ref is never pulled)"
+      verify_grain_image
+      report_image_revision "$GRAIN_IMAGE_REF" "$GRAIN_IMAGE_TAG" || true
+      return 0
+    fi
+    echo "setup.sh: GRAIN_IMAGE=$GRAIN_IMAGE names no registry host, and $GRAIN_IMAGE_REF is not on this host." >&2
+    echo "  A grain/ ref is never pulled: docker would fetch it from Docker Hub's grain/ namespace," >&2
+    echo "  which this project does not control. Unset GRAIN_IMAGE (default docker.io/grainai/grain)" >&2
+    echo "  or set it to the registry repository to pull from." >&2
+    exit 1
+  fi
   registry_login
   step_start "Pulling $GRAIN_IMAGE_REF"
   if docker pull "$GRAIN_IMAGE_REF"; then
@@ -4198,12 +4218,12 @@ ensure_container_sandbox_image() {
   fi
 
   if release_asset_ref "$image"; then
-    # Loaded from the release's tarball by install_release_assets, or not
-    # at all: pulling this name would fetch docker.io/$image.
+    # Only ever loaded from release assets by an earlier release, never
+    # pulled: pulling this name would fetch docker.io/$image.
     echo "setup.sh: local Docker sandbox image $image is not in the local image store." >&2
-    echo "  It is a release-asset image, loaded from the release (install_release_assets), never pulled:" >&2
+    echo "  It is a release-asset image (grain/...), which is never pulled:" >&2
     echo "  docker would fetch it from Docker Hub's grain/ namespace, which this project does not control." >&2
-    echo "  Run setup.sh again to load the release, or set GRAIN_IMAGE to install from a registry." >&2
+    echo "  Unset GRAIN_IMAGE (or set it to a registry repository) to install from a registry." >&2
     exit 1
   fi
 
@@ -5388,7 +5408,7 @@ ensure_granule_oci_image() {
   fi
 
   # A release-asset ref (release_asset_ref) was loaded and checked against
-  # images.json by install_release_assets: pulling it would ask Docker Hub
+  # images.json by an earlier release's installer: pulling it would ask Docker Hub
   # for a name this project does not control, and a pull that succeeded
   # would replace the checked image with whatever Docker Hub served.
   if release_asset_ref "$GRAIN_GRANULE_OCI_IMAGE"; then
@@ -7291,7 +7311,7 @@ EnvironmentFile=-/etc/default/grain-daemon
 ExecStartPre=${IMAGE_REF_PROMOTER}
 ${hostd_extract}
 ExecStartPre=-$DOCKER_BIN rm -f grain-daemon
-ExecStartPre=/bin/sh -c 'case "\$\$GRAIN_IMAGE" in grain/*) $DOCKER_BIN image inspect "\$\$GRAIN_IMAGE" >/dev/null 2>&1 || { echo "\$\$GRAIN_IMAGE is a release-asset image that is not loaded on this host; it is never pulled (docker would fetch it from Docker Hub): run setup.sh again to load the release" >&2; exit 1; } ;; esac'
+ExecStartPre=/bin/sh -c 'case "\$\$GRAIN_IMAGE" in grain/*) $DOCKER_BIN image inspect "\$\$GRAIN_IMAGE" >/dev/null 2>&1 || { echo "\$\$GRAIN_IMAGE is a release-asset image that is not loaded on this host; it is never pulled (docker would fetch it from Docker Hub): run setup.sh again to install from a registry" >&2; exit 1; } ;; esac'
 ExecStart=$DOCKER_BIN run --name grain-daemon ${DOCKER_ARGS[*]} \$GRAIN_EXTRA_DOCKER_RUN_ARGS \${GRAIN_IMAGE} ${daemon_args[*]} \$GRAIN_EXTRA_DAEMON_ARGS
 ExecStop=-$DOCKER_BIN stop --time 300 grain-daemon
 Restart=on-failure

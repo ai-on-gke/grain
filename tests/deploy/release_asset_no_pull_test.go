@@ -49,7 +49,7 @@ func TestReleaseAssetRefIsTheContractsLocalRefsOnly(t *testing.T) {
 // ensure_granule_oci_image used to `docker pull` the sandbox image
 // unconditionally: for a release-asset install that asks Docker Hub for
 // grain/guest:sha-..., and a pull that succeeded would replace the image
-// install_release_assets had just checked.
+// an earlier release's release-asset install had checked.
 func TestGranuleSandboxImageFromReleaseAssetsIsNeverPulled(t *testing.T) {
 	fn := shellFunction(t, "release_asset_ref") + shellFunction(t, "ensure_granule_oci_image")
 	stubs := `
@@ -97,4 +97,54 @@ func TestNothingSetupLeavesBehindPullsAReleaseAssetImage(t *testing.T) {
 	contains(t, units, guard)
 	before(t, units, guard, "ExecStart=$DOCKER_BIN run --name grain-daemon",
 		"the daemon unit refuses a missing release-asset image before docker run could pull it")
+}
+
+// pull_image used to reach release-asset refs only through
+// install_release_assets, which loaded them and never pulled. With that
+// path gone, a GRAIN_IMAGE naming a grain/ repository (or a host whose
+// earlier install left one) must still never become a `docker pull` of
+// Docker Hub's grain/ namespace: a copy already on the host is deployed,
+// and a missing one stops the install. A registry ref is pulled as before.
+func TestPullImageNeverPullsAReleaseAssetRef(t *testing.T) {
+	fn := shellFunction(t, "release_asset_ref") + shellFunction(t, "pull_image")
+	stubs := `
+log() { echo "log: $*"; }
+step_start() { :; }
+step_done() { :; }
+registry_login() { echo "docker login" >> "$DOCKER_LOG"; }
+verify_grain_image() { echo "verified $GRAIN_IMAGE_REF"; }
+report_image_revision() { :; }
+docker() {
+  echo "docker $*" >> "$DOCKER_LOG"
+  if [ "$1" = image ] && [ "$2" = inspect ]; then [ "$LOADED" = 1 ]; return; fi
+  return 0
+}
+`
+	for _, tc := range []struct {
+		ref, loaded string
+		wantPull    bool
+		wantOK      bool
+	}{
+		{"grain/grain:main", "1", false, true},
+		{"grain/grain:main", "0", false, false},
+		{"docker.io/grainai/grain:main", "0", true, true},
+	} {
+		log := t.TempDir() + "/docker.log"
+		out := runBash(t, stubs+fn+`
+: > "$DOCKER_LOG"
+GRAIN_DOCKER_AVAILABLE=1
+GRAIN_IMAGE_TAG=main
+GRAIN_IMAGE="${REF%:*}"
+GRAIN_IMAGE_REF="$REF"
+if (pull_image); then echo "status=ok"; else echo "status=failed"; fi
+cat "$DOCKER_LOG"
+`, "DOCKER_LOG="+log, "LOADED="+tc.loaded, "REF="+tc.ref)
+		pulled := strings.Contains(out, "docker pull") || strings.Contains(out, "docker login")
+		if pulled != tc.wantPull {
+			t.Errorf("%s (loaded=%s): reached the registry = %v, want %v:\n%s", tc.ref, tc.loaded, pulled, tc.wantPull, out)
+		}
+		if ok := strings.Contains(out, "status=ok"); ok != tc.wantOK {
+			t.Errorf("%s (loaded=%s): pull_image succeeded = %v, want %v:\n%s", tc.ref, tc.loaded, ok, tc.wantOK, out)
+		}
+	}
 }
