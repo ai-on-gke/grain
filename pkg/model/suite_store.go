@@ -513,13 +513,22 @@ func resolveSuiteTemplates(ctx context.Context, s *Store, items []SuiteItem) (ma
 // comment: content from each item's template, placement from the run
 // unless that template is bound to a repo of its own, and approval and
 // auto-merge from the run, for every task in every pass of it.
-func fireSuitePass(ctx context.Context, tx *sql.Tx, runID int64, items []SuiteItem,
+func fireSuitePass(ctx context.Context, tx *sql.Tx, runID int64, suiteID string, items []SuiteItem,
 	templates map[string]Template, target RepoRef, base string,
 	requireApproval, autoMerge, autoApproveProposals bool, opts SuiteRunOptions, passNumber int, orderKey float64, now time.Time) error {
 
-	composed, err := composeSuitePass(ctx, tx, items, templates, target, base, requireApproval, autoMerge, autoApproveProposals, opts)
+	composed, err := composeSuitePass(ctx, tx, suiteID, items, templates, target, base, requireApproval, autoMerge, autoApproveProposals, opts)
 	if err != nil {
 		return err
+	}
+	noted := map[string]bool{}
+	for _, comp := range composed {
+		if h := comp.DeclarationHold; h != nil && !noted[h.ID] {
+			noted[h.ID] = true
+			if err := noteDeclarationHold(ctx, tx, h, now); err != nil {
+				return err
+			}
+		}
 	}
 	for i, it := range items {
 		id, err := newTaskID(ctx, tx)
@@ -646,7 +655,7 @@ func (s *Store) createSuiteRun(ctx context.Context, suite Suite, target RepoRef,
 				return err
 			}
 		}
-		return fireSuitePass(ctx, tx, runID, suite.Items, templates, target, base,
+		return fireSuitePass(ctx, tx, runID, suite.ID, suite.Items, templates, target, base,
 			suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, opts, 1, orderKey, now)
 	})
 	if err != nil {
@@ -675,7 +684,7 @@ func (s *Store) FireNextPass(ctx context.Context, run SuiteRun, now time.Time) (
 	}
 	next := run.CurrentPass() + 1
 	err = s.write(ctx, fmt.Sprintf("fire pass %d of suite run %d", next, run.ID), func(tx *sql.Tx) error {
-		return fireSuitePass(ctx, tx, run.ID, run.Items, templates, run.Target, run.Base,
+		return fireSuitePass(ctx, tx, run.ID, run.SuiteID, run.Items, templates, run.Target, run.Base,
 			run.RequireApproval, run.AutoMerge, run.AutoApproveProposals, SuiteRunOptions{}, next, orderKey, now)
 	})
 	if err != nil {

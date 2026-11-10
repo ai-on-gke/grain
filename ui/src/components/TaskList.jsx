@@ -642,6 +642,11 @@ export function TaskRow({
   // The inbox shows a parked question's summary under the row itself, so
   // its rows leave it off their status line rather than say it twice.
   hideQuestion = false,
+  // Where the row's title links, for a caller whose row means one place
+  // in the task rather than the task: the inbox's parked question links
+  // to the comment it is parked on. onOpenTask is still what a plain
+  // click calls; this is the href a modified click opens in a new tab.
+  href = `/tasks/${encodeURIComponent(t.id)}`,
 }) {
   const zone = useTimeZone();
   const mergedAt = showMergedAt ? taskMergedAt(t) : null;
@@ -755,7 +760,7 @@ export function TaskRow({
           unreached (grain/task-1582). The row keeps a pointer click. */}
       <RowLink
         className="task-title"
-        href={`/tasks/${encodeURIComponent(t.id)}`}
+        href={href}
         onOpen={() => onOpenTask(t.id)}
         aria-label={t.title ? undefined : `Task ${t.id}`}
       >

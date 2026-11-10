@@ -204,6 +204,7 @@ var booleanKeys = map[string]bool{
 	"require-approval":       true,
 	"interactive":            true,
 	"keep-running":           true,
+	"grain-ci":               true,
 }
 
 // declKinds is the three of them, built from pkg/declschema so the keys,

@@ -885,9 +885,9 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	// And once more for the one line each asked task's question is shown
-	// by.
-	questionSummaries, err := c.Store.PendingQuestionSummaries(ctx)
+	// And once more for the comment each asked task is parked on, and the
+	// one line its question is shown by.
+	pendingQuestions, err := c.Store.PendingQuestions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -923,7 +923,8 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		}
 		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
 		if task.State == model.StateAwaitingReply {
-			task.QuestionSummary = questionSummaries[t.ID]
+			task.QuestionSummary = pendingQuestions[t.ID].Summary
+			task.QuestionCommentID = pendingQuestions[t.ID].CommentID
 			task.AwaitingAccess = accessRequests[t.ID]
 		}
 		var wait *model.GrantWait
@@ -1253,6 +1254,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		}
 		task.TurnStopped = turnStopped(state, obs, comments)
 		task.QuestionSummary = questionSummary(state, obs, comments)
+		task.QuestionCommentID = questionCommentID(state, obs)
 		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
 	}
 	task = c.withReasons(task, *t, obs, wait)
@@ -1390,6 +1392,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	// which is told apart by it (withReasons).
 	task.TurnStopped = turnStopped(state, obs, comments)
 	task.QuestionSummary = questionSummary(state, obs, comments)
+	task.QuestionCommentID = questionCommentID(state, obs)
 	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail := TaskDetail{
 		Task:        c.withReasons(task, *t, obs, wait),
@@ -1807,6 +1810,15 @@ func turnStopped(state model.State, obs *model.Observation, comments []model.Com
 		}
 	}
 	return false
+}
+
+// questionCommentID is the comment an awaiting_reply task is parked on
+// (Task.QuestionCommentID), or 0 for a task that is not.
+func questionCommentID(state model.State, obs *model.Observation) int64 {
+	if state != model.StateAwaitingReply || obs == nil || obs.PendingQuestionCommentID == nil {
+		return 0
+	}
+	return *obs.PendingQuestionCommentID
 }
 
 // questionSummary is the one line an awaiting_reply task's pending

@@ -145,6 +145,14 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 			Detail: "skipped: " + StandingWorkOffReason(sched.Target),
 		}, nil
 	}
+	if off, mode, err := s.workflowGrainCIOff(ctx, sched, sched.Target); err != nil {
+		return nil, err
+	} else if off {
+		return &ScheduleSuppression{
+			Reason: SuppressedByStandingWork,
+			Detail: "skipped: " + WorkflowGrainCIOffReason(mode),
+		}, nil
+	}
 	if sched.Recurrence.Kind == RecurrenceGitRef && sched.Recurrence.GitRef != nil {
 		if watched, err := ParseRepo(sched.Recurrence.GitRef.Repo); err == nil {
 			if IsConfigRepo(watched) && IsRepoDeclaredID(sched.ID) {
