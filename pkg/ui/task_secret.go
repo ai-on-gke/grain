@@ -124,6 +124,12 @@ func (c *Client) SetPendingSecret(ctx context.Context, id, value string) error {
 		return validationErrorf("task %s is not waiting on a secret", id)
 	}
 	target := c.pendingSecretFor(obs)
+	// request_secret refuses these names; this is the same refusal for a
+	// request recorded before it did, or by any other route.
+	if secrets.GrainHeld(target.Secret) {
+		return validationErrorf("%s is grain's own credential or signing material and is not set "+
+			"from a task's secret request", target.Name)
+	}
 	if err := store.Set(target.Secret, target.Key, []byte(value)); err != nil {
 		return validationErrorf("%s", err)
 	}

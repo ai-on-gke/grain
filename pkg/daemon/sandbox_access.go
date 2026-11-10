@@ -90,10 +90,7 @@ func sandboxAccessControllerIPs(getenv func(string) string) []string {
 // mints credentials through. live is consulted on every admission; it is a
 // pointer because the backend it reads is built after this.
 func startSandboxAccess(ctx context.Context, cfg Config, accessStore orchestrator.SandboxAccessStore, deployment, namespace string, live *func(string) bool) (*orchestrator.K8sGranuleAccess, error) {
-	var store sandboxaccess.CAStore = sandboxaccess.FileCAStore{Path: filepath.Join(cfg.DataDir, "sandbox-access-ca.pem")}
-	if cfg.SandboxAccessCASecret != "" {
-		store = sandboxaccess.SecretManagerStore{Secret: cfg.SandboxAccessCASecret}
-	}
+	store := sandboxAccessCAStore(cfg, filepath.Join(cfg.DataDir, "sandbox-access-ca.pem"))
 	if deployment == "" {
 		deployment = "grain"
 	}

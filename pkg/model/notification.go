@@ -238,6 +238,11 @@ const (
 	// FamilyCIWakeStalled is a task deferred on a resume_later CI wake past
 	// its stall bound with no CI activity on its branch, "<task>".
 	FamilyCIWakeStalled = "pipeline.ci-wake-stalled"
+	// FamilyScheduleStarved is an overlap: skip schedule held past
+	// ScheduleStarvedAfter by a task of its own that has never started,
+	// "<schedule id>" (EscalateStarvedScheduleBlocker). It clears when
+	// that task closes.
+	FamilyScheduleStarved = "pipeline.schedule-starved"
 	// FamilyStateRepoUnapplied is a configuration-repository commit the
 	// daemon could not apply across a schema migration and had to rewrite
 	// over, "<prior-head>".

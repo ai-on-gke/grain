@@ -602,6 +602,9 @@ func reformatStateRepo(ctx context.Context, dataDir string, repo *staterepo.Repo
 func RepoToken(dataDir, remote, tokenFile string) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		if tokenFile != "" {
+			if tok, ok := storedRepoToken(ctx, dataDir, tokenFile); ok {
+				return tok, nil
+			}
 			data, err := os.ReadFile(tokenFile)
 			if err != nil {
 				return "", fmt.Errorf("reading %s: %w", tokenFile, err)
