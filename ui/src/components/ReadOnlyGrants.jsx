@@ -19,7 +19,7 @@ import ConfigRepoLink, { useStateRepoFiles } from "./ConfigRepoLink.jsx";
 // CAPABILITIES_FILE is the config repo file default and CI grants live
 // in once a deployment has adopted the capability catalogue
 // (design/design/config-repo-settings.design.md §3).
-export const CAPABILITIES_FILE = "settings/capabilities.yml";
+const CAPABILITIES_FILE = "settings/capabilities.yml";
 
 // ReadOnlyGrants is a list of default grants as chips, with an optional
 // link to settings/capabilities.yml when that file exists: what

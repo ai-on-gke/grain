@@ -23,7 +23,7 @@ import Alert from "@mui/material/Alert";
 // decides whether the change may merge itself, which CI gates it and how
 // long the queue waits (docs/test-runs/2026-10-05-merge-rules.md). It
 // draws nothing for a task whose repository declares no rules.
-export function sourceText(from) {
+function sourceText(from) {
   return (from || [])
     .map((f) =>
       f === "defaults" || f === "repository setting" ? f : `rule ${f}`,

@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -1710,11 +1711,12 @@ func (c *Client) AttemptCapabilityAudit(ctx context.Context, taskID string, numb
 // 412 KB, about a fifth of the window" is the fact that makes the pane
 // worth opening a second time.
 type TaskPrompt struct {
-	Prompt        string `json:"prompt"`
-	Attempt       int    `json:"attempt,omitempty"`
-	Bytes         int    `json:"bytes,omitempty"`
-	Tokens        int    `json:"tokens,omitempty"`
-	ContextTokens int    `json:"contextTokens,omitempty"`
+	Prompt        string                   `json:"prompt"`
+	Attempt       int                      `json:"attempt,omitempty"`
+	Bytes         int                      `json:"bytes,omitempty"`
+	Tokens        int                      `json:"tokens,omitempty"`
+	ContextTokens int                      `json:"contextTokens,omitempty"`
+	Skills        []intree.SkillIndexEntry `json:"skills,omitempty"`
 }
 
 // TaskPrompt returns the prompt taskID's most recent attempt was given
@@ -1753,6 +1755,7 @@ func (c *Client) TaskPrompt(ctx context.Context, taskID string) (TaskPrompt, err
 				Bytes:         size.Bytes,
 				Tokens:        size.EstimatedTokens,
 				ContextTokens: size.ContextTokens,
+				Skills:        intree.ParsePromptSkills(prompt),
 			}, nil
 		}
 	}
@@ -2003,7 +2006,8 @@ type CreateTaskRequest struct {
 	// deployment-wide and per-repo layers, so a box someone typed a
 	// newline into files as no override rather than as an override that
 	// silences both.
-	PromptExtension string `json:"promptExtension"`
+	PromptExtension string              `json:"promptExtension"`
+	Skills          *model.SkillsConfig `json:"skills,omitempty"`
 	// ReviewTemplateID attaches a review to this task
 	// (model.Task.ReviewTemplateID, grain/task-284): the ID of the
 	// template a second task is filed from once this one's own work is
@@ -2493,6 +2497,14 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if err := refuseTaskHostd("hostd", req.Hostd); err != nil {
 		return Task{}, err
+	}
+	var chosenSkills *model.SkillsConfig
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return Task{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
 	}
 	priority := model.DefaultTaskPriority
 	if req.Priority != nil {
@@ -3325,6 +3337,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Model:                chosenModel,
 		ModelSource:          modelSourceOfRequest(req, chosenModel),
 		PromptExtension:      strings.TrimSpace(req.PromptExtension),
+		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
 		Owner:                resolvedOwner,
@@ -4723,7 +4736,8 @@ type UpdateTaskRequest struct {
 	// creation (model.Task.PromptExtension), so an edit here reaches any
 	// run this task has not started yet -- but not one already live,
 	// whose prompt was built when it began.
-	PromptExtension *string `json:"promptExtension,omitempty"`
+	PromptExtension *string             `json:"promptExtension,omitempty"`
+	Skills          *model.SkillsConfig `json:"skills,omitempty"`
 	// ReviewTemplateID attaches, changes or detaches this task's review
 	// (CreateTaskRequest.ReviewTemplateID sets the same field), with an
 	// empty string meaningful for the reason it is on the two above: it
@@ -5085,6 +5099,16 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	var pinnedFramework string
 	var statedPin, statedModel string
+	var chosenSkills *model.SkillsConfig
+	var hasChosenSkills bool
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return Task{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
+		hasChosenSkills = true
+	}
 	if req.AgentBackendID != nil {
 		statedPin = strings.TrimSpace(*req.AgentBackendID)
 	}
@@ -5501,6 +5525,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.PromptExtension != nil {
 			task.PromptExtension = strings.TrimSpace(*req.PromptExtension)
+		}
+		if hasChosenSkills {
+			task.Skills = chosenSkills
 		}
 		if req.ReviewTemplateID != nil {
 			task.ReviewTemplateID = reviewTemplateID

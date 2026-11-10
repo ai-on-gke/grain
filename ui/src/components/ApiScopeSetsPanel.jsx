@@ -68,7 +68,7 @@ function scopeLabel(set, scope) {
   return limit ? `${scope} @ ${limit.join(", ")}` : scope;
 }
 
-export function ScopeSetRow({ set, readOnly, onEdit, onDelete }) {
+function ScopeSetRow({ set, readOnly, onEdit, onDelete }) {
   return (
     <Box
       data-testid={`api-scope-set-${set.name}`}

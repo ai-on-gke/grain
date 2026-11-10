@@ -278,6 +278,8 @@ type Composition struct {
 	// Hosting is the resolved hosting setting for the task (empty means
 	// neither template nor schedule set one, so Task defaults to unattended).
 	Hosting Hosting
+	// Skills is the optional per-task skill discovery override from the template.
+	Skills *SkillsConfig
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -333,6 +335,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		KeepRunning:          c.KeepRunning,
 		Admission:            NormalizeAdmission(c.Admission),
 		Hosting:              NormalizeHosting(c.Hosting),
+		Skills:               c.Skills.Clone(),
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -454,6 +457,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		KeepRunning:          tmpl.KeepRunning,
 		Admission:            tmpl.Admission,
 		Hosting:              tmpl.Hosting,
+		Skills:               tmpl.Skills.Clone(),
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,

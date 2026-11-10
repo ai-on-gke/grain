@@ -26,7 +26,7 @@ import { TIMEZONE_STORAGE_KEY } from "./PreferencesContext.jsx";
 // pinned list or time zone it reads. main.jsx runs this before the first
 // render, so nothing ever reads an old key.
 export const STORAGE_VERSION_KEY = "grain.storageVersion";
-export const STORAGE_VERSION = "1";
+const STORAGE_VERSION = "1";
 
 const USERNAME_KEY = "grain.username";
 const OLD_TIMEZONE_KEY = "grain.userTimeZone";

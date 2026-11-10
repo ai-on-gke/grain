@@ -134,6 +134,8 @@ func TestTaskMutationResponseClassificationIsTotal(t *testing.T) {
 			rawVal = `1`
 		case reflect.Slice:
 			rawVal = `[]`
+		case reflect.Struct:
+			rawVal = `{}`
 		}
 		sample := []byte(`{"` + tag + `":` + rawVal + `}`)
 		if got := editedPatchResponseKeys(sample); !slices.Equal(got, []string{tag}) {

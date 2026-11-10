@@ -110,7 +110,7 @@ function usePendingLocalScripts() {
 // INBOX_COLLAPSED_STORAGE_KEY remembers which inbox sections this browser
 // has folded or unfolded, keyed by stable section id rather than display
 // title. Only choices that differ from a section's default are kept.
-export const INBOX_COLLAPSED_STORAGE_KEY = "grain.inbox.collapsed";
+const INBOX_COLLAPSED_STORAGE_KEY = "grain.inbox.collapsed";
 
 function readCollapsedMap() {
   try {
@@ -125,7 +125,7 @@ function readCollapsedMap() {
   }
 }
 
-export function useCollapsed(sectionId, defaultCollapsed = false) {
+function useCollapsed(sectionId, defaultCollapsed = false) {
   const [collapsed, setCollapsed] = useState(() => {
     const stored = readCollapsedMap()[sectionId];
     return typeof stored === "boolean" ? stored : Boolean(defaultCollapsed);
@@ -161,7 +161,7 @@ export function useCollapsed(sectionId, defaultCollapsed = false) {
 // heading is a button with a chevron, the section title and its count,
 // and folding a section hides its rows while keeping its heading and
 // count on screen.
-export function CollapsibleInboxGroup({
+function CollapsibleInboxGroup({
   sectionId,
   title,
   count,

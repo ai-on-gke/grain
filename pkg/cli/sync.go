@@ -318,6 +318,7 @@ var settingsDiffRows = []settingsDiffRow{
 	// line of output rather than breaking the two-column shape of every
 	// line around it.
 	{"promptExtension", "prompt extension", func(s ui.Settings) any { return s.PromptExtension }},
+	{"skills", "skills", func(s ui.Settings) any { return model.EncodeSkillsConfig(s.Skills) }},
 	{"taskBranchTemplate", "task branch template", func(s ui.Settings) any { return s.TaskBranchTemplate }},
 	{"deploymentId", "deployment id", func(s ui.Settings) any { return s.DeploymentID }},
 	{"repairTemplateID", "repair template", func(s ui.Settings) any { return s.RepairTemplateID }},

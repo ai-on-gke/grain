@@ -758,7 +758,7 @@ $$\text{Built-in Defaults} \longrightarrow \text{Deployment (`default`)} \longri
 1. **Runtime policy filtering in the picker:**
    - The capabilities offered in `GrantsPicker` and pre-populated by `capabilities.defaults` are intersected with `catalogue.AllowedFor(GrantContext{Repo: selectedRepo, TemplateID: selectedTemplate, Kind: "task"})` (§3) and `CapabilityPolicy` (`pkg/model/capability_ref.go`).
    - If a capability is `ci_only: true`, disabled, or restricted to `repos: ["ai-on-gke/grain"]`, it is automatically excluded from the picker and from defaults when `bwsalmon/silo` is selected.
-   - Capabilities listed in `capabilities.hidden` are omitted from the `GrantsPicker` dropdown menu (unless already held on the draft/task, in which case `useHeldIds` keeps the chip removable), while remaining enabled at runtime for templates or schedules that declare them.
+   - Capabilities listed in `capabilities.hidden` are omitted from the `GrantsPicker` dropdown menu (a grant already held on the draft/task still renders as its own row, with its Remove button, outside that menu), while remaining enabled at runtime for templates or schedules that declare them.
 2. **Config PR validation (`staterepo.Check`):**
    - Validates `settings/new-task-form.yml` on every config PR:
      - Rejects unknown field IDs or invalid `visibility` values (`shown`, `more`, `hidden`).

@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -3085,6 +3086,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	skillFolders, err := resolveSkillFolders(ctx, store, cfg.Skills, task)
+	if err != nil {
+		return unprepared(err)
+	}
 
 	// Before the agent's first turn: a run whose sandbox never got its repo
 	// has nothing to do. Capability placements are applied just below before
@@ -3188,6 +3193,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			cc.Task = task
 		}
 	}
+	var repoSkills []intree.SkillIndexEntry
+	if checkoutErr == nil && prepErr == nil && len(skillFolders) > 0 && prepared.Dir != "" {
+		repoSkills = discoverRepoSkills(runCtx, tools, prepared, task, skillFolders, d.RunID, nil)
+	}
 
 	// The commits those earlier attempts pushed, read out of the checkout
 	// they are in -- the one place they can be read at all
@@ -3222,16 +3231,18 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 
 	var prompt string
 	var dynamicSections []string
+	capabilityPromptSections := cfg.capabilityPromptSections
 	if checkoutErr == nil && prepErr == nil {
-		prompt, dynamicSections, prepErr = prepareCapabilityPrompt(ctx, cc, materialized, tools, history,
+		prompt, dynamicSections, capabilityPromptSections, prepErr = prepareCapabilityPromptWithSkills(ctx, cc, materialized, tools, history,
 			attachments, prepared, cfg.settingsRepo(), cfg.checkImage(),
-			frameworkOpensPullRequests(framework), promptExtension, memory, cfg.maxRunRuntime())
+			frameworkOpensPullRequests(framework), promptExtension, memory, cfg.maxRunRuntime(),
+			repoSkills, capabilityPromptSections)
 	}
 	// Each capability grant's prompt_section, as a block naming the grant,
 	// its attempt_id and its MCP server, and saying a capability server
 	// wrote it rather than the task's author (design/spec/capabilities/capabilities.spec.md
 	// §5.4.2).
-	if section := cfg.capabilityPromptSections; section != "" && prompt != "" {
+	if section := capabilityPromptSections; section != "" && prompt != "" {
 		prompt += "\n\n" + section
 		dynamicSections = append(dynamicSections, section)
 	}
@@ -4335,6 +4346,17 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 	attachments []model.Attachment, prepared checkout, settingsRepo model.RepoRef,
 	checkImage string, canOpenPullRequest bool, promptExtension, memory string,
 	maxRuntime time.Duration) (string, []string, error) {
+	p, dyn, _, err := prepareCapabilityPromptWithSkills(ctx, cc, materialized, tools, history,
+		attachments, prepared, settingsRepo, checkImage, canOpenPullRequest, promptExtension, memory, maxRuntime,
+		nil, "")
+	return p, dyn, err
+}
+
+func prepareCapabilityPromptWithSkills(ctx context.Context, cc model.CapabilityContext,
+	materialized []model.Materialized, tools []mcp.Tool, history History,
+	attachments []model.Attachment, prepared checkout, settingsRepo model.RepoRef,
+	checkImage string, canOpenPullRequest bool, promptExtension, memory string,
+	maxRuntime time.Duration, repoSkills []intree.SkillIndexEntry, passPromptSections string) (string, []string, string, error) {
 
 	extension := appendSection(memorySection(memory), promptExtensionSection(promptExtension))
 	prompt := BuildPrompt(cc.Task, prepared.Dir, prepared.Root, canOpenPullRequest, maxRuntime, history, prepared.Setup)
@@ -4356,7 +4378,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 	prompt += grainSourceSection(prepared, cc.Task)
 	attachmentsSection, err := placeAttachments(ctx, tools, attachments)
 	if err != nil {
-		return "", nil, err
+		return "", nil, passPromptSections, err
 	}
 	prompt += attachmentsSection
 	var dynamicSections []string
@@ -4365,13 +4387,22 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 	}
 	sections, err := model.PromptSections(ctx, cc, materialized)
 	if err != nil {
-		return prompt, dynamicSections, fmt.Errorf("building prompt sections: %w", err)
+		return prompt, dynamicSections, passPromptSections, fmt.Errorf("building prompt sections: %w", err)
 	}
+	var repoLabel string
+	if cc.Task.Target != nil {
+		repoLabel = cc.Task.Target.String()
+	}
+	sections, unifiedSkills, keptPassSections := mergePromptSkills(sections, passPromptSections, materialized, repoSkills, repoLabel, cc.Run.ID, nil)
 	for _, section := range sections {
 		prompt += "\n\n" + section
 		dynamicSections = append(dynamicSections, section)
 	}
-	return appendSection(prompt, extension), dynamicSections, nil
+	if unifiedSkills != "" {
+		prompt += "\n\n" + unifiedSkills
+		dynamicSections = append(dynamicSections, unifiedSkills)
+	}
+	return appendSection(prompt, extension), dynamicSections, keptPassSections, nil
 }
 
 // toolGrants are the capability grants whose whole effect is which tools

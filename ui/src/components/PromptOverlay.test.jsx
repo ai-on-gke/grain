@@ -85,6 +85,31 @@ describe("PromptOverlay", () => {
     expect(screen.queryByText(/attempt #/)).not.toBeInTheDocument();
   });
 
+  it("lists the skills shown in the recorded prompt", async () => {
+    api.mockResolvedValueOnce({
+      prompt: "Fix the thing",
+      attempt: 1,
+      skills: [
+        {
+          name: "deploy",
+          path: "/home/debian/.skills/deploy/SKILL.md",
+          source: "capability",
+        },
+        {
+          name: "lint",
+          path: "/home/debian/work/.claude/skills/lint/SKILL.md",
+          source: "repo: .claude/skills/lint",
+        },
+      ],
+    });
+    render(<PromptOverlay taskId="12" onClose={() => {}} />);
+
+    const summary = await screen.findByTestId("prompt-skills");
+    expect(summary).toHaveTextContent("Skills shown (2):");
+    expect(summary).toHaveTextContent("deploy");
+    expect(summary).toHaveTextContent("repo: .claude/skills/lint");
+  });
+
   it("reports a fetch failure in the pane itself", async () => {
     api.mockRejectedValueOnce(new Error("boom"));
     render(<PromptOverlay taskId="12" onClose={() => {}} />);

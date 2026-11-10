@@ -79,7 +79,7 @@ import { leavingLosesEdits } from "../unsavedEdits.js";
 import { settingLabel } from "../settingsPlan.js";
 import { useIsPhone } from "../phone.js";
 
-export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
+export { SETTINGS_GROUPS };
 
 // Sections that hold no saved settings of their own -- this browser's
 // preferences, Access's sign-in (design/design/config-repo-settings.design.md
