@@ -114,10 +114,19 @@ failed=()
 log="$(mktemp -d)/build.log"
 
 check_substrings() {
-  # check_substrings <file of wanted substrings> <file to look in> <what it is>
-  local wanted="$1" haystack="$2" what="$3" line
+  # check_substrings <file of wanted substrings> <file to look in> <what it is> [<granule image>]
+  #
+  # An expect-dockerfile is written against the build's default granule
+  # image, granule:latest, which is what `go test ./pkg/granulefile`
+  # compiles with. When this run passes -kontur-image the compiled build
+  # names that image instead, so the fourth argument stands in for
+  # granule:latest in a "FROM granule:latest " line.
+  local wanted="$1" haystack="$2" what="$3" image="${4:-}" line
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    if [ -n "$image" ]; then
+      line="${line//FROM granule:latest /FROM $image }"
+    fi
     if ! grep -qF -- "$line" "$haystack"; then
       echo "   $what does not contain: $line" >&2
       return 1
@@ -230,7 +239,7 @@ for dir in "$here"/*/; do
       failed+=("$name")
       continue
     fi
-    if ! check_substrings "$dir/expect-dockerfile" "$log" "the compiled build"; then
+    if ! check_substrings "$dir/expect-dockerfile" "$log" "the compiled build" "$kontur_image"; then
       cat "$log" >&2
       failed+=("$name")
       continue

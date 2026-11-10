@@ -87,6 +87,13 @@ Commands:
   key retired delete (-all | NAME...)
                             delete replaced keys; refuses the one the secrets
                             file is still encrypted to
+  key wrap -kms KEY         wrap the private key with the Cloud KMS key KEY
+                            (projects/P/locations/L/keyRings/R/cryptoKeys/K), in
+                            the daemon when one is running; verifies the round
+                            trip before writing, and lists plaintext copies left
+  key unwrap                put the private key back in plaintext form (needs
+                            KMS); run it before downgrading past the build that
+                            wrapped it
 `
 
 func stateCmd(args []string) {
@@ -349,6 +356,15 @@ func plural(n int, one, many string) string {
 // must not create the thing it reports on.
 func reportSecretsKey(dataDir string, out io.Writer) {
 	path := daemon.SecretsConfig(dataDir).KeyFile
+	if info, err := secrets.ReadKeyFileInfo(path); err == nil && info.Protection == secrets.ProtectionKMS {
+		fmt.Fprintf(out, "secrets key: %s (wrapped by Cloud KMS key %s)\n", path, info.KMSKey)
+		fmt.Fprintf(out, "            public key %s\n", info.Public)
+		fmt.Fprintf(out, "            this file is useless without decrypt on that KMS key, and the daemon\n")
+		fmt.Fprintf(out, "            unwraps it once at start. Back it up all the same; run\n")
+		fmt.Fprintf(out, "            `grain state key unwrap` before downgrading to a build older than\n")
+		fmt.Fprintf(out, "            the one that wrapped it.\n")
+		return
+	}
 	key, err := secrets.ReadKeyFile(path)
 	switch {
 	case errors.Is(err, secrets.ErrNoKey):
@@ -569,7 +585,13 @@ func stateCheck(ctx context.Context, dataDir string, args []string) error {
 // prints one invites it into a terminal's scrollback.
 func stateKey(dataDir string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: grain state key show|path|import|retired")
+		return errors.New("usage: grain state key show|path|import|wrap|unwrap|retired")
+	}
+	switch args[0] {
+	case "wrap", "unwrap":
+		// Before opening the store too: the daemon holds the key, and
+		// the change is made there (stateKeyWrap).
+		return stateKeyWrap(context.Background(), dataDir, args[0], args[1:], os.Stdout)
 	}
 	if args[0] == "retired" {
 		// Before opening the store, which would mint a key on a data
@@ -658,13 +680,13 @@ func stateKeyRetired(cfg secrets.Config, out io.Writer, args []string) error {
 			return fmt.Errorf("reading which key %s is encrypted to: %w", cfg.File, err)
 		}
 	}
-	live, _ := secrets.ReadKeyFile(cfg.KeyFile)
+	live, _ := secrets.ReadKeyFileInfo(cfg.KeyFile)
 	for _, name := range names {
 		rk, ok := byName[name]
 		if !ok {
 			return fmt.Errorf("no retired key %q beside %s (see `grain state key retired`)", name, cfg.KeyFile)
 		}
-		if sealedTo != "" && rk.Public == sealedTo && live.Public() != sealedTo {
+		if sealedTo != "" && rk.Public == sealedTo && live.Public != sealedTo {
 			return fmt.Errorf("refusing to delete %s: %s is encrypted to it and not to the live key -- "+
 				"install it again with `grain state key import` first", name, cfg.File)
 		}

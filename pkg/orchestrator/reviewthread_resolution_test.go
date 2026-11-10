@@ -15,6 +15,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -97,13 +98,34 @@ func TestReviewTaskThreadsAreResolvedAfterOwnerRunHandlesThemAndPRMerges(t *test
 		t.Errorf("reply body = %q, want one-line summary of what was done", comments[len(comments)-1].Body)
 	}
 
-	// 4. The merge queue merges the PR cleanly even with RequireConversationResolution enabled.
+	// 4. Re-review runs and passes cleanly, then the merge queue merges the PR
+	// cleanly even with RequireConversationResolution enabled.
+	passCleanRereview(t, ctx, store, reviewed.ID, baseTime.Add(3*time.Minute+30*time.Second))
 	markMergeable(sim)
 	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(4*time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	if !sim.PullRequests[0].Merged {
 		t.Fatalf("expected PR #%d to merge after review task thread was resolved", prNum)
+	}
+}
+
+func passCleanRereview(t *testing.T, ctx context.Context, store *model.Store, reviewedID string, at time.Time) {
+	t.Helper()
+	if err := orchestrator.SyncReviews(ctx, store, at); err != nil {
+		t.Fatalf("SyncReviews (re-review): %v", err)
+	}
+	got := reloaded(t, ctx, store, reviewedID)
+	rereviewID := linkOf(got, model.LinkReviewTask)
+	if rereviewID == "" {
+		t.Fatalf("expected a fresh re-review task on %s, got links=%+v", reviewedID, got.Links)
+	}
+	done := at.Add(10 * time.Second)
+	if err := store.Observe(ctx, model.Observation{TaskID: rereviewID, CompletedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncReviews(ctx, store, done.Add(time.Second)); err != nil {
+		t.Fatalf("SyncReviews (close clean re-review): %v", err)
 	}
 }
 
@@ -130,17 +152,19 @@ func TestMergeQueueBeltAndBracesResolvesDecidedGrainReviewThreadsAndRetriesMerge
 	}
 	threadID := relayed[0].ThreadID
 
-	// Owner decides "Ship as is" by re-enabling AutoMerge and commenting.
-	if err := store.UpdateTask(ctx, reviewed.ID, func(tk *model.Task) error {
-		tk.AutoMerge = true
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// Owner answers, a clean re-review passes, and the relayed thread on GitHub
+	// was left unresolved so belt-and-braces resolves it on merge.
 	say(t, ctx, store, reviewed.ID, owner, "Keep as is.", baseTime.Add(time.Minute))
 	if err := orchestrator.SyncReviewQuestions(ctx, store, baseTime.Add(2*time.Minute)); err != nil {
 		t.Fatalf("SyncReviewQuestions: %v", err)
 	}
+	done := baseTime.Add(2*time.Minute + 15*time.Second)
+	if err := store.ObserveField(ctx, reviewed.ID, done, func(o *model.Observation) {
+		o.CompletedAt = &done
+	}); err != nil {
+		t.Fatal(err)
+	}
+	passCleanRereview(t, ctx, store, reviewed.ID, baseTime.Add(2*time.Minute+30*time.Second))
 
 	// Thread is still unresolved before SyncPullRequests runs.
 	if sim.ResolvedThreads[threadID] {
@@ -262,6 +286,7 @@ func TestReviewTaskThreadsAreResolvedWhenOwnerRunKeepsAsIsWithoutPushing(t *test
 	if !sim.ResolvedThreads[threadID] {
 		t.Fatalf("expected relayed review thread %s to be resolved after keep-as-is run", threadID)
 	}
+	passCleanRereview(t, ctx, store, reviewed.ID, baseTime.Add(3*time.Minute+30*time.Second))
 	markMergeable(sim)
 	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(4*time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
@@ -309,16 +334,17 @@ func grainRelayedThreadSomeoneRepliedInIsNeverAutoResolved(t *testing.T, replier
 		Body: "I disagree -- the name is load-bearing elsewhere.",
 	})
 
-	if err := store.UpdateTask(ctx, reviewed.ID, func(tk *model.Task) error {
-		tk.AutoMerge = true
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 	say(t, ctx, store, reviewed.ID, owner, "Keep as is.", baseTime.Add(time.Minute))
 	if err := orchestrator.SyncReviewQuestions(ctx, store, baseTime.Add(2*time.Minute)); err != nil {
 		t.Fatalf("SyncReviewQuestions: %v", err)
 	}
+	done := baseTime.Add(2*time.Minute + 15*time.Second)
+	if err := store.ObserveField(ctx, reviewed.ID, done, func(o *model.Observation) {
+		o.CompletedAt = &done
+	}); err != nil {
+		t.Fatal(err)
+	}
+	passCleanRereview(t, ctx, store, reviewed.ID, baseTime.Add(2*time.Minute+30*time.Second))
 
 	markMergeable(sim)
 	_ = orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(3*time.Minute))
@@ -403,6 +429,7 @@ func TestTwoRelayedThreadsOneRepliedToByAPersonMergeOnceThePersonResolvesIt(t *t
 			replies[grainThread.CommentID], grainThread.CommentID, sim.ReviewComments[prNum])
 	}
 
+	passCleanRereview(t, ctx, store, reviewed.ID, baseTime.Add(3*time.Minute+30*time.Second))
 	markMergeable(sim)
 	_ = orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(4*time.Minute))
 	if sim.PullRequests[0].Merged {
