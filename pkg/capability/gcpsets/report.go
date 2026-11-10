@@ -21,9 +21,8 @@ import (
 	"strings"
 )
 
-// AdminPermissions is what an admin needs on each of its projects
-// (docs/capabilities.md, "GCP"): the custom role grainGcpKeyAdmin holds
-// exactly these.
+// AdminPermissions is what an admin needs on each project where it manages
+// key-mode permission sets (docs/capabilities.md, "GCP").
 var AdminPermissions = []string{
 	"iam.serviceAccounts.create",
 	"iam.serviceAccounts.delete",
@@ -37,11 +36,52 @@ var AdminPermissions = []string{
 	"resourcemanager.projects.setIamPolicy",
 }
 
+// TokenAdminServiceAccountPermissions are the service-account permissions an
+// admin needs on a project for a managed token-mode set: creating, listing and
+// deleting the set's service account, plus setting its IAM policy so grain can
+// grant the admin roles/iam.serviceAccountTokenCreator on that account only
+// (no serviceAccountKeys.* permissions are needed).
+var TokenAdminServiceAccountPermissions = []string{
+	"iam.serviceAccounts.create",
+	"iam.serviceAccounts.delete",
+	"iam.serviceAccounts.get",
+	"iam.serviceAccounts.list",
+	"iam.serviceAccounts.getIamPolicy",
+	"iam.serviceAccounts.setIamPolicy",
+}
+
+// ProjectPolicyPermissions are the project IAM permissions needed when a
+// managed set binds roles on the project rather than on a resource_scope.
+var ProjectPolicyPermissions = []string{
+	"resourcemanager.projects.get",
+	"resourcemanager.projects.getIamPolicy",
+	"resourcemanager.projects.setIamPolicy",
+}
+
+// TokenAdminPermissions are all project permissions an admin needs for an
+// unscoped managed token-mode set.
+var TokenAdminPermissions = append(append([]string(nil), TokenAdminServiceAccountPermissions...), ProjectPolicyPermissions...)
+
 // ScopePermissions are the extra permissions an admin needs when one of
 // its sets binds on a bucket.
 var ScopePermissions = []string{
 	"storage.buckets.getIamPolicy",
 	"storage.buckets.setIamPolicy",
+}
+
+// ArtifactRegistryScopePermissions are the extra permissions an admin needs
+// when one of its sets binds on an Artifact Registry repository
+// (repositories/<location>/<repo>).
+var ArtifactRegistryScopePermissions = []string{
+	"artifactregistry.repositories.getIamPolicy",
+	"artifactregistry.repositories.setIamPolicy",
+}
+
+// ResourcePermissionTester is an optional Cloud capability for checking
+// permissions directly on a scoped bucket or Artifact Registry repository when
+// the admin holds resource-level rather than project-wide IAM.
+type ResourcePermissionTester interface {
+	TestResourcePermissions(ctx context.Context, resource string, perms []string) ([]string, error)
 }
 
 // AdminCheck is Test's finding for one admin.
@@ -98,13 +138,7 @@ func (m *Manager) CheckAdmins(ctx context.Context) []AdminCheck {
 				// each account (CheckExisting).
 				continue
 			}
-			want := append([]string(nil), AdminPermissions...)
-			for _, s := range m.Config.Sets {
-				if s.Admin == a.Name && s.Project == p && s.ResourceScope != "" {
-					want = append(want, ScopePermissions...)
-					break
-				}
-			}
+			want, scopeResources := m.Config.wantedPermissionsIn(a.Name, p)
 			has, err := c.TestPermissions(ctx, p, want)
 			if err != nil {
 				chk.Missing[p] = []string{"(could not test: " + err.Error() + ")"}
@@ -113,6 +147,24 @@ func (m *Manager) CheckAdmins(ctx context.Context) []AdminCheck {
 			held := map[string]bool{}
 			for _, h := range has {
 				held[h] = true
+			}
+			if rpt, ok := c.(ResourcePermissionTester); ok && len(scopeResources) > 0 {
+				for perm, resources := range scopeResources {
+					if held[perm] {
+						continue
+					}
+					allHeld := true
+					for _, res := range resources {
+						rhas, rerr := rpt.TestResourcePermissions(ctx, res, []string{perm})
+						if rerr != nil || !contains(rhas, perm) {
+							allHeld = false
+							break
+						}
+					}
+					if allHeld {
+						held[perm] = true
+					}
+				}
 			}
 			for _, w := range want {
 				if !held[w] {
@@ -170,6 +222,16 @@ func (m *Manager) Report(ctx context.Context, census Census, deleted []string) s
 		if s.ResourceScope != "" {
 			where += " on " + s.ResourceScope
 		}
+		if s.TokenMode() {
+			if len(accounts) > 0 {
+				fmt.Fprintf(&b, "set %s (%s, %s): service account %s (credential token; short-lived tokens, no keys), %d attempt(s) holding tokens now\n",
+					s.Name, where, strings.Join(s.Roles, ", "), accounts[0], held[s.Name])
+			} else {
+				fmt.Fprintf(&b, "set %s (%s, %s): 0 of 1 account(s) (credential token; short-lived tokens, no keys), %d attempt(s) holding tokens now\n",
+					s.Name, where, strings.Join(s.Roles, ", "), held[s.Name])
+			}
+			continue
+		}
 		fmt.Fprintf(&b, "set %s (%s, %s): %d of %d account(s), %d key(s) held now\n",
 			s.Name, where, strings.Join(s.Roles, ", "), len(accounts), s.PoolMax, held[s.Name])
 	}
@@ -223,6 +285,81 @@ func (c *Config) managesAccountsIn(admin, project string) bool {
 		}
 	}
 	return !existing
+}
+
+// wantedPermissionsIn lists the permissions admin needs in project across its
+// sets there, plus -- for resource-scoped permissions -- the scoped resources
+// that may satisfy them individually.
+func (c *Config) wantedPermissionsIn(admin, project string) ([]string, map[string][]string) {
+	var want []string
+	seen := map[string]bool{}
+	add := func(perms ...string) {
+		for _, p := range perms {
+			if !seen[p] {
+				seen[p] = true
+				want = append(want, p)
+			}
+		}
+	}
+	scopeResources := map[string][]string{}
+	addScope := func(res string, perms []string) {
+		add(perms...)
+		for _, p := range perms {
+			if !contains(scopeResources[p], res) {
+				scopeResources[p] = append(scopeResources[p], res)
+			}
+		}
+	}
+	hasPoolOrMigrated := false
+	hasManagedToken := false
+	hasUnscopedManagedToken := false
+	hasAnyManagedSet := false
+	if g := c.GeminiKey; g != nil && g.Admin == admin && g.Project == project {
+		hasPoolOrMigrated = true
+	}
+	for i := range c.Sets {
+		s := &c.Sets[i]
+		if s.Admin != admin || s.Existing() || s.Project != project {
+			continue
+		}
+		hasAnyManagedSet = true
+		if s.ManagedToken() {
+			hasManagedToken = true
+			if s.ResourceScope == "" {
+				hasUnscopedManagedToken = true
+			}
+		} else {
+			hasPoolOrMigrated = true
+		}
+	}
+	if !hasAnyManagedSet {
+		hasPoolOrMigrated = true
+	}
+	if hasPoolOrMigrated {
+		add(AdminPermissions...)
+	}
+	if hasManagedToken {
+		add(TokenAdminServiceAccountPermissions...)
+		if hasUnscopedManagedToken {
+			add(ProjectPolicyPermissions...)
+		}
+	}
+	for i := range c.Sets {
+		s := &c.Sets[i]
+		if s.Admin != admin || s.Existing() || s.Project != project || s.ResourceScope == "" {
+			continue
+		}
+		res, ok := scopeResource(s.Project, s.ResourceScope)
+		if !ok {
+			continue
+		}
+		if _, isBucket := bucketOf(s.ResourceScope); isBucket {
+			addScope(res, ScopePermissions)
+		} else if _, _, isAR := artifactRepoOf(s.ResourceScope); isAR {
+			addScope(res, ArtifactRegistryScopePermissions)
+		}
+	}
+	return want, scopeResources
 }
 
 // ExistingCheck is Test's finding for a set over an existing service

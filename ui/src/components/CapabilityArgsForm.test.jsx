@@ -534,4 +534,79 @@ describe("CapabilityArgsForm", () => {
     expect(screen.queryByLabelText("_grain_deployment_id")).toBeNull();
     expect(screen.queryByLabelText("grainDeploymentId")).toBeNull();
   });
+
+  it("offers 'token (recommended, no keys)' as the default for new permission sets", async () => {
+    const user = userEvent.setup();
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        permission_sets: {
+          type: "array",
+          title: "Permission sets",
+          items: {
+            type: "object",
+            required: ["name"],
+            properties: {
+              name: { type: "string" },
+              credential: {
+                type: "string",
+                enum: ["token", "key"],
+                default: "token",
+                "x-grain-enum-labels": {
+                  token: "token (recommended, no keys)",
+                  key: "key (service-account key pool)",
+                },
+              },
+              project: { type: "string" },
+              roles: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+    };
+    let latest = {
+      permission_sets: [
+        { name: "legacy-pool", project: "my-proj", roles: ["roles/viewer"] },
+      ],
+    };
+    const { rerender } = render(
+      <CapabilityArgsForm
+        schema={schema}
+        value={latest}
+        onChange={(next) => {
+          latest = next;
+          rerender(
+            <CapabilityArgsForm
+              schema={schema}
+              value={latest}
+              onChange={(n) => {
+                latest = n;
+              }}
+              secrets={{ fields: {}, values: {}, onChange: () => {} }}
+            />,
+          );
+        }}
+        secrets={{ fields: {}, values: {}, onChange: () => {} }}
+      />,
+    );
+
+    // Existing pool set with omitted credential is not falsely shown as token.
+    const combosBefore = screen.getAllByRole("combobox", {
+      name: /credential/i,
+    });
+    expect(combosBefore[0].textContent).not.toContain(
+      "token (recommended, no keys)",
+    );
+
+    // Adding a new permission set defaults to token (recommended, no keys).
+    await user.click(
+      screen.getByRole("button", { name: "Add permission_sets" }),
+    );
+    expect(latest.permission_sets[1]).toEqual({ credential: "token" });
+    const combosAfter = screen.getAllByRole("combobox", {
+      name: /credential/i,
+    });
+    expect(combosAfter[1].textContent).toBe("token (recommended, no keys)");
+  });
 });
