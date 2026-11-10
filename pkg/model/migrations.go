@@ -930,6 +930,13 @@ var Migrations = []Migration{
 			usageSettingTable,
 		},
 	},
+	{
+		Version:     131,
+		Description: "add schedule.grain_ci, a schedule whose workflow firing runs on grain CI even on a ci_mode: github repository",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `grain_ci` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
