@@ -86,45 +86,15 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 		if err != nil {
 			return false, err
 		}
-		checkRegistry := func() (bool, error) {
-			running, ok := kubeDigestRef(current)
-			if !ok || !sameRepository(repositoryOf(current), repositoryOf(tag)) {
-				return false, nil
-			}
-			digest, err := u.manifestDigest(ctx, tag)
-			if err != nil {
-				return false, err
-			}
-			return running == normalizeRepository(repositoryOf(tag))+"@"+digest, nil
+		running, ok := kubeDigestRef(current)
+		if !ok || !sameRepository(repositoryOf(current), repositoryOf(tag)) {
+			return false, nil
 		}
-		if u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
-			same, relErr := u.alreadyRunningReleaseAssets(ctx, branch, current, tag)
-			if relErr == nil {
-				return same, nil
-			}
-			if errors.Is(relErr, errReleaseMidUpdate) {
-				// A channel caught between its publisher's images.json
-				// swap is nothing to install yet: the next poll retries.
-				return true, nil
-			}
-			if errors.Is(relErr, errReleaseNotPublished) {
-				// A version tagged without its image assets, on a
-				// deployment with no registry to pull it from, is nothing
-				// to install either: the upgrade would only refuse it.
-				return true, nil
-			}
-			if ok, _ := u.shouldFallbackToRegistry(relErr); ok {
-				return checkRegistry()
-			}
-			return false, relErr
+		digest, err := u.manifestDigest(ctx, tag)
+		if err != nil {
+			return false, err
 		}
-		same, regErr := checkRegistry()
-		if regErr != nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
-			if relSame, relErr := u.alreadyRunningReleaseAssets(ctx, branch, current, tag); relErr == nil {
-				return relSame, nil
-			}
-		}
-		return same, regErr
+		return running == normalizeRepository(repositoryOf(tag))+"@"+digest, nil
 	}
 	running, err := u.Running()
 	if err != nil {
