@@ -139,23 +139,20 @@ test("a promote-release.yml run that fails after Approve is marked failed, raise
   // The sim finishes that run as GitHub would with the repository
   // variable unset: the approve job refused, the run a failure.
   const completed = await ok(
-    await page.request.post(
-      `${SIM}/actions/runs/${approve.runId}/complete`,
-      {
-        data: {
-          conclusion: "failure",
-          jobs: [
-            {
-              name: "approve the pending release",
-              log:
-                "2026-11-10T11:30:01.0000000Z promote-release: approving v2.9.1\n" +
-                `2026-11-10T11:30:02.0000000Z ##[error]${REFUSAL}\n` +
-                "2026-11-10T11:30:02.1000000Z ##[error]Process completed with exit code 1.\n",
-            },
-          ],
-        },
+    await page.request.post(`${SIM}/actions/runs/${approve.runId}/complete`, {
+      data: {
+        conclusion: "failure",
+        jobs: [
+          {
+            name: "approve the pending release",
+            log:
+              "2026-11-10T11:30:01.0000000Z promote-release: approving v2.9.1\n" +
+              `2026-11-10T11:30:02.0000000Z ##[error]${REFUSAL}\n` +
+              "2026-11-10T11:30:02.1000000Z ##[error]Process completed with exit code 1.\n",
+          },
+        ],
       },
-    ),
+    }),
     "complete the run",
   );
   expect(completed).toMatchObject({
@@ -212,7 +209,10 @@ test("a promote-release.yml run that fails after Approve is marked failed, raise
   // reason, and the same Approve.
   await expect(alertsBell(page)).toHaveAttribute("data-severity", "critical");
   await openAlerts(page);
-  const alert = alertRow(page, "v2.9.1 is ready to promote (approve dispatch failed)");
+  const alert = alertRow(
+    page,
+    "v2.9.1 is ready to promote (approve dispatch failed)",
+  );
   await expect(alert).toHaveCount(1);
   await expect(alert).toContainText(`DISPATCH FAILED (${runRef})`);
   await expect(alert).toContainText("verify-release-approval: refused");
@@ -228,7 +228,10 @@ test("a promote-release.yml run that fails after Approve is marked failed, raise
   sent = await dispatches();
   expect(sent).toHaveLength(before + 2);
   const retry = sent[sent.length - 1];
-  expect(retry.inputs).toMatchObject({ version: "v2.9.1", decision: "approve" });
+  expect(retry.inputs).toMatchObject({
+    version: "v2.9.1",
+    decision: "approve",
+  });
   expect(retry.runId).not.toBe(approve.runId);
   // And that retry holds the release as the first Approve did: a third
   // press is refused while its run is in flight.
