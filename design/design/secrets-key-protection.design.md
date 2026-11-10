@@ -529,8 +529,7 @@ Why KMS wrap rather than the SM backend as the GCE/GKE default:
 reversible on their own:
 - rotation keeps the retired key ([§4.1](#SKP-4-1));
 - loose-file moves rename the file to `<file>.migrated` and delete it only one
-  release later, and `grain secrets get-file`-style export is not needed
-  because the source is kept;
+  release later, so rolling back is renaming it back;
 - the Postgres change keeps the old password valid until the new one is
   verified ([Phase 4](#SKP-P4)).
 
