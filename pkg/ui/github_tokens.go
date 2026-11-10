@@ -366,7 +366,7 @@ func (s *Server) handleListGitHubTokens(w http.ResponseWriter, r *http.Request) 
 			keys := append([]string{t.Name, t.Capability}, t.Connections...)
 			return list.matches(keys...)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(t gitHubTokenInfo) string { return t.Name })
 		for i := range page.Items {
 			page.Items[i].ConnectionCount = len(page.Items[i].Connections)
 			if len(page.Items[i].Connections) > listPageSmall {

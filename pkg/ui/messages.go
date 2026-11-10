@@ -466,7 +466,7 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 				return list.matches(m.Author, m.Body, m.Summary)
 			})
 			if len(messages) > 0 || waitCtx.Err() != nil {
-				writeList(w, messages, list)
+				writeListBy(w, messages, list, messageKey)
 				return
 			}
 			select {
@@ -484,8 +484,11 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 	messages = filterList(messages, func(m Message) bool {
 		return list.matches(m.Author, m.Body, m.Summary)
 	})
-	writeList(w, messages, list)
+	writeListBy(w, messages, list, messageKey)
 }
+
+// messageKey names a message for paging (pageOfBy) by its comment id.
+func messageKey(m Message) string { return strconv.FormatInt(m.ID, 10) }
 
 // deliveredRequest is POST /api/tasks/{id}/delivered's body: the last
 // comment the run reporting it has now been shown.

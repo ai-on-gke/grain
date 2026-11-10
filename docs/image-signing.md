@@ -178,7 +178,7 @@ refused at its signature step, while the daemon itself runs normally. No
 digest out of cosign's default JSON.
 
 The image's cosign is a v3 release (v3.1.4) while the release signs with
-v2 (`COSIGN_VERSION`, v2.4.1). That mix works because the signer writes
+v2 (`COSIGN_VERSION`, v2.6.5). That mix works because the signer writes
 cosign's legacy `.sig` signature, which every verifier reads: v2.4.1,
 v2.6.5 and v3.1.4 each verified the others' `--tlog-upload=false`
 signatures with the flags above, and printed the same
