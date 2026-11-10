@@ -310,6 +310,9 @@ func TestAllowedPrincipalsAgentScopeAndSandboxIsolation(t *testing.T) {
 	if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:oncall@example.com", Role: "grain/viewer"}); err != nil {
 		t.Fatal(err)
 	}
+	if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/access/principals", `{"entry":"user:oncall@example.com"}`, "duplicate probe"); code != http.StatusForbidden {
+		t.Fatalf("task 3 POST /api/access/principals on existing entry: got %d %s, want 403", code, resp)
+	}
 	for _, try := range []struct{ method, body string }{
 		{http.MethodPatch, `{"role":"grain/contributor"}`},
 		{http.MethodDelete, ""},

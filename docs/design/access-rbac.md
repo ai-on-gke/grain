@@ -94,11 +94,11 @@ a service account (unchanged).
 - **Never on oneself.** The caller's own entries are its `user:` entry
   and every `group:` entry Cloud Identity says it belongs to (a failed
   lookup counts as a match). On an entry that matches the caller:
-  - a change that widens what *that entry* grants is refused
+  - a change that adds or widens what *that entry* grants is refused
     (`self_escalation`). The comparison is per entry, so a person who
-    is already a full admin through a group still cannot raise their
-    own `user:` entry. Adding a new entry is not a widening, because
-    the caller already holds every scope of its role;
+    is already a full admin through a group still cannot add or raise
+    their own `user:` entry (or remove and re-add a matching entry at a
+    wider role);
   - adding or lifting a deny is refused (`self_access_change`). Another
     admin, or the access code, can do it;
   - narrowing it, or removing it, is allowed but must be confirmed:

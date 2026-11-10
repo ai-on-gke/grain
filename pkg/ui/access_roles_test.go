@@ -359,7 +359,7 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 		Scopes: []string{"access:write"}, Version: 1})
 	h := newRoleHarness(t)
 	h.client.Config.GroupChecker = groupCheckerFunc(func(_ context.Context, group, member string) (bool, error) {
-		return group == "admins@example.com" && member == "ops@example.com", nil
+		return group == "admins@example.com" && (member == "ops@example.com" || member == "temp@example.com"), nil
 	})
 	h.allow(t, "user:ops@example.com", model.DefaultAccessRole)
 	h.allow(t, "user:other@example.com", model.DefaultAccessRole)
@@ -404,8 +404,9 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 		t.Fatalf("lead POST at grain/operator: %d %s, want 403", code, body)
 	}
 
-	// Self: widening an entry matching the caller is refused, even a
-	// group the caller is in; narrowing it asks for confirmation.
+	// Self: widening or adding an entry matching the caller is refused,
+	// even a group the caller is in (closing DELETE?confirmSelf=1 + POST
+	// and group-to-user persistence); narrowing it asks for confirmation.
 	h.allow(t, "group:admins@example.com", "grain/viewer")
 	if code, body := h.call("ops@example.com", http.MethodPatch, path("group:admins@example.com"), `{"role":"grain/contributor","reason":"x"}`); code != http.StatusForbidden || !strings.Contains(body, "self_escalation") {
 		t.Fatalf("ops PATCH its own group wider: %d %s, want 403 self_escalation", code, body)
@@ -415,6 +416,35 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 	}
 	if code, body := h.call("ops@example.com", http.MethodDelete, path("group:admins@example.com")+"?confirmSelf=1", ""); code != http.StatusOK {
 		t.Fatalf("ops DELETE its own group confirmed: %d %s", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodPost, "/api/access/principals", `{"entry":"group:admins@example.com","role":"grain/contributor"}`); code != http.StatusForbidden || !strings.Contains(body, "self_escalation") {
+		t.Fatalf("ops POST its own group after DELETE: %d %s, want 403 self_escalation", code, body)
+	}
+	// A person admitted only through a group cannot entrench a direct user:
+	// entry (or another matching group) for themselves.
+	h.allow(t, "group:admins@example.com", model.DefaultAccessRole)
+	if code, body := h.call("temp@example.com", http.MethodPost, "/api/access/principals", `{"entry":"user:temp@example.com","role":"grain/operator","reason":"persist"}`); code != http.StatusForbidden || !strings.Contains(body, "self_escalation") {
+		t.Fatalf("group admin POST its own user entry: %d %s, want 403 self_escalation", code, body)
+	}
+	if code, body := h.call("other@example.com", http.MethodDelete, path("group:admins@example.com")+"?reason=done", ""); code != http.StatusOK {
+		t.Fatalf("other DELETE admins group: %d %s", code, body)
+	}
+
+	// Newlines in a reason are flattened so config_audit and logs stay one line.
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/viewer","reason":"line1\r\nforged"}`); code != http.StatusOK {
+		t.Fatalf("ops PATCH with newline reason: %d %s", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/operator","reason":"restore"}`); code != http.StatusOK {
+		t.Fatalf("ops PATCH restore other: %d %s", code, body)
+	}
+	auditsAfterNL, err := h.client.Store.ConfigAudit(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range auditsAfterNL {
+		if strings.ContainsAny(a.Summary, "\r\n") {
+			t.Fatalf("config_audit summary contains raw newline: %q", a.Summary)
+		}
 	}
 
 	// The last full admin is never removed or narrowed by a session.
@@ -429,8 +459,11 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 	}
 
 	// An agent, even with a person-granted access:write and a reason,
-	// changes nothing.
-	seedAPITask(t, h.client, "9", "acme/widgets", "api:access:read", "api:access:write")
+	// changes nothing -- including an idempotent POST on an existing entry.
+	seedAPITask(t, h.client, "9", "acme/widgets", "api:access:write")
+	if code, body := asAgent(t, h.srv, "9", http.MethodPost, "/api/access/principals", `{"entry":"user:lead@example.com"}`, "probe"); code != http.StatusForbidden {
+		t.Fatalf("agent POST existing entry: %d %s, want 403", code, body)
+	}
 	if code, body := asAgent(t, h.srv, "9", http.MethodPatch, path("user:lead@example.com"), `{"role":"grain/viewer","reason":"x"}`, "rotation"); code != http.StatusForbidden {
 		t.Fatalf("agent PATCH: %d %s, want 403", code, body)
 	}

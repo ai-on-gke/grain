@@ -145,7 +145,10 @@ func (a *accessRole) matchesEntry(ctx context.Context, entry string) (bool, erro
 	if a.matches != nil {
 		return a.matches(ctx, entry)
 	}
-	return strings.EqualFold(entry, "user:"+a.Who), nil
+	if strings.HasPrefix(entry, "group:") {
+		return false, errors.New("group membership checker unavailable")
+	}
+	return strings.EqualFold(entry, "user:"+a.Who) || strings.EqualFold(entry, "serviceAccount:"+a.Who), nil
 }
 
 // allows reports whether the role grants scope on repo.
