@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -1621,7 +1622,31 @@ func pullRequestEventsFrom(obs *model.Observation) []PullRequestEvent {
 // attempt finishes, or forever for a framework that never populates one
 // (agent.Result.Transcript's own doc comment) or a deployment with no
 // LiveTranscripts configured at all.
+//
+// Whichever of those it comes from, the text is redacted on the way out
+// with the same list the Logs pane uses (Config.LogRedactor): a
+// transcript stored in the database was redacted when the run finished
+// only of its own sandbox's env and of credential shapes, and a live
+// tail on a deployment with no object store not at all, while tasks:read
+// -- grain/viewer's -- reads every task's (credential exposure audit,
+// docs/security/audits/2026-11-10-credential-exposure.md).
 func (c *Client) AttemptTranscript(ctx context.Context, taskID string, number int) (string, error) {
+	text, err := c.attemptTranscript(ctx, taskID, number)
+	if err != nil || text == "" {
+		return text, err
+	}
+	redactor := grainlog.NewRedactor(nil)
+	if c.Config.LogRedactor != nil {
+		redactor, err = c.Config.LogRedactor()
+		if err != nil || redactor == nil {
+			return "(this transcript is withheld: the credentials that would have to be redacted out of it could not be read)", nil
+		}
+	}
+	text, _ = redactor.Text(text)
+	return text, nil
+}
+
+func (c *Client) attemptTranscript(ctx context.Context, taskID string, number int) (string, error) {
 	runs, err := c.Store.Runs(ctx, taskID)
 	if err != nil {
 		return "", err

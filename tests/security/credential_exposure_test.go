@@ -178,6 +178,30 @@ func TestNonAdminReadsNoPlantedCredential(t *testing.T) {
 	if read < 50 {
 		t.Fatalf("grain/viewer read only %d GET routes successfully; the sweep is not reaching the handlers", read)
 	}
+	// A finished run whose agent printed the same credentials, its
+	// transcript stored the way a deployment with no object store keeps
+	// it: in the database, redacted at finish only of its sandbox's env
+	// and of credential shapes.
+	now := time.Now()
+	if err := f.store.StartRun(ctx, model.Run{ID: "planted-run", TaskID: f.taskID, Sandbox: "s-planted", Attempt: 99, StartedAt: now}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.FinishRun(ctx, "planted-run", now.Add(time.Minute), "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.SetRunTranscript(ctx, "planted-run", "> run_command(cat credentials)\n"+strings.Join(printed, "\n")+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	transcript := f.send(t, http.MethodGet, "/api/tasks/"+f.taskID+"/attempts/99/transcript", "", viewer)
+	if transcript.code != http.StatusOK || !strings.Contains(transcript.body.String(), "[redacted") {
+		t.Errorf("GET /api/tasks/{id}/attempts/{number}/transcript as grain/viewer answered %d with no redaction: %s", transcript.code, transcript.excerpt())
+	}
+	for _, v := range printed {
+		if leaks(transcript.body.String(), v) {
+			t.Errorf("GET /api/tasks/{id}/attempts/{number}/transcript as grain/viewer carries a credential the run printed: %q", v)
+		}
+	}
+
 	// The console has printed everything by now, or will within moments.
 	deadline := time.Now().Add(10 * time.Second)
 	output := readConsole()
