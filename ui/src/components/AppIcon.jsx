@@ -117,10 +117,6 @@ export const CHROME_GLYPH_MAP = {
   metrics: "metrics",
 };
 
-export function isChromeGlyph(kind) {
-  return Boolean(kind && Object.hasOwn(CHROME_GLYPH_MAP, kind));
-}
-
 // AppIcon renders one standard UI icon. Like ItemGlyph, it is decorative
 // (`aria-hidden="true"`) unless `title` is supplied for a standalone
 // graphic, and inherits `currentColor` from its parent button, link or

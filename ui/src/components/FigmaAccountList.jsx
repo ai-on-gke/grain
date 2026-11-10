@@ -32,7 +32,7 @@ import api from "../api.js";
 // token in the secret store. Neither token ever reaches the browser. The
 // redirect URI has to be registered on the Figma OAuth app, so it is
 // shown beside the button.
-export const FIGMA_TEST_TOOL = "test_account";
+const FIGMA_TEST_TOOL = "test_account";
 
 // isFigmaServer is the built-in figma server, or any server whose attach
 // status advertises figma's test_account control-plane tool.

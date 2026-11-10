@@ -90,9 +90,7 @@ export const PANEL_KINDS = [
   { id: "metrics", label: "Throughput", view: "metrics" },
 ];
 
-export const PANEL_KINDS_BY_ID = Object.fromEntries(
-  PANEL_KINDS.map((k) => [k.id, k]),
-);
+const PANEL_KINDS_BY_ID = Object.fromEntries(PANEL_KINDS.map((k) => [k.id, k]));
 
 // PANEL_WIDTHS is how much of a row a panel takes. Three widths rather
 // than a column count or a pixel size: a dashboard is read on a laptop
@@ -131,7 +129,7 @@ const METRICS_RANGE_DAYS = Object.fromEntries(
 // DEFAULT_METRICS_RANGE is the default every report here shares, so a
 // panel that does not say shows the same week `grain metrics` prints
 // with no flags.
-export const DEFAULT_METRICS_RANGE = DEFAULT_REPORT_WINDOW;
+const DEFAULT_METRICS_RANGE = DEFAULT_REPORT_WINDOW;
 
 // panelRanges is the vocabulary one kind's `range` takes, and null for
 // the kinds that draw no span at all -- the same split model.
@@ -143,7 +141,7 @@ export function panelRanges(kind) {
   return null;
 }
 
-export function panelKindLabel(kind) {
+function panelKindLabel(kind) {
   return PANEL_KINDS_BY_ID[kind]?.label || PANEL_KINDS[0].label;
 }
 
@@ -476,7 +474,7 @@ export function panelPath(panel, fallback) {
 // case panelMetricsWindow does not decide either: an absolute span is
 // the more specific thing to have said, and reportPath sends it in
 // place of a window at both ends of the link.
-export function panelReportNarrowing(panel, fallback) {
+function panelReportNarrowing(panel, fallback) {
   const narrowing = panelNarrowing(panel, fallback);
   const days = METRICS_RANGE_DAYS[panel?.range];
   if (!days || hasAbsoluteSpan(reportScope(narrowing))) return narrowing;

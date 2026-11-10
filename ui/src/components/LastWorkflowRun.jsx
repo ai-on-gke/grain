@@ -16,7 +16,7 @@ import { formatDateTime } from "../time.js";
 
 // describeWorkflowRunOutcome is how the last firing of a schedule that
 // runs a workflow ended, in words (ui.ScheduleWorkflowRun).
-export function describeWorkflowRunOutcome(run) {
+function describeWorkflowRunOutcome(run) {
   if (!run.runId) return run.conclusion ? "could not start" : "starting";
   if (!run.conclusion) return "running";
   if (run.unfinished) return "never finished";
