@@ -29,7 +29,7 @@
 # Dockerfile gives above its own ARGs: a tag is a name its registry can
 # repoint, and the digest is what is fetched. This is the same value as
 # that file's RUNTIME_IMAGE -- bump both together.
-ARG BASE_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+ARG BASE_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # The Go image the sandbox's own grain is built with: the main Dockerfile's
 # GO_VERSION and GO_IMAGE_DIGEST -- bump all three together.
 ARG GO_VERSION=1.26.10

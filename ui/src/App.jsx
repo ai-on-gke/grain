@@ -196,7 +196,7 @@ export const HIDDEN_POLL_EVERY = 10;
 // Thirty seconds because the finest thing anything on screen says about
 // elapsed time is a whole minute, so a label is never more than half a
 // step behind, at a twentieth of the renders the poll was paying for.
-export const CLOCK_INTERVAL_MS = 30000;
+const CLOCK_INTERVAL_MS = 30000;
 
 // GATE_INTERVAL_MS is how often the shell re-reads the base branches
 // nothing is judging (GET /api/base-branch-gates, grain/task-470).
@@ -219,7 +219,7 @@ export const GATE_INTERVAL_MS = 60000;
 // sandboxes (GET /api/persistent-sandboxes) for its Staging group's
 // state dots. A staging environment restarting is worth seeing within
 // seconds, but not worth a request on every poll tick.
-export const STAGING_INTERVAL_MS = 15000;
+const STAGING_INTERVAL_MS = 15000;
 
 // LOADING_PANE_DELAY_MS is how long a task's detail may take before its
 // loading pane goes up (TaskLoadingOverlay). Short enough that a slow

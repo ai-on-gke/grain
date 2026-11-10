@@ -192,7 +192,8 @@ type Task struct {
 	// Omitted, like the fields above, for the common "no override" case,
 	// so a frontend reading it back gets the same empty-means-default it
 	// sent.
-	PromptExtension string `json:"promptExtension,omitempty"`
+	PromptExtension string              `json:"promptExtension,omitempty"`
+	Skills          *model.SkillsConfig `json:"skills,omitempty"`
 	// ReviewTemplateID is the template a review of this task's own work
 	// is filed from once it is done -- model.Task.ReviewTemplateID.
 	// Omitted, like the overrides above, for the common case of a task
@@ -1187,6 +1188,7 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		FixesBaseBranch:      model.FixesBaseBranch(t),
 		GrainBaseRepair:      model.GrainBaseRepair(t),
 		PromptExtension:      t.PromptExtension,
+		Skills:               t.Skills.Clone(),
 		ReviewTemplateID:     t.ReviewTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),

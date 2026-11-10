@@ -75,11 +75,10 @@ import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
 import AccessGate from "./AccessGate.jsx";
 
-// instantOf, hasStarted and spanOf live with the filter vocabulary now
-// (ciFilters.js), since narrowing and ordering runs by when they started
-// and how long they took needs them -- and are re-exported from here
-// because this is where every reader of them still looks.
-export { hasStarted, instantOf, spanOf };
+// spanOf lives with the filter vocabulary now (ciFilters.js), since
+// narrowing and ordering runs by how long they took needs it -- and is
+// re-exported from here for the readers that still import it from CIPage.
+export { spanOf };
 
 // CIPage is grain's own CI (pkg/ci, GET /api/ci/runs) with somebody
 // looking at it (grain/task-247). The engine and its API have existed
@@ -821,7 +820,7 @@ function JobPanel({ job, zone }) {
 const RETRYABLE = new Set(["errored", "failure", "cancelled"]);
 
 // retryableRun says whether run is over without having passed.
-export function retryableRun(run) {
+function retryableRun(run) {
   return Boolean(run && RETRYABLE.has(run.conclusion));
 }
 
@@ -829,7 +828,7 @@ export function retryableRun(run) {
 // started by hand: the orchestrator and a task's own wait_for_checks ask
 // for a run in the task's id (requesterLabel above), and a person's run
 // carries their principal instead.
-export function runTaskId(run) {
+function runTaskId(run) {
   const by = run?.requestedBy || "";
   return /^\d+$/.test(by) ? by : "";
 }

@@ -110,7 +110,7 @@ function sentenceCase(s) {
 // now offered -- pressing it re-stamps the request, which starts at once
 // -- and says what holds the task rather than promising the next cycle.
 // The attempts are read too, for a server that does not send the flag.
-export function runNowIsStale(t) {
+function runNowIsStale(t) {
   if (!t?.runNowAt) return false;
   if (t.runNowStale) return true;
   const asked = Date.parse(t.runNowAt);

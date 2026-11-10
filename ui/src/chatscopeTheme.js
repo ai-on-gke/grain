@@ -121,7 +121,7 @@ export const CHATSCOPE_PALETTE = {
 // Colours left exactly as the library drew them, each for a reason that
 // is not "nobody has noticed it yet". chatscopeTheme.test.js treats
 // this as the complete list of exceptions.
-export const CHATSCOPE_EXEMPT = {
+const CHATSCOPE_EXEMPT = {
   // The specular gloss the kit lays over an avatar's presence bullet on
   // hover: white at varying transparency in a radial gradient, which is
   // a highlight on whatever is underneath rather than a colour from the

@@ -28,15 +28,15 @@ import api from "./api.js";
 // what closing one looks like from here.
 
 // CLOSED_PAGE_SIZE is how many closed tasks one page holds.
-export const CLOSED_PAGE_SIZE = 200;
+const CLOSED_PAGE_SIZE = 200;
 
 // CLOSED_REFRESH_MS is how often the newest page is asked again.
-export const CLOSED_REFRESH_MS = 60_000;
+const CLOSED_REFRESH_MS = 60_000;
 
 // SEARCH_DEBOUNCE_MS is how long the search box has to sit still before
 // the server is asked to search closed work for it: one request for a
 // word, not one per keystroke.
-export const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 300;
 
 // closedPagePath is the request for the page after cursor ("" for the
 // newest). search narrows it to the closed tasks whose title,
@@ -68,7 +68,7 @@ export function closedPagePath(
 // narrowing pins (taskFilters.js's closedServerFilters) -- as one string,
 // "" when it asks nothing: what useClosedTasks compares to know whether
 // an answer is still the one the views want.
-export function closedQueryKey({ q = "", owner = "", externalRef = "" } = {}) {
+function closedQueryKey({ q = "", owner = "", externalRef = "" } = {}) {
   if (!q && !owner && !externalRef) return "";
   return JSON.stringify([q, owner, externalRef]);
 }

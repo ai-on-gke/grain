@@ -48,7 +48,7 @@ import InfoPopover from "./InfoPopover.jsx";
 import { capabilityMethods, checkGrants } from "./capabilityMethods.js";
 import {
   API_ARGS_SCHEMA,
-  API_CAPABILITY_SERVER_ID,
+  API_CAPABILITY_SERVER,
   DANGEROUS_API_HINT,
   apiRef,
   apiShortName,
@@ -120,7 +120,7 @@ const asList = (m) => (Array.isArray(m) ? m : []);
 // SAVE_DELAY_MS is how long an argument section waits after the last
 // edit before saving it, so typing a word is one write rather than one
 // per keystroke.
-export const SAVE_DELAY_MS = 500;
+const SAVE_DELAY_MS = 500;
 
 // liveErrorsOf is the schema's own check of a with: value -- none for a
 // schema the form edits as raw JSON, which only the server can judge.
@@ -613,7 +613,7 @@ export default function GrantsPicker({
       const row = apiRowOf(ref);
       return {
         ref,
-        capability: API_CAPABILITY_SERVER_ID,
+        capability: API_CAPABILITY_SERVER,
         method: listed?.method || apiShortName(ref),
         description:
           listed?.description ||

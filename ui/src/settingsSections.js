@@ -302,7 +302,7 @@ export function settingsAliasAnchorAt(pathname, hash) {
 // bare /system: on a phone the bare path is the list of tabs, not Health,
 // so a reloaded or shared /system/health would land on the list. App
 // folds it back to "" on a wider screen, where the two are the same page.
-export function systemTabFor(raw) {
+function systemTabFor(raw) {
   const id = String(raw || "").toLowerCase();
   return SYSTEM_TABS.some((t) => t.id === id) ? id : "";
 }
