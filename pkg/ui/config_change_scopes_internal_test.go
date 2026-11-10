@@ -110,3 +110,45 @@ func TestALimitedRoleCannotSubmitAConfigChange(t *testing.T) {
 		}
 	}
 }
+
+// Accepting a repository declaration's grants takes the scope each item
+// needs (task 3971): capabilities:admin for a capability server's grant,
+// and a dangerous api grant's own scope -- which capabilities:admin is
+// not.
+func TestAcceptingADeclarationNeedsTheScopesItsGrantsNeed(t *testing.T) {
+	settingsOnly := roleHolding("settings@example.com", "settings:write")
+	capAdmin := roleHolding("caps@example.com", "capabilities:admin")
+	secrets := roleHolding("secrets@example.com", "secrets:write")
+	gcp := `gcp#gcp-key={"permission_set":"ar-writer"}`
+	for _, tc := range []struct {
+		name   string
+		role   *accessRole
+		items  []string
+		refuse string
+	}{
+		{"gcp key by settings writer", settingsOnly, []string{gcp}, "capabilities:admin"},
+		{"gcp key by capability admin", capAdmin, []string{gcp}, ""},
+		{"secrets scope by capability admin", capAdmin, []string{"api:secrets:write"}, "secrets:write"},
+		{"secrets scope by secrets writer", secrets, []string{"api:secrets:write"}, ""},
+		{"both by secrets writer", secrets, []string{gcp, "api:secrets:write"}, "capabilities:admin"},
+		{"unlimited session", nil, []string{gcp, "api:secrets:write"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.role != nil {
+				ctx = withAccessRole(ctx, tc.role)
+			}
+			err := declarationScopeRefusal(ctx, declarationNeedsScopes(tc.items))
+			if tc.refuse == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			var forbidden *ForbiddenError
+			if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), tc.refuse) {
+				t.Fatalf("err = %v, want a forbidden error naming %s", err, tc.refuse)
+			}
+		})
+	}
+}

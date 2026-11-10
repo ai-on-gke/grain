@@ -83,7 +83,6 @@ var humanRouteScopes = map[string]APIScope{
 	// a dangerous api grant needs its own scope, not capabilities:admin.
 	"GET /api/declarations":         "capabilities:read",
 	"POST /api/declarations/accept": scopeSignedIn,
-	"POST /api/declarations/revoke": scopeSignedIn,
 }
 
 // operatorOnlyRoutes are the internal routes no limited role reaches: a

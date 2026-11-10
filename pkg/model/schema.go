@@ -3521,11 +3521,10 @@ var Tables = []string{
 	//
 	// Grain's own record rather than settings (staterepo.SettingsTables):
 	// it is a person's grant, made through grain by somebody holding the
-	// scope, and importing one from a branch of the state repository
+	// scope, and importing one live from a branch of the state repository
 	// would let whoever can write there accept on a person's behalf. A
-	// restore loses it, and the next firing is held until a person
-	// accepts again. Needs no SchemaVersion bump, for repo_workflow's own
-	// reason.
+	// restore brings it back with the rest of grain's record. Needs no
+	// SchemaVersion bump, for repo_workflow's own reason.
 	`CREATE TABLE IF NOT EXISTS ` + "`declaration_acceptance`" + ` (
   ` + "`id`" + `               TEXT     NOT NULL,
   ` + "`kind`" + `             TEXT     NOT NULL DEFAULT '',

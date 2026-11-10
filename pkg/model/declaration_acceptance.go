@@ -198,7 +198,7 @@ func DeclarationAcceptanceNote(id string, items []string, widened bool) string {
 	}
 	return fmt.Sprintf("\n\n---\n\ngrain: filed for a person's approval rather than approved: this work comes from "+
 		"a repository's own declaration (`%s`), which asks for %s. %s. Approve this task to run it once, or "+
-		"accept the declaration's set on [Settings → Declarations](/settings/declarations) (it takes a person "+
+		"accept the declaration's set on [Settings → Capabilities → Repository declarations](/settings/capabilities#declarations) (it takes a person "+
 		"holding the scope each item needs) and its later firings land approved.",
 		id, strings.Join(items, ", "), why)
 }
@@ -319,7 +319,7 @@ func encodeItems(items []string) string {
 }
 
 // noteDeclarationRequest records that id (kind, declared in repo at
-// commit) asked for items now: what Settings → Declarations shows and what
+// commit) asked for items now: what Settings → Capabilities shows and what
 // a person accepts. The accepted half of the row is left as it is.
 func noteDeclarationRequest(ctx context.Context, q querier, id string, kind DeclarationKind, repo RepoRef,
 	commit string, items []string, now time.Time) error {
@@ -425,17 +425,6 @@ func (s *Store) AcceptDeclaration(ctx context.Context, id, by string, scopes []s
 		return nil
 	})
 	return out, err
-}
-
-// RevokeDeclarationAcceptance clears id's accepted set: its next firing
-// is held again.
-func (s *Store) RevokeDeclarationAcceptance(ctx context.Context, id string) error {
-	return s.write(ctx, "revoke the acceptance of "+id, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			"UPDATE `declaration_acceptance` SET `accepted` = '', `accepted_by` = '', `accepted_scopes` = '', "+
-				"`accepted_commit` = '', `accepted_at` = NULL WHERE `id` = ?", id)
-		return err
-	})
 }
 
 // PersonStandsBehind reports whether a person stands behind task's

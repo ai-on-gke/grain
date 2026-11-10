@@ -189,7 +189,7 @@ func ciCatalogueRefusal(ctx context.Context, config func(context.Context) (*mode
 // workflow file is the repository's to write, by whoever can merge or
 // push a branch there, so declaring such a capability is a request, not
 // a grant. The request is recorded either way, so Settings ->
-// Declarations shows the job awaiting acceptance; a job widening its
+// Capabilities shows the job awaiting acceptance; a job widening its
 // capabilities past the accepted set is refused again until a person
 // accepts the new one. grain's own builtin jobs, and a daemon with no
 // store (declarations nil), are not asked.
@@ -216,6 +216,6 @@ func ciDeclarationRefusal(ctx context.Context, declarations func(context.Context
 		logf("grain ci: %s: %s job %s held: its declared %s await a person's acceptance", req.Repo, req.Event, req.Name, strings.Join(items, ", "))
 	}
 	return fmt.Errorf("this job declares %s, which only a person may grant, and no person has accepted that for it: "+
-		"a person holding the scope each needs can accept it on Settings -> Declarations (%s)",
+		"a person holding the scope each needs can accept it on Settings -> Capabilities -> Repository declarations (%s)",
 		strings.Join(items, ", "), model.CIJobDeclarationID(repo, req.Name))
 }

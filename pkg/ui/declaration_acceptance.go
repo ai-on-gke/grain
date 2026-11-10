@@ -58,11 +58,6 @@ type AcceptDeclarationRequest struct {
 	Seen []string `json:"seen"`
 }
 
-// RevokeDeclarationRequest is POST /api/declarations/revoke's body.
-type RevokeDeclarationRequest struct {
-	ID string `json:"id"`
-}
-
 func declarationAcceptanceView(a model.DeclarationAcceptance) DeclarationAcceptanceView {
 	v := DeclarationAcceptanceView{
 		ID: a.ID, Kind: string(a.Kind), Requested: a.Requested, RequestedCommit: a.RequestedCommit,
@@ -122,6 +117,12 @@ func (c *Client) declarationAcceptanceRefusal(ctx context.Context, needs []strin
 		return forbiddenErrorf("only a person acting directly may accept what a repository's declaration asks for: " +
 			"a declaration is not a person's grant, and accepting it is one")
 	}
+	return declarationScopeRefusal(ctx, needs)
+}
+
+// declarationScopeRefusal is declarationAcceptanceRefusal's half about
+// scopes: the calling role must hold every one of needs.
+func declarationScopeRefusal(ctx context.Context, needs []string) error {
 	role := accessRoleFromContext(ctx)
 	if role == nil || role.Full {
 		return nil
@@ -157,10 +158,7 @@ func (c *Client) AcceptDeclaration(ctx context.Context, id string, seen []string
 	if err := c.declarationAcceptanceRefusal(ctx, needs); err != nil {
 		return DeclarationAcceptanceView{}, err
 	}
-	by := c.requestPersonOrOperator(ctx)
-	if by == "" {
-		by = c.requestActor(ctx).Actor.ID
-	}
+	by := c.requestActor(ctx).Actor.ID
 	if seen == nil {
 		seen = []string{}
 	}
@@ -173,31 +171,6 @@ func (c *Client) AcceptDeclaration(ctx context.Context, id string, seen []string
 		return DeclarationAcceptanceView{}, err
 	}
 	return declarationAcceptanceView(got), nil
-}
-
-// RevokeDeclarationAcceptance clears what a person accepted for id, so
-// its next firing is held again. Revoking takes the same person and
-// scopes accepting does.
-func (c *Client) RevokeDeclarationAcceptance(ctx context.Context, id string) (DeclarationAcceptanceView, error) {
-	id = strings.TrimSpace(id)
-	acc, err := c.Store.GetDeclarationAcceptance(ctx, id)
-	if err != nil {
-		return DeclarationAcceptanceView{}, err
-	}
-	if acc == nil {
-		return DeclarationAcceptanceView{}, &NotFoundError{ID: id}
-	}
-	if err := c.declarationAcceptanceRefusal(ctx, declarationNeedsScopes(acc.Accepted)); err != nil {
-		return DeclarationAcceptanceView{}, err
-	}
-	if err := c.Store.RevokeDeclarationAcceptance(ctx, id); err != nil {
-		return DeclarationAcceptanceView{}, err
-	}
-	got, err := c.Store.GetDeclarationAcceptance(ctx, id)
-	if err != nil || got == nil {
-		return DeclarationAcceptanceView{}, err
-	}
-	return declarationAcceptanceView(*got), nil
 }
 
 func (s *Server) handleListDeclarationAcceptances(w http.ResponseWriter, r *http.Request) {
@@ -215,19 +188,6 @@ func (s *Server) handleAcceptDeclaration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	got, err := s.tasks.AcceptDeclaration(r.Context(), req.ID, req.Seen)
-	if err != nil {
-		writeClientError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, got)
-}
-
-func (s *Server) handleRevokeDeclarationAcceptance(w http.ResponseWriter, r *http.Request) {
-	var req RevokeDeclarationRequest
-	if !readJSON(w, r, &req) {
-		return
-	}
-	got, err := s.tasks.RevokeDeclarationAcceptance(r.Context(), req.ID)
 	if err != nil {
 		writeClientError(w, err)
 		return

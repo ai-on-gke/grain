@@ -238,3 +238,63 @@ func TestDeclaredItemScopes(t *testing.T) {
 		}
 	}
 }
+
+// A `.grain/workflows` job's declared capabilities are a request too: a
+// GCP key is refused until a person accepts it for that job, accepted
+// from then on, and refused again once the job declares more.
+func TestACIJobsDeclaredGCPKeyNeedsAcceptance(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	gcp := `gcp#gcp-key={"permission_set":"ar-writer"}`
+	note := func(caps ...string) bool {
+		t.Helper()
+		ok, _, err := store.NoteCIJobDeclaration(ctx, nightlyRepo, "publish", "abc123", caps, firstNight)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if !note("api:ci-read@acme/widgets") {
+		t.Fatal("a job declaring nothing held was refused")
+	}
+	if note(gcp) {
+		t.Fatal("a job's GCP key was accepted before anybody accepted it")
+	}
+	id := model.CIJobDeclarationID(nightlyRepo, "publish")
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", []string{"capabilities:admin"}, []string{gcp}, firstNight); err != nil {
+		t.Fatal(err)
+	}
+	if !note(gcp) {
+		t.Fatal("an accepted job was refused")
+	}
+	if note(gcp, "host-script#run") {
+		t.Fatal("a job widened past its accepted set was accepted")
+	}
+}
+
+// PersonStandsBehind is how the dispatch-time catalogue hold tells a
+// firing a person stands behind from one nobody does: an accepted
+// declared schedule's firing has one, an unaccepted one does not.
+func TestPersonStandsBehindAnAcceptedDeclaredFiring(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	id := model.RepoDeclaredID(model.DeclaredSchedule, nightlyRepo, "publish")
+	gcp := `gcp#gcp-key={"permission_set":"ar-writer"}`
+	sched := model.Schedule{ID: id, Title: "Publish", Target: nightlyRepo,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+		Enabled:    true, NextRunAt: firstNight, CreatedAt: firstNight.Add(-time.Hour), Overlap: model.OverlapAllow,
+		Grants: []model.Grant{{Capability: gcp}}}
+	fireForTask(t, store, ctx, sched)
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", nil, []string{gcp}, firstNight); err != nil {
+		t.Fatal(err)
+	}
+	task := fireForTask(t, store, ctx, sched)
+	if ok, err := store.PersonStandsBehind(ctx, *task, []string{gcp}); err != nil || !ok {
+		t.Fatalf("PersonStandsBehind(accepted firing) = %v, %v; want true", ok, err)
+	}
+	if ok, _ := store.PersonStandsBehind(ctx, *task, []string{gcp, "api:secrets:write"}); ok {
+		t.Fatal("PersonStandsBehind covered a grant nobody accepted")
+	}
+}

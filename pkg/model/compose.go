@@ -294,7 +294,7 @@ type Composition struct {
 	// DeclarationHold is, for work a repository's own declaration
 	// files, what it asks for that only a person may accept and whether
 	// a person has (DeclarationAcceptance); nil for anything else. A
-	// firing records it (noteDeclarationHold) so Settings → Declarations
+	// firing records it (noteDeclarationHold) so Settings → Capabilities
 	// can show the set awaiting acceptance; a preview only shows it.
 	DeclarationHold *DeclarationHold
 

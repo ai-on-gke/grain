@@ -17,6 +17,7 @@ import { Alert } from "@mui/material";
 import CapabilityServersPanel from "../CapabilityServersPanel.jsx";
 import CapabilityPolicyEditor from "../CapabilityPolicyEditor.jsx";
 import ApiScopeSetsPanel from "../ApiScopeSetsPanel.jsx";
+import DeclarationAcceptancesPanel from "../DeclarationAcceptancesPanel.jsx";
 import SettingsCard, {
   SettingsReadOnlyContext,
   SettingsRoleRefusalContext,
@@ -173,6 +174,14 @@ export default function CapabilitiesSection({
           onSaved={onSaved}
         />
       </SettingsCard>
+      {/* Accepting a declaration takes the scopes its set needs, which
+          the server asks for itself (POST /api/declarations/accept), so
+          the section's capabilities:admin refusal does not disable it. */}
+      <SettingsRoleRefusalContext.Provider value="">
+        <SettingsCard title="Repository declarations" anchor="declarations">
+          <DeclarationAcceptancesPanel showError={effectiveShowError} />
+        </SettingsCard>
+      </SettingsRoleRefusalContext.Provider>
       {/* The Deployment credentials card writes through PUT /api/settings
           and /api/secrets, not the capabilities:admin routes above, so the
           section's refusal does not reach it: it holds its fields to

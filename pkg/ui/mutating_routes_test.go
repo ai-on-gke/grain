@@ -787,6 +787,27 @@ var attributedRoutes = map[string]attributedRoute{
 		setup:    consoleSession,
 		recorded: lastConfigAudit,
 	},
+	// Accepting a declaration's grants is a person's alone, so the agent
+	// row checks the refusal (task 3971).
+	"POST /api/declarations/accept": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, _, err := client.Store.NoteCIJobDeclaration(context.Background(), model.RepoRef{Owner: "acme", Name: "widgets"},
+				"publish", "abc123", []string{`gcp#gcp-key={"permission_set":"publisher"}`}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		},
+		body:   `{"id":"ci:acme/widgets:publish","seen":["gcp#gcp-key={\"permission_set\":\"publisher\"}"]}`,
+		idOnly: true,
+		recorded: func(t *testing.T, ctx context.Context, client *ui.Client, _, _ string) model.Principal {
+			acc, err := client.Store.GetDeclarationAcceptance(ctx, "ci:acme/widgets:publish")
+			if err != nil || acc == nil || acc.AcceptedAt == nil {
+				t.Fatalf("the acceptance: %+v, %v", acc, err)
+			}
+			return model.Principal{Kind: model.PrincipalHuman, ID: acc.AcceptedBy}
+		},
+	},
 }
 
 // neverAttributedRoutes are non-GET routes that write nothing a person
