@@ -22,6 +22,8 @@ package ui_test
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -324,5 +326,43 @@ func TestSubmitPullRequestSeparatesApprovalAndGateOverride(t *testing.T) {
 	}
 	if len(ovRes.Overridden) != 1 || ovRes.Overridden[0] != "security-review" {
 		t.Fatalf("ovRes = %+v, want security-review overridden", ovRes)
+	}
+}
+
+// `grain pr submit` acts on the pull request the task merges, so it finds a
+// task only by that one: naming another pull request the task merely links
+// would approve, or override the gates of, a pull request nobody named.
+func TestSubmitPullRequestFindsATaskOnlyByItsOwnPullRequest(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.AutoMerge = false
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#98"},
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#99"},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.GetTask(ctx, task.ID)
+	own := model.TaskPullRequest(*got)
+	if own == nil {
+		t.Fatal("the task has no pull request")
+	}
+	other := "acme/widgets#98"
+	if own.String() == other {
+		other = "acme/widgets#99"
+	}
+	_, err := c.SubmitPullRequest(ctx, ui.SubmitPullRequestRequest{PR: other})
+	var nf *ui.NotFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("SubmitPullRequest(%s) = %v, want not found: the task's own pull request is %s", other, err, own)
+	}
+	if got, _ := store.GetTask(ctx, task.ID); slices.ContainsFunc(got.Links, func(l model.Link) bool {
+		return l.Kind == model.LinkHumanSubmitted
+	}) {
+		t.Fatalf("a Submit naming %s was recorded on task %s, whose pull request is %s", other, task.ID, own)
 	}
 }

@@ -251,7 +251,12 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 	return nil
 }
 
-// findTaskByPullRequest locates the task in Store that owns ref.
+// findTaskByPullRequest locates the task in Store whose own pull request
+// (model.TaskPullRequest) is ref. Only that one: Submit and a gate override
+// act on the pull request the task merges (pullRequestRefOf), so a task that
+// merely links ref among others would be acted on for a pull request the
+// caller never named -- possibly in a repository their scopes were not
+// checked against.
 func (c *Client) findTaskByPullRequest(ctx context.Context, ref model.PullRequestRef) (*model.Task, error) {
 	tasks, err := c.Store.ListTasks(ctx)
 	if err != nil {
@@ -259,19 +264,13 @@ func (c *Client) findTaskByPullRequest(ctx context.Context, ref model.PullReques
 	}
 	for i := range tasks {
 		pr := model.TaskPullRequest(tasks[i])
-		if pr != nil && model.SamePullRequest(*pr, ref) {
-			return &tasks[i], nil
+		if pr == nil || !model.SamePullRequest(*pr, ref) {
+			continue
 		}
-	}
-	for i := range tasks {
-		for _, l := range tasks[i].Links {
-			if l.Kind != model.LinkFixes {
-				continue
-			}
-			if parsed, perr := model.ParsePullRequestRef(l.Target); perr == nil && model.SamePullRequest(parsed, ref) {
-				return &tasks[i], nil
-			}
+		if own, perr := model.ParsePullRequestRef(pullRequestRefOf(tasks[i])); perr != nil || !model.SamePullRequest(own, ref) {
+			continue
 		}
+		return &tasks[i], nil
 	}
 	return nil, nil
 }
