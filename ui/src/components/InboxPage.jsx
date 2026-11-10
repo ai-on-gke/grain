@@ -65,6 +65,7 @@ import { formatMoment } from "../time.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { ListEmpty, ListHeader } from "./ListPrimitives.jsx";
 import Markdown from "./Markdown.jsx";
+import { commentPath, navigateInApp } from "../commentLinks.js";
 import PendingAccess from "./detail/PendingAccess.jsx";
 import QuestionDisclosure from "./QuestionDisclosure.jsx";
 import { TaskRow } from "./TaskList.jsx";
@@ -1355,13 +1356,27 @@ export default function InboxPage({
                 // where it has something: the merge queue's own note on a
                 // stalled wait (GROUPS' merge_stalled).
                 const note = group.note?.(t) || null;
+                // A row parked on a question opens on the question itself
+                // (/tasks/<id>#comment=<cid>, CommentDeepLink), as GET
+                // /api/inbox's path for it does: the question is not
+                // always the newest comment, nor the timeline newest
+                // first, so the top of the pane may not show it.
+                const questionHref =
+                  group.reply && t.questionCommentId
+                    ? commentPath(t.id, t.questionCommentId)
+                    : null;
                 return (
                   <li className="inbox-item" key={t.id}>
                     <div className="inbox-line">
                       <TaskRow
                         t={t}
                         config={config}
-                        onOpenTask={onOpenTask}
+                        onOpenTask={
+                          questionHref
+                            ? () => navigateInApp(questionHref)
+                            : onOpenTask
+                        }
+                        href={questionHref || undefined}
                         hideQuestion={!!group.reply}
                       />
                       <div className="inbox-actions">
