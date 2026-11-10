@@ -192,7 +192,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
-	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+	if !grainci.RequiredFor(*task.Target) && c.Store != nil {
 		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
 		if err != nil {
 			return ci.Run{}, err
@@ -203,7 +203,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
 			}
 			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
-			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+			if !rulesRequire && (explicitDisabled || (full && !grainci.GrantedExplicitly(task.Grants))) {
 				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
 			}
 		}
@@ -1016,6 +1016,9 @@ func (c *Client) ciEnabledFor(ctx context.Context, repo model.RepoRef) (bool, er
 	}
 	if grainci.RepoUsesGrainCI(repoCfg, repo) {
 		return true, nil
+	}
+	if repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone) {
+		return false, nil
 	}
 	wfs, err := c.Store.GetRepoWorkflows(ctx, repo)
 	if err != nil {
