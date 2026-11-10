@@ -179,7 +179,7 @@ func EditionSwitchLosses(from installtrack.Track, to string) []string {
 		}
 	}
 	losses = append(losses,
-		fmt.Sprintf("the %s install track's defaults: this host stays a %s install, so the next ordinary upgrade pulls from %s again unless you reinstall as %s",
+		fmt.Sprintf("the %s install track's defaults: this host is still on the %s track, so the next ordinary upgrade pulls from %s again unless you reinstall it as %s",
 			fromName, fromName, installtrack.DefaultRepository(from), toName),
 		"every run in flight, lost to the restart (and to the one that switches back)")
 	return losses
