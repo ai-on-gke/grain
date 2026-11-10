@@ -2636,6 +2636,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err := validateSandboxShape(req.SandboxCPUs, req.SandboxMemoryMB, req.SandboxDiskGB); err != nil {
 		return Task{}, err
 	}
+	if err := c.refuseSandboxShapeAboveMax(ctx, model.SandboxShape{CPUs: req.SandboxCPUs, MemoryMB: req.SandboxMemoryMB, DiskGB: req.SandboxDiskGB}); err != nil {
+		return Task{}, err
+	}
 	if err := c.refuseIgnoredSandboxShape(req.SandboxCPUs, req.SandboxMemoryMB, req.SandboxDiskGB); err != nil {
 		return Task{}, err
 	}
@@ -3273,7 +3276,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		// so neither permission queues a proposal that asks for one. Filed
 		// as asked, with a note saying which, and told to the run as what
 		// its permission does not cover.
-		if why := model.PersonOnlyProposalSettings(model.Task{Admission: askedAdmission, KeepRunning: keepRunning, Priority: priority}, *proposedBy); why != "" {
+		if why := model.PersonOnlyProposalSettings(model.Task{Admission: askedAdmission, KeepRunning: keepRunning, Priority: priority,
+			SandboxCPUs: req.SandboxCPUs, SandboxMemoryMB: req.SandboxMemoryMB, SandboxDiskGB: req.SandboxDiskGB}, *proposedBy); why != "" {
 			if autoSubmit || sessionQueued || req.Approved {
 				personOnlyNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 			}
@@ -5068,6 +5072,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if err := validateSandboxShape(cpus, memoryMB, diskGB); err != nil {
 			return Task{}, err
 		}
+		if err := c.refuseSandboxShapeAboveMax(ctx, model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}); err != nil {
+			return Task{}, err
+		}
 		// Asked of the three numbers this request *states* -- an unstated
 		// field is a 0 here whatever the task already carries -- so that a
 		// task filed with a shape before the deployment moved onto a
@@ -6301,6 +6308,9 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	}
 	if task.Approval != nil {
 		return nil
+	}
+	if err := c.refuseSandboxShapeAboveMax(ctx, model.TaskSandboxShape(*task)); err != nil {
+		return err
 	}
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
@@ -7564,6 +7574,9 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 			return forbiddenErrorf("%s is waiting for a person's reply, and agent %q may not start it in "+
 				"their place: a person has to answer it or Run now it themselves", id, by.ID)
 		}
+	}
+	if err := c.refuseSandboxShapeAboveMax(ctx, model.TaskSandboxShape(*task)); err != nil {
+		return err
 	}
 	now := c.now()
 	if task.Approval == nil {

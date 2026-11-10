@@ -23,7 +23,7 @@ CLI, and MCP (`/mcp` and `/api/mcp`).
 | 1b | Direct `POST /api/tasks` with `approved: true` / `interactive: true` targeting `grain/config` or a person-held change target by a limited `tasks:admin` role or delegated caller | `pkg/ui/agent_api_gate.go`, `pkg/ui/client.go` | **Fixed here** | High |
 | 1c | Omitting `capabilities` on `POST /api/tasks` attaches `DefaultCapabilities` even when vetoed by a role's `deny` list | `pkg/ui/client.go`, `pkg/ui/access_roles.go` | **Fixed here** | Medium |
 | 1d | `GET /api/persistent-sandboxes/{name}/logs` (`deployment:read`) serves unredacted output containing bound secrets and ignores repository limits | `pkg/ui/persistent_sandboxes.go`, `pkg/ui/access_roles.go` | **Fixed here** | High |
-| 1e | Per-task `sandboxCpus`, `sandboxMemoryMb`, and `sandboxDiskGb` have no upper bound or role/agent ceiling | `pkg/ui/client.go`, `pkg/ui/agent_api_gate.go` | Open; follow-up task filed (`knownGapSandboxShapeCeiling`) | Medium |
+| 1e | Per-task `sandboxCpus`, `sandboxMemoryMb`, and `sandboxDiskGb` have no upper bound or role/agent ceiling | `pkg/ui/client.go`, `pkg/ui/agent_api_gate.go`, `pkg/ui/access_roles.go`, `pkg/ui/sandbox_shape_limits.go`, `pkg/model/sandbox_shape_limits.go` | Closed by task 4018 (`sandboxShapeLimits` deployment maximum and per-role ceilings; `knownGapSandboxShapeCeiling = false`); regression tests added | Medium |
 | 2a | `PATCH /api/tasks/{id}` adding capabilities, `autoMerge`, elevated `priority`, widened `networkAccess`, or out-of-scope `reads`/`writes`; `approve` and unapproved `run-now` on wider proposals (#3735) | `pkg/ui/access_roles.go`, `pkg/ui/agent_api_gate.go` | Verified closed (#3735, #3759, #3923, #3925); regression tests added | -- |
 | 2b | Overwriting `description` (prompt) via `PATCH /api/tasks/{id}`, or calling approved `run-now`, `retry`, `reopen`, `undefer`, `resume`, `comments`, or `reply` on an operator-filed task carrying wider grants | `pkg/ui/access_roles.go`, `pkg/ui/agent_api_gate.go` | **Fixed here** | Critical |
 | 2c | Ownerless `gma_` external token holding `tasks:admin` approving a proposal past the token's own grant ceiling | `pkg/ui/agent_api_gate.go` (`externalApprovalRail`) | Closed by #3924 (`externalApprovalWithin`); regression test flipped | -- |
@@ -102,13 +102,29 @@ Every task-creation entry point — the browser form (`POST /api/tasks`), `grain
    `handlePersistentSandboxLogs` redacts through `Config.LogRedactor` (failing closed on
    redactor error, matching `logs.go`) or `grainlog.NewRedactor(nil)`.
 
-### Follow-up task filed
+### Closed by task 4018
 
 - **Per-task sandbox resource shape (`sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`):**
-  `validateSandboxShape` (`pkg/ui/client.go`) validates only lower bounds (`>= 1` CPU,
-  `>= 128` MB RAM, `>= 0` GB disk), and neither `filingEscalation` nor `propose_task`
-  enforces an upper bound or role ceiling. Pinned by `TestPath1KnownGapPerTaskSandboxShapeUncapped`
-  (`knownGapSandboxShapeCeiling`).
+  originally `validateSandboxShape` (`pkg/ui/client.go`) validated only lower bounds
+  (`>= 1` CPU, `>= 128` MB RAM, `>= 0` GB disk), and neither `filingEscalation` nor
+  `propose_task` enforced an upper bound or role ceiling. Task 4018 adds
+  `grain_config.sandbox_shape_limits` (`model.SandboxShapeLimits`, schema 136, settable as
+  `sandboxShapeLimits` through `PUT /api/settings`):
+  - a deployment-wide maximum (defaults 32 vCPU, 128 GiB memory, 1024 GiB disk) that binds
+    every caller, `grain/operator` included, on create, `PATCH`, approve, run-now, and
+    propose (`Client.refuseSandboxShapeAboveMax`, a 400);
+  - optional per-role ceilings beneath it, keyed by scope set name: a limited role may not set
+    a shape above its ceiling in any task, template, schedule, or session body
+    (`filingEscalation`), nor approve, run, or edit a stored task above it (`roleTaskWithin`),
+    a 403;
+  - an agent's proposal above the sandbox its proposing task runs in
+    (`model.ProposalSandboxShapeAbove`, part of `model.PersonOnlyProposalSettings`) is filed
+    held for a person through `propose_task` and the end-of-run relay, refused over the API
+    (`POST /api/tasks` with an acting task), and cannot be approved by a limited role, an
+    agent, or an external credential -- only by an unlimited role.
+
+  None of these clamps a request. `TestPath1KnownGapPerTaskSandboxShapeUncapped` now asserts
+  the refusal, and `TestPath1SandboxShapeCeilings` covers each route.
 
 ---
 
@@ -330,7 +346,8 @@ is ready to be wired into the consolidated nightly `security-attacks` job alongs
 #3981, #3983, and #3984:
 
 - `TestPath1NonAdminTaskFilingAndTemplateGrantCeilings`
-- `TestPath1KnownGapPerTaskSandboxShapeUncapped` (`knownGapSandboxShapeCeiling`)
+- `TestPath1KnownGapPerTaskSandboxShapeUncapped` (was `knownGapSandboxShapeCeiling`; closed by task 4018)
+- `TestPath1SandboxShapeCeilings`
 - `TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings`
 - `TestPath2ExternalTokenApprovalCeiling` (was `knownGapExternalTokenApprovalCeiling`, #3905; closed by #3924)
 - `TestPath3NonAdminAccessRequestGrantCeilings`

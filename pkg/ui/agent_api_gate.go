@@ -1976,6 +1976,23 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				}
 			}
 		}
+		if shape := sandboxShapeOfField(key, raw); !shape.IsZero() {
+			switch {
+			case opts.role != nil:
+				if err := s.roleSandboxShapeRefusal(ctx, opts.role, shape, "set "+key); err != nil {
+					return err
+				}
+			case opts.external != nil:
+				// Held to the deployment's maximum, which the handler asks
+				// of every caller (refuseSandboxShapeAboveMax).
+			case opts.acting != nil:
+				if above := shape.Above(model.EffectiveSandboxShape(*opts.acting)); len(above) > 0 {
+					return fmt.Errorf("an agent cannot ask for a larger sandbox than its own task %s runs in (%s); "+
+						"propose the work with propose_task instead, which files it for a person to approve",
+						opts.acting.ID, strings.Join(above, ", "))
+				}
+			}
+		}
 		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget

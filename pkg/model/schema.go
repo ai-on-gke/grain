@@ -641,7 +641,10 @@ import "strconv"
 // 135 adds `grain_config`.`ci_api_repos` (model.Config.CIAPIRepos): the
 // repositories whose trusted CI jobs may hold api grants, empty for
 // grain's own only (grain/task-4040).
-const SchemaVersion = 135
+// 136 adds `grain_config`.`sandbox_shape_limits`
+// (model.Config.SandboxShapeLimits): the deployment-wide and per-role
+// ceilings on the sandbox shape a task may ask for (grain/task-4018).
+const SchemaVersion = 136
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2686,6 +2689,7 @@ var Tables = []string{
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
+  ` + "`sandbox_shape_limits`" + `         TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

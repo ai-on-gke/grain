@@ -1200,6 +1200,28 @@ func (c *Client) roleTaskWithin(ctx context.Context, a *accessRole, task model.T
 		return fmt.Errorf("%s cannot %s task %s (networkAccess): widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
 			a.label(), verb, task.ID)
 	}
+	if err := c.roleSandboxShapeRefusal(ctx, a, model.TaskSandboxShape(task), verb+" task "+task.ID); err != nil {
+		return err
+	}
+	// An agent's proposal asking for a larger sandbox than the task that
+	// proposed it runs in waits for an unlimited role
+	// (model.ProposalSandboxShapeAbove); a proposer no longer stored is
+	// measured as one at grain's own default shape.
+	if verb == "approve" {
+		if up := proposedByOf(task); up != "" {
+			parent, err := c.Store.GetTask(ctx, up)
+			if err != nil {
+				return fmt.Errorf("reading task %s, which proposed %s: %w", up, task.ID, err)
+			}
+			if parent == nil {
+				parent = &model.Task{ID: up}
+			}
+			if why := model.ProposalSandboxShapeAbove(task, *parent); why != "" {
+				return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)",
+					a.label(), task.ID, why)
+			}
+		}
+	}
 	for _, g := range task.Grants {
 		if verb != "approve" && g.Via == model.GrantByDefault && !grantDeniedByRole(a, g.Capability) {
 			continue

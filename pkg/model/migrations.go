@@ -971,6 +971,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `ci_api_repos` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     136,
+		Description: "add grain_config.sandbox_shape_limits, the deployment and per-role ceilings on a task's sandbox shape (grain/task-4018)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_shape_limits` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

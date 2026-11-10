@@ -238,5 +238,8 @@ func PersonOnlyProposalSettings(child, parent Task) string {
 			"(the higher of its proposer's own priority and the default), which would dispatch it ahead "+
 			"of work a person queued", child.Priority, ceiling))
 	}
+	if shape := ProposalSandboxShapeAbove(child, parent); shape != "" {
+		why = append(why, shape)
+	}
 	return strings.Join(why, "; and ")
 }

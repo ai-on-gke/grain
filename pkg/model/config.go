@@ -967,6 +967,12 @@ type Config struct {
 	// grants are resolved, so a change applies to the next job without a
 	// restart. Stored comma-separated in one column, as TargetRepos is.
 	CIAPIRepos []string
+	// SandboxShapeLimits bounds the sandbox shape a task may ask for itself
+	// (Task.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB): a deployment-wide
+	// maximum every caller is held to, and optional per-role ceilings for
+	// limited roles (sandbox_shape_limits.go). Zero is grain's defaults.
+	// Stored as JSON in one column.
+	SandboxShapeLimits SandboxShapeLimits
 	// Registry configures self-registration and periodic heartbeating with a
 	// grain hub as a connected entry (design/design/hub.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in
