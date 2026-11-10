@@ -3065,7 +3065,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		return unprepared(err)
 	}
 
-	comments, err := store.Comments(ctx, task.ID)
+	comments, err := dispatchComments(ctx, store, task.ID)
 	if err != nil {
 		return unprepared(fmt.Errorf("orchestrator: reading %s's conversation: %w", task.ID, err))
 	}
