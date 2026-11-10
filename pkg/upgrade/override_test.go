@@ -20,7 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 )
 
@@ -173,13 +172,13 @@ func TestRegistryHint(t *testing.T) {
 	}{
 		{"docker pull: exit status 1: GET https://oauth2.googleapis.com/token?x: status code 403: Unauthenticated",
 			"refused this host's credentials for " + ar},
-		{"denied: Permission \"artifactregistry.repositories.downloadArtifacts\" denied", "choose " + installtrack.DefaultOSSGrainRepository},
+		{"denied: Permission \"artifactregistry.repositories.downloadArtifacts\" denied", "choose " + installtracktest.Repository},
 		{"manifest for " + ar + " not found: manifest unknown", ar + " has not been published to " + installtracktest.OptInRepository},
 		{"404 Not Found", "has not been published"},
 		{"exit status 1: no space left on device", ""},
 		{"error pulling " + ar + "@sha256:a404b401", ""},
 	} {
-		got := registryHint(ar, errors.New(c.err))
+		got := registryHint(ar, installtracktest.Repository, errors.New(c.err))
 		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
 			t.Errorf("registryHint(%q) = %q, want it to contain %q", c.err, got, c.want)
 		}
