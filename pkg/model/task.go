@@ -1313,6 +1313,14 @@ const (
 	// SecurityReviewTemplateID. LinkReviewTask's shape, kept apart from
 	// it so a task can carry both its declared review and a security one.
 	LinkSecurityReviewTask LinkKind = "security-review-task"
+	// LinkReviewsPullRequest records, on a review task grain filed against
+	// a task's pull request, which pull request ("owner/repo#number") that
+	// review was filed to read. A reopened or multi-attempt task can open a
+	// second pull request in the same repository after an earlier one has
+	// settled; naming the pull request on the review itself ensures
+	// settling one pull request never closes a review filed for another.
+	// Provenance and scoping only; blocks nothing.
+	LinkReviewsPullRequest LinkKind = "reviews-pr"
 	// LinkPushesReviewedBranch marks a review task that works on the
 	// reviewed change's own branch rather than one of its own (-> the
 	// reviewed task's ID): its Branch is the reviewed task's, the git

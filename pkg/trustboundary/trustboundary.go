@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v27"
+const Version = "trust-boundary/v28"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,20 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v28 adds the six sibling surfaces the post-merge security review of v26
+// found unclassified across scripts/ and pkg/ (task 3926, finding 3.1 of
+// task 3905): scripts/granule/ (build-granule-image.sh and guest-inputs.sh,
+// which scripts/release-images.sh runs to compute the guest cache key and
+// build the runtime baked into every Granule VM guest image) and
+// scripts/release-patch.sh (which cuts release/vX.Y.Z branches and tags
+// patch releases) to release-machinery; scripts/grain-instance-init.sh and
+// scripts/bake-gce-release-image.sh (which bake and boot as root on every
+// hosted Grain Hub GCE VM instance) to setup-scripts; pkg/hostinit/ (which
+// runs host initialization steps including build-granule-image.sh) to
+// exec-sandbox; and pkg/installtrack/ (which defines track image
+// repositories and MovesFrom migration targets read by pkg/upgrade) to
+// upgrade-images.
 //
 // v27 adds pkg/hubenv/ to auth-routes and keeps cmd/grain-registry/ and
 // pkg/registry/ alongside pkg/hub/ and cmd/grain-hub/ in credential-proxy
@@ -402,6 +416,7 @@ var Categories = []Category{
 		prefixes: []string{
 			"pkg/orchestrator/", "pkg/mcp/", "pkg/granule/", "pkg/safepath/",
 			"pkg/k8s/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/", "pkg/sandboximage/",
+			"pkg/hostinit/",
 			"third_party/granule/",
 		},
 		// What every backend is wired with, what is forwarded into
@@ -479,14 +494,19 @@ var Categories = []Category{
 			"it does not weaken a check that refuses anybody but a person (`GRAIN_CI_REQUESTED_BY_KIND`)",
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
+		// Guest-image cache-key and runtime build helpers invoked by
+		// scripts/release-images.sh.
+		prefixes: []string{"scripts/granule/"},
 		files: []string{
 			"scripts/release-images.sh",
 			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
-			// What the release jobs run besides: the patch-tag guard
-			// that refuses a vX.Y.Z not cut from its release branch, the
-			// version every published image is tagged with, and the host
-			// setup the publishing job sources.
-			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			// What the release jobs run besides: the patch-release branch
+			// and tag script, the patch-tag guard that refuses a vX.Y.Z not
+			// cut from its release branch, the version every published
+			// image is tagged with, and the host setup the publishing job
+			// sources.
+			"scripts/release-patch.sh", "scripts/patch-tag-guard.sh",
+			"scripts/build-version.sh", "scripts/grain-ci-host.sh",
 			// The VCS-stamp flag every release binary and image is built
 			// with, the Docker Hub login the publishing jobs run with
 			// DOCKER_PAT, and the registry and repository names every
@@ -562,7 +582,7 @@ var Categories = []Category{
 	{
 		ID:          "upgrade-images",
 		Description: "how a deployment picks, assembles and runs the images it upgrades to",
-		prefixes:    []string{"pkg/upgrade/", "pkg/lifecycle/"},
+		prefixes:    []string{"pkg/upgrade/", "pkg/lifecycle/", "pkg/installtrack/"},
 	},
 	{
 		ID:          "setup-scripts",
@@ -571,6 +591,9 @@ var Categories = []Category{
 			"scripts/setup.sh",
 			// Loads a release's image and installs the binary out of it.
 			"scripts/install-grain.sh",
+			// Bake the per-release Grain Hub GCE VM image and run at boot as
+			// root on every hosted Grain Hub GCE VM instance.
+			"scripts/grain-instance-init.sh", "scripts/bake-gce-release-image.sh",
 			// Served unauthenticated and run as root on every hostd machine,
 			// and the route that renders it and decides who sees what.
 			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",

@@ -5610,7 +5610,12 @@ type TaskPullRequestLink struct {
 // them had each cycle overwrite the other's head, file a fresh security
 // review for whichever it read last, repair a conflict that only the stale
 // one had, and close the task when somebody closed the stale one.
-// PruneOffTargetPullRequestLinks removes such links for good.
+// PruneOffTargetPullRequestLinks removes such links for good. For the same
+// reason, when a reopened or multi-attempt task carries an earlier settled
+// LinkFixes pull request alongside a newer one in the same target
+// repository, only the task's current pull request (TaskPullRequest:
+// Target over Writes, and highest number within a repository) is returned,
+// while the earlier link stays on the task as history (mergedPullRequestOf).
 func (s *Store) OpenPullRequestLinks(ctx context.Context) ([]TaskPullRequestLink, error) {
 	kept, _, err := s.openPullRequestLinks(ctx)
 	return kept, err
@@ -5714,17 +5719,59 @@ func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...
 	if err != nil {
 		return nil, nil, err
 	}
+	type selected struct {
+		idx       int
+		ref       PullRequestRef
+		ownTarget bool
+		hasTarget bool
+	}
+	bestByTask := make(map[string]selected, len(rows))
+	keepParsed := func(link TaskPullRequestLink, ref PullRequestRef, hasTarget, ownTarget bool) {
+		if prev, exists := bestByTask[link.TaskID]; exists {
+			better := false
+			if hasTarget && prev.ownTarget != ownTarget {
+				better = ownTarget
+			} else {
+				better = PullRequestRefLess(prev.ref, ref)
+			}
+			if better {
+				kept[prev.idx] = link
+				bestByTask[link.TaskID] = selected{
+					idx:       prev.idx,
+					ref:       ref,
+					ownTarget: ownTarget,
+					hasTarget: hasTarget,
+				}
+			}
+			return
+		}
+		bestByTask[link.TaskID] = selected{
+			idx:       len(kept),
+			ref:       ref,
+			ownTarget: ownTarget,
+			hasTarget: hasTarget,
+		}
+		kept = append(kept, link)
+	}
 	for _, r := range rows {
 		ref, perr := ParsePullRequestRef(r.link.PullRequest)
-		if perr != nil || r.target == nil || ref.Repo.Same(*r.target) {
+		if perr != nil {
 			// One that will not parse is still returned, for its
 			// readers to report as they always have.
 			kept = append(kept, r.link)
 			continue
 		}
+		if r.target == nil {
+			keepParsed(r.link, ref, false, false)
+			continue
+		}
+		if ref.Repo.Same(*r.target) || IsUpstreamRepoFor(*r.target, ref.Repo) {
+			keepParsed(r.link, ref, true, true)
+			continue
+		}
 		if rc, err := s.GetRepoConfig(ctx, *r.target); err == nil && rc != nil {
 			if up, cross, err := rc.PullRequestRepo(*r.target); err == nil && cross && ref.Repo.Same(up) {
-				kept = append(kept, r.link)
+				keepParsed(r.link, ref, true, true)
 				continue
 			}
 		}
@@ -5748,7 +5795,7 @@ func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...
 			off = append(off, r.link)
 			continue
 		}
-		kept = append(kept, r.link)
+		keepParsed(r.link, ref, true, false)
 	}
 	return kept, off, nil
 }

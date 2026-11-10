@@ -107,9 +107,17 @@ func TestExistingAccountConfig(t *testing.T) {
 		})
 	}
 	cfg := existingConfig(nil)
-	cfg["permission_sets"] = []any{map[string]any{"name": "pool", "admin": "minter", "project": proj, "roles": []any{"roles/logging.viewer"}, "credential": "token"}}
-	if _, err := gcpsets.Parse(cfg); err == nil || !strings.Contains(err.Error(), "credential applies only to a set with service_account") {
-		t.Fatalf("credential without service_account: %v", err)
+	cfg["permission_sets"] = []any{map[string]any{"name": "managed-tok", "admin": "minter", "project": proj, "roles": []any{"roles/logging.viewer"}, "credential": "token"}}
+	parsed, err := gcpsets.Parse(cfg)
+	if err != nil {
+		t.Fatalf("managed token set without service_account: %v", err)
+	}
+	if ms := parsed.Set("managed-tok"); ms.Existing() || !ms.TokenMode() || !ms.ManagedToken() || ms.PersonGranted {
+		t.Fatalf("managed token set defaults: %+v", ms)
+	}
+	cfg["permission_sets"] = []any{map[string]any{"name": "bad-pool", "admin": "minter", "project": proj, "roles": []any{"roles/logging.viewer"}, "credential": "token", "pool_max": float64(2)}}
+	if _, err := gcpsets.Parse(cfg); err == nil || !strings.Contains(err.Error(), "credential: token and pool_max are exclusive") {
+		t.Fatalf("credential: token with pool_max: %v", err)
 	}
 	// With no projects of its own, the admin acts in the account's.
 	cfg = existingConfig(nil)

@@ -65,15 +65,24 @@ type Manager struct {
 	Connector Connector
 	Now       func() time.Time
 
-	mu     sync.Mutex
-	clouds map[string]Cloud
-	leases map[string]Lease
-	setMu  map[string]*sync.Mutex
+	mu              sync.Mutex
+	clouds          map[string]Cloud
+	leases          map[string]Lease
+	setMu           map[string]*sync.Mutex
+	managedAccounts map[string]string
 }
 
 // NewManager is a Manager for cfg.
 func NewManager(cfg *Config, conn Connector) *Manager {
-	return &Manager{Config: cfg, Connector: conn, Now: time.Now, clouds: map[string]Cloud{}, leases: map[string]Lease{}, setMu: map[string]*sync.Mutex{}}
+	return &Manager{
+		Config:          cfg,
+		Connector:       conn,
+		Now:             time.Now,
+		clouds:          map[string]Cloud{},
+		leases:          map[string]Lease{},
+		setMu:           map[string]*sync.Mutex{},
+		managedAccounts: map[string]string{},
+	}
 }
 
 func (m *Manager) cloud(ctx context.Context, admin string) (Cloud, error) {
@@ -133,7 +142,7 @@ func (m *Manager) listAccounts(ctx context.Context, set *PermissionSet) ([]strin
 	}
 	all, err := c.ListServiceAccounts(ctx, set.Project)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, explainDenied(set.Admin, "iam.serviceAccounts.list", "project "+set.Project, "", err)
 	}
 	return m.Config.ownedAccounts(all, set), all, nil
 }
@@ -155,14 +164,11 @@ func (c *Config) ownedAccounts(all []ServiceAccount, set *PermissionSet) []strin
 			continue
 		}
 		n := accountNumber(sa.Email)
-		if n == 0 {
-			continue
-		}
 		id, _, _ := strings.Cut(sa.Email, "@")
 		switch {
 		case c.Ours(o):
 			mine = append(mine, acct{false, n, sa.Email})
-		case o.Legacy && set.AdoptLegacy && LegacyAccountID(set.Name, n) == id:
+		case o.Legacy && set.AdoptLegacy && n > 0 && LegacyAccountID(set.Name, n) == id:
 			mine = append(mine, acct{true, n, sa.Email})
 		}
 	}
@@ -226,10 +232,17 @@ func (m *Manager) mint(ctx context.Context, attemptID, setName string, deadline 
 		return "", Lease{}, err
 	}
 	if set.TokenMode() {
-		return m.mintToken(ctx, c, attemptID, set, deadline)
+		account := set.ServiceAccount
+		if set.ManagedToken() {
+			account, err = m.ensureTokenAccount(ctx, c, set, accounts, all)
+			if err != nil {
+				return "", Lease{}, err
+			}
+		}
+		return m.mintToken(ctx, c, attemptID, set, account, deadline)
 	}
 	if !set.fixed() && len(accounts) > 0 {
-		if err := m.reconcileSet(ctx, c, set, accounts); err != nil {
+		if err := m.reconcileSetWithAll(ctx, c, set, accounts, all); err != nil {
 			return "", Lease{}, err
 		}
 	}
@@ -248,17 +261,20 @@ func (m *Manager) mint(ctx context.Context, attemptID, setName string, deadline 
 				return "", Lease{}, err
 			}
 			accounts = append(accounts, account)
-			all = append(all, ServiceAccount{Email: account})
+			all = append(all, ServiceAccount{Email: account, Description: OwnerDescriptionWithScope(m.Config.Deployment, m.Config.Instance, set.Name, set.ResourceScope)})
 		}
 		tried[account] = true
 		id, keyJSON, err := c.CreateKey(ctx, "projects/"+set.Project+"/serviceAccounts/"+account)
 		if err != nil {
+			if IsKeyCreationDisabled(err) {
+				return "", Lease{}, explainKeyCreationDisabled(set, account, err)
+			}
 			if isKeyQuota(err) {
 				// Someone else's keys filled it between List and Create:
 				// try the next account.
 				continue
 			}
-			return "", Lease{}, err
+			return "", Lease{}, explainDenied(set.Admin, "iam.serviceAccountKeys.create", "service account "+account, "", err)
 		}
 		l := Lease{Set: set.Name, Account: account, KeyID: id, Deadline: deadline}
 		m.mu.Lock()
@@ -266,6 +282,47 @@ func (m *Manager) mint(ctx context.Context, attemptID, setName string, deadline 
 		m.mu.Unlock()
 		return keyJSON, l, nil
 	}
+}
+
+// IsKeyCreationDisabled reports whether err is GCP refusing user-managed key
+// creation under constraints/iam.disableServiceAccountKeyCreation.
+func IsKeyCreationDisabled(err error) bool {
+	if err == nil {
+		return false
+	}
+	detail := err.Error()
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		detail += "\n" + apiErr.Body
+	}
+	return strings.Contains(detail, "iam.disableServiceAccountKeyCreation") ||
+		strings.Contains(detail, "Key creation is not allowed")
+}
+
+func explainKeyCreationDisabled(set *PermissionSet, account string, err error) error {
+	return &Refusal{
+		Reason: fmt.Sprintf(
+			"permission set %s: GCP refuses to create service-account keys for %s in project %s because organization policy constraints/iam.disableServiceAccountKeyCreation forbids user-managed keys. "+
+				"Switch permission set %s to token mode (no keys created; grain creates and binds the service account and grants the admin roles/iam.serviceAccountTokenCreator on it, or impersonates service_account if set) in Settings → Capabilities → gcp instead of pool/key mode:\n%s\n(cause: %v)",
+			set.Name, account, set.Project, set.Name, set.TokenModeConfigJSON(), err),
+	}
+}
+
+// explainDenied wraps a 403 IAM denial with the exact permission and resource
+// the admin lacked so failures are actionable even when GCP's own 403 message
+// says only "The caller does not have permission".
+func explainDenied(admin, perm, target, hint string, err error) error {
+	if err == nil || !IsDenied(err) {
+		return err
+	}
+	if strings.Contains(err.Error(), perm) && strings.Contains(err.Error(), "admin "+admin) {
+		return err
+	}
+	extra := ""
+	if hint != "" {
+		extra = " (" + hint + ")"
+	}
+	return fmt.Errorf("admin %s lacks permission %s on %s%s: %w", admin, perm, target, extra, err)
 }
 
 // IsDenied reports whether err is IAM refusing the admin permission: a
@@ -344,18 +401,151 @@ func (m *Manager) createAccount(ctx context.Context, c Cloud, set *PermissionSet
 		if taken[Email(id, set.Project)] {
 			continue
 		}
-		sa, err := c.CreateServiceAccount(ctx, set.Project, id, "grain "+m.Config.Deployment+" "+set.Name+" "+strconv.Itoa(n), OwnerDescription(m.Config.Deployment, m.Config.Instance, set.Name))
+		sa, err := c.CreateServiceAccount(ctx, set.Project, id, "grain "+m.Config.Deployment+" "+set.Name+" "+strconv.Itoa(n), OwnerDescriptionWithScope(m.Config.Deployment, m.Config.Instance, set.Name, set.ResourceScope))
 		if err != nil {
 			if isAlreadyExists(err) && try < maxNameTries {
 				taken[Email(id, set.Project)] = true
 				continue
 			}
-			return "", err
+			return "", explainDenied(set.Admin, "iam.serviceAccounts.create", "project "+set.Project, "grant roles/iam.serviceAccountAdmin or custom grainGcpKeyAdmin", err)
 		}
-		if err := m.reconcileSet(ctx, c, set, append(append([]string(nil), accounts...), sa.Email)); err != nil {
+		if err := m.reconcileSetWithAll(ctx, c, set, append(append([]string(nil), accounts...), sa.Email), all); err != nil {
 			return "", err
 		}
 		return sa.Email, nil
+	}
+}
+
+// iamMember formats an identity email as a GCP IAM policy member string.
+func iamMember(identity string) string {
+	if strings.Contains(identity, ":") {
+		return identity
+	}
+	if strings.HasSuffix(identity, ".gserviceaccount.com") {
+		return "serviceAccount:" + identity
+	}
+	return "user:" + identity
+}
+
+func (m *Manager) adminIAMMember(ctx context.Context, adminName string) (string, error) {
+	a := m.Config.Admin(adminName)
+	if a == nil {
+		return "", fmt.Errorf("no admin is called %q", adminName)
+	}
+	idCtx, cancel := context.WithTimeout(ctx, identityTimeout)
+	defer cancel()
+	id, err := m.Connector.Identity(idCtx, *a)
+	if err != nil {
+		return "", err
+	}
+	return iamMember(id), nil
+}
+
+// ensureTokenAccount creates (or adopts) a managed token-mode set's service
+// account, reconciles its role bindings on its project or resource_scope, and
+// grants the admin roles/iam.serviceAccountTokenCreator on that account only.
+func (m *Manager) ensureTokenAccount(ctx context.Context, c Cloud, set *PermissionSet, accounts []string, all []ServiceAccount) (string, error) {
+	adminMember, err := m.adminIAMMember(ctx, set.Admin)
+	if err != nil {
+		return "", err
+	}
+	var account string
+	if len(accounts) == 0 {
+		account, err = m.createTokenAccount(ctx, c, set, all)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		account = accounts[0]
+	}
+	if err := m.reconcileSetWithAll(ctx, c, set, []string{account}, all); err != nil {
+		return "", err
+	}
+	if err := reconcileAccountTokenCreator(ctx, c, set.Admin, set.Project, account, adminMember); err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	m.managedAccounts[set.Name] = account
+	m.mu.Unlock()
+	return account, nil
+}
+
+func (m *Manager) createTokenAccount(ctx context.Context, c Cloud, set *PermissionSet, all []ServiceAccount) (string, error) {
+	taken := map[string]bool{}
+	for _, sa := range all {
+		taken[sa.Email] = true
+	}
+	desc := OwnerDescriptionWithScope(m.Config.Deployment, m.Config.Instance, set.Name, set.ResourceScope)
+	for try := 0; ; try++ {
+		var id, display string
+		if try == 0 {
+			id = m.Config.SingleAccountID(set)
+			display = "grain " + m.Config.Deployment + " " + set.Name
+		} else {
+			id = m.Config.AccountID(set, try)
+			display = "grain " + m.Config.Deployment + " " + set.Name + " " + strconv.Itoa(try)
+		}
+		if taken[Email(id, set.Project)] {
+			if try >= maxNameTries {
+				return "", fmt.Errorf("permission set %s: all %d candidate service account names in %s are taken", set.Name, maxNameTries, set.Project)
+			}
+			continue
+		}
+		sa, err := c.CreateServiceAccount(ctx, set.Project, id, display, desc)
+		if err != nil {
+			if isAlreadyExists(err) && try < maxNameTries {
+				taken[Email(id, set.Project)] = true
+				continue
+			}
+			return "", explainDenied(set.Admin, "iam.serviceAccounts.create", "project "+set.Project, "grant roles/iam.serviceAccountAdmin or custom grainGcpKeyAdmin", err)
+		}
+		return sa.Email, nil
+	}
+}
+
+// reconcileAccountTokenCreator ensures adminMember holds
+// roles/iam.serviceAccountTokenCreator on service account email (and nobody
+// else holds that role on this grain-managed account), writing nothing when
+// already converged.
+func reconcileAccountTokenCreator(ctx context.Context, c Cloud, admin, project, email, adminMember string) error {
+	const role = "roles/iam.serviceAccountTokenCreator"
+	resource := "projects/" + project + "/serviceAccounts/" + email
+	target := "service account " + email
+	hint := "grant iam.serviceAccounts.getIamPolicy and iam.serviceAccounts.setIamPolicy, e.g. roles/iam.serviceAccountAdmin or custom grainGcpKeyAdmin"
+	for try := 0; ; try++ {
+		p, err := c.GetPolicy(ctx, resource)
+		if err != nil {
+			return explainDenied(admin, "iam.serviceAccounts.getIamPolicy", target, hint, err)
+		}
+		changed := false
+		found := false
+		var out []Binding
+		for _, b := range p.Bindings {
+			if b.Role != role {
+				out = append(out, b)
+				continue
+			}
+			found = true
+			if len(b.Members) == 1 && b.Members[0] == adminMember {
+				out = append(out, b)
+				continue
+			}
+			out = append(out, Binding{Role: role, Members: []string{adminMember}})
+			changed = true
+		}
+		if !found {
+			out = append(out, Binding{Role: role, Members: []string{adminMember}})
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		p.Bindings = out
+		err = c.SetPolicy(ctx, resource, p)
+		if errors.Is(err, ErrConflict) && try < 4 {
+			continue
+		}
+		return explainDenied(admin, "iam.serviceAccounts.setIamPolicy", target, hint, err)
 	}
 }
 
@@ -423,9 +613,9 @@ func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 	var errs []error
 	for i := range m.Config.Sets {
 		set := &m.Config.Sets[i]
-		if set.fixed() {
+		if set.fixed() || set.TokenMode() {
 			// Migrated and existing accounts hold keys this server never
-			// minted.
+			// minted, and token-mode sets never create keys.
 			continue
 		}
 		c, err := m.cloud(ctx, set.Admin)
@@ -465,30 +655,82 @@ func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 // project, and nothing on the other. Members that are not the set's own
 // accounts are never touched.
 func (m *Manager) reconcileSet(ctx context.Context, c Cloud, set *PermissionSet, accounts []string) error {
+	return m.reconcileSetWithAll(ctx, c, set, accounts, nil)
+}
+
+func (m *Manager) reconcileSetWithAll(ctx context.Context, c Cloud, set *PermissionSet, accounts []string, all []ServiceAccount) error {
 	if set.fixed() || len(accounts) == 0 {
 		return nil
 	}
 	members := make([]string, 0, len(accounts))
+	acctSet := map[string]bool{}
 	for _, a := range accounts {
 		members = append(members, "serviceAccount:"+a)
+		acctSet[a] = true
 	}
-	projectRoles, scopeRoles := set.Roles, []string(nil)
-	if set.ResourceScope != "" {
-		projectRoles, scopeRoles = nil, set.Roles
-		if err := reconcileResource(ctx, c, set.ResourceScope, members, scopeRoles); err != nil {
-			return err
+	// If an owned account previously bound on a different resource_scope,
+	// clear that old scope's bindings first.
+	for _, sa := range all {
+		if !acctSet[sa.Email] {
+			continue
+		}
+		if o, ok := OwnedBy(sa.Description); ok && o.Scope != "" && o.Scope != set.ResourceScope {
+			if oldRes, ok := scopeResource(set.Project, o.Scope); ok {
+				if err := reconcileResourceForAdmin(ctx, c, set.Admin, oldRes, members, nil); err != nil && !IsDenied(err) {
+					return err
+				}
+			}
 		}
 	}
-	return reconcileResource(ctx, c, "projects/"+set.Project, members, projectRoles)
+	projectRoles := set.Roles
+	if set.ResourceScope != "" {
+		res, ok := scopeResource(set.Project, set.ResourceScope)
+		if !ok {
+			return fmt.Errorf("permission set %s: invalid resource_scope %q", set.Name, set.ResourceScope)
+		}
+		if err := reconcileResourceForAdmin(ctx, c, set.Admin, res, members, set.Roles); err != nil {
+			return err
+		}
+		// Best-effort clear on the project in case the set was previously
+		// unscoped; an admin granted IAM only on the scoped resource may
+		// lack project-level getIamPolicy.
+		if err := reconcileResourceForAdmin(ctx, c, set.Admin, "projects/"+set.Project, members, nil); err != nil && !IsDenied(err) {
+			return err
+		}
+		return nil
+	}
+	return reconcileResourceForAdmin(ctx, c, set.Admin, "projects/"+set.Project, members, projectRoles)
+}
+
+func policyPermsForResource(resource string) (getPerm, setPerm, target, hint string) {
+	if b, ok := bucketOf(resource); ok {
+		return "storage.buckets.getIamPolicy", "storage.buckets.setIamPolicy", "bucket " + b, "grant roles/storage.admin on bucket " + b
+	}
+	if isArtifactRegistryResource(resource) {
+		return "artifactregistry.repositories.getIamPolicy", "artifactregistry.repositories.setIamPolicy", "Artifact Registry repository " + resource, "grant roles/artifactregistry.repoAdmin on the repository"
+	}
+	if isServiceAccountResource(resource) {
+		return "iam.serviceAccounts.getIamPolicy", "iam.serviceAccounts.setIamPolicy", "service account " + resource, "grant roles/iam.serviceAccountAdmin on the project or account"
+	}
+	proj := strings.TrimPrefix(resource, "projects/")
+	return "resourcemanager.projects.getIamPolicy", "resourcemanager.projects.setIamPolicy", "project " + proj, "grant custom grainGcpKeyAdmin on project " + proj
 }
 
 // reconcileResource makes members hold exactly roles on resource, retrying
 // a lost race a few times. It reports whether it changed anything through
 // the error alone.
 func reconcileResource(ctx context.Context, c Cloud, resource string, members, roles []string) error {
+	return reconcileResourceForAdmin(ctx, c, "", resource, members, roles)
+}
+
+func reconcileResourceForAdmin(ctx context.Context, c Cloud, admin, resource string, members, roles []string) error {
+	getPerm, setPerm, target, hint := policyPermsForResource(resource)
 	for try := 0; ; try++ {
 		p, err := c.GetPolicy(ctx, resource)
 		if err != nil {
+			if admin != "" {
+				return explainDenied(admin, getPerm, target, hint, err)
+			}
 			return err
 		}
 		if !applyBindings(p, members, roles) {
@@ -497,6 +739,9 @@ func reconcileResource(ctx context.Context, c Cloud, resource string, members, r
 		err = c.SetPolicy(ctx, resource, p)
 		if errors.Is(err, ErrConflict) && try < 4 {
 			continue
+		}
+		if admin != "" {
+			return explainDenied(admin, setPerm, target, hint, err)
 		}
 		return err
 	}
@@ -553,7 +798,7 @@ func applyBindings(p *Policy, members, roles []string) bool {
 // Orphan is a service account this deployment created for a permission
 // set that is no longer configured.
 type Orphan struct {
-	Admin, Project, Set, Email string
+	Admin, Project, Set, Email, Scope string
 }
 
 // Census is what an admin's projects hold beside the configured sets'
@@ -603,7 +848,7 @@ func (m *Manager) Census(ctx context.Context) (Census, error) {
 				case !m.Config.Ours(o):
 					out.Others[p]++
 				case m.Config.Set(o.Set) == nil:
-					out.Orphans = append(out.Orphans, Orphan{Admin: a.Name, Project: p, Set: o.Set, Email: sa.Email})
+					out.Orphans = append(out.Orphans, Orphan{Admin: a.Name, Project: p, Set: o.Set, Email: sa.Email, Scope: o.Scope})
 				}
 			}
 		}
@@ -630,8 +875,8 @@ func (m *Manager) Orphans(ctx context.Context) ([]Orphan, error) {
 }
 
 // DeleteOrphans deletes the accounts of every removed set the operator
-// named in delete_orphans, first taking their project bindings away. It
-// returns the accounts it deleted.
+// named in delete_orphans, first taking their resource_scope and project
+// bindings away. It returns the accounts it deleted.
 func (m *Manager) DeleteOrphans(ctx context.Context, orphans []Orphan) ([]string, error) {
 	var deleted []string
 	var errs []error
@@ -644,12 +889,26 @@ func (m *Manager) DeleteOrphans(ctx context.Context, orphans []Orphan) ([]string
 			errs = append(errs, err)
 			continue
 		}
-		if err := reconcileResource(ctx, c, "projects/"+o.Project, []string{"serviceAccount:" + o.Email}, nil); err != nil {
-			errs = append(errs, err)
-			continue
+		member := []string{"serviceAccount:" + o.Email}
+		if o.Scope != "" {
+			if res, ok := scopeResource(o.Project, o.Scope); ok {
+				if err := reconcileResourceForAdmin(ctx, c, o.Admin, res, member, nil); err != nil {
+					errs = append(errs, err)
+					continue
+				}
+			}
+			if err := reconcileResourceForAdmin(ctx, c, o.Admin, "projects/"+o.Project, member, nil); err != nil && !IsDenied(err) {
+				errs = append(errs, err)
+				continue
+			}
+		} else {
+			if err := reconcileResourceForAdmin(ctx, c, o.Admin, "projects/"+o.Project, member, nil); err != nil {
+				errs = append(errs, err)
+				continue
+			}
 		}
 		if err := c.DeleteServiceAccount(ctx, o.Project, o.Email); err != nil && !isNotFound(err) {
-			errs = append(errs, err)
+			errs = append(errs, explainDenied(o.Admin, "iam.serviceAccounts.delete", "service account "+o.Email, "", err))
 			continue
 		}
 		deleted = append(deleted, o.Email)
@@ -657,8 +916,10 @@ func (m *Manager) DeleteOrphans(ctx context.Context, orphans []Orphan) ([]string
 	return deleted, errors.Join(errs...)
 }
 
-// Reconcile corrects the bindings of every set's existing accounts: the
-// drift check configure makes.
+// Reconcile ensures managed token-mode sets have their service account,
+// role bindings and tokenCreator binding, and corrects the bindings of
+// every pool set's existing accounts: the setup and drift check configure
+// makes.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	var errs []error
 	for i := range m.Config.Sets {
@@ -666,19 +927,34 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if set.fixed() {
 			continue
 		}
+		unlock := m.lockSet(set.Name)
 		c, err := m.cloud(ctx, set.Admin)
 		if err != nil {
+			unlock()
 			errs = append(errs, err)
 			continue
 		}
-		accounts, err := m.Accounts(ctx, set)
+		accounts, all, err := m.listAccounts(ctx, set)
 		if err != nil {
+			unlock()
 			errs = append(errs, fmt.Errorf("permission set %s: %w", set.Name, err))
 			continue
 		}
-		if err := m.reconcileSet(ctx, c, set, accounts); err != nil {
-			errs = append(errs, fmt.Errorf("permission set %s: %w", set.Name, err))
+		if set.ManagedToken() {
+			if _, err := m.ensureTokenAccount(ctx, c, set, accounts, all); err != nil {
+				unlock()
+				errs = append(errs, fmt.Errorf("permission set %s: %w", set.Name, err))
+				continue
+			}
+			unlock()
+			continue
 		}
+		if err := m.reconcileSetWithAll(ctx, c, set, accounts, all); err != nil {
+			unlock()
+			errs = append(errs, fmt.Errorf("permission set %s: %w", set.Name, err))
+			continue
+		}
+		unlock()
 	}
 	return errors.Join(errs...)
 }
@@ -717,18 +993,18 @@ func (m *Manager) impersonator(ctx context.Context, set *PermissionSet) (Imperso
 }
 
 // mintToken is a token-mode grant's mint: it proves the admin can act as
-// the set's account by minting one access token, which it throws away,
-// and records the lease. No key is created; the sandbox fetches its
-// tokens through AccessToken as it needs them.
-func (m *Manager) mintToken(ctx context.Context, c Cloud, attemptID string, set *PermissionSet, deadline time.Time) (string, Lease, error) {
+// account by minting one access token, which it throws away, and records
+// the lease. No key is created; the sandbox fetches its tokens through
+// AccessToken as it needs them.
+func (m *Manager) mintToken(ctx context.Context, c Cloud, attemptID string, set *PermissionSet, account string, deadline time.Time) (string, Lease, error) {
 	imp, ok := c.(Impersonator)
 	if !ok {
 		return "", Lease{}, fmt.Errorf("admin %s's connection cannot impersonate service accounts", set.Admin)
 	}
-	if _, _, err := imp.GenerateAccessToken(ctx, set.ServiceAccount, []string{cloudPlatform}, time.Minute); err != nil {
-		return "", Lease{}, err
+	if _, _, err := imp.GenerateAccessToken(ctx, account, []string{cloudPlatform}, time.Minute); err != nil {
+		return "", Lease{}, explainDenied(set.Admin, "iam.serviceAccounts.getAccessToken", "service account "+account, "grant roles/iam.serviceAccountTokenCreator on "+account, err)
 	}
-	l := Lease{Set: set.Name, Account: set.ServiceAccount, Deadline: deadline}
+	l := Lease{Set: set.Name, Account: account, Deadline: deadline}
 	m.mu.Lock()
 	m.leases[attemptID] = l
 	m.mu.Unlock()
@@ -756,7 +1032,7 @@ func (m *Manager) remaining(set *PermissionSet, deadline time.Time) (time.Durati
 // tokenSet is token-mode set setName, refused unless it still acts as
 // account, the account its grant was given for: a set reconfigured to
 // another account does not hand a running grant that account's tokens.
-func (m *Manager) tokenSet(setName, account string) (*PermissionSet, error) {
+func (m *Manager) tokenSet(ctx context.Context, setName, account string) (*PermissionSet, error) {
 	set := m.Config.Set(setName)
 	if set == nil {
 		return nil, &Refusal{"no permission set is called " + setName}
@@ -764,7 +1040,28 @@ func (m *Manager) tokenSet(setName, account string) (*PermissionSet, error) {
 	if !set.TokenMode() {
 		return nil, &Refusal{"permission set " + setName + " does not mint access tokens"}
 	}
-	if set.ServiceAccount != account {
+	if set.Existing() {
+		if set.ServiceAccount != account {
+			return nil, &Refusal{"permission set " + setName + " no longer acts as " + account + ", the account this grant was given for"}
+		}
+		return set, nil
+	}
+	m.mu.Lock()
+	cached := m.managedAccounts[setName]
+	m.mu.Unlock()
+	if cached == "" {
+		accounts, err := m.Accounts(ctx, set)
+		if err != nil {
+			return nil, err
+		}
+		if len(accounts) > 0 {
+			cached = accounts[0]
+			m.mu.Lock()
+			m.managedAccounts[setName] = cached
+			m.mu.Unlock()
+		}
+	}
+	if cached != account {
 		return nil, &Refusal{"permission set " + setName + " no longer acts as " + account + ", the account this grant was given for"}
 	}
 	return set, nil
@@ -775,7 +1072,7 @@ func (m *Manager) tokenSet(setName, account string) (*PermissionSet, error) {
 // until then, at most MaxTokenLifetime, so a refresh is always another
 // call here.
 func (m *Manager) AccessToken(ctx context.Context, setName, account string, deadline time.Time) (string, time.Time, error) {
-	set, err := m.tokenSet(setName, account)
+	set, err := m.tokenSet(ctx, setName, account)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -787,7 +1084,7 @@ func (m *Manager) AccessToken(ctx context.Context, setName, account string, dead
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	tok, exp, err := imp.GenerateAccessToken(ctx, set.ServiceAccount, []string{cloudPlatform}, lifetime)
+	tok, exp, err := imp.GenerateAccessToken(ctx, account, []string{cloudPlatform}, lifetime)
 	if _, ok := AsCredentialError(err); ok {
 		m.forget(set.Admin)
 	}
@@ -797,7 +1094,7 @@ func (m *Manager) AccessToken(ctx context.Context, setName, account string, dead
 // IDToken is an ID token for token-mode set setName's account with
 // audience, for a grant of account whose deadline has not passed.
 func (m *Manager) IDToken(ctx context.Context, setName, account, audience string, deadline time.Time) (string, error) {
-	set, err := m.tokenSet(setName, account)
+	set, err := m.tokenSet(ctx, setName, account)
 	if err != nil {
 		return "", err
 	}
@@ -808,5 +1105,5 @@ func (m *Manager) IDToken(ctx context.Context, setName, account, audience string
 	if err != nil {
 		return "", err
 	}
-	return imp.GenerateIDToken(ctx, set.ServiceAccount, audience)
+	return imp.GenerateIDToken(ctx, account, audience)
 }

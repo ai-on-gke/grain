@@ -2003,6 +2003,22 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		forge.ForgetExternalChecks(forgeRef(ref))
 		forgetMergeRefusals(ref)
 		forgetGitHubQueued(ref)
+		// Re-check against the task's current pull request before settling:
+		// a reopened or multi-attempt task that has already opened a newer
+		// pull request in this cycle must not have its new pull request's
+		// security review or observation closed by the earlier one.
+		if current, err := store.GetTask(ctx, task.ID); err != nil {
+			return fmt.Errorf("orchestrator: reading %s before settling %s: %w", task.ID, ref, err)
+		} else if current != nil {
+			task = *current
+			if !holdIsAbout(task, ref) {
+				return nil
+			}
+		} else if !holdIsAbout(task, ref) {
+			return nil
+		}
+	} else if !holdIsAbout(task, ref) {
+		return nil
 	}
 	// Before the closing write, not after it: recordPullRequestEvents is
 	// what takes this task out of OpenPullRequestLinks, so this is the
@@ -2278,6 +2294,7 @@ func recordPullRequestEvents(ctx context.Context, store *model.Store, taskID str
 		}
 		o.ClosedAt = &now
 		if health != model.PrMerged {
+			o.PrMergedAt = nil
 			o.PrClosedAt = &now
 			return
 		}
@@ -2285,6 +2302,7 @@ func recordPullRequestEvents(ctx context.Context, store *model.Store, taskID str
 		if detail.MergedAt != nil {
 			mergedAt = *detail.MergedAt
 		}
+		o.PrClosedAt = nil
 		o.PrMergedAt = &mergedAt
 		if detail.Additions != 0 || detail.Deletions != 0 || detail.ChangedFiles != 0 {
 			additions, deletions, files := detail.Additions, detail.Deletions, detail.ChangedFiles
