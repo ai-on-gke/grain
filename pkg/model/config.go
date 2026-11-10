@@ -955,6 +955,18 @@ type Config struct {
 	// -- the default -- requires an explicit -read grant for any non-target
 	// context repository. Stored as JSON in one column.
 	AutoGrantContextReads []string
+	// CIAPIRepos lists the repositories (owner/name, or host/owner/name)
+	// whose trusted CI jobs -- a release, an operator's workflow_dispatch,
+	// a cron grain fired -- may hold api:<scope> grants in their
+	// `capabilities:` (pkg/capability/ciapi, docs/agent-api.md § "CI
+	// jobs"), in addition to grain's own repository (GrainSourceRepo),
+	// which is always offered. Empty -- the default -- is grain's own
+	// only. Listing a repository widens nothing else:
+	// the events, the narrowing to the job's own repository and the CI
+	// scope allowlist (CIAPIScopeRefusal) still apply. Read as each job's
+	// grants are resolved, so a change applies to the next job without a
+	// restart. Stored comma-separated in one column, as TargetRepos is.
+	CIAPIRepos []string
 	// Registry configures self-registration and periodic heartbeating with a
 	// grain hub as a connected entry (design/design/hub.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in

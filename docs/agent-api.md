@@ -501,9 +501,32 @@ The trust rules are those of `repo-write`. A job is given its api grants
 only on a post-merge `release`, an operator's `workflow_dispatch`, or a
 cron grain fired itself, never on a pull request's or an ordinary push's
 run. They are honoured only for the repositories the deployment offers
-grain's API to in CI, which is grain's own (`ai-on-gke/grain`). Like
+grain's API to in CI: grain's own (`ai-on-gke/grain`), always, and the
+repositories the deployment's `ci_api_repos` setting adds to it. Like
 repository access, a job is granted them by declaring them: they are
 not taken from the repository's CI capabilities list.
+
+`ci_api_repos` is the `grain_config.ci_api_repos` column, a
+comma-separated list of `owner/name` (or `host/owner/name`) entries,
+exported to `tables/grain_config.json` in the deployment's state
+repository, so offering the API to one more repository is a reviewed
+pull request there:
+
+```json
+"ci_api_repos": "acme/widgets,git.example.com/acme/gadgets"
+```
+
+Empty, the default, offers it to `ai-on-gke/grain` only, and a listed
+repository is offered it beside `ai-on-gke/grain`, never instead of it.
+An entry that is not a repository is ignored, and the daemon logs it.
+Listing a repository changes nothing else: its jobs still get a token
+only on the trusted events above, still only for the scopes listed
+above, and still narrowed to their own repository. Each job reads the
+setting when its grants are resolved, so a merged change applies from
+the next job on, with no restart. Listing a repository widens a trust
+boundary: anyone who can merge to that repository's default branch, or
+cut a release from it, can then read its tasks and CI and file its
+templates through grain's API.
 
 `release-gate-read`, the release train's capability
 (`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
