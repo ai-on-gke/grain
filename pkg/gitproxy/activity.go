@@ -212,11 +212,6 @@ func (p *GitProxy) noteActivity(ctx context.Context, taskID, phrase string) {
 	_, _ = p.Activity.SetTaskActivity(ctx, taskID, phrase, now)
 }
 
-// recordToolCall counts one served request against the live attempt.
-func (p *GitProxy) recordToolCall(ctx context.Context, runID, tool string, w *countingResponseWriter) {
-	p.recordRouteCall(ctx, runID, RouteActivity{Tool: tool}, w)
-}
-
 // recordRouteCall counts one served request against the live attempt in
 // task_run_tool, task_run_api_call, and systemlog.
 func (p *GitProxy) recordRouteCall(ctx context.Context, runID string, act RouteActivity, w *countingResponseWriter) {

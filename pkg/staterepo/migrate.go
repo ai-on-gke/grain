@@ -549,13 +549,9 @@ func formatUnappliedInline(commits []UnappliedCommit) string {
 	return strings.Join(parts, ", ")
 }
 
-// migratedCommitMessage says what a migration did, in the terms
+// migratedCommitMessageWithReport says what a migration did, in the terms
 // reformatCommitMessage says what a reformat did -- and against it,
 // since the two diffs are indistinguishable.
-func migratedCommitMessage(found, version int, build string, now time.Time) string {
-	return migratedCommitMessageWithReport(found, version, build, now, MigratedReport{})
-}
-
 func migratedCommitMessageWithReport(found, version int, build string, now time.Time, report MigratedReport) string {
 	was := "an earlier schema"
 	if found > 0 {

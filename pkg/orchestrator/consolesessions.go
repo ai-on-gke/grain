@@ -42,15 +42,6 @@ import (
 // cannot drift apart.
 var consoleSessionPrincipal = model.ConsoleSessionPrincipal
 
-// consoleSessionOpening is the first thing in a session's conversation,
-// and it is also what the session is parked on until somebody says
-// something (parkConsoleSession). A comment rather than nothing because
-// parking is "waiting for a reply to *this*"
-// (Observation.PendingQuestionCommentID), which needs a comment to point
-// at, and because a chat window that opens empty says nothing about what
-// it is for.
-const consoleSessionOpening = model.ConsoleSessionOpening
-
 // consoleSessionResting is what grain says when a session's run ended
 // without asking anything, which is the ordinary way an exchange ends:
 // the agent answered, and there is nothing further until somebody
@@ -284,7 +275,7 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 //     new chat says where it came from and the old one is findable from
 //     it. Never a blocking kind: see LinkContinues' own doc comment.
 //   - The most recent handover that thread's runs wrote
-//     (carryConsoleSessionHandover), and nothing else of it. Carrying
+//     (model.CarryConsoleSessionHandover), and nothing else of it. Carrying
 //     more would be carrying the very thing the conversation bound
 //     exists to stop carrying (orchestrator's maxConversationBytes), and
 //     nothing is lost by not carrying it: the old thread is a closed
@@ -303,12 +294,6 @@ func fileConsoleSession(ctx context.Context, deps Deps, session model.ConsoleSes
 		CarryHandoverSummary: previous != "",
 		Now:                  now,
 	})
-}
-
-const consoleSessionHandoverNote = model.ConsoleSessionHandoverNote
-
-func carryConsoleSessionHandover(ctx context.Context, deps Deps, previous, taskID string, now time.Time) error {
-	return model.CarryConsoleSessionHandover(ctx, deps.Store, previous, taskID, now)
 }
 
 // updateConsoleSession is the standing half: a session's task that
@@ -1185,14 +1170,6 @@ func mergeConsoleSessionWrites(current, sessionWrites, prevWrites []model.WriteT
 // still does.
 func consoleSessionNetworkAccess(deps Deps, session model.ConsoleSession) model.NetworkAccess {
 	return model.ConsoleSessionNetworkAccess(session, sandboxesIsolateNetwork(deps.Sandboxes))
-}
-
-// consoleSessionGrants is the session's configured capabilities as
-// grants: GrantByGrain, because it is grain applying them to its own
-// task from a settings row rather than a human labelling one
-// (model.ConsoleSessionGrants).
-func consoleSessionGrants(session model.ConsoleSession) []model.Grant {
-	return model.ConsoleSessionGrants(session)
 }
 
 func parkConsoleSession(ctx context.Context, deps Deps, taskID, note string, now time.Time) error {

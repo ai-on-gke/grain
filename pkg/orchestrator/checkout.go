@@ -492,10 +492,6 @@ func writesConfigRepo(task model.Task) bool {
 	return false
 }
 
-func prepareDirectorState(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef) checkout {
-	return prepareDirectorStateWithReuse(ctx, tools, remoteBase, task, repo, false)
-}
-
 func prepareDirectorStateWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef, reused bool) checkout {
 	out := checkout{DirectorStateRepo: repo, ProxyBase: proxyBaseWithoutCredentials(remoteBase)}
 	if repo.Owner == "" {

@@ -2181,11 +2181,6 @@ func deploymentNetworkAccess(ctx context.Context, store *model.Store) model.Netw
 	return cfg.NetworkAccess
 }
 
-// taskBaseTarget returns the primary repository and base branch the task targets.
-func taskBaseTarget(task *model.Task) (model.RepoRef, string) {
-	return model.TaskBaseBranch(*task)
-}
-
 // pendingBase is the pending branch request task's base names, if any.
 func pendingBase(task model.Task, pending []model.Branch) (model.Branch, bool) {
 	for _, b := range pending {

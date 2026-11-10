@@ -125,5 +125,3 @@ func init() {
 func runEnv(req Request, workflow, jobID string) map[string]string {
 	return workflows.RunEnv(req, workflow, jobID)
 }
-
-func guestCacheKey(repo string, files []TreeFile) Key { return workflows.GuestCacheKey(repo, files) }

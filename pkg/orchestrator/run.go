@@ -4510,11 +4510,6 @@ func runGitCredential(ctx context.Context, store *model.Store, task model.Task) 
 	return name
 }
 
-// hasGrant reports whether task carries a grant for capability, by name
-// alone: model.Grant.Via records how the grant was come by, never what it
-// lets a task do, so a self-debug grant a human ticked and one a repo's
-// defaults attached are the same grant here (model.GrantsSubsetOf draws
-// the same line for the same reason).
 // selfDebugAPIGrant is the api preset the retired self-debug became the
 // REST half of (model.SelfDebugGrants).
 const selfDebugAPIGrant = model.APICapabilityServerID + "#self-debug"
@@ -4525,16 +4520,6 @@ const selfDebugAPIGrant = model.APICapabilityServerID + "#self-debug"
 func hasGrainSource(task model.Task) bool {
 	for _, g := range task.Grants {
 		if model.IsGrainSourceGrant(g.Capability) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasGrant(task model.Task, capability string) bool {
-	want := model.CanonicalGrantKey(capability)
-	for _, g := range task.Grants {
-		if g.Capability == capability || model.CanonicalGrantKey(g.Capability) == want {
 			return true
 		}
 	}
