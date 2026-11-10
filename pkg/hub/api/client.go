@@ -202,9 +202,9 @@ func validateBaseURL(raw string, allowInsecureHTTP bool) (*url.URL, error) {
 	return u, nil
 }
 
-// ValidateRegistryURL validates and normalizes a grain-registry base URL,
+// ValidateHubURL validates and normalizes a grain-registry base URL,
 // requiring https:// except on loopback hosts (or when allowInsecureHTTP is true).
-func ValidateRegistryURL(raw string, allowInsecureHTTP bool) (string, error) {
+func ValidateHubURL(raw string, allowInsecureHTTP bool) (string, error) {
 	u, err := validateBaseURL(raw, allowInsecureHTTP)
 	if err != nil {
 		return "", err

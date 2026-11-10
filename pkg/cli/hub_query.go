@@ -54,21 +54,21 @@ func (m *multiStringFlag) Set(val string) error {
 	return nil
 }
 
-type registryTargetFlags struct {
+type hubTargetFlags struct {
 	url          *string
 	token        *string
 	oidcAudience *string
 }
 
-func bindRegistryTargetFlags(fs *flag.FlagSet) registryTargetFlags {
-	return registryTargetFlags{
+func bindHubTargetFlags(fs *flag.FlagSet) hubTargetFlags {
+	return hubTargetFlags{
 		url:          fs.String("hub-url", "", "base URL of the Grain Hub ($"+daemon.HubURLEnv+")"),
 		token:        fs.String("hub-token", "", "bearer token for authenticating to the hub ($"+daemon.HubTokenEnv+")"),
 		oidcAudience: fs.String("oidc-audience", "", "OIDC ID token audience for the hub (defaults to -hub-url)"),
 	}
 }
 
-func (tf registryTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*api.Client, string, error) {
+func (tf hubTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*api.Client, string, error) {
 	regURL := firstNonEmptyTrimmed(*tf.url, hubenv.Get(daemon.HubURLEnv))
 	aud := strings.TrimSpace(*tf.oidcAudience)
 	if regURL == "" && c != nil {
@@ -82,7 +82,7 @@ func (tf registryTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*ap
 	if regURL == "" {
 		return nil, "", errors.New("-hub-url is required (or set $" + daemon.HubURLEnv + ")")
 	}
-	normURL, err := api.ValidateRegistryURL(regURL, false)
+	normURL, err := api.ValidateHubURL(regURL, false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -90,11 +90,11 @@ func (tf registryTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*ap
 	if aud == "" {
 		aud = regURL
 	}
-	bearer, err := resolveRegistryCLIBearer(ctx, regURL, aud, *tf.token)
+	bearer, err := resolveHubCLIBearer(ctx, regURL, aud, *tf.token)
 	if err != nil {
 		return nil, "", err
 	}
-	cli, err := newRegistryAPIClient(regURL, bearer)
+	cli, err := newHubAPIClient(regURL, bearer)
 	if err != nil {
 		return nil, "", err
 	}
@@ -160,33 +160,33 @@ func shellQuoteArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// registryAssertionIssuer mirrors registry.RegistryAssertionIssuer, the fixed
+// hubAssertionIssuer mirrors hub.HubAssertionIssuer, the fixed
 // `iss` every registry-minted X-Grain-Registry-Assertion carries.
-const registryAssertionIssuer = "grain-registry"
+const hubAssertionIssuer = "grain-registry"
 
 // printConnectedConfigSnippet prints a `grain daemon` command line that
 // actually starts the outbound tunnel: `-hub-connect` refuses to start
 // without the three -ui-hub-* verifier flags, so the snippet carries
 // them (audience = the entry's own URL, keys = the registry's JWKS) along
 // with where the registration token lives.
-func printConnectedConfigSnippet(registryURL, entryName, entryURL, tokenFile string) {
+func printConnectedConfigSnippet(hubURL, entryName, entryURL, tokenFile string) {
 	fmt.Printf("outbound tunnel config snippet:\n")
 	if strings.TrimSpace(tokenFile) == "" {
 		tokenFile = "<file holding the grc_... token>"
 	}
-	keysURL := strings.TrimRight(registryURL, "/") + "/.well-known/jwks.json"
+	keysURL := strings.TrimRight(hubURL, "/") + "/.well-known/jwks.json"
 	fmt.Printf("  grain daemon -hub-url %s -hub-entry %s -hub-token-file %s -hub-connect \\\n",
-		shellQuoteArg(registryURL), shellQuoteArg(entryName), shellQuoteArg(tokenFile))
+		shellQuoteArg(hubURL), shellQuoteArg(entryName), shellQuoteArg(tokenFile))
 	if strings.TrimSpace(entryURL) == "" {
 		entryURL = "<https://" + entryName + ".<instance-domain>>"
 	}
 	fmt.Printf("    -ui-require-verifier=registry -ui-hub-issuer=%s -ui-hub-audience=%s -ui-hub-keys-url=%s\n",
-		registryAssertionIssuer, shellQuoteArg(entryURL), shellQuoteArg(keysURL))
+		hubAssertionIssuer, shellQuoteArg(entryURL), shellQuoteArg(keysURL))
 }
 
-func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub list", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	all := fs.Bool("all", false, "list all entries across the hub (admin only)")
 	owner := fs.String("owner", "", "filter by owner email")
 	ownerGroup := fs.String("owner-group", "", "filter by co-owning group")
@@ -253,9 +253,9 @@ func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 	return nil
 }
 
-func cmdRegistryDirectory(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubDirectory(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub directory", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	query := fs.String("q", "", "free-text search across name, display name, purpose, owner, tags, and scopes")
 	repo := fs.String("repo", "", "filter by repository (<owner/name>)")
 	tag := fs.String("tag", "", "filter by catalog tag")
@@ -312,9 +312,9 @@ func cmdRegistryDirectory(ctx context.Context, c *ui.HTTPClient, out *printer, a
 	return nil
 }
 
-func cmdRegistryRoute(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubRoute(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub route", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	repoFlag := fs.String("repo", "", "repository (<owner/name>)")
 	pathFlag := fs.String("path", "", "path within repository")
 	includeOffline := fs.Bool("include-offline", false, "include offline candidates in route resolution")
@@ -373,9 +373,9 @@ func cmdRegistryRoute(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 	return nil
 }
 
-func cmdRegistryShow(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubShow(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub show", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {

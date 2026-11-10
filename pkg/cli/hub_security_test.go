@@ -35,7 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
-func TestRegistryRotateCredentialTokenFileOmitsTokenFromJSONStdout(t *testing.T) {
+func TestHubRotateCredentialTokenFileOmitsTokenFromJSONStdout(t *testing.T) {
 	ctx := context.Background()
 	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/entries/workstation-1/credentials/rotate" {
@@ -52,20 +52,20 @@ func TestRegistryRotateCredentialTokenFileOmitsTokenFromJSONStdout(t *testing.T)
 	}))
 	defer regSrv.Close()
 
-	prevClient := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	prevClient := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		return "oidc-test-token", nil
 	}
 	t.Cleanup(func() {
-		registryHTTPClient = prevClient
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevClient
+		hubOIDCToken = prevOIDC
 	})
 
 	tokPath := filepath.Join(t.TempDir(), "rotated.token")
 	stdout := captureStdout(t, func() {
-		err := cmdRegistry(ctx, nil, &printer{json: true}, []string{
+		err := cmdHub(ctx, nil, &printer{json: true}, []string{
 			"rotate-credential",
 			"-hub-url", regSrv.URL,
 			"-token-file", tokPath,
@@ -94,28 +94,28 @@ func TestRegistryRotateCredentialTokenFileOmitsTokenFromJSONStdout(t *testing.T)
 	}
 }
 
-func TestRegistryTargetFlagsRejectInsecureURLBeforeOIDCMint(t *testing.T) {
+func TestHubTargetFlagsRejectInsecureURLBeforeOIDCMint(t *testing.T) {
 	ctx := context.Background()
-	prevOIDC := registryOIDCToken
+	prevOIDC := hubOIDCToken
 	oidcCalled := false
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		oidcCalled = true
 		return "should-not-be-minted", nil
 	}
 	t.Cleanup(func() {
-		registryOIDCToken = prevOIDC
+		hubOIDCToken = prevOIDC
 	})
 
 	for _, args := range [][]string{
 		{"list", "-hub-url", "http://registry.example.com"},
 		{"unregister", "-standalone", "-hub-url", "http://registry.example.com", "workstation-1"},
 	} {
-		err := cmdRegistry(ctx, nil, &printer{}, args)
+		err := cmdHub(ctx, nil, &printer{}, args)
 		if err == nil || !strings.Contains(err.Error(), "insecure http://") {
-			t.Fatalf("cmdRegistry(%v) = %v, want insecure http:// refusal", args, err)
+			t.Fatalf("cmdHub(%v) = %v, want insecure http:// refusal", args, err)
 		}
 		if oidcCalled {
-			t.Fatalf("registryOIDCToken was called before validating -hub-url for %v", args)
+			t.Fatalf("hubOIDCToken was called before validating -hub-url for %v", args)
 		}
 	}
 }
@@ -157,7 +157,7 @@ func TestPrintConnectedConfigSnippetCarriesVerifierFlags(t *testing.T) {
 	}
 }
 
-func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(t *testing.T) {
+func TestHubRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(t *testing.T) {
 	ctx := context.Background()
 	var (
 		mu             sync.Mutex
@@ -233,22 +233,22 @@ func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(
 	}))
 	defer regSrv.Close()
 
-	prevClient := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	prevClient := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		return "oidc-creator-jwt", nil
 	}
 	t.Cleanup(func() {
-		registryHTTPClient = prevClient
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevClient
+		hubOIDCToken = prevOIDC
 	})
 
 	// 1. Standalone register on an existing unlisted entry without metadata flags must NOT flip
 	// Listed to true or clear OwnerGroup / DisplayName / Purpose / Tags.
 	tokPath := filepath.Join(t.TempDir(), "priv.token")
 	_ = captureStdout(t, func() {
-		err := cmdRegistry(ctx, nil, &printer{json: true}, []string{
+		err := cmdHub(ctx, nil, &printer{json: true}, []string{
 			"register",
 			"-standalone",
 			"-rotate-token",
@@ -270,7 +270,7 @@ func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(
 	mu.Unlock()
 
 	// 2. Explicit conflicting -scope on an existing entry must surface the 409 error instead of exiting 0.
-	err := cmdRegistry(ctx, nil, &printer{json: true}, []string{
+	err := cmdHub(ctx, nil, &printer{json: true}, []string{
 		"register",
 		"-standalone",
 		"-hub-url", regSrv.URL,
@@ -298,7 +298,7 @@ func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(
 		File:    filepath.Join(tmp, "secrets.age"),
 		KeyFile: filepath.Join(tmp, "secrets.key"),
 	})
-	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+	mgr := daemon.NewHubManager(daemon.HubManagerOptions{
 		Store:   store,
 		Secrets: secStore,
 		LiveConfig: func() daemon.Config {
@@ -306,7 +306,7 @@ func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(
 			if mc == nil {
 				return daemon.Config{HostSandboxes: true}
 			}
-			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+			return daemon.Config{HostSandboxes: true, Hub: mc.Hub}
 		},
 		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
 		Version:        func() version.Info { return version.Info{Release: "v1.4.0", Revision: "abc1234"} },
@@ -314,12 +314,12 @@ func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(
 		JitterFraction: -1,
 	})
 	daemonSrv := httptest.NewServer(ui.NewServer(withAccessCode(ui.Config{
-		Actor:                    ui.DefaultActor("operator"),
-		Capabilities:             ui.OfferedCapabilities(),
-		Secrets:                  secStore,
-		RegistryStatus:           mgr.Snapshot,
-		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
-		TriggerRegistrySync:      mgr.Trigger,
+		Actor:               ui.DefaultActor("operator"),
+		Capabilities:        ui.OfferedCapabilities(),
+		Secrets:             secStore,
+		HubStatus:           mgr.Snapshot,
+		TriggerHubHeartbeat: mgr.TriggerHeartbeat,
+		TriggerHubSync:      mgr.Trigger,
 	}), store))
 	defer daemonSrv.Close()
 
@@ -336,7 +336,7 @@ func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(
 	mu.Unlock()
 
 	_ = captureStdout(t, func() {
-		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-hub-url", regSrv.URL, "private-ws"}); err != nil {
+		if err := cmdHub(ctx, c, &printer{}, []string{"register", "-hub-url", regSrv.URL, "private-ws"}); err != nil {
 			t.Fatalf("daemon attach register: %v", err)
 		}
 	})
@@ -354,10 +354,10 @@ func TestRegistryRegisterPreservesPrivateEntryMetadataAndSurfacesScopeConflicts(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if storedCfg.Registry.Listed {
+	if storedCfg.Hub.Listed {
 		t.Fatalf("stored daemon Registry.Listed = true, want false inherited from remote private entry")
 	}
-	if storedCfg.Registry.OwnerGroup != "group:sec-team@example.com" {
-		t.Fatalf("stored daemon Registry.OwnerGroup = %q, want group:sec-team@example.com", storedCfg.Registry.OwnerGroup)
+	if storedCfg.Hub.OwnerGroup != "group:sec-team@example.com" {
+		t.Fatalf("stored daemon Registry.OwnerGroup = %q, want group:sec-team@example.com", storedCfg.Hub.OwnerGroup)
 	}
 }

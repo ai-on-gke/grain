@@ -213,10 +213,10 @@ func writeInternalError(w http.ResponseWriter, err error) {
 
 // WriteMissingEntryState writes the 404 state page (or JSON) for an unknown or deleted `<name>.<instance-domain>`.
 // When `deletedEntry` is non-nil and `isManager` is true, deletion and reservation retention timestamps are included.
-func WriteMissingEntryState(w http.ResponseWriter, r *http.Request, registryHost, name string, deletedEntry *store.EntryRow, isManager bool) {
+func WriteMissingEntryState(w http.ResponseWriter, r *http.Request, hubHost, name string, deletedEntry *store.EntryRow, isManager bool) {
 	createURL := ""
-	if registryHost != "" && name != "" {
-		createURL = fmt.Sprintf("https://%s/new?name=%s", NormalizeHost(registryHost), url.QueryEscape(name))
+	if hubHost != "" && name != "" {
+		createURL = fmt.Sprintf("https://%s/new?name=%s", NormalizeHost(hubHost), url.QueryEscape(name))
 	}
 
 	if deletedEntry != nil && isManager {
@@ -292,12 +292,12 @@ func WriteMissingEntryState(w http.ResponseWriter, r *http.Request, registryHost
 
 // WriteProvisioningState writes the 503 state page (or JSON) with `Retry-After: 5`
 // when an entry is in `creating` or `replacing`.
-func WriteProvisioningState(w http.ResponseWriter, r *http.Request, registryHost string, entry *store.EntryRow) {
+func WriteProvisioningState(w http.ResponseWriter, r *http.Request, hubHost string, entry *store.EntryRow) {
 	w.Header().Set("Retry-After", "5")
 	state := string(entry.LifecycleState)
 	detailURL := ""
-	if registryHost != "" {
-		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(registryHost), url.PathEscape(entry.Name))
+	if hubHost != "" {
+		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(hubHost), url.PathEscape(entry.Name))
 	}
 
 	if WantsHTML(r) {
@@ -329,11 +329,11 @@ func WriteProvisioningState(w http.ResponseWriter, r *http.Request, registryHost
 
 // WriteStoppingState writes the 503 state page (or JSON) with `Retry-After: 5`
 // when a hosted instance is in `stopping`.
-func WriteStoppingState(w http.ResponseWriter, r *http.Request, registryHost string, entry *store.EntryRow) {
+func WriteStoppingState(w http.ResponseWriter, r *http.Request, hubHost string, entry *store.EntryRow) {
 	w.Header().Set("Retry-After", "5")
 	detailURL := ""
-	if registryHost != "" {
-		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(registryHost), url.PathEscape(entry.Name))
+	if hubHost != "" {
+		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(hubHost), url.PathEscape(entry.Name))
 	}
 
 	if WantsHTML(r) {
@@ -365,11 +365,11 @@ func WriteStoppingState(w http.ResponseWriter, r *http.Request, registryHost str
 
 // WriteStoppedOrWakingState writes the 503 state page (or JSON) with `Retry-After: 5`
 // when an authorized user visits a `stopped` hosted instance (waking it automatically when `waking == true`).
-func WriteStoppedOrWakingState(w http.ResponseWriter, r *http.Request, registryHost string, entry *store.EntryRow, waking bool) {
+func WriteStoppedOrWakingState(w http.ResponseWriter, r *http.Request, hubHost string, entry *store.EntryRow, waking bool) {
 	w.Header().Set("Retry-After", "5")
 	detailURL := ""
-	if registryHost != "" {
-		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(registryHost), url.PathEscape(entry.Name))
+	if hubHost != "" {
+		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(hubHost), url.PathEscape(entry.Name))
 	}
 
 	if waking {
@@ -450,10 +450,10 @@ func WriteDeletingState(w http.ResponseWriter, r *http.Request, entry *store.Ent
 // WriteFailedState writes the 502 Bad Gateway state page (or JSON) when an entry is in `failed`.
 // Entry managers (`isManager == true`) see the failure reason and a Replace VM recovery action;
 // other callers receive a generic 502 page without internal details.
-func WriteFailedState(w http.ResponseWriter, r *http.Request, registryHost string, entry *store.EntryRow, isManager bool) {
+func WriteFailedState(w http.ResponseWriter, r *http.Request, hubHost string, entry *store.EntryRow, isManager bool) {
 	replaceURL := ""
-	if registryHost != "" {
-		replaceURL = fmt.Sprintf("https://%s/entries/%s?action=replace", NormalizeHost(registryHost), url.PathEscape(entry.Name))
+	if hubHost != "" {
+		replaceURL = fmt.Sprintf("https://%s/entries/%s?action=replace", NormalizeHost(hubHost), url.PathEscape(entry.Name))
 	}
 
 	if WantsHTML(r) {

@@ -27,11 +27,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 )
 
-// TestRegistryCLIDelegatingAppsAndGrants drives every
+// TestHubCLIDelegatingAppsAndGrants drives every
 // `grain hub delegating-apps` and `grain hub grants` verb against a
 // fake registry and checks each sends the request the registry's
 // /api/admin/delegating-apps and /api/delegation-grants routes expect.
-func TestRegistryCLIDelegatingAppsAndGrants(t *testing.T) {
+func TestHubCLIDelegatingAppsAndGrants(t *testing.T) {
 	ctx := context.Background()
 	type call struct {
 		method, path, query string
@@ -86,20 +86,20 @@ func TestRegistryCLIDelegatingAppsAndGrants(t *testing.T) {
 	}))
 	defer regSrv.Close()
 
-	prevClient, prevOIDC := registryHTTPClient, registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	prevClient, prevOIDC := hubHTTPClient, hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		return "oidc-test-token", nil
 	}
-	t.Cleanup(func() { registryHTTPClient, registryOIDCToken = prevClient, prevOIDC })
+	t.Cleanup(func() { hubHTTPClient, hubOIDCToken = prevClient, prevOIDC })
 
 	for _, asJSON := range []bool{true, false} {
 		out := &printer{json: asJSON}
 		run := func(group, verb string, args ...string) {
 			t.Helper()
 			full := append([]string{group, verb, "-hub-url", regSrv.URL}, args...)
-			if err := cmdRegistry(ctx, nil, out, full); err != nil {
-				t.Fatalf("cmdRegistry(%v) = %v", full, err)
+			if err := cmdHub(ctx, nil, out, full); err != nil {
+				t.Fatalf("cmdHub(%v) = %v", full, err)
 			}
 		}
 		mu.Lock()
@@ -163,13 +163,13 @@ func TestRegistryCLIDelegatingAppsAndGrants(t *testing.T) {
 
 	// Usage errors: create without -principal, grants create without -entry.
 	out := &printer{}
-	if err := cmdRegistry(ctx, nil, out, []string{"delegating-apps", "create", "-hub-url", regSrv.URL, "planner"}); err == nil {
+	if err := cmdHub(ctx, nil, out, []string{"delegating-apps", "create", "-hub-url", regSrv.URL, "planner"}); err == nil {
 		t.Error("delegating-apps create without -principal succeeded")
 	}
-	if err := cmdRegistry(ctx, nil, out, []string{"grants", "create", "-hub-url", regSrv.URL, "planner"}); err == nil {
+	if err := cmdHub(ctx, nil, out, []string{"grants", "create", "-hub-url", regSrv.URL, "planner"}); err == nil {
 		t.Error("grants create without -entry succeeded")
 	}
-	if err := cmdRegistry(ctx, nil, out, []string{"grants", "bogus"}); err == nil {
+	if err := cmdHub(ctx, nil, out, []string{"grants", "bogus"}); err == nil {
 		t.Error("unknown grants verb succeeded")
 	}
 }

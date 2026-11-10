@@ -54,10 +54,10 @@ const (
 	DefaultTunnelDrainTimeout = 2 * time.Minute
 )
 
-// RegistryTunnelSupervisorOptions configures a RegistryTunnelSupervisor.
-type RegistryTunnelSupervisorOptions struct {
+// HubTunnelSupervisorOptions configures a HubTunnelSupervisor.
+type HubTunnelSupervisorOptions struct {
 	// Handler serves incoming HTTP requests over accepted mux streams. In
-	// production this is ui.Server.RegistryTunnelHandler(), which enforces the
+	// production this is ui.Server.HubTunnelHandler(), which enforces the
 	// unconditional X-Grain-Registry-Assertion verifier gate.
 	Handler http.Handler
 
@@ -97,17 +97,17 @@ type RegistryTunnelSupervisorOptions struct {
 	Logf func(format string, args ...any)
 }
 
-// RegistryTunnelSupervisor supervises the outbound `-hub-connect` tunnel
+// HubTunnelSupervisor supervises the outbound `-hub-connect` tunnel
 // (`wss://<registry-host>/api/entries/<name>/connect`), serving accepted mux
 // streams in-process over a MuxListener with jittered exponential redial
 // backoff (250 ms -> 30 s) and proactive 23 h ± 30 m graceful session rotation.
-type RegistryTunnelSupervisor struct {
-	opts RegistryTunnelSupervisorOptions
+type HubTunnelSupervisor struct {
+	opts HubTunnelSupervisorOptions
 }
 
-// NewRegistryTunnelSupervisor constructs a RegistryTunnelSupervisor with
+// NewHubTunnelSupervisor constructs a HubTunnelSupervisor with
 // production defaults filled in for any zero options.
-func NewRegistryTunnelSupervisor(opts RegistryTunnelSupervisorOptions) *RegistryTunnelSupervisor {
+func NewHubTunnelSupervisor(opts HubTunnelSupervisorOptions) *HubTunnelSupervisor {
 	if opts.Connect == nil {
 		opts.Connect = api.ConnectMux
 	}
@@ -144,7 +144,7 @@ func NewRegistryTunnelSupervisor(opts RegistryTunnelSupervisorOptions) *Registry
 	if opts.Logf == nil {
 		opts.Logf = log.Printf
 	}
-	return &RegistryTunnelSupervisor{opts: opts}
+	return &HubTunnelSupervisor{opts: opts}
 }
 
 type activeTunnelServer struct {
@@ -154,7 +154,7 @@ type activeTunnelServer struct {
 	connectedAt time.Time
 }
 
-func (s *RegistryTunnelSupervisor) startSessionServer(sess *api.TunnelSession) *activeTunnelServer {
+func (s *HubTunnelSupervisor) startSessionServer(sess *api.TunnelSession) *activeTunnelServer {
 	ln := sess.Listener()
 	handler := s.opts.Handler
 	if handler == nil {
@@ -178,7 +178,7 @@ func (s *RegistryTunnelSupervisor) startSessionServer(sess *api.TunnelSession) *
 	}
 }
 
-func (s *RegistryTunnelSupervisor) drainAndCloseSession(a *activeTunnelServer) {
+func (s *HubTunnelSupervisor) drainAndCloseSession(a *activeTunnelServer) {
 	if a == nil {
 		return
 	}
@@ -188,7 +188,7 @@ func (s *RegistryTunnelSupervisor) drainAndCloseSession(a *activeTunnelServer) {
 	_ = a.sess.Close()
 }
 
-func (s *RegistryTunnelSupervisor) closeSessionImmediately(a *activeTunnelServer) {
+func (s *HubTunnelSupervisor) closeSessionImmediately(a *activeTunnelServer) {
 	if a == nil {
 		return
 	}
@@ -198,7 +198,7 @@ func (s *RegistryTunnelSupervisor) closeSessionImmediately(a *activeTunnelServer
 }
 
 // RunTunnel dials and supervises the outbound tunnel until ctx is cancelled.
-func (s *RegistryTunnelSupervisor) RunTunnel(ctx context.Context, cfg api.ConnectConfig) error {
+func (s *HubTunnelSupervisor) RunTunnel(ctx context.Context, cfg api.ConnectConfig) error {
 	if s == nil {
 		return nil
 	}
@@ -262,7 +262,7 @@ func (s *RegistryTunnelSupervisor) RunTunnel(ctx context.Context, cfg api.Connec
 	}
 }
 
-func (s *RegistryTunnelSupervisor) runActiveSessionLoop(
+func (s *HubTunnelSupervisor) runActiveSessionLoop(
 	ctx context.Context,
 	dialCfg api.ConnectConfig,
 	activePtr **activeTunnelServer,
@@ -332,7 +332,7 @@ func (s *RegistryTunnelSupervisor) runActiveSessionLoop(
 //   - HTTP 401/403 enforces a 60 s minimum backoff;
 //   - HTTP 429/503 (or any APIError with RetryAfter > 0) honours Retry-After
 //     capped at 5 m.
-func (s *RegistryTunnelSupervisor) ComputeBackoff(failures int, err error) time.Duration {
+func (s *HubTunnelSupervisor) ComputeBackoff(failures int, err error) time.Duration {
 	if failures < 1 {
 		failures = 1
 	}
@@ -366,7 +366,7 @@ func (s *RegistryTunnelSupervisor) ComputeBackoff(failures int, err error) time.
 
 // ComputeSessionAge returns the target session lifetime before proactive
 // rotation (MaxSessionAge ± SessionAgeJitter, 23 h ± 30 m by default).
-func (s *RegistryTunnelSupervisor) ComputeSessionAge() time.Duration {
+func (s *HubTunnelSupervisor) ComputeSessionAge() time.Duration {
 	base := s.opts.MaxSessionAge
 	jitter := s.opts.SessionAgeJitter
 	if s.opts.DisableJitter || jitter <= 0 {
@@ -380,7 +380,7 @@ func (s *RegistryTunnelSupervisor) ComputeSessionAge() time.Duration {
 	return out
 }
 
-func (s *RegistryTunnelSupervisor) jitterDuration(d time.Duration) time.Duration {
+func (s *HubTunnelSupervisor) jitterDuration(d time.Duration) time.Duration {
 	if d <= 0 || s.opts.DisableJitter || s.opts.JitterFraction <= 0 {
 		return d
 	}
@@ -393,7 +393,7 @@ func (s *RegistryTunnelSupervisor) jitterDuration(d time.Duration) time.Duration
 	return out
 }
 
-func (s *RegistryTunnelSupervisor) sleep(ctx context.Context, d time.Duration) bool {
+func (s *HubTunnelSupervisor) sleep(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		return ctx.Err() == nil
 	}

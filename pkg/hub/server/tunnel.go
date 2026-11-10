@@ -420,9 +420,9 @@ func (c *trackedStreamConn) Close() error {
 	return err
 }
 
-// ExtractRegistryToken extracts a `grc_…` bearer credential from `X-Grain-Registry-Token`
+// ExtractHubToken extracts a `grc_…` bearer credential from `X-Grain-Registry-Token`
 // or `Authorization: Bearer grc_…`.
-func ExtractRegistryToken(r *http.Request) string {
+func ExtractHubToken(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
@@ -493,11 +493,11 @@ func (rt *Router) HandleConnect(w http.ResponseWriter, r *http.Request, name str
 		// On the public listener, require `X-Grain-Auth: token` (or a `grc_` token) and
 		// never inspect `FrontIdentity` headers.
 		if publicPort && !strings.EqualFold(strings.TrimSpace(r.Header.Get(api.HeaderAuth)), api.AuthModeToken) &&
-			ExtractRegistryToken(r) == "" {
+			ExtractHubToken(r) == "" {
 			rt.recordFailedAuthOrWrite429(w, ip, "X-Grain-Auth: token and a valid grc_ credential are required on the public connect endpoint")
 			return
 		}
-		tok := ExtractRegistryToken(r)
+		tok := ExtractHubToken(r)
 		if tok == "" || rt.store == nil {
 			rt.recordFailedAuthOrWrite429(w, ip, "missing or invalid entry credential")
 			return
@@ -555,7 +555,7 @@ func (rt *Router) HandleConnect(w http.ResponseWriter, r *http.Request, name str
 			return
 		}
 		// If X-Grain-Registry-Token was also supplied alongside FrontIdentity, validate it too.
-		if tok := ExtractRegistryToken(r); tok != "" {
+		if tok := ExtractHubToken(r); tok != "" {
 			authedEntry, cid, err := rt.store.AuthenticateCredentialWithID(ctx, tok)
 			if err != nil || authedEntry.ID != e.ID {
 				rt.recordFailedAuthOrWrite429(w, ip, "invalid or mismatched entry credential")

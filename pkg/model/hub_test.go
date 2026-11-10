@@ -24,10 +24,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 )
 
-func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
+func TestNormalizeAndDeriveHubScopes(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := model.NormalizeRegistryConfig(model.RegistryConfig{
+	cfg, err := model.NormalizeHubConfig(model.HubConfig{
 		URL:         "https://grain.example.com/",
 		Entry:       "  Team-Autoscaler ",
 		AuthMode:    "oidc",
@@ -36,13 +36,13 @@ func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
 		HostKind:    api.HostKindKubernetes,
 		Listed:      true,
 		Tags:        []string{"Autoscaler", "K8S", "autoscaler"},
-		Scopes: []model.RegistryScopeRule{
+		Scopes: []model.HubScopeRule{
 			{Repo: "Acme/Monorepo", PathPrefix: "/pkg/autoscaler/"},
 			{Repo: "acme/companion", PathPrefix: "", Role: api.RoleSecondary},
 		},
 	}, false)
 	if err != nil {
-		t.Fatalf("NormalizeRegistryConfig: %v", err)
+		t.Fatalf("NormalizeHubConfig: %v", err)
 	}
 	if cfg.URL != "https://grain.example.com" || cfg.Entry != "team-autoscaler" {
 		t.Errorf("normalized URL/Entry = (%q, %q)", cfg.URL, cfg.Entry)
@@ -52,8 +52,8 @@ func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
 	}
 
 	// grain/config must be rejected as an explicit scope override.
-	if _, err := model.NormalizeRegistryConfig(model.RegistryConfig{
-		Scopes: []model.RegistryScopeRule{{Repo: "grain/config"}},
+	if _, err := model.NormalizeHubConfig(model.HubConfig{
+		Scopes: []model.HubScopeRule{{Repo: "grain/config"}},
 	}, false); err == nil {
 		t.Errorf("expected grain/config scope rule to be rejected")
 	}
@@ -76,12 +76,12 @@ func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
 		},
 	}
 
-	advertised := model.DeriveRegistryScopes(
+	advertised := model.DeriveHubScopes(
 		[]string{"grain/config", "acme/grain-state", "Acme/Primary-Repo", "acme/secondary-repo", "acme/monorepo", "acme/excluded"},
 		[]string{"acme/local-only"},
 		stateRepo,
 		repoConfigs,
-		[]model.RegistryScopeRule{
+		[]model.HubScopeRule{
 			// Inherits secondary role from acme/monorepo's Work.Default = off!
 			{Repo: "acme/monorepo", PathPrefix: "pkg/autoscaler"},
 			{Repo: "acme/excluded", Exclude: true},
@@ -89,15 +89,15 @@ func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
 		},
 	)
 
-	want := []model.RegistryAdvertisedScope{
-		{Repo: "acme/extra", PathPrefix: "services/api", Role: api.RoleSecondary, Origin: model.RegistryScopeAdded},
-		{Repo: "acme/local-only", PathPrefix: "", Role: api.RolePrimary, Origin: model.RegistryScopeFromRepoConfig},
-		{Repo: "acme/monorepo", PathPrefix: "pkg/autoscaler", Role: api.RoleSecondary, Origin: model.RegistryScopeOverridden},
-		{Repo: "acme/primary-repo", PathPrefix: "", Role: api.RolePrimary, Origin: model.RegistryScopeFromRepoConfig},
-		{Repo: "acme/secondary-repo", PathPrefix: "", Role: api.RoleSecondary, Origin: model.RegistryScopeFromRepoConfig},
+	want := []model.HubAdvertisedScope{
+		{Repo: "acme/extra", PathPrefix: "services/api", Role: api.RoleSecondary, Origin: model.HubScopeAdded},
+		{Repo: "acme/local-only", PathPrefix: "", Role: api.RolePrimary, Origin: model.HubScopeFromRepoConfig},
+		{Repo: "acme/monorepo", PathPrefix: "pkg/autoscaler", Role: api.RoleSecondary, Origin: model.HubScopeOverridden},
+		{Repo: "acme/primary-repo", PathPrefix: "", Role: api.RolePrimary, Origin: model.HubScopeFromRepoConfig},
+		{Repo: "acme/secondary-repo", PathPrefix: "", Role: api.RoleSecondary, Origin: model.HubScopeFromRepoConfig},
 	}
 	if len(advertised) != len(want) {
-		t.Fatalf("DeriveRegistryScopes = %+v, want %+v", advertised, want)
+		t.Fatalf("DeriveHubScopes = %+v, want %+v", advertised, want)
 	}
 	for i := range want {
 		if advertised[i] != want[i] {
@@ -106,24 +106,24 @@ func TestNormalizeAndDeriveRegistryScopes(t *testing.T) {
 	}
 }
 
-func TestStoreRegistryConfigAndTaskCounts(t *testing.T) {
+func TestStoreHubConfigAndTaskCounts(t *testing.T) {
 	t.Parallel()
 	store, _ := sqlitetest.Open(t)
 	ctx := context.Background()
 
-	regCfg := model.RegistryConfig{
+	regCfg := model.HubConfig{
 		URL:         "https://grain.example.com",
 		Entry:       "workstation-dev",
 		DisplayName: "Dev Workstation",
 		Purpose:     "Local controller testing",
 		HostKind:    api.HostKindWorkstation,
 		Listed:      true,
-		Scopes: []model.RegistryScopeRule{
+		Scopes: []model.HubScopeRule{
 			{Repo: "acme/widgets", PathPrefix: "cmd/server", Role: api.RolePrimary},
 		},
 	}
 	if err := store.UpdateConfig(ctx, func(c *model.Config) error {
-		c.Registry = regCfg
+		c.Hub = regCfg
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
@@ -132,8 +132,8 @@ func TestStoreRegistryConfigAndTaskCounts(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("GetConfig: %v, %v", got, err)
 	}
-	if got.Registry.URL != regCfg.URL || got.Registry.Entry != regCfg.Entry || !got.Registry.Listed || len(got.Registry.Scopes) != 1 {
-		t.Errorf("round-tripped Registry = %+v, want %+v", got.Registry, regCfg)
+	if got.Hub.URL != regCfg.URL || got.Hub.Entry != regCfg.Entry || !got.Hub.Listed || len(got.Hub.Scopes) != 1 {
+		t.Errorf("round-tripped Registry = %+v, want %+v", got.Hub, regCfg)
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -162,11 +162,11 @@ func TestStoreRegistryConfigAndTaskCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	active, awaiting, err := store.RegistryTaskCounts(ctx)
+	active, awaiting, err := store.HubTaskCounts(ctx)
 	if err != nil {
-		t.Fatalf("RegistryTaskCounts: %v", err)
+		t.Fatalf("HubTaskCounts: %v", err)
 	}
 	if active != 1 || awaiting != 1 {
-		t.Errorf("RegistryTaskCounts = (active=%d, awaiting=%d), want (1, 1)", active, awaiting)
+		t.Errorf("HubTaskCounts = (active=%d, awaiting=%d), want (1, 1)", active, awaiting)
 	}
 }

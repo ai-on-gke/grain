@@ -94,15 +94,15 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ### 2.4 `registry` `IdentityVerifier` (`X-Grain-Hub-Assertion` / `X-Grain-Registry-Assertion`) {#AU-5B}
 
-1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/hub.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-hub-issuer` (`$GRAIN_HUB_ISSUER`), `-ui-hub-audience` (`$GRAIN_HUB_AUDIENCE`), and `-ui-hub-keys-url` (`$GRAIN_HUB_KEYS_URL`) (or their deprecated `-ui-registry-*` / `$GRAIN_REGISTRY_*` aliases) are all configured (`daemon.CheckUIRegistryVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Hub-Assertion` (`ui.HubAssertionHeader`) and `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`) (`Headers() == webauth.HubAssertionHeaders`), refuses requests carrying conflicting values across the two headers or multiple distinct values on either header, reports `Name() == "registry"` (`ui.AuthMethodRegistry`, `model.SourceRegistry`), and sets `AccessCodeWins() == false`.
+1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/hub.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-hub-issuer` (`$GRAIN_HUB_ISSUER`), `-ui-hub-audience` (`$GRAIN_HUB_AUDIENCE`), and `-ui-hub-keys-url` (`$GRAIN_HUB_KEYS_URL`) (or their deprecated `-ui-registry-*` / `$GRAIN_REGISTRY_*` aliases) are all configured (`daemon.CheckUIHubVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Hub-Assertion` (`ui.HubAssertionHeader`) and `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`) (`Headers() == webauth.HubAssertionHeaders`), refuses requests carrying conflicting values across the two headers or multiple distinct values on either header, reports `Name() == "registry"` (`ui.AuthMethodHub`, `model.SourceHub`), and sets `AccessCodeWins() == false`.
 2. Signature verification MUST fetch RFC 7517 JWKS keys via `pkg/jwks` (cached for `1h`, refetched on unknown `kid` at most once per `1m`, retaining stale cached keys on refresh failure, and returning a `VerifierUnavailableError` (`503` with `Retry-After: 5`) when the initial JWKS fetch fails before any keys are cached) and MUST pin the algorithm to `ES256` on an ECDSA P-256 key (`RS256`, `HS256`, and `none` rejected).
 3. The verifier MUST enforce exact `iss` equality against `-ui-hub-issuer`, single-audience equality (`len(aud) == 1 && aud[0] == -ui-hub-audience`), require `exp` and `iat` with `30s` clock-skew tolerance on `exp`, `nbf`, and `iat` and `0 < exp - iat <= 5m`, reject any token carrying the reserved `act` claim (`401`) until delegated-identity support is enabled, and normalize/classify `sub`/`email`/`kind` into `model.Principal{Kind: kind, ID: email, Source: "registry"}`.
 
 **Pinned by:**
-- `pkg/webauth/webauth_test.go`: `TestRegistryVerifier`
-- `pkg/webauth/hub_rename_test.go`: `TestRegistryVerifierRefusesConflictingHubAndRegistryAssertions`
-- `pkg/ui/hub_verifier_test.go`: `TestRegistryIdentityVerifierEndToEnd`
-- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRegistryVerifierFlagsAndEnv`
+- `pkg/webauth/webauth_test.go`: `TestHubVerifier`
+- `pkg/webauth/hub_rename_test.go`: `TestHubVerifierRefusesConflictingHubAndRegistryAssertions`
+- `pkg/ui/hub_verifier_test.go`: `TestHubIdentityVerifierEndToEnd`
+- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigHubVerifierFlagsAndEnv`
 
 ---
 
@@ -353,7 +353,7 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
 3. Any other present `act` MUST fail verification with `401` (`writeAssertionRefused`), with no fallback to the access code, a `gma_…` token, a session cookie or an open route (`AU-2`).
 4. All other `registry` verifier checks MUST be unchanged for delegated assertions: `iss`, a single `aud` equal to `-ui-hub-audience`, `ES256`, `exp - iat <= 5 min` and 30 s skew.
 
-**Pinned by:** `pkg/ui/hub_verifier_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`.
+**Pinned by:** `pkg/ui/hub_verifier_test.go`: `TestHubVerifierExposesPersonAndDelegatingApp`, `TestHubVerifierRefusesMalformedOrNestedAct`.
 
 ### 11.2 `delegate:` allowlist entries {#AU-23}
 
@@ -416,7 +416,7 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
 3. Unproxied-loopback break-glass (`AU-13`) and the mandatory tunnel-ingress gate on `connected` grains MUST be unchanged. The latter requires a valid assertion on every tunnelled request and never accepts access codes over the tunnel.
 4. A `registry` assertion with `kind: "service"` and no `act` MUST be admitted only by an explicit `serviceAccount:` entry (`AU-6`, `AU-7`), and MUST be attributed to the service principal alone with no `OnBehalfOf`.
 
-**Pinned by:** `pkg/ui/delegation_test.go`: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry`.
+**Pinned by:** `pkg/ui/delegation_test.go`: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainHubServicePrincipalNeedsServiceAccountEntry`.
 
 ---
 
@@ -445,12 +445,12 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
 | `AU-19` | Bounded deduplicated logging of refused assertions and principals | Implemented | `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`, `TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience`, `TestRefusedPrincipalsAreLoggedOnce` (*64-cap saturation, unconfigured-audience warning, and `logRefusedVerifierHeader` untested*) |
 | `AU-20` | Plaintext identity headers never trusted | Implemented | `TestExtractPrincipalNamesNobodyFromAnIdentityHeader`, `TestPlaintextIdentityHeadersIgnoredFromUntrustedSource`, `TestIAPModeIgnoresPlaintextIdentityHeaders`, `TestASingleTenantDaemonRefusesWhoeverAProxyNames` (*`logIgnoredIdentityHeader` dedup untested*) |
 | `AU-21` | In-sandbox listeners isolated from proxy assertions | Implemented | `TestGitProxyScopesEachSandboxToItsOwnRepositories`, `TestSandboxGrainLogReadIsAuditedAsItsTask`, `TestSandboxTokenMintedAfterGitProxyStartsAuthenticates` |
-| `AU-22` | Registry `act` claim parsing and `VerifiedIdentity.Via` | Implemented | `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct` |
+| `AU-22` | Registry `act` claim parsing and `VerifiedIdentity.Via` | Implemented | `TestHubVerifierExposesPersonAndDelegatingApp`, `TestHubVerifierRefusesMalformedOrNestedAct` |
 | `AU-23` | `delegate:` allowlist entries (reason, person-only, no dangerous scopes) | Implemented | `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`, `TestAccessAllowDelegateCLI` |
 | `AU-24` | Dual admission (person and `delegate:` entry) and refusals | Implemented | `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp` |
 | `AU-25` | Person ∩ delegate role intersection, read-only grants, person-only operations, `hostd` refusal | Implemented | `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`, `TestDelegatedIdentityNeverOwnsAHostd` |
 | `AU-26` | `Actor` = app, `OnBehalfOf` = person, `(via <app>)` label, trailers, request log | Implemented | `TestPrincipalLabelRendersPersonViaApp`, `TestDelegatedWriteRecordsAppAndPerson`, `TestDelegatedTaskTrailersNameThePerson` |
-| `AU-27` | CSRF, access-code, break-glass, and plain-service rules unchanged under delegation | Implemented | `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry` |
+| `AU-27` | CSRF, access-code, break-glass, and plain-service rules unchanged under delegation | Implemented | `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainHubServicePrincipalNeedsServiceAccountEntry` |
 
 ---
 

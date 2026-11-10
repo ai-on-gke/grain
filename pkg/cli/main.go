@@ -737,7 +737,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	case "host":
 		return cmdHostds(ctx, c, out, cmdArgs)
 	case "hub":
-		return cmdRegistry(ctx, c, out, cmdArgs)
+		return cmdHub(ctx, c, out, cmdArgs)
 	case "access":
 		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":

@@ -698,7 +698,7 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 // strip edge credentials before a tunnel and authenticate grc_ credentials
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
-func TestRegistryFrontDoorIsClassified(t *testing.T) {
+func TestHubFrontDoorIsClassified(t *testing.T) {
 	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
@@ -731,7 +731,7 @@ func TestRegistryFrontDoorIsClassified(t *testing.T) {
 // unclassified at d7dde0c2 (classified since by v22), and what v22 still
 // left out -- the human-review hold an agent may raise but never release,
 // the director's Tier 3 floor, and agent on-behalf-of attribution.
-func TestWebauthAndRegistryIdentityFilesAreClassified(t *testing.T) {
+func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
 	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}

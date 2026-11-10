@@ -36,8 +36,8 @@ const (
 	// HeaderPeerAuth carries the ES256 peer JWT on `:8082` requests.
 	HeaderPeerAuth = "X-Registry-Peer-Auth"
 
-	// HeaderRegistryHop enforces single-hop peer forwarding on `:8082`.
-	HeaderRegistryHop = "X-Registry-Hop"
+	// HeaderHubHop enforces single-hop peer forwarding on `:8082`.
+	HeaderHubHop = "X-Registry-Hop"
 
 	// HeaderTunnelGone signals to an ingress replica that the target tunnel session
 	// is no longer present on the peer replica.
@@ -173,7 +173,7 @@ func (rt *Router) handlePeerTunnelRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	// 2. Enforce single-hop X-Registry-Hop guard.
-	hops := r.Header.Values(HeaderRegistryHop)
+	hops := r.Header.Values(HeaderHubHop)
 	if len(hops) == 0 || strings.TrimSpace(hops[0]) == "" {
 		writeJSONError(w, http.StatusBadRequest, "missing_hop_header", "X-Registry-Hop header is required")
 		return
@@ -212,7 +212,7 @@ func (rt *Router) handlePeerTunnelRequest(w http.ResponseWriter, r *http.Request
 	// 5. Restore original target URI and strip internal peer headers before forwarding over mux.
 	targetURI := strings.TrimSpace(r.Header.Get(HeaderTargetURI))
 	r.Header.Del(HeaderPeerAuth)
-	r.Header.Del(HeaderRegistryHop)
+	r.Header.Del(HeaderHubHop)
 	r.Header.Del(HeaderTargetURI)
 
 	proxy := &httputil.ReverseProxy{
@@ -262,7 +262,7 @@ func (rt *Router) handlePeerTunnelRequest(w http.ResponseWriter, r *http.Request
 // routeConnectedEntry).
 func (rt *Router) forwardToPeer(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, peerAddr string, graceDeadline time.Time) {
 	// Refuse if request already carries X-Registry-Hop (single-hop guard).
-	if strings.TrimSpace(r.Header.Get(HeaderRegistryHop)) != "" {
+	if strings.TrimSpace(r.Header.Get(HeaderHubHop)) != "" {
 		writeJSONError(w, http.StatusLoopDetected, "loop_detected", "single-hop X-Registry-Hop limit exceeded")
 		return
 	}
@@ -325,7 +325,7 @@ func (rt *Router) forwardToPeer(w http.ResponseWriter, r *http.Request, entry *s
 				pr.Out.Header[k] = append([]string(nil), vv...)
 			}
 			pr.Out.Header.Set(HeaderPeerAuth, peerToken)
-			pr.Out.Header.Set(HeaderRegistryHop, "1")
+			pr.Out.Header.Set(HeaderHubHop, "1")
 			pr.Out.Header.Set(HeaderTargetURI, origURI)
 		},
 		Transport:     interceptTransport,

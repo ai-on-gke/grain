@@ -87,17 +87,17 @@ func TestGrainHealthShowsRegisteredCountersUntilUnregistered(t *testing.T) {
 	}
 }
 
-func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
+func TestGrainHealthSurfacesHubFailuresAndScopeConflicts(t *testing.T) {
 	const code = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
 	store, _ := sqlitetest.Open(t)
 	srv := ui.NewServer(ui.Config{
 		Actor:         ui.DefaultActor("operator@example.com"),
 		LocalAPIToken: code,
-		RegistryStatus: func(_ context.Context) (model.RegistrySnapshot, error) {
-			return model.RegistrySnapshot{
+		HubStatus: func(_ context.Context) (model.HubSnapshot, error) {
+			return model.HubSnapshot{
 				Enabled: true,
-				State:   model.RegistryStateError,
-				Config: model.RegistryConfig{
+				State:   model.HubStateError,
+				Config: model.HubConfig{
 					URL:   "https://registry.example.com",
 					Entry: "grain-west",
 				},

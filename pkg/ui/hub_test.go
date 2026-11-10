@@ -39,7 +39,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestRegistrySettingsAndEndpoints(t *testing.T) {
+func TestHubSettingsAndEndpoints(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
 	secDir := t.TempDir()
@@ -50,7 +50,7 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 	c.Config.Secrets = secStore
 
 	var syncCalls atomic.Int32
-	c.Config.TriggerRegistrySync = func() { syncCalls.Add(1) }
+	c.Config.TriggerHubSync = func() { syncCalls.Add(1) }
 
 	srv := ui.NewServerWithClient(c)
 	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
@@ -63,21 +63,21 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /api/registry = %d: %s", rec.Code, rec.Body.String())
 	}
-	snap := decode[model.RegistrySnapshot](t, rec)
-	if snap.Enabled || snap.State != model.RegistryStateDisabled {
+	snap := decode[model.HubSnapshot](t, rec)
+	if snap.Enabled || snap.State != model.HubStateDisabled {
 		t.Fatalf("initial registry snapshot = %+v, want disabled", snap)
 	}
 	healthRec := do(t, srv, http.MethodGet, "/api/sandboxes", "")
 	if healthRec.Code != http.StatusOK {
 		t.Fatalf("GET /api/sandboxes = %d: %s", healthRec.Code, healthRec.Body.String())
 	}
-	if h := decode[ui.SandboxHealthResponse](t, healthRec); h.Registry != nil {
-		t.Fatalf("unconfigured deployment reported non-nil Registry health: %+v", h.Registry)
+	if h := decode[ui.SandboxHealthResponse](t, healthRec); h.Hub != nil {
+		t.Fatalf("unconfigured deployment reported non-nil Registry health: %+v", h.Hub)
 	}
 
 	// Invalid registry URL (plain HTTP to non-loopback) is rejected by UpdateSettings.
-	badReg := model.RegistryConfig{URL: "http://registry.example.com", Entry: "grain-dev"}
-	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &badReg}); err == nil {
+	badReg := model.HubConfig{URL: "http://registry.example.com", Entry: "grain-dev"}
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &badReg}); err == nil {
 		t.Fatal("expected plain HTTP non-loopback registry URL to fail validation")
 	}
 
@@ -93,10 +93,10 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 	}
 
 	// Set registration token secret via PUT /api/secrets/registry-registration-token/value
-	// and verify TriggerRegistrySync fires.
+	// and verify TriggerHubSync fires.
 	beforeSync := syncCalls.Load()
 	secRec := do(t, srv, http.MethodPut,
-		"/api/secrets/"+secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey,
+		"/api/secrets/"+secrets.HubRegistrationTokenSecret+"/"+secrets.AgentCredentialKey,
 		`{"value":"grc_supersecrettokenvalue"}`)
 	if secRec.Code != http.StatusOK {
 		t.Fatalf("PUT registry secret = %d: %s", secRec.Code, secRec.Body.String())
@@ -106,18 +106,18 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 	}
 
 	// Configure registry settings with a path-prefix scope override on acme/widgets.
-	regCfg := model.RegistryConfig{
+	regCfg := model.HubConfig{
 		URL:         "https://registry.example.com/",
 		Entry:       "grain-dev",
 		DisplayName: "Grain Dev",
 		Purpose:     "Widgets team controller",
 		HostKind:    api.HostKindWorkstation,
 		Listed:      true,
-		Scopes: []model.RegistryScopeRule{
+		Scopes: []model.HubScopeRule{
 			{Repo: "acme/widgets", PathPrefix: "/pkg/autoscaler/"},
 		},
 	}
-	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Registry: &regCfg})
+	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &regCfg})
 	if err != nil {
 		t.Fatalf("UpdateSettings(Registry): %v", err)
 	}
@@ -175,55 +175,55 @@ func TestRegistrySettingsAndEndpoints(t *testing.T) {
 		}), nil
 	}
 	var hbTriggered atomic.Bool
-	c.Config.TriggerRegistryHeartbeat = func(_ context.Context) (model.RegistrySnapshot, error) {
+	c.Config.TriggerHubHeartbeat = func(_ context.Context) (model.HubSnapshot, error) {
 		hbTriggered.Store(true)
-		return model.RegistrySnapshot{
+		return model.HubSnapshot{
 			Enabled:   true,
-			State:     model.RegistryStateError,
+			State:     model.HubStateError,
 			Config:    saved.Registry,
 			LastError: "auth failed with bearer grc_supersecrettokenvalue",
 		}, nil
 	}
-	c.Config.RegistryStatus = c.Config.TriggerRegistryHeartbeat
+	c.Config.HubStatus = c.Config.TriggerHubHeartbeat
 
 	hbRec := do(t, srv, http.MethodPost, "/api/registry/heartbeat", "")
 	if hbRec.Code != http.StatusOK {
 		t.Fatalf("POST /api/registry/heartbeat = %d: %s", hbRec.Code, hbRec.Body.String())
 	}
 	if !hbTriggered.Load() {
-		t.Error("POST /api/registry/heartbeat did not invoke TriggerRegistryHeartbeat")
+		t.Error("POST /api/registry/heartbeat did not invoke TriggerHubHeartbeat")
 	}
-	hbSnap := decode[model.RegistrySnapshot](t, hbRec)
+	hbSnap := decode[model.HubSnapshot](t, hbRec)
 	if strings.Contains(hbSnap.LastError, "grc_supersecrettokenvalue") {
 		t.Errorf("LastError leaked secret token: %q", hbSnap.LastError)
 	}
 
-	// Verify Client.TriggerRegistryHeartbeat also redacts errors returned
-	// directly by c.Config.TriggerRegistryHeartbeat using LogRedactor.
+	// Verify Client.TriggerHubHeartbeat also redacts errors returned
+	// directly by c.Config.TriggerHubHeartbeat using LogRedactor.
 	c.Config.LogRedactor = func() (*grainlog.Redactor, error) {
 		return grainlog.NewRedactor([]grainlog.KnownValue{
 			{Label: "secret registry-registration-token", Value: "custom-secret-value-xyz987"},
 		}), nil
 	}
-	c.Config.TriggerRegistryHeartbeat = func(_ context.Context) (model.RegistrySnapshot, error) {
-		return model.RegistrySnapshot{}, errors.New("upstream failed with custom-secret-value-xyz987")
+	c.Config.TriggerHubHeartbeat = func(_ context.Context) (model.HubSnapshot, error) {
+		return model.HubSnapshot{}, errors.New("upstream failed with custom-secret-value-xyz987")
 	}
-	if _, hbErr := c.TriggerRegistryHeartbeat(ctx); hbErr == nil || strings.Contains(hbErr.Error(), "custom-secret-value-xyz987") {
-		t.Fatalf("TriggerRegistryHeartbeat error leaked LogRedactor secret: %v", hbErr)
+	if _, hbErr := c.TriggerHubHeartbeat(ctx); hbErr == nil || strings.Contains(hbErr.Error(), "custom-secret-value-xyz987") {
+		t.Fatalf("TriggerHubHeartbeat error leaked LogRedactor secret: %v", hbErr)
 	}
 }
 
-func TestRegistryDefaultShapeRedactionAndHealthDetail(t *testing.T) {
+func TestHubDefaultShapeRedactionAndHealthDetail(t *testing.T) {
 	t.Parallel()
 	c, _, _ := testClient(t)
 	// Leave c.Config.LogRedactor nil to verify shape-based redaction still
 	// cuts grc_ tokens, X-Grain-Registry-Token headers, and git URL tokens
 	// from both LastError and HealthDetail.
-	c.Config.RegistryStatus = func(_ context.Context) (model.RegistrySnapshot, error) {
-		return model.RegistrySnapshot{
+	c.Config.HubStatus = func(_ context.Context) (model.HubSnapshot, error) {
+		return model.HubSnapshot{
 			Enabled:      true,
-			State:        model.RegistryStateError,
-			Config:       model.RegistryConfig{URL: "https://registry.example.com", Entry: "grain-dev"},
+			State:        model.HubStateError,
+			Config:       model.HubConfig{URL: "https://registry.example.com", Entry: "grain-dev"},
 			LastError:    "X-Grain-Registry-Token: grc_shorttok\nfailed with grc_AbCdEfGhIjKlMnOpQrStUvWxYz",
 			Health:       api.HealthDegraded,
 			HealthDetail: "sync failed against https://oauth2:ghp_abcdefghijklmnopqrstuvwxyz1234@github.com/acme/state.git",
@@ -250,7 +250,7 @@ func TestRegistryDefaultShapeRedactionAndHealthDetail(t *testing.T) {
 	}
 }
 
-func TestRegistryTargetRequiresSecretsWriteRole(t *testing.T) {
+func TestHubTargetRequiresSecretsWriteRole(t *testing.T) {
 	h := newRoleHarness(t)
 	installScopeSets(t,
 		model.APIScopeSet{
@@ -285,7 +285,7 @@ func TestRegistryTargetRequiresSecretsWriteRole(t *testing.T) {
 	}
 }
 
-func TestRegistryTunnelHandlerRequiresAssertionAndRejectsShortcuts(t *testing.T) {
+func TestHubTunnelHandlerRequiresAssertionAndRejectsShortcuts(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
 
@@ -322,16 +322,16 @@ func TestRegistryTunnelHandlerRequiresAssertionAndRejectsShortcuts(t *testing.T)
 	)
 
 	c.Config.LocalAPIToken = accessCode
-	c.Config.RegistryIssuer = issuer
-	c.Config.RegistryAudience = audience
-	c.Config.RegistryKeysURL = jwksSrv.URL
+	c.Config.HubIssuer = issuer
+	c.Config.HubAudience = audience
+	c.Config.HubKeysURL = jwksSrv.URL
 	c.Config.AllowedPrincipals = []string{"user:alice@example.com"}
 	c.Config.StateRepoRef = func() model.RepoRef {
 		return model.RepoRef{Owner: "acme", Name: "grain-config"}
 	}
 	// Intentionally leave RequireVerifier empty on c.Config to simulate a
 	// workstation grain whose local listener accepts the access code while
-	// -hub-connect serves accepted mux streams behind RegistryTunnelHandler.
+	// -hub-connect serves accepted mux streams behind HubTunnelHandler.
 
 	srv := ui.NewServerWithClient(c)
 	ui.SetAccessCodeForTest(srv, accessCode)
@@ -349,25 +349,25 @@ func TestRegistryTunnelHandlerRequiresAssertionAndRejectsShortcuts(t *testing.T)
 	}
 
 	// 1. On the local listener (srv), local access code is accepted and
-	// HTTPClient.GetRegistryInstanceStatus returns scopes excluding grain/config and stateRepo.
+	// HTTPClient.GetHubInstanceStatus returns scopes excluding grain/config and stateRepo.
 	localHTTP := httptest.NewServer(srv)
 	t.Cleanup(localHTTP.Close)
 	hc := ui.NewHTTPClient(localHTTP.URL)
 	hc.Token = accessCode
-	instStatus, err := hc.GetRegistryInstanceStatus(ctx)
+	instStatus, err := hc.GetHubInstanceStatus(ctx)
 	if err != nil {
-		t.Fatalf("GetRegistryInstanceStatus on local listener: %v", err)
+		t.Fatalf("GetHubInstanceStatus on local listener: %v", err)
 	}
 	if len(instStatus.Scopes) != 1 || instStatus.Scopes[0].Repo != "acme/widgets" {
-		t.Fatalf("GetRegistryInstanceStatus scopes = %+v, want [acme/widgets] (excluding grain/config)", instStatus.Scopes)
+		t.Fatalf("GetHubInstanceStatus scopes = %+v, want [acme/widgets] (excluding grain/config)", instStatus.Scopes)
 	}
 
-	// 2. On RegistryTunnelHandler(), every route unconditionally requires a
+	// 2. On HubTunnelHandler(), every route unconditionally requires a
 	// valid X-Grain-Registry-Assertion and rejects loopback/access-code shortcuts.
-	tunnelHandler := srv.RegistryTunnelHandler()
+	tunnelHandler := srv.HubTunnelHandler()
 	mintAssertion := func(aud string, exp time.Time) string {
 		now := time.Now()
-		claims := webauth.RegistryClaims{
+		claims := webauth.HubClaims{
 			RegisteredClaims: jwt.RegisteredClaims{
 				Issuer:    issuer,
 				Audience:  jwt.ClaimStrings{aud},

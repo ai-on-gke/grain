@@ -767,10 +767,10 @@ type Settings struct {
 	// has had since it stopped being the Grain Registry. Both spellings are
 	// served for a release, so a UI or script written against either reads
 	// what it expects; registry and registryTokenSet then go.
-	Registry         model.RegistryConfig `json:"registry"`
-	RegistryTokenSet bool                 `json:"registryTokenSet"`
-	Hub              model.RegistryConfig `json:"hub"`
-	HubTokenSet      bool                 `json:"hubTokenSet"`
+	Registry         model.HubConfig `json:"registry"`
+	RegistryTokenSet bool            `json:"registryTokenSet"`
+	Hub              model.HubConfig `json:"hub"`
+	HubTokenSet      bool            `json:"hubTokenSet"`
 	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
 	// whether the API refuses its non-bootstrap writes in favour of a
 	// config pull request. Unlike SettingsLocked it is false without a
@@ -1216,10 +1216,10 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		RestartRequired:                    restartRequiredKeys(),
 		PendingRestart:                     c.pendingRestart(cfg, sandboxImgDefault, granuleImgDefault),
 		Unrunnable:                         unrunnable,
-		Registry:                           cfg.Registry,
-		RegistryTokenSet:                   c.registryTokenSet(),
-		Hub:                                cfg.Registry,
-		HubTokenSet:                        c.registryTokenSet(),
+		Registry:                           cfg.Hub,
+		RegistryTokenSet:                   c.hubTokenSet(),
+		Hub:                                cfg.Hub,
+		HubTokenSet:                        c.hubTokenSet(),
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
 	out.K8sGranuleImageEffective = effectiveGranule
@@ -1493,10 +1493,10 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			DefaultAdmission:                   string(model.NormalizeAdmission(def.DefaultAdmission)),
 			DefaultHosting:                     string(model.NormalizeHosting(def.DefaultHosting)),
 			SettingsLocked:                     def.SettingsLocked,
-			Registry:                           def.Registry,
-			RegistryTokenSet:                   c.registryTokenSet(),
-			Hub:                                def.Registry,
-			HubTokenSet:                        c.registryTokenSet(),
+			Registry:                           def.Hub,
+			RegistryTokenSet:                   c.hubTokenSet(),
+			Hub:                                def.Hub,
+			HubTokenSet:                        c.hubTokenSet(),
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1618,7 +1618,7 @@ type UpdateSettingsRequest struct {
 	// Registry is the Grain Hub connection, sent as "hub" -- or, for a
 	// release, as "registry", its name before the Grain Registry was
 	// renamed the Grain Hub. "hub" wins when a request carries both.
-	Registry *model.RegistryConfig `json:"registry"`
+	Hub *model.HubConfig `json:"registry"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -1629,13 +1629,13 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 	}
 	*r = UpdateSettingsRequest(p)
 	var renamed struct {
-		Hub *model.RegistryConfig `json:"hub"`
+		Hub *model.HubConfig `json:"hub"`
 	}
 	if err := json.Unmarshal(data, &renamed); err != nil {
 		return err
 	}
 	if renamed.Hub != nil {
-		r.Registry = renamed.Hub
+		r.Hub = renamed.Hub
 	}
 	var snake struct {
 		SettingsLocked        *bool     `json:"settings_locked"`
@@ -1676,7 +1676,7 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		}
 		return Settings{}, err
 	}
-	if err := c.checkRegistryAuthTargetWrite(ctx, current, cfg); err != nil {
+	if err := c.checkHubAuthTargetWrite(ctx, current, cfg); err != nil {
 		return Settings{}, err
 	}
 	// A request changing only the Models and Sandboxes settings writes
@@ -1695,12 +1695,12 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
 			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
 		}
-		if req.Registry != nil {
-			c.auditRegistryChanges(ctx, current, cfg)
+		if req.Hub != nil {
+			c.auditHubChanges(ctx, current, cfg)
 		}
 	}
 	c.triggerIAPSync()
-	c.triggerRegistrySync()
+	c.triggerHubSync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
 		if current != nil {
@@ -2290,12 +2290,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.SettingsLocked != nil {
 		cfg.SettingsLocked = *req.SettingsLocked
 	}
-	if req.Registry != nil {
-		normReg, err := model.NormalizeRegistryConfig(*req.Registry, c.Config.RegistryAllowInsecureHTTP)
+	if req.Hub != nil {
+		normReg, err := model.NormalizeHubConfig(*req.Hub, c.Config.HubAllowInsecureHTTP)
 		if err != nil {
 			return model.Config{}, validationErrorf("%v", err)
 		}
-		cfg.Registry = normReg
+		cfg.Hub = normReg
 	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)

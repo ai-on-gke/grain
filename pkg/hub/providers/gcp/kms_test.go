@@ -136,7 +136,7 @@ func TestKMSSignerSignAndJWKSRoundTrip(t *testing.T) {
 		t.Fatalf("expected 2 keys in JWKS (v1 and v2), got %d", len(jwksDoc.Keys))
 	}
 
-	token, err := signer.SignAssertion(ctx, hub.RegistryClaims{
+	token, err := signer.SignAssertion(ctx, hub.HubClaims{
 		Audience:  "grain-instance:alice-dev",
 		Subject:   "sub-alice",
 		Email:     "alice@example.com",
@@ -147,9 +147,9 @@ func TestKMSSignerSignAndJWKSRoundTrip(t *testing.T) {
 		t.Fatalf("SignAssertion: %v", err)
 	}
 
-	claims, err := hub.VerifyRegistryAssertion(token, jwksDoc, "grain-instance:alice-dev", now)
+	claims, err := hub.VerifyHubAssertion(token, jwksDoc, "grain-instance:alice-dev", now)
 	if err != nil {
-		t.Fatalf("VerifyRegistryAssertion: %v", err)
+		t.Fatalf("VerifyHubAssertion: %v", err)
 	}
 	if claims.Email != "alice@example.com" || claims.Subject != "sub-alice" || claims.RequestID != "req-123" {
 		t.Fatalf("unexpected verified claims: %+v", claims)

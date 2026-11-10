@@ -30,34 +30,34 @@ import (
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
-// RegistryHealth summarizes the deployment's connected-entry registry
+// HubHealth summarizes the deployment's connected-entry registry
 // heartbeat state on GET /api/sandboxes and `grain health`. Absent (nil)
 // when registry self-registration is not configured.
-type RegistryHealth struct {
-	URL                 string                        `json:"url"`
-	Entry               string                        `json:"entry"`
-	State               model.RegistryConnectionState `json:"state"`
-	LastHeartbeatAt     *time.Time                    `json:"lastHeartbeatAt,omitempty"`
-	ConsecutiveFailures int                           `json:"consecutiveFailures,omitempty"`
-	LastError           string                        `json:"lastError,omitempty"`
-	ScopeConflicts      []api.ScopeConflict           `json:"scopeConflicts,omitempty"`
+type HubHealth struct {
+	URL                 string                   `json:"url"`
+	Entry               string                   `json:"entry"`
+	State               model.HubConnectionState `json:"state"`
+	LastHeartbeatAt     *time.Time               `json:"lastHeartbeatAt,omitempty"`
+	ConsecutiveFailures int                      `json:"consecutiveFailures,omitempty"`
+	LastError           string                   `json:"lastError,omitempty"`
+	ScopeConflicts      []api.ScopeConflict      `json:"scopeConflicts,omitempty"`
 }
 
-func (c *Client) registryTokenSet() bool {
+func (c *Client) hubTokenSet() bool {
 	if c == nil || c.Config.Secrets == nil {
 		return false
 	}
-	ok, err := c.Config.Secrets.Has(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey)
+	ok, err := c.Config.Secrets.Has(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey)
 	return err == nil && ok
 }
 
-func (c *Client) triggerRegistrySync() {
-	if c != nil && c.Config.TriggerRegistrySync != nil {
-		c.Config.TriggerRegistrySync()
+func (c *Client) triggerHubSync() {
+	if c != nil && c.Config.TriggerHubSync != nil {
+		c.Config.TriggerHubSync()
 	}
 }
 
-func (c *Client) redactRegistryText(text string) string {
+func (c *Client) redactHubText(text string) string {
 	if text == "" {
 		return ""
 	}
@@ -73,7 +73,7 @@ func (c *Client) redactRegistryText(text string) string {
 	return redacted
 }
 
-// registryTarget is the part of a RegistryConfig that decides where the
+// hubTarget is the part of a HubConfig that decides where the
 // daemon's registry credential goes and what it acts on there: the registry
 // URL, the auth mode and OIDC audience it presents (and mints host identity
 // tokens for), the entry name the credential is presented for -- in OIDC
@@ -82,17 +82,17 @@ func (c *Client) redactRegistryText(text string) string {
 // manage the entry like its owner (rotate its grc_ credential, take over its
 // tunnel). Catalog-only fields (displayName, purpose, listed, tags, hostKind,
 // scopes) are not part of it.
-type registryTarget struct {
+type hubTarget struct {
 	URL          string
 	Entry        string
-	AuthMode     model.RegistryAuthMode
+	AuthMode     model.HubAuthMode
 	OIDCAudience string
 	OwnerGroup   string
 }
 
-func registryAuthTarget(cfg model.RegistryConfig) registryTarget {
-	mode, _ := model.NormalizeRegistryAuthMode(cfg.AuthMode)
-	return registryTarget{
+func hubAuthTarget(cfg model.HubConfig) hubTarget {
+	mode, _ := model.NormalizeHubAuthMode(cfg.AuthMode)
+	return hubTarget{
 		URL:          strings.TrimSpace(cfg.URL),
 		Entry:        strings.ToLower(strings.TrimSpace(cfg.Entry)),
 		AuthMode:     mode,
@@ -101,26 +101,26 @@ func registryAuthTarget(cfg model.RegistryConfig) registryTarget {
 	}
 }
 
-func registryTargets(before *model.Config, after model.Config) (registryTarget, registryTarget) {
-	var prev model.RegistryConfig
+func hubTargets(before *model.Config, after model.Config) (hubTarget, hubTarget) {
+	var prev model.HubConfig
 	if before != nil {
-		prev = before.Registry
+		prev = before.Hub
 	}
-	return registryAuthTarget(prev), registryAuthTarget(after.Registry)
+	return hubAuthTarget(prev), hubAuthTarget(after.Hub)
 }
 
-func registryAuthTargetChanged(before *model.Config, after model.Config) bool {
-	b, a := registryTargets(before, after)
+func hubAuthTargetChanged(before *model.Config, after model.Config) bool {
+	b, a := hubTargets(before, after)
 	return b != a
 }
 
-// checkRegistryAuthTargetWrite holds changes to where the daemon sends its
+// checkHubAuthTargetWrite holds changes to where the daemon sends its
 // registry registration token or mints host OIDC identity tokens for (URL,
 // authMode, oidcAudience), which entry it presents them for (entry), and who
 // it hands management of that entry to (ownerGroup) to a human principal with
 // secrets:write.
-func (c *Client) checkRegistryAuthTargetWrite(ctx context.Context, before *model.Config, after model.Config) error {
-	if !registryAuthTargetChanged(before, after) {
+func (c *Client) checkHubAuthTargetWrite(ctx context.Context, before *model.Config, after model.Config) error {
+	if !hubAuthTargetChanged(before, after) {
 		return nil
 	}
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
@@ -132,13 +132,13 @@ func (c *Client) checkRegistryAuthTargetWrite(ctx context.Context, before *model
 	return nil
 }
 
-// auditRegistryChanges records changes to registry URL, entry, authMode,
+// auditHubChanges records changes to registry URL, entry, authMode,
 // oidcAudience or ownerGroup in the credential-access audit log.
-func (c *Client) auditRegistryChanges(ctx context.Context, before *model.Config, after model.Config) {
-	if c == nil || c.Store == nil || !registryAuthTargetChanged(before, after) {
+func (c *Client) auditHubChanges(ctx context.Context, before *model.Config, after model.Config) {
+	if c == nil || c.Store == nil || !hubAuthTargetChanged(before, after) {
 		return
 	}
-	b, a := registryTargets(before, after)
+	b, a := hubTargets(before, after)
 	action := "set registry target"
 	if a.URL == "" {
 		action = "clear registry target"
@@ -153,34 +153,34 @@ func (c *Client) auditRegistryChanges(ctx context.Context, before *model.Config,
 		Kind:       model.CredentialAccessConnection,
 		Resource:   "registry",
 		Action:     action,
-		Credential: secrets.RegistryRegistrationTokenSecret,
+		Credential: secrets.HubRegistrationTokenSecret,
 		Outcome:    outcome,
 	}); err != nil {
 		log.Printf("grain ui: auditing registry target change: %v", err)
 	}
 }
 
-// GetRegistrySnapshot returns the deployment's current connected-entry
+// GetHubSnapshot returns the deployment's current connected-entry
 // registry state, heartbeat timings, queue counts, and advertised scopes.
-func (c *Client) GetRegistrySnapshot(ctx context.Context) (model.RegistrySnapshot, error) {
-	if c.Config.RegistryStatus != nil {
-		snap, err := c.Config.RegistryStatus(ctx)
+func (c *Client) GetHubSnapshot(ctx context.Context) (model.HubSnapshot, error) {
+	if c.Config.HubStatus != nil {
+		snap, err := c.Config.HubStatus(ctx)
 		if err != nil {
-			return model.RegistrySnapshot{}, err
+			return model.HubSnapshot{}, err
 		}
-		snap.LastError = c.redactRegistryText(snap.LastError)
-		snap.HealthDetail = c.redactRegistryText(snap.HealthDetail)
+		snap.LastError = c.redactHubText(snap.LastError)
+		snap.HealthDetail = c.redactHubText(snap.HealthDetail)
 		if snap.AdvertisedScopes == nil {
-			snap.AdvertisedScopes = []model.RegistryAdvertisedScope{}
+			snap.AdvertisedScopes = []model.HubAdvertisedScope{}
 		}
 		return snap, nil
 	}
-	return c.fallbackRegistrySnapshot(ctx)
+	return c.fallbackHubSnapshot(ctx)
 }
 
-func (c *Client) fallbackRegistrySnapshot(ctx context.Context) (model.RegistrySnapshot, error) {
+func (c *Client) fallbackHubSnapshot(ctx context.Context) (model.HubSnapshot, error) {
 	var (
-		regCfg      model.RegistryConfig
+		regCfg      model.HubConfig
 		targetRepos []string
 		repoConfigs []model.RepoConfig
 		active      int
@@ -189,28 +189,28 @@ func (c *Client) fallbackRegistrySnapshot(ctx context.Context) (model.RegistrySn
 	if c.Store != nil {
 		cfg, err := c.Store.GetConfig(ctx)
 		if err != nil {
-			return model.RegistrySnapshot{}, err
+			return model.HubSnapshot{}, err
 		}
 		if cfg != nil {
-			regCfg = cfg.Registry
+			regCfg = cfg.Hub
 			targetRepos = cfg.TargetRepos
 		}
 		repoConfigs, err = c.Store.ListRepoConfigs(ctx)
 		if err != nil {
-			return model.RegistrySnapshot{}, err
+			return model.HubSnapshot{}, err
 		}
-		active, awaiting, err = c.Store.RegistryTaskCounts(ctx)
+		active, awaiting, err = c.Store.HubTaskCounts(ctx)
 		if err != nil {
-			return model.RegistrySnapshot{}, err
+			return model.HubSnapshot{}, err
 		}
 	}
 	var stateRepo model.RepoRef
 	if c.Config.StateRepoRef != nil {
 		stateRepo = c.Config.StateRepoRef()
 	}
-	scopes := model.DeriveRegistryScopes(targetRepos, nil, stateRepo, repoConfigs, regCfg.Scopes)
+	scopes := model.DeriveHubScopes(targetRepos, nil, stateRepo, repoConfigs, regCfg.Scopes)
 	if scopes == nil {
-		scopes = []model.RegistryAdvertisedScope{}
+		scopes = []model.HubAdvertisedScope{}
 	}
 	ver := version.Get()
 	if c.Config.DaemonVersion != nil {
@@ -227,32 +227,32 @@ func (c *Client) fallbackRegistrySnapshot(ctx context.Context) (model.RegistrySn
 			healthDetail = "state repository sync failing"
 		}
 	}
-	tokenSet := c.registryTokenSet()
-	authMode, _ := model.NormalizeRegistryAuthMode(regCfg.AuthMode)
+	tokenSet := c.hubTokenSet()
+	authMode, _ := model.NormalizeHubAuthMode(regCfg.AuthMode)
 	var credSource string
 	switch authMode {
-	case model.RegistryAuthOIDC:
+	case model.HubAuthOIDC:
 		credSource = "oidc"
 	default:
 		if tokenSet {
-			credSource = "secret:" + secrets.RegistryRegistrationTokenSecret
+			credSource = "secret:" + secrets.HubRegistrationTokenSecret
 		}
 	}
-	state := model.RegistryStateDisabled
+	state := model.HubStateDisabled
 	var lastErr string
 	if regCfg.Enabled() {
-		if authMode == model.RegistryAuthToken && !tokenSet {
-			state = model.RegistryStateError
-			lastErr = "registration token secret " + secrets.RegistryRegistrationTokenSecret + " is not set"
+		if authMode == model.HubAuthToken && !tokenSet {
+			state = model.HubStateError
+			lastErr = "registration token secret " + secrets.HubRegistrationTokenSecret + " is not set"
 		} else {
-			state = model.RegistryStateConnecting
+			state = model.HubStateConnecting
 		}
 	}
 	hostKind := regCfg.HostKind
 	if hostKind == "" {
 		hostKind = api.HostKindWorkstation
 	}
-	return model.RegistrySnapshot{
+	return model.HubSnapshot{
 		Enabled:            regCfg.Enabled(),
 		State:              state,
 		Config:             regCfg,
@@ -270,33 +270,33 @@ func (c *Client) fallbackRegistrySnapshot(ctx context.Context) (model.RegistrySn
 	}, nil
 }
 
-// TriggerRegistryHeartbeat runs one immediate registration/heartbeat step
-// when wired to a live RegistryManager and returns the resulting snapshot.
-func (c *Client) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySnapshot, error) {
-	if c.Config.TriggerRegistryHeartbeat != nil {
-		snap, err := c.Config.TriggerRegistryHeartbeat(ctx)
+// TriggerHubHeartbeat runs one immediate registration/heartbeat step
+// when wired to a live HubManager and returns the resulting snapshot.
+func (c *Client) TriggerHubHeartbeat(ctx context.Context) (model.HubSnapshot, error) {
+	if c.Config.TriggerHubHeartbeat != nil {
+		snap, err := c.Config.TriggerHubHeartbeat(ctx)
 		if err != nil {
 			if msg := err.Error(); msg != "" {
-				if redacted := c.redactRegistryText(msg); redacted != msg {
+				if redacted := c.redactHubText(msg); redacted != msg {
 					err = errors.New(redacted)
 				}
 			}
-			return model.RegistrySnapshot{}, err
+			return model.HubSnapshot{}, err
 		}
-		snap.LastError = c.redactRegistryText(snap.LastError)
-		snap.HealthDetail = c.redactRegistryText(snap.HealthDetail)
+		snap.LastError = c.redactHubText(snap.LastError)
+		snap.HealthDetail = c.redactHubText(snap.HealthDetail)
 		if snap.AdvertisedScopes == nil {
-			snap.AdvertisedScopes = []model.RegistryAdvertisedScope{}
+			snap.AdvertisedScopes = []model.HubAdvertisedScope{}
 		}
 		return snap, nil
 	}
-	return c.GetRegistrySnapshot(ctx)
+	return c.GetHubSnapshot(ctx)
 }
 
-// GetRegistryInstanceStatus answers GET /api/registry/status with the wire
+// GetHubInstanceStatus answers GET /api/registry/status with the wire
 // api.InstanceStatusResponse payload (design/design/hub.design.md).
-func (c *Client) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
-	snap, err := c.GetRegistrySnapshot(ctx)
+func (c *Client) GetHubInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
+	snap, err := c.GetHubSnapshot(ctx)
 	if err != nil {
 		return api.InstanceStatusResponse{}, err
 	}
@@ -320,18 +320,18 @@ func (c *Client) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceSta
 	}, nil
 }
 
-func (c *Client) registryHealth(ctx context.Context) *RegistryHealth {
+func (c *Client) hubHealth(ctx context.Context) *HubHealth {
 	if c == nil {
 		return nil
 	}
-	if c.Config.RegistryStatus == nil && c.Store == nil {
+	if c.Config.HubStatus == nil && c.Store == nil {
 		return nil
 	}
-	snap, err := c.GetRegistrySnapshot(ctx)
+	snap, err := c.GetHubSnapshot(ctx)
 	if err != nil || !snap.Enabled {
 		return nil
 	}
-	return &RegistryHealth{
+	return &HubHealth{
 		URL:                 snap.Config.URL,
 		Entry:               snap.Config.Entry,
 		State:               snap.State,
@@ -342,8 +342,8 @@ func (c *Client) registryHealth(ctx context.Context) *RegistryHealth {
 	}
 }
 
-func (s *Server) handleGetRegistry(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.tasks.GetRegistrySnapshot(r.Context())
+func (s *Server) handleGetHub(w http.ResponseWriter, r *http.Request) {
+	snap, err := s.tasks.GetHubSnapshot(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -351,8 +351,8 @@ func (s *Server) handleGetRegistry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snap)
 }
 
-func (s *Server) handleTriggerRegistryHeartbeat(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.tasks.TriggerRegistryHeartbeat(r.Context())
+func (s *Server) handleTriggerHubHeartbeat(w http.ResponseWriter, r *http.Request) {
+	snap, err := s.tasks.TriggerHubHeartbeat(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -360,8 +360,8 @@ func (s *Server) handleTriggerRegistryHeartbeat(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, snap)
 }
 
-func (s *Server) handleGetRegistryInstanceStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.tasks.GetRegistryInstanceStatus(r.Context())
+func (s *Server) handleGetHubInstanceStatus(w http.ResponseWriter, r *http.Request) {
+	st, err := s.tasks.GetHubInstanceStatus(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

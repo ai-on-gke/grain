@@ -96,10 +96,10 @@ func operatorActor(ctx context.Context) model.Principal {
 func RequestActor(ctx context.Context) model.Attribution {
 	if p, ok := PrincipalFromContext(ctx); ok {
 		if del := delegatedIdentityFromContext(ctx); del != nil &&
-			p.Kind == model.PrincipalHuman && p.Source == model.SourceRegistry && strings.EqualFold(p.ID, del.PersonEmail) {
+			p.Kind == model.PrincipalHuman && p.Source == model.SourceHub && strings.EqualFold(p.ID, del.PersonEmail) {
 			return model.Attribution{
-				Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
-				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+				Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceHub},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceHub},
 			}
 		}
 		if p.Kind == model.PrincipalAgent && p.Source == model.SourceExternalToken {
@@ -117,8 +117,8 @@ func RequestActor(ctx context.Context) model.Attribution {
 	}
 	if del := delegatedIdentityFromContext(ctx); del != nil {
 		return model.Attribution{
-			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
-			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceHub},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceHub},
 		}
 	}
 	op := operatorActor(ctx)

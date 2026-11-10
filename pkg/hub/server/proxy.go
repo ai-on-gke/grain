@@ -86,7 +86,7 @@ func IsUpgradeRequest(r *http.Request) bool {
 
 // SanitizeProxyRequest strips all edge credentials, IAP cookies, incoming registry/peer headers,
 // and edge-audience OIDC bearer tokens, then sets canonical outbound Host and X-Forwarded-* headers.
-func SanitizeProxyRequest(r *http.Request, entryHostname, registryHost, iapAudience, signedAssertion, requestID string) {
+func SanitizeProxyRequest(r *http.Request, entryHostname, hubHost, iapAudience, signedAssertion, requestID string) {
 	if r == nil {
 		return
 	}
@@ -123,7 +123,7 @@ func SanitizeProxyRequest(r *http.Request, entryHostname, registryHost, iapAudie
 	// `*.apps.googleusercontent.com` IAP OAuth client), while preserving grain-scoped
 	// tokens such as `gma_…` and installation access codes.
 	for _, auth := range r.Header.Values("Authorization") {
-		if shouldStripAuthorizationHeader(strings.TrimSpace(auth), entryHostname, registryHost, iapAudience) {
+		if shouldStripAuthorizationHeader(strings.TrimSpace(auth), entryHostname, hubHost, iapAudience) {
 			r.Header.Del("Authorization")
 			break
 		}
@@ -133,7 +133,7 @@ func SanitizeProxyRequest(r *http.Request, entryHostname, registryHost, iapAudie
 		if rest, ok := cutBearerPrefix(rawTok); ok {
 			rawTok = rest
 		}
-		if shouldStripBearerToken(rawTok, entryHostname, registryHost, iapAudience) {
+		if shouldStripBearerToken(rawTok, entryHostname, hubHost, iapAudience) {
 			r.Header.Del("X-Grain-Tunnel-Token")
 			break
 		}
@@ -172,15 +172,15 @@ func cutBearerPrefix(s string) (string, bool) {
 	return strings.TrimSpace(s[7:]), true
 }
 
-func shouldStripAuthorizationHeader(authHeader, entryHostname, registryHost, iapAudience string) bool {
+func shouldStripAuthorizationHeader(authHeader, entryHostname, hubHost, iapAudience string) bool {
 	tok, ok := cutBearerPrefix(authHeader)
 	if !ok {
 		return false
 	}
-	return shouldStripBearerToken(tok, entryHostname, registryHost, iapAudience)
+	return shouldStripBearerToken(tok, entryHostname, hubHost, iapAudience)
 }
 
-func shouldStripBearerToken(tok, entryHostname, registryHost, iapAudience string) bool {
+func shouldStripBearerToken(tok, entryHostname, hubHost, iapAudience string) bool {
 	tok = strings.TrimSpace(tok)
 	if tok == "" {
 		return false
@@ -213,7 +213,7 @@ func shouldStripBearerToken(tok, entryHostname, registryHost, iapAudience string
 		return false
 	}
 
-	normReg := NormalizeHost(registryHost)
+	normReg := NormalizeHost(hubHost)
 	normEntry := NormalizeHost(entryHostname)
 	iapAud := strings.TrimSpace(iapAudience)
 	const googleOAuthClientSuffix = ".apps.googleusercontent.com"

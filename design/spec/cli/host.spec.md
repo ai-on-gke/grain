@@ -1711,7 +1711,7 @@ _No flags._
 | `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/hub_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestRegistryCLIStopStart`, `TestDaemonRegistryFlags`; `pkg/cli/hub_delegation_test.go`: `TestRegistryCLIDelegatingAppsAndGrants`.
+**Pinned by:** `pkg/cli/hub_test.go`: `TestHubCLIRegisterStatusUnregister`, `TestHubCLISubcommands`, `TestHubCLIStopStart`, `TestDaemonHubFlags`; `pkg/cli/hub_delegation_test.go`: `TestHubCLIDelegatingAppsAndGrants`.
 
 ---
 

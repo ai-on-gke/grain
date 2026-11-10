@@ -376,9 +376,9 @@ func ecJWK(kid string, pub *ecdsa.PublicKey) map[string]string {
 	}
 }
 
-func TestRegistryVerifier(t *testing.T) {
-	webauth.ResetRegistryConfig()
-	t.Cleanup(webauth.ResetRegistryConfig)
+func TestHubVerifier(t *testing.T) {
+	webauth.ResetHubConfig()
+	t.Cleanup(webauth.ResetHubConfig)
 
 	ecKey1, _ := generateECKey(t)
 	ecKey2, _ := generateECKey(t)
@@ -421,11 +421,11 @@ func TestRegistryVerifier(t *testing.T) {
 		audience = "https://my-grain.grain.example.com"
 	)
 
-	verifier := webauth.NewRegistryVerifier(
-		webauth.WithRegistryIssuer(issuer),
-		webauth.WithRegistryAudience(audience),
-		webauth.WithRegistryKeysURL(jwksSrv.URL),
-		webauth.WithRegistryVerifierHTTPClient(jwksSrv.Client()),
+	verifier := webauth.NewHubVerifier(
+		webauth.WithHubIssuer(issuer),
+		webauth.WithHubAudience(audience),
+		webauth.WithHubKeysURL(jwksSrv.URL),
+		webauth.WithHubVerifierHTTPClient(jwksSrv.Client()),
 	)
 	if verifier.Name() != "registry" {
 		t.Fatalf("Name() = %q, want registry", verifier.Name())
@@ -452,7 +452,7 @@ func TestRegistryVerifier(t *testing.T) {
 
 	// 1. Initial JWKS fetch failure returns an error implementing Unavailable() == true.
 	failJWKS.Store(true)
-	validClaims := webauth.RegistryClaims{
+	validClaims := webauth.HubClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
 			Audience:  jwt.ClaimStrings{audience},
@@ -489,7 +489,7 @@ func TestRegistryVerifier(t *testing.T) {
 	}
 
 	// 3. Valid service account token classifies as PrincipalService.
-	saTok := signES256("reg-ec-1", ecKey1, webauth.RegistryClaims{
+	saTok := signES256("reg-ec-1", ecKey1, webauth.HubClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
 			Audience:  jwt.ClaimStrings{audience},
@@ -676,7 +676,7 @@ func TestRegistryVerifier(t *testing.T) {
 		t.Fatalf("JWKS fetches = %d, want %d (rate-limited within floor)", jwksFetches.Load(), fetchesBefore)
 	}
 
-	webauth.SetRegistryRefetchFloor(time.Nanosecond)
+	webauth.SetHubRefetchFloor(time.Nanosecond)
 	if id2, ok, err := verifier.VerifyRequest(reqKey2); err != nil || !ok || id2.Email != "alice@example.com" {
 		t.Fatalf("after refetch floor elapsed: id=%+v, ok=%v, err=%v", id2, ok, err)
 	}
