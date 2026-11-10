@@ -470,6 +470,72 @@ working across a rotation. A bearer code is accepted from any address,
 because the code is the credential, unless the daemon requires IAP
 (`-ui-require-iap`), which takes it over unforwarded loopback only.
 
+## Who the code is recorded as
+
+The code carries the owner's powers, but every request it authenticates
+also records who presented it, as the principal `access-code:<name>`
+(a human, source `access-code`, shown as "`<name>` (access code)"):
+
+- **The browser sign-in** asks for your email beside the code. When the
+  allowlist (Settings -> Access) names anybody, the email must be one it
+  admits; a verified identity that arrives with the code (a verifier
+  declaring `AccessCodeWins`) is used instead of what was typed. The
+  session cookie carries the name under its MAC
+  (`v2.<issued>.<name>.<mac>`), so it cannot be edited. A session signed
+  in before names existed (`v1`) keeps working until it expires, as
+  "operator (access code)".
+- **The CLI** sends `X-Grain-Access-Name` beside a bearer code:
+  `$GRAIN_OWNER` when set, else the local account as `<user>@<host>`.
+  The header counts only beside the code. The name is what the CLI
+  says, not something grain verified: anybody who holds the code is the
+  owner already, so the name attributes the request, it does not
+  authorize it. For a verified identity, use `grain login` through IAP
+  or an identity proxy.
+- **The access history** (Settings -> Access, the config audit) records
+  every mutating request the code authenticates under the surface
+  `access-code`: who, the source address, the route and the time,
+  beside role changes.
+
+## Bootstrap and recovery only: `grain access-code mode`
+
+```bash
+grain access-code mode            # prints on, recovery or off
+grain access-code mode recovery   # recommended once a verified sign-in works
+grain access-code mode off
+grain access-code mode on         # the default
+```
+
+The mode is kept in `<data-dir>/access-code-mode`, beside the code, and
+the daemon re-reads it within a second. Only this command, on the host,
+changes it, never Settings. That way someone holding the code on the
+network cannot switch it back on, and an owner who has lost every
+verified sign-in still has the host.
+
+- **on** (the default, and how every existing install behaves): the code
+  works everywhere, as described above.
+- **recovery**: once a person on the allowlist with a full role (a
+  `user:` entry, `grain/operator` or wider) can sign in through a
+  verifier (an IAP audience, `-ui-require-verifier`, or a registered
+  identity proxy), the code only manages access and settings:
+  `/api/access/*`, `/api/api-scope-sets*`, `/api/settings*`,
+  `/api/config`, `/api/deployment` and its config audit,
+  `/api/whoami`, signing in and out, and the frontend. Every other
+  route answers `403` naming recovery mode. Each use raises an Inbox
+  notification (`access-code:recovery:<source>`, at most one a minute
+  per name and source, with every raise counted) that names who used it
+  and from where. Until such a person exists, recovery works like
+  **on**, so it cannot lock out the bootstrap it is meant to protect.
+- **off**: the code is refused as a bearer token, in
+  `X-Grain-Access-Code`, as a session, and at sign-in. One exception
+  remains: a run's own plumbing (`grain mcpserver` requests carrying
+  `X-Grain-Acting-Task`, held to that task's grants and recorded as the
+  task) still reaches the daemon with the code, until runs carry a
+  credential of their own. Undo it with `grain access-code mode on` on
+  the host.
+
+A mode file holding anything else is read as **off**, so a typo never
+opens the code wider than intended.
+
 ## Rotating
 
 `grain access-code rotate` writes a new code into the file and prints it.

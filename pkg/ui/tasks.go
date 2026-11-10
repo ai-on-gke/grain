@@ -2122,7 +2122,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	actor := s.tasks.requestActor(r.Context()).Actor
+	actor := deploymentActorOf(r.Context(), s.tasks.requestActor(r.Context()).Actor)
 	_, authenticated := PrincipalFromContext(r.Context())
 	viewerOwner := ""
 	if authenticated || singleTenantTrusted(r) {

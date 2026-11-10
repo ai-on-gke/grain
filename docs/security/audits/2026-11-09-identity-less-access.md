@@ -103,31 +103,50 @@ refuse the fixture's task, not the caller).
   say who it was. An unnamed legacy cookie keeps working as "operator
   (access code)".
 - **Access-code mode** (`grain access-code mode on|recovery|off`, a file
-  beside the code, read again within a second like the code itself):
-  `recovery` limits the code to managing access and settings once a
-  human admin with a verified identity is on the allowlist, and raises an
-  Inbox notification for each use; `off` refuses it everywhere. Default
-  `on`, today's behaviour. The mode is kept on the host, not in Settings,
-  so a code holder over the network cannot switch the code back on.
+  beside the code that the daemon re-reads within a second, like the code
+  itself). `recovery` limits the code to managing access and settings
+  once a person with a full role on the allowlist can sign in through a
+  verifier, and raises an Inbox notification for each use. `off` refuses
+  the code everywhere except a run's own acting-task plumbing (see the
+  finding below). The default is `on`, today's behaviour, and
+  `scripts/setup.sh` recommends `recovery`. The mode is kept on the
+  host, not in Settings, so someone holding the code on the network
+  cannot switch it back on.
 - **Audit trail.** Every mutating request the code authenticates is
   recorded in the access history (config audit, surface `access-code`)
   with who (if named), source address, route and time, beside #3864's
   role-change records.
 
+## Finding (access code, not identity-less)
+
+- **`X-Grain-Acting-Task` is trusted on the strength of the access code.**
+  A run's `grain mcpserver` reaches the daemon with the code and names
+  its task in `X-Grain-Acting-Task` (and `X-Grain-Acting-Run`).
+  `authorizeAgentCall` holds the call to that task's grants, but takes
+  the header on the code alone: a code holder can act as any task's
+  agent, up to that task's grants. It is no wider than the code, which
+  is already the owner's. It does mean the code cannot be switched off
+  outright, because runs depend on it, so `off` keeps that one path
+  open. Filed as its own task: give each run a credential of its own,
+  then close the exception.
+
 ## Follow-ups filed
 
-- The host CLI's actor is self-asserted (`X-Grain-Access-Name`), which
-  is no weaker than today (the code holder is already the owner) but
-  is not verified. Serving the API on a unix socket and mapping the
-  peer's `SO_PEERCRED` uid to the configured owner, and `grain login`
-  holding a personal token through IAP or a trusted identity proxy, are
-  filed as their own task.
-- A Settings -> Access card showing the access-code mode, recommending
-  `recovery`, and showing the command that changes it, is filed as its
-  own task (a UI change with screenshots).
+- The host CLI's name is self-asserted (`X-Grain-Access-Name`). That is
+  no weaker than today, since the code holder is already the owner, but
+  it is not verified. Two pieces of work are filed as their own task:
+  serving the API on a unix socket and mapping the peer's `SO_PEERCRED`
+  uid to the configured owner, and having `grain login` hold a personal
+  token through IAP or a trusted identity proxy.
+- A Settings -> Access card that shows the access-code mode, recommends
+  `recovery` and gives the command that changes it is filed as its own
+  task (a UI change, with screenshots).
+- The workstation installer lives outside this repository and should
+  make the same recommendation as `scripts/setup.sh`. Filed against
+  that repository.
 
-No confirmed finding in the identity-less, code-less surface, so no
-separate fix task is filed for it.
+Nothing in the identity-less, code-less surface was confirmed as a
+finding, so no fix task is filed for it.
 
 ## Appendix: every route, probed
 
