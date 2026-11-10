@@ -2284,7 +2284,7 @@ This covers where the installation's state repository lives and what it holds. T
 | `reformat` | record that the schema changed, so the next start replaces the dump |
 | `restore-snapshot DIR` | restore the settings and memory tables from a snapshot |
 | `prepare-upgrade` | export a store this build cannot open, for the next start to migrate. Prints `prepared FROM TO DIR`, `current N` or `none` |
-| `check [-migrate] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive |
+| `check [-migrate] [-base REV] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive. `-base` (string) names the git revision the change is against: a credential typed into a capability server rather than referenced as `$secret:<name>` fails the check when the change adds it and is a warning when the base already held it (without `-base`, or with `-migrate`, every one is a warning). The check grain posts on its own configuration repositories reads the base from the clone's `origin/HEAD` |
 | `key show` / `key path` | print the secrets public key / where the private key is read from |
 | `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
 | `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |

@@ -152,9 +152,8 @@ func TestWarnsAboutSettingsGrainCannotRunOn(t *testing.T) {
 		t.Errorf("k8s_node_selector warnings = %v, want one naming k8s_node_selector and bad-selector", warnings)
 	}
 
-	// Capability servers: an entry the daemon would refuse, and a
-	// credential committed in cleartext, each warned about without the
-	// value being repeated.
+	// Capability servers: an entry the daemon would refuse is warned
+	// about, without any value being repeated.
 	if err := store.PutConfig(ctx, model.Config{
 		PollInterval: 30 * time.Second,
 		MaxWorkers:   1,
@@ -170,7 +169,8 @@ func TestWarnsAboutSettingsGrainCannotRunOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checking: %v", err)
 	}
-	if len(warnings) != 2 || !strings.Contains(warnings[0], "caps/bad") || !strings.Contains(warnings[1], "caps/plain") ||
+	// The cleartext one is LiteralCredentials' (literals_test.go).
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "caps/bad") ||
 		strings.Contains(strings.Join(warnings, " "), "cleartext-value") {
 		t.Errorf("capability server warnings = %v", warnings)
 	}

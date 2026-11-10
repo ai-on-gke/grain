@@ -39,7 +39,7 @@ agent granted the same `:read` scopes.
 | ID | Finding | Severity | Status |
 | --- | --- | --- | --- |
 | CE-1 | Console output (`GET /api/console/{id}/output`, `sessions:read`) served a run's raw terminal, unredacted | High | **Fixed here** |
-| CE-2 | Capability server `env` / `headers` / `args` / `serverUrl` accepted typed-in credentials, and `GET /api/capability-servers` (`capabilities:read`) returned them verbatim | High | **Fixed here** for the API and new saves; state repo, grain/config pull requests and existing rows → follow-up task |
+| CE-2 | Capability server `env` / `headers` / `args` / `serverUrl` accepted typed-in credentials, and `GET /api/capability-servers` (`capabilities:read`) returned them verbatim | High | **Fixed here** for the API and new saves; grain/config pull requests and existing rows fixed by task 4003. Values already in state-repo history must be rotated |
 | CE-3 | Attempt transcripts (`tasks:read`): with no object store, the DB copy is redacted only of the sandbox env and credential shapes, and a live tail not at all | High | **Fixed here** (redacted on read) |
 | CE-4 | Credentials kept in files beside the store (Codex logins, GitHub App webhook secrets, setup.sh agent key files, state/secrets repo tokens, relay token file, Postgres password) were in no redaction list | Medium | **Fixed here** |
 | CE-5 | `sessions:write` (e.g. `grain/delegate`) can type into any task's console, whatever grants that run holds | High | Follow-up task |
@@ -83,12 +83,30 @@ saved into `grain_config.mcp_servers` and returned verbatim by
   $secret:cap-token`) are kept. Shapes are cut from args, URL and config
   strings.
 
-**Still open (follow-up task):** the same row is exported to the state
+**Follow-up (task 4003):** the same row was exported to the state
 repository and readable with `settings:read` through the State browser
 (CE-7 redacts shapes and known values there, but not a shapeless
-literal), `config://` and the settings history. A grain/config pull
-request can still add one. The follow-up adds the rule to `statecheck`
-and migrates existing literals into the store.
+literal), `config://` and the settings history, and a grain/config pull
+request could still add one. Now:
+
+- `grain state check` applies the same rule
+  (`statecheck.LiteralCredentials`). A literal the pull request adds or
+  changes, compared with its base, fails the check. One the base
+  already held is a warning. The check grain posts reads the base from
+  the clone's `origin/HEAD`, and the CLI takes `-base <rev>`.
+- At every start, before the capability servers do, the daemon moves
+  each literal in a stored entry's `env` or `headers` into the secrets
+  store as `capability-server-<id>/<field>` and rewrites the entry to
+  `$secret:<name>` (`migrateLiteralCredentials`). The journal logs what
+  moved, by name only. Literals in `args` and `serverUrl` cannot be
+  referenced, so they are logged for the operator to edit.
+  `ServerConfig.Validate` is unchanged, so an upgrade detaches no live
+  server.
+
+**Residual:** a value that was ever exported stays in the state
+repository's git history. The operator must rotate every credential the
+migration moved (`docs/capabilities.md`, "Typed-in credentials";
+secrets-key-protection §4.3).
 
 ### CE-3: attempt transcripts (reproduced)
 
@@ -189,7 +207,7 @@ a git SHA is left alone.
 | Host credential / enrollment code (`ghd_`, `ghe_`) | ✔ | — | ✔ (`LocalTables`) | R | R | R | not exported |
 | Standing sandbox secrets | ✔ names (`standing_sandbox_secret` holds names) | — | ✔ names | R | ✔\* | R | operator only |
 | Capability server `$secret:` values | ✔ names + presence | ✔ | ✔ references | R | ✔\* | R | operator only |
-| Capability server **typed-in** values | — | ✔\* withheld / refused | ✗ CE-2 follow-up (R where shaped) | R | ✔\* | R | in `grain_config` |
+| Capability server **typed-in** values | — | ✔\* withheld / refused | ✔\* moved to the store at start, refused in pull requests (history: rotate) | R | ✔\* | R | moved out of `grain_config` |
 | `request_secret` answers (store) | ✔ (`PUT /api/tasks/{id}/secret` is write-only) | — | ✔ (`pending_secret` is a name) | ✔\* | ✔\* | R | operator only |
 | State / secrets repo tokens | ✔ write-only (`POST /api/state-repo/secrets-repo`) | — | ✔ | ✔\* | ✔\* | ✔\* | operator only |
 | Secrets private key / `secrets.enc` | ✔ (no route returns it; `secrets-key` is write-only) | — | ✔ (`secrets.enc` is outside `browsableDirs`, and moved out of the repo) | ✔\* (shape) | ✔\* | ✔\* | operator only |
@@ -229,6 +247,8 @@ no live sandbox: the console test starts a real PTY with `/bin/sh`.
 | `TestStateRepoFileIsRedacted` | `pkg/ui` | CE-7 |
 | `TestLiteralCredentialsNamesTypedInCredentialsOnly`, `TestWithheldLiteralsKeepsReferencesAndCutsValues` | `pkg/capability/protocol` | CE-2 rules |
 | `TestTextRedactsBareGrainCredentials` | `pkg/redact` | CE-6 |
+| `TestStateCheckRefusesALiteralHeaderAPullRequestAdds` | `pkg/staterepo/statecheck` | CE-2: a grain/config pull request (task 4003) |
+| `TestMigrateLiteralCredentialsLeavesNoLiteralInConfigOrExport` | `pkg/daemon` | CE-2: existing rows (task 4003) |
 
 Each of the sweep's capability-server and transcript checks was seen to
 fail with its fix disabled.

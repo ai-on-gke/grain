@@ -834,6 +834,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
 	}
+	// Also before the capability servers start, so each starts with the
+	// $secret: references its typed-in credentials became.
+	if err := migrateLiteralCredentials(ctx, store, secretStore); err != nil {
+		log.Printf("daemon: moving typed-in capability server credentials into the secrets store: %v", err)
+	}
 	// transcriptDir is where a run's own agent.Framework may mirror its
 	// transcript-in-progress live, and where the UI server below reads one
 	// back from for a still-running attempt -- the two sides of
