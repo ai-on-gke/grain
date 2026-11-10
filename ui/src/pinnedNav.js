@@ -18,6 +18,7 @@ import {
   settingsSectionLabel,
   systemTabLabel,
 } from "./settingsSections.js";
+import { boardLabel } from "./boards.js";
 
 export const DEFAULT_PINNED_ITEMS = [{ kind: "view", id: "inbox" }];
 
@@ -325,7 +326,7 @@ export function getPinnedItemInfo(item, { sessions = [], boards = [] } = {}) {
   if (item.kind === "board") {
     const b = boards.find((board) => board.id === item.id);
     return {
-      label: b ? b.name : item.id,
+      label: b ? boardLabel(boards, b) : item.id,
       glyph: customIcon || null,
       dot: !customIcon,
       color: customColor,
