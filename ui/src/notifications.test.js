@@ -271,6 +271,33 @@ describe("pending releases", () => {
     );
   });
 
+  it("do not call a full soak short when a person ticks Allow short soak", async () => {
+    const release = {
+      repo: "ai-on-gke/grain",
+      version: "v2.4.0",
+      soak: "soaked 25h10m of 24h",
+      shortSoak: null,
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(release, true, { shortSoakOk: true })).toBe(
+      true,
+    );
+    const question = confirm.mock.calls.at(-1)[0];
+    expect(question).toContain("soaked 25h10m of 24h");
+    expect(question).not.toContain("under the minimum");
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+      { method: "POST", body: JSON.stringify({ short_soak_ok: true }) },
+    );
+
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    await decideRelease({ ...release, soak: null }, true, {
+      shortSoakOk: true,
+    });
+    expect(confirm.mock.calls.at(-1)[0]).toContain("It has no recorded soak.");
+    expect(confirm.mock.calls.at(-1)[0]).not.toContain("under the minimum");
+  });
+
   it("read breaking-change warnings and promotion_blocked lines off the body", () => {
     const breakingNotice = {
       ...pending,
