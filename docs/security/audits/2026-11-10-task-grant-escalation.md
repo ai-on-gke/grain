@@ -243,7 +243,8 @@ user's own agent.
   the caller's own grants (`agentCoversGrant`, sharing `agentHoldsGrant` with
   `agentGrantRefusal`), every extra repository it writes or reads must be one the caller writes
   or reads, its network access must not be wider than the caller's, and it must not carry
-  `autoMerge` the caller lacks. Exceptions: the caller's own task (still held by the
+  `autoMerge` the caller lacks. A repository default grant (`GrantByDefault`) is skipped unless
+  it is dangerous, as `roleTaskWithin` skips defaults. Exceptions: the caller's own task (still held by the
   self-mutation rails) and tasks in its own proposal chain, which filing and approval already
   held to the existing ceilings. Approved `run-now` stays outside the rail: it changes only
   when a task runs (`api:dispatch-control`), adds nothing to its prompt, and an unapproved

@@ -77,6 +77,23 @@ func TestAgentAPIRefusesSteeringAWiderSiblingTask(t *testing.T) {
 		t.Errorf("PATCH of a sibling writing elsewhere = %d %s, want 403 naming the write", code, body)
 	}
 
+	// A repository default the agent's task lacks does not make a sibling
+	// wider, unless that default is dangerous.
+	seedAPITask(t, client, "208", "acme/widgets")
+	mutateTask(t, client, "208", func(task *model.Task) {
+		task.Grants = []model.Grant{{Capability: "api:ci-read", Via: model.GrantByDefault}}
+	})
+	if code, body := asAgent(t, srv, "201", http.MethodPatch, "/api/tasks/208", `{"description":"x"}`, "testing"); code != http.StatusOK {
+		t.Errorf("PATCH of a sibling holding a non-dangerous default = %d %s, want 200", code, body)
+	}
+	seedAPITask(t, client, "209", "acme/widgets")
+	mutateTask(t, client, "209", func(task *model.Task) {
+		task.Grants = []model.Grant{{Capability: "api:tasks:admin", Via: model.GrantByDefault}}
+	})
+	if code, body := asAgent(t, srv, "201", http.MethodPatch, "/api/tasks/209", `{"description":"x"}`, "testing"); code != http.StatusForbidden {
+		t.Errorf("PATCH of a sibling holding a dangerous default = %d %s, want 403", code, body)
+	}
+
 	// A sibling within the agent's own grants is still the agent's to steer,
 	// and a message to it is not marked untrusted.
 	if code, body := asAgent(t, srv, "201", http.MethodPatch, "/api/tasks/203", `{"description":"new prompt"}`, "testing"); code != http.StatusOK {

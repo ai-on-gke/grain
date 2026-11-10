@@ -1055,7 +1055,8 @@ with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
 capability's arguments bind), writes to or reads a repository the
 calling task cannot, has wider network access, or has `autoMerge` the
-calling task lacks. Holding `api:tasks:write` on the repository is not
+calling task lacks. A repository default grant the calling task lacks
+counts only when it is dangerous (only a person may grant it). Holding `api:tasks:write` on the repository is not
 enough: otherwise a less-privileged run could have a more-privileged
 one act on its behalf. Ask a person to act on that task instead.
 `run-now` is not refused this way: on an approved task it only moves
