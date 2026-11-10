@@ -1521,17 +1521,20 @@ func warnUnknownGrants(grants GrantNames) {
 
 func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID string, client *ui.HTTPClient) []mcp.Tool {
 	var tools []mcp.Tool
+	var redactLines func([]string) ([]string, int)
+	if grainserver.HasJournal(grants) || grainserver.HasHealth(grants) {
+		redactLines = childRedactor(client, secretsDir)
+	}
 	if grainserver.HasJournal(grants) {
 		tools = append(tools, grainlog.Tools(grainlog.Config{
-			TaskID:   taskID,
-			Redactor: grainLogRedactor(secretsDir),
+			TaskID: taskID,
+			Redact: redactLines,
 		})...)
 	}
 	if grainserver.HasHealth(grants) {
-		redactor := grainLogRedactor(secretsDir)
 		var redact func(string) string
-		if redactor != nil {
-			redact = func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
+		if redactLines != nil {
+			redact = func(s string) string { lines, _ := redactLines([]string{s}); return lines[0] }
 		}
 		var reader deploymenthealth.Reader
 		if client != nil {
@@ -1590,6 +1593,65 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 	known = append(known, knownGitHubTokens(secretsDir)...)
 	return grainlog.NewRedactor(known)
 }
+
+// childRedactor is the redaction a per-run grain mcpserver applies to
+// what read_grain_log and the deployment-health tools hand a run, or nil
+// if it has none (and those tools then refuse).
+//
+// It asks the daemon first (POST /api/secrets/redact): the daemon holds
+// the secret store with its key already loaded, so this process never
+// opens secrets.key, nor sees a single stored value -- only its own lines
+// back, redacted. The GitHub tokens of the git proxy's ladder, which are
+// not in that store, are still cut here. Only when no daemon answers --
+// no -server, or one too old to serve the route -- does it fall back to
+// reading the store itself (grainLogRedactor), as it always has.
+//
+// A daemon that answered once and then fails a later call (restarting,
+// say) withholds that call's lines rather than serving them with only
+// the shapes cut: the contract read_grain_log holds is "every known
+// value or nothing".
+func childRedactor(client *ui.HTTPClient, secretsDir string) func([]string) ([]string, int) {
+	if client != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), childRedactProbeTimeout)
+		_, err := client.RedactSecrets(ctx, nil)
+		cancel()
+		if err == nil {
+			var local *grainlog.Redactor
+			if secretsDir != "" {
+				local = grainlog.NewRedactor(knownGitHubTokens(secretsDir))
+			}
+			return func(lines []string) ([]string, int) {
+				ctx, cancel := context.WithTimeout(context.Background(), childRedactCallTimeout)
+				defer cancel()
+				resp, err := client.RedactSecrets(ctx, lines)
+				if err != nil || len(resp.Lines) != len(lines) {
+					withheld := make([]string, len(lines))
+					for i := range withheld {
+						withheld[i] = "[withheld: the daemon could not redact this line]"
+					}
+					return withheld, len(lines)
+				}
+				out, n := local.Redact(resp.Lines)
+				return out, resp.Redacted + n
+			}
+		}
+		fmt.Fprintf(os.Stderr, "grain mcpserver: the daemon did not serve secret redaction (%v); "+
+			"reading this host's secret store directly instead\n", err)
+	}
+	redactor := grainLogRedactor(secretsDir)
+	if redactor == nil {
+		return nil
+	}
+	return redactor.Redact
+}
+
+// childRedactProbeTimeout bounds the one call childRedactor makes to
+// learn whether the daemon serves redaction, and childRedactCallTimeout
+// each redaction after that.
+const (
+	childRedactProbeTimeout = 10 * time.Second
+	childRedactCallTimeout  = 30 * time.Second
+)
 
 func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlog.Redactor {
 	if secretStore == nil {
