@@ -1131,6 +1131,7 @@ func (k *GranuleSandboxes) ensureNetwork(ctx context.Context) error {
 	// this needs is for the network to be there, not to have been the one
 	// that made it.
 	out, err := dockerCommand(ctx, "network", "create",
+		"--opt", "com.docker.network.bridge.enable_icc=false",
 		"--subnet", k.cfg.Addresses.Prefix().String(), k.cfg.DockerNetwork).CombinedOutput()
 	if err != nil {
 		if dockerCommand(ctx, "network", "inspect", k.cfg.DockerNetwork).Run() == nil {

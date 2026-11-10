@@ -468,12 +468,23 @@ func TestSyncPullRequestsGivesUpOnAReviewThatNeverFinishes(t *testing.T) {
 		t.Fatalf("comments = %q, want the second one naming the review it gave up on", bodies)
 	}
 
-	// Blocked, not abandoned: it still merges the moment it reads clean.
+	// Blocked so later tasks in the repo can move, while this task's required
+	// review gate remains enforced until the review finishes (or is overridden).
 	if err := orchestrator.SyncPullRequests(ctx, store, client, late.Add(time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
+	if sim.PullRequests[0].Merged {
+		t.Fatal("an overdue required review must not silently skip the review gate and merge")
+	}
+	done := late.Add(2 * time.Minute)
+	if err := store.Observe(ctx, model.Observation{TaskID: review.ID, CompletedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, late.Add(3*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
 	if !sim.PullRequests[0].Merged {
-		t.Fatal("a task the queue gave up waiting on a review for still merges once clean")
+		t.Fatal("once the required review finishes cleanly, the blocked task merges")
 	}
 }
 

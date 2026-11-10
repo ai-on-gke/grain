@@ -1282,10 +1282,10 @@ compute:
   # startup_script_file: /etc/grain-registry/instance-startup.sh
   # startup_script: "#!/bin/sh\n..."
   # bind_project_iam: true
-  # The registry grants itself roles/iam.serviceAccountUser on each gi-*
-  # account it creates so it can attach it to the VM (see "IAM the registry
+  # The hub grants itself roles/iam.serviceAccountUser on each gi-*
+  # account it creates so it can attach it to the VM (see "IAM the hub
   # needs" below). Turn off when actAs is granted out of band; set
-  # self_principal when the registry's own principal cannot be detected.
+  # self_principal when the hub's own principal cannot be detected.
   # grant_self_act_as: true
   # self_principal: serviceAccount:grain-registry@grain-instances-prod.iam.gserviceaccount.com
   vm_prefix: grain-
@@ -1364,20 +1364,20 @@ quotas:
   reservation_period: 720h
 ```
 
-### IAM the registry needs
+### IAM the hub needs
 
 For each hosted instance, the `gce` provider creates a service account
 `<sa_prefix><name>` (`gi-<name>@<compute.project>.iam.gserviceaccount.com`)
 and then creates the VM running as that account. GCE accepts an
 `instances.insert` that attaches a service account only when the caller
 holds `iam.serviceAccounts.actAs` on that account, so between those two
-steps the registry grants its own principal `roles/iam.serviceAccountUser`
+steps the hub grants its own principal `roles/iam.serviceAccountUser`
 on the new account. It makes the grant through the account's own IAM
 policy (`projects/<p>/serviceAccounts/<email>:getIamPolicy` and then
-`:setIamPolicy`), not the project's. That way the registry can act as the
+`:setIamPolicy`), not the project's. That way the hub can act as the
 accounts it created and as no other.
 
-The service-account part of the registry's IAM in `compute.project` is:
+The service-account part of the hub's IAM in `compute.project` is:
 
 | Need | Grant |
 |------|-------|

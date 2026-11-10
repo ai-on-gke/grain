@@ -1,0 +1,2 @@
+2026/11/10 07:28:51 usage: automatic worker cap 4 of max_workers 4 (sustainable unbounded)
+2026/11/10 07:29:52 usage: automatic worker cap 3 of max_workers 4 (sustainable 3)

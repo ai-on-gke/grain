@@ -19,7 +19,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -82,13 +81,6 @@ const hubUsage = `usage: grain hub <subcommand> [args]
 Self-registration, directory discovery, path routing, and control-plane management
 for a Grain Hub (Settings -> Hub; design/design/hub.design.md).`
 
-// hubHTTPClient and hubOIDCToken are seams for unit tests so tests
-// never touch the network or host gcloud/ADC credentials.
-var (
-	hubHTTPClient *http.Client
-	hubOIDCToken  func(ctx context.Context, hubURL, audience string) (string, error)
-)
-
 type hubDaemonFlags struct {
 	url          *string
 	entry        *string
@@ -110,7 +102,7 @@ func registerHubFlags(fs *flag.FlagSet) hubDaemonFlags {
 		entry: fs.String("hub-entry", "",
 			"entry name this daemon registers and heartbeats as in the Grain Hub ($"+daemon.HubEntryEnv+")"+seedNote),
 		authMode: fs.String("hub-auth-mode", "",
-			"credential mode for registry heartbeats: \"token\" (secret "+secrets.HubRegistrationTokenSecret+", -hub-token-file, or $"+daemon.HubTokenEnv+") or \"oidc\" (ID token for -hub-oidc-audience)"+seedNote),
+			"credential mode for hub heartbeats: \"token\" (secret "+secrets.HubRegistrationTokenSecret+", -hub-token-file, or $"+daemon.HubTokenEnv+") or \"oidc\" (ID token for -hub-oidc-audience)"+seedNote),
 		oidcAudience: fs.String("hub-oidc-audience", "",
 			"OIDC ID token audience when -hub-auth-mode=oidc (defaults to -hub-url)"+seedNote),
 		tokenFile: fs.String("hub-token-file", "",
@@ -124,7 +116,7 @@ func registerHubFlags(fs *flag.FlagSet) hubDaemonFlags {
 		listed: fs.Bool("hub-listed", true,
 			"include this connected entry in default hub directory listings"+seedNote),
 		connect: fs.Bool("hub-connect", false,
-			"supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($"+daemon.HubConnectEnv+"; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)"),
+			"supervise an outbound wss://<hub-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($"+daemon.HubConnectEnv+"; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)"),
 	}
 }
 
@@ -171,7 +163,7 @@ func checkHubConfig(cfg daemon.Config) error {
 		return errors.New("-hub-url and -hub-entry must be set together")
 	}
 	if _, err := model.NormalizeHubConfig(r, false); err != nil {
-		return fmt.Errorf("registry configuration: %w", err)
+		return fmt.Errorf("hub configuration: %w", err)
 	}
 	return nil
 }
@@ -188,49 +180,56 @@ func cmdHub(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) 
 		return nil
 	case "status":
 		return cmdHubStatus(ctx, c, out, subArgs)
-	case "list":
-		return cmdHubList(ctx, c, out, subArgs)
-	case "directory":
-		return cmdHubDirectory(ctx, c, out, subArgs)
-	case "route":
-		return cmdHubRoute(ctx, c, out, subArgs)
-	case "show":
-		return cmdHubShow(ctx, c, out, subArgs)
-	case "create":
-		return cmdHubCreate(ctx, c, out, subArgs)
 	case "register":
 		return cmdHubRegister(ctx, c, out, subArgs)
 	case "unregister":
 		return cmdHubUnregister(ctx, c, out, subArgs)
-	case "update":
-		return cmdHubUpdate(ctx, c, out, subArgs)
-	case "scopes":
-		return cmdHubScopes(ctx, c, out, subArgs)
-	case "rotate-credential":
-		return cmdHubRotateCredential(ctx, c, out, subArgs)
-	case "upgrade":
-		return cmdHubUpgrade(ctx, c, out, subArgs)
-	case "resize":
-		return cmdHubResize(ctx, c, out, subArgs)
-	case "delete":
-		return cmdHubDelete(ctx, c, out, subArgs)
-	case "restore":
-		return cmdHubRestore(ctx, c, out, subArgs)
-	case "stop":
-		return cmdHubStop(ctx, c, out, subArgs)
-	case "start":
-		return cmdHubStart(ctx, c, out, subArgs)
-	case "transfer":
-		return cmdHubTransfer(ctx, c, out, subArgs)
-	case "accept-transfer":
-		return cmdHubAcceptTransfer(ctx, c, out, subArgs)
-	case "delegating-apps":
-		return cmdHubDelegatingApps(ctx, c, out, subArgs)
-	case "grants":
-		return cmdHubGrants(ctx, c, out, subArgs)
-	default:
-		return fmt.Errorf("unknown registry subcommand %q\n%s", sub, hubUsage)
 	}
+
+	var target hubTarget
+	ctx = withHubTarget(ctx, &target)
+	var err error
+	switch sub {
+	case "list":
+		err = cmdHubList(ctx, c, out, subArgs)
+	case "directory":
+		err = cmdHubDirectory(ctx, c, out, subArgs)
+	case "route":
+		err = cmdHubRoute(ctx, c, out, subArgs)
+	case "show":
+		err = cmdHubShow(ctx, c, out, subArgs)
+	case "create":
+		err = cmdHubCreate(ctx, c, out, subArgs)
+	case "update":
+		err = cmdHubUpdate(ctx, c, out, subArgs)
+	case "scopes":
+		err = cmdHubScopes(ctx, c, out, subArgs)
+	case "rotate-credential":
+		err = cmdHubRotateCredential(ctx, c, out, subArgs)
+	case "upgrade":
+		err = cmdHubUpgrade(ctx, c, out, subArgs)
+	case "resize":
+		err = cmdHubResize(ctx, c, out, subArgs)
+	case "delete":
+		err = cmdHubDelete(ctx, c, out, subArgs)
+	case "restore":
+		err = cmdHubRestore(ctx, c, out, subArgs)
+	case "stop":
+		err = cmdHubStop(ctx, c, out, subArgs)
+	case "start":
+		err = cmdHubStart(ctx, c, out, subArgs)
+	case "transfer":
+		err = cmdHubTransfer(ctx, c, out, subArgs)
+	case "accept-transfer":
+		err = cmdHubAcceptTransfer(ctx, c, out, subArgs)
+	case "delegating-apps":
+		err = cmdHubDelegatingApps(ctx, c, out, subArgs)
+	case "grants":
+		err = cmdHubGrants(ctx, c, out, subArgs)
+	default:
+		return fmt.Errorf("unknown hub subcommand %q\n%s", sub, hubUsage)
+	}
+	return explainHubError(err, target)
 }
 
 func cmdHubStatus(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
@@ -289,15 +288,15 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 		if sErr != nil {
 			return sErr
 		}
-		existingCfg = settings.Registry
-		daemonHasSecret = settings.RegistryTokenSet
+		existingCfg = settingsHubConfig(settings)
+		daemonHasSecret = settings.HubTokenSet || settings.RegistryTokenSet
 		configRepoOnly = settings.ConfigRepoOnly
 		if snap, snapErr := c.GetHub(ctx); snapErr == nil {
 			existingSnap = snap
 		}
 	}
 
-	regURL := firstNonEmptyTrimmed(*regURLFlag, hubenv.Get(daemon.HubURLEnv), existingCfg.URL)
+	regURL, urlSource := resolveHubURL(*regURLFlag, existingCfg.URL)
 	if regURL == "" {
 		return errors.New("-hub-url is required (or set $" + daemon.HubURLEnv + ")")
 	}
@@ -357,7 +356,7 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 	cfgChanged := !reflect.DeepEqual(existingCfg, normCfg)
 	if !*standalone && configRepoOnly && cfgChanged {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &normCfg}); err != nil {
-			return fmt.Errorf("updating daemon registry settings: %w", err)
+			return fmt.Errorf("updating daemon hub settings: %w", err)
 		}
 	}
 
@@ -386,7 +385,7 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 		}
 		mintedToken = bearer
 	} else {
-		regClient, clientErr := newHubAPIClient(normCfg.URL, bearer)
+		regClient, clientErr := newHubAPIClient(c, normCfg.URL, bearer)
 		if clientErr != nil {
 			return clientErr
 		}
@@ -407,7 +406,7 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 			*rotateToken || *mintToken || *standalone || !daemonHasSecret || retargeting,
 		)
 		if err != nil {
-			return err
+			return explainHubError(err, hubTarget{url: normCfg.URL, source: urlSource})
 		}
 		if !*standalone && !hasStoredEntryCfg && remoteEntry != nil {
 			inheritExistingEntryConfig(&normCfg, remoteEntry, passed)
@@ -453,7 +452,7 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 		// config-repo lock checks before touching secrets.Store.
 		empty := model.HubConfig{}
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &empty}); err != nil {
-			return fmt.Errorf("clearing previous daemon registry target before retargeting: %w", err)
+			return fmt.Errorf("clearing previous daemon hub target before retargeting: %w", err)
 		}
 		if mintedToken != "" {
 			if err := c.SetSecret(ctx, secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
@@ -468,11 +467,11 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 			}
 		}
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &normCfg}); err != nil {
-			return fmt.Errorf("updating daemon registry settings: %w", err)
+			return fmt.Errorf("updating daemon hub settings: %w", err)
 		}
 	} else {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &normCfg}); err != nil {
-			return fmt.Errorf("updating daemon registry settings: %w", err)
+			return fmt.Errorf("updating daemon hub settings: %w", err)
 		}
 		if mintedToken != "" {
 			if err := c.SetSecret(ctx, secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey, mintedToken); err != nil {
@@ -482,7 +481,7 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 	}
 	snap, hbErr := c.TriggerHubHeartbeat(ctx)
 	if hbErr != nil {
-		return fmt.Errorf("initial registry heartbeat failed: %w", hbErr)
+		return fmt.Errorf("initial hub heartbeat failed: %w", hbErr)
 	}
 	printHubSnapshot(out, snap)
 	return nil
@@ -643,13 +642,13 @@ func cmdHubUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 		if sErr != nil {
 			return sErr
 		}
-		existingCfg = settings.Registry
+		existingCfg = settingsHubConfig(settings)
 		configRepoOnly = settings.ConfigRepoOnly
 	}
 	if !*standalone && configRepoOnly && !reflect.DeepEqual(existingCfg, model.HubConfig{}) {
 		empty := model.HubConfig{}
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &empty}); err != nil {
-			return fmt.Errorf("clearing daemon registry settings: %w", err)
+			return fmt.Errorf("clearing daemon hub settings: %w", err)
 		}
 	}
 
@@ -657,7 +656,7 @@ func cmdHubUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 	if len(rest) == 1 {
 		posEntry = rest[0]
 	}
-	regURL := firstNonEmptyTrimmed(*regURLFlag, hubenv.Get(daemon.HubURLEnv), existingCfg.URL)
+	regURL, urlSource := resolveHubURL(*regURLFlag, existingCfg.URL)
 	entryName := firstNonEmptyTrimmed(posEntry, *entryFlag, hubenv.Get(daemon.HubEntryEnv), existingCfg.Entry)
 	aud := firstNonEmptyTrimmed(*oidcAudFlag, existingCfg.OIDCAudience, regURL)
 
@@ -677,12 +676,16 @@ func cmdHubUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 			if bErr != nil && (*standalone || *oidcFlag || *regTokenFlag != "") {
 				return bErr
 			}
-			regClient, cErr := newHubAPIClient(regURL, bearer)
+			regClient, cErr := newHubAPIClient(c, regURL, bearer)
 			if cErr != nil {
 				return cErr
 			}
 			if delErr := regClient.DeleteEntry(ctx, entryName, api.DeleteEntryRequest{ConfirmName: entryName}); delErr != nil && !api.IsNotFound(delErr) {
-				return fmt.Errorf("deleting %s on registry %s (pass -keep-remote to clear local daemon settings only): %w", entryName, regURL, delErr)
+				explained := explainHubError(delErr, hubTarget{url: regURL, source: urlSource})
+				if *standalone {
+					return explained
+				}
+				return fmt.Errorf("deleting %s on hub %s (pass -keep-remote to clear local daemon settings only): %w", entryName, regURL, explained)
 			}
 			remoteDeleted = true
 		}
@@ -691,7 +694,7 @@ func cmdHubUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 	if !*standalone {
 		empty := model.HubConfig{}
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &empty}); err != nil {
-			return fmt.Errorf("clearing daemon registry settings: %w", err)
+			return fmt.Errorf("clearing daemon hub settings: %w", err)
 		}
 		if delErr := c.DeleteSecret(ctx, secrets.HubRegistrationTokenSecret); delErr != nil {
 			var notFound *ui.NotFoundError
@@ -718,34 +721,9 @@ func cmdHubUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 	case entryName != "":
 		fmt.Printf("disconnected %s locally (remote entry kept on %s)\n", entryName, regURL)
 	default:
-		fmt.Println("registry configuration cleared")
+		fmt.Println("hub configuration cleared")
 	}
 	return nil
-}
-
-func resolveHubCLIBearer(ctx context.Context, hubURL, audience, flagToken string) (string, error) {
-	if tok := firstNonEmptyTrimmed(flagToken, hubenv.Get(daemon.HubTokenEnv)); tok != "" {
-		return tok, nil
-	}
-	if hubOIDCToken != nil {
-		return hubOIDCToken(ctx, hubURL, audience)
-	}
-	rc := ui.NewHTTPClient(hubURL)
-	rc.Audience = firstNonEmptyTrimmed(audience, hubURL)
-	return rc.GoogleIDToken(ctx)
-}
-
-func newHubAPIClient(hubURL, bearer string) (*api.Client, error) {
-	cfg := api.ClientConfig{
-		BaseURL:    hubURL,
-		HTTPClient: hubHTTPClient,
-	}
-	if strings.HasPrefix(bearer, api.RegistrationTokenPrefix) {
-		cfg.RegistrationToken = bearer
-	} else {
-		cfg.BearerToken = bearer
-	}
-	return api.NewClient(cfg)
 }
 
 func printHubSnapshot(out *printer, snap model.HubSnapshot) {

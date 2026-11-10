@@ -885,9 +885,9 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	// And once more for the one line each asked task's question is shown
-	// by.
-	questionSummaries, err := c.Store.PendingQuestionSummaries(ctx)
+	// And once more for the comment each asked task is parked on, and the
+	// one line its question is shown by.
+	pendingQuestions, err := c.Store.PendingQuestions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -923,7 +923,8 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		}
 		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
 		if task.State == model.StateAwaitingReply {
-			task.QuestionSummary = questionSummaries[t.ID]
+			task.QuestionSummary = pendingQuestions[t.ID].Summary
+			task.QuestionCommentID = pendingQuestions[t.ID].CommentID
 			task.AwaitingAccess = accessRequests[t.ID]
 		}
 		var wait *model.GrantWait
@@ -1253,6 +1254,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		}
 		task.TurnStopped = turnStopped(state, obs, comments)
 		task.QuestionSummary = questionSummary(state, obs, comments)
+		task.QuestionCommentID = questionCommentID(state, obs)
 		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
 	}
 	task = c.withReasons(task, *t, obs, wait)
@@ -1390,6 +1392,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	// which is told apart by it (withReasons).
 	task.TurnStopped = turnStopped(state, obs, comments)
 	task.QuestionSummary = questionSummary(state, obs, comments)
+	task.QuestionCommentID = questionCommentID(state, obs)
 	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail := TaskDetail{
 		Task:        c.withReasons(task, *t, obs, wait),
@@ -1520,6 +1523,8 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
+	allStates, _ := c.Store.States(ctx)
+	detail.MergeGates = model.ComputeMergeGates(*t, obs, allStates)
 	if ownerID, inPlace := t.CIOwner(); inPlace {
 		// A review working on the reviewed change's own branch has no CI
 		// of its own: its branch's verdict is the reviewed task's.
@@ -1807,6 +1812,15 @@ func turnStopped(state model.State, obs *model.Observation, comments []model.Com
 		}
 	}
 	return false
+}
+
+// questionCommentID is the comment an awaiting_reply task is parked on
+// (Task.QuestionCommentID), or 0 for a task that is not.
+func questionCommentID(state model.State, obs *model.Observation) int64 {
+	if state != model.StateAwaitingReply || obs == nil || obs.PendingQuestionCommentID == nil {
+		return 0
+	}
+	return *obs.PendingQuestionCommentID
 }
 
 // questionSummary is the one line an awaiting_reply task's pending
@@ -5444,7 +5458,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// Turning it on is Submit by another name (see above), and
 			// says what Submit does about the holds it was waiting under.
 			if *req.AutoMerge && !task.AutoMerge {
-				humanSubmitted(task, submittedAt, submittedHead)
+				humanSubmitted(task, c.requestActor(ctx).Actor.ID, submittedAt, submittedHead)
 				submitted = true
 			}
 			// Either answer is the caller's own, and the one grain's holds
@@ -5452,7 +5466,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			// API says true (model.DeclineAutoMerge).
 			if *req.AutoMerge {
 				model.AllowAutoMerge(task)
-				task.AutoMerge = true
+				task.AutoMerge = !model.HasPendingReviewHold(*task)
 			} else {
 				model.DeclineAutoMerge(task, model.PrincipalString(c.requestActor(ctx).Actor))
 			}
@@ -5945,16 +5959,24 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 		if err := apply(t); err != nil {
 			return err
 		}
-		if len(before) > 0 && !model.HumanReviewHeld(*t) {
-			// An edit that ends a human-review hold -- a Submit, a PATCH
-			// turning auto-merge on -- is a person's decision, and only a
-			// person's (human_review_hold.go): an agent may raise the
-			// hold, never release it.
+		after := model.HumanReviewReasons(*t)
+		if len(after) < len(before) {
+			// An edit that ends any human-review hold reason -- a Submit, a
+			// PATCH turning auto-merge on -- is a person's decision, and only
+			// a person's (human_review_hold.go): an agent may raise the hold,
+			// never release it.
 			if !mayReleaseHumanReview(actor) {
 				return forbiddenErrorf("%s is held for a person's review (%s), and only a person may release it",
 					id, model.HumanReviewSummary(*t))
 			}
-			released = before
+			for _, b := range before {
+				kept := slices.ContainsFunc(after, func(a model.HumanReviewReason) bool {
+					return a.Source == b.Source && a.ReviewTask == b.ReviewTask && a.Reason == b.Reason
+				})
+				if !kept {
+					released = append(released, b)
+				}
+			}
 		}
 		return nil
 	}); err != nil {
@@ -6502,17 +6524,24 @@ func (c *Client) submit(ctx context.Context, id string) error {
 		return c.submitWithApprovals(ctx, *task, pending)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
-	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "submitted"), id, func(task *model.Task) error {
-		// Only a Submit that turns auto-merge on answers a hold. One
-		// over a change already merging itself (pressed to retry its CI)
-		// has looked at no new head, and must not pin a clearance to
-		// whatever head the next cycle reads -- one a stacked fix or any
-		// other push may have moved to without being classified.
+	openTriggerReview := c.hasUnfinishedTriggerReview(ctx, *task)
+	who := c.requestActor(ctx)
+	if err := c.mutate(model.WithAutoMergeChange(ctx, who.Actor, "submitted"), id, func(task *model.Task) error {
+		// Only a Submit over an unapproved or held change records a human
+		// approval. One over a change already merging itself (pressed to
+		// retry its CI) has looked at no new head.
 		if !task.AutoMerge {
-			humanSubmitted(task, now, head)
+			// A gating trigger whose reviews have all finished cleanly has
+			// passed its review gate; only the person's approval was left.
+			if !openTriggerReview && len(model.ReviewFindings(*task)) == 0 {
+				task.Links = slices.DeleteFunc(task.Links, func(l model.Link) bool {
+					return l.Kind == model.LinkPathTriggerHold
+				})
+			}
+			humanSubmitted(task, who.Actor.ID, now, head)
 		}
 		model.AllowAutoMerge(task)
-		task.AutoMerge = true
+		task.AutoMerge = !model.HasPendingReviewHold(*task)
 		return nil
 	}); err != nil {
 		return err
@@ -6523,31 +6552,26 @@ func (c *Client) submit(ctx context.Context, id string) error {
 	return c.clearUnansweredCI(ctx, id)
 }
 
-// humanSubmitted is what a human's Submit says about the holds a change
-// is waiting under, beside turning its auto-merge on: a security hold, a
-// human-only hold, a broken-rules hold and a review's open questions are
-// all waiting for exactly this decision, so none of them is left for a
-// later cycle to notice and drop. Their absence alone is not enough, though. A
-// clearance recorded for an older head (model.LinkTrustBoundaryCleared)
-// would read as a head that moved the moment the merge queue merges the
-// base branch in, and file another security review of what the human
-// has just shipped. So the decision is marked (model.LinkHumanSubmitted)
-// with head, the head the human was shown (submittedHead), for the
-// orchestrator to pin before it merges anything into the branch -- and
-// only if the branch is still there (orchestrator.pinHumanSubmit).
-func humanSubmitted(t *model.Task, now time.Time, head string) {
-	// A human-review hold waits for exactly this decision too, and is
-	// recorded as released by whoever made it (Client.mutate).
+// humanSubmitted records a person's Submit approval (model.LinkHumanSubmitted)
+// and releases human-only holds without ever clearing LinkSecurityHold,
+// LinkReviewFindings, LinkReviewQuestions or gating review tasks: reviews and
+// a person's Submit are separate merge gates, and every gate must pass.
+func humanSubmitted(t *model.Task, by string, now time.Time, head string) {
 	model.DropHumanReviewHold(t)
+	hasTriggerTasks := slices.ContainsFunc(t.Links, func(l model.Link) bool {
+		return l.Kind == model.LinkPathTriggerTask
+	})
 	t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
 		switch l.Kind {
-		case model.LinkSecurityHold, model.LinkHumanOnlyHold, model.LinkBrokenRulesHold,
-			model.LinkReviewQuestions, model.LinkHumanSubmitted:
+		case model.LinkHumanOnlyHold, model.LinkBrokenRulesHold,
+			model.LinkHumanSubmitted, model.LinkHumanApproved:
 			return true
+		case model.LinkPathTriggerHold:
+			return !hasTriggerTasks
 		}
 		return false
 	})
-	t.Links = append(t.Links, model.Link{Kind: model.LinkHumanSubmitted, Target: model.HumanSubmittedTarget(now, head)})
+	t.Links = append(t.Links, model.Link{Kind: model.LinkHumanSubmitted, Target: model.HumanSubmittedByTarget(by, now, head)})
 }
 
 // submittedHead is the pull request head a human submitting task was
@@ -7290,130 +7314,7 @@ func (c *Client) RetryMerge(ctx context.Context, id string) error {
 // of it. An empty head means "whatever it is now", read off GitHub here
 // rather than at the merge; see forceMergeHead for how it is settled.
 func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error {
-	task, err := c.Store.GetTask(ctx, id)
-	if err != nil {
-		return err
-	}
-	if task == nil {
-		return &NotFoundError{ID: id}
-	}
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return validationErrorf("forcing a merge needs a reason: it is the whole record of why " +
-			"this landed without the checks the queue asks for")
-	}
-	state, err := c.Store.State(ctx, id)
-	if err != nil {
-		return err
-	}
-	if state == model.StateClosed {
-		return validationErrorf("%s is closed: reopen it before forcing its merge", id)
-	}
-	// A live run, or one Stop has parked: neither is anywhere the merge
-	// queue looks, so forcing the merge also finishes the task (below).
-	finish := state == model.StateRunning || state == model.StateAwaitingReply
-	if finish && pullRequestRefOf(*task) == "" && c.Config.PullRequests != nil {
-		// The run pushed its branch but never got as far as asking for
-		// its pull request, which its own finish would have done.
-		if _, err := c.OpenPullRequest(ctx, id); err != nil {
-			return validationErrorf("%s has no pull request to merge, and opening one for its "+
-				"branch failed: %v", id, err)
-		}
-		if task, err = c.Store.GetTask(ctx, id); err != nil {
-			return err
-		}
-		if task == nil {
-			return &NotFoundError{ID: id}
-		}
-	}
-	ref := pullRequestRefOf(*task)
-	if ref == "" {
-		return validationErrorf("%s has no pull request to merge", id)
-	}
-	obs, err := c.Store.GetObservation(ctx, id)
-	if err != nil {
-		return err
-	}
-	// What is being skipped, captured now rather than at the merge: the
-	// queue's own account of why it is not merging this is what the
-	// operator is looking at as they press the button, and by the time
-	// the merge happens it has been overwritten with "merging".
-	skipped := forceMergeSkipped(obs)
-	// Lower-cased because git reads an object name in either case and a
-	// person pasting one may not have kept it: the comparisons below, and
-	// fullSHA, are against git's own lower-case spelling.
-	head, err = c.forceMergeHead(ref, strings.ToLower(strings.TrimSpace(head)), obs)
-	if err != nil {
-		return err
-	}
-	now := c.now()
-	by := c.requestActor(ctx).Actor.ID
-	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
-		o.ForceMergeAt = &now
-		o.ForceMergeReason, o.ForceMergeBy, o.ForceMergeSkipped = reason, by, skipped
-		o.ForceMergeHeadSHA = head
-		if finish {
-			// Completed, so the next SyncPullRequests cycle reads it
-			// (Store.OpenPullRequestLinks); a CompletedAt already set
-			// is the run's own and is kept.
-			o.PendingQuestionCommentID = nil
-			if o.CompletedAt == nil {
-				o.CompletedAt = &now
-			}
-		}
-	}); err != nil {
-		return err
-	}
-	if state == model.StateRunning {
-		if err := c.cancelActiveRuns(ctx, id, now, "cancelled by user"); err != nil {
-			return err
-		}
-	}
-	// CI still running on the task is not going to decide anything now,
-	// and a hung one is holding sandboxes: grain's own cancel, since it
-	// is grain giving up on a verdict it no longer needs.
-	if c.Config.CI != nil && obs != nil && obs.CI != nil && !obs.CI.Done() && obs.CI.RunID != "" {
-		c.Config.CI.Cancel(obs.CI.RunID, "the merge of "+ref+" was forced", ci.CancelBySystem)
-	}
-	// After the write, the way every note in this file is: a note in
-	// front of a write that then failed says something untrue. This one
-	// is what a person reading the task sees between the request and the
-	// cycle that acts on it, and it says plainly that nothing has merged
-	// yet -- a button whose effect is one cycle away needs to say so, or
-	// it reads as a button that did not work.
-	body := fmt.Sprintf(
-		"Asked grain to force the merge of %s at %s, overriding the merge queue's own decision.\n\n"+
-			"**Reason given:** %s", ref, shortHead(head), reason)
-	if skipped != "" {
-		body += "\n\n**What the queue was saying instead:** " + skipped
-	}
-	if finish {
-		body += "\n\nThe task's own run was stopped and the task marked done, so the merge " +
-			"queue takes it up; any grain CI still running on it was cancelled."
-	}
-	body += "\n\ngrain performs the merge itself on its next merge-queue cycle, so its own " +
-		"record of this task stays true: it is merged here as well as on GitHub, the queue row " +
-		"closes, and the base branch is tested afterwards as it is after any other merge. A " +
-		"conflict is the one thing this cannot override -- a merge GitHub refuses is not " +
-		"grain's to authorise -- and such a request waits until the branch merges cleanly. " +
-		"The override is for this commit only: if anything is pushed to the branch before the " +
-		"merge, grain withdraws it rather than merge what nobody reviewed, and it has to be " +
-		"forced again."
-	if _, err := c.Store.AddComment(ctx, model.Comment{
-		TaskID:    id,
-		Author:    c.requestActor(ctx),
-		Body:      body,
-		CreatedAt: now,
-	}); err != nil {
-		return err
-	}
-	// Somebody is watching for this one, exactly as they are for "Run
-	// now": an override that visibly does nothing until the next poll
-	// interval is what sends a person back to merging by hand.
-	if c.Config.Wake != nil {
-		c.Config.Wake()
-	}
-	return nil
+	return c.ForceMergeWithGates(ctx, id, reason, head, nil)
 }
 
 // forceMergeHead settles which commit an override is for: the head the

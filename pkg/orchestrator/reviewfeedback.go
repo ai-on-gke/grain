@@ -210,13 +210,13 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 			draftReviewBody(task, findings), inlineComments(findings))
 	}
 	if err != nil {
-		if reviewed != nil && hasBaseRepairBypass(*reviewed) {
+		if reviewed != nil && isPostMergeReview(ctx, store, task, *reviewed) {
 			if err := relayFindingsToConversation(ctx, store, task, findings,
 				fmt.Sprintf("Posting these findings as a review on %s failed (%v), so they are "+
 					"recorded here instead:", ref, err), now); err != nil {
 				return 0, err
 			}
-			return len(findings), fileBaseRepairReviewFollowUp(ctx, store, client, task, *reviewed, ref, findings, 0, now)
+			return len(findings), filePostMergeReviewFollowUp(ctx, store, client, task, *reviewed, ref, findings, 0, now)
 		}
 
 		log.Printf("orchestrator: task %s could not post its %d review finding(s) as a review on %s (%v); "+
@@ -232,8 +232,8 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 	if reviewed == nil {
 		return len(findings), nil
 	}
-	if hasBaseRepairBypass(*reviewed) {
-		return len(findings), fileBaseRepairReviewFollowUp(ctx, store, client, task, *reviewed, ref, findings, reviewID, now)
+	if isPostMergeReview(ctx, store, task, *reviewed) {
+		return len(findings), filePostMergeReviewFollowUp(ctx, store, client, task, *reviewed, ref, findings, reviewID, now)
 	}
 	relayed := discoverRelayedThreads(client, ref, task.ID, reviewID, false)
 	kind := "a draft review"
@@ -532,10 +532,10 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 		"**Review needs your decision.** The review of this change (task %s) fixed what it "+
 			"could and left %s on %s that it could not settle without you:\n\n%s\n\n"+
 			"Reply here (or on task %s) with your decision, and grain sends another run on "+
-			"this task to carry it out -- it fixes what you decided and the change then goes "+
-			"through the way it would have after a clean review. Or ship it as it stands "+
-			"with **Ship as is** (Submit), leaving these open. The same questions are on %s as %s, "+
-			"on the lines they are about.",
+			"this task to carry it out -- it fixes what you decided and a clean re-review "+
+			"clears the gate. Pressing Submit records your approval only and will not merge "+
+			"over open findings; merging without fixing them requires a force-merge override "+
+			"with a reason. The same questions are on %s as %s, on the lines they are about.",
 		review.ID, countOf(len(findings), "open question"), ref, findingsList(findings),
 		review.ID, ref, kind)
 	commentID, err := store.AddComment(ctx, model.Comment{
@@ -551,13 +551,18 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 	questions := model.ReviewQuestions{
 		ReviewTaskID: review.ID, AfterCommentID: commentID, RestoreAutoMerge: wantedAutoMerge,
 	}
+	summary := findingsSummary(findings)
 	if err := store.UpdateTask(ctx, reviewed.ID, func(t *model.Task) error {
 		t.AutoMerge = false
-		// The questions are the person's decision now, and they hand
-		// auto-merge back themselves once answered (RestoreAutoMerge).
 		model.ClearAutoMergeAwaitsPerson(t)
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: questions.Target()})
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{
+			Gate:       reviewGateOf(*t, review.ID),
+			ReviewTask: review.ID,
+			Summary:    summary,
+			At:         now,
+		})
 		if draftID != 0 {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkDraftReview, Target: strconv.Itoa(draftID)})
 		}

@@ -134,7 +134,7 @@ func (c *Client) DeleteGCPKeyWithUser(ctx context.Context, name, user string) er
 }
 
 func (s *Server) handleListGCPKeys(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return

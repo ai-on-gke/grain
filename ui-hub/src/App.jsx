@@ -262,18 +262,20 @@ function buildConnectedSnippet(registryHost, instanceDomain, entryName, token) {
     `  -ui-hub-issuer grain-registry \\\n` +
     `  -ui-hub-audience https://${name}.${instDom} \\\n` +
     `  -ui-hub-keys-url ${regOrigin}/.well-known/jwks.json`;
-  const yaml =
-    `registry:\n` +
-    `  url: ${regOrigin}\n` +
-    `  entry: ${name}\n` +
-    `  connect: true\n` +
-    `  auth_mode: token\n` +
-    `auth:\n` +
-    `  require_verifier: registry\n` +
-    `  registry_issuer: grain-registry\n` +
-    `  registry_audience: https://${name}.${instDom}\n` +
-    `  registry_keys_url: ${regOrigin}/.well-known/jwks.json`;
-  return { cli, yaml };
+  // The same configuration as the daemon's environment, one KEY=value per
+  // line, for a systemd EnvironmentFile, docker --env-file, or a Kubernetes
+  // env list: each flag above falls back to the variable named here
+  // (pkg/cli/hub.go, pkg/cli/daemon.go, pkg/webauth/hub.go).
+  const env =
+    (safeToken ? `GRAIN_HUB_TOKEN=${safeToken}\n` : "") +
+    `GRAIN_HUB_URL=${regOrigin}\n` +
+    `GRAIN_HUB_ENTRY=${name}\n` +
+    `GRAIN_HUB_CONNECT=true\n` +
+    `GRAIN_REQUIRE_VERIFIER=registry\n` +
+    `GRAIN_HUB_ISSUER=grain-registry\n` +
+    `GRAIN_HUB_AUDIENCE=https://${name}.${instDom}\n` +
+    `GRAIN_HUB_KEYS_URL=${regOrigin}/.well-known/jwks.json`;
+  return { cli, env };
 }
 
 function DirectoryView({ onNavigateEntry }) {
@@ -1049,8 +1051,8 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
           Deleting <strong>{deleteTarget?.name}</strong> stops routing traffic
           and removes it from your entries. Its name stays reserved for you for
           30 days, and a hosted instance can still be restored (
-          <code>grain hub restore</code> or a registry admin) until its retained
-          data is purged.
+          <code>grain hub restore</code> or a hub administrator) until its
+          retained data is purged.
         </p>
         <div className="reg-field">
           <label className="reg-label" htmlFor="confirm-delete-input">
@@ -1265,7 +1267,10 @@ function CreateRegisterView({
                 label="CLI Flag Snippet (-hub-connect)"
                 code={snippet.cli}
               />
-              <CopyBlock label="daemon.yaml Snippet" code={snippet.yaml} />
+              <CopyBlock
+                label="Environment Snippet (systemd EnvironmentFile, docker --env-file)"
+                code={snippet.env}
+              />
             </div>
           ) : null}
         </div>

@@ -214,8 +214,11 @@ func TestReconcilerRetriesVMCreationWhileActAsGrantPropagates(t *testing.T) {
 	if got.LifecycleState != api.StateCreating {
 		t.Fatalf("after refused insert: state = %q (reason %q), want creating", got.LifecycleState, got.StatusReason)
 	}
-	if !strings.Contains(got.StatusReason, "permission to attach it") || !strings.Contains(got.StatusReason, "SERVICE_ACCOUNT_ACCESS_DENIED") {
-		t.Fatalf("after refused insert: status_reason = %q, want it to explain the actAs propagation wait", got.StatusReason)
+	if !strings.Contains(got.StatusReason, "and the hub's permission to attach it") || !strings.Contains(got.StatusReason, "SERVICE_ACCOUNT_ACCESS_DENIED") {
+		t.Fatalf("after refused insert: status_reason = %q, want it to explain the hub's actAs propagation wait", got.StatusReason)
+	}
+	if strings.Contains(strings.ToLower(got.StatusReason), "registry") {
+		t.Fatalf("status_reason still mentions registry: %q", got.StatusReason)
 	}
 	for i := 0; i < 60 && got.LifecycleState == api.StateCreating; i++ {
 		*f.now = f.now.Add(time.Second)
@@ -264,8 +267,8 @@ func TestReconcilerFailsCreatingEntryWithoutComputeProvider(t *testing.T) {
 	if got.LifecycleState != api.StateFailed {
 		t.Fatalf("state = %q (reason %q), want failed when compute.provider is none", got.LifecycleState, got.StatusReason)
 	}
-	if !strings.Contains(got.StatusReason, `compute.provider is "none"`) {
-		t.Fatalf("status_reason = %q, want it to name the missing compute provider", got.StatusReason)
+	if !strings.Contains(got.StatusReason, `compute.provider is "none"`) || !strings.Contains(got.StatusReason, "this hub cannot create hosted instances") {
+		t.Fatalf("status_reason = %q, want it to name the missing compute provider on this hub", got.StatusReason)
 	}
 }
 

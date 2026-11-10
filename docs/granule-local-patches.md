@@ -27,23 +27,45 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `1463ed6` (`1463ed6097335b986e3bbdb37f25c16c28fa1e74`,
-"Merge pull request #244 from gke-labs/grain/098073e4/task-3349-scrub-the-contributor-gcp",
-2026-11-06).
+`gke-labs/granule` `main` at `1e60085` (`1e60085da2dcf946bd7c070fd009a0120fa02c8c`,
+"Merge pull request #254 from gke-labs/grain/098073e4/task-3941-rebuild-granule-guest-binaries",
+2026-11-10).
 
-The tree was replaced wholesale from a `git archive` of `1463ed6` with no
+The tree was replaced wholesale from a `git archive` of `1e60085` with no
 local patches on top -- `third_party/granule` is byte-identical to upstream
-(grain task 3350). The previous sync was `b2fda8b` (`b2fda8bb`, grain task
-3024).
+(grain task 3942). The previous sync was `1463ed6` (`1463ed60`, grain task
+3350).
 
-This sync carries PR #244 (`9de041c`) on top of `b2fda8b`, which drops the
-contributor GCP project default from `.github/workflows/e2e-ipv6-gke.yml`,
-`docs/github-actions-ci.md`, `docs/ipv6-dual-stack-design.md` and
-`test/e2e-ipv6.sh` (resolving `$GKE_PROJECT` from `GKE_PROJECT` or gcloud's
-configured project instead), retiring the last local patch grain carried so
-`tests/hygiene` (`TestCoreSaysNoGoogleTokens`) passes on an unmodified
-archive. Nothing touches Go code, `Dockerfile`, `go.mod`, `go.sum` or
-`vendor/`.
+This sync carries PRs #245–#254 on top of `1463ed6`:
+- granule's guest binaries (`granule-shim`, `granule-agent`,
+  `granule-container`, `granule-mem-agent`) are built on
+  `golang:1.26-bookworm` rather than go1.22, and `go.mod` says `go 1.25.13`
+  / `toolchain go1.26.10` (gke-labs/granule#253, #254). This is what clears
+  the sandbox image's `stdlib` findings on those binaries, which
+  `.grain/baselines/image-vulns-allowlist.yaml` waived until now.
+- Every `debian:bookworm-slim` pin in `Dockerfile`, and
+  `pkg/guestpack.DefaultPackerImage`, moves to
+  `sha256:734a72b3d614...`, the digest grain's own Dockerfiles use
+  (gke-labs/granule#252).
+- Test-script, prompt and doc changes only (`test/rootless-vm.sh`,
+  `test/sandbox-access-vm.sh`, `test/granulefiles/run.sh`,
+  `benchmarks/microbenchmarks`, the stale `docs/konturfile.md` removed;
+  gke-labs/granule#245–#251).
+
+`go.sum` and `vendor/` are unchanged, and `pkg/guestimage`'s contract is
+untouched, so `scripts/granule/build-granule-image.sh` and
+`scripts/granule/guest-inputs.sh` need no change.
+
+### What the `1463ed6` sync carried
+
+The `1463ed6` sync (grain task 3350) carried PR #244 (`9de041c`) on top of
+`b2fda8b`, which drops the contributor GCP project default from
+`.github/workflows/e2e-ipv6-gke.yml`, `docs/github-actions-ci.md`,
+`docs/ipv6-dual-stack-design.md` and `test/e2e-ipv6.sh` (resolving
+`$GKE_PROJECT` from `GKE_PROJECT` or gcloud's configured project instead),
+retiring the last local patch grain carried so `tests/hygiene`
+(`TestCoreSaysNoGoogleTokens`) passes on an unmodified archive. Nothing
+touched Go code, `Dockerfile`, `go.mod`, `go.sum` or `vendor/`.
 
 ### What the `b2fda8b` sync carried
 

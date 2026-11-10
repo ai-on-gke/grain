@@ -71,6 +71,11 @@ const grounds = [
   "--surface-hover",
   "--surface-active",
 ];
+// The dark task pane is an MUI Dialog, whose Paper MUI lightens with a
+// white background-image for its elevation: #3a3c3f is what that paints
+// over --surface, and it is the lightest ground dark text sits on.
+// ui/e2e/dark-contrast.spec.js checks the same pair off rendered pixels.
+const darkPane = "#3a3c3f";
 
 for (const [name, t, theme] of [
   ["light", lightTokens, lightTheme],
@@ -83,6 +88,12 @@ for (const [name, t, theme] of [
           expect(
             contrast(t[fg], t[bg]),
             `${fg} on ${bg}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+        if (name === "dark") {
+          expect(
+            contrast(t[fg], darkPane),
+            `${fg} on the task pane`,
           ).toBeGreaterThanOrEqual(4.5);
         }
       });

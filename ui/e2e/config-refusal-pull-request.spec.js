@@ -62,6 +62,52 @@ async function expectInView(page, locator) {
   expect(box.y + Math.min(box.height, 40)).toBeLessThanOrEqual(height);
 }
 
+// landSubmitted waits for a submitted grain/config change to land. Submit
+// records a person's approval only; when the change touches the config
+// repository's trust boundary, grain files a security review -- possibly
+// on its first merge-queue look, after the Submit -- and no agent runs it
+// on this daemon. So the override a person holding merge:force would take
+// is taken here, once, explicitly and with a reason, the moment a review
+// gate is seen standing. It returns the reviews that override left running
+// against the merged commit.
+async function landSubmitted(
+  request,
+  url,
+  id,
+  landed,
+  message,
+  timeout = 90_000,
+) {
+  const deadline = Date.now() + timeout;
+  let overridden = [];
+  while (Date.now() < deadline) {
+    if (await landed()) return overridden;
+    if (overridden.length === 0) {
+      const detail = await (await request.get(`${url}/api/tasks/${id}`)).json();
+      const standing = (detail.mergeGates || []).filter(
+        (g) =>
+          (g.id === "security-review" || g.id === "review") &&
+          g.state !== "passed" &&
+          g.state !== "overridden",
+      );
+      if (standing.length > 0) {
+        const res = await request.post(`${url}/api/tasks/${id}/force-merge`, {
+          data: {
+            reason:
+              "e2e: no agent runs the config repository's security review here",
+            head: detail.ci?.commit || undefined,
+            overrideGates: standing.map((g) => g.id),
+          },
+        });
+        expect(res.ok(), await res.text()).toBeTruthy();
+        overridden = standing.map((g) => g.reviewTask).filter(Boolean);
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(message);
+}
+
 test("a refused setting opens a held config pull request that Submit lands", async ({
   page,
 }) => {
@@ -131,14 +177,16 @@ test("a refused setting opens a held config pull request that Submit lands", asy
 
     await page.goto(`${url}/tasks/${taskId}`);
     await page
-      .getByRole("button", { name: /^submit$/i })
+      .getByRole("button", { name: /^submit/i })
       .last()
       .click();
-    await eventually(
+    await landSubmitted(
+      page.request,
+      url,
+      taskId,
       async () =>
         (await templateNames(page.request, url)).includes("Held template"),
       "the submitted config pull request was not applied",
-      90_000,
     );
 
     // Phone: somebody else's change lands while the dialog is open, so
@@ -158,11 +206,13 @@ test("a refused setting opens a held config pull request that Submit lands", asy
       `${url}/api/tasks/${otherTask}/submit`,
     );
     expect(submitted.ok()).toBeTruthy();
-    await eventually(
+    await landSubmitted(
+      page.request,
+      url,
+      otherTask,
       async () =>
         (await templateNames(page.request, url)).includes("Other template"),
       "the other config pull request was not applied",
-      90_000,
     );
 
     await stale.getByRole("button", { name: "Create Config PR" }).click();

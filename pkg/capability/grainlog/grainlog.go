@@ -213,6 +213,11 @@ type Config struct {
 	// no known values instead (NewRedactor(nil)), which is a different
 	// thing and says so.
 	Redactor *Redactor
+	// Redact, when set, is used instead of Redactor: a redaction served
+	// by something else -- the daemon, which holds the secret store this
+	// process should not have to open itself. It carries the same
+	// contract: it must cut every known value or withhold the line.
+	Redact func(lines []string) ([]string, int)
 	// Sources is the allowlist; nil means DefaultSources.
 	Sources []Source
 	// Log writes the audit line. Nil means log.Printf, which in a forked
@@ -351,7 +356,7 @@ func readLog(ctx context.Context, cfg Config, args map[string]any) mcp.Result {
 	// asked for too: "this run tried to read the journal and was told
 	// no" is as much a thing an operator wants in the trail as a read
 	// that happened.
-	if cfg.Redactor == nil {
+	if cfg.Redactor == nil && cfg.Redact == nil {
 		audit(cfg, req, 0, 0, "refused: no redactor")
 		return mcp.Result{Text: noRedactor, IsError: true}
 	}
@@ -376,7 +381,12 @@ func readLog(ctx context.Context, cfg Config, args map[string]any) mcp.Result {
 		dropped = len(shown) - req.maxLines
 		shown = shown[dropped:]
 	}
-	shown, redacted := cfg.Redactor.Redact(shown)
+	var redacted int
+	if cfg.Redact != nil {
+		shown, redacted = cfg.Redact(shown)
+	} else {
+		shown, redacted = cfg.Redactor.Redact(shown)
+	}
 
 	audit(cfg, req, len(shown), redacted, "ok")
 	return mcp.Result{Text: answer(req, shown, len(matched), dropped, redacted, windowFull)}

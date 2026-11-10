@@ -118,6 +118,10 @@ func reconcileSchedule(ctx context.Context, deps Deps, now time.Time) error {
 			log.Printf("orchestrator: schedule %s skipped: %s; its cadence moved on to the next occurrence",
 				sched.ID, model.StandingWorkOffReason(*firing.StandingWorkOff))
 		}
+		if firing.WorkflowGrainCIOff != "" {
+			log.Printf("orchestrator: schedule %s skipped: %s; its cadence moved on to the next occurrence",
+				sched.ID, model.WorkflowGrainCIOffReason(firing.WorkflowGrainCIOff))
+		}
 	}
 	return errors.Join(errs...)
 }

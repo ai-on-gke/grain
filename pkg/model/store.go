@@ -1591,28 +1591,37 @@ func (s *Store) TurnStopped(ctx context.Context, taskID string) (bool, error) {
 	return true, nil
 }
 
-// PendingQuestionSummaries is the one-line summary of the question every
-// open task is parked on (Comment.Summary), keyed by task -- one query for
-// a whole list, as TurnsStopped is, so a row can say what it was asked
-// without the conversation. A question stored without a summary gets one
-// derived from its body; a stopped turn has none.
-func (s *Store) PendingQuestionSummaries(ctx context.Context) (map[string]string, error) {
-	out := map[string]string{}
+// PendingQuestion is the comment an open task is parked on, as a list
+// needs it: its id, which a row links to (CommentPath), and the one line
+// it is shown by.
+type PendingQuestion struct {
+	CommentID int64
+	// Summary is the question's Comment.Summary, or one derived from its
+	// body for a question stored without one; "" for a stopped turn.
+	Summary string
+}
+
+// PendingQuestions is the comment every open task is parked on, keyed by
+// task -- one query for a whole list, as TurnsStopped is, so a row can
+// say what it was asked, and link to where, without the conversation.
+func (s *Store) PendingQuestions(ctx context.Context) (map[string]PendingQuestion, error) {
+	out := map[string]PendingQuestion{}
 	err := each(ctx, s.db,
-		"SELECT `o`.`task_id`, `c`.`summary`, `c`.`body` FROM `task_observation` `o` JOIN `task_comment` `c` "+
+		"SELECT `o`.`task_id`, `c`.`id`, `c`.`summary`, `c`.`body` FROM `task_observation` `o` JOIN `task_comment` `c` "+
 			"ON `c`.`id` = `o`.`pending_question_comment_id` "+
-			"WHERE `o`.`closed_at` IS NULL AND `c`.`body` <> ?", TurnStoppedComment,
+			"WHERE `o`.`closed_at` IS NULL", nil,
 		func(rows *sql.Rows) error {
 			var id, summary, body string
-			if err := rows.Scan(&id, &summary, &body); err != nil {
+			var commentID int64
+			if err := rows.Scan(&id, &commentID, &summary, &body); err != nil {
 				return err
 			}
-			if summary == "" {
+			if body == TurnStoppedComment {
+				summary = ""
+			} else if summary == "" {
 				summary = DeriveQuestionSummary(body)
 			}
-			if summary != "" {
-				out[id] = summary
-			}
+			out[id] = PendingQuestion{CommentID: commentID, Summary: summary}
 			return nil
 		})
 	return out, err
@@ -6174,24 +6183,25 @@ func newScheduleID(ctx context.Context, tx *sql.Tx) (string, error) {
 
 const scheduleColumns = "`id`,`title`,`body`,`target_owner`,`target_name`,`base`," +
 	"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`," +
-	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`"
+	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`"
 
 func scanSchedule(scan func(...any) error) (Schedule, error) {
 	var t Schedule
 	var base, templateID, suiteID sql.NullString
-	var kind, overlap, networkAccess, nothingNeeded, timeZone, workflowReview, admission, hosting string
+	var kind, overlap, networkAccess, nothingNeeded, timeZone, workflowReview, admission, hosting, overlapGroup string
 	var everyNHours, everyNMinutes, timeOfDay, weekday, dayOfMonth sql.NullInt64
 	var lastRun sql.NullTime
 	if err := scan(&t.ID, &t.Title, &t.Body, &t.Target.Owner, &t.Target.Name, &base,
 		&t.AutoMerge, &t.AutoApproveProposals, &templateID, &suiteID, &kind, &everyNHours, &timeOfDay, &weekday, &dayOfMonth,
 		&overlap, &networkAccess, &nothingNeeded, &t.Model, &t.Enabled, &t.NextRunAt, &lastRun, &t.CreatedAt, &timeZone,
-		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting, &t.GrainCI); err != nil {
+		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting, &t.GrainCI, &overlapGroup); err != nil {
 		return Schedule{}, err
 	}
 	t.Admission = Admission(strings.TrimSpace(admission))
 	t.Hosting = Hosting(strings.TrimSpace(hosting))
 	t.Target = RepoFromStored(t.Target.Owner, t.Target.Name)
 	t.Overlap = OverlapPolicy(overlap)
+	t.OverlapGroup = strings.TrimSpace(overlapGroup)
 	t.NetworkAccess = NetworkAccess(networkAccess)
 	t.NothingNeededAction = NothingNeededAction(nothingNeeded)
 	t.WorkflowReview = WorkflowReviewPolicy(workflowReview)
@@ -6257,12 +6267,12 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`schedule`"+` (
   `+"`id`,`title`,`body`,`target_owner`,`target_name`,`base`,"+
 		"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`,"+
-		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`"+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`"+`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
 		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
-		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting), t.GrainCI)
+		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting), t.GrainCI, strings.TrimSpace(t.OverlapGroup))
 	if err != nil {
 		return fmt.Errorf("writing schedule %s: %w", t.ID, err)
 	}
@@ -6483,6 +6493,34 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 		if err := hydrateSchedule(ctx, s.db, &out[i]); err != nil {
 			return nil, err
 		}
+	}
+	return out, nil
+}
+
+// SchedulesInOverlapGroup is every schedule that fires into repo and names
+// group as its OverlapGroup, ordered by id so that the peer named as
+// holding a firing is the same one every cycle. Scoped to repo: an
+// overlap group is a repository's own, and one repository's declarations
+// can never hold another's schedules.
+func (s *Store) SchedulesInOverlapGroup(ctx context.Context, repo RepoRef, group string) ([]Schedule, error) {
+	group = strings.TrimSpace(group)
+	if repo == (RepoRef{}) || group == "" {
+		return nil, nil
+	}
+	var out []Schedule
+	err := each(ctx, s.db,
+		"SELECT "+scheduleColumns+" FROM `schedule` "+
+			"WHERE `target_owner` = ? AND `target_name` = ? AND `overlap_group` = ? ORDER BY `id`",
+		[]any{repo.StoredOwner(), repo.Name, group}, func(rows *sql.Rows) error {
+			t, err := scanSchedule(rows.Scan)
+			if err != nil {
+				return err
+			}
+			out = append(out, t)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("listing schedules in overlap group %q of %s: %w", group, repo, err)
 	}
 	return out, nil
 }

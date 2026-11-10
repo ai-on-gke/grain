@@ -142,9 +142,7 @@ func Main() {
 		// runs the host agent.
 		args = []string{"host", "list"}
 	}
-	if len(args) > 0 {
-		args[0] = canonicalCommand(args[0])
-	}
+	canonicalizeCommandWord(args, os.Stderr)
 	// Inside an agent's sandbox, the read commands of
 	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
@@ -417,13 +415,14 @@ Commands:
   reopen <id>                          reopen a closed task
   retry <id>                           clear a failed task's retry cap so it dispatches again
   retry-merge <id>                     put a pull request the merge queue gave up on back on the queue
-  force-merge <id> <reason...>         merge this change anyway, overriding the queue's own decision --
-                                       an operator's action, recorded with the reason on the task and
-                                       the pull request, and refused if the branch does not merge cleanly;
-                                       -head <sha> names the commit you reviewed, and the override is
-                                       withdrawn if anything else is pushed before the merge
-  pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
-                                       (-threads) a pull request grain did not open (see prcmd.go)
+  force-merge [-override-gates g] <id> <reason...>
+                                       merge this change anyway, overriding the queue's own decision --
+                                       an operator's action (merge:force), recorded with the reason on
+                                       the task and pull request, and refused if the branch does not
+                                       merge cleanly; -override-gates must explicitly name any skipped
+                                       review gate (e.g. security-review); -head <sha> pins the commit
+  pr adopt|review|status|submit <pr>   adopt (-mode review-only|finish), review (-design), report on
+                                       (-threads), or approve/submit a pull request (see prcmd.go)
   run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -656,7 +655,7 @@ func runCLI(args []string) error {
 // dispatchCLI runs one task-CLI command against c.
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
-	warnDeprecatedCommand(rest[0], cmd)
+	warnDeprecatedCommand(os.Stderr, rest[0], cmd)
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)

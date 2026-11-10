@@ -192,13 +192,16 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 // inboxReadable is which repositories the caller's tasks:read reaches:
-// an external-agent token's own grants, and everything for anyone else
-// (a person, the local CLI), whose task list is already the one they
-// may see.
+// an external-agent token's own grants; a limited role's, or an agent
+// run's, as the event stream reads them (eventsReadable); and everything
+// for anyone else (the access code, the local CLI). A role limited to
+// some repositories was once shown every repository's inbox -- titles,
+// questions and pending secret names included (task 3981).
 func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 	tok := externalTokenFromContext(r.Context())
 	if tok == nil {
-		return func(string) bool { return true }
+		readable, _ := s.eventsReadable(r)
+		return readable
 	}
 	_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 	if err != nil {

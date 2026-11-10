@@ -30,3 +30,5 @@ The script `run-bench.sh` sets up Docker and the dependencies, rebuilds Granule 
 # To run this on your own machine or GCE instance (c4-standard-4):
 ./run-bench.sh
 ```
+
+The disk benchmarks run `fio` with `--direct=1` (`O_DIRECT`), which `tmpfs` rejects, so the host and Docker runs write their 1 GiB test files to the disk-backed `/var/tmp` rather than `/tmp` (which is `tmpfs` on stock Debian/systemd hosts). Set `BENCH_SCRATCH_DIR` to benchmark a different host directory; it must be on a block-backed filesystem that supports `O_DIRECT`. The Granule guest run uses `/var/tmp` inside the VM.
