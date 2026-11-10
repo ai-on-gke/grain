@@ -840,6 +840,41 @@ export function resolvedImage(image, repo, branch) {
   return `${from}:${tagForBranch(target)}`;
 }
 
+// ImageRepoWarning is GET /api/upgrade's imageRepoWarning: the repository
+// this deployment upgrades from names no registry host -- typically an
+// -upgrade-image a release-asset-era installer wrote -- so the Upgrade
+// button would be refused rather than pull it from Docker Hub. Said before
+// anybody presses it, beside the build's own default, so the fix is in
+// view before an upgrade fails on it.
+function ImageRepoWarning({ status }) {
+  if (!status?.imageRepoWarning) return null;
+  const { imageRepo, defaultImageRepo, imageRepoWarning } = status;
+  return (
+    <Alert
+      severity="warning"
+      className="upgrade-image-repo-warning"
+      sx={{ mb: 2, overflowWrap: "anywhere" }}
+    >
+      <Box>
+        <strong>
+          This deployment&apos;s image repository names no registry host.
+        </strong>
+      </Box>
+      <Box sx={{ mt: 0.5 }}>
+        Configured: <code className="upgrade-configured-repo">{imageRepo}</code>
+        {defaultImageRepo && defaultImageRepo !== imageRepo && (
+          <>
+            {" "}
+            &middot; This build&apos;s default:{" "}
+            <code className="upgrade-default-repo">{defaultImageRepo}</code>
+          </>
+        )}
+      </Box>
+      <Box sx={{ mt: 0.5 }}>{imageRepoWarning}</Box>
+    </Alert>
+  );
+}
+
 // ImageChooser is where an image deployment says what the Upgrade button
 // will pull -- GET /api/upgrade's imageRepo, with the branch's tag -- and
 // lets an operator pull from another repository the daemon allows
@@ -1316,6 +1351,7 @@ export default function UpgradePanel({
               setChosen(true);
             }}
           />
+          <ImageRepoWarning status={status} />
           <LastRestart report={status.lastRestart} />
           <ScheduledUpgrade
             scheduled={status.scheduled}

@@ -61,7 +61,9 @@ entries:
   #
   # The guest's packed root filesystem, scanned as sandbox-rootfs since
   # scripts/scan-images.sh learned to read a pack's disk (2026-11-10). Its
-  # Debian packages had nothing fixable outstanding; the bundled tools did.
+  # Debian packages had nothing fixable outstanding; the bundled tools did,
+# and what of those a bump could fix was fixed (Node.js 24 with a newer
+# npm, act, kind and actionlint rebuilt on the guest's Go, gcloud's pip).
   # granule's guest agents inside the guest's own root filesystem, built
   # by third_party/granule with go1.22 like the copies in the pack above.
   - image: sandbox-rootfs
@@ -88,175 +90,20 @@ entries:
     expires: "2027-01-15"
     followup: "image-vulns follow-up: rebuild granule's guest binaries on a supported Go"
     ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
-  # npm 10.8.2 and its bundled dependencies, as shipped inside Node.js
-  # 20.19.0 (Granulefile NODE_VERSION). Node 20 is past end of life;
-  # moving the guest to a supported Node line is its own change.
-  - image: sandbox-rootfs
-    package: brace-expansion
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-102276, CVE-2026-102278, CVE-2026-13149, CVE-2026-14257, CVE-2026-69152]
-  - image: sandbox-rootfs
-    package: cross-spawn
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2024-21538]
-  - image: sandbox-rootfs
-    package: glob
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2025-64756]
-  - image: sandbox-rootfs
-    package: ip-address
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-69192]
-  - image: sandbox-rootfs
-    package: minimatch
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-26996, CVE-2026-27903, CVE-2026-27904]
-  - image: sandbox-rootfs
-    package: pacote
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-9496]
-  - image: sandbox-rootfs
-    package: sigstore
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-48815]
-  - image: sandbox-rootfs
-    package: tar
-    target: Node.js
-    reason: npm's own bundled dependencies in Node.js 20.19.0 (Granulefile NODE_VERSION); move the guest to a supported Node
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-23745, CVE-2026-23950, CVE-2026-24842, CVE-2026-26960, CVE-2026-29786, CVE-2026-31802, CVE-2026-59873, CVE-2026-59874, CVE-2026-73566]
-  # Python distributions Trivy finds in the guest outside dpkg's
-  # database (it reports no path for them): the guest's pip-installed or
-  # bundled Python trees, such as google-cloud-cli's.
-  - image: sandbox-rootfs
-    package: msgpack
-    target: Python
-    reason: Python packages in the guest outside apt; find their owner and update it
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-114613, GHSA-6v7p-g79w-8964]
+  # setuptools as pip lists it in pip/_vendor/vendor.txt, inside
+  # google-cloud-cli's bundled Python (Granulefile PIP_VERSION). pip
+  # vendors only setuptools' pkg_resources, not the package_index module
+  # CVE-2025-47273 is in, and even pip 26.3, the newest, still lists
+  # setuptools 70.3.0. The pip upgrade that fixed this tree's msgpack and
+  # urllib3 cannot move this one.
   - image: sandbox-rootfs
     package: setuptools
     target: Python
-    reason: Python packages in the guest outside apt; find their owner and update it
+    reason: pip 26.3, the newest, vendors pkg_resources from setuptools 70.3.0 (not package_index, where the CVE is); take the pip release that moves it
     owner: release-train
     expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
+    followup: "bump Granulefile PIP_VERSION once pip vendors a fixed setuptools"
     ids: [CVE-2025-47273]
-  - image: sandbox-rootfs
-    package: urllib3
-    target: Python
-    reason: Python packages in the guest outside apt; find their owner and update it
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-97687, CVE-2026-97689]
-  # act v0.2.89 (Granulefile ACT_VERSION), built with go1.25.0.
-  - image: sandbox-rootfs
-    package: github.com/go-git/go-git/v5
-    target: usr/local/bin/act
-    reason: act v0.2.89's own Go toolchain and modules; bump ACT_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-45022, CVE-2026-71556]
-  - image: sandbox-rootfs
-    package: github.com/klauspost/compress
-    target: usr/local/bin/act
-    reason: act v0.2.89's own Go toolchain and modules; bump ACT_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-63209]
-  - image: sandbox-rootfs
-    package: github.com/moby/go-archive
-    target: usr/local/bin/act
-    reason: act v0.2.89's own Go toolchain and modules; bump ACT_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-17106]
-  - image: sandbox-rootfs
-    package: golang.org/x/crypto
-    target: usr/local/bin/act
-    reason: act v0.2.89's own Go toolchain and modules; bump ACT_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-39828, CVE-2026-39829, CVE-2026-39830, CVE-2026-39831, CVE-2026-39832, CVE-2026-39835, CVE-2026-42508, CVE-2026-46595, CVE-2026-46597, CVE-2026-56854]
-  - image: sandbox-rootfs
-    package: golang.org/x/net
-    target: usr/local/bin/act
-    reason: act v0.2.89's own Go toolchain and modules; bump ACT_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-25681, CVE-2026-27136, CVE-2026-39821, CVE-2026-46600, CVE-2026-78661, CVE-2026-78669]
-  - image: sandbox-rootfs
-    package: golang.org/x/text
-    target: usr/local/bin/act
-    reason: act v0.2.89's own Go toolchain and modules; bump ACT_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-56851, CVE-2026-56852]
-  - image: sandbox-rootfs
-    package: stdlib
-    target: usr/local/bin/act
-    reason: act v0.2.89's own Go toolchain and modules; bump ACT_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
-  # actionlint 1.7.12 (Granulefile ACTIONLINT_VERSION), built with go1.26.1.
-  - image: sandbox-rootfs
-    package: stdlib
-    target: usr/local/bin/actionlint
-    reason: actionlint 1.7.12's Go toolchain; bump ACTIONLINT_VERSION and its checksums
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-111943, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33810, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-46600, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
-  # kind v0.32.0 (Granulefile KIND_VERSION), built with go1.26.3.
-  - image: sandbox-rootfs
-    package: stdlib
-    target: usr/local/bin/kind
-    reason: kind v0.32.0's Go toolchain; bump KIND_VERSION
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the guest's bundled tools (sandbox-rootfs)"
-    ids: [CVE-2026-111943, CVE-2026-27145, CVE-2026-33818, CVE-2026-39821, CVE-2026-39822, CVE-2026-42504, CVE-2026-46600, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
   # The docker-ce and google-cloud-cli apt repositories' newest builds.
   # The guest installs whatever those repositories carry when it is built,
   # so these clear once upstream ships a release built against the fix.

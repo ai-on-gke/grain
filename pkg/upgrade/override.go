@@ -101,6 +101,9 @@ type ImageTarget struct {
 	Repository        string
 	DefaultRepository string
 	Repositories      []string
+	// RepositoryWarning is RepositoryWarning(): set when Repository names
+	// no registry host, so an upgrade would refuse to pull it.
+	RepositoryWarning string
 }
 
 // ImageTarget reports where an image upgrade would pull from, and false
@@ -110,7 +113,8 @@ func (u *Upgrader) ImageTarget() (ImageTarget, bool) {
 		return ImageTarget{}, false
 	}
 	t := ImageTarget{
-		Repository: u.EffectiveRepository(),
+		Repository:        u.EffectiveRepository(),
+		RepositoryWarning: u.RepositoryWarning(),
 	}
 	if u.cfg.Image.Track != "" {
 		t.DefaultRepository = installtrack.DefaultRepository(u.cfg.Image.Track)
