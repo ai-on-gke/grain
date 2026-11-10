@@ -837,9 +837,18 @@ describe("Grain Hub UI", () => {
         "grc_test_secret_token_12345",
       );
     });
-    expect(
-      screen.getByText(/registry_issuer: grain-registry/i),
-    ).toBeInTheDocument();
+    // The second snippet is the daemon's environment, which grain reads;
+    // there is no daemon.yaml.
+    const env = screen.getByText(/GRAIN_HUB_CONNECT=true/);
+    expect(env).toHaveTextContent(
+      "GRAIN_HUB_TOKEN=grc_test_secret_token_12345",
+    );
+    expect(env).toHaveTextContent("GRAIN_HUB_ENTRY=my-workstation");
+    expect(env).toHaveTextContent("GRAIN_REQUIRE_VERIFIER=registry");
+    expect(env).toHaveTextContent("GRAIN_HUB_ISSUER=grain-registry");
+    expect(env).toHaveTextContent("GRAIN_HUB_AUDIENCE=https://my-workstation.");
+    expect(env).toHaveTextContent("/.well-known/jwks.json");
+    expect(screen.queryByText(/registry_issuer/)).not.toBeInTheDocument();
   });
 
   it("renders Entry detail view with tunnel status, last_seen_at, scopes, conflict banner, and credential rotation", async () => {
