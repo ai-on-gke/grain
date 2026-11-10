@@ -85,7 +85,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	}
 	hasHubIssue := h.Hub != nil && (h.Hub.LastError != "" || len(h.Hub.ScopeConflicts) > 0)
 	if hasHubIssue {
-		fmt.Printf("registry (%s @ %s): %s\n", h.Hub.Entry, h.Hub.URL, h.Hub.State)
+		fmt.Printf("hub (%s @ %s): %s\n", h.Hub.Entry, h.Hub.URL, h.Hub.State)
 		if h.Hub.LastError != "" {
 			if h.Hub.ConsecutiveFailures > 0 {
 				fmt.Printf("  last error (%d failure(s)): %s\n", h.Hub.ConsecutiveFailures, h.Hub.LastError)

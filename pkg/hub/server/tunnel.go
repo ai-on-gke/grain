@@ -475,7 +475,7 @@ func (rt *Router) HandleConnect(w http.ResponseWriter, r *http.Request, name str
 	// 4. Reject new tunnel handshakes while this replica is draining on SIGTERM.
 	if rt.IsDraining() {
 		w.Header().Set("Retry-After", "2")
-		writeJSONError(w, http.StatusServiceUnavailable, "draining", "registry replica is draining; reconnect to another replica")
+		writeJSONError(w, http.StatusServiceUnavailable, "draining", "hub replica is draining; reconnect to another replica")
 		return
 	}
 
