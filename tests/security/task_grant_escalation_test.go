@@ -952,14 +952,12 @@ func TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings(t *testing.T) {
 	}
 }
 
-// knownGapExternalTokenApprovalCeiling coordinates with task #3905 Finding 2.2:
-// externalApprovalRail checks the external token's human owner's role when an
-// identity verifier is active, whereas a token without an email owner (local
-// account) holding tasks:admin@acme/widgets does not yet run roleTaskWithin
-// against the token's own grant/network/repo ceilings on approve.
-const knownGapExternalTokenApprovalCeiling = true
-
-func TestPath2KnownGapExternalTokenApprovalCeiling(t *testing.T) {
+// TestPath2ExternalTokenApprovalCeiling was a known gap (#3905 Finding 2.2):
+// a gma_ token without an email owner holding tasks:admin@acme/widgets
+// approved a stored acme/widgets task carrying a grant it does not hold.
+// externalApprovalWithin now holds the approval to the token's own grant,
+// network and repository ceilings, so it is refused.
+func TestPath2ExternalTokenApprovalCeiling(t *testing.T) {
 	rig := newEscalationRig(t)
 	ctx := context.Background()
 	tok := issueTestExternalToken(t, rig.client, "local-widgets-approver",
@@ -988,14 +986,11 @@ func TestPath2KnownGapExternalTokenApprovalCeiling(t *testing.T) {
 
 	code, body := doBearerJSON(t, rig.srv, tok, http.MethodPost, "/api/tasks/"+id+"/approve", "{}",
 		map[string]string{ui.ActingReasonHeader: "testing external token ceiling"})
-	accepted := code == http.StatusOK
-	switch {
-	case knownGapExternalTokenApprovalCeiling && !accepted:
-		t.Fatalf("external token approve past grant ceiling is now refused (%d %s): set knownGapExternalTokenApprovalCeiling = false", code, body)
-	case knownGapExternalTokenApprovalCeiling:
-		t.Skipf("known gap (#3905 Finding 2.2): ownerless gma_ token with tasks:admin approved gcp-key proposal (%d)", code)
-	case accepted:
-		t.Fatalf("gma_ token approved proposal exceeding its own grant ceiling: %s", body)
+	if code != http.StatusForbidden {
+		t.Fatalf("gma_ token approve of a proposal past its own grant ceiling = %d (%s), want 403", code, body)
+	}
+	if !strings.Contains(body, "(capabilities)") {
+		t.Errorf("refusal %q does not name the capabilities ceiling", body)
 	}
 }
 
