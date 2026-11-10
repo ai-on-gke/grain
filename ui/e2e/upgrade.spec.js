@@ -209,3 +209,173 @@ test("offers no button on a deployment with no upgrader configured", async ({
   await expect(page.getByText(/Not available/i)).toBeVisible();
   await expect(page.getByLabel("Branch")).toHaveCount(0);
 });
+
+test("shows the grace countdown, cancels a running upgrade, and disables Cancel past the point of no return", async ({
+  page,
+}) => {
+  const deleted = [];
+  let state = null;
+
+  await page.route("**/api/upgrade", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      const body = JSON.parse(request.postData() || "{}");
+      state = {
+        ...IDLE,
+        branch: body.branch,
+        phase: "running",
+        cancellable: true,
+        graceWindowSeconds: 10,
+        graceUntil: new Date(Date.now() + 9000).toISOString(),
+        steps: [
+          { name: "grace window", state: "running" },
+          { name: "pull image", state: "pending" },
+        ],
+      };
+      await route.fulfill({ status: 202, json: state });
+      return;
+    }
+    await route.fulfill({ json: state || IDLE });
+  });
+
+  await page.route("**/api/upgrade/current", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      await route.fallback();
+      return;
+    }
+    deleted.push(JSON.parse(route.request().postData() || "{}"));
+    state = {
+      ...IDLE,
+      branch: state?.branch || "v3.2.0",
+      phase: "cancelled",
+      detail: "cancelled by alice: cancelled during grace window",
+      cancelled: true,
+      steps: [
+        {
+          name: "grace window",
+          state: "cancelled",
+          detail: "cancelled by alice: cancelled during grace window",
+        },
+        { name: "pull image", state: "pending" },
+      ],
+    };
+    await route.fulfill({ json: state });
+  });
+
+  await page.goto("/");
+  await page.getByTestId("top-bar-settings").click();
+  await page.getByTestId("settings-nav-upgrade").click();
+
+  await page.getByLabel("Branch").fill("v3.2.0");
+  await page
+    .getByTestId("upgrade-section")
+    .getByRole("button", { name: "Upgrade" })
+    .click();
+
+  const banner = page.getByTestId("upgrade-running-banner");
+  const countdown = page.getByTestId("upgrade-grace-countdown");
+  const cancelBtn = page.getByRole("button", { name: "Cancel upgrade" });
+  await expect(countdown).toContainText(/Starting upgrade in \d+s/);
+  await expect(cancelBtn).toBeEnabled();
+
+  // Desktop layout rule: Cancel upgrade sits in the right-hand slot of the
+  // banner rather than wrapping underneath the countdown text.
+  const bannerBox = await banner.boundingBox();
+  const countdownBox = await countdown.boundingBox();
+  const cancelBox = await cancelBtn.boundingBox();
+  expect(cancelBox.x).toBeGreaterThan(countdownBox.x + countdownBox.width / 2);
+  expect(
+    Math.abs(
+      cancelBox.y + cancelBox.height / 2 - (bannerBox.y + bannerBox.height / 2),
+    ),
+  ).toBeLessThan(24);
+
+  await cancelBtn.click();
+  await expect
+    .poll(() => deleted)
+    .toEqual([{ reason: "cancelled during grace window" }]);
+  await expect(page.locator(".upgrade-phase-cancelled")).toHaveText(
+    "cancelled",
+  );
+
+  // Past the point of no return: Cancel upgrade is disabled and states why.
+  const blockedText =
+    "restarting onto v3.2.0 \u2014 too late to cancel; upgrade back to docker.io/grainai/grain:v3.1.0 afterwards";
+  state = {
+    ...IDLE,
+    branch: "v3.2.0",
+    phase: "running",
+    cancellable: false,
+    cancelBlockedReason: blockedText,
+  };
+  await page.reload();
+  await page.getByTestId("top-bar-settings").click();
+  await page.getByTestId("settings-nav-upgrade").click();
+  await expect(page.getByTestId("upgrade-cancel-blocked")).toHaveText(
+    blockedText,
+  );
+  await expect(
+    page.getByRole("button", { name: "Cancel upgrade" }),
+  ).toBeDisabled();
+});
+
+test("rolls back in one click to the replaced image after a completed upgrade", async ({
+  page,
+}) => {
+  const prevDigest = `sha256:${"1".repeat(64)}`;
+  const newDigest = `sha256:${"2".repeat(64)}`;
+  const previousImage = `docker.io/grainai/grain:v3.1.0@${prevDigest}`;
+  const currentImage = `docker.io/grainai/grain:v3.2.0@${newDigest}`;
+  const posted = [];
+  let state = {
+    enabled: true,
+    mode: "image",
+    running: { image: currentImage },
+    branch: "v3.2.0",
+    phase: "ok",
+    detail: `pulled ${currentImage}`,
+    previousImage,
+    previousImageLabel: "docker.io/grainai/grain:v3.1.0",
+  };
+
+  await page.route("**/api/upgrade", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      const body = JSON.parse(request.postData() || "{}");
+      posted.push(body);
+      state = {
+        ...state,
+        branch: body.branch || "v3.1.0",
+        phase: "running",
+        cancellable: true,
+      };
+      await route.fulfill({ status: 202, json: state });
+      return;
+    }
+    await route.fulfill({ json: state });
+  });
+
+  await page.goto("/");
+  await page.getByTestId("top-bar-settings").click();
+  await page.getByTestId("settings-nav-upgrade").click();
+
+  const rollbackAlert = page.getByTestId("upgrade-rollback");
+  const rollbackBtn = page.getByRole("button", {
+    name: "Roll back to docker.io/grainai/grain:v3.1.0",
+  });
+  await expect(rollbackAlert).toContainText(previousImage);
+  await expect(rollbackBtn).toBeEnabled();
+
+  const alertBox = await rollbackAlert.boundingBox();
+  const btnBox = await rollbackBtn.boundingBox();
+  expect(btnBox.x).toBeGreaterThan(alertBox.x + alertBox.width / 3);
+
+  await rollbackBtn.click();
+  await expect.poll(() => posted).toEqual([
+    {
+      branch: "v3.1.0",
+      image: previousImage,
+      afterTasksFinish: false,
+    },
+  ]);
+});
