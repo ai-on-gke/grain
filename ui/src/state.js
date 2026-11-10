@@ -192,7 +192,7 @@ export function displayCounts(counts) {
 // "submit" (awaiting_submit); title is the chip's tooltip; action is what
 // ends it, "reply", "grant" or "submit".
 // humanReviewLine is a human-review hold's reasons on one line.
-export function humanReviewLine(t) {
+function humanReviewLine(t) {
   return [...new Set((t.humanReviewHold || []).map((r) => r.reason))].join(
     "; ",
   );
@@ -295,7 +295,7 @@ export const SET_ASIDE_STATES = ["deferred", "closed"];
 // said, through the nothing_needed tool, that the task needed no change:
 // a success, labelled apart from "Succeeded" so a deliberate no-op is
 // told from a run that produced something.
-export const OUTCOME_LABELS = {
+const OUTCOME_LABELS = {
   "": "Running",
   succeeded: "Succeeded",
   failed: "Failed",
@@ -666,8 +666,8 @@ export function questionActivity(t) {
 // dating them early would cry wolf on every dispatch. Past ten minutes a
 // setup phrase has outlived the longest step it can describe, and the age
 // is the fact somebody wants.
-export const RUN_ACTIVITY_AGE_AFTER_MS = 5 * 60 * 1000;
-export const GRAIN_ACTIVITY_AGE_AFTER_MS = 10 * 60 * 1000;
+const RUN_ACTIVITY_AGE_AFTER_MS = 5 * 60 * 1000;
+const GRAIN_ACTIVITY_AGE_AFTER_MS = 10 * 60 * 1000;
 
 // activityAge is relativeAge with a threshold under it and the word "ago"
 // on top: "22m ago", or null while the phrase is younger than after.
@@ -680,7 +680,7 @@ export const GRAIN_ACTIVITY_AGE_AFTER_MS = 10 * 60 * 1000;
 // the age says "ago" rather than standing as a bare "22m" beside a
 // sentence, because a number next to "waiting for CI" is as easily read
 // as how long the wait has left to run as how long it has already stood.
-export function activityAge(iso, now, after) {
+function activityAge(iso, now, after) {
   if (!iso) return null;
   const at = new Date(iso).getTime();
   if (!Number.isFinite(at) || now - at < after) return null;
@@ -1956,7 +1956,7 @@ export function defaultRepoChoice(config, options) {
 // /api/deployment/reachable-repos lists the team's GitHub credential as
 // reaching, [{repo, push}] -- that a picker may offer: every one for a
 // read, only those it may push to for a target or an extra write.
-export function reachableRepoNames(reachable, { push = false } = {}) {
+function reachableRepoNames(reachable, { push = false } = {}) {
   return (reachable || [])
     .filter((r) => r && r.repo && (!push || r.push))
     .map((r) => r.repo);
@@ -2070,7 +2070,7 @@ export function repoTargetable(config, repo) {
 // dead branch is suggested again for the next task, which fails the same
 // way, which makes it the newest again. The suggestion outlives the
 // branch forever, and every task filed from it is dead on arrival.
-export const STALE_BASE_STATES = ["failed", "closed"];
+const STALE_BASE_STATES = ["failed", "closed"];
 
 // suggestsBase reports whether a task is evidence of where a repo's work
 // currently lives -- the filter behind both lastBaseForRepo below and
@@ -2233,7 +2233,7 @@ export function connectionPause(pause, connection, modelName) {
 // as its own or as one of its labels ("auto" for a provider-chosen run
 // the provider said was refused on p.model). orchestrator's
 // pauseWindow.coversRun.
-export function pauseCoversModel(p, modelName) {
+function pauseCoversModel(p, modelName) {
   if (!p) return false;
   if (!p.model) return true;
   const name = (modelName || "").trim().toLowerCase();
@@ -2356,7 +2356,7 @@ function taskConnectionPause(pause, t, b, config) {
 // taskFramework is the framework the usage-limit gate reads a task on no
 // connection as running on -- its own, else the deployment's default --
 // which is orchestrator.frameworkFor.
-export function taskFramework(t, config) {
+function taskFramework(t, config) {
   return t?.agentFramework || config?.agentFramework || "antigravity";
 }
 

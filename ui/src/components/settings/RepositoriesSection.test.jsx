@@ -42,7 +42,15 @@ function routeApi() {
     if (path === "/api/deployment/reachable-repos")
       return Promise.resolve(reach);
     if (path === "/api/repos/acme/widgets/declarations")
-      return Promise.resolve({ declarations: true, ciMode: "grain" });
+      return Promise.resolve({
+        declarations: true,
+        ciMode: "grain",
+        skills: {
+          enabled: true,
+          folders: [".claude/skills", ".gemini/skills"],
+        },
+        effectiveSkillFolders: [".claude/skills", ".gemini/skills"],
+      });
     if (
       opts &&
       path === "/api/repos/acme/widgets/base-repair-bypasses-human-gates"
@@ -83,6 +91,9 @@ describe("RepositoriesSection", () => {
     expect(
       within(widgets).getByTestId("settings-repo-declarations"),
     ).toHaveTextContent("Read");
+    expect(
+      within(widgets).getByTestId("settings-repo-skills"),
+    ).toHaveTextContent(".claude/skills, .gemini/skills");
     expect(within(widgets).getByTestId("settings-repo-ci")).toHaveTextContent(
       "Grain CI",
     );
@@ -93,6 +104,9 @@ describe("RepositoriesSection", () => {
     const gadgets = row("acme/gadgets");
     expect(await within(gadgets).findByText("Unknown")).toBeInTheDocument();
     expect(await within(gadgets).findByText("Not read")).toBeInTheDocument();
+    expect(
+      within(gadgets).getByTestId("settings-repo-skills"),
+    ).toHaveTextContent("Default folders");
     expect(within(gadgets).getByTestId("settings-repo-ci")).toHaveTextContent(
       "GitHub CI",
     );

@@ -181,7 +181,7 @@ export const PINNED_COLOR_OPTIONS = [
 // grain.pinnedNav.<user>.<team> lists here.
 export const PINNED_STORAGE_KEY = "grain.pinned";
 
-export function cleanPinnedItem(item) {
+function cleanPinnedItem(item) {
   const clean = { kind: item.kind, id: item.id };
   if (item.kind === "view") {
     if (item.id === "system" && typeof item.tab === "string" && item.tab)

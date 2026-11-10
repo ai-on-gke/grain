@@ -20,7 +20,7 @@ import { effectiveTimeZone } from "./PreferencesContext.jsx";
 // opened or a message sent from here records it, which is the zone the
 // run that answers is told the time in. Reads go without it -- they
 // change nothing the server would record it on.
-export const TIMEZONE_HEADER = "X-Grain-Time-Zone";
+const TIMEZONE_HEADER = "X-Grain-Time-Zone";
 
 // The ETag each polled path was last answered with, so the next poll of
 // it can ask "still this?" instead of asking for the whole thing again.

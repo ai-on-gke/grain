@@ -544,8 +544,9 @@ type Settings struct {
 	// settings it already has, so text cleared back to nothing has to
 	// arrive as present-and-empty rather than as an absent key leaving
 	// the old value on screen.
-	PromptExtension  string `json:"promptExtension"`
-	RepairTemplateID string `json:"repairTemplateID"`
+	PromptExtension  string              `json:"promptExtension"`
+	Skills           *model.SkillsConfig `json:"skills,omitempty"`
+	RepairTemplateID string              `json:"repairTemplateID"`
 	// TaskBranchTemplate controls names assigned to newly created tasks.
 	TaskBranchTemplate string `json:"taskBranchTemplate"`
 	// DeploymentID is model.Config's own: the id {deployment} expands to
@@ -1187,6 +1188,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		ConfigRepoOnly:                     c.rowConfigRepoOnly(ctx, cfg),
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
+		Skills:                             cfg.Skills.Clone(),
 		RepairTemplateID:                   cfg.RepairTemplateID,
 		TaskBranchTemplate:                 cfg.TaskBranchTemplate,
 		DeploymentID:                       cfg.DeploymentID,
@@ -1610,6 +1612,7 @@ type UpdateSettingsRequest struct {
 	AgentBackends         *[]model.AgentBackend `json:"agentBackends"`
 	DefaultModel          *string               `json:"defaultModel"`
 	PromptExtension       *string               `json:"promptExtension"`
+	Skills                *model.SkillsConfig   `json:"skills"`
 	RepairTemplateID      *string               `json:"repairTemplateID"`
 	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
 	DeploymentID          *string               `json:"deploymentId"`
@@ -2326,6 +2329,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 	if req.PromptExtension != nil {
 		cfg.PromptExtension = strings.TrimSpace(*req.PromptExtension)
+	}
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return model.Config{}, validationErrorf("skills: %v", err)
+		}
+		cfg.Skills = norm
 	}
 	if req.RepairTemplateID != nil {
 		cfg.RepairTemplateID = strings.TrimSpace(*req.RepairTemplateID)

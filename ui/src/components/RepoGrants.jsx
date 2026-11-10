@@ -58,8 +58,8 @@ import RepoPicker from "./RepoPicker.jsx";
 //	                 the default
 
 export const REPO_READ_REF = "https://grain.dev/capabilities/repo#read";
-export const REPO_WRITE_REF = "https://grain.dev/capabilities/repo#write";
-export const REPO_TARGET_REF = "https://grain.dev/capabilities/repo#target";
+const REPO_WRITE_REF = "https://grain.dev/capabilities/repo#write";
+const REPO_TARGET_REF = "https://grain.dev/capabilities/repo#target";
 
 const sameRepo = (a, b) =>
   (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();

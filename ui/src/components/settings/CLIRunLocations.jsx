@@ -27,7 +27,7 @@ import api from "../../api.js";
 
 // The CLIs a run location can be set for, in the order the daemon
 // resolves them (model.CLIRunFrameworks).
-export const CLI_RUN_CLIS = [
+const CLI_RUN_CLIS = [
   { framework: "claude", label: "claude" },
   { framework: "codex", label: "codex" },
   { framework: "antigravity", label: "agy (Antigravity)" },
@@ -173,7 +173,7 @@ function HostdDialInHelp() {
 // HostExecutorNotice says what "host" means for this deployment when it
 // is not the bare machine: why there is no host to run on (Kubernetes, or
 // a container with no grain hostd), or whether grain hostd answers.
-export function HostExecutorNotice({ executor }) {
+function HostExecutorNotice({ executor }) {
   if (!executor || executor.kind === "local") return null;
   if (!executor.hostAvailable) {
     return (
@@ -307,7 +307,7 @@ export function HostdUpgrade({ hostd }) {
 // HostdProcesses lists what grain hostd holds now: each host run's CLI,
 // started detached so that it outlives a daemon upgrade and is adopted
 // by the next daemon, and each run: host capability server.
-export function HostdProcesses({ hostd }) {
+function HostdProcesses({ hostd }) {
   const procs = hostd?.processes || [];
   if (!hostd?.reachable || procs.length === 0) return null;
   return (

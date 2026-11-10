@@ -1,0 +1,234 @@
+# Waivers for the release images' vulnerability gate
+# (docs/image-vulnerability-scanning.md; cmd/image-vulns,
+# scripts/scan-images.sh).
+#
+# The gate fails on a CRITICAL or HIGH finding that has a fixed version
+# available. An entry here waives one: the vulnerability ids (`id`, or
+# `ids` for several that share everything else), the package as Trivy
+# names it, the image's leaf name (grain, sandbox, sandbox-k8s, hub, or
+# "*"), optionally the target (a binary's path in the image, or "os" for
+# its OS packages) -- and why, who owns getting rid of it, and when it
+# expires. Every one of reason, owner and expires is required.
+#
+# An entry applies up to and including its expiry date and not after:
+# an expired entry fails the gate again, which is the point -- it is a
+# date to look again, not a way to stop looking. No entry may expire more
+# than 180 days ahead. Entries that no finding matches any more are
+# listed in every report as stale; delete them.
+#
+# Seeded from the first scan of main's images (2026-11-10). What was
+# cheap was fixed in the same change (Debian base digest, kubectl
+# v1.37.2, golang.org/x/net); what is below is not, and each group names
+# the follow-up task fixing it.
+entries:
+  # cosign v2.4.1 (Dockerfile COSIGN_IMAGE), built with go1.22 and two-year-old
+  # sigstore modules. It is the signing tool, pinned in step with
+  # scripts/release-images.sh and the promote workflows, so bumping it is
+  # its own reviewed change.
+  - image: grain
+    package: github.com/docker/cli
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-15558]
+  - image: grain
+    package: github.com/go-jose/go-jose/v3
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-34986]
+  - image: grain
+    package: github.com/go-jose/go-jose/v4
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-116587, CVE-2026-34986]
+  - image: grain
+    package: github.com/golang-jwt/jwt/v4
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-30204]
+  - image: grain
+    package: github.com/golang-jwt/jwt/v5
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-30204]
+  - image: grain
+    package: github.com/klauspost/compress
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-63209]
+  - image: grain
+    package: github.com/open-policy-agent/opa
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-46569]
+  - image: grain
+    package: github.com/sigstore/fulcio
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-66506, CVE-2026-49478]
+  - image: grain
+    package: github.com/sigstore/rekor
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-48702]
+  - image: grain
+    package: github.com/sigstore/timestamp-authority
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-66564]
+  - image: grain
+    package: go.opentelemetry.io/otel/sdk
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-24051, CVE-2026-39883]
+  - image: grain
+    package: golang.org/x/crypto
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2024-45337, CVE-2025-22869, CVE-2025-47913, CVE-2026-39828, CVE-2026-39829, CVE-2026-39830, CVE-2026-39831, CVE-2026-39832, CVE-2026-39835, CVE-2026-42508, CVE-2026-46595, CVE-2026-46597, CVE-2026-56854]
+  - image: grain
+    package: golang.org/x/mod
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-56864, CVE-2026-56865]
+  - image: grain
+    package: golang.org/x/net
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2024-45338, CVE-2026-25681, CVE-2026-27136, CVE-2026-33814, CVE-2026-39821, CVE-2026-46600, CVE-2026-78661, CVE-2026-78669]
+  - image: grain
+    package: golang.org/x/oauth2
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-22868]
+  - image: grain
+    package: golang.org/x/text
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-56851, CVE-2026-56852]
+  - image: grain
+    package: google.golang.org/grpc
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2026-33186, CVE-2026-84304, CVE-2026-84445, GHSA-hrxh-6v49-42gf]
+  - image: grain
+    package: stdlib
+    target: usr/local/bin/cosign
+    reason: cosign v2.4.1's own dependencies; bump cosign everywhere it is pinned together
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump cosign"
+    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
+  # The docker CLI from docker:28-cli (Dockerfile DOCKER_CLI_IMAGE), built
+  # with go1.25.3; 28 gets no newer builds, and 29 raises the minimum
+  # engine API it will talk to.
+  - image: grain
+    package: stdlib
+    target: usr/local/bin/docker
+    reason: docker 28 CLI built with go1.25.3; moving to docker:29-cli needs an engine-compatibility check
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "image-vulns follow-up: bump the docker CLI"
+    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
+  # granule's guest binaries, built by third_party/granule with go1.22.
+  # Granule is upstream-first: fixed in gke-labs/granule and re-vendored.
+  - image: sandbox
+    package: stdlib
+    target: usr/local/bin/granule-shim
+    reason: granule's guest binaries are built with go1.22.12; fix in gke-labs/granule, then re-vendor
+    owner: release-train
+    expires: "2027-01-15"
+    followup: "image-vulns follow-up: rebuild granule's guest binaries on a supported Go"
+    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
+  - image: sandbox
+    package: stdlib
+    target: usr/local/share/granule/guest-parts/granule-agent
+    reason: granule's guest binaries are built with go1.22.12; fix in gke-labs/granule, then re-vendor
+    owner: release-train
+    expires: "2027-01-15"
+    followup: "image-vulns follow-up: rebuild granule's guest binaries on a supported Go"
+    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
+  - image: sandbox
+    package: stdlib
+    target: usr/local/share/granule/guest-parts/granule-container
+    reason: granule's guest binaries are built with go1.22.12; fix in gke-labs/granule, then re-vendor
+    owner: release-train
+    expires: "2027-01-15"
+    followup: "image-vulns follow-up: rebuild granule's guest binaries on a supported Go"
+    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
+  - image: sandbox
+    package: stdlib
+    target: usr/local/share/granule/guest-parts/granule-mem-agent
+    reason: granule's guest binaries are built with go1.22.12; fix in gke-labs/granule, then re-vendor
+    owner: release-train
+    expires: "2027-01-15"
+    followup: "image-vulns follow-up: rebuild granule's guest binaries on a supported Go"
+    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
+  # kubectl v1.37.2 (Dockerfile KUBECTL_VERSION) is the newest release, and
+  # still vendors these; the next patch release should pick them up.
+  - image: grain
+    package: golang.org/x/net
+    target: usr/local/bin/kubectl
+    reason: kubectl v1.37.2, the newest release, vendors golang.org/x/net v0.57.0; take the next kubectl patch
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "bump KUBECTL_VERSION to the next 1.37 patch"
+    ids: [CVE-2026-78661, CVE-2026-78669]
+  - image: grain
+    package: golang.org/x/text
+    target: usr/local/bin/kubectl
+    reason: kubectl v1.37.2, the newest release, vendors golang.org/x/text v0.40.0; take the next kubectl patch
+    owner: release-train
+    expires: "2026-12-31"
+    followup: "bump KUBECTL_VERSION to the next 1.37 patch"
+    ids: [CVE-2026-56851]
