@@ -58,14 +58,14 @@ import (
 // UpgradePanel.jsx reads, spelled the same way, so a rename that broke
 // the panel would break this too.
 type upgradeResponse struct {
-	Enabled    bool            `json:"enabled"`
-	Mode       string          `json:"mode"`
-	Running    *upgradeRunning `json:"running"`
-	Channel    string          `json:"channel"`
-	Branch     string          `json:"branch"`
-	Phase      string          `json:"phase"`
-	Detail     string          `json:"detail"`
-	Unchanged  bool            `json:"unchanged"`
+	Enabled             bool            `json:"enabled"`
+	Mode                string          `json:"mode"`
+	Running             *upgradeRunning `json:"running"`
+	Channel             string          `json:"channel"`
+	Branch              string          `json:"branch"`
+	Phase               string          `json:"phase"`
+	Detail              string          `json:"detail"`
+	Unchanged           bool            `json:"unchanged"`
 	Steps               []upgradeStep   `json:"steps"`
 	StartedAt           *time.Time      `json:"startedAt"`
 	FinishedAt          *time.Time      `json:"finishedAt"`

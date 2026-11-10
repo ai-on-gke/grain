@@ -364,9 +364,9 @@ func TestCancelAfterPointOfNoReturnReturnsTooLate(t *testing.T) {
 			ListCmd:    []string{"true"},
 		},
 		HealthCheckArgs: []string{"schema-version"},
-		RestartCmd: []string{"sh", "-c", `touch ` + inRestart + `; while [ ! -f ` + releaseRestart + ` ]; do sleep 0.02; done`},
-		Stopping:   stopping,
-		StatusFile: filepath.Join(dir, "upgrade-status.json"),
+		RestartCmd:      []string{"sh", "-c", `touch ` + inRestart + `; while [ ! -f ` + releaseRestart + ` ]; do sleep 0.02; done`},
+		Stopping:        stopping,
+		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
 	})
 
 	if err := u.Start("v3.2.0"); err != nil {
@@ -405,7 +405,7 @@ func TestCancelAfterPointOfNoReturnReturnsTooLate(t *testing.T) {
 	if stAfter.PreviousImage != prevRef {
 		t.Errorf("PreviousImage = %q, want %q", stAfter.PreviousImage, prevRef)
 	}
-	if _, err := u.Cancel("alice@example.com", "still draining"); ! func() bool { _, ok := IsTooLate(err); return ok }() {
+	if _, err := u.Cancel("alice@example.com", "still draining"); !func() bool { _, ok := IsTooLate(err); return ok }() {
 		t.Errorf("Cancel while RestartPending = %v, want TooLateError", err)
 	}
 }
@@ -529,9 +529,9 @@ func TestCancelSourceAndKubePipelinesAndRollbackToPreviousImage(t *testing.T) {
 				Repository: "docker.io/grainai/grain",
 				RefFile:    refFile,
 				PullCmd:    []string{"true"},
-				DigestCmd: []string{"sh", "-c", `case "$1" in *sha-1a2b3c4*) echo "docker.io/grainai/grain@` + prevDigest + `";; *) echo "docker.io/grainai/grain@` + newDigest + `";; esac`, "sh"},
-				RunCmd:    []string{"true"},
-				ListCmd:   []string{"true"},
+				DigestCmd:  []string{"sh", "-c", `case "$1" in *sha-1a2b3c4*) echo "docker.io/grainai/grain@` + prevDigest + `";; *) echo "docker.io/grainai/grain@` + newDigest + `";; esac`, "sh"},
+				RunCmd:     []string{"true"},
+				ListCmd:    []string{"true"},
 			},
 			HealthCheckArgs: []string{"schema-version"},
 			StatusFile:      filepath.Join(dir, "upgrade-status.json"),
