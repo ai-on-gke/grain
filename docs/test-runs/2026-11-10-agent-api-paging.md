@@ -179,7 +179,7 @@ Task 4027 extended the harness so that the six routes above are walked against m
 | `/api/suite-runs` | 20 | 20 | **10,248** / 10,188 | **10,259** / 10,199 | 130,895 | 260 | 13 | 0 | yes |
 | `/api/access/history` | 20 | **0** | 41 / 41 | 41 / 41 | 3 | 0 | 1 | 0 | n/a |
 
-**Defects the larger seed exposed (not fixed here; filed as a follow-up `fix(ui)` task).** Bold cells above are over the 10,240 B cap or empty:
+**Defects the larger seed exposed (not fixed in task 4027; fixed in task 4112, below).** Bold cells above are over the 10,240 B cap or empty:
 
 - **F1 `ci/runs`: a default agent page is 221–234 KB.** One base-branch run on `acme/widgets` (ghsim has 525 declared workflows) carries 525 `jobs`, 280 KB on one row. Paged rows have no jobs cap. `view=compact` is 12.6–14.4 KB at 20 rows. The run only happens once the reconciler is woken: task 3953's walk had a 1 h poll interval and no wake, so it never saw this.
 - **F2 `ci/faults`: 11.1 KB per default page** (~586 B a row, mostly `runs`).
@@ -188,6 +188,31 @@ Task 4027 extended the harness so that the six routes above are walked against m
 - **F5 `capability-methods`: a later page is 30.5 KB.** `…/gchat#post` has a 22.5 KB `description` and 3.3 KB `args`, both enumerating spaces.
 - **F6 `suite-runs`: 10,188–10,259 B**, just at or over the cap.
 - **F7 `access/history`: empty for people and agents alike.** `handleAccessHistory` reads the newest `maxConfigAudit` config-audit rows and only then keeps `surface == "access"`. Once the 261 capability-server PUTs were newer than every access change, the route answered 0 rows, and `?limit=5` answered 0. The surface filter has to happen in the store query.
+
+**Fixed in task 4112.** Each fix is in `pkg/ui` (and, for F7, `pkg/model`), with a regression test in `pkg/ui/list_page_walkthrough_test.go` (`TestCIRunAgentPagesCapJobsOnWideRuns`, `TestFaultGateAndSuiteRunAgentPagesFitToolResultCap`, `TestCapabilityServerConfigAndMethodRowsAreCappedForAgents`, `TestAccessHistorySurvivesNewerChangesToOtherSurfaces`) and, for F7, `TestConfigAuditOfSurfaceMatchesBeforeTheLimit` in `pkg/model` on both drivers. A paged row now carries the first few items of each list or document that grows with the deployment, and says how many there were. A person's unpaged read is unchanged, and `fields=full` returns whole rows on the routes that document it.
+
+- F1: an agent's `ci/runs` row (unless `fields=full`) keeps 5 jobs (failed, errored and cancelled first), with `jobCount`/`jobsTruncated`; a person's UI poll (`CIPage.jsx`'s `?limit=50`) keeps whole rows and standalone GitHub CI faults. The agent row's error and its jobs' errors are cut to 500 B (`errorTruncated`). A `release` run with nothing to run, seen after a daemon restart, listed every declared workflow in its error: 33 KB on one row. A compact agent row keeps 10 job lines, failures first. The agent full view's `faults` are the ones seen on that page's own runs (at most 5, trimmed), not ten of the deployment's (5.5 KB on every page).
+- F2: `ci/faults` defaults to 10. A paged row names its first 3 runs, 5 refs and 5 paths, with `runCount`/`refCount`/`pathCount`/`trimmed`.
+- F3: paged `base-branch-gates` rows leave out `detail` unless `fields=full`.
+- F4: each array in a paged `capability-servers` row's `config.config` is cut to 10 items, with `configTruncated`/`configItemCounts`.
+- F5: a paged `capability-methods` row cuts `description` to 500 B and each array in `args` to 10 items, with `descriptionTruncated`/`argsTruncated`/`argItemCounts`.
+- F6: `suite-runs` defaults to 10. A paged row keeps 3 tasks, with `taskCount`/`tasksTruncated`.
+- F7: `access/history` reads `model.Store.ConfigAuditOfSurface(ctx, "access", …)`, which puts the surface in the SQL `WHERE`, so newer changes to other surfaces no longer crowd access changes out.
+
+walk_routes.py's defaults for `ci/faults` and `suite-runs` are now 10. Re-walked from a fresh `start_paging_env` on each driver (`grain` built from task 4112's branch): **walk_routes.py reported 0 anomalies on SQLite and 0 on PostgreSQL 15** (55 routes each, with `--insert-test`). The rows below are the routes F1–F7 covered:
+
+| Route | Doc default | Page 1 rows | Page 1 B (SQLite / PG) | Max page B (SQLite / PG) | total | Pages | Dups | Union = person |
+|---|---|---|---|---|---|---|---|---|
+| `/api/ci/runs` | 10 | 10 | 6,585 / 7,192 | 6,585 / 7,192 | 522 / 522 | 53 | 0 | n/a / n/a |
+| `/api/ci/runs?view=compact` | 20 | 20 | 5,245 / 5,297 | 6,776 / 6,713 | 522 / 522 | 27 | 0 | n/a / n/a |
+| `/api/ci/faults` | 10 | 10 | 5,703 / 5,703 | 5,704 / 5,704 | 260 / 260 | 26 | 0 | yes / yes |
+| `/api/base-branch-gates` | 20 | 20 | 2,343 / 2,343 | 2,344 / 2,344 | 260 / 260 | 13 | 0 | yes / yes |
+| `/api/capability-servers` | 10 | 10 | 7,072 / 7,074 | 7,072 / 7,074 | 272 / 272 | 28 | 0 | yes / yes |
+| `/api/capability-methods` | 10 | 10 | 4,860 / 4,860 | 6,478 / 6,478 | 362 / 362 | 37 | 0 | yes / yes |
+| `/api/suite-runs` | 10 | 10 | 5,185 / 5,145 | 5,196 / 5,156 | 260 / 260 | 26 | 0 | yes / yes |
+| `/api/access/history` | 20 | 20 | 4,088 / 4,088 | 4,089 / 4,089 | 265 / 265 | 14 | 0 | n/a / n/a |
+
+Harness note: restarting a seeded daemon in place (rather than a fresh `start_paging_env`) records every unfinished CI run as interrupted, and the next reconciler cycle then deletes the seeded merge batches. walk_routes.py would then report `merge-batches` short of rows, so re-walks should start from a fresh environment or re-run `seed -phase live`.
 
 The PostgreSQL walk also had one duplicate in `deployment/audit-logs`: audit rows were written while the walk ran, and that route's newest-first offset cursor shifts under inserts. That is follow-up 1 from task 3953 (keyset cursors), not a new defect.
 
@@ -272,7 +297,7 @@ The repo-limited callers were task 9001 (`@acme/widgets` grants), the gma_ `repo
 1. `fix(ui)`: keyset cursors for newest-first offset-paged list routes, so inserts between pages neither duplicate nor skip rows.
 2. `fix(cli)`: page `grain mcp`'s `list_grain_tasks`, `grain_inbox` and `ci_runs` to fit the ~10 KB tool budget.
 3. ~~`test`: extend the paging harness to the derived collections and a dispatched fake-agent MCP run~~: done in task 4027.
-4. `fix(ui)` (from task 4027): F1–F7 above, the agent-page caps on `ci/runs`, `ci/faults`, `base-branch-gates`, `capability-servers`, `capability-methods` and `suite-runs`, and `access/history`'s surface filter.
+4. ~~`fix(ui)` (from task 4027): F1–F7 above, the agent-page caps on `ci/runs`, `ci/faults`, `base-branch-gates`, `capability-servers`, `capability-methods` and `suite-runs`, and `access/history`'s surface filter~~: done in task 4112.
 
 ## Tests run
 

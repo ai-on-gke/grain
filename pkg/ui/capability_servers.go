@@ -92,6 +92,13 @@ type CapabilityServer struct {
 	// per scope set, which grows with the deployment.
 	MethodCount      int  `json:"methodCount,omitempty"`
 	MethodsTruncated bool `json:"methodsTruncated,omitempty"`
+	// ConfigTruncated says a paged call cut the arrays in Config.Config
+	// to their first pageRowArrayItems items -- gchat's spaces, one per
+	// configured room -- and ConfigItemCounts gives the full length of
+	// each array it cut, by its path in the configuration ("spaces").
+	// fields=full, and a person's unpaged read, carry the whole entry.
+	ConfigTruncated  bool           `json:"configTruncated,omitempty"`
+	ConfigItemCounts map[string]int `json:"configItemCounts,omitempty"`
 }
 
 // capabilityServerPageMethods is how many of a server's methods a paged
@@ -1469,21 +1476,28 @@ func (s *Server) handleListCapabilityServers(w http.ResponseWriter, r *http.Requ
 	servers = filterList(servers, func(srv CapabilityServer) bool {
 		return list.matches(srv.ID, srv.Config.Command, srv.Config.ServerURL)
 	})
-	if list.Paged {
-		for i := range servers {
-			if servers[i].Status != nil {
-				st := *servers[i].Status
-				st.MethodDetails = nil
-				st.ConfigSchema = nil
-				if n := len(st.Methods); n > capabilityServerPageMethods {
-					st.Methods = append([]string(nil), st.Methods[:capabilityServerPageMethods]...)
-					servers[i].MethodCount, servers[i].MethodsTruncated = n, true
-				}
-				servers[i].Status = &st
-			}
+	writePageTrimmed(w, r, servers, list, nil, pagedCapabilityServer)
+}
+
+// pagedCapabilityServer is srv as a paged row carries it: no method or
+// configure schemas, the first capabilityServerPageMethods methods, and
+// the first pageRowArrayItems items of each array in its configuration.
+func pagedCapabilityServer(srv CapabilityServer) CapabilityServer {
+	if srv.Status != nil {
+		st := *srv.Status
+		st.MethodDetails = nil
+		st.ConfigSchema = nil
+		if n := len(st.Methods); n > capabilityServerPageMethods {
+			st.Methods = append([]string(nil), st.Methods[:capabilityServerPageMethods]...)
+			srv.MethodCount, srv.MethodsTruncated = n, true
 		}
+		srv.Status = &st
 	}
-	writeList(w, servers, list)
+	if capped, cut := capJSONObject(srv.Config.Config, pageRowArrayItems); len(cut) > 0 {
+		srv.Config.Config = capped
+		srv.ConfigTruncated, srv.ConfigItemCounts = true, cut
+	}
+	return srv
 }
 
 // pluralHolds is "holds" or "hold" for n things.
