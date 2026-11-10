@@ -68,13 +68,15 @@ func cmdUsage(ctx context.Context, c *ui.HTTPClient, out *printer, args []string
 			for _, raw := range budgets {
 				b, err := parseBudget(raw)
 				if err != nil {
-					return err
+					return usageErrorf("%w", err)
 				}
 				settings.Budgets = append(settings.Budgets, b)
 			}
 		}
+		// A malformed flag is the command being wrong (exit 2), as the
+		// daemon's 400 for the same settings is.
 		if err := settings.Validate(); err != nil {
-			return err
+			return usageErrorf("%w", err)
 		}
 		if resp, err = c.SetUsageSettings(ctx, settings); err != nil {
 			return err
@@ -123,9 +125,12 @@ func (p *printer) usage(rep ui.UsageResponse) {
 		return
 	}
 	fmt.Printf("mode: %s   max_workers: %d   effective worker cap: %d", rep.Mode, rep.MaxWorkers, rep.EffectiveWorkers)
-	if rep.SustainableWorkers != nil {
+	switch {
+	case rep.Mode == model.UsageModeOff:
+		fmt.Printf("   sustainable: not estimated (mode off)")
+	case rep.SustainableWorkers != nil:
 		fmt.Printf("   sustainable: ≈%d", *rep.SustainableWorkers)
-	} else {
+	default:
 		fmt.Printf("   sustainable: unbounded (a connection in use has no known budget)")
 	}
 	fmt.Println()
