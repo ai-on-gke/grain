@@ -784,7 +784,7 @@ func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	writeList(w, out, list)
+	writeListBy(w, out, list, configAuditKey)
 }
 
 func (s *Server) handleAllowPrincipal(w http.ResponseWriter, r *http.Request) {

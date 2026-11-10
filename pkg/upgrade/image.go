@@ -74,7 +74,7 @@ type ImageConfig struct {
 	// in something that needs no docker daemon.
 	PullCmd []string
 	// RunCmd runs an image, with the ref and then HealthCheckArgs
-	// appended; {"docker", "run", "--rm"} when left nil. The image's
+	// appended; {"docker", "run", "--rm", "--pull=never"} when left nil. The image's
 	// own ENTRYPOINT is `grain` (Dockerfile), so appending
 	// HealthCheckArgs -- {"schema-version"} on a real deployment -- runs
 	// exactly the same subcommand the binary path's health check runs,
@@ -209,23 +209,18 @@ type ImageConfig struct {
 	// installtrack.TrackOSS; when Repository is empty, DefaultRepository(Track)
 	// supplies the default image repository.
 	Track installtrack.Track
-	// Source chooses where candidate container images are fetched from
-	// (ImageSourceRegistry, `docker pull`). When empty, TrackDefaultsFor(Track)
-	// supplies any edition default before falling back to ImageSourceRegistry.
+	// Source is kept for config compatibility; container upgrades always pull
+	// from ImageSourceRegistry, and any legacy "release-assets" value logs a
+	// one-time warning and falls back to ImageSourceRegistry.
 	Source ImageSource
-	// SourceLocked marks Source as fixed by a daemon command-line flag or
-	// environment variable rather than editable configuration, so the UI
-	// displays it read-only.
-	SourceLocked bool
-	// SourceOverrideFile optionally persists UI-configured image source
-	// overrides across restarts when SourceLocked is false.
-	SourceOverrideFile string
-	// Fallback optionally names a secondary image source; kept for
-	// compatibility with daemon flags and edition track defaults.
+	// Fallback is kept for edition/config compatibility; because
+	// ImageSourceRegistry is the only supported image source, fallback is a
+	// no-op and any legacy "release-assets" value logs a one-time warning.
 	Fallback ImageSource
-	// FallbackExplicit records that Fallback was explicitly set (including to
-	// empty/"none" to override a track default).
-	FallbackExplicit bool
+	// SourceOverrideFile, when set, is inspected once on startup so any legacy
+	// stored "release-assets" override (<data-dir>/upgrade-image-source.json)
+	// is migrated to the registry source with a one-time warning.
+	SourceOverrideFile string
 }
 
 // imageRefEnvKey is the variable name written into ImageConfig.RefFile,
@@ -434,6 +429,15 @@ func (u *Upgrader) imageRefIn(repository, branch string) (string, error) {
 // holding a usable one. No token, or a login that fails, is only logged
 // -- the pull is what says whether it mattered.
 func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string) error {
+	// A ref naming no registry host is never pulled: docker would resolve
+	// it to Docker Hub, where anybody may have published that name.
+	// Images from Docker Hub are named with an explicit docker.io/ host.
+	if registryauth.HostOf(ref) == "" {
+		if repo := repositoryOf(ref); repo == u.EffectiveRepository() {
+			return fmt.Errorf("refusing to pull %s: %s", ref, u.hostlessRepositoryProblem(repo))
+		}
+		return fmt.Errorf("refusing to pull %s: it names no registry host, so docker would fetch it from Docker Hub, where anybody may publish that name; only a registry-qualified image is pulled", ref)
+	}
 	argv := u.cfg.Image.PullCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "pull"}
@@ -447,6 +451,48 @@ func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string)
 	}
 	argv = append(append([]string{}, argv...), ref)
 	return runLogged(ctx, p, step, "", argv)
+}
+
+// repositoryOrigin says where the repository effectiveRepository settles
+// on came from, in the words an operator would go looking for it by.
+func (u *Upgrader) repositoryOrigin() string {
+	switch {
+	case strings.TrimSpace(u.cfg.Image.TargetRepository) != "":
+		return "chosen on the Upgrade pane"
+	case strings.TrimSpace(u.cfg.Image.Repository) != "":
+		return "set by the -upgrade-image flag in this deployment's unit"
+	default:
+		return "this build's default"
+	}
+}
+
+// hostlessRepositoryProblem is what is wrong with repo, a repository
+// naming no registry host that this deployment is configured to upgrade
+// from, and how to fix it. Such a name is usually one an older installer
+// wrote as -upgrade-image when releases shipped images as release assets
+// (grain-<edition>/grain), which only ever named a local tag; it is now
+// just a name Docker Hub would be asked for.
+func (u *Upgrader) hostlessRepositoryProblem(repo string) string {
+	msg := fmt.Sprintf("the image repository %s (%s) names no registry host, so docker would fetch it from Docker Hub, where anybody may publish that name. "+
+		"Set -upgrade-image to a registry-qualified repository (registry host, then path)", repo, u.repositoryOrigin())
+	if def := installtrack.DefaultRepository(u.cfg.Image.Track); def != repo && registryauth.HostOf(def) != "" {
+		msg += fmt.Sprintf(", or remove that setting so this build's default, %s, applies", def)
+	}
+	return msg + ": re-run the installer (scripts/setup.sh, leaving GRAIN_IMAGE unset for the default) and it rewrites the unit"
+}
+
+// RepositoryWarning is what the Upgrade pane warns of before anybody
+// presses Upgrade: the configured repository names no registry host, so
+// pullImage would refuse it. Empty when there is nothing to warn of.
+func (u *Upgrader) RepositoryWarning() string {
+	if u.Mode() != ModeImage {
+		return ""
+	}
+	repo := u.EffectiveRepository()
+	if repo == "" || registryauth.HostOf(repo) != "" {
+		return ""
+	}
+	return "Upgrades will be refused: " + u.hostlessRepositoryProblem(repo) + "."
 }
 
 func (u *Upgrader) tagImage(ctx context.Context, p *progress, step, src, dst string) error {
@@ -597,6 +643,21 @@ func (u *Upgrader) pinImage(ctx context.Context, p *progress, step, ref string) 
 // imageRunTimeout's tail.
 const imageInspectTimeout = time.Minute
 
+// dockerRunArgs builds the default `docker run --rm --pull=never` argv when
+// ImageConfig.RunCmd is unset. Every container run in ModeImage executes an
+// image already expected in the local Docker store (either just pulled,
+// digest-pinned and verified, or the host's previous image when still
+// present), so Docker must never implicitly pull a missing ref -- in
+// particular a hostless `grain/*` ref left in RefFile by an earlier
+// release-asset install, which Docker would resolve on Docker Hub.
+func (u *Upgrader) dockerRunArgs(extra ...string) []string {
+	argv := u.cfg.Image.RunCmd
+	if len(argv) == 0 {
+		argv = []string{"docker", "run", "--rm", "--pull=never"}
+	}
+	return append(append([]string{}, argv...), extra...)
+}
+
 // healthCheckImage runs the just-pulled image with HealthCheckArgs, the
 // image-mode counterpart of healthCheck's run of the just-installed
 // binary -- and, unlike that one, it runs *before* anything cuts over,
@@ -608,11 +669,7 @@ const imageInspectTimeout = time.Minute
 func (u *Upgrader) healthCheckImage(ctx context.Context, p *progress, ref string) error {
 	ctx, cancel := context.WithTimeout(ctx, imageRunTimeout)
 	defer cancel()
-	argv := u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), ref)
+	argv := append(u.dockerRunArgs(), ref)
 	argv = append(argv, u.cfg.HealthCheckArgs...)
 	return runLogged(ctx, p, stepHealthCheck, "", argv)
 }
@@ -642,11 +699,7 @@ func (u *Upgrader) healthCheckImage(ctx context.Context, p *progress, ref string
 // the question from a deployment that has just silently stopped keeping
 // its guest in step.
 func (u *Upgrader) sandboxImage(ctx context.Context, p *progress, ref string) (sandbox, why string, err error) {
-	argv := u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), ref)
+	argv := append(u.dockerRunArgs(), ref)
 	argv = append(argv, u.cfg.Image.SandboxImageArgs...)
 	out, err := runAsked(ctx, p, stepSandbox, imageRunTimeout, argv)
 	if err != nil {
@@ -704,11 +757,7 @@ func (u *Upgrader) sandboxImage(ctx context.Context, p *progress, ref string) (s
 // check that could not run is no reason to refuse a build that has
 // already proved it runs.
 func (u *Upgrader) checkImageFlags(ctx context.Context, p *progress, ref string) ([]string, error) {
-	argv := u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), ref)
+	argv := append(u.dockerRunArgs(), ref)
 	argv = append(argv, u.cfg.Image.FlagNamesArgs...)
 	out, err := runAsked(ctx, p, stepFlags, imageRunTimeout, argv)
 	if err != nil {
@@ -758,12 +807,7 @@ type imageRunner struct {
 // itself, before the image ref; args go to the image, whose ENTRYPOINT
 // is `grain` (Dockerfile).
 func (r imageRunner) run(extra, args []string) []string {
-	argv := r.u.cfg.Image.RunCmd
-	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm"}
-	}
-	argv = append(append([]string{}, argv...), extra...)
-	argv = append(argv, r.ref)
+	argv := append(r.u.dockerRunArgs(extra...), r.ref)
 	return append(argv, args...)
 }
 

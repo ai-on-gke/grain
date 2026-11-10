@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 )
 
 // The controller-local configuration repository status and controls.
@@ -557,6 +558,23 @@ func (s *Server) handleGetStateRepoFile(w http.ResponseWriter, r *http.Request) 
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err)
 	default:
+		// settings:read -- grain/viewer's -- reads this, and an exported
+		// row can carry what somebody typed in: a capability server's
+		// header saved before saves refused one, a prompt pasted with a
+		// token in it. The same list the Logs pane redacts with cuts the
+		// credentials grain knows and every credential shape.
+		if file.Content != "" {
+			redactor := grainlog.NewRedactor(nil)
+			if s.tasks.Config.LogRedactor != nil {
+				var rerr error
+				if redactor, rerr = s.tasks.Config.LogRedactor(); rerr != nil || redactor == nil {
+					writeError(w, http.StatusServiceUnavailable, apierror.Public(
+						"this file cannot be shown: the credentials that would have to be redacted out of it could not be read"))
+					return
+				}
+			}
+			file.Content, _ = redactor.Text(file.Content)
+		}
 		writeJSON(w, http.StatusOK, file)
 	}
 }

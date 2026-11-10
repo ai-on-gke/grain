@@ -638,7 +638,14 @@ import "strconv"
 // (model.ScheduleSkip.HeldByScheduleID): an overlap group shared by the
 // schedules of one repository, and the schedule that held a skipped
 // firing when it was another one in that group (grain/task-3895).
-const SchemaVersion = 134
+// 135 adds `grain_config`.`ci_api_repos` (model.Config.CIAPIRepos): the
+// repositories whose trusted CI jobs may hold api grants, empty for
+// grain's own only (grain/task-4040).
+// 136 adds `task_context` and `task_brief_edit` (model.TaskContext,
+// model.TaskBriefEdit): a durable task's compaction cursor, handover
+// version and current brief, and every edit of that brief
+// (design/design/durable-tasks.design.md#DT-15, grain/task-4107).
+const SchemaVersion = 136
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2682,6 +2689,7 @@ var Tables = []string{
   ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
+  ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -4364,6 +4372,11 @@ var Tables = []string{
 	taskRunUsageTaskIndex,
 	usageCapacityTable,
 	usageSettingTable,
+
+	// Durable task context (task_context.go, schema 136).
+	taskContextTable,
+	taskBriefEditTable,
+	taskBriefEditTaskIndex,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

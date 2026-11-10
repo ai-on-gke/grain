@@ -198,6 +198,8 @@ Each of these takes `<id>`, calls the route, and prints the task. `approve` and 
 | `retry <id>` | `POST /api/tasks/{id}/retry`: clears the retry cap | |
 | `retry-merge <id>` | `POST /api/tasks/{id}/retry-merge` | |
 | `run-now <id>` | `POST /api/tasks/{id}/run-now` | |
+| `compact [-handover-file f] <id>` | `POST /api/tasks/{id}/compact`. With a handover the task is compacted now, through every comment so far; without one its next run is asked to compact first (`design/design/durable-tasks.design.md#DT-15`) | |
+| `brief [-file f -reason r] <id>` | `GET /api/tasks/{id}/context` to show the current brief, handover age and compaction cursor; with `-file`, `POST /api/tasks/{id}/brief` replaces the brief (an empty file reverts to the original description) | |
 | `resume <id>` | `POST /api/tasks/{id}/resume` | |
 | `capability <id> <capability-id> attach\|detach` | `POST /api/tasks/{id}/capabilities`. A bad verb gets `third argument must be attach or detach, got "<x>"`; fewer than three arguments get `usage: grain capability <id> <capability-id> attach\|detach` | admin |
 
@@ -227,6 +229,19 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-reason` | string |  |  | why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give when run-now approves an unapproved task |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain compact -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-handover-file` | string |  |  | compact now, to the handover in this file (- for stdin); without it, the task's next run is asked to compact first |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain brief -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-file` | string |  |  | replace the current brief with this file (- for stdin); an empty file reverts to the original description |
+| `-reason` | string |  |  | why the brief changed (required with -file) |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain resume -->
@@ -1260,7 +1275,7 @@ _No flags._
 Installs and checks the workstation coding-agent skill guide (`SKILL.md`) and serves the optional local stdio 13-tool external coordination MCP server ([external-cli #XC-30](../external-cli/external-cli.spec.md#XC-30) and [#XC-31](../external-cli/external-cli.spec.md#XC-31)).
 - `grain skill install` combines the embedded `pkg/cli/skill/SKILL.md.tmpl` static CLI guide with live deployment metadata from `GET /api/auth/whoami`, `GET /api/config`, and `GET /api/templates`, embeds the CLI version and SHA-256 deployment digest, refuses to write any bearer token or secret, and with `-mcp` registers `grain mcp` in the target agent's MCP configuration file.
 - `grain skill status` checks recorded or standard skill paths for the active context and reports `installed`, `stale` (`version_mismatch` or `deployment_digest_mismatch`), or `missing`. Ordinary CLI calls emit at most a single-line notice on `stderr` when the recorded skill is stale, never touching `stdout`.
-- `grain mcp [-context <name>]` speaks JSON-RPC 2.0 over `stdin`/`stdout` (distinct from in-sandbox `grain mcpserver`) exposing the 13 external coordination tools (`propose_task`, `read_grain_task`, `list_grain_tasks`, `wait_for_task`, `reply_to_task`, `comment_on_task`, `grain_inbox`, `ci_runs`, `ci_log`, `merge_queue`, `fs_read`, `fs_grep`, and `adopt_pull_request`) over the CLI's shared `ui.HTTPClient` and context credentials, slicing `wait_for_task` below MCP client tool timeouts.
+- `grain mcp [-context <name>]` speaks JSON-RPC 2.0 over `stdin`/`stdout` (distinct from in-sandbox `grain mcpserver`) exposing the 13 external coordination tools (`propose_task`, `read_grain_task`, `list_grain_tasks`, `wait_for_task`, `reply_to_task`, `comment_on_task`, `grain_inbox`, `ci_runs`, `ci_log`, `merge_queue`, `fs_read`, `fs_grep`, and `adopt_pull_request`) over the CLI's shared `ui.HTTPClient` and context credentials, slicing `wait_for_task` below MCP client tool timeouts and paging `list_grain_tasks`, `grain_inbox`, and `ci_runs` (`limit`, `cursor`, `q`; answers carry `total`, `truncated`, `nextCursor`) so each default answer fits the ~10 KB tool budget ([external-cli #XC-31](../external-cli/external-cli.spec.md#XC-31)).
 
 #### `grain skill`
 
@@ -1958,9 +1973,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
-| `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none" or "registry" (legacy "release-assets" logs a deprecation warning and maps to "none"; or GRAIN_UPGRADE_IMAGE_FALLBACK) |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
-| `-upgrade-image-source` | string |  |  | where -upgrade-image pulls candidate container images from: "registry" (docker pull, the default; legacy "release-assets" logs a deprecation warning and maps to "registry"; or GRAIN_UPGRADE_IMAGE_SOURCE) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
 | `-upgrade-restart-cmd` | value |  |  | one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below. |
 | `-upgrade-src-dir` | string |  |  | git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature |
@@ -2704,4 +2717,3 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
-

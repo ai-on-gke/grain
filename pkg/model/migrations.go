@@ -964,6 +964,23 @@ var Migrations = []Migration{
 			"ALTER TABLE `scheduled_firing_skip` ADD COLUMN `held_by_schedule_id` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     135,
+		Description: "add grain_config.ci_api_repos, the repositories whose trusted CI jobs may hold api grants (grain/task-4040)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `ci_api_repos` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 136,
+		Description: "add task_context and task_brief_edit, a durable task's compaction cursor, handover version " +
+			"and current brief (grain/task-4107)",
+		Statements: []string{
+			taskContextTable,
+			taskBriefEditTable,
+			taskBriefEditTaskIndex,
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

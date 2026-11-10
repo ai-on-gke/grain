@@ -140,14 +140,11 @@ ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca
 # The docker CLI is copied out of this image rather than apt-installed:
 # Debian's own `docker.io` package pulls in the whole daemon --
 # containerd, runc, iptables, a systemd unit -- to get one client binary
-# that only ever talks to a socket mounted from the host.
-#
-# 29 rather than 28: 28 gets no rebuilds on a newer Go, so its stdlib
-# CVEs never clear. What 29 raised is the *daemon's* minimum API (an
-# Engine 29 refuses clients older than 1.44); the 29 client still
-# negotiates down to whatever the host engine speaks, and was checked
-# against Engine 20.10 (API 1.41, Debian 12's docker.io), 24 and 26
-# (Debian 13's docker.io) for every subcommand grain runs.
+# that only ever talks to a socket mounted from the host. The 29 CLI
+# negotiates down to an older engine's API (it still drives Engine 24),
+# and the hosts grain drives run a current one anyway: docker-ce from
+# pkg/hostinit, or the CI runner's own engine under tests/container and
+# tests/installer.
 ARG DOCKER_CLI_IMAGE=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a

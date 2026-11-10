@@ -168,13 +168,11 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 	// X-Grain-Acting-Task on a token's request is ignored rather than let
 	// widen the token's scopes to a task's grants.
 	if tok := externalTokenFromContext(ctx); tok != nil {
-		_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		held, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 		if err != nil {
 			return mcpCallerAccess{role: role, externalToken: tok}, err
 		}
-		if role != nil && !role.Full {
-			set = set.Intersect(role.set).Without(role.deny)
-		}
+		_, set = narrowExternalGrants(held, set, role)
 		return mcpCallerAccess{
 			role:          role,
 			externalToken: tok,
@@ -320,7 +318,7 @@ var domainGuidance = map[string]string{
 	"connections":  "Git connections and model backend definitions.",
 	"sessions":     "Interactive console sessions and standing Director/chat sessions.",
 	"caches":       "CI, package, and GitHub Actions cache inspection and flushing.",
-	"dispatch":     "Queue/pipeline pause controls and immediate task dispatch (run-now).",
+	"dispatch":     "Queue/pipeline pause controls, immediate task dispatch (run-now), and what a durable task's next dispatch carries (context compaction and current brief).",
 	"memory":       "Deployment and per-repository standing agent memory documents.",
 }
 

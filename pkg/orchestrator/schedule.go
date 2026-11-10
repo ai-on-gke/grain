@@ -107,6 +107,18 @@ func reconcileSchedule(ctx context.Context, deps Deps, now time.Time) error {
 			if _, err := deps.Store.NoteHeldScheduleOnBlocker(ctx, sched, *firing.Skip, now); err != nil {
 				errs = append(errs, fmt.Errorf("orchestrator: schedule %s: %w", sched.ID, err))
 			}
+			// A blocker that has never started is not a previous firing
+			// still going but one starved of a worker: kept and raised,
+			// and said in the Inbox (model.EscalateStarvedScheduleBlocker).
+			starved, err := deps.Store.EscalateStarvedScheduleBlocker(ctx, sched, *firing.Skip, now, loc)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: schedule %s: %w", sched.ID, err))
+			}
+			if starved.Raised() || starved.Notified {
+				log.Printf("orchestrator: schedule %s has been held %s (%d occurrences) by task %s, which has "+
+					"never started; priority %d -> %d", sched.ID, starved.HeldFor.Round(time.Minute),
+					starved.Occurrences, starved.TaskID, starved.From, starved.To)
+			}
 		}
 		if firing.OffTargetRepos != nil {
 			log.Printf("orchestrator: schedule %s fires into %s, which is no longer on this deployment's "+

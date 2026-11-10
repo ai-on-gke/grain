@@ -229,30 +229,6 @@ func (p *progress) logf(format string, args ...any) {
 	log.Printf(p.prefix+format, args...)
 }
 
-// setSource records which image source ("registry" or "release-assets") this
-// upgrade used on Status.Source.
-func (p *progress) setSource(source ImageSource) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.status.Source = string(source)
-	p.dirty = true
-}
-
-// setFallbackNote records why this upgrade fell back from its primary image
-// source (for example "release has no image assets; pulled from <registry>").
-func (p *progress) setFallbackNote(note string) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.status.FallbackNote = note
-	p.dirty = true
-}
-
 // start marks a step running. The step must be in the plan -- a
 // mismatch between the plan and what run actually does is a bug in this
 // package, and one that would otherwise show up as a pane that quietly

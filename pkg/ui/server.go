@@ -478,6 +478,9 @@ func (s *Server) routes() {
 	// messages.go, and mcp's chat tool at the other end of it.
 	s.route("POST /api/tasks/{id}/messages", s.handlePostTaskMessage)
 	s.route("POST /api/tasks/{id}/notes", s.handlePostTaskNote)
+	s.route("GET /api/tasks/{id}/context", s.handleGetTaskContext)
+	s.route("POST /api/tasks/{id}/compact", s.handleCompactTask)
+	s.route("POST /api/tasks/{id}/brief", s.handleSetTaskBrief)
 	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
 	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
@@ -741,7 +744,6 @@ func (s *Server) routes() {
 	s.route("GET /api/host/top", s.handleGetHostTop)
 	s.route("GET /api/upgrade", s.handleGetUpgradeStatus)
 	s.route("POST /api/upgrade", s.handleStartUpgrade)
-	s.route("PUT /api/upgrade/source", s.handleUpdateUpgradeSource)
 	s.route("DELETE /api/upgrade/scheduled", s.handleCancelScheduledUpgrade)
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)

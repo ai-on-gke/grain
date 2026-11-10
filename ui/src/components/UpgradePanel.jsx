@@ -28,6 +28,7 @@ import {
   DialogTitle,
   FormControlLabel,
   LinearProgress,
+  Link,
   MenuItem,
   Stack,
   TextField,
@@ -583,6 +584,50 @@ function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
   );
 }
 
+// UpgradeNotices are GET /api/upgrade's notices: what the edition has to
+// tell the operator about how this deployment upgrades
+// (upgrade.RegisterNotice), each a warning with the command that fixes
+// it. Drawn above everything else, whether or not this deployment can
+// upgrade itself, since a notice is often about why it cannot.
+function UpgradeNotices({ notices }) {
+  if (!notices?.length) return null;
+  return notices.map((notice, i) => (
+    <Alert
+      key={`${notice.kind}-${i}`}
+      severity="warning"
+      data-testid="upgrade-notice"
+      sx={{
+        mb: 2,
+        "& .MuiAlert-message": { minWidth: 0, overflowWrap: "anywhere" },
+      }}
+    >
+      {notice.message}
+      {notice.command && (
+        <Box sx={{ mt: 0.5 }}>
+          Run{" "}
+          <Box component="code" data-testid="upgrade-notice-command">
+            {notice.command}
+          </Box>
+          .
+        </Box>
+      )}
+      {notice.docsUrl && (
+        <Box sx={{ mt: 0.5 }}>
+          <Link
+            href={notice.docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            color="inherit"
+            underline="always"
+          >
+            Docs
+          </Link>
+        </Box>
+      )}
+    </Alert>
+  ));
+}
+
 // RetractedReleaseAlert says the promoted release this deployment runs has
 // been retracted (<running>-retracted in the registry; scripts/
 // release-from-trunk.sh rollback, design/playbook/releases.playbook.md
@@ -838,6 +883,41 @@ export function resolvedImage(image, repo, branch) {
   const target = (branch || "").trim();
   if (!from || !target) return from;
   return `${from}:${tagForBranch(target)}`;
+}
+
+// ImageRepoWarning is GET /api/upgrade's imageRepoWarning: the repository
+// this deployment upgrades from names no registry host -- typically an
+// -upgrade-image a release-asset-era installer wrote -- so the Upgrade
+// button would be refused rather than pull it from Docker Hub. Said before
+// anybody presses it, beside the build's own default, so the fix is in
+// view before an upgrade fails on it.
+function ImageRepoWarning({ status }) {
+  if (!status?.imageRepoWarning) return null;
+  const { imageRepo, defaultImageRepo, imageRepoWarning } = status;
+  return (
+    <Alert
+      severity="warning"
+      className="upgrade-image-repo-warning"
+      sx={{ mb: 2, overflowWrap: "anywhere" }}
+    >
+      <Box>
+        <strong>
+          This deployment&apos;s image repository names no registry host.
+        </strong>
+      </Box>
+      <Box sx={{ mt: 0.5 }}>
+        Configured: <code className="upgrade-configured-repo">{imageRepo}</code>
+        {defaultImageRepo && defaultImageRepo !== imageRepo && (
+          <>
+            {" "}
+            &middot; This build&apos;s default:{" "}
+            <code className="upgrade-default-repo">{defaultImageRepo}</code>
+          </>
+        )}
+      </Box>
+      <Box sx={{ mt: 0.5 }}>{imageRepoWarning}</Box>
+    </Alert>
+  );
 }
 
 // ImageChooser is where an image deployment says what the Upgrade button
@@ -1252,6 +1332,7 @@ export default function UpgradePanel({
 
   return (
     <>
+      <UpgradeNotices notices={status.notices} />
       {selfUpgradeDisabled && (
         <>
           <RunningNow running={fallbackRunning} />
@@ -1316,6 +1397,7 @@ export default function UpgradePanel({
               setChosen(true);
             }}
           />
+          <ImageRepoWarning status={status} />
           <LastRestart report={status.lastRestart} />
           <ScheduledUpgrade
             scheduled={status.scheduled}
@@ -1435,18 +1517,6 @@ export default function UpgradePanel({
               <dd className={`upgrade-phase upgrade-phase-${status.phase}`}>
                 {status.phase}
               </dd>
-              {status.source && (
-                <>
-                  <dt>Image source</dt>
-                  <dd>{status.source}</dd>
-                </>
-              )}
-              {status.fallbackNote && (
-                <>
-                  <dt>Fallback</dt>
-                  <dd>{status.fallbackNote}</dd>
-                </>
-              )}
               {status.detail && (
                 <>
                   <dt>Detail</dt>
