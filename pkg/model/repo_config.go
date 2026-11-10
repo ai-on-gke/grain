@@ -508,6 +508,10 @@ type RepoConfig struct {
 	// narrows a direction between branches it paired itself.
 	PortTypes         map[string][]string
 	DeclaredPortTypes map[string][]string
+	// Skills is the operator-configured per-repository skill discovery
+	// setting, and DeclaredSkills is `skills` from `.grain/settings.yml`.
+	Skills         *SkillsConfig
+	DeclaredSkills *SkillsConfig
 	// Declarations turns on reading this repository's own `.grain`
 	// directory for the templates, suites and schedules it declares
 	// (repo_declaration.go, grain/task-60). Off by default, and off is
@@ -895,8 +899,14 @@ func (c RepoConfig) Empty() bool {
 		c.DeclaredPromptExtension == "" && c.DeclaredSetupCommand == "" &&
 		c.RepairTemplateID == "" && len(c.PortBranches) == 0 && len(c.DeclaredPortBranches) == 0 &&
 		len(c.PortTypes) == 0 && len(c.DeclaredPortTypes) == 0 &&
+		c.Skills.IsZero() && c.DeclaredSkills.IsZero() &&
 		c.GitCredential == "" && c.IssueImport.Empty() &&
 		c.UpstreamRepo == ""
+}
+
+// EffectiveSkills folds the operator's Skills and the repository's DeclaredSkills.
+func (c RepoConfig) EffectiveSkills() *SkillsConfig {
+	return ComposeRepoSkills(c.Skills, c.DeclaredSkills)
 }
 
 // PullRequestRepo returns the repository where pull requests for a task

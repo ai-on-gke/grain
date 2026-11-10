@@ -479,6 +479,9 @@ type Config struct {
 	// Settings reaches the next run dispatched rather than the next
 	// restart.
 	PromptExtension string
+	// Skills is this deployment's default repository skill discovery
+	// configuration (model.Config.Skills), refreshed from grain_config each cycle.
+	Skills *model.SkillsConfig
 	// TimeZone is this deployment's own clock, model.Config.TimeZone --
 	// "" for one that never set it. It is the zone a run's prompt tells
 	// the time in for a task that names none of its own (RunDispatch);
