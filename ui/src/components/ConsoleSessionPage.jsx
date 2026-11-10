@@ -111,7 +111,7 @@ const TITLED_BUTTON_SX = { minWidth: 0, overflowWrap: "anywhere" };
 // onto the task row, never into a run already going. So the pane notes
 // which run was live when something was saved, and says, for as long as
 // that run lasts, that it does not have the change.
-export function liveRunKey(task) {
+function liveRunKey(task) {
   if (!isAgentRunning(task)) return "";
   const open = [...(task.attempts || [])].reverse().find((a) => !a.finishedAt);
   return open ? `attempt-${open.number}` : "live";

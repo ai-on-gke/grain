@@ -92,7 +92,7 @@ import { repoApiRoot } from "../repoApi.js";
 // sameWorkflowPath reports whether a path typed in the form names the
 // stored workflow at path: the server fills a bare file name in under
 // the workflows directory, so "tests.yml" is ".grain/workflows/tests.yml".
-export function sameWorkflowPath(path, typed) {
+function sameWorkflowPath(path, typed) {
   const t = (typed || "").trim();
   return t !== "" && (path === t || path.endsWith(`/${t}`));
 }
@@ -101,7 +101,7 @@ export function sameWorkflowPath(path, typed) {
 // shows them: what was typed, or else what imp (the stored
 // issueImport) says, in the boxes' own shape -- the interval in whole
 // minutes, empty for the default.
-export function issueImportDraftOf(draft, imp) {
+function issueImportDraftOf(draft, imp) {
   if (draft) return draft;
   return {
     repo: imp?.repo || "",
@@ -117,7 +117,7 @@ export function issueImportDraftOf(draft, imp) {
 // Unlike the boxes that save when left, these wait for Save, so leaving
 // the page -- "← Repos", the rail, Back, a reload -- used to take a typed
 // label with it without asking (2026-11-07 repository walkthrough).
-export function issueImportDraftUnsaved(draft, imp) {
+function issueImportDraftUnsaved(draft, imp) {
   if (!draft || !imp) return false;
   const stored = issueImportDraftOf(null, imp);
   return (
@@ -153,7 +153,7 @@ export function workflowEditsUnsaved(edits, saved) {
 // returned saved: each row that is still one of the objects that save
 // sent becomes the server's copy of it, and every other row -- one added
 // or edited while the request was out -- is kept exactly as it is.
-export function settleWorkflowEdits(current, sent, saved) {
+function settleWorkflowEdits(current, sent, saved) {
   const sentRows = new Set(sent);
   const unclaimed = [...saved];
   return current.map((row) => {

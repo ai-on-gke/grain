@@ -55,7 +55,7 @@ import { templateLabeler } from "../templateLabels.js";
 // to make that nested overlay work.
 // The most passes a suite may ask for: model.MaxSuitePasses, which the
 // server enforces on every create and update (task 3323).
-export const MAX_SUITE_PASSES = 100;
+const MAX_SUITE_PASSES = 100;
 
 function SuiteOverlay({
   suite,

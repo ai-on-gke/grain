@@ -23,7 +23,7 @@
 // the legacy credential, never "anonymous", which pushes nothing). A row
 // from a server that predates that field falls back to the same rule
 // with github.com as the default host.
-export const DEFAULT_GIT_HOST = "github.com";
+const DEFAULT_GIT_HOST = "github.com";
 
 export function hasGitCredential(deployment) {
   if (!deployment) return false;

@@ -75,8 +75,8 @@ const instant = (iso) => {
 // created on this deployment -- in the UI, over the API, or in the state
 // repository's tables, which are the same rows (schedulefilter's
 // SourceSystem and SourceDeployment).
-export const SOURCE_SYSTEM = "system";
-export const SOURCE_DEPLOYMENT = "deployment";
+const SOURCE_SYSTEM = "system";
+const SOURCE_DEPLOYMENT = "deployment";
 
 // sourceOf is where a row is declared: the repository for one a
 // repository's `.grain/` declares (a trigger always is), and otherwise
@@ -92,13 +92,7 @@ export function sourceOf(row) {
 
 // SCHEDULE_TYPES is what a schedule's firing does, in menu order --
 // schedulefilter.Types.
-export const SCHEDULE_TYPES = [
-  "template",
-  "task",
-  "suite",
-  "workflow",
-  "system",
-];
+const SCHEDULE_TYPES = ["template", "task", "suite", "workflow", "system"];
 const SCHEDULE_TYPE_LABELS = {
   template: "Files a task from a template",
   task: "Files its own task",
@@ -383,7 +377,7 @@ export const DEFAULT_PROCESS_NARROWING = Object.freeze({
 // cadence the row's chip says -- schedulefilter.SearchText's list, plus
 // the chips only the page draws. `extra` is what this module cannot word
 // itself (a suite's mode, SuiteRunPane.jsx's describeMode).
-export function processSearchText(row, extra = []) {
+function processSearchText(row, extra = []) {
   const item = row.item || {};
   return [
     row.name,

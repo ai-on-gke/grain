@@ -23,7 +23,7 @@ import { stateLabel, taskBadgeState } from "./state.js";
 
 // compareIds orders task ids the way they were filed: numerically, with
 // anything that is not a number after the ones that are.
-export function compareIds(a, b) {
+function compareIds(a, b) {
   const x = Number(a);
   const y = Number(b);
   if (Number.isFinite(x) && Number.isFinite(y)) return x - y;

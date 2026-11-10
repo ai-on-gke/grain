@@ -62,7 +62,7 @@ export function parseHiddenSections(raw) {
   }
 }
 
-export function loadHiddenSections() {
+function loadHiddenSections() {
   try {
     return parseHiddenSections(
       localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY),

@@ -28,7 +28,7 @@ import { writeAccessCode } from "./accesscode.js";
 // test writes agent-finish there, so the test makes the run's edit in
 // that sandbox's checkout itself.
 
-export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function eventually(fn, message, timeout = 30_000) {
   const deadline = Date.now() + timeout;

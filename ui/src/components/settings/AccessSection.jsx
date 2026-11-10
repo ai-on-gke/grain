@@ -64,7 +64,7 @@ export function verifiedUserEmail(config) {
 const SERVICE_ACCOUNT_DOMAIN = /\.gserviceaccount\.com$/;
 
 // isServiceAccountEntry reports whether entry is a `serviceAccount:` entry.
-export function isServiceAccountEntry(entry) {
+function isServiceAccountEntry(entry) {
   return (entry || "").startsWith("serviceAccount:");
 }
 

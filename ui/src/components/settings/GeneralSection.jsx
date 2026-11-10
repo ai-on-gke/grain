@@ -142,7 +142,7 @@ export default function GeneralSection({ s, config }) {
 // versionText is the build this daemon runs, as the old Settings
 // overlay's Version line wrote it: the release, the commit (marked
 // -dirty for a modified tree) and when it was committed.
-export function versionText(v) {
+function versionText(v) {
   if (!v || (!v.commit && !v.release)) {
     return v?.edition ? `dev (${v.edition}, unstamped)` : "dev (unstamped)";
   }

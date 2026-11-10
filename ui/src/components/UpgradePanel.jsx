@@ -964,12 +964,7 @@ function currentImageSourceMode(imageSource) {
   return "release-assets";
 }
 
-export function ImageSourceSettings({
-  status,
-  disabled,
-  onUpdated,
-  showError,
-}) {
+function ImageSourceSettings({ status, disabled, onUpdated, showError }) {
   const imageSource = status?.imageSource;
   const [saving, setSaving] = useState(false);
   const [repoDraft, setRepoDraft] = useState(
@@ -2012,10 +2007,7 @@ export const OFFLINE_MIGRATION_COMMANDS = [
 
 // databaseStatus is GET /api/upgrade's "database" (the same reading as
 // GET /api/database), so the pane asks nothing of its own.
-export function DatabaseBackend({
-  databaseStatus,
-  selfUpgradeDisabled = false,
-}) {
+function DatabaseBackend({ databaseStatus, selfUpgradeDisabled = false }) {
   const dbStatus = databaseStatus || null;
   const postgres = dbStatus && dbStatus.driver === "postgres";
   if (selfUpgradeDisabled && !postgres) {
