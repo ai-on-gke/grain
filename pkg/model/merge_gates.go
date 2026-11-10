@@ -35,11 +35,16 @@ const (
 // force-merge API accept. Prefix `trigger:` (e.g. `trigger:foo`) is also
 // accepted for a named gating path trigger, and `review` covers configured and
 // path-trigger code reviews.
+//
+// GateApproval is not among them: a person's approval is given by Submit,
+// by someone the change's approvers name (approvals.go, IsApprover), and a
+// forced merge has never stood in for it -- holding merge:force does not
+// make its holder an approver of a sensitive path, a `human: required`
+// trigger, or a change whose merge rules say `auto_merge: never`.
 var KnownOverrideGates = []string{
 	GateCI,
 	GateSecurityReview,
 	GateReview,
-	GateApproval,
 }
 
 // MergeGateState is the current status of one merge gate on a task or PR.
@@ -533,17 +538,14 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			}
 		}
 		switch {
-		case hasOv && GateOverriddenBy(GateApproval, ovGates):
-			g.State = GateStateOverridden
-			g.Detail = formatOverrideDetail(ov)
 		case approvalNeeded:
+			// Not overridable (KnownOverrideGates): only a Submit gives it.
 			g.State = GateStateNeeded
 			if len(pendingApprovals) > 0 {
 				g.Detail = "needed from " + DescribeApprovers(pendingApprovals[0].Approvers)
 			} else {
 				g.Detail = "needed"
 			}
-			g.Overridable = true
 		default:
 			g.State = GateStatePassed
 			g.ApprovedBy = by

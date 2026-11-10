@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +259,13 @@ func TestForceMergeRequiresExplicitOverrideGatesForReviews(t *testing.T) {
 	// Plain ForceMerge without naming security-review is refused!
 	if err := c.ForceMerge(ctx, task.ID, "hotfix", ""); err == nil {
 		t.Fatal("ForceMerge without explicit overrideGates must refuse an unsatisfied security-review gate")
+	}
+
+	// A person's approval is given by Submit, by someone the approvers
+	// name; merge:force does not stand in for it.
+	if err := c.ForceMergeWithGates(ctx, task.ID, "hotfix", "", []string{"security-review", "approval"}); err == nil ||
+		!strings.Contains(err.Error(), `unknown gate "approval"`) {
+		t.Fatalf("ForceMergeWithGates naming approval = %v, want it refused as a gate no override skips", err)
 	}
 
 	// Naming security-review explicitly with a reason succeeds and records the override.

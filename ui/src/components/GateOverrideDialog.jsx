@@ -62,14 +62,13 @@ export default function GateOverrideDialog({ open, onClose, t, onSubmit }) {
 
   const allGates = deriveMergeGates(t);
   const reviewSkipped = unsatisfiedReviewGates(t);
+  // A person's approval is not among them: no override stands in for a
+  // Submit (model.KnownOverrideGates), so it is never listed as bypassed.
   const skippedGates = allGates.filter(
     (g) =>
       g.state !== "passed" &&
       g.state !== "overridden" &&
-      (g.name === "security-review" ||
-        g.name === "review" ||
-        g.name === "ci" ||
-        g.name === "approval"),
+      (g.name === "security-review" || g.name === "review" || g.name === "ci"),
   );
   const overrideGateNames = reviewSkipped.map((g) => g.name);
   const expectedPR = pullRequestNumber(t.pullRequest);
