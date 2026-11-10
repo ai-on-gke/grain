@@ -36,7 +36,7 @@ import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 // formatLabels is a host's labels as the label field takes them:
 // "k=v,k2=v2", sorted.
-export function formatLabels(labels) {
+function formatLabels(labels) {
   return Object.keys(labels || {})
     .sort()
     .map((k) => `${k}=${labels[k]}`)
@@ -58,7 +58,7 @@ export function parseLabels(text) {
 }
 
 // parsePrincipals splits a comma-separated list of allowed principal rules.
-export function parsePrincipals(text) {
+function parsePrincipals(text) {
   return (text || "")
     .split(",")
     .map((s) => s.trim())

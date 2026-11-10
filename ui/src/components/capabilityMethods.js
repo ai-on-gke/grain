@@ -23,7 +23,7 @@ import api from "../api.js";
 // METHODS_TTL_MS is how long a fetched listing is reused. Servers are
 // configured while pages stay open (Settings, or an agent's run), so the
 // listing is never kept for the page's lifetime.
-export const METHODS_TTL_MS = 30000;
+const METHODS_TTL_MS = 30000;
 
 // methodsCache is one entry ({promise, at, settled}) per listing asked
 // for: the plain one, and one per run a picker names (runKind and policyRepo).

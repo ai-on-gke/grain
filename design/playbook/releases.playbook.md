@@ -221,7 +221,7 @@ A release candidate `vX.Y.Z-rc.N` passes qualification if and only if **every re
 
 #### Stage 0 — Trunk LKG pre-filter (already green on `main` before cutting the RC)
 - `.github/workflows/tests.yml`: all active hosted push-gate jobs (`go`, `go-e2e`, `go-orchestrator`, `go-model`, `go-unit`, `granule`, `postgres`, `run-host`, `host-script-container`, `frontend`, `ui-e2e`, `lint`, `terraform`, `installer`, `package-cache`), plus workflow security scans.
-- `.github/workflows/release.yml`: full container and installer verification (`tests/container` and `tests/installer` across stock host, `trixie`, and `hostmode`, each failing if `--- SKIP` appears or zero tests pass) and `:sha-<short>` images pushed to the registry.
+- `.github/workflows/release.yml`: the image vulnerability gate between build and push (below), then full container and installer verification (`tests/container` and `tests/installer` across stock host, `trixie`, and `hostmode`, each failing if `--- SKIP` appears or zero tests pass) and `:sha-<short>` images pushed to the registry.
 
 #### Stage 1 — Deterministic CI qualification (`.github/workflows/nightly.yml` on `vX.Y.Z-rc.N`)
 
@@ -229,10 +229,20 @@ Today `nightly.yml` has not run on GitHub Actions in over a week because relying
 
 | Job(s) | Workflow | Required now | Required once runner / WIF infra lands |
 | --- | --- | --- | --- |
-| `go-long` (4 shards), `staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `postgres-stress`, `tunnel-stress`, `ui-e2e-long` (4 shards), `installer-variants`, `vulns`, `cmd-grain-stress`, `upgrade-test` | `nightly.yml` | **Yes (all 14 jobs, `success` required; `skipped` is a failure)** | **Yes** |
+| `go-long` (4 shards), `staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `postgres-stress`, `tunnel-stress`, `ui-e2e-long` (4 shards), `installer-variants`, `vulns`, `image-vulns`, `cmd-grain-stress`, `upgrade-test` | `nightly.yml` | **Yes (all 15 jobs, `success` required; `skipped` is a failure)** | **Yes** |
 | `real-vm`, `real-kubernetes` | `tests.yml` (`ENABLE_SELF_HOSTED_TESTS`) | **No** — skipped on hosted runners lacking nested KVM / cluster fixtures | **Yes** — required in Stage 0/1 once self-hosted KVM runners set `ENABLE_SELF_HOSTED_TESTS=true` |
 | `kvm-sandboxes`, `kvm-route-stress` | `nightly.yml` / `kvm-route-stress.yml` (`ENABLE_SELF_HOSTED_TESTS`) | **No** — skipped without nested KVM, 16 GiB RAM, and cached guest images | **Yes** — required in Stage 1 once `ENABLE_SELF_HOSTED_TESTS=true` |
 | `smoke` (`GCE and GKE lifecycle`) | `gcp-smoke.yml` (`GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`) | **No** — skips every step while WIF variables are unset; a skipped job carries no verdict | **Yes** — dispatched in Stage 1 once WIF variables are set, with non-skipping assertion and transient cloud quota/IAM errors routed through `infra` retry (§4) |
+
+#### The image vulnerability gate (`image-vulns`)
+
+`vulns` (govulncheck) reads Go source; `image-vulns` reads what ships. It scans every image the release builds (`grain`, `sandbox`, `sandbox-k8s`, `hub`; `registry` is `hub` under its old name) with Trivy, over both OS packages and language packages, which is the same ground Artifact Registry's scanning covers. It runs in four places:
+- `release.yml`, after `release-images.sh build` and before anything is signed or published;
+- `nightly.yml`'s `image-vulns` job on every `vX.Y.Z-rc.N`, against that RC's published images, as a required Stage 1 job;
+- `image-vulns.yml` on pull requests that change a `Dockerfile*` or `Granulefile*` (where base images, apt package lists, pinned binaries and agent CLI versions live);
+- `image-vulns.yml` weekly, as a report that never fails.
+
+Only a **fixable** CRITICAL or HIGH finding fails the gate: one with a fixed version available that no unexpired entry in `.grain/baselines/image-vulns-allowlist.yaml` waives. Unfixable findings and lower severities are reported, not failed. An allowlist entry names the vulnerability, package, image, a reason, an owner and an expiry date at most 180 days ahead. Once the date passes the entry stops applying and the gate fails again. A red `image-vulns` on an RC is a product failure (§4), not a flake. Its one automatic retry gives the same verdict unless the vulnerability database changed in between. The job reads the allowlist from the RC's own ref, so the fix lands on `main` and reaches the next RC: either a base-image or package bump, or an allowlist entry with an owner and an expiry (§5). See `docs/image-vulnerability-scanning.md` for how to read the reports and add an entry.
 
 #### Stage 2 — Agent qualification (`release-qualification` suite)
 

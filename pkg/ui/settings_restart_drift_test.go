@@ -106,6 +106,7 @@ var settingsAppliedLive = map[string]string{
 	"ciReserveAfter": "when the CI gate starts holding capacity for a job the budget keeps refusing " +
 		"(ci.SharedGate asks cmd/grain for it on every admission attempt)",
 	"promptExtension":     "the deployment-wide text RunCycle refreshes out of grain_config every cycle (orchestrator.resolvePromptExtension)",
+	"skills":              "the deployment-wide skill discovery defaults RunCycle refreshes out of grain_config every cycle (orchestrator.resolveSkillFolders)",
 	"repairTemplateID":    "orchestrator resolves the repair template dynamically from the config row on each repair/triage filing",
 	"defaultCapabilities": "pkg/ui, which reads grain_config per request (CreateTask's own defaults)",
 	"defaultAdmission":    "pkg/ui, which reads grain_config per request (CreateTask's defaultTaskAdmission)",

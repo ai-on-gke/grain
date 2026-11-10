@@ -160,7 +160,7 @@ export function isExternalAgent(author) {
   return typeof author === "string" && author.startsWith(EXTERNAL_AGENT_PREFIX);
 }
 
-export function normalizeOwnerValue(raw) {
+function normalizeOwnerValue(raw) {
   const trimmed = String(raw || "").trim();
   if (!trimmed) return "";
   if (/^user:/i.test(trimmed)) return trimmed.slice(5).trim().toLowerCase();
@@ -246,7 +246,7 @@ const SORT_STATE_ORDER = DISPLAY_STATE_ORDER.flatMap((s) =>
 // this build has never heard of sorts after all of them instead of
 // before, so a newer daemon's unknown state doesn't quietly take over
 // the top of the list.
-export function stateRank(t) {
+function stateRank(t) {
   const i = SORT_STATE_ORDER.indexOf(t.state);
   return i === -1 ? SORT_STATE_ORDER.length : i;
 }

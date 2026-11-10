@@ -372,8 +372,12 @@ type RepoDefaults struct {
 	// a PUT to this repo's routes writes touches either of them: the
 	// declaration sync owns these two columns, as those routes own the
 	// two above.
-	DeclaredPromptExtension string `json:"declaredPromptExtension,omitempty"`
-	DeclaredSetupCommand    string `json:"declaredSetupCommand,omitempty"`
+	DeclaredPromptExtension string              `json:"declaredPromptExtension,omitempty"`
+	DeclaredSetupCommand    string              `json:"declaredSetupCommand,omitempty"`
+	Skills                  *model.SkillsConfig `json:"skills,omitempty"`
+	DeclaredSkills          *model.SkillsConfig `json:"declaredSkills,omitempty"`
+	DeploymentSkills        *model.SkillsConfig `json:"deploymentSkills,omitempty"`
+	EffectiveSkillFolders   []string            `json:"effectiveSkillFolders"`
 	// RepairTemplateID is this repo's configured default repair template.
 	RepairTemplateID string `json:"repairTemplateID,omitempty"`
 	// PortBranches, DeclaredPortBranches and PairedBranches are which of
@@ -608,15 +612,16 @@ type SetRepoSettingsRequest struct {
 	// MergeRecheck is the overlap re-check's mode: "off", "observe" or
 	// "enforce" (model.RepoConfig.MergeRecheck); "" puts it back to the
 	// default, observe.
-	MergeRecheck        *string   `json:"mergeRecheck,omitempty"`
-	DefaultCapabilities *[]string `json:"defaultCapabilities,omitempty"`
-	DefaultAdmission    *string   `json:"defaultAdmission,omitempty"`
-	DefaultHosting      *string   `json:"defaultHosting,omitempty"`
-	CICapabilities      *[]string `json:"ciCapabilities,omitempty"`
-	PromptExtension     *string   `json:"promptExtension,omitempty"`
-	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
-	SetupCommand        *string   `json:"setupCommand,omitempty"`
-	UnfixableChecks     *[]string `json:"unfixableChecks,omitempty"`
+	MergeRecheck        *string             `json:"mergeRecheck,omitempty"`
+	DefaultCapabilities *[]string           `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission    *string             `json:"defaultAdmission,omitempty"`
+	DefaultHosting      *string             `json:"defaultHosting,omitempty"`
+	CICapabilities      *[]string           `json:"ciCapabilities,omitempty"`
+	PromptExtension     *string             `json:"promptExtension,omitempty"`
+	RepairTemplateID    *string             `json:"repairTemplateID,omitempty"`
+	SetupCommand        *string             `json:"setupCommand,omitempty"`
+	Skills              *model.SkillsConfig `json:"skills,omitempty"`
+	UnfixableChecks     *[]string           `json:"unfixableChecks,omitempty"`
 	// DefaultHostd is read only to be refused (TaskHostdRefusal): a
 	// repository's tasks have no hostd of their own any more.
 	DefaultHostd *string `json:"defaultHostd,omitempty"`
@@ -740,6 +745,8 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.SetupCommand = stored.SetupCommand
 		out.DeclaredPromptExtension = stored.DeclaredPromptExtension
 		out.DeclaredSetupCommand = stored.DeclaredSetupCommand
+		out.Skills = stored.Skills.Clone()
+		out.DeclaredSkills = stored.DeclaredSkills.Clone()
 		out.Declarations = stored.Declarations
 		out.RequireBranchUpToDate = stored.RequireBranchUpToDate
 		out.IgnoreGitHubCI = stored.IgnoreGitHubCI
@@ -780,9 +787,19 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if cfg != nil {
 		out.DeploymentDefaultCapabilities = cfg.DefaultCapabilities
 		out.DeploymentPromptExtension = cfg.PromptExtension
+		out.DeploymentSkills = cfg.Skills.Clone()
 		deploymentAdmission = cfg.DefaultAdmission
 		deploymentHosting = cfg.DefaultHosting
 	}
+	var repoSkillsLayer *model.SkillsConfig
+	if stored != nil {
+		repoSkillsLayer = stored.EffectiveSkills()
+	}
+	effSkillFolders := model.ResolveSkillFolders(out.DeploymentSkills, repoSkillsLayer, nil)
+	if effSkillFolders == nil {
+		effSkillFolders = []string{}
+	}
+	out.EffectiveSkillFolders = effSkillFolders
 	out.DeploymentDefaultAdmission = string(model.NormalizeAdmission(deploymentAdmission))
 	effAdm := model.NormalizeAdmission(deploymentAdmission)
 	if stored != nil {
@@ -1146,6 +1163,16 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		chosenDefaultHosting = &h
 	}
+	var chosenSkills *model.SkillsConfig
+	var hasChosenSkills bool
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
+		hasChosenSkills = true
+	}
 	var ciCaps []string
 	if req.CICapabilities != nil {
 		if ciCaps, err = c.cleanRepoCICapabilities(*req.CICapabilities); err != nil {
@@ -1266,6 +1293,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.SetupCommand != nil {
 			rc.SetupCommand = strings.TrimSpace(*req.SetupCommand)
+		}
+		if hasChosenSkills {
+			rc.Skills = chosenSkills
 		}
 		if req.UpstreamRepo != nil {
 			rc.UpstreamRepo = upstreamRepo

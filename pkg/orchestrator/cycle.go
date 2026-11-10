@@ -839,6 +839,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -928,6 +929,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()

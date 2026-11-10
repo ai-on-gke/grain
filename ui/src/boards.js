@@ -110,7 +110,7 @@ import {
 // "Timeline" rather than "Gantt" for the label, because that is what the
 // nav rail already calls the same view and a board's chip should say the
 // word the reader has seen.
-export const BOARD_KINDS = [
+const BOARD_KINDS = [
   { id: "list", label: "List" },
   { id: "kanban", label: "Kanban" },
   { id: "gantt", label: "Timeline" },
@@ -119,7 +119,7 @@ export const BOARD_KINDS = [
   { id: "tree", label: "Tree" },
 ];
 
-export const BOARD_KIND_LABELS = Object.fromEntries(
+const BOARD_KIND_LABELS = Object.fromEntries(
   BOARD_KINDS.map((k) => [k.id, k.label]),
 );
 

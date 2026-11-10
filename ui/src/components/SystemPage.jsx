@@ -43,7 +43,7 @@ export { SYSTEM_TABS };
 // SYSTEM_TABPANEL_ID is the open tab's panel, which its tab controls.
 const SYSTEM_TABPANEL_ID = "system-tabpanel";
 
-export const POWER_ACTIONS = [
+const POWER_ACTIONS = [
   {
     id: "restart",
     label: "Restart grain",
