@@ -189,6 +189,13 @@ grain-secret-key-kms-v1:<projects/P/locations/L/keyRings/R/cryptoKeys/K>:<base64
 The AAD is `"grain secrets key v1\0" ‖ <public key>`, so a wrapped blob cannot
 be swapped for another deployment's.
 
+*As built (Phase 2):* the public key is the 32 raw X25519 bytes, and the
+file carries it on a second line (`grain-secret-pub-v1:<base64>`). The AAD
+has to be rebuilt before the key is unwrapped, and a file that names its
+own public key can be described (`grain state status`, the retired-key
+list, Settings → State) without a KMS call. The public key is public, so
+this costs nothing. `pkg/secrets/kms.go` holds the format.
+
 **Unwrap.** One `cryptoKeys.decrypt` call at the first load. The daemon then
 keeps the key in memory for its lifetime. The token comes from the metadata
 server, exactly as `smBackend.token` gets one
@@ -604,6 +611,14 @@ optional.
 > Regenerate the CLI spec (`GRAIN_UPDATE_CLI_SPEC=1 go test ./pkg/cli ./pkg/sandboxcli -run CLISpec`).
 
 ### Phase 2: Cloud KMS-wrapped key {#SKP-P2}
+
+*Implemented in task 3959:* `pkg/secrets/kms.go` (`KMSKeySource`, the
+format and the REST client), `kms_store.go` (`Store.WrapKeyWithKMS` /
+`UnwrapKeyFromKMS`), `pkg/secrets/kmsfake` (the fake behind
+`GRAIN_KMS_ENDPOINT`), `POST /api/state-repo/secrets-key/{wrap,unwrap}`,
+`grain state key wrap|unwrap`, `deploy/terraform/gcp/kms.tf`, and
+`deploy/kubernetes/README.md`'s Workload Identity section. The brief
+follows.
 
 > **Title:** Cloud KMS-wrapped secrets key (grain state key wrap/unwrap), default on terraform/gcp and GKE
 >

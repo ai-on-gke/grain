@@ -145,6 +145,9 @@ func ReadKeyFile(path string) (Key, error) {
 	if err != nil {
 		return Key{}, fmt.Errorf("secrets: reading %s: %w", path, err)
 	}
+	if IsWrappedKey(string(data)) {
+		return Key{}, fmt.Errorf("secrets: %s is wrapped by Cloud KMS; it is read through a KeySource (FileKeySource), not ReadKeyFile", path)
+	}
 	return ParseKey(string(data))
 }
 

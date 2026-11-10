@@ -2904,7 +2904,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		tools:              tools,
 		sandboxRoot:        sandboxRoot,
 		placer:             placer,
-		mint:               deps.MintSandboxToken,
+		mint:               mintSandboxTokenFor(deps, d.TaskID, d.Attempt),
 		credentialIdentity: deps.CredentialGitIdentity,
 	})
 	defer stopRecreating()

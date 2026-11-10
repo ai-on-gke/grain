@@ -202,6 +202,22 @@ export function askedCase(t) {
   if (!t || !ASKED_STATES.includes(t.state)) return null;
   if (t.state === "awaiting_submit") {
     const what = t.pullRequest || "its change";
+    if (t.humanApprovedBy) {
+      let title = `Approved by ${t.humanApprovedBy} for ${what}`;
+      if (
+        t.reviewFindings?.length ||
+        t.humanReviewHold?.some((r) => r.category === "security-findings")
+      ) {
+        title += " — held on review findings";
+      } else if (t.reviewQuestions) {
+        title += ` — waiting on review questions from #${t.reviewQuestions}`;
+      } else if (t.securityHold) {
+        title += ` — waiting for security review${t.securityReviewTask ? ` #${t.securityReviewTask}` : ""}`;
+      } else if (t.pathTriggerHold) {
+        title += " — waiting for repository gating reviews";
+      }
+      return { kind: "submit", title, action: "submit" };
+    }
     let title = `Asked you to submit ${what}`;
     if (t.humanReviewHold?.length) {
       title += ` — held for a person's review: ${humanReviewLine(t)}`;
@@ -1215,6 +1231,14 @@ export function redBaseRepairSentence(t) {
 // somebody pressed Submit.
 export function awaitsHumanSubmit(t) {
   if (!t || typeof t !== "object") return false;
+  if (
+    t.humanApprovedBy &&
+    !t.reviewQuestions &&
+    !(t.reviewFindings?.length > 0) &&
+    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+  ) {
+    return false;
+  }
   if (t.state === "awaiting_submit") return true;
   return (
     t.state === "running" &&

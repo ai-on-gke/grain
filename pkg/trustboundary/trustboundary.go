@@ -29,10 +29,12 @@ package trustboundary
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -849,6 +851,116 @@ var stateScopePaths = []struct {
 	{"schema-version", []string{"capabilities:admin"}},
 }
 
+// GrainConfigPath is the deployment's config row in the config
+// repository: one file holding plain settings beside the columns that
+// grant (mcp_servers, capability_policy, default_capabilities, ...).
+const GrainConfigPath = "tables/grain_config.json"
+
+// grainConfigSettingsColumns are the tables/grain_config.json columns a
+// change to which confers nothing beyond settings:write: worker and merge
+// limits, sandbox sizing, CI retention, display defaults. It is an allow
+// list on purpose. Every other column -- capability servers and policy,
+// default capabilities, approval and auto-merge defaults, console
+// sessions, the sandbox image and setup script, network access, the
+// forge host, sign-in, Kubernetes placement, and any column a later
+// schema adds -- is judged by grainConfigColumnScopes, and confers
+// capabilities:admin there unless it names something narrower.
+var grainConfigSettingsColumns = map[string]bool{
+	"poll_interval_ms": true, "max_workers": true, "max_mergers": true,
+	"max_merges_per_repo": true, "merge_batch_size": true, "merge_gather_window_ms": true,
+	"max_ci_jobs": true, "max_agent_turns": true, "newest_first": true,
+	"sandbox_cpus": true, "sandbox_memory_mb": true, "sandbox_disk_gb": true,
+	"sandbox_cpu_overcommit": true, "sandbox_memory_overcommit": true, "sandbox_disk_overcommit": true,
+	"sandbox_overcommit": true, "sandbox_memory_reserve_mb": true,
+	"sandbox_disk_floor_share": true, "sandbox_disk_floor_min_mb": true,
+	"show_closed_by_default": true, "default_filters": true, "default_model": true,
+	"judgement_model": true, "environment_name": true, "time_zone": true,
+	"upgrade_check_mode": true, "upgrade_check_pauses": true,
+	"package_cache_enabled": true, "package_cache_size_gb": true,
+	"actions_cache_enabled": true, "actions_cache_size_gb": true,
+	"ci_run_history": true, "ci_step_output_mb": true, "ci_step_output_days": true,
+	"ci_run_output_kb": true, "ci_cache_mb": true, "ci_cache_entries": true, "ci_cache_days": true,
+	"ci_artifact_mb": true, "ci_artifact_run_mb": true, "ci_artifact_file_mb": true,
+	"ci_artifact_days": true, "ci_jobs_per_run": true, "ci_age_boost_ms": true,
+	"ci_reserve_after_ms": true, "base_ci_red_streak": true,
+	"max_auto_submit_depth": true, "max_auto_submit_fan_out": true,
+}
+
+// grainConfigColumnScopes is what a change to one tables/grain_config.json
+// column confers, beyond settings:write.
+func grainConfigColumnScopes(column string) []string {
+	switch {
+	case grainConfigSettingsColumns[column]:
+		return nil
+	case column == "git_credential" || column == "git_connections":
+		return []string{"secrets:write"}
+	case column == "agent_backends" || column == "agent_backend_id" || column == "model_settings":
+		return []string{"connections:write"}
+	}
+	return []string{"capabilities:admin"}
+}
+
+// ChangedColumns is the columns that differ between two versions of a
+// config-repository table file -- a JSON array of row objects, as
+// staterepo exports it -- sorted, each once, and whether it could say.
+// A row added or removed changes every column it carries; a file that is
+// missing on one side (nil) is all rows added or removed. ok is false
+// when either side is not that shape, and a caller must then judge the
+// change by its path alone.
+func ChangedColumns(before, after []byte) (columns []string, ok bool) {
+	rows := func(data []byte) (map[string]map[string]json.RawMessage, bool) {
+		out := map[string]map[string]json.RawMessage{}
+		if data == nil {
+			return out, true
+		}
+		var list []map[string]json.RawMessage
+		if err := json.Unmarshal(data, &list); err != nil {
+			return nil, false
+		}
+		for i, row := range list {
+			key := fmt.Sprintf("#%d", i)
+			if id, ok := row["id"]; ok {
+				key = string(id)
+			}
+			out[key] = row
+		}
+		return out, true
+	}
+	a, okA := rows(before)
+	b, okB := rows(after)
+	if !okA || !okB {
+		return nil, false
+	}
+	set := map[string]bool{}
+	compare := func(x, y map[string]map[string]json.RawMessage) {
+		for key, row := range x {
+			other := y[key]
+			for col, v := range row {
+				w, present := other[col]
+				if !present || !jsonEqual(v, w) {
+					set[col] = true
+				}
+			}
+		}
+	}
+	compare(a, b)
+	compare(b, a)
+	columns = make([]string, 0, len(set))
+	for col := range set {
+		columns = append(columns, col)
+	}
+	sort.Strings(columns)
+	return columns, true
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return bytes.Equal(a, b)
+	}
+	return reflect.DeepEqual(x, y)
+}
+
 // StateScopes is every API scope, beyond the settings:write any config
 // change needs, that a person must hold to let a change to these
 // grain/config paths merge: what the change confers once it is applied
@@ -856,11 +968,28 @@ var stateScopePaths = []struct {
 // tables/ that stateScopePaths does not name (prose aside) confers
 // capabilities:admin, since what it would do once applied is not
 // something this build can say.
-func StateScopes(paths []string) []string {
+//
+// columns, where it has an entry for a path, is the columns the change
+// alters in that file (ChangedColumns), and the path is judged by them
+// instead: so far only tables/grain_config.json, where a plain settings
+// edit (max_workers, time_zone) needs settings:write alone and one to
+// mcp_servers or default_capabilities still needs capabilities:admin. A
+// path with no entry -- a change recorded before columns were, or a file
+// ChangedColumns could not read -- is judged by its path, which for
+// grain_config.json is capabilities:admin.
+func StateScopes(paths []string, columns map[string][]string) []string {
 	set := map[string]bool{}
 	for _, raw := range paths {
 		p := cleanStatePath(raw)
 		if p == "" {
+			continue
+		}
+		if cols, ok := columns[p]; ok && p == GrainConfigPath {
+			for _, col := range cols {
+				for _, sc := range grainConfigColumnScopes(col) {
+					set[sc] = true
+				}
+			}
 			continue
 		}
 		matched := false

@@ -53,6 +53,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -310,6 +311,31 @@ type Store struct {
 	// with the daemon running -- may have installed one).
 	keyMu sync.Mutex
 	key   *Key
+	// keyErr is the last KMS failure loading the key, and keyRetryAt
+	// when the next attempt may be made: until then every use of the
+	// store answers keyErr rather than calling KMS again, and each
+	// failure doubles keyBackoff up to maxKeyBackoff. Only KMS failures
+	// (ErrKMS) are held like this; they are the ones that put
+	// themselves right.
+	keyErr     error
+	keyRetryAt time.Time
+	keyBackoff time.Duration
+	// lastUnwrap is when KMS last handed this store its key.
+	lastUnwrap time.Time
+	// now is time.Now, replaceable in tests.
+	now func() time.Time
+}
+
+const (
+	minKeyBackoff = 5 * time.Second
+	maxKeyBackoff = 5 * time.Minute
+)
+
+func (s *Store) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // currentKey is the cached key, loading it on first use.
@@ -319,12 +345,78 @@ func (s *Store) currentKey() (Key, error) {
 	if s.key != nil {
 		return *s.key, nil
 	}
+	if s.keyErr != nil && s.clock().Before(s.keyRetryAt) {
+		return Key{}, s.keyErr
+	}
 	k, err := s.cfg.keySource().Load(context.Background())
 	if err != nil {
+		if errors.Is(err, ErrKMS) {
+			s.keyBackoff = min(max(2*s.keyBackoff, minKeyBackoff), maxKeyBackoff)
+			s.keyErr, s.keyRetryAt = err, s.clock().Add(s.keyBackoff)
+		}
 		return Key{}, err
+	}
+	if s.keyErr != nil {
+		log.Printf("grain: the secrets key unwrapped after earlier failures; the store is readable again")
+	}
+	s.keyErr, s.keyBackoff = nil, 0
+	if info, ierr := ReadKeyFileInfo(s.cfg.KeyFile); ierr == nil && info.Protection == ProtectionKMS {
+		s.lastUnwrap = s.clock()
 	}
 	s.key = &k
 	return k, nil
+}
+
+// KeyRetryIn is how long until the store will next try to load a key
+// KMS failed to unwrap, or 0 when it is not waiting on one.
+func (s *Store) KeyRetryIn() time.Duration {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	if s.key != nil || s.keyErr == nil {
+		return 0
+	}
+	return max(s.keyRetryAt.Sub(s.clock()), 0)
+}
+
+// WaitingOnKMS reports whether the store's key is not loaded because
+// KMS last failed to unwrap it.
+func (s *Store) WaitingOnKMS() bool {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	return s.key == nil && s.keyErr != nil
+}
+
+// KeyProtection is how this store's key is protected at rest, for
+// `grain state status` and Settings -> State.
+type KeyProtection struct {
+	// Mode is ProtectionFile (a plaintext key file) or ProtectionKMS.
+	Mode string `json:"mode"`
+	// KMSKey is the Cloud KMS key that wraps it, in KMS mode.
+	KMSKey string `json:"kmsKey,omitempty"`
+	// LastUnwrap is when this process last unwrapped the key, zero if
+	// it has not.
+	LastUnwrap time.Time `json:"lastUnwrap,omitempty"`
+	// Error is why the key could not be unwrapped, while that lasts.
+	Error string `json:"error,omitempty"`
+}
+
+// KeyProtection reports how the key is held. It reads the key file's
+// header and never calls KMS.
+func (s *Store) KeyProtection() KeyProtection {
+	out := KeyProtection{Mode: ProtectionFile}
+	if s.backend != BackendFile || s.cfg.KeyFile == "" {
+		return out
+	}
+	if info, err := ReadKeyFileInfo(s.cfg.KeyFile); err == nil {
+		out.Mode, out.KMSKey = info.Protection, info.KMSKey
+	}
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	out.LastUnwrap = s.lastUnwrap
+	if s.key == nil && s.keyErr != nil {
+		out.Error = s.keyErr.Error()
+	}
+	return out
 }
 
 // forgetKey drops the cached key, so the next use loads it again.
@@ -391,6 +483,11 @@ func Open(cfg Config) *Store {
 		}
 		s.key = &key
 		s.created = true
+	case errors.Is(err, ErrKMS):
+		// KMS is down, or has been told not to answer this host. The
+		// store stays open and every use says so; currentKey tries
+		// again with backoff, so the store unlocks when KMS answers
+		// without anything restarting.
 	default:
 		s.openErr = err
 	}
@@ -477,7 +574,7 @@ func (s *Store) ImportKey(k Key) error {
 	case err != nil && !os.IsNotExist(err):
 		return fmt.Errorf("secrets: reading %s: %w", s.cfg.File, err)
 	}
-	if existing, err := ReadKeyFile(s.cfg.KeyFile); err == nil && existing.String() != k.String() {
+	if existing, err := os.ReadFile(s.cfg.KeyFile); err == nil && strings.TrimSpace(string(existing)) != k.String() {
 		archived := s.cfg.KeyFile + ".replaced-" + time.Now().UTC().Format("20060102-150405")
 		if err := os.Rename(s.cfg.KeyFile, archived); err != nil {
 			return fmt.Errorf("secrets: keeping the key %s replaces: %w", s.cfg.KeyFile, err)

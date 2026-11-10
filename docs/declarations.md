@@ -519,6 +519,10 @@ enabled: true                      # optional; default true
 overlap: skip                      # optional; "skip" (default) or "allow"; "skip" only with workflow:
                                    # "skip" holds a firing that overlaps the last one and fires it once
                                    # when that closes; every skip is recorded (see "Skipped firings")
+# overlap: {skip: true, group: sync-oss-release}
+                                   # optional; also holds a firing while any other schedule in this
+                                   # repository naming the same group is running (see "Overlap groups");
+                                   # `overlap-group: sync-oss-release` beside `overlap: skip` says the same
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
 grain-ci: true                     # optional, workflow: only; run on grain CI even when ci_mode is github
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
@@ -569,6 +573,55 @@ per recorded skip, for example `schedule repo:schedule:… skipped at
 2026-10-13 02:00 UTC: #3201 from the previous firing is still open
 (awaiting_submit); … is held`. The schedules page shows the newest skip
 on the row and the history in the schedule's pane (`ui.Schedule.skips`).
+
+#### Overlap groups
+
+grain/task-3895. `overlap: skip` looks only at the schedule's own previous
+firing, so two schedule files that fire the same work -- a release sync
+and the safety net that re-runs it if the sync is missed -- can still run
+at once. Naming a group makes them wait for each other:
+
+```yaml
+# .grain/schedules/sync-oss-release.yml
+template: sync-oss-release
+daily: {at: "02:00"}
+overlap: {skip: true, group: sync-oss-release}
+```
+
+```yaml
+# .grain/schedules/sync-oss-release-safety-net.yml
+template: sync-oss-release
+every: {hours: 6}
+overlap-group: sync-oss-release    # the same as the mapping form above
+```
+
+A firing is then held while *any* schedule in the same repository and
+group has an unfinished firing: an open task it filed, a suite run that
+has not finished, or a workflow run not yet settled (or its review still
+inside its hold). A held firing behaves exactly as an `overlap: skip`
+hold does -- the next run stays where it was and fires once when the
+holder closes -- and its skip record and the schedules page name the
+schedule holding it, for example `skipped at 2026-11-10 02:00 UTC: #4120
+from schedule "Sync" (repo:schedule:acme/widgets:sync-oss-release) in
+overlap group "sync-oss-release" is still open (running)`.
+
+- **Per repository.** A group is the repository's own: it is matched on
+  the repository the firing goes into, so another repository's schedule
+  naming the same group neither holds nor is held by these.
+- **Tagged tasks.** Every task a grouped schedule files carries
+  `schedule-group:<owner>/<name>:<group>` beside its own `schedule:<id>`
+  tag, so a task keeps holding the group after the schedule that filed
+  it is renamed or withdrawn.
+- **Names.** Letters, digits, `.`, `_` and `-`, starting with a letter or
+  digit, at most 128 characters.
+- **Refused combinations.** A group is a skip by definition, so
+  `overlap: allow` (or `skip: false`) beside a group is refused, as is
+  naming the group both in the mapping and as `overlap-group:`. The plain
+  `overlap: skip` and `overlap: allow` strings parse as they always did.
+
+A settings-owned schedule row carries the same `overlap-group:` key
+(`settings/schedules.yml`, `overlapGroup` on `POST`/`PATCH
+/api/schedules`).
 
 ### `.grain/triggers/<name>.yml`
 
@@ -681,12 +734,14 @@ approvers: [team:payments, alice] # optional; default: the deployment's owner
   the change: a person has to press Submit. Whoever holds the access code
   is the deployment's owner ([access-code.md](access-code.md)), and a
   single-tenant grain has no accounts or team members, so a person's
-  Submit approves every outstanding trigger, whoever its `approvers`
-  name; `approvers` records who the repository meant. Auto-merge comes
-  back once none is left. A Submit, or an edit turning auto-merge on,
-  from an agent -- a run's token, a sandbox -- is refused with a 403.
-  Approvals are tied to the head they were given at: a push that moves
-  the head re-judges the change and clears them.
+  Submit records human approval for every outstanding trigger, whoever its
+  `approvers` name; `approvers` records who the repository meant. Submit
+  satisfies the human approval gate only and never skips or cancels a
+  gating trigger's review: auto-merge comes back once both the person's
+  approval and every gating review have passed cleanly. A Submit, or an
+  edit turning auto-merge on, from an agent -- a run's token, a sandbox --
+  is refused with a 403. Approvals are tied to the head they were given at:
+  a push that moves the head re-judges the change and clears them.
 - **Checked at sync.** Every `team:` approver has to be a team this
   deployment has (the default one, by id or name), and every template
   has to exist. Otherwise the sync is refused like any other bad

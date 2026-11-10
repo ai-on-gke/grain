@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,50 @@ var SchedulePrincipal = Principal{Kind: PrincipalAutomation, ID: "schedule"}
 // awaiting a reply, or otherwise unclosed) does not pile up a second one
 // on top of it.
 func ScheduleFiringTag(scheduleID string) string { return "schedule:" + scheduleID }
+
+// ScheduleOverlapGroupTag is the tag every task filed by a schedule in
+// overlap group group, firing into repo, carries beside its own
+// ScheduleFiringTag (Schedule.OverlapGroup, grain/task-3895) -- what
+// keeps the group held by a task whose schedule has since been renamed
+// or withdrawn. The repository is part of it, so the same group name in
+// two repositories is two groups. Empty when there is no group.
+func ScheduleOverlapGroupTag(repo RepoRef, group string) string {
+	group = strings.TrimSpace(group)
+	if repo == (RepoRef{}) || group == "" {
+		return ""
+	}
+	return "schedule-group:" + repo.String() + ":" + group
+}
+
+// scheduleFiringTags is the tags a task sched files carries: its own
+// firing tag, its overlap group's when it has one and is set to skip,
+// and whatever else the caller adds.
+func scheduleFiringTags(sched Schedule, repo RepoRef, extra ...string) []string {
+	tags := []string{ScheduleFiringTag(sched.ID)}
+	if !sched.Overlap.Allows() {
+		if gt := ScheduleOverlapGroupTag(repo, sched.OverlapGroup); gt != "" {
+			tags = append(tags, gt)
+		}
+	}
+	return append(tags, extra...)
+}
+
+// overlapGroupHold is the group half of the overlap check for a schedule
+// set to skip: the firing held by another schedule in its group, as the
+// ScheduleFiring every fireXSchedule returns for it, or nil.
+func (s *Store) overlapGroupHold(ctx context.Context, sched Schedule, repo RepoRef,
+	now time.Time) (*ScheduleFiring, error) {
+
+	if sched.Overlap.Allows() || sched.OverlapGroup == "" {
+		return nil, nil
+	}
+	sup, err := s.OverlapGroupInFlight(ctx, sched, repo, now)
+	if err != nil || sup == nil {
+		return nil, err
+	}
+	return &ScheduleFiring{Skipped: true, OpenReview: sup.openReviewID(),
+		Skip: s.overlapGroupSkip(ctx, sched, now, *sup)}, nil
+}
 
 // ScheduleFiring is what one firing actually did -- what a caller needs
 // to say so afterwards, which is the whole reason firing lives here
@@ -572,6 +617,12 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	// the skip would name the task while SuppressedFiring named the
 	// switch.
 	tag := ScheduleFiringTag(sched.ID)
+	// The repository the group is scoped to is the one this firing goes
+	// into, for the reason the target-repo check above asks it.
+	groupRepo := sched.Target
+	if comp.Target != nil {
+		groupRepo = *comp.Target
+	}
 	standing := tmpl != nil && IsStandingTemplateID(tmpl.ID)
 	// A standing template asks whatever the overlap policy says: it is
 	// one task by definition, so OverlapAllow cannot mean a second one.
@@ -583,6 +634,14 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 			return ScheduleFiring{}, fmt.Errorf("checking for a previous unfinished firing: %w", err)
 		}
 		if open != nil && standing {
+			// Waking a standing job is a firing too, so another schedule
+			// in its group still running holds it.
+			if held, err := s.overlapGroupHold(ctx, sched, groupRepo, now); err != nil || held != nil {
+				if err != nil {
+					return ScheduleFiring{}, err
+				}
+				return *held, nil
+			}
 			if err := s.applyStandingDeclarations(ctx, open.ID, *tmpl, now); err != nil {
 				return ScheduleFiring{}, err
 			}
@@ -608,6 +667,14 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 				Skip: s.overlapSkip(ctx, sched, now, SuppressedByOpenTask, open.ID)}, nil
 		}
 	}
+	// The group's check, after the schedule's own: its own previous
+	// firing is the more useful thing to name when both are true.
+	if held, err := s.overlapGroupHold(ctx, sched, groupRepo, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
 
 	// What a repository's declaration asked for, recorded as of this
 	// firing, is what Settings -> Capabilities offers a person to
@@ -615,7 +682,7 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	if err := noteDeclarationHold(ctx, s.db, comp.DeclarationHold, now); err != nil {
 		return ScheduleFiring{}, err
 	}
-	id, err := s.putScheduleTask(ctx, comp, []string{tag}, now)
+	id, err := s.putScheduleTask(ctx, comp, scheduleFiringTags(sched, groupRepo), now)
 	if err != nil {
 		return ScheduleFiring{}, err
 	}
@@ -812,6 +879,12 @@ func (s *Store) fireWorkflowSchedule(ctx context.Context, sched Schedule, stem s
 				Skip: s.overlapSkip(ctx, sched, now, reason, hold.heldReview())}, nil
 		}
 		abandoned = hold.Review
+	}
+	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
 	}
 
 	// Written before the firing is recorded, so that a store this fails
@@ -1079,7 +1152,9 @@ func (s *Store) FileWorkflowReview(ctx context.Context, sched Schedule, row Sche
 	if err != nil {
 		return "", false, err
 	}
-	id, err := s.putScheduleTask(ctx, comp, []string{ScheduleFiringTag(row.ScheduleID), tag}, now)
+	tagged := sched
+	tagged.ID = row.ScheduleID
+	id, err := s.putScheduleTask(ctx, comp, scheduleFiringTags(tagged, row.Repo, tag), now)
 	if err != nil {
 		return "", false, err
 	}
@@ -1174,6 +1249,12 @@ func (s *Store) fireSuiteSchedule(ctx context.Context, sched Schedule, now time.
 			return ScheduleFiring{Skipped: true,
 				Skip: s.overlapSkip(ctx, sched, now, SuppressedBySuiteRun, "")}, nil
 		}
+	}
+	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
 	}
 
 	suite, err := s.GetSuite(ctx, *sched.SuiteID)

@@ -125,8 +125,26 @@ func openStoreBeside(dir string) *secrets.Store {
 	if _, err := os.Stat(cfg.KeyFile); err != nil {
 		return nil
 	}
-	return secrets.Open(cfg)
+	// One Store per directory per process: a Store loads its key once and
+	// keeps it, and a KMS-wrapped key (secrets.KMSKeySource) is a network
+	// unwrap, so a fresh Store for every LoadCredentialSet would be one
+	// unwrap per call. A Store notices a key installed under it by another
+	// (ErrWrongKey, then a reload), so sharing it loses nothing.
+	if v, ok := besideStores.Load(cfg.KeyFile); ok {
+		return v.(*secrets.Store)
+	}
+	store := secrets.Open(cfg)
+	if err := store.Check(); err != nil {
+		// Not cached: an unreadable store (a key not yet imported) is
+		// worth opening afresh next time.
+		return store
+	}
+	v, _ := besideStores.LoadOrStore(cfg.KeyFile, store)
+	return v.(*secrets.Store)
 }
+
+// besideStores is openStoreBeside's per-key-file cache.
+var besideStores sync.Map
 
 // UseStore backs this set with store instead of the one beside its
 // directory (nil: files only). For a caller that opened the deployment's

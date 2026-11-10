@@ -88,6 +88,10 @@ type HTTPClient struct {
 	// reason the agent API gate asks an external agent credential for
 	// on a destructive route (`grain approve -reason`).
 	ActingReason string
+	// Socket is the daemon's API socket (HostAPISocket) when HTTP dials
+	// it rather than BaseURL: the daemon then knows the caller by its uid
+	// (hostaccount.go), so no local API token is offered.
+	Socket string
 	// RetryPolicy is how long a call waits out a daemon that is not
 	// answering. nil means DefaultRetryPolicy; &NoRetry is one attempt.
 	RetryPolicy *RetryPolicy
@@ -199,7 +203,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if IsLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) && c.Socket == "" {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
@@ -1033,8 +1037,13 @@ func (c *HTTPClient) RetryMerge(ctx context.Context, id string) error {
 // end -- there is no spelling of this call without one. head is the
 // commit reviewed, "" for the pull request's head as it is now.
 func (c *HTTPClient) ForceMerge(ctx context.Context, id, reason, head string) error {
+	return c.ForceMergeWithGates(ctx, id, reason, head, nil)
+}
+
+// ForceMergeWithGates is Client.ForceMergeWithGates over the wire.
+func (c *HTTPClient) ForceMergeWithGates(ctx context.Context, id, reason, head string, overrideGates []string) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/force-merge",
-		forceMergeRequest{Reason: reason, Head: head}, nil)
+		forceMergeRequest{Reason: reason, Head: head, OverrideGates: overrideGates}, nil)
 }
 
 // RunNow is Client.RunNow over the wire: ask for an agent to be put on

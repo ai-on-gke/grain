@@ -60,6 +60,18 @@ func (d *prDaemon) handler(w http.ResponseWriter, r *http.Request) {
 			report.Threads = []model.PullRequestThread{{Path: "design/design/x.design.md", Line: 4, Body: "overlaps y.design.md"}}
 		}
 		json.NewEncoder(w).Encode(report)
+	case "/api/pull-requests/submit":
+		var req ui.SubmitPullRequestRequest
+		_ = json.Unmarshal(body, &req)
+		json.NewEncoder(w).Encode(ui.SubmitPullRequestResult{
+			PR: "acme/widgets#7", TaskID: "77", State: "awaiting_submit",
+			Approved: len(req.OverrideGates) == 0, Overridden: req.OverrideGates,
+			Gates: []model.MergeGate{
+				{ID: model.GateCI, Label: "CI", State: model.GateStatePassed, Detail: "passed"},
+				{ID: model.GateSecurityReview, Label: "Security review", State: model.GateStateRunning, Detail: "running (task #78)"},
+				{ID: model.GateApproval, Label: "Approval", State: model.GateStatePassed, Detail: "given by alice"},
+			},
+		})
 	default:
 		http.NotFound(w, r)
 	}
@@ -143,5 +155,44 @@ func TestGrainPRReviewDesignAndPRStatusThreadsJSON(t *testing.T) {
 	}
 	if len(d.seen) != before {
 		t.Errorf("usage errors reached the daemon: %v", d.seen[before:])
+	}
+}
+
+func TestGrainPRSubmitAndGateOverride(t *testing.T) {
+	d := &prDaemon{}
+
+	// Plain submit records approval without overriding gates.
+	out, err := runPR(t, d, "submit", "acme/widgets#7")
+	if err != nil {
+		t.Fatalf("grain pr submit: %v", err)
+	}
+	if !strings.Contains(out, "approval recorded") || !strings.Contains(out, "security-review") {
+		t.Errorf("grain pr submit output = %q", out)
+	}
+
+	// Override requires both explicit --override-gates and --reason; no wildcard allowed.
+	before := len(d.seen)
+	for _, bad := range [][]string{
+		{"submit", "acme/widgets#7", "--override-gates=security-review"},
+		{"submit", "acme/widgets#7", "--reason", "hotfix"},
+		{"submit", "acme/widgets#7", "--override-gates=all", "--reason", "hotfix"},
+	} {
+		if _, err := runPR(t, d, bad...); err == nil {
+			t.Errorf("grain pr %v succeeded, want usage error", bad)
+		}
+	}
+	if len(d.seen) != before {
+		t.Errorf("invalid submit args reached daemon: %v", d.seen[before:])
+	}
+
+	// Explicit --override-gates=security-review --reason succeeds.
+	out, err = runPR(t, d, "submit", "acme/widgets#7", "--override-gates=security-review", "--reason", "hotfix verified manually")
+	if err != nil {
+		t.Fatalf("grain pr submit --override-gates: %v", err)
+	}
+	if !strings.Contains(d.bodies[len(d.bodies)-1], `"overrideGates":["security-review"]`) ||
+		!strings.Contains(d.bodies[len(d.bodies)-1], `"reason":"hotfix verified manually"`) ||
+		!strings.Contains(out, "overrode gate(s) security-review") {
+		t.Errorf("grain pr submit override sent %s and printed:\n%s", d.bodies[len(d.bodies)-1], out)
 	}
 }

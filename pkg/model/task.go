@@ -108,6 +108,10 @@ const (
 	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
 	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
 	SourceInternal      AuthSource = "internal"       // grain itself
+	// SourceHostAccount is a caller on the daemon's unix socket whose
+	// account the kernel named (SO_PEERCRED) and the daemon's
+	// -host-accounts map (or -deployment-owner) named a person for.
+	SourceHostAccount AuthSource = "host-account"
 )
 
 // unverifiedSources are the sources that establish nobody in particular:
@@ -1448,6 +1452,20 @@ const (
 	// trust-boundary auto-merge withdrawal) under
 	// RepoConfig.BaseRepairBypassesHumanGates while the base branch was red.
 	LinkBaseRepairBypass LinkKind = "base-repair-bypass"
+	// LinkReviewFindings records that a required review of this task's pull
+	// request failed its gate -- left findings or open questions, had fixes
+	// closed without merging, or could not be filed (-> ReviewFindingsRecord
+	// JSON). Cleared only by a clean re-review after fixes or an explicit
+	// merge:force gate override, never by Submit.
+	LinkReviewFindings LinkKind = "review-findings"
+	// LinkGateOverride records an operator's explicit merge:force override
+	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
+	LinkGateOverride LinkKind = "gate-override"
+	// LinkHumanApproved records a person's persisted Submit approval of a
+	// pull request head (-> HumanSubmittedByTarget), kept after
+	// LinkHumanSubmitted is consumed so the UI and merge gates know who
+	// approved which commit.
+	LinkHumanApproved LinkKind = "human-approved"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
