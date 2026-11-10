@@ -344,6 +344,50 @@ describe("ReportBoard", () => {
     );
   });
 
+  it("moves focus to the destination slot even when two sections share identical stored rows", async () => {
+    function MovableTwinSections() {
+      const [row, setRow] = useState(() =>
+        board({
+          sections: [
+            { kind: "throughput", orderKey: 10 },
+            { kind: "throughput", orderKey: 20 },
+          ],
+        }),
+      );
+      return (
+        <Harness
+          board={row}
+          onMoveSection={(b, key, beforeKey) =>
+            setRow(
+              normalizeBoard({
+                ...b,
+                sections: sectionMove(b.sections, key, beforeKey),
+              }),
+            )
+          }
+        />
+      );
+    }
+    const user = userEvent.setup();
+    render(<MovableTwinSections />);
+    await screen.findAllByText("Throughput");
+    screen
+      .getByRole("button", { name: "Move section 2, “Throughput”" })
+      .focus();
+    await user.keyboard("{Enter}");
+    screen
+      .getByRole("button", {
+        name: "Move here, above section 1, “Throughput”",
+      })
+      .focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Move section 1, “Throughput”" }),
+      ).toHaveFocus(),
+    );
+  });
+
   // The toolbar narrows the report itself -- it re-asks the endpoint
   // with a different scope, since there is nothing on this page to
   // filter (grain/task-111's gesture, on the one board where it has to

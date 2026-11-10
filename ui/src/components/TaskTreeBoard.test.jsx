@@ -16,6 +16,7 @@ import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import TaskTree from "./TaskTree.jsx";
 import TaskTreeBoard from "./TaskTreeBoard.jsx";
 import { NO_NARROWING } from "../taskFilters.js";
 
@@ -55,8 +56,8 @@ function Narrowed({ props }) {
 
 function renderTree(overrides = {}) {
   const props = { tasks, config: null, onOpenTask: vi.fn(), ...overrides };
-  render(<Narrowed props={props} />);
-  return props;
+  const view = render(<Narrowed props={props} />);
+  return { ...props, unmount: view.unmount };
 }
 
 const shownIds = () =>
@@ -146,6 +147,37 @@ describe("TaskTreeBoard", () => {
     await userEvent.click(title);
     expect(onOpenTask).toHaveBeenCalledWith("11");
     expect(document.activeElement).toBe(link);
+  });
+
+  it("restores focus to the opened row link when the tree board remounts on Back, without stealing focus in a task pane's own WorkTree", async () => {
+    const user = userEvent.setup();
+    const first = renderTree();
+    const sessionLink = screen.getByRole("link", { name: "12" });
+    sessionLink.focus();
+    await user.keyboard("{Enter}");
+    first.unmount();
+    expect(document.activeElement).toBe(document.body);
+
+    // A task pane's own WorkTree (no returnFocus) never claims focus.
+    const inline = render(
+      <TaskTree
+        nodes={[
+          {
+            id: "12",
+            title: "Director Session",
+            status: "Waiting",
+            children: [],
+          },
+        ]}
+        onOpenTask={() => {}}
+      />,
+    );
+    expect(document.activeElement).toBe(document.body);
+    inline.unmount();
+
+    const back = renderTree();
+    expect(screen.getByRole("link", { name: "12" })).toHaveFocus();
+    back.unmount();
   });
 
   it("tells failed task reads from an empty tree and keeps held tasks across transient failures", async () => {

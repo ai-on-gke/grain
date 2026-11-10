@@ -49,7 +49,11 @@ import {
   sectionTitle,
 } from "../report.js";
 import { formatSeconds } from "./metricsFormat.js";
-import { childRenderKeys } from "../childOrder.js";
+import {
+  childDestinationIndex,
+  childOrderSignature,
+  childRenderKeys,
+} from "../childOrder.js";
 import { sectionPlaces } from "../sectionOrder.js";
 import {
   MoveHandle,
@@ -425,13 +429,39 @@ function ReportSections({
   const places = pickedKey !== null ? sectionPlaces(sections, pickedKey) : [];
   const offered = new Set(places);
   const renderKeys = childRenderKeys(sections);
+  const listRef = useRef(null);
+  const landedRef = useRef(null);
+  const orderSig = childOrderSignature(sections);
+  useEffect(() => {
+    landedRef.current = null;
+  }, [board?.id]);
+  useEffect(() => {
+    if (!landedRef.current || landedRef.current.sig === orderSig) return;
+    const { to } = landedRef.current;
+    landedRef.current = null;
+    const active = document.activeElement;
+    const keepHandleFocus =
+      !active ||
+      active === document.body ||
+      (listRef.current?.contains(active) &&
+        active.classList.contains("task-drag-handle"));
+    if (keepHandleFocus) {
+      listRef.current
+        ?.querySelectorAll(".task-drag-handle")
+        ?.[to]?.focus({ preventScroll: true });
+    }
+  }, [orderSig]);
   const name = (section, i) => `section ${i + 1}, “${sectionTitle(section)}”`;
   const stop = () => {
     setDragKey(null);
     setOverKey(null);
   };
   const move = (beforeKey) => {
-    if (pickedKey !== null) onMoveSection(board, pickedKey, beforeKey);
+    if (pickedKey !== null) {
+      const to = childDestinationIndex(sections, pickedKey, beforeKey);
+      if (to >= 0) landedRef.current = { to, sig: orderSig };
+      onMoveSection(board, pickedKey, beforeKey);
+    }
     cancel();
   };
   const drop = (beforeKey) => (event) => {
@@ -450,7 +480,7 @@ function ReportSections({
           onCancel={cancel}
         />
       )}
-      <ul className="report-sections">
+      <ul ref={listRef} className="report-sections">
         {sections.map((section, i) => (
           <Fragment key={renderKeys[i]}>
             {pickedKey !== null && offered.has(section.key) && (
