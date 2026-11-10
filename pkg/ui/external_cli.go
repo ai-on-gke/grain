@@ -689,7 +689,23 @@ func (c *HTTPClient) Reply(ctx context.Context, id, body string, attachments []A
 
 // Inbox is GET /api/inbox, narrowed to repo and kind when they are set.
 func (c *HTTPClient) Inbox(ctx context.Context, repo, kind string) (InboxResponse, error) {
+	return c.InboxPage(ctx, repo, kind, "", 0, "")
+}
+
+// InboxPage is Inbox asking for one page: at most limit items (0 for the
+// route's own default), starting at cursor (a previous answer's
+// NextCursor), narrowed by the substring search.
+func (c *HTTPClient) InboxPage(ctx context.Context, repo, kind, search string, limit int, cursor string) (InboxResponse, error) {
 	q := url.Values{}
+	if search != "" {
+		q.Set("q", search)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
 	if repo != "" {
 		q.Set("repo", repo)
 	}
