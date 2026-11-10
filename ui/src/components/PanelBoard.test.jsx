@@ -878,6 +878,47 @@ describe("PanelBoard", () => {
       );
     });
 
+    it("moves focus to the destination slot even when two panels share identical stored rows", async () => {
+      function MovableTwins() {
+        const [row, setRow] = useState(() =>
+          board([
+            { kind: "list", orderKey: 1 },
+            { kind: "list", orderKey: 2 },
+          ]),
+        );
+        return (
+          <PanelBoard
+            board={row}
+            tasks={tasks}
+            config={config}
+            onOpenTask={() => {}}
+            now={NOW}
+            onMovePanel={(b, key, beforeKey) =>
+              setRow(
+                normalizeBoard({
+                  ...b,
+                  panels: panelMove(b.panels, key, beforeKey),
+                }),
+              )
+            }
+          />
+        );
+      }
+      const user = userEvent.setup();
+      render(<MovableTwins />);
+      screen.getByRole("button", { name: "Move panel 2, “Task list”" }).focus();
+      await user.keyboard("{Enter}");
+      screen
+        .getByRole("button", { name: "Move here, above panel 1, “Task list”" })
+        .focus();
+      await user.keyboard("{Enter}");
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Move panel 1, “Task list”" }),
+        ).toHaveFocus(),
+      );
+    });
+
     it("disables the handle on the only panel there is", () => {
       draw({
         board: board([{ kind: "list", title: "Live work" }]),
