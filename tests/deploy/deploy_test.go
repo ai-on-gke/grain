@@ -3432,6 +3432,25 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 	}
 }
 
+// TestReleaseWorkflowsCheckTheCosignTheyDownload holds every workflow that
+// downloads the release signer to the release asset's own sha256 before
+// the signing key is written beside it: the version alone pins nothing a
+// swapped or truncated download could not also claim to be.
+func TestReleaseWorkflowsCheckTheCosignTheyDownload(t *testing.T) {
+	const assetSum = `echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  /usr/local/bin/cosign" | sha256sum -c -`
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml", "promote-release.yml", "publish-release.yml"} {
+		content := stripComments(read(t, ".github", "workflows", name))
+		downloads := strings.Count(content, "releases/download/${cosign_version}/cosign-linux-amd64")
+		if downloads == 0 {
+			t.Errorf(".github/workflows/%s no longer downloads cosign; drop it from this test", name)
+		}
+		if got := strings.Count(content, assetSum); got != downloads {
+			t.Errorf(".github/workflows/%s downloads cosign %d times but checks the release asset's sha256 %d times", name, downloads, got)
+		}
+		contains(t, content, `cosign_version="v2.6.5"`)
+	}
+}
+
 func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
 	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
 		content := stripComments(read(t, ".github", "workflows", name))
