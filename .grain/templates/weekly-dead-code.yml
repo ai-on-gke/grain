@@ -1,0 +1,111 @@
+name: Weekly dead-code scan
+title: Dead-code scan of main
+base: main
+auto-merge: true
+nothing-needed: close
+body: |
+  Find code on `main` that nothing reaches, delete what is clearly dead in
+  one small pull request, and record what only looks dead so next week's
+  scan does not flag it again. The first run (task 3871) seeded
+  `.grain/baselines/dead-code-allowlist.txt`. Its pull request
+  description is a worked example of the triage.
+
+  ## 1. Scan
+
+  Install the tools at these versions. Bump a pin in this file when it
+  stops building, not in the middle of a run.
+
+  ```sh
+  GOBIN=$HOME/bin go install golang.org/x/tools/cmd/deadcode@v0.38.0
+  GOBIN=$HOME/bin go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+  ```
+
+  - **Go.** Run each of these to a file and read it with `grep`, not
+    whole into the transcript:
+    - `deadcode ./cmd/...`: unreachable from every `main` package.
+    - `deadcode -test ./cmd/...`: the same with `cmd/`'s tests as roots.
+    - `deadcode -test ./...`: unreachable even from every test. Start
+      here, because these are the strongest candidates. A hit in the
+      first two lists and not this one is code that only tests use.
+      Report it, and do not delete it in this run.
+    - `staticcheck -checks U1000 ./...`: unused fields, types, consts and
+      vars, which deadcode does not report.
+
+    `grain-plc/` is its own module. Run the same commands inside it.
+  - **JS.** In `ui/` (and `ui-shared/` and `ui-registry/` where they
+    exist), run `npm ci`, then
+    `npx -y knip@5.70.0 --no-progress --reporter compact`. It reports
+    unused files, exports and dependencies. If knip cannot cope with a
+    package, fall back to `npx -y ts-prune@0.10.3` or
+    `npx -y unimported@1.31.1`.
+  - **Scripts and declarations.** List every `*.sh` file outside
+    `third_party/` and every `.grain/templates`, `.grain/workflows` and
+    `.grain/suites` file. Flag any whose name nothing else in the repo
+    mentions (`git grep -F <basename>`).
+
+  ## 2. Triage every hit
+
+  Drop every hit that matches a line of
+  `.grain/baselines/dead-code-allowlist.txt` (`<path>:<symbol>  # reason`).
+  Match on the symbol, not the line number. Each remaining hit is one of:
+  dead, a false positive, or uncertain.
+
+  Code is **not dead** when it is reached through any of these:
+  - reflection, `go:linkname`, or `//go:embed`;
+  - a build tag deadcode did not build with. Check `GOOS=darwin`,
+    `windows`, `!linux`, `race` and `grain_e2e` with
+    `go vet -tags ... ./...`, and `GOOS=... go build`;
+  - an interface the type satisfies. Deleting the method fails `go vet`,
+    so vet every package you touched;
+  - the agent API route tables, MCP tool registries, or templates and
+    schedules that config refers to by name;
+  - an exported identifier that the Google edition or granule imports.
+    This repository may not name the edition (`TestCoreSaysNoGoogleTokens`),
+    so the edition's read is granted to this template in grain's own
+    settings rather than here. Your prompt lists the repositories you may
+    read. Clone the edition from there and grep it for `<pkg>.<Name>`,
+    including its tests. If it is not readable, do not delete any
+    exported identifier. List them as uncertain and say that the read is
+    missing.
+
+  Also treat as **uncertain**, and report rather than delete, any code
+  that a doc comment, design doc or test-run record describes as live
+  behaviour. When code nothing calls is documented as doing something,
+  the usual cause is a wiring that got lost, not an idea that was
+  abandoned.
+
+  Add every confirmed false positive to the allowlist, one line each with
+  a one-line reason. Remove allowlist lines whose symbol is gone.
+
+  ## 3. Remove what is clearly dead
+
+  - One pull request per run, at most about 800 deleted lines. Delete
+    the doc comment with the function, and fix comments elsewhere that
+    name it. Then run `staticcheck -checks U1000` again, because a
+    deletion can orphan a type or const.
+  - Confirm each removal by grep across this repo and the edition.
+  - `go build ./...`, `go vet ./...` and `go test` must pass for every
+    touched package. Run the UI's `npm test` when `ui/` is touched.
+  - Never delete trust-boundary code in this auto-merging pull request.
+    That is any path `pkg/trustboundary.Classify` puts in a code category
+    (`auth-routes`, `capabilities-secrets`, `exec-sandbox`, which covers
+    all of `pkg/orchestrator/` and `pkg/mcp/`, `credential-proxy`,
+    `merge-gate`, `state-repo`, `upgrade-images` and the rest), plus
+    auth, routes, capabilities, sandbox and proxy code anywhere else.
+    Instead, file one `propose_task` with `hold_for_approval: true` and
+    `auto_merge: false` listing those deletions with the evidence for
+    each. First check open tasks for one already covering them.
+  - Leave `third_party/` alone. Vendored granule changes upstream in
+    `gke-labs/granule`.
+  - Anything left over beyond the size cap goes in a follow-up
+    `propose_task` that depends on this task.
+
+  ## 4. Report
+
+  - Put the removals in the commit body (it becomes the pull request
+    description), grouped by package, each with the tool that found it
+    and how it was confirmed. List the uncertain hits after them.
+  - If there is nothing to delete but some hits are uncertain, finish
+    with `comment_on_issue` listing them.
+  - If nothing is dead and nothing is uncertain, finish with
+    `nothing_needed`.

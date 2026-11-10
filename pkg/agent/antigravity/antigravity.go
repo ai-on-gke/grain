@@ -840,32 +840,6 @@ func eagerToolsConfig() map[string]any {
 	return tools
 }
 
-// mcpConfigJSON is the content of the file agy reads its MCP servers
-// from: grainBinaryPath spawned with mcpArgs (built by mcpServerArgs
-// above) -- the "mcpserver" argument selects the same subcommand
-// mcpserver.go implements, so agy forking this exact command is what
-// actually starts an MCP server, rather than needing a separately built
-// binary on disk. The schema is Gemini CLI's own mcpServers map, which
-// agy inherited along with the ~/.gemini config directory, plus the
-// per-server timeoutSeconds and tools keys agy added to it.
-//
-// Those two keys have to be the right JSON *type*, and getting one wrong
-// is not a partial load: agy drops the whole server entry and reports "No
-// MCP servers configured", with no error, no warning and nothing in the
-// file to say which key did it. Measured in docs/agy-surface.md, one key
-// at a time -- `tools` as a list rather than the object eagerToolsConfig
-// builds drops the server, `timeoutSeconds` as a string drops the server,
-// and a key agy has never heard of is ignored without harm. So the
-// asymmetry to hold on to is that an unknown key here is safe and a known
-// key of the wrong type costs a run every tool it has.
-//
-// Each capability MCP server (design/spec/capabilities/capabilities.spec.md §5.2.4) is an
-// entry beside grain-sandbox, its serverUrl grain's proxy and every tool
-// its tools/list reported registered eagerly the same way.
-func mcpConfigJSON(grainBinaryPath string, mcpArgs []string, servers ...agent.CapabilityMCPServer) ([]byte, error) {
-	return mcpConfigJSONFor(grainBinaryPath, "", mcpArgs, servers...)
-}
-
 // mcpConfigJSONFor is mcpConfigJSON, with grain-sandbox at mcpURL
 // rather than forked when mcpURL is set: the endpoint grain serves it
 // from, carried to the machine of an agy that cannot fork grain's
@@ -898,11 +872,6 @@ func mcpConfigJSONFor(grainBinaryPath, mcpURL string, mcpArgs []string, servers 
 	}
 	return json.Marshal(map[string]any{"mcpServers": all})
 }
-
-// capabilityToolName is how agy names a capability server's tool in the
-// model's roster and in the calls its hook sees: mcp_<server>_<tool>, the
-// spelling mcp.AgyQualifiedToolName gives grain-sandbox's.
-func capabilityToolName(server, tool string) string { return "mcp_" + server + "_" + tool }
 
 // Host returns the Host this framework stages files on and runs the CLI on.
 func (f *Framework) Host() agent.Host {

@@ -29,17 +29,6 @@ type AuthorSignatureSource interface {
 	AuthorSignature(owner, repo string) string
 }
 
-// AuthorSignatureFor returns the human author signature configured on client
-// for (owner, repo), or "" when client is not backed by an
-// AuthorSignatureSource or the credential is a bot/anonymous credential.
-func AuthorSignatureFor(client Client, owner, repo string) string {
-	rc, ok := client.(*RESTClient)
-	if !ok || rc == nil {
-		return ""
-	}
-	return rc.authorSignature(owner, repo)
-}
-
 func (c *RESTClient) authorSignature(owner, repo string) string {
 	if c == nil || c.Tokens == nil {
 		return ""
