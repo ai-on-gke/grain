@@ -1001,7 +1001,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"assert that this cluster's CNI actually enforces NetworkPolicy objects, and that "+
 			"deploy/kubernetes/networkpolicy.yaml is installed. Without it a task asking for no network access "+
 			"is refused rather than silently given a networked pod, since a policy object is accepted by every "+
-			"cluster and enforced by only some. Only used with -k8s-sandboxes"+seedOnly)
+			"cluster and enforced by only some, and attempts holding an external capability grant are refused "+
+			"because nothing then keeps an open-network pod off the metadata server and the cluster. Only used "+
+			"with -k8s-sandboxes and -k8s-granule-sandboxes"+seedOnly)
 	k8sDeployment := fs.String("k8s-deployment", "grain",
 		"name of the Kubernetes Deployment running grain itself, which the Upgrade button repoints at a new "+
 			"image (only used with -k8s-sandboxes and -upgrade-image). deploy/kubernetes/grain.yaml calls it "+

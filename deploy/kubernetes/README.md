@@ -60,10 +60,15 @@ stops the daemon's own ServiceAccount, which can create pods, from
 creating a privileged or host-mounting one; see the comment above the
 Namespace in `grain.yaml`.
 
-**A CNI that enforces NetworkPolicy, if you want `network: none` tasks.**
-See `networkpolicy.yaml`, which says what to check and in what order.
-Without it, a task asking for no network access is refused rather than
-silently given a networked pod.
+**A CNI that enforces NetworkPolicy, and Workload Identity on GKE.**
+Both manifests ship `grain-sandbox-egress`, the NetworkPolicy that keeps
+an open-network sandbox pod off the node's metadata server and the
+cluster's own pods, nodes and Services, but a policy object is only a
+fence on a cluster that enforces it. See [Fencing sandboxes off the
+metadata server and the cluster](#fencing-sandboxes-off-the-metadata-server-and-the-cluster)
+below. Without `-k8s-network-policy`, a task asking for no network
+access is refused rather than silently given a networked pod, and so is
+any attempt holding an external capability grant.
 
 **A storage class that gives ReadWriteOnce volumes.** grain's state is an
 embedded SQLite database on a filesystem, with one writer.
@@ -91,6 +96,79 @@ the `grain` container as `GRAIN_DB_DSN`, which the daemon reads when no
 On a deployment that already has a SQLite store on its volume, migrate it
 first with `grain upgrade-postgres -data-dir /data -dsn …` in the pod,
 with replicas at 0 or the daemon paused.
+
+## Fencing sandboxes off the metadata server and the cluster
+
+A sandbox runs whatever its task's repository runs, so an open-network
+sandbox pod has to be kept off three things its namespace's ordinary
+networking hands it: the node's metadata server (`169.254.169.254`,
+GKE's metadata proxy at `169.254.169.252`, `fd20:ce::254`) and the node
+service account token behind it, the cluster's own Services, pods, nodes
+and API server, and any capability server whose control plane runs in
+the cluster. On a single host grain installs that fence itself, as an
+nftables chain per sandbox. On Kubernetes it is three layers, and only
+the first two are grain's:
+
+1. **`grain-sandbox-egress`**, the NetworkPolicy at the end of both
+   `grain.yaml` and `grain-granule.yaml` (and in `networkpolicy.yaml`,
+   which explains every rule — the copies are tested to match). It
+   allows grain's own pod, cluster DNS and the internet, and drops
+   `169.254.0.0/16`, `fc00::/7`, `fe80::/10`, every RFC 1918 range,
+   `100.64.0.0/10` and loopback. It is applied with either manifest,
+   so applying one alone no longer leaves sandboxes unfenced.
+2. **The granule splice** (`k8s-granule` only). Each open-network
+   granule pod's netshim splice drops guest frames addressed to the
+   metadata and workload-identity endpoints
+   (`orchestrator.K8sGranuleMetadataGuardIPs`) before they leave the pod,
+   whatever the CNI does. A guest's traffic never reaches the pod's IP
+   stack — the splice is a tc redirect between the tap and `eth0` — so
+   this is a tc filter rather than an nftables chain, and it matches the
+   endpoints themselves rather than whole ranges. The ranges are layer
+   1's.
+3. **Your cluster.** A NetworkPolicy is stored by every cluster and
+   enforced only by some, and grain cannot tell which from inside a pod.
+
+What that asks of a GKE cluster:
+
+- **Enforce NetworkPolicy.** Create the cluster with Dataplane V2
+  (`gcloud container clusters create … --enable-dataplane-v2`), or turn
+  on Calico network policy enforcement on an existing one
+  (`gcloud container clusters update CLUSTER --update-addons=NetworkPolicy=ENABLED`,
+  then `--enable-network-policy`). Autopilot clusters run Dataplane V2
+  already. Other distributions: Calico, Cilium and Antrea all enforce
+  policy; kubenet and a managed CNI with its policy plugin left off do
+  not.
+- **Use Workload Identity Federation for GKE** on every node pool that
+  schedules sandboxes (`--workload-pool=PROJECT.svc.id.goog` on the
+  cluster, `--workload-metadata=GKE_METADATA` on the pool). The pool's
+  pods then reach GKE's metadata server rather than the node's own,
+  which hands a pod with no annotated Kubernetes service account no
+  Google credential at all. Sandbox pods run as the namespace's
+  `default` account with no token mounted, and that account should stay
+  unannotated. This is what keeps the node's service account out of
+  reach on a cluster where layer 1 is not enforced, so do it even if
+  you never set the flag below.
+- **Check it, then say so.** Run a pod carrying the sandbox labels and
+  confirm the metadata server times out:
+
+  ```sh
+  kubectl -n grain run fence-check --rm -it --restart=Never \
+    --labels=app.kubernetes.io/managed-by=grain,app.kubernetes.io/component=sandbox \
+    --image=curlimages/curl -- \
+    curl -sS -m 5 -H 'Metadata-Flavor: Google' \
+    http://169.254.169.254/computeMetadata/v1/instance/service-accounts/
+  ```
+
+  A timeout is the fence working; a service-account list is not. Then
+  uncomment `-k8s-network-policy` in the Deployment's args.
+
+`-k8s-network-policy` is the operator saying layer 3 holds. Without it,
+both Kubernetes backends report their open-network sandboxes unfenced,
+the same way a Docker host that cannot run `nft` does
+(`-container-sandbox-fence`), and grain refuses every attempt holding an
+external capability grant: nothing then keeps a capability server's
+control plane out of a sandbox's reach. In-process grants are
+unaffected.
 
 ## The daemon does not run as root
 
@@ -186,7 +264,10 @@ the daemon, only `kubectl exec`.
 # before this apply.
 kubectl apply -f deploy/kubernetes/grain.yaml
 
-# Optional, and only with the checks in its header done:
+# grain.yaml already carries grain-sandbox-egress, the open-network
+# fence. networkpolicy.yaml adds grain-sandbox-network-none, for
+# network:none tasks -- optional, and only with the checks in its
+# header done:
 kubectl apply -f deploy/kubernetes/networkpolicy.yaml
 
 # The UI has no authentication of its own. Tunnel to it rather than
