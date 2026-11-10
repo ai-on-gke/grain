@@ -16,6 +16,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http/httptest"
@@ -111,12 +112,23 @@ func TestGrainAccessCLI(t *testing.T) {
 	}
 
 	// 4. Deny removes the entry.
-	out, err = runAccessCLI(t, ts.URL, code, "access", "deny", "user:alice@example.com")
+	out, err = runAccessCLI(t, ts.URL, code, "access", "deny", "--reason", "left the team", "--confirm-self", "user:alice@example.com")
 	if err != nil {
 		t.Fatalf("grain access deny: %v", err)
 	}
 	if !strings.Contains(out, "removed user:alice@example.com") {
 		t.Fatalf("deny output = %q", out)
+	}
+	audits, err := store.ConfigAudit(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawReason bool
+	for _, a := range audits {
+		sawReason = sawReason || (a.Surface == "access" && a.Summary == "removed user:alice@example.com (was grain/operator) (left the team)")
+	}
+	if !sawReason {
+		t.Fatalf("config_audit = %+v, want the removal with its old role and --reason", audits)
 	}
 
 	// 5. Invalid token / unauthenticated caller is refused.

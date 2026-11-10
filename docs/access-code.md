@@ -216,15 +216,20 @@ the database (`allowed_principal`).
   the list gets a `403` naming **Settings → Access** and
   `grain access allow`.
 - **Who assigns roles:** the access code (and loopback break-glass) can
-  assign any role. A role that holds a dangerous scope, including
-  `grain/operator` itself, can be assigned only with the access code,
-  and the assignment needs a reason (`--reason`). The reason is
-  recorded in `config_audit` along with the old and new role. A
-  verified session whose role holds `access:write` can add, re-role and
-  remove entries, but only at roles no wider than its own and holding
-  no dangerous scope. It cannot change or remove an entry at a wider or
-  dangerous role. Agents and sandboxes cannot change the list by any
-  route, whatever they hold.
+  assign any role. A change involving a role that holds a dangerous
+  scope, including `grain/operator` itself, or one that denies scopes
+  needs a reason (`--reason`). The reason is recorded in `config_audit`
+  along with who made the change and the old and new role, and Settings
+  → Access shows it under **Access history**. A verified person whose
+  role holds `access:write` can add, re-role and remove entries,
+  dangerous and deny roles included, as long as their own role holds
+  every scope of the entry's current and new role. They cannot widen,
+  or add or lift a deny on, an entry that matches themselves (their
+  `user:` entry or a group they are in); narrowing one asks them to
+  confirm (`--confirm-self`). Nobody signed in can remove or narrow the
+  last entry holding a full admin role: the access code stays the way
+  to recover. Agents and sandboxes cannot change the list by any route,
+  whatever they hold.
 - **Routes outside the scope table:** the SPA's static pages are served
   to every admitted caller, and so are sign-in, `GET /api/config` and
   `whoami`. Event streams, console terminals and file downloads are
