@@ -1829,6 +1829,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	// its Publish replies button has something to publish (§5).
 	demoDrafts.leave(clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
 
+	if err := seedDemoDurableTask(ctx, store, create, ago); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -78,6 +78,11 @@ import PendingAccess from "./detail/PendingAccess.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
 import GoalSection from "./detail/GoalSection.jsx";
+import {
+  BriefSection,
+  ContextSection,
+  useTaskContext,
+} from "./detail/TaskContext.jsx";
 import Target from "./detail/Target.jsx";
 import MergePolicy from "./detail/MergePolicy.jsx";
 import TaskLink from "./detail/TaskLink.jsx";
@@ -193,6 +198,9 @@ export default function DetailOverlay({
     [tasks],
   );
   const phase = completionPhase(t);
+  // A durable task's compaction cursor, handover age and current brief
+  // (design/design/durable-tasks.design.md#DT-15); null on any other task.
+  const [taskContext, setTaskContext] = useTaskContext(t);
   // And grain's verdict that this task's merge-queue wait has stopped
   // being one (state.js's mergeQueueStall) -- the same chip the row in
   // the list carries, so the page somebody opens because of it says the
@@ -642,11 +650,22 @@ export default function DetailOverlay({
                   so it stays a plain string -- only a real description
                   (often an agent's own markdown, for a task another run
                   proposed) goes through the renderer. */}
-              {t.description ? (
-                <Markdown className="description">{t.description}</Markdown>
-              ) : (
-                <div className="description">(no description)</div>
-              )}
+              {/* On a durable task with a current brief, the brief stands
+                  where the description does, since it is what prompts
+                  carry; the description is kept under it (DT-15). */}
+              <BriefSection
+                t={t}
+                context={taskContext}
+                setContext={setTaskContext}
+                act={act}
+                description={
+                  t.description ? (
+                    <Markdown className="description">{t.description}</Markdown>
+                  ) : (
+                    <div className="description">(no description)</div>
+                  )
+                }
+              />
               <AttachmentLinks taskId={t.id} attachments={t.attachments} />
             </>
           )}
@@ -720,6 +739,7 @@ export default function DetailOverlay({
                 <summary>Task history</summary>
                 <Timeline
                   t={t}
+                  context={taskContext}
                   act={act}
                   showError={showError}
                   onOpenTask={onOpenTask}
@@ -729,6 +749,7 @@ export default function DetailOverlay({
           ) : (
             <Timeline
               t={t}
+              context={taskContext}
               act={act}
               showError={showError}
               onOpenTask={onOpenTask}
@@ -899,6 +920,14 @@ export default function DetailOverlay({
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
           <GoalSection t={t} act={act} config={config} tasks={tasks} />
+          {/* What a durable task's next prompt starts from, and Compact
+              (design/design/durable-tasks.design.md#DT-15). */}
+          <ContextSection
+            t={t}
+            context={taskContext}
+            setContext={setTaskContext}
+            act={act}
+          />
           {/* The repo this task is filed against and its base branch.
               The other repos it reads and writes are grants, in Access
               below (unified-grants slice 5), where its target shows
