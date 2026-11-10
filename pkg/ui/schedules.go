@@ -2271,6 +2271,15 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 			"standing work, or this schedule's own item, back on to run it",
 			model.StandingWorkOffReason(*firing.StandingWorkOff))
 	}
+	if firing.WorkflowGrainCIOff != "" {
+		if firing.WorkflowGrainCIOff == model.CIModeGitHub {
+			return ScheduleRun{}, validationErrorf("this schedule cannot be run now: %s; set `grain-ci: true` on the schedule, "+
+				"or set the repository's CI Mode to \"Use Grain CI\"",
+				model.WorkflowGrainCIOffReason(firing.WorkflowGrainCIOff))
+		}
+		return ScheduleRun{}, validationErrorf("this schedule cannot be run now: %s",
+			model.WorkflowGrainCIOffReason(firing.WorkflowGrainCIOff))
+	}
 
 	// What it filed is parked, as the cadence's own firing would be
 	// (orchestrator.parkUnreached), when the schedule's team cannot reach

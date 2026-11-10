@@ -2272,7 +2272,9 @@ This covers where the installation's state repository lives and what it holds. T
 | `prepare-upgrade` | export a store this build cannot open, for the next start to migrate. Prints `prepared FROM TO DIR`, `current N` or `none` |
 | `check [-migrate] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive |
 | `key show` / `key path` | print the secrets public key / where the private key is read from |
-| `key import [-key-file F]` | install a private key from `-key-file` or stdin |
+| `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
+| `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |
+| `key retired delete (-all \| NAME...)` | delete replaced keys by exact name. Refuses the live key, anything that is not an archive beside it, and the archive the secrets file is still encrypted to when the live key does not open it |
 
 <!-- BEGIN GENERATED FLAGS: grain state -->
 _No flags._
@@ -2318,13 +2320,23 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain state key retired -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain state key retired delete -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-all` | bool |  |  | delete every retired key |
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain state key import -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-key-file` | string |  |  | file holding the private key; defaults to reading stdin |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
+**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_retired_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
 
 ### 6.5 `grain backup`, `grain export`, `grain import` {#CLI-54}
 
@@ -2351,6 +2363,7 @@ The export and import usage is hand-written. Their flags:
 | `-passphrase-file` | both | passphrase file, or `-` for stdin |
 | `-key-file` | both | 64-hex-character key file, or `-` for stdin |
 | `-passphrase`, `-password`, `-key` | both | deprecated literal forms |
+| `-plaintext` | export | allow an unencrypted bundle that carries `secrets/secrets.key`; without a passphrase or key, export refuses one unless this is set |
 
 <!-- BEGIN GENERATED FLAGS: grain backup -->
 _No flags._

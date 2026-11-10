@@ -709,6 +709,7 @@ func (s *Server) routes() {
 	s.route("DELETE /api/github-tokens/{name}", s.handleDeleteGitHubToken)
 
 	s.route("GET /api/secrets", s.handleListSecrets)
+	s.route("POST /api/secrets/redact", s.handleRedactSecrets)
 	s.route("PUT /api/secrets/{secret}/{key}", s.handleSetSecret)
 	s.route("DELETE /api/secrets/{secret}/{key}", s.handleDeleteSecretKey)
 	s.route("DELETE /api/secrets/{secret}", s.handleDeleteSecret)

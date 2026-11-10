@@ -802,6 +802,9 @@ var neverAttributedRoutes = map[string]bool{
 	// and nothing is written that names them.
 	"POST /api/auth/access-code": true,
 	"POST /api/auth/logout":      true,
+	// A read that is a POST only because its input is a body of lines:
+	// it writes nothing (handleRedactSecrets).
+	"POST /api/secrets/redact": true,
 	// Self-authenticating Ed25519 host handshake and silent credential
 	// renewal protocol endpoints; operator approval is attributed on
 	// POST /api/hostds/pending/{id}/accept and .../reject.
