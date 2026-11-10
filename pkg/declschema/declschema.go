@@ -801,6 +801,14 @@ func scheduleSchema() Schema {
 				},
 			},
 			{Model: "Overlap", Keys: carried("overlap"), Columns: []string{"overlap"}},
+			// An overlap group shared by this repository's schedules
+			// (model.Schedule.OverlapGroup, grain/task-3895). Written
+			// `overlap-group:` in either context, or inside the mapping form
+			// `overlap: {skip: true, group: <name>}` (repodecl's rawOverlap,
+			// staterepo's decodeOverlapMapping). Carried: a group can only
+			// hold this repository's own schedules, because it is scoped to
+			// the repository the firing goes into.
+			{Model: "OverlapGroup", Keys: carried("overlap-group"), Columns: []string{"overlap_group"}},
 			{Model: "TimeZone", Keys: carried("timezone"), Columns: []string{"time_zone"}},
 			{Model: "Enabled", Keys: carried("enabled"), Columns: []string{"enabled"}},
 			{Model: "Base", Keys: carried("base"), Columns: []string{"base"}},

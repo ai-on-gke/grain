@@ -40,6 +40,15 @@ import (
 // on each call -- the same nil-means-unavailable contract Secrets,
 // Reboot and Upgrader already give their own panes.
 
+// RetiredSecretsKey is one key an import replaced: its file name, its
+// public half (empty when the file is not a readable key) and when it was
+// moved aside.
+type RetiredSecretsKey struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"publicKey,omitempty"`
+	Retired   string `json:"retired,omitempty"`
+}
+
 // StateRepoStatus is what the bootstrap pane renders: where state lives,
 // what is in the repository, and which key its secrets are encrypted to.
 // No secret value and no private key is ever in here -- the public key is
@@ -58,6 +67,9 @@ type StateRepoStatus struct {
 	// Head is the commit the working tree is on, empty before the first
 	// commit exists.
 	Head string `json:"head,omitempty"`
+	// Verification is require_verified mode, for an external config
+	// repository (docs/external-config-repo.md); nil in internal mode.
+	Verification *StateRepoVerification `json:"verification,omitempty"`
 	// SchemaVersion is the schema the repository's dump was written by,
 	// and BuildSchemaVersion the one this build knows. They differ only
 	// when something is wrong, which is why both are reported rather than
@@ -69,6 +81,11 @@ type StateRepoStatus struct {
 	// operator has to back up.
 	SecretsPublicKey string `json:"secretsPublicKey,omitempty"`
 	SecretsKeyFile   string `json:"secretsKeyFile,omitempty"`
+	// RetiredSecretsKeys are the keys an import replaced and left beside
+	// SecretsKeyFile (secrets.key.replaced-*). Each is still a whole
+	// private key, so the pane lists them for the operator to keep or
+	// delete (`grain state key retired delete`). Only public halves.
+	RetiredSecretsKeys []RetiredSecretsKey `json:"retiredSecretsKeys,omitempty"`
 	// SecretsFileRecipient is the public key this host's secrets file is
 	// actually sealed to, which is not always the key above: a file
 	// restored from another installation is encrypted to that
@@ -82,6 +99,14 @@ type StateRepoStatus struct {
 	// repository problem -- and because an unreadable store is not an
 	// export failure.
 	SecretsError string `json:"secretsError,omitempty"`
+	// SecretsKeyProtection is how the private key is held at rest:
+	// "file", a plaintext key file, or "kms", wrapped by the Cloud KMS
+	// key SecretsKMSKey (`grain state key wrap`). SecretsKeyLastUnwrap
+	// is when this daemon last had KMS unwrap it (RFC 3339), empty when
+	// it has not.
+	SecretsKeyProtection string `json:"secretsKeyProtection,omitempty"`
+	SecretsKMSKey        string `json:"secretsKmsKey,omitempty"`
+	SecretsKeyLastUnwrap string `json:"secretsKeyLastUnwrap,omitempty"`
 	// SecretsRepo is the repository this host's encrypted secrets file is
 	// backed up to (pkg/secretsrepo), and SecretsRepoFile what it is
 	// called there -- a name derived from the state repository, since a
@@ -250,6 +275,41 @@ type StateRepoRemoteRequest struct {
 	// Token is an optional personal access token for Remote. Empty leaves
 	// the deployment's GitHub credential ladder to answer.
 	Token string
+	// require_verified mode (StateRepoVerification); nil leaves a field
+	// as it is. AllowedSigners is the text of an ssh allowed_signers file.
+	// AcceptCommit is a held commit an operator accepts by name.
+	RequireVerified   *bool
+	RequiredApprovals *int
+	VerifiedMergers   *string
+	AllowedSigners    *string
+	AcceptCommit      string
+}
+
+// StateRepoVerification is require_verified mode for an external config
+// repository: whether it is on, what verifies a commit, and the commit it
+// is holding. Anybody who may push to that repository's branch is
+// otherwise an administrator of this deployment, since grain applies what
+// lands there without anybody's Submit.
+type StateRepoVerification struct {
+	RequireVerified   bool     `json:"requireVerified"`
+	RequiredApprovals int      `json:"requiredApprovals"`
+	VerifiedMergers   []string `json:"verifiedMergers,omitempty"`
+	// AllowedSigners is how many keys the allowed_signers file holds.
+	AllowedSigners int `json:"allowedSigners"`
+	// ForgeReviews is whether grain can read the remote's pull requests
+	// (a github.com repository); without it only signatures and
+	// acceptances verify.
+	ForgeReviews bool                 `json:"forgeReviews"`
+	Held         *StateRepoHeldCommit `json:"held,omitempty"`
+}
+
+// StateRepoHeldCommit is the commit require_verified mode is holding:
+// nothing from it on is applied until it verifies or is accepted.
+type StateRepoHeldCommit struct {
+	SHA     string    `json:"sha"`
+	Subject string    `json:"subject,omitempty"`
+	Reason  string    `json:"reason"`
+	Since   time.Time `json:"since"`
 }
 
 // SecretsRepoRequest is "back this deployment's encrypted secrets file
@@ -536,6 +596,101 @@ func (s *Server) handleImportSecretsKey(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, normalizeStateRepoStatus(status))
 }
 
+// SecretsKeyWrapper is the part of a StateRepoManager that wraps the
+// secrets key with Cloud KMS and unwraps it again. It is a separate
+// interface, asserted for, so a manager that cannot -- a demo, a test
+// fake -- need not say so: the routes answer 501 for it.
+type SecretsKeyWrapper interface {
+	WrapSecretsKey(ctx context.Context, kmsKey string) (SecretsKeyWrapResult, error)
+	UnwrapSecretsKey(ctx context.Context) (SecretsKeyWrapResult, error)
+}
+
+// SecretsKeyWrapResult is what wrap and unwrap answer: the pane's status
+// after the change, and what the operator still has to clean up.
+type SecretsKeyWrapResult struct {
+	Status     StateRepoStatus `json:"status"`
+	KeyFile    string          `json:"keyFile"`
+	PublicKey  string          `json:"publicKey"`
+	Protection string          `json:"protection"`
+	KMSKey     string          `json:"kmsKey,omitempty"`
+	// PlaintextCopies are files on this host that still hold the
+	// private key in the clear.
+	PlaintextCopies []string `json:"plaintextCopies,omitempty"`
+	Notes           []string `json:"notes,omitempty"`
+}
+
+// secretsKeyWrapRequest is POST /api/state-repo/secrets-key/wrap's body.
+type secretsKeyWrapRequest struct {
+	// KMSKey is the CryptoKey resource name:
+	// projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>.
+	KMSKey string `json:"kmsKey"`
+}
+
+func (s *Server) secretsKeyWrapper(w http.ResponseWriter) (SecretsKeyWrapper, bool) {
+	wrapper, ok := s.tasks.Config.StateRepo.(SecretsKeyWrapper)
+	if s.tasks.Config.StateRepo == nil || !ok {
+		writeError(w, http.StatusNotImplemented, apierror.Public("this deployment's UI cannot wrap its secrets key"))
+		return nil, false
+	}
+	return wrapper, true
+}
+
+// handleWrapSecretsKey wraps the daemon's secrets key with a Cloud KMS
+// key, in the daemon, which keeps the key in memory throughout: nothing
+// restarts.
+func (s *Server) handleWrapSecretsKey(w http.ResponseWriter, r *http.Request) {
+	wrapper, ok := s.secretsKeyWrapper(w)
+	if !ok {
+		return
+	}
+	var req secretsKeyWrapRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if strings.TrimSpace(req.KMSKey) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a Cloud KMS key name (kmsKey) is required"))
+		return
+	}
+	res, err := wrapper.WrapSecretsKey(r.Context(), strings.TrimSpace(req.KMSKey))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	res.Status = normalizeStateRepoStatus(res.Status)
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleUnwrapSecretsKey is wrap's reversal.
+func (s *Server) handleUnwrapSecretsKey(w http.ResponseWriter, r *http.Request) {
+	wrapper, ok := s.secretsKeyWrapper(w)
+	if !ok {
+		return
+	}
+	res, err := wrapper.UnwrapSecretsKey(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	res.Status = normalizeStateRepoStatus(res.Status)
+	writeJSON(w, http.StatusOK, res)
+}
+
+// WrapSecretsKey asks the daemon to wrap its secrets key with kmsKey.
+func (c *HTTPClient) WrapSecretsKey(ctx context.Context, kmsKey string) (SecretsKeyWrapResult, error) {
+	var out SecretsKeyWrapResult
+	err := c.do(ctx, http.MethodPost, "/api/state-repo/secrets-key/wrap", secretsKeyWrapRequest{KMSKey: kmsKey}, &out)
+	return out, err
+}
+
+// UnwrapSecretsKey asks the daemon to put its secrets key back in
+// plaintext form.
+func (c *HTTPClient) UnwrapSecretsKey(ctx context.Context) (SecretsKeyWrapResult, error) {
+	var out SecretsKeyWrapResult
+	err := c.do(ctx, http.MethodPost, "/api/state-repo/secrets-key/unwrap", struct{}{}, &out)
+	return out, err
+}
+
 // secretsRepoRequest is POST /api/state-repo/secrets-repo's body. A
 // token, when one is given, is write-only in the same sense every secret
 // this package handles is.
@@ -609,6 +764,12 @@ type stateRepoRemoteRequest struct {
 	Branch string `json:"branch"`
 	Token  string `json:"token"`
 	None   bool   `json:"none"`
+	// require_verified mode; see StateRepoRemoteRequest.
+	RequireVerified   *bool   `json:"requireVerified"`
+	RequiredApprovals *int    `json:"requiredApprovals"`
+	VerifiedMergers   *string `json:"verifiedMergers"`
+	AllowedSigners    *string `json:"allowedSigners"`
+	AcceptCommit      string  `json:"acceptCommit"`
 }
 
 // handleSetStateRepoRemote names the external Git repository this
@@ -634,9 +795,14 @@ func (s *Server) handleSetStateRepoRemote(w http.ResponseWriter, r *http.Request
 		return
 	}
 	status, err := s.tasks.Config.StateRepo.SetRemote(r.Context(), StateRepoRemoteRequest{
-		Remote: remote,
-		Branch: strings.TrimSpace(req.Branch),
-		Token:  strings.TrimSpace(req.Token),
+		Remote:            remote,
+		Branch:            strings.TrimSpace(req.Branch),
+		Token:             strings.TrimSpace(req.Token),
+		RequireVerified:   req.RequireVerified,
+		RequiredApprovals: req.RequiredApprovals,
+		VerifiedMergers:   req.VerifiedMergers,
+		AllowedSigners:    req.AllowedSigners,
+		AcceptCommit:      req.AcceptCommit,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

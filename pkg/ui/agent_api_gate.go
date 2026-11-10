@@ -365,10 +365,10 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil {
 		return call, err
 	}
-	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && call.repo == "" && set.Has(scope) {
-		// A namespace read or event stream naming no repository is narrowed
-		// to the ones the grant reaches by fsScope / eventsReadable, not
-		// refused for naming none.
+	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && call.repo == "" && set.Has(scope) {
+		// A namespace read, event stream or reachable-repos listing naming no
+		// repository is narrowed to the ones the grant reaches by fsScope /
+		// eventsReadable / reposReadable, not refused for naming none.
 		capAllowed = true
 	}
 	if isRepoNarrowedTasksRead(pattern, r) && call.repo == "" && set.Has(scope) {
@@ -1810,7 +1810,7 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 	allowedRepo func(APIScope, string) bool, pattern string, scope APIScope, repo string,
 	body []byte, opts filingEscalationOpts) error {
 	if opts.role == nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return errAgentAutoMerge
 		}
 		if personOnlyChangeReview[pattern] {
@@ -2174,7 +2174,7 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		}
 	}
 	if opts.role != nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return fmt.Errorf("%s cannot submit work (autoMerge): letting a change merge unreviewed requires an unlimited role (grain/operator)", opts.role.label())
 		}
 		if pattern == "POST /api/tasks/{id}/human-review/release" {
@@ -2234,6 +2234,15 @@ func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []
 		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
 	}
 	return nil
+}
+
+// submitRoutes are the two spellings of a person's Submit: a task's, and
+// `grain pr submit`'s by its pull request. Each records the approval a
+// change waits on (and, with overrideGates, forces its merge), so neither
+// is an agent's or a limited role's to call, whichever one is used.
+var submitRoutes = map[string]bool{
+	"POST /api/tasks/{id}/submit":    true,
+	"POST /api/pull-requests/submit": true,
 }
 
 func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
@@ -2945,7 +2954,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	// templates:read even when the credential is narrowed to specific
 	// repositories.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
 		(pattern == "GET /api/config" && (set.Has(scope) || set.Has("deployment:read"))) ||
 		(pattern == "GET /api/templates" && set.Has(scope))
 	if !set.Has(scope) && !adminPatch && !fsAllowed && !detach {
@@ -3165,19 +3174,19 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	}); ok {
 		return repo, nil, err
 	}
-	// If the credential is restricted to a single repository and calls a
-	// read-only collection endpoint that accepts ?repo=, default the filter
-	// to that repository so listing works without repeating the repo parameter.
-	if r.Method == http.MethodGet && len(tok.Repos) == 1 && !isRepoNarrowedTasksRead(pattern, r) {
-		switch pattern {
-		case "GET /api/tasks", "GET /api/ci/runs", "GET /api/ci/workflows",
-			"GET /api/merge-batches", "GET /api/pipeline/changes", "GET /api/memory/documents/{name}":
+	// If the credential is restricted to a single repository for this scope and
+	// calls a read-only collection endpoint that accepts ?repo= (other than
+	// GET /api/templates, which serves both bound and deployment-wide unbound
+	// templates via templateAllowedForGrants), default the filter to that
+	// repository so listing works whether narrowed via tok.Repos or @repo.
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && pattern != "GET /api/templates" && !isRepoNarrowedTasksRead(pattern, r) && !set.Allows(scope, "") {
+		if repos := set.Repos(scope); len(repos) == 1 {
 			q := r.URL.Query()
 			if q.Get("repo") == "" {
-				q.Set("repo", tok.Repos[0])
+				q.Set("repo", repos[0])
 				r.URL.RawQuery = q.Encode()
 			}
-			return tok.Repos[0], nil, nil
+			return repos[0], nil, nil
 		}
 	}
 	return "", nil, nil
@@ -3424,6 +3433,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/withdraw-approval":       taskRespSingle,
 	"POST /api/tasks/{id}/park-until":              taskRespNone,
 	"POST /api/pull-requests/review":               taskRespNone,
+	"POST /api/pull-requests/submit":               taskRespNone,
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,

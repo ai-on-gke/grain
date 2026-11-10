@@ -161,6 +161,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/pull-request":                             trusted,
 	"POST /api/pull-requests/adopt":                                 trusted,
 	"POST /api/pull-requests/review":                                trusted,
+	"POST /api/pull-requests/submit":                                trusted,
 	"GET /api/pull-requests/status":                                 trusted,
 	"POST /api/tasks/{id}/sandbox/recreate":                         trusted,
 	"POST /api/tasks/{id}/activity":                                 trusted,
@@ -192,6 +193,8 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/expire": trusted,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": trusted,
 	"GET /api/local-script-approvals":                               trusted,
+	"GET /api/declarations":                                         trusted,
+	"POST /api/declarations/accept":                                 trusted,
 	"POST /api/tasks/{id}/delivered":                                trusted,
 	"GET /api/tasks/{id}/attempts/{number}/transcript":              trusted,
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":        trusted,
@@ -408,34 +411,37 @@ var routeAuthorization = map[string]authLevel{
 	"PUT /api/github-tokens/{name}":                      trusted,
 	"DELETE /api/github-tokens/{name}":                   trusted,
 	"GET /api/secrets":                                   trusted,
+	"POST /api/secrets/redact":                           trusted,
 	"PUT /api/secrets/{secret}/{key}":                    trusted,
 	"DELETE /api/secrets/{secret}/{key}":                 trusted,
 	"DELETE /api/secrets/{secret}":                       trusted,
 
 	// The deployment's own state, host, daemon and database.
-	"GET /api/state-repo":                trusted,
-	"GET /api/state-repo/files":          trusted,
-	"GET /api/state-repo/file":           trusted,
-	"POST /api/state-repo/sync":          trusted,
-	"POST /api/state-repo/pull-requests": trusted,
-	"POST /api/state-repo/remote":        trusted,
-	"POST /api/state-repo/secrets-key":   trusted,
-	"POST /api/state-repo/import-key":    trusted,
-	"POST /api/state-repo/secrets-repo":  trusted,
-	"POST /api/state-repo/reset-notice":  trusted,
-	"POST /api/host/reboot":              trusted,
-	"POST /api/host/shutdown":            trusted,
-	"POST /api/host/restart":             trusted,
-	"GET /api/host/top":                  trusted,
-	"GET /api/upgrade":                   trusted,
-	"POST /api/upgrade":                  trusted,
-	"DELETE /api/upgrade/scheduled":      trusted,
-	"PUT /api/upgrade/source":            trusted,
-	"GET /api/upgrade/targets":           trusted,
-	"GET /api/upgrade/release-notes":     trusted,
-	"GET /api/database":                  trusted,
-	"GET /api/logs":                      trusted,
-	"GET /api/logs/{source}":             trusted,
+	"GET /api/state-repo":                     trusted,
+	"GET /api/state-repo/files":               trusted,
+	"GET /api/state-repo/file":                trusted,
+	"POST /api/state-repo/sync":               trusted,
+	"POST /api/state-repo/pull-requests":      trusted,
+	"POST /api/state-repo/remote":             trusted,
+	"POST /api/state-repo/secrets-key":        trusted,
+	"POST /api/state-repo/import-key":         trusted,
+	"POST /api/state-repo/secrets-key/wrap":   trusted,
+	"POST /api/state-repo/secrets-key/unwrap": trusted,
+	"POST /api/state-repo/secrets-repo":       trusted,
+	"POST /api/state-repo/reset-notice":       trusted,
+	"POST /api/host/reboot":                   trusted,
+	"POST /api/host/shutdown":                 trusted,
+	"POST /api/host/restart":                  trusted,
+	"GET /api/host/top":                       trusted,
+	"GET /api/upgrade":                        trusted,
+	"POST /api/upgrade":                       trusted,
+	"DELETE /api/upgrade/scheduled":           trusted,
+	"PUT /api/upgrade/source":                 trusted,
+	"GET /api/upgrade/targets":                trusted,
+	"GET /api/upgrade/release-notes":          trusted,
+	"GET /api/database":                       trusted,
+	"GET /api/logs":                           trusted,
+	"GET /api/logs/{source}":                  trusted,
 
 	"GET /api/sandboxes":                             trusted,
 	"GET /api/persistent-sandboxes":                  trusted,
@@ -661,6 +667,8 @@ type routeFixture struct {
 	accessCookie string
 	// proxy signs people in (identityProxy) on a multi-tenant fixture.
 	proxy *identityProxy
+	// seeded is its template's routeFixtureTemplate.seeded.
+	seeded map[string]string
 }
 
 // newRouteFixtureFor is a routeFixture of a single-tenant daemon
@@ -683,12 +691,26 @@ type routeFixtureTemplate struct {
 	files     []routeFixtureTemplateFile
 	taskID    string
 	secretKey []byte
-	err       error
+	// seeded is what the template's seed (routeFixtureSeed) recorded
+	// about what it made: credentials a probe presents, ids it names.
+	seeded map[string]string
+	err    error
 }
 
-var routeFixtureTemplates [4]routeFixtureTemplate
+// routeFixtureSeed adds callers and objects to a fixture template before
+// it is copied, so every fixture made from it holds them without paying
+// for them again. The template it seeds is its own: only matrixSeed is
+// one, and it is the only template with bit 4 of the index set.
+type routeFixtureSeed func(t *testing.T, f *routeFixture) (map[string]string, error)
+
+var routeFixtureTemplates [8]routeFixtureTemplate
 
 func prepareRouteFixtureTemplate(t *testing.T, singleTenant, withProxy bool) *routeFixtureTemplate {
+	t.Helper()
+	return prepareSeededRouteFixtureTemplate(t, singleTenant, withProxy, nil)
+}
+
+func prepareSeededRouteFixtureTemplate(t *testing.T, singleTenant, withProxy bool, seed routeFixtureSeed) *routeFixtureTemplate {
 	t.Helper()
 	idx := 0
 	if singleTenant {
@@ -696,6 +718,9 @@ func prepareRouteFixtureTemplate(t *testing.T, singleTenant, withProxy bool) *ro
 	}
 	if withProxy {
 		idx |= 2
+	}
+	if seed != nil {
+		idx |= 4
 	}
 	tmpl := &routeFixtureTemplates[idx]
 	tmpl.once.Do(func() {
@@ -822,6 +847,14 @@ func prepareRouteFixtureTemplate(t *testing.T, singleTenant, withProxy bool) *ro
 		} else {
 			tmpl.taskID = "1"
 		}
+		if seed != nil {
+			f.taskID = tmpl.taskID
+			if tmpl.seeded, err = seed(t, f); err != nil {
+				_ = db.Close()
+				tmpl.err = fmt.Errorf("seeding fixture template: %w", err)
+				return
+			}
+		}
 		if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 			_ = db.Close()
 			tmpl.err = fmt.Errorf("checkpointing fixture template: %w", err)
@@ -869,7 +902,13 @@ func prepareRouteFixtureTemplate(t *testing.T, singleTenant, withProxy bool) *ro
 // built from it: a daemon hook a route consults (ui.Config.CLIRunCheck).
 func newRouteFixtureWith(t *testing.T, singleTenant, withProxy bool, configure ...func(*ui.Config)) *routeFixture {
 	t.Helper()
-	tmpl := prepareRouteFixtureTemplate(t, singleTenant, withProxy)
+	return newRouteFixtureFrom(t, prepareRouteFixtureTemplate(t, singleTenant, withProxy), singleTenant, withProxy, configure...)
+}
+
+// newRouteFixtureFrom is a fixture copied from tmpl, which was prepared
+// for singleTenant and withProxy.
+func newRouteFixtureFrom(t *testing.T, tmpl *routeFixtureTemplate, singleTenant, withProxy bool, configure ...func(*ui.Config)) *routeFixture {
+	t.Helper()
 	if tmpl.err != nil {
 		t.Fatalf("preparing route fixture template: %v", tmpl.err)
 	}
@@ -942,7 +981,7 @@ func newRouteFixtureWith(t *testing.T, singleTenant, withProxy bool, configure .
 		c(&uiCfg)
 	}
 	server := ui.NewServer(uiCfg, store)
-	f := &routeFixture{server: server, store: store, taskID: tmpl.taskID, proxy: proxy}
+	f := &routeFixture{server: server, store: store, taskID: tmpl.taskID, proxy: proxy, seeded: tmpl.seeded}
 	if singleTenant {
 		f.from = loopbackAddr
 		f.accessCookie = accessSession(t, server, loopbackAddr, testAccessCode)
@@ -1226,7 +1265,7 @@ func TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes(t *testing.T)
 
 	bodyFor := func(pattern, fragment string) string {
 		prefix := `"repo":"acme/widgets",`
-		if pattern == "POST /api/pull-requests/review" {
+		if pattern == "POST /api/pull-requests/review" || pattern == "POST /api/pull-requests/submit" {
 			prefix += `"pr":"acme/widgets#1",`
 		}
 		return `{` + prefix + fragment + `}`

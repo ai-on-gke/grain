@@ -435,6 +435,12 @@ var repoCaseTables = []repoCaseTable{
 	// provenance that spells the repository the way the repo_config row
 	// switching it on now does.
 	{name: "repo_declaration", owner: "owner", repo: "name"},
+	// A person's acceptance of what a declaration asks for
+	// (model.DeclarationAcceptance), keyed by the declaration's id, which
+	// carries the repository lowercased as repo_declaration's does
+	// (RepoDeclaredID, CIJobDeclarationID): the same rewrite, for the same
+	// reason.
+	{name: "declaration_acceptance", owner: "owner", repo: "name"},
 	// Grain's record of polling one repository for those declarations.
 	// Both sides of a fold are re-derived by the next poll, which is why
 	// the merge simply keeps the canonical row's (mergeDeclarationSyncRow).

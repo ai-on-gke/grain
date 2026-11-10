@@ -269,7 +269,7 @@ Coordinated with #3965 (`docs/security/audits/2026-11-10-insider-risk.md`) and #
    `POST /api/tasks/{id}/force-merge` checked only scope `merge:force`. A custom non-operator
    role holding `merge:force` on a single repo could bypass `Submit`, unfinished security
    reviews, and `NeverAutoMergePaths` holds even though `Submit` itself requires
-   `grain/operator`. Both `filingEscalation` and `Client.ForceMerge` now require an unlimited
+   `grain/operator`. Both `filingEscalation` and `Client.ForceMergeWithGates` (which `ForceMerge` and `grain pr submit --override-gates` both reach) now require an unlimited
    role (`grain/operator`).
 
 ---

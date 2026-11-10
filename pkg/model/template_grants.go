@@ -220,33 +220,30 @@ func grantServerID(grant string) string {
 }
 
 // DeclaredFiringHold is why a firing of sched (through tmpl, nil for none)
-// composed as comp must wait for a person's approval rather than land
-// approved: each grant only a person may accept that a repository's own
-// declaration put there (DeclaredGrantNeedsPerson), and an admission
-// above standard. A schedule or template an operator wrote holds nothing
-// here -- it is a person's standing approval already -- so only a
-// repo-declared one is asked about.
+// composed as comp must wait for a person rather than land approved:
+// what a repository's own declaration put there that only a person may
+// accept (DeclaredCompositionHold). A schedule or template an operator
+// wrote holds nothing here -- it is a person's standing approval already
+// -- so only a repo-declared one is asked about. Whether a person has
+// accepted the set is DeclarationAcceptance's question
+// (composeScheduleTask).
 func DeclaredFiringHold(sched Schedule, tmpl *Template, comp Composition) []string {
-	declared := IsRepoDeclaredID(sched.ID) || (tmpl != nil && IsRepoDeclaredID(tmpl.ID))
-	if !declared {
+	if ScheduleDeclarationID(sched, tmpl) == "" {
 		return nil
 	}
-	var held []string
-	for _, g := range comp.Grants {
-		if DeclaredGrantNeedsPerson(g.Capability) && !slices.Contains(held, g.Capability) {
-			held = append(held, g.Capability)
-		}
-	}
-	if adm := NormalizeAdmission(comp.Admission); adm.AtLeast(AdmissionBypass) {
-		held = append(held, "admission "+string(adm))
-	}
-	return held
+	return DeclaredCompositionHold(comp)
 }
 
-// DeclaredFiringHoldNote is the line a firing held by DeclaredFiringHold
-// carries in its body, saying why it waits and who can release it.
-func DeclaredFiringHoldNote(held []string) string {
-	return fmt.Sprintf("\n\n---\n\ngrain: filed for a person's approval rather than approved: this work comes from a "+
-		"repository's own declaration, which grants %s. Only a person may accept that grant; "+
-		"approve the task to run it with it.", strings.Join(held, ", "))
+// ScheduleDeclarationID is the declaration a firing of sched (through
+// tmpl) is accepted under (DeclarationAcceptance): the schedule's own id
+// when a repository declared it, else its template's when one did, and
+// "" for a firing nothing declared.
+func ScheduleDeclarationID(sched Schedule, tmpl *Template) string {
+	if IsRepoDeclaredID(sched.ID) {
+		return sched.ID
+	}
+	if tmpl != nil && IsRepoDeclaredID(tmpl.ID) {
+		return tmpl.ID
+	}
+	return ""
 }

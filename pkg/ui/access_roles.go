@@ -78,6 +78,11 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/notifications/{id}/investigate":                      "tasks:write",
 	"GET /api/local-script-approvals":                               "capabilities:read",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": "capabilities:admin",
+	// Accepting a declaration takes the scopes its set needs, which
+	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal):
+	// a dangerous api grant needs its own scope, not capabilities:admin.
+	"GET /api/declarations":         "capabilities:read",
+	"POST /api/declarations/accept": scopeSignedIn,
 }
 
 // operatorOnlyRoutes are the internal routes no limited role reaches: a
@@ -89,6 +94,7 @@ var operatorOnlyRoutes = map[string]bool{
 	"PUT /api/tasks/{id}/session-title":                             true,
 	"POST /api/tasks/{id}/staged-attachments":                       true,
 	"POST /api/tasks/{id}/db/query":                                 true,
+	"POST /api/secrets/redact":                                      true,
 	"POST /api/tasks/{id}/db/execute":                               true,
 	"POST /api/tasks/{id}/notify":                                   true,
 	"POST /api/tasks/{id}/delivered":                                true,
@@ -771,10 +777,10 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 		repo = s.persistentSandboxRepo(r.Context(), r.PathValue("name"))
 	}
 	if !a.allows(scope, "") {
-		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
-			// A namespace read or event stream naming no repository is narrowed
-			// to the ones the role reaches by fsScope / eventsReadable, as an
-			// agent's is.
+		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && repo == "" {
+			// A namespace read, event stream or reachable-repos listing naming no
+			// repository is narrowed to the ones the role reaches by fsScope /
+			// eventsReadable / reposReadable, as an agent's is.
 			return nil
 		}
 		if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {

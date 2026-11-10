@@ -91,6 +91,7 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 	}
 	var remaining []model.ApprovalRequirement
 	now, head := c.now(), c.submittedHead(ctx, task)
+	openTriggerReview := c.hasUnfinishedTriggerReview(ctx, task)
 	released := model.WithAutoMergeChange(ctx, actor, "approved by "+user)
 	var heldFor []model.HumanReviewReason
 	if err := c.Store.UpdateTask(released, task.ID, func(t *model.Task) error {
@@ -103,9 +104,22 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 		remaining = model.PendingApprovals(*t)
 		if len(remaining) == 0 {
 			model.AllowAutoMerge(t)
-			t.AutoMerge = true
-			heldFor = model.HumanReviewReasons(*t)
-			humanSubmitted(t, now, head)
+			for _, r := range model.HumanReviewReasons(*t) {
+				if r.Source != model.HumanReviewSecurityFindings {
+					heldFor = append(heldFor, r)
+				}
+			}
+			if !openTriggerReview && len(model.ReviewFindings(*t)) == 0 {
+				var kept []model.Link
+				for _, l := range t.Links {
+					if l.Kind != model.LinkPathTriggerHold {
+						kept = append(kept, l)
+					}
+				}
+				t.Links = kept
+			}
+			humanSubmitted(t, user, now, head)
+			t.AutoMerge = !model.HasPendingReviewHold(*t)
 		}
 		return nil
 	}); err != nil {
@@ -137,4 +151,36 @@ func describePending(reqs []model.ApprovalRequirement) string {
 		fmt.Fprintf(&b, "- `%s`: %s\n", r.Rule, model.DescribeApprovers(r.Approvers))
 	}
 	return b.String()
+}
+
+// hasUnfinishedTriggerReview reports whether any gating path-trigger review
+// on task (model.LinkPathTriggerTask) has not finished: still queued or
+// running, or with a pull request of its own that has not merged.
+func (c *Client) hasUnfinishedTriggerReview(ctx context.Context, task model.Task) bool {
+	for _, l := range task.Links {
+		if l.Kind != model.LinkPathTriggerTask {
+			continue
+		}
+		_, id, ok := strings.Cut(l.Target, "=")
+		if !ok || id == "" {
+			continue
+		}
+		rt, err := c.Store.GetTask(ctx, id)
+		if err != nil || rt == nil {
+			// Unread is not finished: a Submit taking this for a passed
+			// review would drop the trigger's hold on nobody's say.
+			return true
+		}
+		obs, _ := c.Store.GetObservation(ctx, id)
+		if model.TaskPullRequest(*rt) != nil {
+			if obs == nil || obs.PrMergedAt == nil {
+				return true
+			}
+			continue
+		}
+		if obs == nil || obs.CompletedAt == nil {
+			return true
+		}
+	}
+	return false
 }

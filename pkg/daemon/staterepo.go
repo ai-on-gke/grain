@@ -198,7 +198,11 @@ func OpenSecrets(dataDir string) *secrets.Store {
 	// unreadable until the operator imports that key. Said once at startup, where it
 	// is a line about the deployment, rather than only later as a run
 	// that could not resolve a credential.
-	if err := store.Check(); err != nil {
+	if err := store.Check(); errors.Is(err, secrets.ErrKMS) {
+		log.Printf("grain: the secrets key %s could not be unwrapped: %v -- grain keeps running, but "+
+			"nothing that needs a secret works until Cloud KMS answers; the store retries with backoff",
+			store.KeyFile(), err)
+	} else if err != nil {
 		log.Printf("grain: this host cannot read %s: %v", store.File(), err)
 		if recipient, rerr := store.FileRecipient(); rerr == nil && recipient != "" {
 			log.Printf("grain: it is encrypted to %s -- install that key with "+
@@ -206,6 +210,32 @@ func OpenSecrets(dataDir string) *secrets.Store {
 		}
 	}
 	return store
+}
+
+// retrySecretsKey keeps the daemon's store trying to unwrap a key Cloud
+// KMS refused or could not be reached for at start, on the store's own
+// backoff, so that the store unlocks when KMS answers rather than on the
+// first request that happens to need a secret afterwards. A store that
+// is not waiting on KMS -- every store whose key is a plaintext file --
+// starts nothing; the loop it starts otherwise ends as soon as the key
+// loads, or the store fails for any other reason.
+func retrySecretsKey(ctx context.Context, store *secrets.Store) {
+	if !store.WaitingOnKMS() {
+		return
+	}
+	go func() {
+		for {
+			wait := max(store.KeyRetryIn(), time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			if err := store.Check(); !errors.Is(err, secrets.ErrKMS) {
+				return
+			}
+		}
+	}()
 }
 
 // moveSecretsOutOfStateRepo lifts an encrypted secrets file an earlier
@@ -361,6 +391,8 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 	if err := staterepo.EnsureIgnored(repo.Dir()); err != nil {
 		return nil, err
 	}
+	// Before the load that follows, which is the first pull.
+	repo.SetVerifier(stateRepoVerifier(dataDir, settings))
 	return repo, nil
 }
 

@@ -93,6 +93,13 @@ type Task struct {
 	// model.Task.Reads, rendered as owner/name strings the same way Repo
 	// renders its single Target.
 	Reads []string `json:"reads,omitempty"`
+	// ReadCount and ReadsTruncated say how many Reads there were when a
+	// paged GET /api/tasks list row capped them at taskPageRowReads: a
+	// standing session such as the director reads every target
+	// repository, which grows with the deployment. GET /api/tasks/{id}
+	// carries them all.
+	ReadCount      int  `json:"readCount,omitempty"`
+	ReadsTruncated bool `json:"readsTruncated,omitempty"`
 	// Writes is every *other* repo this task's work may land in, with
 	// the base branch for each -- model.Task.Writes. Repo and Base above
 	// are still the one repo and branch this task's own runs push to;
@@ -375,6 +382,19 @@ type Task struct {
 	// ChangeTargetKind is the kind of non-git change this task's work is
 	// ("changelist"), or "" for a git task (model.ChangeTarget).
 	ChangeTargetKind string `json:"changeTargetKind,omitempty"`
+	// MergeGates lists each required merge gate on this task's pull request
+	// (CI, security review, configured/trigger code review, and human
+	// approval) and its current state.
+	MergeGates []model.MergeGate `json:"mergeGates,omitempty"`
+	// ReviewFindings lists any unresolved review-findings gate blocks on
+	// this task's pull request.
+	ReviewFindings []model.ReviewFindingsRecord `json:"reviewFindings,omitempty"`
+	// GateOverride is the most recent explicit merge:force gate override on
+	// this task, if any.
+	GateOverride *model.GateOverrideRecord `json:"gateOverride,omitempty"`
+	// HumanApprovedBy is who recorded a Submit approval for the current
+	// pull request head, if any.
+	HumanApprovedBy string `json:"humanApprovedBy,omitempty"`
 	// Reviewers is the person-set list of reviewer usernames for this task
 	// (model.Task.Reviewers, docs/design/changelists.md §5).
 	Reviewers []string `json:"reviewers,omitempty"`
@@ -519,6 +539,12 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// QuestionCommentID is the id of the comment an awaiting_reply task is
+	// parked on (Observation.PendingQuestionCommentID) -- a question, a
+	// credential or access request, or a stopped turn -- so a row can link
+	// straight to it (model.CommentPath), as GET /api/inbox's path does.
+	// 0 when the task is not parked.
+	QuestionCommentID int64 `json:"questionCommentId,omitempty"`
 	// AwaitingAccess is an awaiting_reply task parked on an access
 	// request (request_access) rather than a question: what it wants is
 	// a grant, which its card offers, not a reply.
@@ -1335,7 +1361,24 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		if l.Kind.Blocks() && targetStates[l.Target] != model.StateClosed && !slices.Contains(out.BlockedBy, l.Target) {
 			out.BlockedBy = append(out.BlockedBy, l.Target)
 		}
+		if l.Kind == model.LinkHumanSubmitted {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		} else if l.Kind == model.LinkHumanApproved && out.HumanApprovedBy == "" {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		}
 	}
+	out.ReviewFindings = model.ReviewFindings(t)
+	if ov, ok := model.LatestGateOverride(t); ok {
+		out.GateOverride = &ov
+	}
+	synthObs := &model.Observation{
+		MergeQueueBlockedAt: mergeQueueBlockedAt,
+		MergeQueueState:     mergeQueue.State,
+		MergeQueueNote:      mergeQueue.Note,
+		PrMergedAt:          span.PrMergedAt,
+		PrClosedAt:          span.PrClosedAt,
+	}
+	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
 	return out
@@ -2450,18 +2493,39 @@ func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	q, narrowed := parseTaskListQuery(r.URL.Query())
+	rawQ := r.URL.Query()
+	if text := strings.TrimSpace(rawQ.Get("limit")); text != "" {
+		if n, err := strconv.Atoi(text); err != nil || n < 0 {
+			writeClientError(w, validationErrorf("%q is not a limit: it is how many items to answer with, a whole number (0 means every item)", rawQ.Get("limit")))
+			return
+		}
+	}
+	if text := strings.TrimSpace(rawQ.Get("cursor")); text != "" {
+		if _, ok := parsePageCursor(text); !ok {
+			writeClientError(w, validationErrorf("%q is not a cursor this route handed out: pass back a previous answer's nextCursor, or leave it out for the first page", rawQ.Get("cursor")))
+			return
+		}
+	}
+	q, narrowed := parseTaskListQuery(rawQ)
 	if q.owner != "" {
 		q.owner = s.tasks.resolveOwnerFilter(r.Context(), q.owner)
 	}
-	if isAgentListCaller(r) && !r.URL.Query().Has("fields") {
+	if isAgentListCaller(r) {
 		q.paged = true
-		if !r.URL.Query().Has("limit") {
-			q.limit = listPageLarge
-		} else if q.limit > listPageMax {
-			q.limit = listPageMax
+		if strings.TrimSpace(rawQ.Get("limit")) == "" {
+			switch {
+			case q.summary:
+				q.limit = listPageMedium
+			case q.full:
+				q.limit = listPageTiny
+			default:
+				q.limit = listPageSmall
+			}
 		}
 		narrowed = true
+	}
+	if q.paged && q.limit > listPageMax {
+		q.limit = listPageMax
 	}
 	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
@@ -2504,14 +2568,32 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	if isAgentListCaller(r) {
 		limit = 250
 	}
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+	if l := strings.TrimSpace(r.URL.Query().Get("limit")); l != "" {
+		parsed, err := strconv.Atoi(l)
+		if err != nil || parsed < 0 {
+			writeClientError(w, validationErrorf("%q is not a limit: it is how many items to answer with, a whole number (0 means at most %d)", r.URL.Query().Get("limit"), listPageMax))
+			return
+		}
+		if parsed == 0 {
+			limit = listPageMax
+		} else {
 			limit = min(parsed, listPageMax)
 		}
 	}
-	cursor := r.URL.Query().Get("cursor")
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
 	if cursor == "" {
-		cursor = r.URL.Query().Get("since")
+		cursor = strings.TrimSpace(r.URL.Query().Get("since"))
+	}
+	if cursor != "" && s.tasks != nil && s.tasks.Store != nil {
+		t, err := s.tasks.Store.GetTask(r.Context(), cursor)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		if t == nil {
+			writeClientError(w, validationErrorf("%q is not a cursor this route handed out: pass back a previous answer's nextCursor, or leave it out for the first page", cursor))
+			return
+		}
 	}
 
 	states, nextCursor, err := s.tasks.StatesPage(r.Context(), limit, cursor)
@@ -3097,23 +3179,27 @@ type forceMergeRequest struct {
 	// request's head as it is when the request arrives. Either way it is
 	// for that one commit (bwsalmon/grain#2399).
 	Head string `json:"head,omitempty"`
+	// OverrideGates names each unsatisfied gate to skip under merge:force
+	// (e.g. ["security-review"]). Required whenever any review gate is
+	// unsatisfied; no default or shorthand skips a review gate.
+	OverrideGates []string `json:"overrideGates,omitempty"`
 }
 
-// handleForceMerge is the UI's own "Force merge" button, and `grain
-// force-merge`: an operator telling grain to land a change the merge
-// queue is not going to land on its own, with a reason recorded against
-// the task and the pull request. See Client.ForceMerge.
+// handleForceMerge is the UI's own "Force merge" / gate-override action, and
+// `grain force-merge`: an operator telling grain to land a change the merge
+// queue is not going to land on its own, with a reason recorded against the
+// task and the pull request. See Client.ForceMergeWithGates.
 //
 // It records the request and returns; the merge is grain's next
 // merge-queue cycle's to perform, which is what keeps grain's own state
-// consistent with what happened on GitHub. Nothing here talks to GitHub.
+// consistent with what happened on GitHub.
 func (s *Server) handleForceMerge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req forceMergeRequest
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	if err := s.tasks.ForceMerge(r.Context(), id, req.Reason, req.Head); err != nil {
+	if err := s.tasks.ForceMergeWithGates(r.Context(), id, req.Reason, req.Head, req.OverrideGates); err != nil {
 		writeClientError(w, err)
 		return
 	}

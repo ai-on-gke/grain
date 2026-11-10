@@ -153,11 +153,12 @@ func closeObsoleteReviews(ctx context.Context, store *model.Store, now time.Time
 			errs = append(errs, err)
 			break
 		}
-		if reviewed, err := store.GetTask(ctx, r.ReviewedID); err == nil && reviewed != nil && hasBaseRepairBypass(*reviewed) {
+		if reviewed, err := store.GetTask(ctx, r.ReviewedID); err == nil && reviewed != nil &&
+			mergedThroughOverrideOrBypass(ctx, store, *reviewed) {
 			if obs, err := store.GetObservation(ctx, r.ReviewedID); err == nil && obs != nil && obs.PrMergedAt != nil {
 				baseBranch := resolveTaskBaseBranch(*reviewed, "")
 				_ = store.UpdateTask(ctx, r.ReviewID, func(t *model.Task) error {
-					if t.Base == reviewed.BranchName() {
+					if t.Base == reviewed.BranchName() || linkTarget(*t, LinkPostMergeReviewCommit) != "" {
 						// A review is never classified on its own account
 						// (holdForTrustBoundary, pullRequestTriggersApply skip
 						// it: it merges into the branch it reviews). Moved onto
@@ -166,6 +167,9 @@ func closeObsoleteReviews(ctx context.Context, store *model.Store, now time.Time
 						t.Base = baseBranch
 						t.AutoMerge = false
 						detachFromReviewedBranch(t)
+						if linkTarget(*t, LinkPostMergeReviewCommit) == "" {
+							t.Links = append(t.Links, model.Link{Kind: LinkPostMergeReviewCommit, Target: "HEAD"})
+						}
 					}
 					return nil
 				})
@@ -233,7 +237,8 @@ func stopOnMissingBase(ctx context.Context, store *model.Store, task model.Task,
 
 	if isReviewTask(task) {
 		if id := linkTarget(task, model.LinkProposedBy); id != "" {
-			if reviewed, err := store.GetTask(ctx, id); err == nil && reviewed != nil && hasBaseRepairBypass(*reviewed) {
+			if reviewed, err := store.GetTask(ctx, id); err == nil && reviewed != nil &&
+				isPostMergeReview(ctx, store, task, *reviewed) {
 				baseBranch := resolveTaskBaseBranch(*reviewed, "")
 				if gone.Base != baseBranch {
 					return store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -241,6 +246,7 @@ func stopOnMissingBase(ctx context.Context, store *model.Store, task model.Task,
 						// would land there unclassified (closeSecurityReviewOnSettle).
 						t.Base = baseBranch
 						t.AutoMerge = false
+						detachFromReviewedBranch(t)
 						return nil
 					})
 				}

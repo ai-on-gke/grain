@@ -372,7 +372,7 @@ func releaseNoteFrom(n model.ReleaseNote) ReleaseNote {
 
 // handleListReleaseNotes answers GET /api/release-notes.
 func (s *Server) handleListReleaseNotes(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return

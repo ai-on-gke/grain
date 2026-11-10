@@ -25,7 +25,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
-	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
 // humanSubmit is what ui.Client.Submit writes: auto-merge on, the holds
@@ -34,15 +33,17 @@ import (
 // head.
 func humanSubmit(t *testing.T, ctx context.Context, store *model.Store, id, shown string) {
 	t.Helper()
-	if err := store.UpdateTask(ctx, id, func(t *model.Task) error {
-		t.AutoMerge = true
-		// A Submit ends the human-review hold too (ui.humanSubmitted).
-		model.DropHumanReviewHold(t)
-		t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
-			return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkReviewQuestions ||
-				l.Kind == model.LinkBrokenRulesHold
+	if err := store.UpdateTask(ctx, id, func(tk *model.Task) error {
+		model.AllowAutoMerge(tk)
+		model.DropHumanReviewHold(tk)
+		tk.Links = slices.DeleteFunc(tk.Links, func(l model.Link) bool {
+			return l.Kind == model.LinkHumanOnlyHold || l.Kind == model.LinkBrokenRulesHold ||
+				l.Kind == model.LinkHumanSubmitted
 		})
-		t.Links = append(t.Links, model.Link{Kind: model.LinkHumanSubmitted, Target: model.HumanSubmittedTarget(baseTime, shown)})
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkHumanSubmitted, Target: model.HumanSubmittedTarget(baseTime, shown)})
+		if !model.HasPendingReviewHold(*tk) {
+			tk.AutoMerge = true
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -89,13 +90,25 @@ func TestHumanSubmitIsCarriedAcrossABaseMergeWithoutAnotherReview(t *testing.T) 
 	sim, client, task, branch := heldAt(t, ctx, store, "pkg/ui/server.go")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 
-	// The review's stacked fix merges back, touching the same file.
-	pushFile(t, sim.BareRepo, branch, "pkg/ui/server.go", "fixed by the review\n")
+	// The security review fixes an auxiliary file in place on the branch and completes cleanly.
+	pushFile(t, sim.BareRepo, branch, "pkg/thing/thing.go", "fixed by the review\n")
 	shipped := prHeadOf(t, client, reloaded(t, ctx, store, task.ID))
+	reviewID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	if err := store.UpdateTask(ctx, reviewID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkReviewerHead, Target: shipped})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Human submits before SyncSecurityHolds runs: does NOT merge yet while security hold stands.
 	humanSubmit(t, ctx, store, task.ID, shipped)
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(35*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 
 	// main moves on, and CI on the shipped head is red against the older
-	// main: the queue merges main in.
+	// main: the queue merges main in and carries the clearance without a second review.
 	pushFileToBranch(t, sim.BareRepo, "main", "MAIN.md", "unrelated work", "unrelated change on main")
 	setMergeable(sim, true)
 	sim.CheckRuns[branch] = []github.CheckRun{{Name: "go", Status: "completed", Conclusion: strPtr("failure")}}
@@ -103,12 +116,8 @@ func TestHumanSubmitIsCarriedAcrossABaseMergeWithoutAnotherReview(t *testing.T) 
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	got := reloaded(t, ctx, store, task.ID)
-	if want := trustboundary.Version + "@" + shipped; linkOf(got, model.LinkTrustBoundaryCleared) != want {
-		t.Fatalf("clearance = %q, want the shipped head %q: links=%+v",
-			linkOf(got, model.LinkTrustBoundaryCleared), want, got.Links)
-	}
 	if !got.AutoMerge || linkOf(got, model.LinkHumanSubmitted) != "" {
-		t.Fatalf("automerge=%v links=%+v, want auto-merge on and the Submit pinned", got.AutoMerge, got.Links)
+		t.Fatalf("automerge=%v links=%+v, want auto-merge on and the Submit consumed", got.AutoMerge, got.Links)
 	}
 	if n := mergeWrites(sim, repo); n != 1 {
 		t.Fatalf("the queue made %d base merges, want 1", n)
@@ -126,14 +135,19 @@ func TestHumanSubmitIsCarriedAcrossABaseMergeWithoutAnotherReview(t *testing.T) 
 	}
 }
 
-// A change only a human may release carries no clearance a base merge
-// could be checked against, so a Submit over it pins nothing -- and the
-// base merge after it is the human's call, not another review.
+// A change touching a human-only path requires BOTH the security review and a
+// human's Submit; once both gates have passed, a base merge carries both
+// without filing another review.
 func TestHumanSubmitOverAHumanOnlyHoldPinsNoClearance(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
 	sim, client, task, branch := heldAt(t, ctx, store, ".grain/quarantine.yml")
+	reviewID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
 	humanSubmit(t, ctx, store, task.ID, prHeadOf(t, client, reloaded(t, ctx, store, task.ID)))
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(35*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 
 	pushFileToBranch(t, sim.BareRepo, "main", "MAIN.md", "unrelated work", "unrelated change on main")
 	setMergeable(sim, true)
@@ -142,8 +156,8 @@ func TestHumanSubmitOverAHumanOnlyHoldPinsNoClearance(t *testing.T) {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	got := reloaded(t, ctx, store, task.ID)
-	if !got.AutoMerge || linkOf(got, model.LinkTrustBoundaryCleared) != "" || linkOf(got, model.LinkHumanSubmitted) != "" {
-		t.Fatalf("automerge=%v links=%+v, want auto-merge on, no clearance and no marker", got.AutoMerge, got.Links)
+	if !got.AutoMerge || linkOf(got, model.LinkHumanSubmitted) != "" {
+		t.Fatalf("automerge=%v links=%+v, want auto-merge on and no pending submit marker", got.AutoMerge, got.Links)
 	}
 
 	sim.CheckRuns[branch] = greenCheck
@@ -253,14 +267,14 @@ func TestHumanSubmitNamingNoHeadOverAnUnclassifiedChangeMerges(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
 	sim, client := newSim(t, "acme", "widgets", "main")
-	task := finishTouching(t, ctx, store, sim, "t1", "pkg/ui/server.go", false)
+	task := finishTouching(t, ctx, store, sim, "t1", "README.md", false)
 	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
 	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
 		t.Fatalf("ProcessResult: %v", err)
 	}
 	branch := model.BranchName(task.ID)
-	if got := reloaded(t, ctx, store, task.ID); got.AutoMerge || linkOf(got, model.LinkTrustBoundaryCleared) != "" {
-		t.Fatalf("a change not merging itself was classified: automerge=%v links=%+v", got.AutoMerge, got.Links)
+	if got := reloaded(t, ctx, store, task.ID); got.AutoMerge {
+		t.Fatalf("a change not merging itself got auto-merge on: links=%+v", got.Links)
 	}
 	humanSubmit(t, ctx, store, task.ID, "")
 	setMergeable(sim, true)
@@ -272,6 +286,6 @@ func TestHumanSubmitNamingNoHeadOverAnUnclassifiedChangeMerges(t *testing.T) {
 		t.Fatalf("the submitted change did not merge: links=%+v", reloaded(t, ctx, store, task.ID).Links)
 	}
 	if reviews := securityReviewsOf(t, ctx, store, task.ID); len(reviews) != 0 {
-		t.Fatalf("filed %d security reviews of a change a human submitted", len(reviews))
+		t.Fatalf("filed %d security reviews of a non-trust-boundary change", len(reviews))
 	}
 }
