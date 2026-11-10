@@ -17,7 +17,7 @@ package cli
 import (
 	"flag"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/hubenv"
@@ -144,8 +144,8 @@ var deprecatedCommandAliases = map[string]bool{"registry": true}
 
 // warnDeprecatedCommand says on stderr that the command word typed, raw,
 // is a deprecated spelling of cmd.
-func warnDeprecatedCommand(raw, cmd string) {
+func warnDeprecatedCommand(stderr io.Writer, raw, cmd string) {
 	if deprecatedCommandAliases[raw] {
-		fmt.Fprintf(os.Stderr, "warning: 'grain %s' is deprecated and will be removed in a future release; use 'grain %s' (the Grain Registry is now the Grain Hub)\n", raw, cmd)
+		fmt.Fprintf(stderr, "warning: 'grain %s' is deprecated and will be removed in a future release; use 'grain %s' (the Grain Registry is now the Grain Hub)\n", raw, cmd)
 	}
 }

@@ -142,9 +142,7 @@ func Main() {
 		// runs the host agent.
 		args = []string{"host", "list"}
 	}
-	if len(args) > 0 {
-		args[0] = canonicalCommand(args[0])
-	}
+	canonicalizeCommandWord(args, os.Stderr)
 	// Inside an agent's sandbox, the read commands of
 	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
@@ -277,6 +275,19 @@ var hiddenCommandAliases = map[string]string{
 	"hostd":    "host",
 	"hostds":   "host",
 	"registry": "hub",
+}
+
+// canonicalizeCommandWord rewrites args[0] to the command word it is
+// spelled as now, saying on stderr when the word typed is a deprecated
+// spelling: main rewrites it before anything dispatches on it, so this is
+// the one place that still sees what was typed.
+func canonicalizeCommandWord(args []string, stderr io.Writer) {
+	if len(args) == 0 {
+		return
+	}
+	raw := args[0]
+	args[0] = canonicalCommand(raw)
+	warnDeprecatedCommand(stderr, raw, args[0])
 }
 
 // canonicalCommand is the command word cmd is spelled as now.
@@ -656,7 +667,7 @@ func runCLI(args []string) error {
 // dispatchCLI runs one task-CLI command against c.
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
-	warnDeprecatedCommand(rest[0], cmd)
+	warnDeprecatedCommand(os.Stderr, rest[0], cmd)
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
