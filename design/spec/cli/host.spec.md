@@ -1215,6 +1215,7 @@ These sign a workstation in to a deployment as a named context, and say who it i
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
 - `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
 - It refuses `--token-stdin` beside `--refresh` the same way (exit `2`, `token_stdin_refresh`), and `--scope-set`, `--repos` or `--expires` without `--issue-token` (exit `2`, `needs_issue_token`): each would otherwise be ignored. A refused login writes nothing.
+- Signed in as a person through IAP (a Google ID token) or a registered credential source, with none of `--issue-token`, `--token-stdin` or `--refresh` given, `grain login` mints and keeps a personal `--scope-set` token as `--issue-token` would, so the CLI stops needing the proxy's sign-in or the access code day to day. `--issue-token=false` keeps a context that signs in through the proxy every time; a deployment with `externalAgentApi` off gets that context and a note on stderr.
 - `grain logout --local` forgets the credential without revoking its token on the server.
 
 #### `grain context list|use|show|delete`
@@ -1230,7 +1231,7 @@ _No flags._
 |---|---|---|---|---|
 | `-auth` | string |  |  | how to sign in: access-code, or a credential source this build registers |
 | `-expires` | string | `"30d"` |  | how long --issue-token's token lasts (30d, 12h, ...) |
-| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it |
+| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it (the default when IAP or a credential source signs in a person; --issue-token=false declines) |
 | `-name` | string |  |  | the context's name (default: from the server's host name) |
 | `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
 | `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
@@ -1732,7 +1733,7 @@ _No flags._
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
 
-This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md)) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
+This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md); `-host-accounts` and `-api-socket` for the unix socket the host CLI is recorded through by account, `docs/access-code.md`) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
 
 <!-- BEGIN GENERATED FLAGS: grain daemon -->
 | Flag | Type | Default | Env | Description |
@@ -1742,6 +1743,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-agy-path` | string |  |  | path to the Antigravity CLI binary (agy) agent/antigravity runs as a subprocess; empty resolves "agy" against $PATH instead. Only used by a run driven by the "antigravity" framework |
 | `-agy-run` | string |  |  | where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release |
 | `-allow-unisolated-host-sandboxes` | bool |  |  | let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user |
+| `-api-socket` | string |  |  | unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names (default <data-dir>/api/grain.sock, served only when some account is mapped; "none" turns it off) |
 | `-as` | string |  |  | principal the UI/API attributes tasks and comments it creates to (defaults to the OS user) |
 | `-backup-gcs-bucket` | string |  |  | GCS bucket for scheduled backups; when set, upload to GCS instead of Google Drive |
 | `-backup-google-credentials-file` | string |  |  | Google credential JSON for scheduled backups; omitted uses Application Default Credentials |
@@ -1811,6 +1813,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-grit-client-token` | value |  |  | client token (<id>.<secret>) sent in Grit-Client when -grit-url is set |
 | `-grit-experimental` | bool |  |  | allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI |
 | `-grit-url` | value |  |  | EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred) |
+| `-host-accounts` | string |  | $GRAIN_HOST_ACCOUNTS | comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as (the daemon's own account maps to -deployment-owner unless named here; $GRAIN_HOST_ACCOUNTS when unset) |
 | `-host-sandbox-env` | value |  |  | NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone |
 | `-host-sandboxes` | bool |  |  | dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed |
 | `-hostd-reattach-timeout` | duration | `15m0s` |  | how long a run's agent CLI, running detached on a host whose connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once |

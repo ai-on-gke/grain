@@ -258,14 +258,22 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 	scopeOwner := req.ScopeOwner()
 
 	token, hasToken := ExtractBasicAuthToken(headers["Authorization"])
-	var sandbox string
+	var grant Grant
 	if hasToken {
-		sandbox, ok = p.Tokens.Authenticate(token)
+		grant, ok = p.Tokens.AuthenticateGrant(token)
 	}
 	if !hasToken || !ok {
 		unauthenticated := Denial(401, "authentication required")
 		unauthenticated.Headers["WWW-Authenticate"] = `Basic realm="grain-git-proxy"`
 		return unauthenticated
+	}
+	sandbox := grant.Sandbox
+	if denied, status, reason := p.checkGrantBinding(ctx, grant); denied {
+		p.audit().Record(AuditEntry{
+			Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
+			Action: req.Action, Outcome: "denied: " + reason,
+		})
+		return Denial(status, "forbidden: "+reason)
 	}
 
 	// A per-team configuration repository's name (grain/config-<team>)
