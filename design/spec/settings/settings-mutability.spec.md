@@ -252,7 +252,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 | --- | --- | --- | --- | --- | --- |
 | External remote / branch | Action — Config repo; `POST /api/state-repo/remote` | No — host-local `<data-dir>/state-repo.json` (also `-external-config-repo`, `-external-config-branch`) | Unlocked (Action) | No | Switches mode (§2.7.4). |
 | `directConfigWrites` | No | No — host-local `state-repo.json`, read per request | — | Ignored | §2.5. |
-| Secrets key / secrets repo | Write-only — `POST /api/state-repo/secrets-key` (`import-key`), `POST /api/state-repo/secrets-repo` | No — secret material | Unlocked (Secret) | No | |
+| Secrets key / secrets repo | Write-only — `POST /api/state-repo/secrets-key` (`import-key`), `POST /api/state-repo/secrets-key/wrap` / `unwrap`, `POST /api/state-repo/secrets-repo` | No — secret material | Unlocked (Secret) | No | |
 | Sync now, open config PR, dismiss reset notice | Action — `POST /api/state-repo/sync`, `/pull-requests`, `/reset-notice` | No — action | Unlocked (Action) | No | The PR route is how a refusal's `change` becomes a PR. |
 
 ### 3.11 General (`/settings/general`)

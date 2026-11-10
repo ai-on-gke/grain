@@ -115,8 +115,8 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		return fmt.Errorf("orchestrator: reading %s's state: %w", task.ID, err)
 	}
 	switch {
-	case state == model.StateClosed || task.AutoMerge:
-		// Shipped as is (Submit), or gone: there is nobody left to ask.
+	case state == model.StateClosed:
+		// Closed: there is nobody left to ask.
 		return dropReviewQuestions(ctx, store, task.ID, questions)
 	case state != model.StateAwaitingSubmit:
 		// Already running again, or parked on something else; the hold
@@ -156,9 +156,19 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		reopened = true
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = markRelayedReviewThreadsDecided(t.Links, questions.ReviewTaskID)
+		if reviewGateOf(*t, questions.ReviewTaskID) == model.GateReview && t.ReviewTemplateID != "" &&
+			linkTarget(*t, model.LinkReviewTask) == questions.ReviewTaskID && change.Primary(*t) == "" {
+			// Drop the finished review link so SyncReviews files a fresh
+			// re-review once this fix run pushes its changes, and reviewStateOf
+			// holds the merge until that re-review passes. A CL needs none of
+			// this: SyncCLReviews reviews every new snapshot on its own.
+			t.Links = withoutLinks(t.Links, model.LinkReviewTask)
+			model.ClearReviewFindingsForGate(t, model.GateReview)
+		}
 		// Answering a review's questions is not the Submit a human-only
-		// trust-boundary hold waits for.
-		if questions.RestoreAutoMerge && !heldForHuman(*t) {
+		// trust-boundary hold waits for, nor does it bypass another pending
+		// review hold.
+		if questions.RestoreAutoMerge && !heldForHuman(*t) && !model.HasPendingReviewHold(*t) {
 			t.AutoMerge, restored = true, true
 		}
 		return nil

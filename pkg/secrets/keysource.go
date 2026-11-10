@@ -48,11 +48,19 @@ type FileKeySource struct {
 	Path string
 }
 
-// Load reads the file. It is ReadKeyFile, unchanged.
-func (f FileKeySource) Load(context.Context) (Key, error) { return ReadKeyFile(f.Path) }
+// Load reads the file. A file in the KMS-wrapped form
+// (grain-secret-key-kms-v1:) is handed to KMSKeySource, so wrapping a
+// deployment's key needs no flag and no restart with different
+// configuration: the file says what it is.
+func (f FileKeySource) Load(ctx context.Context) (Key, error) {
+	if data, err := os.ReadFile(f.Path); err == nil && IsWrappedKey(string(data)) {
+		return KMSKeySource{Path: f.Path}.Load(ctx)
+	}
+	return ReadKeyFile(f.Path)
+}
 
-// Describe is the path.
-func (f FileKeySource) Describe() string { return f.Path }
+// Describe is the path, and the KMS key when the file is wrapped.
+func (f FileKeySource) Describe() string { return KMSKeySource{Path: f.Path}.Describe() }
 
 // RetiredKeyMarker is what Store.ImportKey puts between a key file's
 // name and the time it was replaced: secrets.key.replaced-20261110-052600.
@@ -97,8 +105,8 @@ func RetiredKeys(keyFile string) ([]RetiredKey, error) {
 		if info, err := e.Info(); err == nil {
 			rk.ModTime = info.ModTime().UTC()
 		}
-		if k, err := ReadKeyFile(path); err == nil {
-			rk.Public = k.Public()
+		if info, err := ReadKeyFileInfo(path); err == nil {
+			rk.Public = info.Public
 		}
 		out = append(out, rk)
 	}

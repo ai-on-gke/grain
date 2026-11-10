@@ -97,6 +97,14 @@ type StateRepoStatus struct {
 	// repository problem -- and because an unreadable store is not an
 	// export failure.
 	SecretsError string `json:"secretsError,omitempty"`
+	// SecretsKeyProtection is how the private key is held at rest:
+	// "file", a plaintext key file, or "kms", wrapped by the Cloud KMS
+	// key SecretsKMSKey (`grain state key wrap`). SecretsKeyLastUnwrap
+	// is when this daemon last had KMS unwrap it (RFC 3339), empty when
+	// it has not.
+	SecretsKeyProtection string `json:"secretsKeyProtection,omitempty"`
+	SecretsKMSKey        string `json:"secretsKmsKey,omitempty"`
+	SecretsKeyLastUnwrap string `json:"secretsKeyLastUnwrap,omitempty"`
 	// SecretsRepo is the repository this host's encrypted secrets file is
 	// backed up to (pkg/secretsrepo), and SecretsRepoFile what it is
 	// called there -- a name derived from the state repository, since a
@@ -566,6 +574,101 @@ func (s *Server) handleImportSecretsKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeStateRepoStatus(status))
+}
+
+// SecretsKeyWrapper is the part of a StateRepoManager that wraps the
+// secrets key with Cloud KMS and unwraps it again. It is a separate
+// interface, asserted for, so a manager that cannot -- a demo, a test
+// fake -- need not say so: the routes answer 501 for it.
+type SecretsKeyWrapper interface {
+	WrapSecretsKey(ctx context.Context, kmsKey string) (SecretsKeyWrapResult, error)
+	UnwrapSecretsKey(ctx context.Context) (SecretsKeyWrapResult, error)
+}
+
+// SecretsKeyWrapResult is what wrap and unwrap answer: the pane's status
+// after the change, and what the operator still has to clean up.
+type SecretsKeyWrapResult struct {
+	Status     StateRepoStatus `json:"status"`
+	KeyFile    string          `json:"keyFile"`
+	PublicKey  string          `json:"publicKey"`
+	Protection string          `json:"protection"`
+	KMSKey     string          `json:"kmsKey,omitempty"`
+	// PlaintextCopies are files on this host that still hold the
+	// private key in the clear.
+	PlaintextCopies []string `json:"plaintextCopies,omitempty"`
+	Notes           []string `json:"notes,omitempty"`
+}
+
+// secretsKeyWrapRequest is POST /api/state-repo/secrets-key/wrap's body.
+type secretsKeyWrapRequest struct {
+	// KMSKey is the CryptoKey resource name:
+	// projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>.
+	KMSKey string `json:"kmsKey"`
+}
+
+func (s *Server) secretsKeyWrapper(w http.ResponseWriter) (SecretsKeyWrapper, bool) {
+	wrapper, ok := s.tasks.Config.StateRepo.(SecretsKeyWrapper)
+	if s.tasks.Config.StateRepo == nil || !ok {
+		writeError(w, http.StatusNotImplemented, apierror.Public("this deployment's UI cannot wrap its secrets key"))
+		return nil, false
+	}
+	return wrapper, true
+}
+
+// handleWrapSecretsKey wraps the daemon's secrets key with a Cloud KMS
+// key, in the daemon, which keeps the key in memory throughout: nothing
+// restarts.
+func (s *Server) handleWrapSecretsKey(w http.ResponseWriter, r *http.Request) {
+	wrapper, ok := s.secretsKeyWrapper(w)
+	if !ok {
+		return
+	}
+	var req secretsKeyWrapRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if strings.TrimSpace(req.KMSKey) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a Cloud KMS key name (kmsKey) is required"))
+		return
+	}
+	res, err := wrapper.WrapSecretsKey(r.Context(), strings.TrimSpace(req.KMSKey))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	res.Status = normalizeStateRepoStatus(res.Status)
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleUnwrapSecretsKey is wrap's reversal.
+func (s *Server) handleUnwrapSecretsKey(w http.ResponseWriter, r *http.Request) {
+	wrapper, ok := s.secretsKeyWrapper(w)
+	if !ok {
+		return
+	}
+	res, err := wrapper.UnwrapSecretsKey(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	res.Status = normalizeStateRepoStatus(res.Status)
+	writeJSON(w, http.StatusOK, res)
+}
+
+// WrapSecretsKey asks the daemon to wrap its secrets key with kmsKey.
+func (c *HTTPClient) WrapSecretsKey(ctx context.Context, kmsKey string) (SecretsKeyWrapResult, error) {
+	var out SecretsKeyWrapResult
+	err := c.do(ctx, http.MethodPost, "/api/state-repo/secrets-key/wrap", secretsKeyWrapRequest{KMSKey: kmsKey}, &out)
+	return out, err
+}
+
+// UnwrapSecretsKey asks the daemon to put its secrets key back in
+// plaintext form.
+func (c *HTTPClient) UnwrapSecretsKey(ctx context.Context) (SecretsKeyWrapResult, error) {
+	var out SecretsKeyWrapResult
+	err := c.do(ctx, http.MethodPost, "/api/state-repo/secrets-key/unwrap", struct{}{}, &out)
+	return out, err
 }
 
 // secretsRepoRequest is POST /api/state-repo/secrets-repo's body. A

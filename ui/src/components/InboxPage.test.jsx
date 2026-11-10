@@ -137,6 +137,7 @@ describe("InboxPage", () => {
       questionSummary: "Retry or give up?",
       questionCommentId: 37,
     });
+    window.history.replaceState({}, "", "/inbox");
     renderInbox({ tasks: [asked], onOpenTask });
 
     const link = screen.getByRole("link", { name: "Investigate the stall" });
@@ -151,7 +152,13 @@ describe("InboxPage", () => {
     expect(onOpenTask).not.toHaveBeenCalled();
 
     await user.click(link);
-    expect(pushState).toHaveBeenCalledWith({}, "", "/tasks/4#comment=37");
+    // The pushed entry keeps the inbox as the page behind the pane, so
+    // its "← Back" (and a Back then Forward onto it) returns there.
+    expect(pushState).toHaveBeenCalledWith(
+      { behind: "/inbox" },
+      "",
+      "/tasks/4#comment=37",
+    );
     expect(window.location.hash).toBe("#comment=37");
     expect(onOpenTask).not.toHaveBeenCalled();
     window.history.replaceState({}, "", "/");
@@ -814,11 +821,22 @@ describe("InboxPage", () => {
       within(held).getByRole("button", { name: "Reply" }),
     ).toBeInTheDocument();
     expect(
-      within(held).getByRole("button", { name: "Ship as is" }),
+      within(held).getByRole("button", { name: "Approve" }),
     ).toBeInTheDocument();
+    expect(
+      within(held).getByRole("button", {
+        name: "Merge without the code review",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(held).queryByRole("button", { name: "Ship as is" }),
+    ).not.toBeInTheDocument();
     expect(
       within(held).queryByRole("button", { name: "Submit" }),
     ).not.toBeInTheDocument();
+    expect(within(held).getByTestId("inbox-gate-review")).toHaveTextContent(
+      "Code review: findings",
+    );
     expect(
       await within(held).findByText(/Should the core build publish/),
     ).toBeInTheDocument();
@@ -1485,10 +1503,9 @@ describe("InboxPage", () => {
     });
   });
 
-  it("shows a waiting base-branch repair item with reason and Submit / Force merge buttons", async () => {
+  it("shows a waiting base-branch repair item with pending gates, Submit (merges when the reviews pass), and explicit gate override dialog", async () => {
     const user = userEvent.setup();
     const onAct = vi.fn((fn) => fn());
-    vi.spyOn(window, "prompt").mockReturnValue("unblock main");
 
     const repairTask = task({
       id: "323",
@@ -1510,16 +1527,41 @@ describe("InboxPage", () => {
     expect(item.querySelector(".inbox-note")).toHaveTextContent(
       "main is red — repair #323 is on security hold (trust-boundary/v4) for security review #376 — waiting for Submit",
     );
+    expect(
+      within(item).getByTestId("inbox-gate-security-review"),
+    ).toHaveTextContent("Security review: running");
+    expect(within(item).getByTestId("inbox-gate-approval")).toHaveTextContent(
+      "Approval: needed",
+    );
 
-    await user.click(within(item).getByRole("button", { name: "Submit" }));
+    await user.click(
+      within(item).getByRole("button", {
+        name: "Submit (merges when the reviews pass)",
+      }),
+    );
     expect(api).toHaveBeenCalledWith("/api/tasks/323/submit", {
       method: "POST",
     });
 
-    await user.click(within(item).getByRole("button", { name: "Force merge" }));
+    await user.click(
+      within(item).getByRole("button", {
+        name: "Merge without the security review",
+      }),
+    );
+    const dialog = screen.getByTestId("gate-override-dialog");
+    expect(within(dialog).getByTestId("confirm-gate-override")).toBeDisabled();
+    await user.type(within(dialog).getByTestId("override-pr-input"), "#4495");
+    await user.type(
+      within(dialog).getByTestId("override-reason-input"),
+      "unblock main",
+    );
+    await user.click(within(dialog).getByTestId("confirm-gate-override"));
     expect(api).toHaveBeenCalledWith("/api/tasks/323/force-merge", {
       method: "POST",
-      body: JSON.stringify({ reason: "unblock main" }),
+      body: JSON.stringify({
+        reason: "unblock main",
+        overrideGates: ["security-review"],
+      }),
     });
   });
 

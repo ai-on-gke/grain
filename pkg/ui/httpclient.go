@@ -1033,8 +1033,13 @@ func (c *HTTPClient) RetryMerge(ctx context.Context, id string) error {
 // end -- there is no spelling of this call without one. head is the
 // commit reviewed, "" for the pull request's head as it is now.
 func (c *HTTPClient) ForceMerge(ctx context.Context, id, reason, head string) error {
+	return c.ForceMergeWithGates(ctx, id, reason, head, nil)
+}
+
+// ForceMergeWithGates is Client.ForceMergeWithGates over the wire.
+func (c *HTTPClient) ForceMergeWithGates(ctx context.Context, id, reason, head string, overrideGates []string) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/force-merge",
-		forceMergeRequest{Reason: reason, Head: head}, nil)
+		forceMergeRequest{Reason: reason, Head: head, OverrideGates: overrideGates}, nil)
 }
 
 // RunNow is Client.RunNow over the wire: ask for an agent to be put on
@@ -1484,9 +1489,30 @@ func (c *HTTPClient) GetSettings(ctx context.Context) (Settings, error) {
 	return settings, nil
 }
 
+// settingsWireRequest sends a hub connection under both "hub" and its
+// pre-rename "registry" spelling when req.Hub is set, so a CLI (`grain
+// hub register`, `grain hub unregister`, `grain sync -server`) talking
+// to a pre-rename daemon still updates its connected-entry settings
+// without triggering the "registry"-only deprecation warning on a new
+// daemon.
+type settingsWireRequest struct {
+	UpdateSettingsRequest
+	Registry *model.HubConfig `json:"registry,omitempty"`
+}
+
+func wireSettingsRequest(req UpdateSettingsRequest) any {
+	if req.Hub == nil {
+		return req
+	}
+	return settingsWireRequest{
+		UpdateSettingsRequest: req,
+		Registry:              req.Hub,
+	}
+}
+
 func (c *HTTPClient) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
 	var settings Settings
-	if err := c.do(ctx, http.MethodPut, "/api/settings", req, &settings); err != nil {
+	if err := c.do(ctx, http.MethodPut, "/api/settings", wireSettingsRequest(req), &settings); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil
@@ -1509,7 +1535,7 @@ func (c *HTTPClient) UpdateSettings(ctx context.Context, req UpdateSettingsReque
 // when it gets it.
 func (c *HTTPClient) PlanSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
 	var settings Settings
-	if err := c.do(ctx, http.MethodPost, "/api/settings/plan", req, &settings); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/settings/plan", wireSettingsRequest(req), &settings); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil

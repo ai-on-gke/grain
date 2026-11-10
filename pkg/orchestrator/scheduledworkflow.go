@@ -1056,6 +1056,18 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 			})
 			return nil
 		}
+		// And another schedule in its overlap group still running
+		// (model.Schedule.OverlapGroup, grain/task-3895).
+		if sched.OverlapGroup != "" {
+			sup, err := deps.Store.OverlapGroupInFlight(ctx, sched, run.Repo, now)
+			if err != nil {
+				return err
+			}
+			if sup != nil {
+				_, _ = deps.Store.RecordScheduleSkip(ctx, deps.Store.DroppedOverlapGroupSkip(ctx, sched, now, *sup))
+				return nil
+			}
+		}
 	}
 
 	row := model.ScheduledWorkflowRun{

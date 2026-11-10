@@ -367,18 +367,28 @@ jobs:
           # promote-version prints nothing but a vX.Y.Z.
           version="$(bash ./scripts/release-assets.sh promote-version "${PROMOTE_VERSION:-}")"
           build=true
-          if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${version}/checksums.txt"; then
+          # The probes' stderr goes to /dev/null: a 404 is an answer here,
+          # not an error, and curl's "(22) ... error: 404" lines only hid
+          # the reason this step logs below.
+          if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${version}/checksums.txt" 2>/dev/null; then
             echo "promote: ${version} already carries the grain CLI"
             build=false
-          elif [ -z "${PROMOTE_VERSION:-}" ]; then
+          elif [ -n "${PROMOTE_VERSION:-}" ]; then
+            echo "promote: building the grain CLI for ${version}: asked for by name, and it carries no checksums.txt"
+          else
             commit="$(git rev-parse "refs/tags/${version}^{commit}")"
             sha_release="sha-${commit:0:12}"
             status="$(curl -fsSIL -o /dev/null -w '%{http_code}' \
               -H 'Accept: application/vnd.github+json' \
               -H 'X-GitHub-Api-Version: 2022-11-28' \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${version}" 2>/dev/null || true)"
-            if [ "$status" = "404" ] &&
-               ! curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${sha_release}/images.json"; then
+            if [ "$status" = "200" ]; then
+              echo "promote: building the grain CLI for ${version}: its GitHub Release exists and carries no checksums.txt"
+            elif [ "$status" != "404" ]; then
+              echo "promote: building the grain CLI for ${version}: the GitHub API answered ${status:-nothing} for releases/tags/${version}, so whether it exists is unknown"
+            elif curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${sha_release}/images.json" 2>/dev/null; then
+              echo "promote: building the grain CLI for ${version}: GitHub Release ${version} does not exist yet, but ${sha_release} has the release assets the assets job creates it from"
+            else
               echo "promote: GitHub Release ${version} does not exist and ${sha_release} has no release assets to create it; skipping grain CLI build"
               build=false
             fi

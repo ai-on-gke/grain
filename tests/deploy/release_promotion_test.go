@@ -460,12 +460,16 @@ func TestPromoteCLISkipsMissingReleaseAndPromoteReleaseGatesCLIOnApprove(t *test
 		[]byte("#!/usr/bin/env bash\nprintf '%s\\n' \"${2:-v3.2.0}\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The stub prints curl's own "(22) ... error: 404" line when asked
+	// for -S, so the step's log shows whether it still emits that noise.
 	curlStub := `#!/usr/bin/env bash
-status_fmt=false url=""
+status_fmt=false show_error=false url=""
+miss() { [ "$show_error" = true ] && echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) status_fmt=true; shift ;;
     -o | -H) shift ;;
+    -*S*) show_error=true ;;
     -*) ;;
     *) url="$1" ;;
   esac
@@ -473,12 +477,12 @@ while [ $# -gt 0 ]; do
 done
 case "$url" in
   */releases/download/v3.2.0/checksums.txt)
-    [ "${STUB_CHECKSUMS:-404}" = 200 ] && exit 0 || exit 22 ;;
+    [ "${STUB_CHECKSUMS:-404}" = 200 ] && exit 0 || miss ;;
   */repos/ai-on-gke/grain/releases/tags/v3.2.0)
     [ "$status_fmt" = true ] && printf '%s' "${STUB_RELEASE_API:-404}"
     [ "${STUB_RELEASE_API:-404}" = 200 ] && exit 0 || exit 0 ;;
   */releases/download/sha-*/images.json)
-    [ "${STUB_SHA_IMAGES:-404}" = 200 ] && exit 0 || exit 22 ;;
+    [ "${STUB_SHA_IMAGES:-404}" = 200 ] && exit 0 || miss ;;
   *)
     echo "unexpected curl url: $url" >&2
     exit 99 ;;
@@ -529,16 +533,31 @@ esac
 			name:      "automatic run builds when GitHub Release exists without sha assets",
 			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=200", "STUB_SHA_IMAGES=404"},
 			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: its GitHub Release exists and carries no checksums.txt",
 		},
 		{
 			name:      "automatic run builds when sha assets exist so assets job will create release",
 			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=404", "STUB_SHA_IMAGES=200"},
 			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: GitHub Release v3.2.0 does not exist yet, but sha-",
+		},
+		{
+			name:      "automatic run builds and names the status when the API is rate limited",
+			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=403", "STUB_SHA_IMAGES=404"},
+			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: the GitHub API answered 403 for releases/tags/v3.2.0",
+		},
+		{
+			name:      "automatic run builds and names the status when the API is unreachable",
+			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=000", "STUB_SHA_IMAGES=404"},
+			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: the GitHub API answered 000 for releases/tags/v3.2.0",
 		},
 		{
 			name:      "explicit PROMOTE_VERSION builds so cli-assets fails loudly on missing release",
 			env:       []string{"PROMOTE_VERSION=v3.2.0", "STUB_CHECKSUMS=404", "STUB_RELEASE_API=404", "STUB_SHA_IMAGES=404"},
 			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: asked for by name",
 		},
 	} {
 		outFile := filepath.Join(t.TempDir(), "github_output")
@@ -564,6 +583,9 @@ esac
 		}
 		if tc.wantLog != "" && !strings.Contains(string(out), tc.wantLog) {
 			t.Errorf("%s: log = %q, want substring %q", tc.name, out, tc.wantLog)
+		}
+		if strings.Contains(string(out), "curl: (22)") {
+			t.Errorf("%s: log = %q, want no curl error lines for the expected 404s", tc.name, out)
 		}
 	}
 

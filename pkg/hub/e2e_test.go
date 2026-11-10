@@ -2792,11 +2792,47 @@ func TestHubEndToEndStep15(t *testing.T) {
 
 		repA.srv.Router().CatalogCache().Invalidate()
 
+		// The ranking entries are only marked online in Replica A's in-memory
+		// tunnel cache; no tunnel session row backs them in PostgreSQL. Replica
+		// A's background `PollAll` (every `DefaultTunnelPollInterval`, and on
+		// `registry_tunnels` notifications) therefore marks them disconnected
+		// whenever it runs, which on a slow runner can land between the marks
+		// above and a query below, so the entry ranks as offline (an offline
+		// secondary is dropped). Re-mark every ranking entry right before each
+		// query, and repeat the query if any of them was cleared by the time
+		// it returned: then no poll ran in between and the response reflects
+		// all four entries online.
+		rankEntries := []string{"rank-primary-root", "rank-subpath-secondary", "rank-api-secondary", "rank-api-secondary-busy"}
+		getRouteWithLiveTunnels := func(path string) (int, []byte) {
+			t.Helper()
+			var (
+				c int
+				b []byte
+			)
+			for attempt := 0; attempt < 5; attempt++ {
+				for _, name := range rankEntries {
+					markTunnelOnline(name)
+				}
+				c, b, _ = doMainJSON(repA, http.MethodGet, hubHost, path, "charlie@example.com", nil, nil)
+				stillLive := true
+				for _, name := range rankEntries {
+					if tc, ok := repA.srv.Router().TunnelCache().Get(name); !ok || tc.SessionEpoch <= 0 {
+						stillLive = false
+						break
+					}
+				}
+				if stillLive {
+					break
+				}
+			}
+			return c, b
+		}
+
 		// 1) Query `/api/route?repo=acme/monorepo&path=pkg/api/v2/handler.go`:
 		// - Clean `primary` (`rank-primary-root`) wins #1 (and is `Primary`), while conflicting `rank-late-claimant` is excluded.
 		// - Longest segment-boundary `path_prefix` match (`/pkg/api/v2` on `rank-subpath-secondary`, specificity 10) ranks ahead of shorter `/pkg/api` secondaries (specificity 7) despite higher `active_tasks`.
 		// - Between equal-specificity `/pkg/api` secondaries, lower `active_tasks` (`rank-api-secondary`, 0) ranks ahead of higher `active_tasks` (`rank-api-secondary-busy`, 4).
-		code, body, _ = doMainJSON(repA, http.MethodGet, hubHost, "/api/route?repo=acme/monorepo&path=pkg/api/v2/handler.go", "charlie@example.com", nil, nil)
+		code, body = getRouteWithLiveTunnels("/api/route?repo=acme/monorepo&path=pkg/api/v2/handler.go")
 		if code != http.StatusOK {
 			t.Fatalf("GET /api/route v2 = %d: %s", code, string(body))
 		}
@@ -2815,7 +2851,7 @@ func TestHubEndToEndStep15(t *testing.T) {
 		// 2) Query `/api/route?repo=acme/monorepo&path=pkg/api/v1/server.go`:
 		// Clean `primary` (`rank-primary-root`) ranks ahead of `secondary` (`rank-api-secondary`, `rank-api-secondary-busy`),
 		// and `/pkg/api/v2` (`rank-subpath-secondary`) does not match `pkg/api/v1/server.go`!
-		code, body, _ = doMainJSON(repA, http.MethodGet, hubHost, "/api/route?repo=acme/monorepo&path=pkg/api/v1/server.go", "charlie@example.com", nil, nil)
+		code, body = getRouteWithLiveTunnels("/api/route?repo=acme/monorepo&path=pkg/api/v1/server.go")
 		if code != http.StatusOK {
 			t.Fatalf("GET /api/route v1 = %d: %s", code, string(body))
 		}
