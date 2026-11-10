@@ -16,7 +16,7 @@
 // slice 5): the target line, repo#read and repo#write lines, declared
 // push: refs, and "Add grant…"'s Repository access rows.
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GrantsPicker from "./GrantsPicker.jsx";
@@ -172,6 +172,10 @@ describe("GrantsPicker repository grants", () => {
     expect(
       screen.queryByRole("textbox", { name: "Repo to read" }),
     ).not.toBeInTheDocument();
+    // Focus goes back to "Add grant…", not to the page.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add grant…" })).toHaveFocus(),
+    );
   });
 
   it("adds a write on the repo's default branch", async () => {

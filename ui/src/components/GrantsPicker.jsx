@@ -1103,9 +1103,13 @@ export default function GrantsPicker({
             repos={repos}
             drafts={repoDrafts}
             disabled={disabled}
-            onDropDraft={(i) =>
-              setRepoDrafts((ds) => ds.filter((_, j) => j !== i))
-            }
+            onDropDraft={(i) => {
+              setRepoDrafts((ds) => ds.filter((_, j) => j !== i));
+              // The picker that had focus is gone with its draft: focus
+              // goes back to "Add grant…" rather than to the page, where
+              // the overlay's own keys (Escape) would no longer reach.
+              setTimeout(() => addButtonRef.current?.focus(), 0);
+            }}
           />
         )}
         {bareHeld.map(bareLine)}
