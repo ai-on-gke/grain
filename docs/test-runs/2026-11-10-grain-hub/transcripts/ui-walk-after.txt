@@ -1,0 +1,25 @@
+PASS My Entries shows walk-creating as creating -- walk-creatinghttps://walk-creating.grain-user.testregistry-vmcreatingcreatingwai
+PASS My Entries shows its status_detail -- waiting for service account gi-walk-creating@made-up-proj
+PASS Entry Detail shows the Provisioning instance: banner -- Provisioning instance: waiting for service account gi-walk-creating@made-up-proj.iam.gserv
+PASS /new opens on Hosted VM -- Hosted VM (instance)
+PASS /new suggests a random name -- grain-06c48b
+PASS Generate another random name changes it -- grain-06c48b -> grain-118f3e
+PASS Create hosted VM with the suggested name -- grain-118f3e
+PASS Create hosted VM with an edited name -- walk-edited
+PASS /new?kind=connected opens on Connected -- Self-registered grain (connected)
+PASS /new on a hub with no shapes falls back to Connected -- Self-registered grain (connected)
+PASS Delete dialog says hub admin, not registry admin -- restored (grain hub restore or a hub administrator) until its retained data is purged.
+PASS Deleted entry is gone from My Entries
+PASS The deleted entry's URL still offers Restore
+PASS Admin sees the deleted entry with Restore
+PASS Admin sees the deleted entry with Hard purge
+PASS Hard purge asks for confirmation
+PASS Cancelling the purge leaves the entry restorable
+PASS Revoke credential asks for confirmation
+PASS grain mark and favicon follow the light theme -- {"svg":"/grain-mark-light.svg","png":"/grain-mark-light.png","mark":"/grain-mark-light.svg"}
+PASS /grain-mark-light.svg is served -- HTTP 200 image/svg+xml
+PASS /grain-mark-light.png is served -- HTTP 200 image/png
+PASS grain mark and favicon follow the dark theme -- {"svg":"/grain-mark-dark.svg","png":"/grain-mark-dark.png","mark":"/grain-mark-dark.svg"}
+PASS /grain-mark-dark.svg is served -- HTTP 200 image/svg+xml
+PASS /grain-mark-dark.png is served -- HTTP 200 image/png
+all checks passed
