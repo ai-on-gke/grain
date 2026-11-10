@@ -222,6 +222,10 @@ func historyWorkflow(run Run, job JobRun) string {
 
 func jobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
 	var results []TestExecution
+	startedAt := job.StartedAt
+	if startedAt == nil {
+		startedAt = run.StartedAt
+	}
 
 	// 1. Check Job FailureSummary
 	if job.FailureSummary != nil && len(job.FailureSummary.Tests) > 0 {
@@ -242,7 +246,7 @@ func jobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
 					JobID:     job.JobID,
 					JobName:   job.Name,
 					Status:    status,
-					StartedAt: job.StartedAt,
+					StartedAt: startedAt,
 					Duration:  job.Duration(time.Now()),
 					Message:   tf.Message,
 					Location:  tf.Location,
@@ -277,7 +281,7 @@ func jobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
 							JobID:     job.JobID,
 							JobName:   job.Name,
 							Status:    status,
-							StartedAt: job.StartedAt,
+							StartedAt: startedAt,
 							Duration:  job.Duration(time.Now()),
 						})
 					}
@@ -294,7 +298,7 @@ func jobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
 							JobID:     job.JobID,
 							JobName:   job.Name,
 							Status:    TestStatusPass,
-							StartedAt: job.StartedAt,
+							StartedAt: startedAt,
 							Duration:  job.Duration(time.Now()),
 						})
 					}
@@ -311,7 +315,7 @@ func jobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
 							JobID:     job.JobID,
 							JobName:   job.Name,
 							Status:    TestStatusSkipped,
-							StartedAt: job.StartedAt,
+							StartedAt: startedAt,
 							Duration:  job.Duration(time.Now()),
 						})
 					}
@@ -334,7 +338,7 @@ func jobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
 					JobID:     job.JobID,
 					JobName:   job.Name,
 					Status:    TestStatusPass,
-					StartedAt: job.StartedAt,
+					StartedAt: startedAt,
 					Duration:  job.Duration(time.Now()),
 				})
 			}

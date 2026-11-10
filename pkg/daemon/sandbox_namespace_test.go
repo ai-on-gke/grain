@@ -31,6 +31,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -589,5 +590,48 @@ func TestSandboxMemoryLargeLayerWalkIsLinear(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("single-doc + ?list + ?grep over %d SQLite memory docs took %v, want < 5s", docCount, elapsed)
+	}
+}
+
+func TestSandboxExternalCIForwardsServesRepo(t *testing.T) {
+	prev := liveSandboxCLI.Load()
+	t.Cleanup(func() { liveSandboxCLI.Store(prev) })
+
+	ctx := context.Background()
+	liveSandboxCLI.Store(nil)
+	if ci.ExternalCIFor(ctx, sandboxExternalCI{}, "acme/widgets") {
+		t.Fatal("ExternalCIFor = true before liveSandboxCLI is wired, want false")
+	}
+
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ref := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{"acme/widgets"}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	client := ui.NewClient(ui.Config{}, store)
+	liveSandboxCLI.Store(client)
+
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: ref, CIMode: model.CIModeGrain}); err != nil {
+		t.Fatal(err)
+	}
+	if ci.ExternalCIFor(ctx, sandboxExternalCI{}, "acme/widgets") {
+		t.Fatal("ExternalCIFor = true on ci_mode: grain, want false")
+	}
+
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: ref, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	if !ci.ExternalCIFor(ctx, sandboxExternalCI{}, "acme/widgets") {
+		t.Fatal("ExternalCIFor = false on ci_mode: github, want sandboxExternalCI to forward ServesRepo")
 	}
 }
