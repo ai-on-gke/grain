@@ -77,7 +77,7 @@ export async function writeAccessCode(file) {
 export async function signIn(
   url,
   code = accessCode(),
-  name = "owner@example.com",
+  name = "alice@example.com",
 ) {
   const res = await fetch(`${url}/api/auth/access-code`, {
     method: "POST",
