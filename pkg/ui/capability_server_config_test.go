@@ -785,9 +785,30 @@ func TestCapabilityServerSaveRefusesATypedInCredential(t *testing.T) {
 	}
 	stored, _ := client.Store.GetConfig(ctx)
 	row, _ := json.Marshal(stored)
-	if strings.Contains(string(row), "typed-in") {
+	if strings.Contains(string(row), "typed-in-token-value") {
 		t.Errorf("a refused save was stored: %s", row)
 	}
+	// An entry saved before the rule keeps its literal through an edit of
+	// something else, and is refused a new one.
+	const legacyID = "legacy-literal"
+	if err := client.Store.UpdateConfig(ctx, func(c *model.Config) error {
+		if c.MCPServers == nil {
+			c.MCPServers = map[string]protocol.ServerConfig{}
+		}
+		c.MCPServers[legacyID] = protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "legacy-token-value"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	carried := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "legacy-token-value", "REGION": "eu"}}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: legacyID, Config: carried}); err != nil && strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a stored literal carried forward was refused: %v", err)
+	}
+	carried.Env["API_TOKEN"] = "replaced-token-value"
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: legacyID, Config: carried}); err == nil || !strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a replaced literal was not refused: %v", err)
+	}
+
 	// A reference, with its scheme word, is still accepted.
 	ok := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "$secret:cap-token", "REGION": "eu"}}
 	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: ok}); err != nil &&

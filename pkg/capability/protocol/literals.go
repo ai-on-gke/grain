@@ -69,19 +69,43 @@ func credentialName(name string) bool {
 // value holds a credential typed in rather than a $secret:<name>
 // reference: one under a credential's name (credentialName) with any
 // literal text at all, or one whose literal text has a credential's
-// shape (pkg/redact) whatever it is called. Such a value is stored in
+// shape (pkg/redact) whatever it is called; and every arg, and the URL,
+// with a credential's shape. Such a value is stored in
 // grain_config.mcp_servers, exported to the state repository, and shown
-// to anyone who may read settings, so a save carrying one is refused
-// (Client.SetCapabilityServer) rather than written.
+// to anyone who may read settings.
 func (c ServerConfig) LiteralCredentials() []string {
+	return sortedKeys(c.literalCredentials())
+}
+
+// NewLiteralCredentials is LiteralCredentials less those prev already
+// held with the same value: what a save of c over prev would add. A save
+// that adds one is refused (Client.SetCapabilityServer); one that only
+// carries forward what the stored entry already held -- an entry saved
+// before saves refused it, edited for some other field -- is not, so
+// that the entry stays editable until it is migrated.
+func (c ServerConfig) NewLiteralCredentials(prev ServerConfig) []string {
+	held := prev.literalCredentials()
 	var out []string
+	for where, v := range c.literalCredentials() {
+		if old, ok := held[where]; !ok || old != v {
+			out = append(out, where)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// literalCredentials is LiteralCredentials keyed by where each is, with
+// the value it holds there.
+func (c ServerConfig) literalCredentials() map[string]string {
+	out := map[string]string{}
 	check := func(kind, name, v string) {
 		lit := literalText(v)
 		if lit == "" {
 			return
 		}
 		if _, n := (*redact.Redactor)(nil).Line(lit); n > 0 || credentialName(name) {
-			out = append(out, kind+" "+name)
+			out[kind+" "+name] = v
 		}
 	}
 	for name, v := range c.Env {
@@ -92,11 +116,19 @@ func (c ServerConfig) LiteralCredentials() []string {
 	}
 	for i, a := range c.Args {
 		if _, n := (*redact.Redactor)(nil).Line(a); n > 0 {
-			out = append(out, "args["+strconv.Itoa(i)+"]")
+			out["args["+strconv.Itoa(i)+"]"] = a
 		}
 	}
 	if _, n := (*redact.Redactor)(nil).Line(c.ServerURL); n > 0 {
-		out = append(out, "serverUrl")
+		out["serverUrl"] = c.ServerURL
+	}
+	return out
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out

@@ -82,3 +82,18 @@ func TestWithheldLiteralsKeepsReferencesAndCutsValues(t *testing.T) {
 		t.Errorf("a config reference was not kept: %s", raw)
 	}
 }
+
+func TestNewLiteralCredentialsCarriesForwardWhatWasStored(t *testing.T) {
+	prev := ServerConfig{ServerURL: "https://cap.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer old-literal-token"}}
+	same := ServerConfig{ServerURL: "https://cap.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer old-literal-token", "X-Tenant": "acme"}}
+	if got := same.NewLiteralCredentials(prev); len(got) != 0 {
+		t.Errorf("an unchanged stored literal was reported as new: %v", got)
+	}
+	changed := ServerConfig{ServerURL: "https://cap.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer new-literal-token"}}
+	if got := changed.NewLiteralCredentials(prev); !slices.Equal(got, []string{"header Authorization"}) {
+		t.Errorf("a changed literal = %v, want it reported", got)
+	}
+	if got := changed.NewLiteralCredentials(ServerConfig{}); !slices.Equal(got, []string{"header Authorization"}) {
+		t.Errorf("a literal on a new entry = %v, want it reported", got)
+	}
+}

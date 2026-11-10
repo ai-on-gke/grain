@@ -466,14 +466,6 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	// them from what is stored now so neither secretMapField,
 	// CheckBuiltinConfig nor Probe acts on a caller-supplied Builtin.
 	c.applyStoredBuiltin(ctx, id, &cfg)
-	// A credential typed into env, headers, args or the URL would be
-	// stored in grain_config, exported to the state repository and shown
-	// to everyone who may read settings; it belongs in the secrets store,
-	// referenced as $secret:<name> (docs/security/audits/2026-11-10-credential-exposure.md).
-	if lits := cfg.LiteralCredentials(); len(lits) > 0 {
-		return validationErrorf("capability server %s: %s %s a credential typed in; store it as a secret and write $secret:<name> instead "+
-			"(or use Bind a secret), so its value never reaches grain/config", id, strings.Join(lits, ", "), pluralHolds(len(lits)))
-	}
 	from := strings.TrimSpace(req.RenameFrom)
 	if from == id {
 		from = ""
@@ -481,6 +473,20 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	schemaID := id
 	if from != "" {
 		schemaID = from
+	}
+	// A credential typed into env, headers, args or the URL would be
+	// stored in grain_config, exported to the state repository and shown
+	// to everyone who may read settings; it belongs in the secrets store,
+	// referenced as $secret:<name>. One the stored entry already holds is
+	// carried forward rather than refused, so an entry saved before this
+	// rule stays editable (docs/security/audits/2026-11-10-credential-exposure.md).
+	var prev protocol.ServerConfig
+	if stored, err := c.Store.GetConfig(ctx); err == nil && stored != nil {
+		prev = stored.MCPServers[schemaID]
+	}
+	if lits := cfg.NewLiteralCredentials(prev); len(lits) > 0 {
+		return validationErrorf("capability server %s: %s %s a credential typed in; store it as a secret and write $secret:<name> instead "+
+			"(or use Bind a secret), so its value never reaches grain/config", id, strings.Join(lits, ", "), pluralHolds(len(lits)))
 	}
 	if err := c.normalizeServerHostd(ctx, schemaID, &cfg); err != nil {
 		return err
