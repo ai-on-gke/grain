@@ -16,6 +16,8 @@ package model_test
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +79,162 @@ func TestDeclaredGrantNeedsPerson(t *testing.T) {
 	} {
 		if got := model.DeclaredGrantNeedsPerson(grant); got != want {
 			t.Errorf("DeclaredGrantNeedsPerson(%q) = %v, want %v", grant, got, want)
+		}
+	}
+}
+
+// A person's acceptance of a declared schedule's grant set (task 3971)
+// lets its firings land approved for as long as the set stays within
+// what was accepted: the first firing is held and asks, an accepted one
+// fires approved, and a schedule widened past the accepted set -- here
+// by a host script beside the GCP key -- is held again and shows as
+// awaiting acceptance.
+func TestAnAcceptedDeclaredScheduleFiresApprovedUntilItWidens(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	id := model.RepoDeclaredID(model.DeclaredSchedule, nightlyRepo, "publish")
+	gcp := `gcp#gcp-key={"permission_set":"ar-writer"}`
+	sched := model.Schedule{
+		ID:         id,
+		Title:      "Publish",
+		Target:     nightlyRepo,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+		Enabled:    true,
+		NextRunAt:  firstNight,
+		CreatedAt:  firstNight.Add(-time.Hour),
+		Overlap:    model.OverlapAllow,
+		Grants:     []model.Grant{{Capability: gcp}},
+	}
+
+	if task := fireForTask(t, store, ctx, sched); task.Approval != nil {
+		t.Fatalf("the first firing, before anybody accepted, landed approved: %+v", task.Approval)
+	}
+	acc, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || acc == nil || !acc.Awaiting() || !slices.Equal(acc.Requested, []string{gcp}) {
+		t.Fatalf("after a held firing the declaration's record is %+v (%v), want it awaiting acceptance of %s", acc, err, gcp)
+	}
+
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", []string{"capabilities:admin"}, []string{gcp}, firstNight); err != nil {
+		t.Fatalf("accepting: %v", err)
+	}
+	task := fireForTask(t, store, ctx, sched)
+	if task.Approval == nil {
+		t.Fatalf("a firing within the accepted set was held: %q", task.Body)
+	}
+	if strings.Contains(task.Body, "filed for a person's approval") {
+		t.Errorf("an accepted firing still says it is held: %q", task.Body)
+	}
+
+	widened := sched
+	widened.Grants = append(slices.Clone(sched.Grants), model.Grant{Capability: `host-script#run={"script":"deploy"}`})
+	task = fireForTask(t, store, ctx, widened)
+	if task.Approval != nil {
+		t.Fatalf("a firing widened past the accepted set landed approved")
+	}
+	if !strings.Contains(task.Body, "more than a person last accepted") {
+		t.Errorf("a widened firing does not say it widened: %q", task.Body)
+	}
+	acc, err = store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || acc == nil || !acc.Awaiting() || !slices.Equal(acc.Unaccepted(), []string{`host-script#run={"script":"deploy"}`}) {
+		t.Fatalf("after widening the record is %+v (%v), want it awaiting the host script alone", acc, err)
+	}
+
+	// Accepting a set other than the one the declaration now asks for
+	// -- a page left open across the widening -- is refused.
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", nil, []string{gcp}, firstNight); !errors.Is(err, model.ErrDeclarationMoved) {
+		t.Fatalf("accepting a stale set: %v, want ErrDeclarationMoved", err)
+	}
+}
+
+// A declared template's grants are accepted under the template when an
+// operator's schedule fires it: the same rule, keyed by what was
+// declared.
+func TestAnOperatorScheduleFiringADeclaredTemplateIsAcceptedUnderTheTemplate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	tmplID := model.RepoDeclaredID(model.DeclaredTemplate, nightlyRepo, "publish")
+	gcp := `gcp#gcp-key={"permission_set":"ar-writer"}`
+	if err := store.PutTemplate(ctx, model.Template{ID: tmplID, Name: "Publish", Title: "Publish", Body: "Publish it.",
+		Grants: []model.Grant{{Capability: gcp}}}); err != nil {
+		t.Fatalf("writing the template: %v", err)
+	}
+	sched := model.Schedule{
+		ID: "sched-operator-publish", TemplateID: &tmplID, Title: "Publish", Target: nightlyRepo,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+		Enabled:    true, NextRunAt: firstNight, CreatedAt: firstNight.Add(-time.Hour), Overlap: model.OverlapAllow,
+	}
+	if task := fireForTask(t, store, ctx, sched); task.Approval != nil {
+		t.Fatalf("a declared template's GCP key landed approved before anybody accepted it")
+	}
+	if _, err := store.AcceptDeclaration(ctx, tmplID, "alice@example.com", nil, []string{gcp}, firstNight); err != nil {
+		t.Fatalf("accepting the template: %v", err)
+	}
+	if task := fireForTask(t, store, ctx, sched); task.Approval == nil {
+		t.Fatalf("a firing of the accepted template was held: %q", task.Body)
+	}
+}
+
+// A repository's declared suite that files its tasks approved
+// (`require_approval: false`) has its items' grants held as a declared
+// schedule's are, and accepted the same way: as a set, with the suite's
+// own require_approval in it.
+func TestADeclaredAutoApprovedSuiteIsHeldUntilAccepted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	tmplID := model.RepoDeclaredID(model.DeclaredTemplate, nightlyRepo, "smoke")
+	suiteID := model.RepoDeclaredID(model.DeclaredSuite, nightlyRepo, "release")
+	gcp := `gcp#gcp-key={"permission_set":"ar-writer"}`
+	if err := store.PutTemplate(ctx, model.Template{ID: tmplID, Name: "Smoke", Title: "Smoke", Body: "Smoke it.",
+		Grants: []model.Grant{{Capability: gcp}}}); err != nil {
+		t.Fatalf("writing the template: %v", err)
+	}
+	suite := model.Suite{ID: suiteID, Name: "Release", Items: []model.SuiteItem{{TemplateID: tmplID}},
+		Mode: model.SuiteCount, Count: 1, RequireApproval: false, CreatedAt: firstNight}
+	if err := store.PutSuite(ctx, suite); err != nil {
+		t.Fatalf("writing the suite: %v", err)
+	}
+	approved := func() bool {
+		t.Helper()
+		run, err := store.CreateSuiteRun(ctx, suite, nightlyRepo, "main", firstNight)
+		if err != nil || len(run.Tasks) != 1 {
+			t.Fatalf("running the suite: (%+v, %v)", run, err)
+		}
+		task, err := store.GetTask(ctx, run.Tasks[0].TaskID)
+		if err != nil || task == nil {
+			t.Fatalf("reading the suite's task: (%+v, %v)", task, err)
+		}
+		return task.Approval != nil
+	}
+	if approved() {
+		t.Fatalf("a declared suite's GCP key landed approved before anybody accepted it")
+	}
+	want := []string{gcp, model.DeclaredAutoApprovedSuiteItem}
+	slices.Sort(want)
+	acc, err := store.GetDeclarationAcceptance(ctx, suiteID)
+	if err != nil || acc == nil || !slices.Equal(acc.Requested, want) {
+		t.Fatalf("the suite's record is %+v (%v), want it asking for %v", acc, err, want)
+	}
+	if _, err := store.AcceptDeclaration(ctx, suiteID, "alice@example.com", nil, want, firstNight); err != nil {
+		t.Fatalf("accepting the suite: %v", err)
+	}
+	if !approved() {
+		t.Fatalf("a run of the accepted suite was held")
+	}
+}
+
+func TestDeclaredItemScopes(t *testing.T) {
+	for item, want := range map[string]string{
+		`gcp#gcp-key={"permission_set":"ar-writer"}`: "capabilities:admin",
+		"api:secrets:write":                          "secrets:write",
+		model.DeclaredNetworkOpenItem:                "capabilities:admin",
+		model.DeclaredAutoApprovedSuiteItem:          "capabilities:admin",
+	} {
+		got := model.DeclaredItemScopes(item)
+		if len(got) != 1 || string(got[0]) != want {
+			t.Errorf("DeclaredItemScopes(%q) = %v, want [%s]", item, got, want)
 		}
 	}
 }

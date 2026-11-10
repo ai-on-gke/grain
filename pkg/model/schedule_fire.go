@@ -592,6 +592,12 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 		}
 	}
 
+	// What a repository's declaration asked for, recorded as of this
+	// firing, is what Settings -> Declarations offers a person to accept
+	// (DeclarationAcceptance).
+	if err := noteDeclarationHold(ctx, s.db, comp.DeclarationHold, now); err != nil {
+		return ScheduleFiring{}, err
+	}
 	id, err := s.putScheduleTask(ctx, comp, []string{tag}, now)
 	if err != nil {
 		return ScheduleFiring{}, err

@@ -3512,6 +3512,36 @@ var Tables = []string{
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
+	// A person's acceptance of what a repository's own declaration asks
+	// for that only a person may grant (model.DeclarationAcceptance, task
+	// 3971): one row per declared schedule, template, suite or CI job that
+	// has asked for any, with what it last asked for and what a person
+	// last accepted, who, holding which scopes, at which commit. Lists are
+	// JSON because nothing queries inside them.
+	//
+	// Grain's own record rather than settings (staterepo.SettingsTables):
+	// it is a person's grant, made through grain by somebody holding the
+	// scope, and importing one from a branch of the state repository
+	// would let whoever can write there accept on a person's behalf. A
+	// restore loses it, and the next firing is held until a person
+	// accepts again. Needs no SchemaVersion bump, for repo_workflow's own
+	// reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`declaration_acceptance`" + ` (
+  ` + "`id`" + `               TEXT     NOT NULL,
+  ` + "`kind`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`name`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`requested`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_commit`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_at`" + `     DATETIME NOT NULL,
+  ` + "`accepted`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_by`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_scopes`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_commit`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_at`" + `      DATETIME NULL,
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
 	// A declared template's `push:` list (model.RefPush, grain/task-2536):
 	// one row per ref pattern, keyed by the declaration's id, written by
 	// the same sync that writes repo_declaration and deleted with it. It
