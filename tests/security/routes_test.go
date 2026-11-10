@@ -408,6 +408,7 @@ var routeAuthorization = map[string]authLevel{
 	"PUT /api/github-tokens/{name}":                      trusted,
 	"DELETE /api/github-tokens/{name}":                   trusted,
 	"GET /api/secrets":                                   trusted,
+	"POST /api/secrets/redact":                           trusted,
 	"PUT /api/secrets/{secret}/{key}":                    trusted,
 	"DELETE /api/secrets/{secret}/{key}":                 trusted,
 	"DELETE /api/secrets/{secret}":                       trusted,

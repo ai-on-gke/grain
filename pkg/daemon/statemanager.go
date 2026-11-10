@@ -903,6 +903,13 @@ func (m *StateManager) status(ctx context.Context) ui.StateRepoStatus {
 	}
 	if m.secrets != nil {
 		out.SecretsKeyFile = m.secrets.KeyFile()
+		if retired, err := secrets.RetiredKeys(m.secrets.KeyFile()); err == nil {
+			for _, rk := range retired {
+				out.RetiredSecretsKeys = append(out.RetiredSecretsKeys, ui.RetiredSecretsKey{
+					Name: rk.Name, PublicKey: rk.Public, Retired: rk.ModTime.Format(time.RFC3339),
+				})
+			}
+		}
 		if pub, err := m.secrets.PublicKey(); err == nil {
 			out.SecretsPublicKey = pub
 		}

@@ -56,6 +56,31 @@ describe("StateRepoPanel", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("lists keys an import replaced, by public half only", async () => {
+    api.mockResolvedValueOnce({
+      ...local,
+      retiredSecretsKeys: [
+        {
+          name: "secrets.key.replaced-20261110-052600",
+          publicKey: "grain-secret-pub-v1:OLD1",
+        },
+      ],
+    });
+    render(<StateRepoPanel showError={() => {}} />);
+
+    const list = await screen.findByTestId("retired-secrets-keys");
+    expect(list).toHaveTextContent("secrets.key.replaced-20261110-052600");
+    expect(list).toHaveTextContent("grain-secret-pub-v1:OLD1");
+    expect(list).toHaveTextContent("grain state key retired delete NAME");
+  });
+
+  it("shows no retired keys section when there are none", async () => {
+    api.mockResolvedValueOnce(local);
+    render(<StateRepoPanel showError={() => {}} />);
+    expect(await screen.findAllByText("grain/config")).not.toHaveLength(0);
+    expect(screen.queryByTestId("retired-secrets-keys")).toBeNull();
+  });
+
   it("switches between internal and external config repository modes", async () => {
     api.mockResolvedValueOnce(local);
     const user = userEvent.setup();
