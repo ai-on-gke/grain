@@ -105,7 +105,8 @@ body: |
   - Put the removals in the commit body (it becomes the pull request
     description), grouped by package, each with the tool that found it
     and how it was confirmed. List the uncertain hits after them.
-  - If there is nothing to delete but some hits are uncertain, finish
-    with `comment_on_issue` listing them.
-  - If nothing is dead and nothing is uncertain, finish with
-    `nothing_needed`.
+  - With nothing to delete, finish with `nothing_needed` whose reason
+    lists the uncertain hits (or says there were none), and send
+    `grain notify` when one needs a person's eye. A branchless closing
+    comment would park the task in awaiting_reply, and `overlap: skip`
+    would then hold back every later week.
