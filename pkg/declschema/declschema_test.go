@@ -207,8 +207,12 @@ func TestAFieldHasOneKeyPerContext(t *testing.T) {
 				// A schedule's template is named by "template" or, for a
 				// workflow's review, "workflow" -- and repodecl refuses a
 				// file that sets both.
+				// A schedule's grants are written "grants" or
+				// "capabilities" in a repository, the unified spelling
+				// beside the older one (unified-grants §3), which
+				// repodecl reads as one list.
 				if f.Model == "Recurrence" || (s.Kind == model.DeclaredTemplate && f.Model == "Body") ||
-					(s.Kind == model.DeclaredSchedule && f.Model == "TemplateID") {
+					(s.Kind == model.DeclaredSchedule && (f.Model == "TemplateID" || f.Model == "Grants")) {
 					continue
 				}
 				if len(in) > 1 {
@@ -285,11 +289,11 @@ func TestEveryColumnOfTheExportIsAField(t *testing.T) {
 // accept.
 func TestGroupSaysOneThingPerReason(t *testing.T) {
 	refusals := declschema.RepoRefusals(model.DeclaredSchedule)
-	got := declschema.Group(refusals, []string{"template", "grants", "repo", "title", "every"})
+	got := declschema.Group(refusals, []string{"template", "reads", "repo", "title", "every"})
 	if len(got) != 2 {
 		t.Fatalf("grouped = %+v, want reach and inline and nothing else", got)
 	}
-	if got[0].Why != declschema.Reach || got[0].String() != "grants, repo" {
+	if got[0].Why != declschema.Reach || got[0].String() != "reads, repo" {
 		t.Errorf("first group = %+v, want the reach keys first", got[0])
 	}
 	if got[1].Why != declschema.Inline || got[1].String() != "title" {
@@ -486,7 +490,13 @@ func TestATemplatesRepositoryAccessIsTheOnlyReachARepositoryWrites(t *testing.T)
 		if s.Kind == model.DeclaredSuite {
 			continue
 		}
-		for _, key := range []string{"reads", "writes", "grants", "target"} {
+		// `grants:` is no longer among them: since slice 4 of
+		// design/design/unified-grants.design.md it is `capabilities:`'
+		// unified spelling, held to the same repository-access rule.
+		if refused["grants"] != "" {
+			t.Errorf("%s: %q is refused for %q, want it accepted beside capabilities:", s.Kind, "grants", refused["grants"])
+		}
+		for _, key := range []string{"reads", "writes", "target"} {
 			if refused[key] != declschema.Reach {
 				t.Errorf("%s: %q is refused for %q, want reach", s.Kind, key, refused[key])
 			}
