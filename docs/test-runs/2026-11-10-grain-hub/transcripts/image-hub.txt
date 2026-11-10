@@ -1,0 +1,15 @@
+=== make image-hub IMAGE_HUB=grain-hub-walk:local (with the Makefile fix; sandbox CA staged as .grain-ca.crt) ===
+  -rwxr-xr-x 1 root root 14749858 Nov 10 05:53 /usr/local/bin/grain-hub
+  lrwxrwxrwx 1 root root        9 Nov 10 05:53 /usr/local/bin/grain-registry -> grain-hub
+--- docker run --entrypoint /usr/local/bin/grain-hub grain-hub-walk:local version
+  grain-hub v3.5.0-dev.125+655e060 (655e060d03c5)
+--- docker run --entrypoint /usr/local/bin/grain-registry grain-hub-walk:local version
+  grain-hub v3.5.0-dev.125+655e060 (655e060d03c5)
+--- default ENTRYPOINT: docker run grain-hub-walk:local version
+  grain-hub v3.5.0-dev.125+655e060 (655e060d03c5)
+--- before the fix, make -n image-hub / make -n grain-hub said:
+  --build-arg MAIN_GRAIN_HUB=./cmd/grain-registry
+  -o bin/grain-hub ./cmd/grain-registry
+--- after:
+  --build-arg MAIN_GRAIN_HUB=./cmd/grain-hub \
+  -o bin/grain-hub ./cmd/grain-hub

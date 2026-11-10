@@ -1,0 +1,47 @@
+=== PAIR=new-hub hub=grain-hub (grain-hub v0.0.0-20261110053018-37015c37b92c+dirty (37015c37b92c)) daemon=/tmp/bin-old/grain (dev (unstamped)) ===
+  validate: config /tmp/interop-new-hub/hub.yaml is valid
+--- register conn-alice and echo with the daemon's own CLI (grain registry register -registry-url/-registry-token)
+  registered connected entry conn-alice on http://127.0.0.1:4230
+  outbound tunnel config snippet:
+      -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://conn-alice.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4230/.well-known/jwks.json
+  register conn-alice exit=0 token=grc_…
+  registered connected entry echo on http://127.0.0.1:4230
+  outbound tunnel config snippet:
+      -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://echo.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4230/.well-known/jwks.json
+  register echo exit=0 token=grc_…
+--- start the daemon with -registry-* flags and the registry verifier
+  conn-alice status/tunnel_connected: online/true
+  {"name":"conn-alice","kind":"connected","status":"online","reachability":null,"tunnel_connected":true,"grain_version":null}
+--- identity assertion through the outbound tunnel (alice -> conn-alice /api/whoami)
+  HTTP 200 {"actor":"alice@example.com","source":"registry","verified":true,"allowed":true}
+  bob (not allowed on the daemon) -> HTTP 403
+--- headers the hub forwards over the tunnel (echoconn)
+  HTTP 200 {"host":"echo.grain-user.test","path":"/probe","x_grain_headers":["X-Grain-Hub-Assertion","X-Grain-Registry-Assertion"]}
+--- a client-supplied assertion header: does the hub strip or overwrite it?
+  client sends X-Grain-Hub-Assertion: forged -> echoconn sees ["X-Grain-Hub-Assertion","X-Grain-Registry-Assertion"]
+  client sends X-Grain-Hub-Assertion: forged -> daemon /api/whoami HTTP 200 {"actor":"alice@example.com","verified":true}
+  client sends X-Grain-Registry-Assertion: forged -> echoconn sees ["X-Grain-Hub-Assertion","X-Grain-Registry-Assertion"]
+  client sends X-Grain-Registry-Assertion: forged -> daemon /api/whoami HTTP 200 {"actor":"alice@example.com","verified":true}
+--- headers the daemon and CLI sent to the hub (hdrtap, distinct method/path/header-name sets)
+        1 new-hub GET /api/entries/conn-alice Authorization e…
+        1 new-hub GET /api/entries/conn-alice/connect Authorization g… Upgrade X-Grain-Auth X-Grain-Connect-Protocol X-Grain-Entry X-Grain-Host-Kind X-Grain-Registry-Token
+        1 new-hub GET /api/entries/echo Authorization e…
+        1 new-hub GET /api/entries/echo/connect Authorization g… Upgrade X-Grain-Auth X-Grain-Connect-Protocol X-Grain-Entry X-Grain-Host-Kind X-Grain-Hub-Token X-Grain-Registry-Token X-Grain-Version
+        2 new-hub POST /api/entries Authorization e…
+       31 new-hub PUT /api/entries/conn-alice/heartbeat Authorization g… X-Grain-Auth X-Grain-Registry-Token
+--- hub metrics prefixes (GET /metrics as admin root@example.com)
+  grain_hub_* series=10 grain_registry_* series=10
+  grain_hub_assertions_signed_total 0
+  grain_hub_active_tunnels 2
+  grain_registry_assertions_signed_total 0
+  grain_registry_active_tunnels 2
+  alice (not admin) GET /metrics -> HTTP 403
+--- daemon log lines about the hub
+  2026/11/10 05:43:09 grain: generated a new secrets key at /tmp/interop-new-hub/d/secrets/secrets.key -- back this file up: without it, /tmp/interop-new-hub/d/secrets/secrets.enc cannot be decrypted by anyone, grain included
+  2026/11/10 05:43:09 grain daemon: the package cache is serving at http://127.0.0.1:43497, holding at most 20 GiB under /tmp/interop-new-hub/d/scratch/cache/packages
+  2026/11/10 05:43:09 grain daemon: the Actions cache is serving at http://127.0.0.1:43601, holding at most 20 GiB under /tmp/interop-new-hub/d/scratch/cache/actions (0 entries, 0 MiB, carried over from before this restart): every CI job is handed it, and every branch of a repository shares one
+  2026/11/10 05:43:09 grain access: imported 1 allowed user/group entry from -ui-allowed-principals into the database (user:alice@example.com); -ui-allowed-principals is deprecated and will not be applied on future starts (manage access in Settings -> Access or with 'grain access')
+  2026/11/10 05:43:09 grain daemon: single-tenant: every caller, this host's loopback included, presents the access code in /tmp/interop-new-hub/d/local-api-token -- a browser on the UI's "Enter access code" page, the grain CLI as a bearer token; `grain access-code` prints it
+  2026/11/10 05:43:09 grain daemon: disk floor -- 13.1 GiB free of 15.3 GiB on /tmp/interop-new-hub/d, against a floor of 3.8 GiB (10% of the volume, never less than 5.0 GiB and never more than 25% of it). Read through /tmp/interop-new-hub/d, /tmp/interop-new-hub/d/scratch, /var/lib/docker. A new CI job is held and an agent dispatch deferred while free space is under it, because a sandbox's disk grows as it is written rather than being taken out of the volume when the sandbox is made. Moved in Settings -> Sandbox, and binding from the reconcile tick that reads it
+  2026/11/10 05:43:09 grain daemon: registry tunnel (conn-alice) connected (session=1)
+--- hub log errors
