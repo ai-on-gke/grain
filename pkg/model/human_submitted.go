@@ -50,36 +50,37 @@ func HumanSubmittedByTarget(by string, at time.Time, head string) string {
 // human was shown, or "" for one that names none -- written before the
 // head was recorded, or by a Submit nothing could read the head for.
 func HumanSubmittedHead(target string) string {
-	if i := strings.LastIndexByte(target, '@'); i >= 0 {
-		return target[i+1:]
+	_, _, head := splitHumanSubmitted(target)
+	return head
+}
+
+// splitHumanSubmitted takes a `[by|]RFC3339[@head]` target apart. by is
+// read off the front, up to the one '|' HumanSubmittedByTarget writes (it
+// strips any from by itself), and head off what follows the timestamp: by is
+// a person's ID, often an e-mail address, so the last '@' of the whole
+// target is the head's only where one was written -- a Submit naming no
+// head by alice@example.com would otherwise read as one of "example.com|...".
+func splitHumanSubmitted(target string) (by, when, head string) {
+	rest := target
+	if b, r, ok := strings.Cut(rest, "|"); ok {
+		by, rest = strings.TrimSpace(b), r
 	}
-	return ""
+	when, head, _ = strings.Cut(rest, "@")
+	return by, strings.TrimSpace(when), strings.TrimSpace(head)
 }
 
 // HumanSubmittedBy returns who recorded the LinkHumanSubmitted approval, or ""
 // when the target was written without an actor.
 func HumanSubmittedBy(target string) string {
-	body := target
-	if i := strings.LastIndexByte(body, '@'); i >= 0 {
-		body = body[:i]
-	}
-	if by, _, ok := strings.Cut(body, "|"); ok {
-		return strings.TrimSpace(by)
-	}
-	return ""
+	by, _, _ := splitHumanSubmitted(target)
+	return by
 }
 
 // HumanSubmittedAt parses the timestamp recorded in a LinkHumanSubmitted
 // target.
 func HumanSubmittedAt(target string) (time.Time, bool) {
-	body := target
-	if i := strings.LastIndexByte(body, '@'); i >= 0 {
-		body = body[:i]
-	}
-	if _, rest, ok := strings.Cut(body, "|"); ok {
-		body = rest
-	}
-	at, err := time.Parse(time.RFC3339, strings.TrimSpace(body))
+	_, when, _ := splitHumanSubmitted(target)
+	at, err := time.Parse(time.RFC3339, when)
 	if err != nil {
 		return time.Time{}, false
 	}
