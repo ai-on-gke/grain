@@ -272,8 +272,13 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 				// image moves under it on every upgrade, so this is the
 				// one check that is about the *deployment* rather than
 				// about the build (grain/task-233).
-				UnitFlags:          cfg.UnitFlags,
-				FlagNamesArgs:      []string{"daemon", "-flag-names"},
+				UnitFlags:     cfg.UnitFlags,
+				FlagNamesArgs: []string{"daemon", "-flag-names"},
+				// And which edition's build it is, checked against this
+				// host's install track before anything cuts over: an
+				// upgrade never crosses editions unless the operator
+				// switched edition on purpose (pkg/upgrade/edition.go).
+				EditionArgs:        []string{"version", "--json"},
 				Track:              track,
 				Source:             upgrade.ImageSource(strings.TrimSpace(os.Getenv("GRAIN_UPGRADE_IMAGE_SOURCE"))),
 				SourceOverrideFile: filepath.Join(cfg.DataDir, "upgrade-image-source.json"),

@@ -245,6 +245,9 @@ func (s *Store) WriteTaskHandover(ctx context.Context, taskID, runID, body strin
 			break
 		}
 	}
+	if err := s.BumpHandoverVersion(ctx, taskID); err != nil {
+		return err
+	}
 	agentPrincipal := Principal{Kind: PrincipalAgent, ID: taskID}
 	_, err = s.AddComment(ctx, Comment{
 		TaskID: taskID,

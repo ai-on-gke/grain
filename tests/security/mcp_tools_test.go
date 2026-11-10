@@ -67,6 +67,11 @@ var everyRunTool = map[string]string{
 	"ask_question": "escape hatch", "request_secret": "escape hatch", "request_access": "escape hatch", "comment_on_issue": "escape hatch",
 	"nothing_needed": "escape hatch",
 	"write_handover": "escape hatch", "propose_task": "escape hatch", "add_review_comment": "escape hatch",
+	// write_handover's deliberate forms (durable-tasks DT-15): each is
+	// relayed when the run ends and only rewrites the run's own task's
+	// handover, compaction cursor or current brief -- never another
+	// task's, and never the original description.
+	"compact_context": "own task", "update_brief": "own task",
 	// The run's own branch's CI, which it cannot leave.
 	"pull_request_status": "own branch", "base_branch_status": "own branch", "wait_for_checks": "own branch",
 	// Answering and resolving review comments on the pull request open
