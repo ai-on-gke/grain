@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -102,6 +104,50 @@ type rawRepoSettings struct {
 	SetupCommand    *string             `yaml:"setup-command"`
 	PortBranches    []string            `yaml:"port-branches"`
 	PortTypes       map[string][]string `yaml:"port-types"`
+	Skills          *rawSkills          `yaml:"skills"`
+}
+
+var rawSkillsKeys = []string{"enabled", "folders"}
+
+type rawSkills struct {
+	Enabled *bool     `yaml:"enabled"`
+	Folders *[]string `yaml:"folders"`
+}
+
+func (s *rawSkills) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: skills must be a mapping with enabled and/or folders", node.Line)
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if key := node.Content[i].Value; !slices.Contains(rawSkillsKeys, key) {
+			return fmt.Errorf("line %d: skills: field %s not found -- skills accepts %s",
+				node.Content[i].Line, key, strings.Join(rawSkillsKeys, ", "))
+		}
+	}
+	var m struct {
+		Enabled *bool     `yaml:"enabled"`
+		Folders *[]string `yaml:"folders"`
+	}
+	if err := node.Decode(&m); err != nil {
+		return err
+	}
+	s.Enabled = m.Enabled
+	s.Folders = m.Folders
+	return nil
+}
+
+func parseRawSkills(path string, raw *rawSkills) (*model.SkillsConfig, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	cfg, err := model.NormalizeSkillsConfig(&model.SkillsConfig{
+		Enabled: raw.Enabled,
+		Folders: raw.Folders,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: skills: %w", path, err)
+	}
+	return cfg, nil
 }
 
 // conventionalType is what a `port-types` entry may name: a
@@ -165,5 +211,10 @@ func parseSettings(f file, repo model.RepoRef) (model.RepoSettings, error) {
 		}
 		s.PortTypes[model.PortDirection(from, to)] = kept
 	}
+	skills, err := parseRawSkills(f.path, raw.Skills)
+	if err != nil {
+		return model.RepoSettings{}, err
+	}
+	s.Skills = skills
 	return s, nil
 }

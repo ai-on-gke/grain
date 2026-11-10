@@ -25,7 +25,7 @@ import {
   Typography,
 } from "@mui/material";
 
-export const DEFAULT_CONFIG_MAP_DIR = "/home/debian/.config-map";
+const DEFAULT_CONFIG_MAP_DIR = "/home/debian/.config-map";
 
 export function isConfigMapServer(server) {
   if (
@@ -40,20 +40,20 @@ export function isConfigMapServer(server) {
 
 // secretValueKey is the secret_values key of one secret map key, the
 // "<map>/<key>" the server stores and reports back as configured.
-export function secretValueKey(mapName, key) {
+function secretValueKey(mapName, key) {
   return `${(mapName || "").trim()}/${(key || "").trim()}`;
 }
 
 // isSecretKeySet reports whether the stored secret_values holds a value
 // for key of the secret map mapName; values themselves are never read.
-export function isSecretKeySet(server, mapName, key) {
+function isSecretKeySet(server, mapName, key) {
   if (!(mapName || "").trim() || !(key || "").trim()) return false;
   return (server?.configuredSecretKeys || []).includes(
     secretValueKey(mapName, key),
   );
 }
 
-export function defaultMapDir(name) {
+function defaultMapDir(name) {
   return `${DEFAULT_CONFIG_MAP_DIR}/${(name || "").trim() || "<name>"}`;
 }
 

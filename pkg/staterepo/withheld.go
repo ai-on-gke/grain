@@ -66,7 +66,7 @@ var withheldColumns = map[string][]string{
 // lives in the target repository, which is where it is edited.
 var declaredColumns = map[string][]string{
 	"repo_config": {"declared_prompt_extension", "declared_setup_command",
-		"declared_port_branches", "declared_port_types"},
+		"declared_port_branches", "declared_port_types", "declared_skills"},
 }
 
 // isWithheld reports whether column of table is one withheldColumns or

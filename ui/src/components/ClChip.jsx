@@ -18,7 +18,7 @@ import { Chip } from "@mui/material";
 // docs/design/changelists.md §10): cl/<number>, linking to its
 // http://cl/<number> go link, which resolves because the UI is reached
 // over UberProxy. The task's first CL is its primary.
-export function clUrl(cl) {
+function clUrl(cl) {
   const n = String(cl || "").replace(/^cl\//, "");
   return /^[0-9]+$/.test(n) ? `http://cl/${n}` : null;
 }

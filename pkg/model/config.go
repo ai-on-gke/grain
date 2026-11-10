@@ -741,6 +741,9 @@ type Config struct {
 	// onto new ad-hoc tasks when neither the caller nor a template names one
 	// (empty or unattended means unattended).
 	DefaultHosting Hosting
+	// Skills is the deployment-wide default repository skill discovery
+	// configuration (nil means DefaultSkillFolders with discovery enabled).
+	Skills *SkillsConfig
 	// PromptExtension is the standing instruction text every run
 	// dispatched on this deployment is given on top of the prompt grain
 	// builds for it (grain/task-114) -- prompt_extension.go's own doc

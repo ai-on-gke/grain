@@ -597,6 +597,7 @@ func templateSchema() Schema {
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
 			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
 			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
+			{Model: "Skills", Keys: carried("skills"), Columns: []string{"skills"}},
 			// `hostd`, which a template once carried (schema 94 to 110):
 			// which grain hostd host work runs on is a model connection's
 			// or a capability server's, never what a template files, so
@@ -957,6 +958,11 @@ func RepoSettingsSchema() Schema {
 				Model: "PortTypes", Declared: "DeclaredPortTypes", Compose: Append,
 				Keys:    carried("port-types"),
 				Columns: []string{"port_types", "declared_port_types"},
+			},
+			{
+				Model: "Skills", Declared: "DeclaredSkills", Compose: Union,
+				Keys:    carried("skills"),
+				Columns: []string{"skills", "declared_skills"},
 			},
 
 			// The grants of authority. Each of these would be perfectly

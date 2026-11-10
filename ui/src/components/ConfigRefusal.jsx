@@ -30,21 +30,15 @@ import CopyButton from "./CopyButton.jsx";
 import ConfigRepoLink, { openInApp } from "./ConfigRepoLink.jsx";
 import { settleEdits } from "../unsavedEdits.js";
 
-// The refusal a configuration write gets when the deployment's
-// configuration lives in an external config repository (pkg/ui's
-// config_refusal.go): code "config_managed_externally", the repository,
-// the file(s) holding the setting and the patch that makes the change.
-export const CONFIG_MANAGED_EXTERNALLY = "config_managed_externally";
-
 // The code POST /api/state-repo/pull-requests' 422 carries when the
 // refusal's patch no longer applies: grain/config moved since
 // (pkg/ui's ConfigChangeStale).
-export const CONFIG_CHANGE_STALE = "config_change_stale";
+const CONFIG_CHANGE_STALE = "config_change_stale";
 
 // ConfigPullRequestError says why a config pull request was not opened:
 // a stale patch as something to make again, the pre-review suite's
 // liveness findings as a list, anything else in the server's words.
-export function ConfigPullRequestError({ error, branch }) {
+function ConfigPullRequestError({ error, branch }) {
   const message = error?.message || String(error);
   if (error?.code === CONFIG_CHANGE_STALE) {
     return (
@@ -81,7 +75,7 @@ export function ConfigPullRequestError({ error, branch }) {
 
 // configFileURL is the page of path in the repository, when the server
 // could tell where the repository is browsable.
-export function configFileURL(refusal, path) {
+function configFileURL(refusal, path) {
   if (!refusal?.url) return "";
   return `${refusal.url}/blob/${refusal.branch || "main"}/${path}`;
 }
@@ -113,12 +107,12 @@ export function configRepoRefusal(remote, branch) {
 // Config Repo Browser shows and POST /api/state-repo/pull-requests opens
 // pull requests in. An external repository's files and pull requests are
 // on its own host.
-export function isInternalRefusal(refusal) {
+function isInternalRefusal(refusal) {
   return Boolean(refusal?.internal);
 }
 
 // configPullRequestTitle names a pull request after what it changes.
-export function configPullRequestTitle(refusal, paths) {
+function configPullRequestTitle(refusal, paths) {
   const what = refusal?.description || `Change ${paths.join(", ")}`;
   return what.charAt(0).toUpperCase() + what.slice(1);
 }
