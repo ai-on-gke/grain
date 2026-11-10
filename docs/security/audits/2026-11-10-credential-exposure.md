@@ -70,9 +70,13 @@ saved into `grain_config.mcp_servers` and returned verbatim by
   names any env var or header under a credential's name (`*TOKEN*`,
   `*SECRET*`, `*PASSWORD*`, `Authorization`, `*_KEY`, …) that carries
   literal text, and any value, arg or URL with a credential's shape.
-  `Client.SetCapabilityServer` refuses such a save and points to
-  `$secret:<name>` and *Bind a secret*. The refusal never echoes the
-  value.
+  `Client.SetCapabilityServer` refuses a save that *adds or changes*
+  one (`NewLiteralCredentials`, compared with the stored entry) and
+  points to `$secret:<name>` and *Bind a secret*. The refusal never
+  echoes the value. A literal the stored entry already held is carried
+  forward, so an entry saved before the rule stays editable until the
+  follow-up migrates it. That includes `grain demo`'s demo servers,
+  which carry a bearer token in a header.
 - `ServerConfig.WithheldLiterals` is what a caller without
   `capabilities:admin` is shown. Literal env and header text becomes
   `[withheld]`. References and auth scheme words (`Bearer
