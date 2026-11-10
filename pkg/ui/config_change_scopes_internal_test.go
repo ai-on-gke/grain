@@ -21,8 +21,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 // roleHolding is a limited role holding exactly scopes.
@@ -150,5 +152,39 @@ func TestAcceptingADeclarationNeedsTheScopesItsGrantsNeed(t *testing.T) {
 				t.Fatalf("err = %v, want a forbidden error naming %s", err, tc.refuse)
 			}
 		})
+	}
+}
+
+// The scopes an acceptance is checked against cover the set the person
+// sent as seen, not only the set read before the store's transaction: a
+// declaration widened between the two reads is accepted, if at all, by
+// someone holding what the wider set needs.
+func TestAcceptingADeclarationChecksTheScopesOfTheSetSeen(t *testing.T) {
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gcp := `gcp#gcp-key={"permission_set":"publisher"}`
+	if _, _, err := store.NoteCIJobDeclaration(ctx, model.RepoRef{Owner: "acme", Name: "widgets"},
+		"publish", "abc123", []string{gcp}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Config{Actor: DefaultActor("alice")}, store)
+	person := withAccessRole(WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "caps@example.com"}),
+		roleHolding("caps@example.com", "capabilities:admin"))
+
+	_, err = srv.tasks.AcceptDeclaration(person, "ci:acme/widgets:publish", []string{gcp, "api:secrets:write"})
+	var forbidden *ForbiddenError
+	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "secrets:write") {
+		t.Fatalf("err = %v, want a forbidden error naming secrets:write", err)
+	}
+	if _, err := srv.tasks.AcceptDeclaration(person, "ci:acme/widgets:publish", []string{gcp}); err != nil {
+		t.Fatalf("accepting the set as it stands: %v", err)
 	}
 }

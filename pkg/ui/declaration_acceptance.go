@@ -154,14 +154,19 @@ func (c *Client) AcceptDeclaration(ctx context.Context, id string, seen []string
 	if acc == nil {
 		return DeclarationAcceptanceView{}, &NotFoundError{ID: id}
 	}
-	needs := declarationNeedsScopes(acc.Requested)
+	if seen == nil {
+		seen = []string{}
+	}
+	// The store accepts whatever the declaration asks for inside its own
+	// transaction, refusing it unless that is seen; the scopes are
+	// checked against seen too, so a declaration widened between this
+	// read and that one cannot be accepted by a person whose role only
+	// held what the narrower set needed.
+	needs := declarationNeedsScopes(append(slices.Clone(acc.Requested), seen...))
 	if err := c.declarationAcceptanceRefusal(ctx, needs); err != nil {
 		return DeclarationAcceptanceView{}, err
 	}
 	by := c.requestActor(ctx).Actor.ID
-	if seen == nil {
-		seen = []string{}
-	}
 	got, err := c.Store.AcceptDeclaration(ctx, id, by, needs, seen, c.now())
 	if errors.Is(err, model.ErrDeclarationMoved) {
 		return DeclarationAcceptanceView{}, validationErrorf("%s now asks for %s: reload and accept what it asks for now",
