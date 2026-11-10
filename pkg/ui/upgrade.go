@@ -319,15 +319,10 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 			}
 			if target.Source != "" {
 				resp.ImageSource = &upgradeImageSourceResponse{
-					Source:            string(target.Source),
-					SourceDefault:     target.SourceDefault,
-					Locked:            target.SourceLocked,
-					Fallback:          string(target.Fallback),
-					ReleaseRepository: target.ReleaseRepository,
-					ManifestAsset:     target.ManifestAsset,
-					ReleaseAsset:      target.ReleaseAsset,
-					ChecksumAsset:     target.ChecksumAsset,
-					ChecksumSuffix:    target.ChecksumSuffix,
+					Source:        string(target.Source),
+					SourceDefault: target.SourceDefault,
+					Locked:        target.SourceLocked,
+					Fallback:      string(target.Fallback),
 				}
 			}
 		}
@@ -897,15 +892,10 @@ type cancelScheduledUpgradeResponse struct {
 }
 
 type upgradeImageSourceResponse struct {
-	Source            string `json:"source"`
-	SourceDefault     bool   `json:"sourceDefault"`
-	Locked            bool   `json:"locked"`
-	Fallback          string `json:"fallback,omitempty"`
-	ReleaseRepository string `json:"releaseRepository,omitempty"`
-	ManifestAsset     string `json:"manifestAsset,omitempty"`
-	ReleaseAsset      string `json:"releaseAsset,omitempty"`
-	ChecksumAsset     string `json:"checksumAsset,omitempty"`
-	ChecksumSuffix    string `json:"checksumSuffix,omitempty"`
+	Source        string `json:"source"`
+	SourceDefault bool   `json:"sourceDefault"`
+	Locked        bool   `json:"locked"`
+	Fallback      string `json:"fallback,omitempty"`
 }
 
 type imageSourceUpdater interface {
@@ -913,12 +903,9 @@ type imageSourceUpdater interface {
 }
 
 type updateUpgradeSourceRequest struct {
-	Mode              string `json:"mode,omitempty"`
-	Fallback          string `json:"fallback,omitempty"`
-	FallbackExplicit  bool   `json:"fallbackExplicit,omitempty"`
-	ReleaseRepository string `json:"releaseRepository,omitempty"`
-	ReleaseAsset      string `json:"releaseAsset,omitempty"`
-	Checksum          string `json:"checksum,omitempty"`
+	Mode             string `json:"mode,omitempty"`
+	Fallback         string `json:"fallback,omitempty"`
+	FallbackExplicit bool   `json:"fallbackExplicit,omitempty"`
 }
 
 func (s *Server) handleUpdateUpgradeSource(w http.ResponseWriter, r *http.Request) {
@@ -936,12 +923,9 @@ func (s *Server) handleUpdateUpgradeSource(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := updater.SetImageSource(upgrade.ImageSourceOverride{
-		Mode:              req.Mode,
-		Fallback:          req.Fallback,
-		FallbackExplicit:  req.FallbackExplicit,
-		ReleaseRepository: req.ReleaseRepository,
-		ReleaseAsset:      req.ReleaseAsset,
-		Checksum:          req.Checksum,
+		Mode:             req.Mode,
+		Fallback:         req.Fallback,
+		FallbackExplicit: req.FallbackExplicit,
 	}); err != nil {
 		if errors.Is(err, upgrade.ErrImageSourceLocked) {
 			writeError(w, http.StatusConflict, err)
@@ -972,8 +956,7 @@ func (c *Client) auditUpgradeSource(ctx context.Context, req updateUpgradeSource
 		return
 	}
 	by := RequestActor(ctx)
-	summary := fmt.Sprintf("image source %q, fallback %q, release repository %q, asset %q, checksum %q",
-		req.Mode, req.Fallback, req.ReleaseRepository, req.ReleaseAsset, req.Checksum)
+	summary := fmt.Sprintf("image source %q, fallback %q", req.Mode, req.Fallback)
 	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
 		By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: "upgrade:source", Summary: summary,
 	}); err != nil {

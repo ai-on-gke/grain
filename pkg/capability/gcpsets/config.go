@@ -77,6 +77,8 @@ var projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 var migratedProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.:-]{0,62}$`)
 var serviceAccountEmailPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}@[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?\.gserviceaccount\.com$`)
 var credentialEnvPattern = regexp.MustCompile(`^(GCP_MINTER_KEY|GRAIN_GCP_MINTER_[A-Z0-9_]+)$`)
+var arLocationPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+var arRepoPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
 // keyPathPattern is where a migrated gcp-key:<name> set may place its
 // key: the path the in-process provider used, and nowhere else in the
@@ -107,7 +109,7 @@ type PermissionSet struct {
 	Project string
 	Roles   []string
 	// ResourceScope narrows the bindings to one resource rather than the
-	// project; v1 understands buckets: "buckets/<name>".
+	// project: "buckets/<name>" or "repositories/<location>/<repo>".
 	ResourceScope string
 	MaxLease      time.Duration
 	PoolMax       int
@@ -133,10 +135,14 @@ type PermissionSet struct {
 	// role ceiling does not apply. What the task gets is whatever the
 	// account may already do.
 	ServiceAccount string
-	// Credential is how a ServiceAccount set's grants get their
-	// credentials: CredentialToken (the default) mints short-lived access
-	// tokens by impersonation and no key exists; CredentialKey mints a
-	// key, as created sets do.
+	// Credential is how the set's grants get their credentials:
+	// CredentialToken mints short-lived access tokens by impersonation and
+	// no key ever exists (creating and binding one grain-managed service
+	// account and granting the admin roles/iam.serviceAccountTokenCreator
+	// on it when ServiceAccount is omitted, or impersonating ServiceAccount
+	// directly when set); CredentialKey mints a per-attempt service-account
+	// key (the legacy default when ServiceAccount and Credential are both
+	// omitted).
 	Credential string
 	// PersonGranted makes the set one only a person may grant
 	// (protocol.PersonGrantedArgKey): an agent holding it cannot pass it
@@ -145,7 +151,7 @@ type PermissionSet struct {
 	PersonGranted bool
 }
 
-// Credential modes of a set over an existing service account.
+// Credential modes of a permission set.
 const (
 	CredentialToken = "token"
 	CredentialKey   = "key"
@@ -157,7 +163,73 @@ func (s *PermissionSet) Existing() bool { return s.ServiceAccount != "" }
 
 // TokenMode reports whether the set's grants get impersonated access
 // tokens rather than keys.
-func (s *PermissionSet) TokenMode() bool { return s.Existing() && s.Credential != CredentialKey }
+func (s *PermissionSet) TokenMode() bool {
+	if s.Existing() {
+		return s.Credential != CredentialKey
+	}
+	return s.Credential == CredentialToken
+}
+
+// ManagedToken reports whether the set is a managed token-mode set: grain
+// creates (or adopts) its service account, reconciles its roles and
+// grants the admin roles/iam.serviceAccountTokenCreator on that account,
+// then mints short-lived access tokens with no keys.
+func (s *PermissionSet) ManagedToken() bool {
+	return !s.Existing() && len(s.Accounts) == 0 && s.Credential == CredentialToken
+}
+
+// TokenModeConfigJSON renders the JSON configuration entry for switching s
+// from key mode to token mode without creating keys.
+func (s *PermissionSet) TokenModeConfigJSON() string {
+	type existingSnippet struct {
+		Name           string   `json:"name"`
+		Admin          string   `json:"admin,omitempty"`
+		ServiceAccount string   `json:"service_account"`
+		Credential     string   `json:"credential"`
+		Project        string   `json:"project,omitempty"`
+		Roles          []string `json:"roles,omitempty"`
+	}
+	type managedSnippet struct {
+		Name          string   `json:"name"`
+		Admin         string   `json:"admin,omitempty"`
+		Project       string   `json:"project"`
+		Credential    string   `json:"credential"`
+		Roles         []string `json:"roles"`
+		ResourceScope string   `json:"resource_scope,omitempty"`
+	}
+	admin := s.Admin
+	if admin == DefaultAdmin {
+		admin = ""
+	}
+	if s.Existing() {
+		proj := s.Project
+		if home, ok := AccountProject(s.ServiceAccount); ok && home == proj {
+			proj = ""
+		}
+		b, _ := json.Marshal(existingSnippet{
+			Name:           s.Name,
+			Admin:          admin,
+			ServiceAccount: s.ServiceAccount,
+			Credential:     CredentialToken,
+			Project:        proj,
+			Roles:          s.Roles,
+		})
+		return string(b)
+	}
+	roles := s.Roles
+	if len(roles) == 0 {
+		roles = []string{"roles/..."}
+	}
+	b, _ := json.Marshal(managedSnippet{
+		Name:          s.Name,
+		Admin:         admin,
+		Project:       s.Project,
+		Credential:    CredentialToken,
+		Roles:         roles,
+		ResourceScope: s.ResourceScope,
+	})
+	return string(b)
+}
 
 // fixed reports whether the set's accounts are given rather than
 // created: the migrated pool's Accounts or an existing ServiceAccount.
@@ -218,6 +290,12 @@ func (c *Config) GeminiAdmin() *Admin {
 // prefix and deployment id (the package's AccountID).
 func (c *Config) AccountID(set *PermissionSet, n int) string {
 	return AccountID(c.prefix(), c.Deployment, set.Project, set.Name, n)
+}
+
+// SingleAccountID is the id of a managed token-mode set's one account under
+// this configuration's prefix and deployment id (the package's SingleAccountID).
+func (c *Config) SingleAccountID(set *PermissionSet) string {
+	return SingleAccountID(c.prefix(), c.Deployment, set.Project, set.Name)
 }
 
 func (c *Config) prefix() string {
@@ -335,17 +413,25 @@ func Schema() map[string]any {
 					"required":             []any{"name"},
 					"properties": map[string]any{
 						"name": map[string]any{"type": "string", "pattern": migratedNamePattern.String()},
+						"credential": map[string]any{
+							"type":    "string",
+							"enum":    []any{CredentialToken, CredentialKey},
+							"default": CredentialToken,
+							"x-grain-enum-labels": map[string]any{
+								CredentialToken: "token (recommended, no keys)",
+								CredentialKey:   "key (service-account key pool)",
+							},
+							"description": "How grants get credentials. token (recommended, no keys): with no service_account, grain creates one service account (<prefix>-<deployment>-<set>), binds roles on project or resource_scope, grants the admin roles/iam.serviceAccountTokenCreator on that account only, and mints short-lived access tokens; with service_account, grain impersonates that existing account without creating or binding anything. key: grain mints a per-attempt service-account key (pool of up to pool_max accounts, blocked when constraints/iam.disableServiceAccountKeyCreation is enforced).",
+						},
 						"service_account": map[string]any{"type": "string", "pattern": serviceAccountEmailPattern.String(),
-							"description": "Optional: an existing service account every grant acts as, instead of accounts grain creates. Grain never creates, changes or deletes it and binds no roles for it, so the task gets whatever the account may already do; roles then only list what Test checks it holds. Not with pool_max or adopt_legacy."},
-						"credential": map[string]any{"type": "string", "enum": []any{CredentialToken, CredentialKey},
-							"description": "With service_account: token (the default, recommended) gives the task short-lived access tokens by impersonation -- no key exists, the admin needs roles/iam.serviceAccountTokenCreator on the account; key mints a key deleted at release (GCP's 10 keys per account cap concurrent attempts at 10)."},
+							"description": "Optional: an existing service account every grant acts as, instead of one grain creates and binds. Leave empty for managed sets so grain creates the service account and binds roles itself. When set, grain never creates, changes or deletes the account and binds no roles; roles only list what Test checks it holds. Exclusive with pool_max, adopt_legacy, accounts and resource_scope."},
 						"admin":          map[string]any{"type": "string", "description": "The admin account that manages this set.", "deprecated": true},
 						"person_granted": map[string]any{"type": "boolean", "description": "Only a person may grant this set; an agent holding it cannot pass it on to a task it files. Default: on with service_account, off otherwise."},
-						"project":        str("The one project the set's service accounts live and are bound in (with service_account: the project gcloud selects, default the account's own)."),
-						"roles":          strs("Roles bound to the set's service accounts within the project (e.g. roles/storage.objectViewer)."),
-						"resource_scope": str("Optional: bind on one resource instead of the project, e.g. buckets/<name>."),
-						"max_lease":      map[string]any{"type": "string", "pattern": `^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`, "description": "Longest a key may live, as a Go duration (default 24h)."},
-						"pool_max":       map[string]any{"type": "integer", "minimum": 1, "maximum": 99, "description": "Most service accounts the set may create (default 3)."},
+						"project":        str("The one project the set's service accounts live and are bound in (required unless service_account is set, where it defaults to the account's own project)."),
+						"roles":          strs("Roles grain binds to a managed set's service account(s) on project or resource_scope, bounded by the admin's role_ceiling (with service_account: optional list checked read-only by Test)."),
+						"resource_scope": str("Optional: bind roles on one resource instead of the project -- buckets/<name> or repositories/<location>/<repo> (Artifact Registry). Managed sets only."),
+						"max_lease":      map[string]any{"type": "string", "pattern": `^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`, "description": "Longest a grant or key may live, as a Go duration (default 24h)."},
+						"pool_max":       map[string]any{"type": "integer", "minimum": 1, "maximum": 99, "description": "Key mode only: most service accounts the set may create (default 3). Omit for token mode, which uses a single account with no key cap."},
 						"accounts":       map[string]any{"type": "array", "description": "Existing service accounts to mint keys for instead of creating any (the migrated fixed pool).", "items": map[string]any{"type": "string", "pattern": serviceAccountEmailPattern.String()}, "deprecated": true},
 						"key_path":       map[string]any{"type": "string", "pattern": keyPathPattern.String(), "description": "Deprecated: primary sandbox key placement path for a migrated gcp-key:<name> set.", "deprecated": true},
 						"adopt_legacy":   map[string]any{"type": "boolean", "description": "Also use this set's accounts from before account names carried the deployment id (grain-<set>-<n>, marked [grain-gcp-key set=<set>]). Turn it on only in the one deployment that created them.", "deprecated": true},
@@ -588,10 +674,24 @@ func (c *Config) Validate() error {
 			}
 			continue
 		}
-		if s.Credential != "" {
-			return fmt.Errorf("permission set %q: credential applies only to a set with service_account", s.Name)
+		switch s.Credential {
+		case "":
+			s.Credential = CredentialKey
+		case CredentialToken:
+			if len(s.Accounts) > 0 {
+				return fmt.Errorf("permission set %q: credential: token and accounts are exclusive: accounts names a migrated fixed key pool; omit accounts so grain creates and binds a token-mode service account, or set service_account to impersonate one existing account", s.Name)
+			}
+			if s.PoolMax > 0 {
+				return fmt.Errorf("permission set %q: credential: token and pool_max are exclusive: in token mode grain creates one service account and mints short-lived access tokens with no 10-key cap; omit pool_max, or set credential: key for a multi-account key pool", s.Name)
+			}
+		case CredentialKey:
+		default:
+			return fmt.Errorf("permission set %q: credential must be %s or %s", s.Name, CredentialToken, CredentialKey)
 		}
 		if len(s.Accounts) == 0 {
+			if s.Project == "" {
+				return fmt.Errorf("permission set %q: %q is not a project id: project is required when service_account is omitted (grain creates the set's service account in project; only a service_account set infers project from the account email)", s.Name, s.Project)
+			}
 			if !projectPattern.MatchString(s.Project) {
 				return fmt.Errorf("permission set %q: %q is not a project id", s.Name, s.Project)
 			}
@@ -609,7 +709,7 @@ func (c *Config) Validate() error {
 			a.Projects = append(a.Projects, s.Project)
 		}
 		if len(s.Roles) == 0 && len(s.Accounts) == 0 {
-			return fmt.Errorf("permission set %q grants no roles", s.Name)
+			return fmt.Errorf("permission set %q grants no roles: add roles for grain to bind on the set's service account, or set service_account to impersonate an existing account whose roles are already bound", s.Name)
 		}
 		for _, r := range s.Roles {
 			if !rolePattern.MatchString(r) {
@@ -638,8 +738,8 @@ func (c *Config) Validate() error {
 			}
 		}
 		if s.ResourceScope != "" {
-			if _, ok := bucketOf(s.ResourceScope); !ok {
-				return fmt.Errorf("permission set %q: resource_scope %q is not buckets/<name>, the one scope v1 binds on", s.Name, s.ResourceScope)
+			if _, ok := scopeResource(s.Project, s.ResourceScope); !ok {
+				return fmt.Errorf("permission set %q: resource_scope %q must be buckets/<name> or repositories/<location>/<repo>", s.Name, s.ResourceScope)
 			}
 		}
 		for _, e := range s.Accounts {
@@ -653,7 +753,9 @@ func (c *Config) Validate() error {
 		if s.MaxLease <= 0 {
 			s.MaxLease = DefaultMaxLease
 		}
-		if s.PoolMax <= 0 {
+		if s.ManagedToken() {
+			s.PoolMax = 1
+		} else if s.PoolMax <= 0 {
 			s.PoolMax = DefaultPoolMax
 			if len(s.Accounts) > 0 {
 				s.PoolMax = len(s.Accounts)
@@ -705,7 +807,7 @@ func validateExisting(s *PermissionSet, a *Admin, explicitProjects bool) error {
 	case s.PoolMax > 0:
 		return fmt.Errorf("permission set %q: service_account and pool_max are exclusive: a set over an existing account creates no pool", s.Name)
 	case s.ResourceScope != "":
-		return fmt.Errorf("permission set %q: resource_scope binds roles, which a set over an existing service account never does", s.Name)
+		return fmt.Errorf("permission set %q: resource_scope binds roles, which a set over an existing service account never does (omit service_account so grain creates a managed account and binds roles on %s, or bind the role yourself and omit resource_scope)", s.Name, s.ResourceScope)
 	}
 	if !serviceAccountEmailPattern.MatchString(s.ServiceAccount) || strings.Contains(s.ServiceAccount, "..") {
 		return fmt.Errorf("permission set %q: service_account %q is not a service account email", s.Name, s.ServiceAccount)
@@ -787,10 +889,44 @@ func credentialKind(raw string) (string, error) {
 
 func bucketOf(scope string) (string, bool) {
 	b, ok := strings.CutPrefix(scope, "buckets/")
-	if !ok || b == "" || strings.Contains(b, "/") {
+	if !ok || b == "" || strings.Contains(b, "/") || strings.Contains(b, "..") {
 		return "", false
 	}
 	return b, true
+}
+
+func artifactRepoOf(scope string) (location, repo string, ok bool) {
+	rest, ok := strings.CutPrefix(scope, "repositories/")
+	if !ok {
+		return "", "", false
+	}
+	loc, name, ok := strings.Cut(rest, "/")
+	if !ok || strings.Contains(name, "/") || strings.Contains(loc, "..") || strings.Contains(name, "..") {
+		return "", "", false
+	}
+	if !arLocationPattern.MatchString(loc) || !arRepoPattern.MatchString(name) {
+		return "", "", false
+	}
+	return loc, name, true
+}
+
+// scopeResource resolves a validated resource_scope in project to the
+// Cloud.GetPolicy / SetPolicy resource identifier.
+func scopeResource(project, scope string) (string, bool) {
+	if b, ok := bucketOf(scope); ok {
+		return "buckets/" + b, true
+	}
+	if loc, repo, ok := artifactRepoOf(scope); ok {
+		return "projects/" + project + "/locations/" + loc + "/repositories/" + repo, true
+	}
+	return "", false
+}
+
+// ScopeResource resolves a permission set's resource_scope (e.g.
+// "buckets/<name>" or "repositories/<location>/<repo>") to the resource name
+// Cloud.GetPolicy and Cloud.SetPolicy use.
+func ScopeResource(project, scope string) (string, bool) {
+	return scopeResource(project, scope)
 }
 
 func list(v any) []map[string]any {

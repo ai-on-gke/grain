@@ -25,7 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
-func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
+func TestUpgradeStatusReportsRegistryDefaultAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 	dir := t.TempDir()
 	refFile := filepath.Join(dir, "image-ref")
 	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:main\n"), 0o644); err != nil {
@@ -36,8 +36,7 @@ func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 		"branch": "main",
 		"phase": "done",
 		"source": "registry",
-		"fallbackNote": "release has no image assets; pulled from docker.io/grainai/grain",
-		"detail": "release has no image assets; pulled from docker.io/grainai/grain"
+		"detail": "pulled docker.io/grainai/grain:main"
 	}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -58,25 +57,28 @@ func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 		t.Fatalf("GET /api/upgrade status = %d: %s", rec.Code, rec.Body.String())
 	}
 	var got struct {
-		Source       string `json:"source"`
-		FallbackNote string `json:"fallbackNote"`
-		ImageSource  *struct {
-			Source            string `json:"source"`
-			SourceDefault     bool   `json:"sourceDefault"`
-			Locked            bool   `json:"locked"`
-			Fallback          string `json:"fallback"`
-			ReleaseRepository string `json:"releaseRepository"`
-			ManifestAsset     string `json:"manifestAsset"`
+		Source      string `json:"source"`
+		ImageSource *struct {
+			Source        string `json:"source"`
+			SourceDefault bool   `json:"sourceDefault"`
+			Locked        bool   `json:"locked"`
+			Fallback      string `json:"fallback"`
 		} `json:"imageSource"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode GET /api/upgrade: %v", err)
 	}
-	if got.Source != "registry" || !strings.Contains(got.FallbackNote, "release has no image assets") {
-		t.Fatalf("GET /api/upgrade source=%q fallbackNote=%q", got.Source, got.FallbackNote)
+	if got.Source != "registry" {
+		t.Fatalf("GET /api/upgrade source=%q, want registry", got.Source)
 	}
-	if got.ImageSource == nil || got.ImageSource.Source != "release-assets" || !got.ImageSource.SourceDefault || got.ImageSource.Locked || got.ImageSource.Fallback != "registry" || got.ImageSource.ReleaseRepository != "github.com/ai-on-gke/grain" {
+	if got.ImageSource == nil || got.ImageSource.Source != "registry" || !got.ImageSource.SourceDefault || got.ImageSource.Locked || got.ImageSource.Fallback != "" {
 		t.Fatalf("unexpected default imageSource: %+v", got.ImageSource)
+	}
+
+	// Removed release-assets source is rejected with 400 Bad Request.
+	rec = do(t, srv, http.MethodPut, "/api/upgrade/source", `{"mode":"release-assets"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "removed") {
+		t.Fatalf("PUT /api/upgrade/source(release-assets) = %d: %s", rec.Code, rec.Body.String())
 	}
 
 	// Update to explicit registry mode via PUT /api/upgrade/source.
@@ -98,7 +100,7 @@ func TestUpgradeStatusReportsAndUpdatesImageSourceUnlessLocked(t *testing.T) {
 		Image: &upgrade.ImageConfig{
 			Repository:   "docker.io/grainai/grain",
 			RefFile:      refFile,
-			Source:       upgrade.ImageSourceReleaseAssets,
+			Source:       upgrade.ImageSourceRegistry,
 			SourceLocked: true,
 		},
 	})

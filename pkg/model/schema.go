@@ -625,7 +625,12 @@ import "strconv"
 // 131 adds `schedule`.`grain_ci` (model.Schedule.GrainCI): a schedule's
 // `workflow:` firing runs on grain CI even on a ci_mode: github
 // repository (grain/task-3878).
-const SchemaVersion = 131
+// 132 changes no table: it rewrites every grant still stored as
+// `api:<what>[@repo]` (or a non-canonical api reference), `repo-read:` or
+// `repo-write:` to its canonical `https://grain.dev/capabilities/api#…` /
+// `…/repo#read|#write` reference, slice 4 of
+// design/design/unified-grants.design.md (canonical_grant_migration.go).
+const SchemaVersion = 132
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

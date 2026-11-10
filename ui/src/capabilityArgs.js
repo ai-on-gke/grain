@@ -116,6 +116,7 @@ const ANNOTATIONS = new Set([
   // set over an existing service account). Grain enforces it when a
   // grant is filed, not the form, and every value is still a choice.
   "x-grain-person-granted",
+  "x-grain-enum-labels",
 ]);
 const KIND_KEYWORDS = {
   choice: ["enum", "const", "type"],

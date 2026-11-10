@@ -96,13 +96,11 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 			RefreshURL:  CIAPI.URL,
 		})
 	}
-	// release-gate-read registers unconditionally too: it is the CI alias
-	// for the api:release-gate-read preset (pkg/capability/ciapi), and
-	// what it needs is this process's CI API listener (CIAPI), which its
-	// own Resolve refuses without, and a job of grain's own repository,
-	// which it refuses every other one for (design/design/release-from-trunk.design.md §6).
-	providers = append(providers, ciapi.NewAlias(CIAPI, ciapi.Config{}, model.ReleaseGateReadCapability,
-		ciapi.Aliases[model.ReleaseGateReadCapability]))
+	// release-gate-read is no longer a provider here: it is the bare CI
+	// alias for the https://grain.dev/capabilities/api#release-gate-read
+	// preset, and a CI job's api grants, the alias among them
+	// (ciapi.Aliases), resolve through ciapi.DynamicProvider registered
+	// above (design/design/unified-grants.design.md §3, slice 4).
 	// claude-proxy, openai-proxy and gemini-proxy are no longer
 	// providers here: they were retired onto the in-process model-proxy
 	// server (modelProxyMethod below, schema migration 100), which mints

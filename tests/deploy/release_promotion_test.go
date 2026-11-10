@@ -169,9 +169,11 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 	}
 	decl := declarations(t)
 	for _, p := range []string{
+		"scripts/granule/build-granule-image.sh", "scripts/granule/guest-inputs.sh",
 		"scripts/release-images.sh", "scripts/release-notes.sh",
 		"scripts/candidate-gate.sh",
-		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		"scripts/release-patch.sh", "scripts/patch-tag-guard.sh",
+		"scripts/build-version.sh", "scripts/grain-ci-host.sh",
 		"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
@@ -179,7 +181,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
 		"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 	} {
-		if !containsString(trigger.Paths, p) {
+		if len(trigger.Match([]string{p})) == 0 {
 			t.Errorf("the release-machinery trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}
 		if matches := trustboundary.Classify([]string{p}); matches == nil || trustboundary.RequiresHuman(matches) {

@@ -135,6 +135,16 @@ role, or at a role that denies scopes. The reason is recorded in
 so it needs a `--reason`. The one-time flag import is automation and
 records its source instead.
 
+An access-code admin is no longer anonymous. The change is recorded
+under the name the code's session signed in with, `access-code:<name>`
+([access-code.md](../access-code.md#who-the-code-is-recorded-as)), and
+every other mutation the code makes goes into the same access history
+under the surface `access-code`. In the code's **recovery** mode
+(`grain access-code mode recovery`), managing access and settings is
+all a code session may do once a person with a full role can sign in
+with a verified identity. So the code stays the way back in for role
+changes, but it stops being an everyday admin credential.
+
 Holding a dangerous scope through a role does not make a person give a
 reason for each call. Per-call reasons stay an agent rule.
 

@@ -9271,6 +9271,10 @@ report_sign_in() {
     echo "                       with the access code (grain access-code prints it, to ${GRAIN_USER} and root):"
     echo "                       every caller presents it, localhost included (this host's grain CLI reads it itself)."
     echo "                       It is full owner access -- grain access-code rotate replaces it if it leaks"
+    echo "                       Signing in with it asks for your email, and what you do is recorded as you."
+    echo "    recommended:       once you sign in with a verified identity (IAP or an identity proxy),"
+    echo "                       limit the code to recovery: sudo -u ${GRAIN_USER} grain access-code mode recovery"
+    echo "                       (or switch it off: grain access-code mode off; docs/access-code.md)"
     report_cli_access
     return 0
   fi

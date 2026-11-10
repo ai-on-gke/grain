@@ -631,7 +631,7 @@ test.describe("on a phone", () => {
     // (operator-attribution spec §5.4).
     await expect(drawer.getByTestId("user-tile")).toHaveAttribute(
       "title",
-      /^operator \((access code|local)\)$/,
+      /^(operator|alice@example\.com) \((access code|local)\)$/,
     );
   });
 

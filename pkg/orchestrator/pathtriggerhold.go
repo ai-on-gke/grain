@@ -225,7 +225,11 @@ func reusableSecurityReviewPaths(ctx context.Context, store *model.Store, client
 	if linkTarget(task, model.LinkTrustBoundaryCleared) != clearedTarget(headSHA, rules) {
 		return "", nil
 	}
-	if !securityReviewReusable(ctx, store, reviewID) {
+	var ref model.PullRequestRef
+	if tp := model.TaskPullRequest(task); tp != nil {
+		ref = *tp
+	}
+	if !securityReviewReusable(ctx, store, reviewID, ref) {
 		return "", nil
 	}
 	covered := map[string]bool{}

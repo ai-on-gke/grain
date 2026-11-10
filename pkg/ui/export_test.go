@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -80,3 +81,12 @@ func SetCLIInstallReleaseForTest(t *testing.T, release string) {
 	cliInstallRelease = func() string { return release }
 	t.Cleanup(func() { cliInstallRelease = prev })
 }
+
+// SetAccessCodeModeForTest makes mode s's access-code mode, as the mode
+// file beside the code would.
+func SetAccessCodeModeForTest(s *Server, mode AccessCodeMode) {
+	s.accessCodeMode.Store(&accessCodeFile{fallback: string(mode)})
+}
+
+// AccessCodeRecoveryRouteForTest is accessCodeRecoveryRoute.
+func AccessCodeRecoveryRouteForTest(r *http.Request) bool { return accessCodeRecoveryRoute(r) }

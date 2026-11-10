@@ -30,7 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const accessCodeUsage = `usage: grain access-code [-data-dir DIR] [show|rotate]
+const accessCodeUsage = `usage: grain access-code [-data-dir DIR] [show|rotate|mode [on|recovery|off]]
 
 Prints this host's grain access code: it is the daemon's one credential, typed into the UI's "Enter
 access code" page and sent by the grain CLI as a bearer token. It lives
@@ -44,6 +44,16 @@ treat it like a password.
   show     print the code (the default)
   rotate   replace it with a new one, print that, and end every UI
            session and bearer use of the old one within a second
+  mode     print the code's mode, or set it (DIR/access-code-mode):
+             on        the code works everywhere (the default)
+             recovery  once a person with a full role on the allowlist can
+                       sign in with a verified identity (IAP or an identity
+                       proxy), the code only manages access and settings,
+                       and every use raises an Inbox notification
+             off       the code is refused everywhere; only a run's own
+                       plumbing still uses it
+           Recommended: recovery, once your own verified sign-in works.
+           Only this command, on this host, changes the mode.
 `
 
 // accessCodeCmd is `grain access-code`: show or rotate the access code
@@ -67,7 +77,7 @@ func runAccessCode(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	action := "show"
-	if fs.NArg() > 1 {
+	if fs.NArg() > 1 && !(fs.Arg(0) == "mode" && fs.NArg() == 2) {
 		fs.Usage()
 		return errors.New("too many arguments")
 	}
@@ -111,6 +121,31 @@ func runAccessCode(args []string, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintln(stdout, code)
 		fmt.Fprintln(stderr, "grain access-code: rotated; the old code and every UI session signed in with it stop working within a second")
+		return nil
+	case "mode":
+		if fs.NArg() == 1 {
+			fmt.Fprintln(stdout, ui.ReadAccessCodeMode(path))
+			return nil
+		}
+		mode, err := ui.ParseAccessCodeMode(fs.Arg(1))
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(path); err != nil {
+			return accessCodeFileError(path, err)
+		}
+		if err := ui.WriteAccessCodeMode(path, mode); err != nil {
+			return accessCodeFileError(ui.AccessCodeModePath(path), err)
+		}
+		fmt.Fprintln(stdout, mode)
+		switch mode {
+		case ui.AccessCodeRecovery:
+			fmt.Fprintln(stderr, "grain access-code: recovery: once a person with a full role on the allowlist can sign in with a verified identity, "+
+				"the code only manages access and settings, and each use raises an Inbox notification")
+		case ui.AccessCodeOff:
+			fmt.Fprintln(stderr, "grain access-code: off: the UI, the CLI and every session refuse the code within a second; "+
+				"sign in with a verified identity (grain login), or run `grain access-code mode on` here to undo it")
+		}
 		return nil
 	default:
 		fs.Usage()
