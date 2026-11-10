@@ -1591,6 +1591,7 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 		return nil
 	}
 	known = append(known, knownGitHubTokens(secretsDir)...)
+	known = append(known, knownLooseCredentials(secretsDir)...)
 	return grainlog.NewRedactor(known)
 }
 
@@ -1697,6 +1698,7 @@ func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlo
 	}
 	if secretsDir != "" {
 		known = append(known, knownGitHubTokens(secretsDir)...)
+		known = append(known, knownLooseCredentials(secretsDir)...)
 	}
 	return grainlog.NewRedactor(known)
 }
