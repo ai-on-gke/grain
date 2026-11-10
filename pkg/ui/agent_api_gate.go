@@ -2177,9 +2177,61 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		if submitRoutes[pattern] {
 			return fmt.Errorf("%s cannot submit work (autoMerge): letting a change merge unreviewed requires an unlimited role (grain/operator)", opts.role.label())
 		}
+		if pattern == "POST /api/tasks/{id}/human-review/release" {
+			return fmt.Errorf("%s cannot release human-review hold: releasing a human-review hold requires an unlimited role (grain/operator)", opts.role.label())
+		}
+		if pattern == "POST /api/tasks/{id}/force-merge" {
+			return fmt.Errorf("%s cannot force-merge work: forcing a merge requires an unlimited role (grain/operator)", opts.role.label())
+		}
 		if pattern == "POST /api/suites" && !bodyExplicitlyDisablesAutoMerge(fields) {
 			return fmt.Errorf("%s cannot set autoMerge: suites default autoMerge to true, which requires an unlimited role (pass \"autoMerge\": false)", opts.role.label())
 		}
+		if pattern == "POST /api/tasks" || pattern == "POST /api/schedules" {
+			if err := roleApprovedTargetRefusal(opts.role, pattern, repo, fields); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []jsonField) error {
+	approves := pattern == "POST /api/schedules"
+	var probe model.Task
+	if r, err := model.ParseRepo(strings.TrimSpace(repo)); err == nil {
+		probe.Target = &r
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "approved", "interactive":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil && on {
+				approves = true
+			}
+		case "writes":
+			var targets []WriteTarget
+			if json.Unmarshal(f.raw, &targets) == nil {
+				for _, t := range targets {
+					if r, err := model.ParseRepo(strings.TrimSpace(t.Repo)); err == nil {
+						probe.Writes = append(probe.Writes, model.WriteTarget{Repo: r, Base: t.Base})
+					}
+				}
+			}
+		case "changetarget", "change_target":
+			var ct model.ChangeTarget
+			if json.Unmarshal(f.raw, &ct) == nil && ct.Kind != "" {
+				probe.ChangeTarget = &ct
+			}
+		}
+	}
+	if !approves {
+		return nil
+	}
+	if why := model.ConfigRepoProposalHold(probe); why != "" {
+		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
+	}
+	if needs, why := model.ChangeTargetNeedsPersonApproval(probe.ChangeTarget); needs {
+		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
 	}
 	return nil
 }
@@ -2888,6 +2940,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		// tasks:admin, a task PATCH's capabilities:admin, tasks:admin and
 		// capabilities:detach -- read the narrower of the two.
 		set = set.Intersect(role.set).Without(role.deny)
+		held = grantListFromSet(set)
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
