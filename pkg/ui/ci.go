@@ -1082,8 +1082,8 @@ func ciRunsPageFaultRows(faults []CIFault, runs []ci.Run) []CIFault {
 		onPage[run.ID] = true
 		if run.Commit != "" {
 			// A GitHub Actions fault names check runs, not the
-			// workflow run a listing shows: its branch and commit do.
-			onPage[run.Ref+"\x00"+run.Commit] = true
+			// workflow run a listing shows: its repo, branch and commit do.
+			onPage[strings.ToLower(run.Repo)+"\x00"+run.Ref+"\x00"+run.Commit] = true
 		}
 	}
 	var out []CIFault
@@ -1091,8 +1091,9 @@ func ciRunsPageFaultRows(faults []CIFault, runs []ci.Run) []CIFault {
 		if len(out) == ciRunsPageFaults {
 			break
 		}
+		repoPrefix := strings.ToLower(f.Repo) + "\x00"
 		for _, run := range f.Runs {
-			if onPage[run.RunID] || (run.Commit != "" && onPage[run.Ref+"\x00"+run.Commit]) {
+			if onPage[run.RunID] || (run.Commit != "" && onPage[repoPrefix+run.Ref+"\x00"+run.Commit]) {
 				out = append(out, pagedCIFault(f))
 				break
 			}
@@ -1419,7 +1420,7 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		if filter, ferr := ciRunFilterFrom(r.URL.Query(), time.Now()); ferr == nil {
 			repoProvider = s.repoCIProvider(r.Context(), filter.Repo)
 		}
-		faults := s.tasks.CISharedFaults(r.Context())
+		faults := s.faultsMatchingRepo(s.tasks.CISharedFaults(r.Context()), r.URL.Query().Get("repo"))
 		if trimsCIRuns(r) {
 			// No runs to scope them to: the faults are the answer.
 			kept, _ := firstOf(faults, ciRunsPageFaults)
@@ -1475,6 +1476,7 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	} else {
 		faults = s.tasks.CISharedFaults(r.Context())
 	}
+	faults = s.faultsMatchingRepo(faults, filter.Repo)
 	page, truncated, nextCursor := pageCIRunResult(rawPage, list)
 	trim := trimsCIRuns(r)
 	if compact {
@@ -1501,6 +1503,19 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		Truncated:    truncated,
 		NextCursor:   nextCursor,
 	})
+}
+
+func (s *Server) faultsMatchingRepo(faults []CIFault, repoText string) []CIFault {
+	repoText = strings.TrimSpace(repoText)
+	if repoText == "" {
+		return faults
+	}
+	if s.tasks != nil {
+		if parsed, err := s.tasks.parseRepo(repoText); err == nil {
+			repoText = parsed.String()
+		}
+	}
+	return filterList(faults, func(f CIFault) bool { return strings.EqualFold(f.Repo, repoText) })
 }
 
 func (s *Server) repoCIProvider(ctx context.Context, repoText string) string {
@@ -1544,7 +1559,7 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 	page.Matched += actionsMatched
 	page.Stored += actionsMatched
 	page, truncated, nextCursor := pageCIRunResult(page, list)
-	faults := s.tasks.CISharedFaults(r.Context())
+	faults := s.faultsMatchingRepo(s.tasks.CISharedFaults(r.Context()), repo.String())
 	trim := trimsCIRuns(r)
 	if compact {
 		resp := ciCompactRuns(page, faults)

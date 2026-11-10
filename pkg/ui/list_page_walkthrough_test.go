@@ -974,6 +974,54 @@ func TestCIRunAgentPagesCapJobsOnWideRuns(t *testing.T) {
 	if err := json.Unmarshal(emptyHuman.Body.Bytes(), &emptyRuns); err != nil || len(emptyRuns.Faults) != 1 || emptyRuns.Faults[0].Trimmed {
 		t.Errorf("person's ci/runs?limit=50 with no grain CI runs = %+v (%v), want standalone fault", emptyRuns.Faults, err)
 	}
+
+	// Security regression: a repo-scoped agent (api:ci:read@acme/widgets)
+	// must never see another repository's shared faults via fields=full,
+	// same-ref+commit collisions, or when grain CI is disabled.
+	seedAPITask(t, client, "scoped-ci-reader", "acme/widgets", "api:ci:read@acme/widgets")
+	for b := range 2 {
+		ref := fmt.Sprintf("feature/other-%d", b)
+		commit := fmt.Sprintf("%040x", 0x9900+b)
+		if b == 0 {
+			// Collide with wide-run's ref+commit on another repository.
+			ref, commit = wide.Ref, wide.Commit
+		}
+		if err := client.Store.PutGitHubCIJob(context.Background(), model.GitHubCIJob{
+			Repo: "acme/other", CheckRunID: int64(930000 + b), Source: model.GitHubCISource,
+			App: "github-actions", Ref: ref, Commit: commit,
+			Workflow: "Tests", RunID: int64(940000 + b), RunAttempt: 1,
+			JobName: "CI / secret", Conclusion: "failure",
+			StartedAt: &faultAt, CompletedAt: &faultAt, FailingStep: "go test",
+			FailureTail: "--- FAIL: TestOtherSecretFault\n    pkg/secret/key.go:9: nope\n",
+			TailSource:  "log", RecordedAt: faultAt, UpdatedAt: faultAt,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client.Config.CI = &fakeCIRunner{runs: runs}
+	for _, query := range []string{"", "?fields=full"} {
+		code, body = asAgent(t, srv, "scoped-ci-reader", http.MethodGet, "/api/ci/runs"+query, "", "")
+		var scoped ui.CIRunsResponse
+		if err := json.Unmarshal([]byte(body), &scoped); code != http.StatusOK || err != nil {
+			t.Fatalf("scoped agent GET /api/ci/runs%s: %d %v %s", query, code, err, body)
+		}
+		for _, f := range scoped.Faults {
+			if f.Repo != "acme/widgets" {
+				t.Errorf("scoped agent GET /api/ci/runs%s leaked fault for %s: %+v", query, f.Repo, f)
+			}
+		}
+	}
+	client.Config.CI = nil
+	for _, query := range []string{"", "?fields=full"} {
+		code, body = asAgent(t, srv, "scoped-ci-reader", http.MethodGet, "/api/ci/runs"+query, "", "")
+		var disabled ui.CIRunsResponse
+		if err := json.Unmarshal([]byte(body), &disabled); code != http.StatusOK || err != nil {
+			t.Fatalf("scoped agent GET /api/ci/runs%s (CI off): %d %v %s", query, code, err, body)
+		}
+		if len(disabled.Faults) != 1 || disabled.Faults[0].Repo != "acme/widgets" {
+			t.Errorf("scoped agent GET /api/ci/runs%s (CI off) faults = %+v, want only acme/widgets", query, disabled.Faults)
+		}
+	}
 }
 
 // docs/test-runs/2026-11-10-agent-api-paging.md, F2, F3 and F6: a
