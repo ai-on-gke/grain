@@ -448,6 +448,37 @@ export default function StateRepoPanel({
         {status.secretsPublicKey || "(no key yet)"}
       </Typography>
 
+      {/* How that private half is held at rest: a plaintext file, or
+          wrapped by a Cloud KMS key the daemon unwraps once at start
+          (`grain state key wrap`). */}
+      {status.secretsKeyProtection && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mt: 1 }}
+          data-testid="secrets-key-protection"
+        >
+          {status.secretsKeyProtection === "kms" ? (
+            <>
+              Protection: wrapped by Cloud KMS key{" "}
+              <code>{status.secretsKmsKey}</code>
+              {status.secretsKeyLastUnwrap
+                ? `, last unwrapped ${formatDateTime(status.secretsKeyLastUnwrap, zone)}`
+                : ", not unwrapped by this daemon yet"}
+              . A copy of the key file is useless without decrypt on that key.
+              Run <code>grain state key unwrap</code> on the host before
+              downgrading grain.
+            </>
+          ) : (
+            <>
+              Protection: a plaintext key file. On GCE or GKE, wrap it with a
+              Cloud KMS key on the host with{" "}
+              <code>grain state key wrap -kms KEY</code>.
+            </>
+          )}
+        </Typography>
+      )}
+
       {/* Keys an import replaced. Each is still a whole private key that
           opens whatever was sealed to it, so they are listed rather than
           left for a disk image to reveal. Deleting is a host command on
