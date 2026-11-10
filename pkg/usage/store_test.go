@@ -97,3 +97,36 @@ func TestLearnFromPauseThenCapRecovers(t *testing.T) {
 		t.Fatalf("cap with a large window = %d, want 6", got)
 	}
 }
+
+// One Cap lives as long as the daemon (orchestrator.Deps.UsageCap), so a
+// mode, floor or budget the operator sets must bind the next cycle rather
+// than wait out the cached estimate: the 2026-11-10 walkthrough set
+// `-mode auto -budget ...` and then saw four runs dispatched at once under
+// a cap of two, because the cap computed a few seconds earlier under no
+// budget was still cached.
+func TestCapRecomputesWhenSettingsChange(t *testing.T) {
+	store, ctx := openStore(t)
+	for i, ago := range []time.Duration{20 * time.Minute, 80 * time.Minute} {
+		if err := store.RecordRunUsage(ctx, run(string(rune('a'+i)), "conn", "opus", ago, 400000)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &Cap{Store: store, Refresh: time.Hour}
+	if got := c.Workers(ctx, now, 6); got != 6 {
+		t.Fatalf("advisory cap = %d, want max_workers 6", got)
+	}
+	if err := store.PutUsageSettings(ctx, model.UsageSettings{Mode: model.UsageModeAuto, MinWorkers: 2,
+		Budgets: []model.TokenBudget{{Connection: "conn", Tokens: 1000000, Window: "5h"}}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Workers(ctx, now.Add(time.Second), 6); got != 2 {
+		t.Fatalf("cap a second after auto and a budget were set = %d, want the floor 2", got)
+	}
+	if err := store.PutUsageSettings(ctx, model.UsageSettings{Mode: model.UsageModeAdvisory, MinWorkers: 2,
+		Budgets: []model.TokenBudget{{Connection: "conn", Tokens: 1000000, Window: "5h"}}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Workers(ctx, now.Add(2*time.Second), 6); got != 6 {
+		t.Fatalf("cap a second after advisory was set = %d, want max_workers 6", got)
+	}
+}

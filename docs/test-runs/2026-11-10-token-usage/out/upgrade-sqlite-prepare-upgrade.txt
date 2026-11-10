@@ -1,0 +1,5 @@
+rehearsed: 86 rows across 26 tables migrate from schema 129 into 133
+prepared 129 133 /home/debian/walk/up-sqlite/prepared/schema-upgrade
+  schedule_read                5
+ok: grain can load this
+state check: ok
