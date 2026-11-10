@@ -57,8 +57,15 @@ type matrixCaller struct {
 	// sandbox-cli), which is what gitproxy.forwardToAPI turns a run's
 	// per-attempt proxy token into.
 	agent bool
-	// external presents the matrix's gma_ credential.
+	// task is the task an agent caller acts for (matrixAgentTask if
+	// empty), and controller sends its calls the way the controller MCP
+	// proxy does: the acting task alone, on no channel.
+	task       string
+	controller bool
+	// external presents the matrix's gma_ credential, or the one matrixSeed
+	// recorded under token.
 	external bool
+	token    string
 	// anonymous presents nothing, from the open internet.
 	anonymous bool
 }
@@ -81,6 +88,13 @@ const (
 	matrixOneWrite = "matrix-one-write"
 	// matrixWidgetsOnly is a set limited to acme/widgets.
 	matrixWidgetsOnly = "matrix-widgets-only"
+	matrixCapAdmin    = "matrix-cap-admin"
+	matrixAccessAdmin = "matrix-access-admin"
+	matrixSessions    = "matrix-sessions"
+	// matrixWidgetsAgentTask acts with grants limited to acme/widgets,
+	// and matrixCapAdminAgentTask holds capabilities:admin.
+	matrixWidgetsAgentTask  = "902"
+	matrixCapAdminAgentTask = "903"
 )
 
 // matrixAgentGrants are the agent caller's task grants, and
@@ -97,6 +111,11 @@ func matrixScopeSets() []model.APIScopeSet {
 		{Name: matrixOneWrite, Scopes: []string{"tasks:write"}, Version: 1},
 		{Name: matrixWidgetsOnly, Scopes: []string{"tasks:read", "tasks:write", "ci:read", "sessions:read"},
 			Repos: []string{"acme/widgets"}, Version: 1},
+		// Administers one thing without holding everything: the roles
+		// TestNoEscalationThroughTheAPI tries to climb out of.
+		{Name: matrixCapAdmin, Scopes: []string{"capabilities:read", "capabilities:admin", "tasks:read"}, Version: 1},
+		{Name: matrixAccessAdmin, Scopes: []string{"access:read", "access:write"}, Version: 1},
+		{Name: matrixSessions, Scopes: []string{"sessions:read", "sessions:write", "tasks:read"}, Version: 1},
 	}
 }
 
@@ -146,8 +165,19 @@ func matrixSeed(t *testing.T, f *routeFixture) (map[string]string, error) {
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	other := model.RepoRef{Owner: "other", Name: "gadgets"}
+	widgetsGrants := []model.Grant{
+		{Capability: model.APIGrantString("tasks:read", "acme/widgets"), Via: model.GrantByLabel},
+		{Capability: model.APIGrantString("tasks:write", "acme/widgets"), Via: model.GrantByLabel},
+	}
+	capAdminGrants := []model.Grant{
+		{Capability: model.APIRef("capabilities:admin"), Via: model.GrantByLabel},
+		{Capability: model.APIRef("capabilities:read"), Via: model.GrantByLabel},
+		{Capability: model.APIRef("tasks:read"), Via: model.GrantByLabel},
+	}
 	for _, task := range []model.Task{
 		{ID: matrixAgentTask, Title: "matrix agent", Target: &widgets, Grants: grants},
+		{ID: matrixWidgetsAgentTask, Title: "matrix widgets agent", Target: &widgets, Grants: widgetsGrants},
+		{ID: matrixCapAdminAgentTask, Title: "matrix capabilities agent", Target: &widgets, Grants: capAdminGrants},
 		{ID: matrixOtherTask, Title: "matrix other repo", Target: &other},
 	} {
 		task.Intent = model.IntentImplement
@@ -160,16 +190,29 @@ func matrixSeed(t *testing.T, f *routeFixture) (map[string]string, error) {
 			return nil, fmt.Errorf("putting task %s: %w", task.ID, err)
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"name": "matrix", "scopes": matrixExternalScopes})
-	rec := f.serve(t, http.MethodPost, "/api/external-agents/tokens", string(body), http.Header{})
-	var issued ui.IssuedExternalAgentToken
-	if rec.code != http.StatusOK && rec.code != http.StatusCreated {
-		return nil, fmt.Errorf("issuing the gma_ credential: %d %s", rec.code, rec.excerpt())
+	seeded := map[string]string{}
+	// The first is the matrix's own (its id is the fixture's "1"); the
+	// second is limited to acme/widgets.
+	for _, tok := range []struct {
+		key  string
+		body map[string]any
+	}{
+		{"gma", map[string]any{"name": "matrix", "scopes": matrixExternalScopes}},
+		{"gmaWidgets", map[string]any{"name": "matrix-widgets", "scopes": []string{"tasks:read", "tasks:write"},
+			"repos": []string{"acme/widgets"}}},
+	} {
+		body, _ := json.Marshal(tok.body)
+		rec := f.serve(t, http.MethodPost, "/api/external-agents/tokens", string(body), http.Header{})
+		var issued ui.IssuedExternalAgentToken
+		if rec.code != http.StatusOK && rec.code != http.StatusCreated {
+			return nil, fmt.Errorf("issuing gma_ credential %s: %d %s", tok.key, rec.code, rec.excerpt())
+		}
+		if err := json.Unmarshal(rec.body.Bytes(), &issued); err != nil || !strings.HasPrefix(issued.Token, "gma_") {
+			return nil, fmt.Errorf("issuing gma_ credential %s: %v %s", tok.key, err, rec.excerpt())
+		}
+		seeded[tok.key], seeded[tok.key+"ID"] = issued.Token, issued.ID
 	}
-	if err := json.Unmarshal(rec.body.Bytes(), &issued); err != nil || !strings.HasPrefix(issued.Token, "gma_") {
-		return nil, fmt.Errorf("issuing the gma_ credential: %v %s", err, rec.excerpt())
-	}
-	return map[string]string{"gma": issued.Token, "gmaID": issued.ID}, nil
+	return seeded, nil
 }
 
 // newMatrixFixture is a single-tenant daemon behind an identity proxy,
@@ -207,11 +250,21 @@ func (f *routeFixture) as(t *testing.T, c matrixCaller, method, target, body str
 	case c.agent:
 		u.from = loopbackAddr
 		header = trustedHeader()
-		header.Set(ui.ActingTaskHeader, matrixAgentTask)
-		header.Set(ui.ChannelHeader, ui.SandboxCLIChannel)
+		task := c.task
+		if task == "" {
+			task = matrixAgentTask
+		}
+		header.Set(ui.ActingTaskHeader, task)
+		if !c.controller {
+			header.Set(ui.ChannelHeader, ui.SandboxCLIChannel)
+		}
 		header.Set(ui.ActingReasonHeader, "route matrix")
 	case c.external:
-		header.Set("Authorization", "Bearer "+f.seeded["gma"])
+		key := c.token
+		if key == "" {
+			key = "gma"
+		}
+		header.Set("Authorization", "Bearer "+f.seeded[key])
 		header.Set(ui.ActingReasonHeader, "route matrix")
 	}
 	return u.serve(t, method, target, body, header)
@@ -331,6 +384,10 @@ func apiRefs(scopes []string) []string {
 // says what decides instead; every one is a refusal of more, never an
 // answer to less.
 var matrixNotDecidedByScope = map[string]string{
+	"PUT /api/api-scope-sets": "a limited role may write only a set within itself (roleGrantEscalation), and the probe's {} " +
+		"names no set; TestNoEscalationThroughTheAPI writes within and beyond",
+	"POST /api/external-agents/tokens": "a limited role's credential must be within the role (roleGrantEscalation), " +
+		"and the probe's {} names nothing it can be measured against; TestNoEscalationThroughTheAPI mints within and beyond",
 	"POST /mcp": "the external-agent endpoint answers only a gma_ bearer token; a person uses POST /api/mcp",
 	"POST /api/tasks/{id}/submit": "submitting turns on auto-merge, which only an unlimited role or the code may do " +
 		"(roleGrantEscalation; agents: agentTaskPatchBodyAllowed)",
@@ -348,6 +405,13 @@ var matrixNotDecidedByScope = map[string]string{
 	"POST /api/tasks/{id}/messages":                                 "a model-only control action, refused on the sandbox CLI channel",
 	"POST /api/tasks/{id}/park-until":                               "a model-only control action, refused on the sandbox CLI channel",
 	"POST /api/tasks/{id}/resume-later":                             "a model-only control action, refused on the sandbox CLI channel",
+}
+
+// unroutedRoutes are the routes pkg/ui registers on its mux outside
+// Server.route, so Server.Routes() does not list them, and the pattern
+// whose gates each is wrapped in (server.go).
+var unroutedRoutes = map[string]string{
+	"PUT /api/config": "PUT /api/settings",
 }
 
 // TestRouteAuthorizationMatrix asks every route pkg/ui registers as every
@@ -382,6 +446,17 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 		}
 	}
 	callers := matrixCallers()
+	// gatedAs is the pattern whose gates a route answers behind: its own,
+	// except for the routes Server.routes registers on the mux directly,
+	// outside Server.route, and so outside Routes().
+	gatedAs := map[string]string{}
+	for _, pattern := range routes {
+		gatedAs[pattern] = pattern
+	}
+	for pattern, as := range unroutedRoutes {
+		routes = append(routes, pattern)
+		gatedAs[pattern] = as
+	}
 
 	var mu sync.Mutex
 	var failures []string
@@ -417,7 +492,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 				trusted := fresh().serve(t, method, target, body, trustedHeader())
 				refusedSink := fresh()
 				for _, c := range callers {
-					want := matrixExpect(c, pattern)
+					want := matrixExpect(c, gatedAs[pattern])
 					f := refusedSink
 					switch {
 					case c.external:
@@ -445,7 +520,7 @@ func TestRouteAuthorizationMatrix(t *testing.T) {
 							// repository in TestHorizontalObjectAccess.
 							break
 						}
-						if refused(rec.code) && !refused(trusted.code) && matrixNotDecidedByScope[pattern] == "" {
+						if refused(rec.code) && !refused(trusted.code) && matrixNotDecidedByScope[gatedAs[pattern]] == "" {
 							fail("%s as %s: refused %d %s, but its scopes allow it (the access code is answered %d)",
 								pattern, c.name, rec.code, rec.excerpt(), trusted.code)
 						}

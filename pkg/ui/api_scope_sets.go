@@ -179,7 +179,7 @@ func (c *Client) DeleteAPIScopeSet(ctx context.Context, name string) error {
 		return errors.New("this server has no store to remove a scope set from")
 	}
 	if strings.HasPrefix(name, model.APIScopeSetBuiltinPrefix) {
-		return errors.New(name + " is one of grain's own scope sets and cannot be removed")
+		return validationErrorf("%s is one of grain's own scope sets and cannot be removed", name)
 	}
 	if err := c.checkSettingsWritable(ctx, "api_scope_set"); err != nil {
 		return err
