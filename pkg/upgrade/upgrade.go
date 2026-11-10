@@ -1127,9 +1127,9 @@ func (u *Upgrader) stage(ctx context.Context, p *progress, branch string) (strin
 	return u.stageBinary(ctx, p, branch)
 }
 
-// stageImage is the container path (image.go / release_assets.go): load from
-// release assets (or pull from an OCI registry), verify and health-check, and
-// only then point the deployment's ref file at the validated image.
+// stageImage is the container path (image.go): pull from an OCI registry,
+// verify and health-check, and only then point the deployment's ref file at
+// the validated image.
 func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (string, error) {
 	prevRef, _ := u.readImageRef()
 	var prevSandbox string

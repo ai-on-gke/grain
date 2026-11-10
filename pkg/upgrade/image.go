@@ -429,13 +429,13 @@ func (u *Upgrader) imageRefIn(repository, branch string) (string, error) {
 // holding a usable one. No token, or a login that fails, is only logged
 // -- the pull is what says whether it mattered.
 func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string) error {
-	// A ref naming no registry host is the local tag a release-asset
-	// tarball loads (grain/guest:sha-..., images.json's "ref"), not a
-	// pullable image: docker would resolve it to Docker Hub, where anybody
+	// A ref naming no registry host -- such as the local grain/guest:sha-...
+	// tag an earlier release's release-asset install left behind -- is not
+	// a pullable image: docker would resolve it to Docker Hub, where anybody
 	// may have published that name. Images from Docker Hub are named with
 	// an explicit docker.io/ host.
 	if registryauth.HostOf(ref) == "" {
-		return fmt.Errorf("refusing to pull %s: it names no registry host, so it is a local tag a release asset loads rather than an image to pull (docker would fetch it from Docker Hub); publish it on the release or name its registry", ref)
+		return fmt.Errorf("refusing to pull %s: it names no registry host, and docker would fetch it from Docker Hub, where anybody may have published that name; name its registry (for example docker.io/)", ref)
 	}
 	argv := u.cfg.Image.PullCmd
 	if len(argv) == 0 {
