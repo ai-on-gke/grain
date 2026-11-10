@@ -40,17 +40,6 @@ entries:
     expires: "2026-12-31"
     followup: "image-vulns follow-up: bump cosign"
     ids: [CVE-2026-111943, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
-  # The docker CLI from docker:28-cli (Dockerfile DOCKER_CLI_IMAGE), built
-  # with go1.25.3; 28 gets no newer builds, and 29 raises the minimum
-  # engine API it will talk to.
-  - image: grain
-    package: stdlib
-    target: usr/local/bin/docker
-    reason: docker 28 CLI built with go1.25.3; moving to docker:29-cli needs an engine-compatibility check
-    owner: release-train
-    expires: "2026-12-31"
-    followup: "image-vulns follow-up: bump the docker CLI"
-    ids: [CVE-2025-61726, CVE-2025-61729, CVE-2025-68121, CVE-2026-111943, CVE-2026-25679, CVE-2026-27145, CVE-2026-32280, CVE-2026-32281, CVE-2026-32283, CVE-2026-33811, CVE-2026-33814, CVE-2026-33818, CVE-2026-39820, CVE-2026-39821, CVE-2026-39822, CVE-2026-39836, CVE-2026-42499, CVE-2026-42504, CVE-2026-56853, CVE-2026-56858, CVE-2026-56859, CVE-2026-56860, CVE-2026-56862, CVE-2026-78667, CVE-2026-78669, CVE-2026-97031]
   # kubectl v1.37.2 (Dockerfile KUBECTL_VERSION) is the newest release, and
   # still vendors these; the next patch release should pick them up.
   - image: grain
