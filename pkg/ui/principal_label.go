@@ -31,8 +31,8 @@ import (
 // operator, never as a person; any other unsourced human is shown as
 // unverified.
 func PrincipalLabel(p model.Principal, behalf *model.Principal) string {
-	if p.Kind == model.PrincipalService && p.Source == model.SourceRegistry &&
-		behalf != nil && behalf.Kind == model.PrincipalHuman && behalf.Source == model.SourceRegistry {
+	if p.Kind == model.PrincipalService && p.Source == model.SourceHub &&
+		behalf != nil && behalf.Kind == model.PrincipalHuman && behalf.Source == model.SourceHub {
 		via := model.DelegateLabelForEmail(p.ID)
 		return strings.TrimSpace(behalf.ID) + " (via " + via + ")"
 	}

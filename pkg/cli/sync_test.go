@@ -474,7 +474,7 @@ func settingsWithEveryFieldChanged() ui.Settings {
 	}
 	// Struct-valued settings: the overcommit mode and registry connection.
 	s.SandboxOvercommit = model.OvercommitSettings{Mode: model.OvercommitAuto}
-	s.Registry = model.RegistryConfig{URL: "https://registry.example.com", Entry: "grain-dev"}
+	s.Registry = model.HubConfig{URL: "https://registry.example.com", Entry: "grain-dev"}
 	return s
 }
 

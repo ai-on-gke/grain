@@ -37,7 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
-func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
+func TestHubCLIRegisterStatusUnregister(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
@@ -159,18 +159,18 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 	}))
 	defer regSrv.Close()
 
-	prevHTTP := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(_ context.Context, _, _ string) (string, error) {
+	prevHTTP := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(_ context.Context, _, _ string) (string, error) {
 		return "oidc-creator-jwt", nil
 	}
 	defer func() {
-		registryHTTPClient = prevHTTP
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevHTTP
+		hubOIDCToken = prevOIDC
 	}()
 
-	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+	mgr := daemon.NewHubManager(daemon.HubManagerOptions{
 		Store:   store,
 		Secrets: secStore,
 		LiveConfig: func() daemon.Config {
@@ -178,7 +178,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 			if mc == nil {
 				return daemon.Config{HostSandboxes: true}
 			}
-			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+			return daemon.Config{HostSandboxes: true, Hub: mc.Hub}
 		},
 		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
 		Version:        func() version.Info { return version.Info{Release: "v1.4.0", Revision: "abc1234"} },
@@ -187,12 +187,12 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 	})
 
 	uiCfg := withAccessCode(ui.Config{
-		Actor:                    ui.DefaultActor("operator"),
-		Capabilities:             ui.OfferedCapabilities(),
-		Secrets:                  secStore,
-		RegistryStatus:           mgr.Snapshot,
-		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
-		TriggerRegistrySync:      mgr.Trigger,
+		Actor:               ui.DefaultActor("operator"),
+		Capabilities:        ui.OfferedCapabilities(),
+		Secrets:             secStore,
+		HubStatus:           mgr.Snapshot,
+		TriggerHubHeartbeat: mgr.TriggerHeartbeat,
+		TriggerHubSync:      mgr.Trigger,
 	})
 	daemonSrv := httptest.NewServer(ui.NewServer(uiCfg, store))
 	defer daemonSrv.Close()
@@ -207,7 +207,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 
 	// 1. Initial status is disabled.
 	outText := captureStdout(t, func() {
-		if err := cmdRegistry(ctx, c, &printer{}, []string{"status"}); err != nil {
+		if err := cmdHub(ctx, c, &printer{}, []string{"status"}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -218,7 +218,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 	// 2. Register creates the connected entry, stores grc_minted_initial_token in secrets,
 	// updates Settings, and runs an immediate heartbeat.
 	regText := captureStdout(t, func() {
-		err := cmdRegistry(ctx, c, &printer{}, []string{
+		err := cmdHub(ctx, c, &printer{}, []string{
 			"register",
 			"-hub-url", regSrv.URL,
 			"-display-name", "Widgets Grain",
@@ -233,7 +233,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 		t.Fatalf("register output = %q, want connected state and acme/widgets scope", regText)
 	}
 
-	storedTok, err := secStore.Resolve(ctx, secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
+	storedTok, err := secStore.Resolve(ctx, secrets.HubRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
 	if err != nil || storedTok != "grc_minted_initial_token" {
 		t.Fatalf("stored secret = %q, %v; want grc_minted_initial_token", storedTok, err)
 	}
@@ -248,25 +248,25 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 
 	// 3. Status JSON reports connected snapshot.
 	statusJSON := captureStdout(t, func() {
-		if err := cmdRegistry(ctx, c, &printer{json: true}, nil); err != nil {
+		if err := cmdHub(ctx, c, &printer{json: true}, nil); err != nil {
 			t.Fatal(err)
 		}
 	})
-	var snap model.RegistrySnapshot
+	var snap model.HubSnapshot
 	if err := json.Unmarshal([]byte(statusJSON), &snap); err != nil {
 		t.Fatalf("unmarshal status json: %v (%s)", err, statusJSON)
 	}
-	if !snap.Enabled || snap.State != model.RegistryStateConnected || snap.Config.Entry != "widgets-dev" {
+	if !snap.Enabled || snap.State != model.HubStateConnected || snap.Config.Entry != "widgets-dev" {
 		t.Fatalf("status snapshot = %+v", snap)
 	}
 
 	// 4. Register with -rotate-token rotates credential and heartbeats with the new token.
 	_ = captureStdout(t, func() {
-		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-rotate-token"}); err != nil {
+		if err := cmdHub(ctx, c, &printer{}, []string{"register", "-rotate-token"}); err != nil {
 			t.Fatal(err)
 		}
 	})
-	rotatedTok, err := secStore.Resolve(ctx, secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
+	rotatedTok, err := secStore.Resolve(ctx, secrets.HubRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
 	if err != nil || rotatedTok != "grc_rotated_token" {
 		t.Fatalf("rotated secret = %q, %v; want grc_rotated_token", rotatedTok, err)
 	}
@@ -278,7 +278,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 
 	// 5. Unregister deletes remote entry, clears settings, and removes secret.
 	unregText := captureStdout(t, func() {
-		if err := cmdRegistry(ctx, c, &printer{}, []string{"unregister"}); err != nil {
+		if err := cmdHub(ctx, c, &printer{}, []string{"unregister"}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -286,24 +286,24 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 		t.Fatalf("unregister output = %q", unregText)
 	}
 	mu.Lock()
-	_, stillOnRegistry := entries["widgets-dev"]
+	_, stillOnHub := entries["widgets-dev"]
 	mu.Unlock()
-	if stillOnRegistry {
+	if stillOnHub {
 		t.Fatal("expected widgets-dev to be deleted from fake registry")
 	}
-	hasSec, _ := secStore.Has(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey)
+	hasSec, _ := secStore.Has(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey)
 	if hasSec {
 		t.Fatal("expected registry-registration-token secret to be deleted")
 	}
 	mcAfter, _ := store.GetConfig(ctx)
-	if mcAfter.Registry.Enabled() {
-		t.Fatalf("expected stored registry config to be cleared, got %+v", mcAfter.Registry)
+	if mcAfter.Hub.Enabled() {
+		t.Fatalf("expected stored registry config to be cleared, got %+v", mcAfter.Hub)
 	}
 
 	// 6. Standalone register writes 0600 token file without contacting a daemon.
 	tokFile := filepath.Join(tmp, "standalone.token")
 	_ = captureStdout(t, func() {
-		err := cmdRegistry(ctx, nil, &printer{}, []string{
+		err := cmdHub(ctx, nil, &printer{}, []string{
 			"register",
 			"-standalone",
 			"-hub-url", regSrv.URL,
@@ -323,7 +323,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 	}
 }
 
-func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) {
+func TestGrainHubRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(tmp, "data")))
@@ -387,18 +387,18 @@ func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) 
 	regNew := newFakeReg("regNew", tokNew, tokOld)
 	defer regNew.Close()
 
-	prevHTTP := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regOld.Client()
-	registryOIDCToken = func(_ context.Context, _, _ string) (string, error) {
+	prevHTTP := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regOld.Client()
+	hubOIDCToken = func(_ context.Context, _, _ string) (string, error) {
 		return "oidc-creator-jwt", nil
 	}
 	defer func() {
-		registryHTTPClient = prevHTTP
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevHTTP
+		hubOIDCToken = prevOIDC
 	}()
 
-	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+	mgr := daemon.NewHubManager(daemon.HubManagerOptions{
 		Store:   store,
 		Secrets: secStore,
 		LiveConfig: func() daemon.Config {
@@ -406,7 +406,7 @@ func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) 
 			if mc == nil {
 				return daemon.Config{HostSandboxes: true}
 			}
-			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+			return daemon.Config{HostSandboxes: true, Hub: mc.Hub}
 		},
 		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
 		Version:        func() version.Info { return version.Info{Release: "v1.4.0", Revision: "abc1234"} },
@@ -426,12 +426,12 @@ func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) 
 	}()
 
 	uiCfg := withAccessCode(ui.Config{
-		Actor:                    ui.DefaultActor("operator"),
-		Capabilities:             ui.OfferedCapabilities(),
-		Secrets:                  secStore,
-		RegistryStatus:           mgr.Snapshot,
-		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
-		TriggerRegistrySync: func() {
+		Actor:               ui.DefaultActor("operator"),
+		Capabilities:        ui.OfferedCapabilities(),
+		Secrets:             secStore,
+		HubStatus:           mgr.Snapshot,
+		TriggerHubHeartbeat: mgr.TriggerHeartbeat,
+		TriggerHubSync: func() {
 			// Run an immediate synchronous step whenever settings or secrets
 			// change, maximizing race sensitivity for cross-host token leaks.
 			_, _ = mgr.TriggerHeartbeat(ctx)
@@ -447,14 +447,14 @@ func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) 
 
 	// Register initially against regOld.
 	_ = captureStdout(t, func() {
-		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-hub-url", regOld.URL, "widgets-dev"}); err != nil {
+		if err := cmdHub(ctx, c, &printer{}, []string{"register", "-hub-url", regOld.URL, "widgets-dev"}); err != nil {
 			t.Fatalf("register regOld: %v", err)
 		}
 	})
 
 	// Retarget live daemon from regOld to regNew where widgets-dev already exists.
 	_ = captureStdout(t, func() {
-		if err := cmdRegistry(ctx, c, &printer{}, []string{"register", "-hub-url", regNew.URL, "widgets-dev"}); err != nil {
+		if err := cmdHub(ctx, c, &printer{}, []string{"register", "-hub-url", regNew.URL, "widgets-dev"}); err != nil {
 			t.Fatalf("retarget regNew: %v", err)
 		}
 	})
@@ -465,13 +465,13 @@ func TestGrainRegistryRegisterRetargetingNeverSendsCrossHostToken(t *testing.T) 
 	if len(leaks) > 0 {
 		t.Fatalf("cross-host registry token leak detected:\n%s", strings.Join(leaks, "\n"))
 	}
-	gotTok, err := secStore.Resolve(ctx, secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
+	gotTok, err := secStore.Resolve(ctx, secrets.HubRegistrationTokenSecret+"/"+secrets.AgentCredentialKey)
 	if err != nil || gotTok != tokNew {
 		t.Fatalf("stored secret after retarget = %q, %v; want %q", gotTok, err, tokNew)
 	}
 }
 
-func TestDaemonRegistryFlags(t *testing.T) {
+func TestDaemonHubFlags(t *testing.T) {
 	t.Setenv(daemon.HubURLEnv, "")
 	t.Setenv(daemon.HubEntryEnv, "")
 
@@ -494,13 +494,13 @@ func TestDaemonRegistryFlags(t *testing.T) {
 	if err := checkConfig(cfg); err != nil {
 		t.Fatalf("checkConfig(valid registry flags) = %v", err)
 	}
-	if cfg.Registry.URL != "https://registry.example.com" ||
-		cfg.Registry.Entry != "team-alpha" ||
-		cfg.Registry.AuthMode != model.RegistryAuthOIDC ||
-		cfg.Registry.HostKind != api.HostKindKubernetes ||
-		cfg.Registry.Listed != false ||
-		cfg.RegistryTokenFile != "/etc/grain/reg.token" {
-		t.Fatalf("parsed Registry = %+v (tokenFile=%q)", cfg.Registry, cfg.RegistryTokenFile)
+	if cfg.Hub.URL != "https://registry.example.com" ||
+		cfg.Hub.Entry != "team-alpha" ||
+		cfg.Hub.AuthMode != model.HubAuthOIDC ||
+		cfg.Hub.HostKind != api.HostKindKubernetes ||
+		cfg.Hub.Listed != false ||
+		cfg.HubTokenFile != "/etc/grain/reg.token" {
+		t.Fatalf("parsed Registry = %+v (tokenFile=%q)", cfg.Hub, cfg.HubTokenFile)
 	}
 
 	// Environment variable fallback when flags are omitted.
@@ -510,20 +510,20 @@ func TestDaemonRegistryFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if envCfg.Registry.URL != "https://env-registry.example.com" || envCfg.Registry.Entry != "env-grain" {
-		t.Fatalf("env fallback Registry = %+v", envCfg.Registry)
+	if envCfg.Hub.URL != "https://env-registry.example.com" || envCfg.Hub.Entry != "env-grain" {
+		t.Fatalf("env fallback Registry = %+v", envCfg.Hub)
 	}
 
 	// Partial configuration (URL without entry) is rejected by checkConfig.
 	bad := cfg
-	bad.Registry.Entry = ""
+	bad.Hub.Entry = ""
 	if err := checkConfig(bad); err == nil || !strings.Contains(err.Error(), "-hub-url and -hub-entry") {
 		t.Fatalf("checkConfig(missing entry) = %v, want paired flag error", err)
 	}
 
 	// Non-HTTPS non-loopback URL is rejected by checkConfig.
 	badURL := cfg
-	badURL.Registry.URL = "http://registry.example.com"
+	badURL.Hub.URL = "http://registry.example.com"
 	if err := checkConfig(badURL); err == nil || !strings.Contains(err.Error(), "insecure http://") {
 		t.Fatalf("checkConfig(http url) = %v, want insecure http:// error", err)
 	}
@@ -541,8 +541,8 @@ func TestDaemonRegistryFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseDaemonArgs(-hub-connect): %v", err)
 	}
-	if !connCfg.RegistryConnect {
-		t.Fatal("connCfg.RegistryConnect = false, want true")
+	if !connCfg.HubConnect {
+		t.Fatal("connCfg.HubConnect = false, want true")
 	}
 	if err := checkConfig(connCfg); err == nil || !strings.Contains(err.Error(), "-ui-hub-issuer") {
 		t.Fatalf("checkConfig(-hub-connect without verifier flags) = %v, want missing -ui-hub-issuer error", err)
@@ -560,15 +560,15 @@ func TestDaemonRegistryFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseDaemonArgs(GRAIN_REGISTRY_CONNECT=true): %v", err)
 	}
-	if !connEnvCfg.RegistryConnect {
-		t.Fatal("connEnvCfg.RegistryConnect = false, want true")
+	if !connEnvCfg.HubConnect {
+		t.Fatal("connEnvCfg.HubConnect = false, want true")
 	}
 	if err := checkConfig(connEnvCfg); err != nil {
 		t.Fatalf("checkConfig(-hub-connect with verifier flags) = %v, want nil", err)
 	}
 }
 
-func TestRegistryCLISubcommands(t *testing.T) {
+func TestHubCLISubcommands(t *testing.T) {
 	ctx := context.Background()
 
 	var (
@@ -638,7 +638,7 @@ func TestRegistryCLISubcommands(t *testing.T) {
 				Kind:        req.Kind,
 				State:       api.StateCreating,
 				Status:      api.StatusOffline,
-				HostKind:    api.HostKindRegistryVM,
+				HostKind:    api.HostKindHubVM,
 				DisplayName: req.DisplayName,
 				Purpose:     req.Purpose,
 				Owner:       "alice@example.com",
@@ -747,23 +747,23 @@ func TestRegistryCLISubcommands(t *testing.T) {
 	}))
 	defer regSrv.Close()
 
-	prevClient := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	prevClient := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		return "oidc-test-token", nil
 	}
 	defer func() {
-		registryHTTPClient = prevClient
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevClient
+		hubOIDCToken = prevOIDC
 	}()
 
 	out := &printer{json: true}
 	runSub := func(args ...string) {
 		t.Helper()
 		full := append([]string{args[0], "-hub-url", regSrv.URL}, args[1:]...)
-		if err := cmdRegistry(ctx, nil, out, full); err != nil {
-			t.Fatalf("cmdRegistry(%v) = %v", full, err)
+		if err := cmdHub(ctx, nil, out, full); err != nil {
+			t.Fatalf("cmdHub(%v) = %v", full, err)
 		}
 	}
 
@@ -784,10 +784,10 @@ func TestRegistryCLISubcommands(t *testing.T) {
 	runSub("restore", "platform-vm")
 }
 
-// TestRegistryCLIStopStart drives `grain hub stop` / `start` against a
+// TestHubCLIStopStart drives `grain hub stop` / `start` against a
 // fake registry: each posts to its own endpoint, prints the new lifecycle
 // state, and refuses a missing or extra entry name before any request.
-func TestRegistryCLIStopStart(t *testing.T) {
+func TestHubCLIStopStart(t *testing.T) {
 	ctx := context.Background()
 
 	var (
@@ -819,15 +819,15 @@ func TestRegistryCLIStopStart(t *testing.T) {
 		}
 	}))
 	defer regSrv.Close()
-	prevClient := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	prevClient := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		return "oidc-test-token", nil
 	}
 	t.Cleanup(func() {
-		registryHTTPClient = prevClient
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevClient
+		hubOIDCToken = prevOIDC
 	})
 
 	run := func(args ...string) (string, error) {
@@ -835,7 +835,7 @@ func TestRegistryCLIStopStart(t *testing.T) {
 		full := append([]string{args[0], "-hub-url", regSrv.URL}, args[1:]...)
 		var err error
 		stdout := captureStdout(t, func() {
-			err = cmdRegistry(ctx, nil, &printer{}, full)
+			err = cmdHub(ctx, nil, &printer{}, full)
 		})
 		return stdout, err
 	}
@@ -883,7 +883,7 @@ func TestRegistryCLIStopStart(t *testing.T) {
 	}
 }
 
-func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T) {
+func TestHubRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
@@ -995,18 +995,18 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 		}
 	}))
 	defer regSrv.Close()
-	prevHTTP := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(_ context.Context, _, _ string) (string, error) {
+	prevHTTP := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(_ context.Context, _, _ string) (string, error) {
 		return "oidc-creator-jwt", nil
 	}
 	defer func() {
-		registryHTTPClient = prevHTTP
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevHTTP
+		hubOIDCToken = prevOIDC
 	}()
 
-	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+	mgr := daemon.NewHubManager(daemon.HubManagerOptions{
 		Store:   store,
 		Secrets: secStore,
 		LiveConfig: func() daemon.Config {
@@ -1014,7 +1014,7 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 			if mc == nil {
 				return daemon.Config{HostSandboxes: true}
 			}
-			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+			return daemon.Config{HostSandboxes: true, Hub: mc.Hub}
 		},
 		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
 		Version:        func() version.Info { return version.Info{Release: "v1.5.0", Revision: "def5678"} },
@@ -1023,12 +1023,12 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 		JitterFraction: -1,
 	})
 	uiCfg := withAccessCode(ui.Config{
-		Actor:                    ui.DefaultActor("operator"),
-		Capabilities:             ui.OfferedCapabilities(),
-		Secrets:                  secStore,
-		RegistryStatus:           mgr.Snapshot,
-		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
-		TriggerRegistrySync:      mgr.Trigger,
+		Actor:               ui.DefaultActor("operator"),
+		Capabilities:        ui.OfferedCapabilities(),
+		Secrets:             secStore,
+		HubStatus:           mgr.Snapshot,
+		TriggerHubHeartbeat: mgr.TriggerHeartbeat,
+		TriggerHubSync:      mgr.Trigger,
 	})
 	daemonSrv := httptest.NewServer(ui.NewServer(uiCfg, store))
 	defer daemonSrv.Close()
@@ -1042,7 +1042,7 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 	// host_kind=kubernetes, listed=false, and tags.
 	tokFile := filepath.Join(tmp, "conn-alice.token")
 	_ = captureStdout(t, func() {
-		err := cmdRegistry(ctx, nil, &printer{}, []string{
+		err := cmdHub(ctx, nil, &printer{}, []string{
 			"register",
 			"-standalone",
 			"-hub-url", regSrv.URL,
@@ -1064,7 +1064,7 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 	// Neither the PATCH nor the immediate heartbeat may overwrite the remote
 	// entry's metadata or CLI-declared host_kind.
 	_ = captureStdout(t, func() {
-		err := cmdRegistry(ctx, c, &printer{}, []string{
+		err := cmdHub(ctx, c, &printer{}, []string{
 			"register",
 			"-hub-url", regSrv.URL,
 			"conn-alice",
@@ -1098,13 +1098,13 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mc.Registry.DisplayName != "Alice" || mc.Registry.Purpose != "API" || mc.Registry.Listed {
-		t.Fatalf("daemon stored RegistryConfig did not adopt remote metadata: %+v", mc.Registry)
+	if mc.Hub.DisplayName != "Alice" || mc.Hub.Purpose != "API" || mc.Hub.Listed {
+		t.Fatalf("daemon stored HubConfig did not adopt remote metadata: %+v", mc.Hub)
 	}
 
 	// 3. Explicit CLI flags still override (including clearing with -display-name "").
 	_ = captureStdout(t, func() {
-		err := cmdRegistry(ctx, c, &printer{}, []string{
+		err := cmdHub(ctx, c, &printer{}, []string{
 			"register",
 			"-hub-url", regSrv.URL,
 			"-display-name", "",
@@ -1130,9 +1130,9 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 	}
 }
 
-// TestRegistryCLITransferCancel covers `grain hub transfer -cancel`: it
+// TestHubCLITransferCancel covers `grain hub transfer -cancel`: it
 // posts {"cancel": true} with no target, and refuses to be combined with -to.
-func TestRegistryCLITransferCancel(t *testing.T) {
+func TestHubCLITransferCancel(t *testing.T) {
 	ctx := context.Background()
 	var (
 		mu     sync.Mutex
@@ -1155,22 +1155,22 @@ func TestRegistryCLITransferCancel(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(entry)
 	}))
 	defer regSrv.Close()
-	prevClient := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	prevClient := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		return "oidc-test-token", nil
 	}
 	t.Cleanup(func() {
-		registryHTTPClient = prevClient
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevClient
+		hubOIDCToken = prevOIDC
 	})
 	run := func(args ...string) (string, error) {
 		t.Helper()
 		full := append([]string{"transfer", "-hub-url", regSrv.URL}, args...)
 		var err error
 		stdout := captureStdout(t, func() {
-			err = cmdRegistry(ctx, nil, &printer{}, full)
+			err = cmdHub(ctx, nil, &printer{}, full)
 		})
 		return stdout, err
 	}
@@ -1195,19 +1195,19 @@ func TestRegistryCLITransferCancel(t *testing.T) {
 	}
 }
 
-// TestRegistryCLIListAndShowPrintStatusDetail covers the 2026-11-09 walkthrough
+// TestHubCLIListAndShowPrintStatusDetail covers the 2026-11-09 walkthrough
 // fix: plain-text `grain registry list` and `grain registry show` print an
 // entry's `status_detail` (such as a service-account propagation retry reason
 // while `creating` or a failure reason when `failed`), plus `replace_step`,
 // `health_detail`, and `boot_disk_gb` on `show`.
-func TestRegistryCLIListAndShowPrintStatusDetail(t *testing.T) {
+func TestHubCLIListAndShowPrintStatusDetail(t *testing.T) {
 	ctx := context.Background()
 	const propReason = "waiting for service account gi-late-vm@acme-prod.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s)"
 	entry := api.Entry{
 		Name:         "late-vm",
 		URL:          "https://late-vm.grain.example.com",
 		Kind:         api.KindInstance,
-		HostKind:     api.HostKindRegistryVM,
+		HostKind:     api.HostKindHubVM,
 		State:        api.StateCreating,
 		Status:       api.StatusOffline,
 		StatusDetail: propReason,
@@ -1229,20 +1229,20 @@ func TestRegistryCLIListAndShowPrintStatusDetail(t *testing.T) {
 		}
 	}))
 	defer regSrv.Close()
-	prevClient := registryHTTPClient
-	prevOIDC := registryOIDCToken
-	registryHTTPClient = regSrv.Client()
-	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+	prevClient := hubHTTPClient
+	prevOIDC := hubOIDCToken
+	hubHTTPClient = regSrv.Client()
+	hubOIDCToken = func(ctx context.Context, hubURL, audience string) (string, error) {
 		return "oidc-test-token", nil
 	}
 	t.Cleanup(func() {
-		registryHTTPClient = prevClient
-		registryOIDCToken = prevOIDC
+		hubHTTPClient = prevClient
+		hubOIDCToken = prevOIDC
 	})
 
 	var listErr error
 	listOut := captureStdout(t, func() {
-		listErr = cmdRegistry(ctx, nil, &printer{}, []string{"list", "-registry-url", regSrv.URL})
+		listErr = cmdHub(ctx, nil, &printer{}, []string{"list", "-registry-url", regSrv.URL})
 	})
 	if listErr != nil {
 		t.Fatalf("grain registry list: %v", listErr)
@@ -1253,7 +1253,7 @@ func TestRegistryCLIListAndShowPrintStatusDetail(t *testing.T) {
 
 	var showErr error
 	showOut := captureStdout(t, func() {
-		showErr = cmdRegistry(ctx, nil, &printer{}, []string{"show", "-registry-url", regSrv.URL, "late-vm"})
+		showErr = cmdHub(ctx, nil, &printer{}, []string{"show", "-registry-url", regSrv.URL, "late-vm"})
 	})
 	if showErr != nil {
 		t.Fatalf("grain registry show: %v", showErr)

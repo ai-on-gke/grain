@@ -307,12 +307,12 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
-	uiRegistryIssuer := fs.String("ui-hub-issuer", "", "the exact issuer URL a signed X-Grain-Hub-Assertion must carry for the UI/API to accept "+
+	uiHubIssuer := fs.String("ui-hub-issuer", "", "the exact issuer URL a signed X-Grain-Hub-Assertion must carry for the UI/API to accept "+
 		"the identity in it (e.g. \"https://grain.example.com\"); defaults to $GRAIN_HUB_ISSUER. All three of -ui-hub-issuer, "+
 		"-ui-hub-audience, and -ui-hub-keys-url must be set to enable the \"registry\" IdentityVerifier")
-	uiRegistryAudience := fs.String("ui-hub-audience", "", "the single audience URL a signed X-Grain-Hub-Assertion must carry "+
+	uiHubAudience := fs.String("ui-hub-audience", "", "the single audience URL a signed X-Grain-Hub-Assertion must carry "+
 		"(e.g. \"https://<name>.<instance-domain>\"); defaults to $GRAIN_HUB_AUDIENCE")
-	uiRegistryKeysURL := fs.String("ui-hub-keys-url", "", "where the hub's ES256 signing keys are published as a JWK set "+
+	uiHubKeysURL := fs.String("ui-hub-keys-url", "", "where the hub's ES256 signing keys are published as a JWK set "+
 		"(e.g. \"https://grain.example.com/.well-known/jwks.json\"); defaults to $GRAIN_HUB_KEYS_URL")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
 		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
@@ -553,7 +553,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
 	grit := daemon.RegisterGritFlags(fs)
-	registryFlags := registerRegistryFlags(fs)
+	hubFlags := registerHubFlags(fs)
 
 	// The CI job cache's bounds (ci.DirCacheOptions). Seeds, like the CI
 	// history's four below and unlike what they were until
@@ -1260,9 +1260,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
-		UiRegistryIssuer:        *uiRegistryIssuer,
-		UiRegistryAudience:      *uiRegistryAudience,
-		UiRegistryKeysURL:       *uiRegistryKeysURL,
+		UiHubIssuer:             *uiHubIssuer,
+		UiHubAudience:           *uiHubAudience,
+		UiHubKeysURL:            *uiHubKeysURL,
 		UiRequireVerifier:       strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
@@ -1367,7 +1367,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
-	registryFlags.apply(&cfg, passed)
+	hubFlags.apply(&cfg, passed)
 	if err = upgradeSource.apply(&cfg, passed); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
@@ -1384,5 +1384,5 @@ func checkConfig(cfg daemon.Config) error {
 	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
 		return err
 	}
-	return checkRegistryConfig(cfg)
+	return checkHubConfig(cfg)
 }

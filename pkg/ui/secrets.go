@@ -124,8 +124,8 @@ func (s *Server) handleSetSecret(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if r.PathValue("secret") == secrets.RegistryRegistrationTokenSecret {
-		s.tasks.triggerRegistrySync()
+	if r.PathValue("secret") == secrets.HubRegistrationTokenSecret {
+		s.tasks.triggerHubSync()
 	}
 	s.respondWithSecrets(w, r)
 }
@@ -140,8 +140,8 @@ func (s *Server) handleDeleteSecretKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	if r.PathValue("secret") == secrets.RegistryRegistrationTokenSecret {
-		s.tasks.triggerRegistrySync()
+	if r.PathValue("secret") == secrets.HubRegistrationTokenSecret {
+		s.tasks.triggerHubSync()
 	}
 	s.respondWithSecrets(w, r)
 }
@@ -156,8 +156,8 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	if r.PathValue("secret") == secrets.RegistryRegistrationTokenSecret {
-		s.tasks.triggerRegistrySync()
+	if r.PathValue("secret") == secrets.HubRegistrationTokenSecret {
+		s.tasks.triggerHubSync()
 	}
 	s.respondWithSecrets(w, r)
 }

@@ -1366,7 +1366,7 @@ func InstanceGrainConfig(cfg hub.Config, entry *store.EntryRow, bundle *hub.Inst
 	set("instance", entry.Name)
 	set("deployment_owner", entry.OwnerEmail)
 	set("owner_group", strings.TrimPrefix(strings.TrimSpace(entry.OwnerGroup), "group:"))
-	set("issuer", hub.RegistryAssertionIssuer)
+	set("issuer", hub.HubAssertionIssuer)
 	set("instance_domain", instanceDomain)
 	set("audience", audience)
 	set("jwks_url", jwksURL)
@@ -1486,7 +1486,7 @@ func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName
 	if err != nil {
 		return nil, err
 	}
-	r.attachRegistryAssertion(ctx, healthReq, entryName, ownerEmail)
+	r.attachHubAssertion(ctx, healthReq, entryName, ownerEmail)
 	resp, err := r.httpClient.Do(healthReq)
 	if err != nil {
 		return nil, err
@@ -1518,7 +1518,7 @@ func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, ownerEm
 	if err != nil {
 		return nil, err
 	}
-	r.attachRegistryAssertion(ctx, req, entryName, ownerEmail)
+	r.attachHubAssertion(ctx, req, entryName, ownerEmail)
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -1538,7 +1538,7 @@ func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, ownerEm
 	return &statusResp, nil
 }
 
-func (r *Reconciler) attachRegistryAssertion(ctx context.Context, req *http.Request, entryName, ownerEmail string) {
+func (r *Reconciler) attachHubAssertion(ctx context.Context, req *http.Request, entryName, ownerEmail string) {
 	instDom := strings.TrimPrefix(strings.TrimSpace(r.cfg.InstanceDomain), ".")
 	aud := "grain-instance:" + entryName
 	if instDom != "" {
@@ -1557,7 +1557,7 @@ func (r *Reconciler) attachRegistryAssertion(ctx context.Context, req *http.Requ
 		email = owner
 		kind = "human"
 	}
-	tok, err := r.signer.SignAssertion(ctx, hub.RegistryClaims{
+	tok, err := r.signer.SignAssertion(ctx, hub.HubClaims{
 		Audience: aud,
 		Subject:  sub,
 		Email:    email,

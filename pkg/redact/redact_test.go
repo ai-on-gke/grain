@@ -69,7 +69,7 @@ func TestTextCutsKnownValuesAndLeavesCleanTextAlone(t *testing.T) {
 	}
 }
 
-func TestTextCutsRegistryTokenShapes(t *testing.T) {
+func TestTextCutsHubTokenShapes(t *testing.T) {
 	text := "X-Grain-Registry-Token: grc_shorttok\n" +
 		"token=grc_AbCdEfGhIjKlMnOpQrStUvWxYz012345\n"
 	got, n := (*redact.Redactor)(nil).Text(text)

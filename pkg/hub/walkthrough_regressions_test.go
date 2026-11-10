@@ -32,11 +32,11 @@ import (
 // lifecycle_state "replacing", after which the registry answered every request
 // for it with the "currently replacing" state page instead of routing to its
 // live tunnel.
-// newWalkthroughRegistry starts a PostgreSQL-backed registry Server and
+// newWalkthroughHub starts a PostgreSQL-backed registry Server and
 // returns a client factory acting as the given person.
-func newWalkthroughRegistry(t *testing.T) (context.Context, *store.Store, func(email string) *api.Client) {
+func newWalkthroughHub(t *testing.T) (context.Context, *store.Store, func(email string) *api.Client) {
 	t.Helper()
-	pgURL := startEphemeralPostgresForRegistryTest(t)
+	pgURL := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
 	if err != nil {
@@ -86,7 +86,7 @@ func newWalkthroughRegistry(t *testing.T) (context.Context, *store.Store, func(e
 }
 
 func TestReplaceRefusesConnectedEntries(t *testing.T) {
-	ctx, st, clientFor := newWalkthroughRegistry(t)
+	ctx, st, clientFor := newWalkthroughHub(t)
 	cli := clientFor("alice@example.com")
 
 	if _, err := cli.CreateEntry(ctx, api.CreateEntryRequest{Name: "alice-laptop", Kind: api.KindConnected}); err != nil {
@@ -128,7 +128,7 @@ func TestReplaceRefusesConnectedEntries(t *testing.T) {
 // permission to view this entry" (403 from GET /api/entries/{name} on the
 // tombstone), so the name could not be claimed through the CLI.
 func TestOthersDeletedEntryReadsAsNotFound(t *testing.T) {
-	ctx, _, clientFor := newWalkthroughRegistry(t)
+	ctx, _, clientFor := newWalkthroughHub(t)
 	alice, bob, admin := clientFor("alice@example.com"), clientFor("bob@example.com"), clientFor("admin@example.com")
 
 	if _, err := alice.CreateEntry(ctx, api.CreateEntryRequest{Name: "old-box", Kind: api.KindConnected}); err != nil {
@@ -160,7 +160,7 @@ func TestOthersDeletedEntryReadsAsNotFound(t *testing.T) {
 // `connected` entries and stored `target_version` on them even though only
 // hosted `instance` VMs are upgraded by the reconciler.
 func TestUpgradeRefusesConnectedEntries(t *testing.T) {
-	ctx, st, clientFor := newWalkthroughRegistry(t)
+	ctx, st, clientFor := newWalkthroughHub(t)
 	cli := clientFor("alice@example.com")
 
 	if _, err := cli.CreateEntry(ctx, api.CreateEntryRequest{Name: "alice-laptop", Kind: api.KindConnected}); err != nil {
@@ -189,7 +189,7 @@ func TestUpgradeRefusesConnectedEntries(t *testing.T) {
 // GET /api/entries redacts status_detail and credentials for a pending transfer
 // recipient who does not yet manage the entry, matching GET /api/entries/{name}.
 func TestListEntriesRedactsStatusDetailForPendingTransferRecipient(t *testing.T) {
-	ctx, st, clientFor := newWalkthroughRegistry(t)
+	ctx, st, clientFor := newWalkthroughHub(t)
 	alice, bob, admin := clientFor("alice@example.com"), clientFor("bob@example.com"), clientFor("admin@example.com")
 
 	if _, err := alice.CreateEntry(ctx, api.CreateEntryRequest{Name: "xfer-vm", Kind: api.KindInstance, Shape: "small"}); err != nil {

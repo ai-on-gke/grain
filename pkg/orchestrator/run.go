@@ -2346,7 +2346,9 @@ func proposalSection(task model.Task) string {
 		"in your comments, questions, chat messages, or task descriptions must always be a " +
 		"relative path (such as `[Task #31](/tasks/31)` or `[Settings → CI](/settings/ci)`) " +
 		"and never an absolute `http://127.0.0.1:...` or `http://localhost:...` URL, so links " +
-		"work when viewed through UberProxy or any reverse proxy."
+		"work when viewed through UberProxy or any reverse proxy. To point at one comment " +
+		"in a task's conversation, add its comment id as the fragment: " +
+		"`[comment](/tasks/31#comment=13)`."
 	return s
 }
 

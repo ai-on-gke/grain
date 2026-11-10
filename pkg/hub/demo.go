@@ -101,7 +101,7 @@ type demoState struct {
 	now              time.Time
 	callerEmail      string
 	instanceDomain   string
-	registryHost     string
+	hubHost          string
 	shapes           []api.Shape
 	entries          map[string]*api.Entry
 	order            []string
@@ -129,7 +129,7 @@ func newDemoState() *demoState {
 		now:            now,
 		callerEmail:    "alice@example.com",
 		instanceDomain: "grain.example.com",
-		registryHost:   "registry.grain.example.com",
+		hubHost:        "registry.grain.example.com",
 		// Hosted VMs need nested virtualization (/dev/kvm for Granule
 		// microVMs), which E2 machine types do not support, so every demo
 		// shape is an N2 machine type.
@@ -391,7 +391,7 @@ func newDemoState() *demoState {
 			State:               api.StateRunning,
 			Status:              api.StatusOnline,
 			Health:              api.HealthOK,
-			HostKind:            api.HostKindRegistryVM,
+			HostKind:            api.HostKindHubVM,
 			DisplayName:         "Platform Core VM",
 			Purpose:             "Primary hosted grain VM for acme/platform and production GKE cluster manifests.",
 			Owner:               "alice@example.com",
@@ -632,7 +632,7 @@ func newDemoState() *demoState {
 			ReplaceStep:         api.ReplaceStepCreatingVM,
 			Status:              api.StatusOffline,
 			StatusDetail:        "Replacing VM (creating_vm): upgrading to v0.14.2 on shape large",
-			HostKind:            api.HostKindRegistryVM,
+			HostKind:            api.HostKindHubVM,
 			DisplayName:         "Payments Staging VM",
 			Purpose:             "Hosted grain VM for acme/payments integration verification and ledger migration runs.",
 			Owner:               "alice@example.com",
@@ -806,7 +806,7 @@ func newDemoState() *demoState {
 			State:        api.StateStopped,
 			Status:       api.StatusOffline,
 			StatusDetail: "Stopped by owner; VM deleted, state kept",
-			HostKind:     api.HostKindRegistryVM,
+			HostKind:     api.HostKindHubVM,
 			DisplayName:  "Docs Preview VM",
 			Purpose:      "Occasional hosted grain for acme/docs preview builds, stopped between uses.",
 			Owner:        "alice@example.com",
@@ -832,7 +832,7 @@ func newDemoState() *demoState {
 			State:         api.StateDeleted,
 			Status:        api.StatusOffline,
 			StatusDetail:  "Soft-deleted; name reserved for 28d",
-			HostKind:      api.HostKindRegistryVM,
+			HostKind:      api.HostKindHubVM,
 			DisplayName:   "Alice Legacy Sandbox",
 			Purpose:       "Previous experimental VM held in 30-day reservation window.",
 			Owner:         "alice@example.com",
@@ -938,13 +938,13 @@ func (d *demoState) handleMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, api.MeResponse{
-		Email:           d.callerEmail,
-		Kind:            "human",
-		IsRegistryAdmin: true,
-		CanCreate:       true,
-		Groups:          []string{"group:platform-eng@example.com", "group:payments-eng@example.com"},
-		InstanceDomain:  d.instanceDomain,
-		RegistryHost:    d.registryHost,
+		Email:          d.callerEmail,
+		Kind:           "human",
+		IsHubAdmin:     true,
+		CanCreate:      true,
+		Groups:         []string{"group:platform-eng@example.com", "group:payments-eng@example.com"},
+		InstanceDomain: d.instanceDomain,
+		HubHost:        d.hubHost,
 		Quota: api.QuotaUsage{
 			QuotaUnitsUsed:  usedUnits,
 			QuotaUnitsLimit: 10,
@@ -969,7 +969,7 @@ func (d *demoState) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := api.StatusResponse{
 		OK:             true,
 		Status:         "ok",
-		Host:           d.registryHost,
+		Host:           d.hubHost,
 		InstanceDomain: d.instanceDomain,
 		Release:        "v0.14.2",
 		Revision:       "9f3c1e8b4a12",
@@ -1421,7 +1421,7 @@ func (d *demoState) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 	if req.Kind == api.KindInstance {
 		state = api.StateCreating
 		status = api.StatusOffline
-		hostKind = api.HostKindRegistryVM
+		hostKind = api.HostKindHubVM
 		if req.Shape == "" {
 			req.Shape = "medium"
 		}

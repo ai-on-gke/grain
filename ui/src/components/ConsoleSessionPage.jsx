@@ -41,6 +41,7 @@ import {
 } from "../state.js";
 import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
+import CommentDeepLink from "./CommentDeepLink.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import ModelPicker from "./ModelPicker.jsx";
 import WorkTree from "./detail/WorkTree.jsx";
@@ -819,6 +820,7 @@ export default function ConsoleSessionPage({
       </PageHeaderActions>
 
       <div className="console-session-body">
+        {task && <CommentDeepLink key={task.id} t={task} />}
         {task ? (
           <TaskChat
             // Keyed by task so switching sessions remounts the composer:

@@ -997,7 +997,8 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"`/settings/...`, `/system/...`, etc.) must always be a relative path (such as " +
 		"`[Task #31](/tasks/31)` or `[Settings → CI](/settings/ci)`) and never an absolute " +
 		"`http://127.0.0.1:...` or `http://localhost:...` URL, so links work when viewed " +
-		"through UberProxy or any reverse proxy.\n\n")
+		"through UberProxy or any reverse proxy. To point at one comment in a task's " +
+		"conversation, add its comment id as the fragment: `[comment](/tasks/31#comment=13)`.\n\n")
 
 	b.WriteString("When you have nothing further to say, stop. The conversation stays open and " +
 		"the next message picks it back up, so there is no need to keep going, to summarise " +

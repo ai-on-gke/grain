@@ -61,6 +61,7 @@ import Overlay, { DISCARD_PROMPT } from "./Overlay.jsx";
 import PromptOverlay from "./PromptOverlay.jsx";
 import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
+import CommentDeepLink from "./CommentDeepLink.jsx";
 import Actions from "./detail/Actions.jsx";
 import CapabilityToggles from "./detail/CapabilityToggles.jsx";
 import CommittedContext from "./detail/CommittedContext.jsx";
@@ -709,6 +710,9 @@ export default function DetailOverlay({
               reply actually did (grain/task-414). Every other task is
               unchanged: the timeline is the whole of its conversation
               and is not hidden behind anything. */}
+          {/* A /tasks/<id>#comment=<id> link scrolls to its comment,
+              wherever on this pane that is drawn (commentLinks.js). */}
+          <CommentDeepLink t={t} />
           {t.interactive ? (
             <>
               <TaskChat t={t} act={act} />

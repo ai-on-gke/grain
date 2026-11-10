@@ -142,7 +142,7 @@ func (h HealthState) Valid() bool {
 type HostKind string
 
 const (
-	HostKindRegistryVM  HostKind = "registry-vm"
+	HostKindHubVM       HostKind = "registry-vm"
 	HostKindWorkstation HostKind = "workstation"
 	HostKindKubernetes  HostKind = "kubernetes"
 	HostKindOther       HostKind = "other"
@@ -151,7 +151,7 @@ const (
 // Valid reports whether k is a known HostKind.
 func (k HostKind) Valid() bool {
 	switch k {
-	case HostKindRegistryVM, HostKindWorkstation, HostKindKubernetes, HostKindOther:
+	case HostKindHubVM, HostKindWorkstation, HostKindKubernetes, HostKindOther:
 		return true
 	default:
 		return false
@@ -816,14 +816,14 @@ type QuotaUsage struct {
 
 // MeResponse is returned by GET /api/me.
 type MeResponse struct {
-	Email           string     `json:"email"`
-	Kind            string     `json:"kind"`
-	IsRegistryAdmin bool       `json:"is_registry_admin"`
-	CanCreate       bool       `json:"can_create"`
-	Groups          []string   `json:"groups,omitempty"`
-	Quota           QuotaUsage `json:"quota"`
-	InstanceDomain  string     `json:"instance_domain,omitempty"`
-	RegistryHost    string     `json:"registry_host,omitempty"`
+	Email          string     `json:"email"`
+	Kind           string     `json:"kind"`
+	IsHubAdmin     bool       `json:"is_registry_admin"`
+	CanCreate      bool       `json:"can_create"`
+	Groups         []string   `json:"groups,omitempty"`
+	Quota          QuotaUsage `json:"quota"`
+	InstanceDomain string     `json:"instance_domain,omitempty"`
+	HubHost        string     `json:"registry_host,omitempty"`
 }
 
 // NameAvailabilityResponse is returned by GET /api/entries/<name>/availability.

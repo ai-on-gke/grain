@@ -36,7 +36,7 @@ Every normative requirement below is derived from the implementation on `main` a
 1. `pkg/hub` MUST define narrow, provider-agnostic interfaces for external dependencies so the control plane, store, router, and reconciler can be tested with deterministic fakes and deployed across cloud environments:
    - `FrontIdentity` (`pkg/webauth/front.go`): verifies the front-proxy identity header on every incoming request;
    - `GroupResolver`: `IsMember(ctx, groupEmail, memberEmail) (bool, error)` and `NormalizeGroup(raw) (string, error)`;
-   - `AssertionSigner`: `SignAssertion(ctx, RegistryClaims) (string, error)` and `JWKS(ctx) ([]byte, error)`;
+   - `AssertionSigner`: `SignAssertion(ctx, HubClaims) (string, error)` and `JWKS(ctx) ([]byte, error)`;
    - `ComputeProvider`: `EnsureInstance`, `GetInstance`, `DeleteInstance`, `ListManagedInstances`, `GrantBreakGlassSSH`, `RevokeBreakGlassSSH`;
    - `InstanceResources`: `EnsureResources`, `FenceDatabase`, `UnfenceDatabase`, `PurgeResources`;
    - `ConfigRepoProvider`: `EnsureRepo`, `WriteBootstrapMetadata`, `WriteRestoreFlag`, `ClearRestoreFlag`, `ArchiveRepo`;
@@ -307,8 +307,8 @@ Every normative requirement below is derived from the implementation on `main` a
 
 **Pinned by:**
 - `pkg/ui/hub_verifier_test.go`: `TestRegistryVerifierAcceptsValidAssertionAndRefusesTampered`
-- `pkg/webauth/hub_rename_test.go`: `TestRegistryVerifierRefusesConflictingHubAndRegistryAssertions`
-- `pkg/ui/delegation_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`
+- `pkg/webauth/hub_rename_test.go`: `TestHubVerifierRefusesConflictingHubAndRegistryAssertions`
+- `pkg/ui/delegation_test.go`: `TestHubVerifierExposesPersonAndDelegatingApp`, `TestHubVerifierRefusesMalformedOrNestedAct`
 
 ### 8.3 RFC 8693 `act` delegated identity and per-person consent grants {#REG-22}
 
@@ -327,8 +327,8 @@ Every normative requirement below is derived from the implementation on `main` a
 - `pkg/hub/delegation_admin_test.go`: `TestDelegatingAppAdminAPIAndPersonGrants`
 - `pkg/hub/e2e_test.go`: `TestMultiReplicaDelegationCacheEviction`
 - `pkg/hub/store/store_test.go`: `TestNormalizeAppPrincipal`
-- `tests/security/hub_delegation_test.go`: `TestRegistryConsentSurfaceRefusesOtherTenantsAndNonAdmins`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn`
-- `pkg/ui/delegation_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`, `TestDelegatedRoleIsPersonIntersectDelegate`
+- `tests/security/hub_delegation_test.go`: `TestHubConsentSurfaceRefusesOtherTenantsAndNonAdmins`, `TestHubDelegationGrantIsOnlyEverThePersonsOwn`
+- `pkg/ui/delegation_test.go`: `TestHubVerifierExposesPersonAndDelegatingApp`, `TestHubVerifierRefusesMalformedOrNestedAct`, `TestDelegatedRoleIsPersonIntersectDelegate`
 
 ---
 
@@ -508,7 +508,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 **Pinned by:**
 - `pkg/cli/hub_test.go`: `TestRegistryCLICommandsEndToEnd`, `TestRegistryClientURLValidationAndSSRFGuard`
-- `pkg/cli/hub_delegation_test.go`: `TestRegistryCLIDelegatingAppsAndGrants`
+- `pkg/cli/hub_delegation_test.go`: `TestHubCLIDelegatingAppsAndGrants`
 
 ### 14.2 Web UI (`ui-hub`) views, strict CSP, and admin recovery controls {#REG-37}
 
@@ -564,7 +564,7 @@ Every normative requirement below is derived from the implementation on `main` a
 | `REG-19` | Zero-SQL hot path via `CatalogCache` and PostgreSQL `LISTEN/NOTIFY` | Implemented | `TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd` |
 | `REG-20` | ES256 `X-Grain-Registry-Assertion` signing, `30s` `CachingSigner`, and `/.well-known/jwks.json` | Implemented | `TestKMSSignerSignAssertionAndJWKS`, `TestCachingSignerActClaimAndInvalidation` |
 | `REG-21` | Downstream `registry` `IdentityVerifier` on `grain` daemons | Implemented | `TestRegistryVerifierAcceptsValidAssertionAndRefusesTampered` |
-| `REG-22` | RFC 8693 `act` delegated identity (`X-Grain-On-Behalf-Of`) and per-person consent grants | Implemented | `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDelegatingAppAdminAPIAndPersonGrants`, `TestMultiReplicaDelegationCacheEviction`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn` |
+| `REG-22` | RFC 8693 `act` delegated identity (`X-Grain-On-Behalf-Of`) and per-person consent grants | Implemented | `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestHubVerifierExposesPersonAndDelegatingApp`, `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDelegatingAppAdminAPIAndPersonGrants`, `TestMultiReplicaDelegationCacheEviction`, `TestHubDelegationGrantIsOnlyEverThePersonsOwn` |
 | `REG-23` | Reverse proxy routing and inbound `X-Grain-*` / `X-Goog-IAP-*` header stripping | Implemented | `TestRouterReverseProxyAndHeaderSanitization` |
 | `REG-24` | Outbound WebSocket tunnel (`grain.tunnel.v1` mux) and credential revocation termination | Implemented | `TestSessionHTTPAndWebSocketMultiplexing`, `TestStep13TunnelMuxCrossReplicaForwardingAndReconnect` |
 | `REG-25` | Cross-replica peer forwarding on `:8082` with `X-Grain-Tunnel-Hop: 1` loop prevention | Implemented | `TestStep13TunnelMuxCrossReplicaForwardingAndReconnect` |
@@ -578,7 +578,7 @@ Every normative requirement below is derived from the implementation on `main` a
 | `REG-33` | Enriched `GET /api/admin/summary` and admin-only route protection | Implemented | `TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd`, `TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd` |
 | `REG-34` | Admin recovery endpoints (owner disable, quota override/reset, conflict resolve, SQL draining, orphan VM delete, tunnel disconnect) | Implemented | `TestStep16TwoStepTransfer7DayExpiryRestoreHardPurgeAndAdminRecovery`, `TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd` |
 | `REG-35` | Control-plane audit log attribution (`actor_email`, `via`, `grant_id`) | Implemented | `TestStep16TwoStepTransfer7DayExpiryRestoreHardPurgeAndAdminRecovery`, `TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd` |
-| `REG-36` | `grain hub` / `grain connect` CLI commands and SSRF / URL / credential-hygiene guards | Implemented | `TestRegistryCLICommandsEndToEnd`, `TestRegistryClientURLValidationAndSSRFGuard`, `TestRegistryCLIDelegatingAppsAndGrants` |
+| `REG-36` | `grain hub` / `grain connect` CLI commands and SSRF / URL / credential-hygiene guards | Implemented | `TestRegistryCLICommandsEndToEnd`, `TestRegistryClientURLValidationAndSSRFGuard`, `TestHubCLIDelegatingAppsAndGrants` |
 | `REG-37` | `ui-hub` SPA views, strict CSP, two-step transfer UI, and `/admin` recovery tools | Implemented | `TestStaticHandlerServesSPAWithStrictCSP`, `ui-hub/src/App.test.jsx` |
 
 ---

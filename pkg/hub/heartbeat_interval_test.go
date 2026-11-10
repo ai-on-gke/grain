@@ -34,7 +34,7 @@ import (
 // 12s (a config Validate accepts) showed every connected entry offline
 // between heartbeats.
 func TestHeartbeatResponseCarriesConfiguredCatalogInterval(t *testing.T) {
-	pgURL := startEphemeralPostgresForRegistryTest(t)
+	pgURL := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
 	if err != nil {
