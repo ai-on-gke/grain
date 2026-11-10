@@ -1639,7 +1639,7 @@ func TestGranuleSandboxOpenNetworkFenceBlocksMetadataHostAndPeers(t *testing.T) 
 		},
 	})
 
-	name, err := k.VMNameFor("open-fence-1")
+	name, err := k.VMNameFor("open-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1649,7 +1649,7 @@ func TestGranuleSandboxOpenNetworkFenceBlocksMetadataHostAndPeers(t *testing.T) 
 		}
 	})
 
-	sb, err := k.Acquire(context.Background(), "open-fence-1", orchestrator.Shape{
+	sb, err := k.Acquire(context.Background(), "open-1", orchestrator.Shape{
 		NetworkAccess: model.NetworkOpen,
 	})
 	if err != nil {
