@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -138,6 +139,11 @@ func TestGrainInboxMatchesActionableCategoriesWithinRepoGrants(t *testing.T) {
 		case ui.InboxSecret:
 			if it.Path != "/tasks/401" {
 				t.Errorf("secret item path = %q", it.Path)
+			}
+		case ui.InboxQuestion:
+			// A question links to the comment it is parked on.
+			if !regexp.MustCompile(`^/tasks/` + it.Task + `#comment=\d+$`).MatchString(it.Path) {
+				t.Errorf("question item path = %q, want /tasks/%s#comment=<id>", it.Path, it.Task)
 			}
 		}
 	}
