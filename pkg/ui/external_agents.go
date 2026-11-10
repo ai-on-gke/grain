@@ -685,7 +685,7 @@ func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Re
 			}
 		}
 	}
-	writeList(w, tokens, list)
+	writeListBy(w, tokens, list, func(t ExternalAgentTokenView) string { return t.ID })
 }
 
 func (s *Server) handleCreateExternalAgentToken(w http.ResponseWriter, r *http.Request) {
