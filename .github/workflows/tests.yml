@@ -766,6 +766,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # Every release tag: the host agent compatibility step builds
+          # grain-agentd from each released tag.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Cache Go modules and build cache
@@ -796,6 +799,15 @@ jobs:
         env:
           GRAIN_RUNHOST_DOCKER: "1"
         run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys|TestRunHostAgentCannotReachAHostDirectorySandbox)$' -v ./pkg/cli/
+
+      # The host agent contract (design/design/agentd-stable-contract.design.md,
+      # "Guard rails"): this tree's daemon side against grain-agentd built
+      # from the oldest release still accepted and the newest releases after
+      # it -- start, detached start, reattach after a daemon restart,
+      # cancel, stage, listen and drain. A change that would strand an
+      # installed host agent fails here rather than on an operator's machine.
+      - name: Released host agents still work with this daemon
+        run: ./scripts/agentd-compat.sh -timeout 10m
 
   host-script-container:
     name: host-script container
