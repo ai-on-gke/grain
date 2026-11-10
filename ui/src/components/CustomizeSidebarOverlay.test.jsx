@@ -444,4 +444,41 @@ describe("CustomizeSidebarOverlay", () => {
       { kind: "board", id: "board-3" },
     ]);
   });
+
+  it("disambiguates same-named boards across folders in the picker and pinned actions", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <CustomizeSidebarOverlay
+        open={true}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+        sessions={sessions}
+        boards={[
+          { id: "board-10", name: "Triage", folder: "Ops" },
+          { id: "board-11", name: "Triage", folder: "Zeta" },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByLabelText("Type"));
+    await user.click(screen.getByRole("option", { name: "Board" }));
+    const itemBox = screen.getByLabelText("Item");
+    await chooseOption(user, itemBox, "Triage, in Ops");
+    await user.click(screen.getByRole("button", { name: /Pin item/ }));
+    await chooseOption(user, itemBox, "Triage, in Zeta");
+    await user.click(screen.getByRole("button", { name: /Pin item/ }));
+
+    expect(
+      screen.getByRole("button", { name: "Customize Triage, in Ops" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Customize Triage, in Zeta" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Unpin Triage, in Ops" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Unpin Triage, in Zeta" }),
+    ).toBeInTheDocument();
+  });
 });

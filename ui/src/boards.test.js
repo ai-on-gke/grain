@@ -19,6 +19,8 @@ import {
   boardColumns,
   boardFolders,
   boardKindLabel,
+  boardLabel,
+  boardLabels,
   boardNarrowing,
   editBoardTask,
   keepPanelQueryTask,
@@ -810,5 +812,26 @@ describe("a report board", () => {
       narrowing: NO_NARROWING,
     });
     expect(task.description).toContain("prints the whole report");
+  });
+});
+
+describe("boardLabels", () => {
+  it("keeps unique names intact and disambiguates duplicates by folder and id", () => {
+    const list = [
+      { id: "board-1", name: "Overview", folder: "" },
+      { id: "board-2", name: "Triage", folder: "" },
+      { id: "board-3", name: "Triage", folder: "Ops" },
+      { id: "board-4", name: "Triage", folder: "Zeta" },
+      { id: "board-5", name: "Queue", folder: "Ops" },
+      { id: "board-6", name: "Queue", folder: "Ops" },
+    ];
+    const labels = boardLabels(list);
+    expect(labels.get("board-1")).toBe("Overview");
+    expect(labels.get("board-2")).toBe("Triage, outside every folder");
+    expect(labels.get("board-3")).toBe("Triage, in Ops");
+    expect(labels.get("board-4")).toBe("Triage, in Zeta");
+    expect(labels.get("board-5")).toBe("Queue (board-5), in Ops");
+    expect(labels.get("board-6")).toBe("Queue (board-6), in Ops");
+    expect(boardLabel(list, list[2])).toBe("Triage, in Ops");
   });
 });
