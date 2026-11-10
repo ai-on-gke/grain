@@ -361,6 +361,8 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 	if err := staterepo.EnsureIgnored(repo.Dir()); err != nil {
 		return nil, err
 	}
+	// Before the load that follows, which is the first pull.
+	repo.SetVerifier(stateRepoVerifier(dataDir, settings))
 	return repo, nil
 }
 

@@ -748,7 +748,15 @@ func Load(ctx context.Context, r *Repo, db *sql.DB, version int) error {
 func LoadExternal(ctx context.Context, r *Repo, db *sql.DB, version int) error {
 	var unreachable error
 	if _, err := r.PullExternal(ctx); err != nil {
+		if errors.Is(err, ErrHeld) {
+			return nil
+		}
 		if !errors.Is(err, ErrUnreachable) {
+			return err
+		}
+		if marker, _ := r.loadedHead(ctx); r.verifier != nil && marker == "" {
+			// A clone checks out whatever origin's tip was, unverified;
+			// with nothing applied from it yet, there is nothing to load.
 			return err
 		}
 		if empty, _ := r.isEmpty(ctx); empty {
@@ -791,6 +799,10 @@ func LoadExternal(ctx context.Context, r *Repo, db *sql.DB, version int) error {
 // exporting, committing, or pushing to origin.
 func SyncExternal(ctx context.Context, r *Repo, db *sql.DB, force bool) (bool, error) {
 	pulled, err := r.PullExternal(ctx)
+	if errors.Is(err, ErrHeld) {
+		// Held, and said so in Held: not a failed sync.
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

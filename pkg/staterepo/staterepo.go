@@ -288,6 +288,11 @@ type Repo struct {
 
 	gitDirMu stdsync.Mutex
 	gitDir   string
+
+	// verifier is require_verified mode, nil when it is off; held is the
+	// commit it is holding (verify.go).
+	verifier *Verifier
+	held     *HeldCommit
 }
 
 // Dir returns the working tree.
@@ -765,6 +770,11 @@ func (r *Repo) Pull(ctx context.Context) (bool, error) {
 // where the external repository is the sole source of truth and local history
 // (including a prior internal grain/config history) is replaced rather than
 // merged or pushed.
+//
+// In require_verified mode (SetVerifier) it resets onto the newest commit
+// up to which everything since the last applied commit verifies, rather
+// than onto origin's tip, and Held names the first commit that does not;
+// ErrHeld is no verified commit at all.
 func (r *Repo) PullExternal(ctx context.Context) (bool, error) {
 	if r.cfg.Remote == "" {
 		return false, nil
@@ -776,7 +786,20 @@ func (r *Repo) PullExternal(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("%w: fetching %s: %w", ErrUnreachable, r.branch, err)
 	}
 	before, _ := r.git(ctx, "rev-parse", "HEAD")
-	if _, err := r.git(ctx, "checkout", "-f", "-B", r.branch, "FETCH_HEAD"); err != nil {
+	target := "FETCH_HEAD"
+	if r.verifier != nil {
+		tip, err := r.git(ctx, "rev-parse", "FETCH_HEAD")
+		if err != nil {
+			return false, err
+		}
+		if target, err = r.verifiedTarget(ctx, strings.TrimSpace(tip)); err != nil {
+			return false, err
+		}
+		if target == "" {
+			return false, ErrHeld
+		}
+	}
+	if _, err := r.git(ctx, "checkout", "-f", "-B", r.branch, target); err != nil {
 		return false, fmt.Errorf("staterepo: checking out origin/%s: %w", r.branch, err)
 	}
 	if _, err := r.git(ctx, "clean", "-fd"); err != nil {

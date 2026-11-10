@@ -24,6 +24,9 @@ import {
 } from "@mui/material";
 import api from "../api.js";
 import StateRepoBrowser from "./StateRepoBrowser.jsx";
+import StateRepoVerification, {
+  ExternalRepoWritersWarning,
+} from "./StateRepoVerification.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
 import { identifierField } from "../identifierField.js";
@@ -353,6 +356,7 @@ export default function StateRepoPanel({
           as Code mode).
         </Typography>
       )}
+      <ExternalRepoWritersWarning />
       <TextField
         label="Repository URL"
         value={mirrorRemote}
@@ -416,6 +420,9 @@ export default function StateRepoPanel({
           </Button>
         )}
       </Stack>
+      {status.remote && (
+        <StateRepoVerification status={status} busy={busy} act={act} />
+      )}
 
       {/* And reading what that export wrote. This repository is
           controller-local, so there is no page anywhere else that shows
