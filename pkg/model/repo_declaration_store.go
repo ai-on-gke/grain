@@ -309,6 +309,7 @@ func deleteDeclared(ctx context.Context, tx *sql.Tx, row RepoDeclaration) error 
 			cfg.DeclaredSetupCommand = ""
 			cfg.DeclaredPortBranches = nil
 			cfg.DeclaredPortTypes = nil
+			cfg.DeclaredSkills = nil
 			if err := putRepoConfig(ctx, tx, *cfg); err != nil {
 				return err
 			}
