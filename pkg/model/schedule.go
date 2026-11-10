@@ -180,6 +180,20 @@ type Schedule struct {
 	// only schedules that run a workflow.
 	WorkflowReview WorkflowReviewPolicy
 
+	// GrainCI says a schedule that runs a workflow runs it on grain CI
+	// even when its repository's ci_mode is github (grain/task-3878).
+	// Without it such a firing is dropped, since that mode says GitHub
+	// Actions is this repository's CI. It is an exception for this
+	// schedule's own firings and nothing else: the run is a schedule
+	// event on the base branch, so it gates no pull request and posts no
+	// commit status, and a firing still files a review only when the
+	// run does not pass. ci_mode: none still drops the firing, since that
+	// mode says no CI runs here at all. Meaningless on any other
+	// schedule, and set only by a `.grain/schedules` file with
+	// `workflow:` (`grain-ci: true`), or by a settings row that names a
+	// workflow-review template.
+	GrainCI bool
+
 	// CustomFields is the values every task this schedule files carries
 	// for the fields this deployment declares (CustomField), keyed by
 	// field name -- content alongside Reads, Writes and Grants, and
