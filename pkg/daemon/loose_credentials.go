@@ -17,12 +17,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/releaseapproval"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
@@ -38,7 +40,10 @@ import (
 //   - -hub-token-file, into registry-registration-token, when that secret
 //     is unset. The file is the operator's own path and is left alone;
 //     the store is read before it, so it is inert from here on;
-//   - secrets/relay/token, into relay/token, renamed to token.migrated.
+//   - secrets/relay/token, into relay/token, renamed to token.migrated;
+//   - secrets/state-repo-token and secrets-repo-token, into secrets of the
+//     same names (key token), renamed to <file>.migrated. RepoToken serves
+//     them from there to git's askpass helper.
 //
 // The CA bundles move on first use instead (SecretsCAStore), and the
 // rollback writes them back too (restoreCAFiles).
@@ -53,7 +58,18 @@ func MoveLooseCredentialsIntoStore(cfg Config, store *secrets.Store) {
 	}
 	if os.Getenv(gitproxy.CredentialsInFilesEnv) == "files" {
 		restoreCAFiles(store, cfg.DataDir)
+		if err := releaseapproval.RestoreKeyFile(cfg.DataDir); err != nil {
+			log.Printf("grain: restoring %s: %v", releaseapproval.KeyFile, err)
+		}
+		if fileStore := fileSecretsBeside(cfg.DataDir); fileStore != nil {
+			restoreRepoTokenFiles(fileStore, cfg.DataDir)
+		}
 		return
+	}
+	if fileStore := repoTokenSecrets(cfg.DataDir); fileStore != nil {
+		for _, name := range repoTokenNames {
+			importRepoTokenFile(fileStore, cfg.DataDir, name)
+		}
 	}
 	importHubTokenFile(store, cfg.HubTokenFile)
 	importRelayTokenFile(store, cfg.DataDir)
@@ -207,4 +223,143 @@ func setVerified(store *secrets.Store, secret, key, value string) error {
 		return errors.New("the store read back something other than what was written")
 	}
 	return nil
+}
+
+// repoTokenNames are the state and secrets repositories' explicit push
+// tokens. Each is kept in the secrets store as secret <name>, key token;
+// the settings' TokenFile still names <data-dir>/secrets/<name>, which is
+// how RepoToken knows to look in the store for it.
+var repoTokenNames = []string{"state-repo-token", "secrets-repo-token"}
+
+const repoTokenKey = "token"
+
+// fileSecretsBeside is the file store in <data-dir>/secrets when it has a
+// key, whatever CredentialsInFilesEnv says: what a rollback reads from.
+func fileSecretsBeside(dataDir string) *secrets.Store {
+	cfg := SecretsConfig(dataDir)
+	if _, err := os.Stat(cfg.KeyFile); err != nil {
+		return nil
+	}
+	return secrets.Open(cfg)
+}
+
+// repoTokenSecrets is the file store a repository token is kept in: the
+// one in <data-dir>/secrets, when it has a key and files were not asked
+// for (gitproxy.CredentialsInFilesEnv). Never minted here.
+func repoTokenSecrets(dataDir string) *secrets.Store {
+	if dataDir == "" || os.Getenv(gitproxy.CredentialsInFilesEnv) == "files" {
+		return nil
+	}
+	cfg := SecretsConfig(dataDir)
+	if _, err := os.Stat(cfg.KeyFile); err != nil {
+		return nil
+	}
+	return secrets.Open(cfg)
+}
+
+// storedRepoTokenName is the repoTokenNames entry tokenFile is the
+// canonical path of, or "".
+func storedRepoTokenName(dataDir, tokenFile string) string {
+	if dataDir == "" || tokenFile == "" {
+		return ""
+	}
+	for _, name := range repoTokenNames {
+		if filepath.Clean(tokenFile) == filepath.Join(SecretsDir(dataDir), name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// storedRepoToken is the token behind tokenFile when it is one the store
+// holds; ok is false otherwise, and the caller reads the file.
+func storedRepoToken(ctx context.Context, dataDir, tokenFile string) (string, bool) {
+	name := storedRepoTokenName(dataDir, tokenFile)
+	if name == "" {
+		return "", false
+	}
+	store := repoTokenSecrets(dataDir)
+	if store == nil {
+		return "", false
+	}
+	if has, err := store.Has(name, repoTokenKey); err != nil || !has {
+		importRepoTokenFile(store, dataDir, name)
+		if has, err = store.Has(name, repoTokenKey); err != nil || !has {
+			return "", false
+		}
+	}
+	v, err := store.Resolve(ctx, name+"/"+repoTokenKey)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(v), true
+}
+
+// importRepoTokenFile moves <data-dir>/secrets/<name> into the store and
+// renames it to <name>.migrated.
+func importRepoTokenFile(store *secrets.Store, dataDir, name string) {
+	path := filepath.Join(SecretsDir(dataDir), name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if err := setVerified(store, name, repoTokenKey, strings.TrimSpace(string(data))); err != nil {
+		log.Printf("grain: importing %s into the secrets store: %v -- still reading the file", path, err)
+		return
+	}
+	if err := os.Rename(path, path+gitproxy.MigratedSuffix); err != nil {
+		log.Printf("grain: renaming %s after importing it: %v", path, err)
+		return
+	}
+	log.Printf("grain: moved %s into secret %s (kept as %s for a rollback)", path, name, path+gitproxy.MigratedSuffix)
+}
+
+// writeRepoToken stores a repository's explicit token and returns the
+// path its settings' TokenFile records: into the store when there is one
+// (removing a plaintext copy), else into that file.
+func writeRepoToken(dataDir, name, token string) (string, error) {
+	dir := SecretsDir(dataDir)
+	path := filepath.Join(dir, name)
+	token = strings.TrimSpace(token)
+	if store := repoTokenSecrets(dataDir); store != nil {
+		if err := store.Set(name, repoTokenKey, []byte(token)); err != nil {
+			return "", fmt.Errorf("storing %s: %w", name, err)
+		}
+		for _, p := range []string{path, path + gitproxy.MigratedSuffix} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return "", err
+			}
+		}
+		return path, nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("preparing %s: %w", dir, err)
+	}
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("writing %s: %w", path, err)
+	}
+	return path, nil
+}
+
+// restoreRepoTokenFiles writes each stored repository token back to its
+// file and drops the store's copy: the rollback half for these two.
+func restoreRepoTokenFiles(store *secrets.Store, dataDir string) {
+	for _, name := range repoTokenNames {
+		has, err := store.Has(name, repoTokenKey)
+		if err != nil || !has {
+			continue
+		}
+		v, err := store.Resolve(context.Background(), name+"/"+repoTokenKey)
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(SecretsDir(dataDir), name)
+		if err := writeFileAtomic0600(path, []byte(strings.TrimSpace(v)+"\n")); err != nil {
+			log.Printf("grain: restoring %s: %v", path, err)
+			continue
+		}
+		_ = store.DeleteKey(name, repoTokenKey)
+		_ = os.Remove(path + gitproxy.MigratedSuffix)
+		log.Printf("grain: %s=files: wrote %s back out of the secrets store", gitproxy.CredentialsInFilesEnv, path)
+	}
 }

@@ -79,3 +79,47 @@ func TestMoveLooseCredentialsIntoStoreImportsEachFileOnce(t *testing.T) {
 		t.Fatalf("rollback: bot.token = %q, %v", b, err)
 	}
 }
+
+func TestRepoTokensAreKeptInTheStoreAndServedToGitFromThere(t *testing.T) {
+	dataDir := t.TempDir()
+	store := OpenSecrets(dataDir)
+	ctx := context.Background()
+
+	path, err := writeStateRepoToken(dataDir, " ghp_state \n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("writeStateRepoToken left a plaintext token file")
+	}
+	if tok, err := RepoToken(dataDir, "", path)(ctx); err != nil || tok != "ghp_state" {
+		t.Fatalf("RepoToken = %q, %v", tok, err)
+	}
+
+	// A file an older build wrote is imported on first use.
+	legacy := filepath.Join(SecretsDir(dataDir), "secrets-repo-token")
+	if err := os.WriteFile(legacy, []byte("ghp_secrets\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := RepoToken(dataDir, "", legacy)(ctx); err != nil || tok != "ghp_secrets" {
+		t.Fatalf("RepoToken(legacy) = %q, %v", tok, err)
+	}
+	if _, err := os.Stat(legacy + gitproxy.MigratedSuffix); err != nil {
+		t.Errorf("the legacy token was not kept as a rollback copy: %v", err)
+	}
+	if v, err := store.Resolve(ctx, "secrets-repo-token/token"); err != nil || v != "ghp_secrets" {
+		t.Errorf("stored secrets-repo-token = %q, %v", v, err)
+	}
+
+	// Rollback writes both back to the paths the settings name.
+	t.Setenv(gitproxy.CredentialsInFilesEnv, "files")
+	MoveLooseCredentialsIntoStore(Config{DataDir: dataDir}, store)
+	for p, want := range map[string]string{path: "ghp_state\n", legacy: "ghp_secrets\n"} {
+		if b, err := os.ReadFile(p); err != nil || string(b) != want {
+			t.Errorf("rollback: %s = %q, %v", p, b, err)
+		}
+	}
+	if tok, err := RepoToken(dataDir, "", path)(ctx); err != nil || tok != "ghp_state" {
+		t.Fatalf("RepoToken after a rollback = %q, %v", tok, err)
+	}
+}
