@@ -535,6 +535,14 @@ func Run(ctx context.Context, cfg Config) error {
 	// backend names them to, and what the package cache's resolver and
 	// HTTP service hold to it (startPackageCache).
 	restrictedSandboxes := &pkgcache.ClientSet{}
+	// Every sandbox, by address: what the granule backend registers each
+	// guest under, and what the package cache resolves an intercepted
+	// request back to a sandbox -- and that sandbox's repository scope --
+	// through before it spends this deployment's GitHub credential on one
+	// (packageCacheRepoScope). A backend that registers nobody leaves the
+	// credential spent for nobody.
+	sandboxClients := &pkgcache.ClientNames{}
+	cfg.packageCacheScope = newPackageCacheRepoScope(sandboxClients, store, CiReadScopes)
 	// Filled in below, once the package cache itself exists
 	// (startPackageCache) -- nil until then, which GranuleConfig's own
 	// DNS field treats exactly like "the cache is off". Declared this
@@ -616,6 +624,9 @@ func Run(ctx context.Context, cfg Config) error {
 			},
 			// The package cache, told which guests have NetworkNone.
 			DNSEgress: restrictedSandboxes,
+			// And every guest's address, so the package cache can tell
+			// which sandbox -- and so which repositories -- a request is for.
+			SandboxClients: sandboxClients,
 			// And the only ports such a guest reaches at the gateway.
 			SandboxServicePorts: servicePorts.Ports,
 		})

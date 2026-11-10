@@ -344,6 +344,7 @@ func startPackageCacheFrom(cfg Config, fabric Fabric, upstreams packageCacheUpst
 	handler := pkgcache.NewServer(pkgcache.Config{
 		Cache:          cache,
 		Credentials:    credentials,
+		RepoScope:      cfg.packageCacheScope,
 		Restricted:     restricted,
 		AptUpstream:    upstreams.AptUpstream,
 		PyPIIndex:      upstreams.PyPIIndex,

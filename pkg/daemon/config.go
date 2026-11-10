@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -864,6 +865,11 @@ type Config struct {
 	// CA bundles are kept in (ca_store.go), set by Run once it has opened
 	// one. Nil keeps them in their <data-dir>/*.pem files.
 	caSecrets *secrets.Store
+	// packageCacheScope is what the package cache asks before spending
+	// this deployment's GitHub credential on a repository for the sandbox
+	// a request came from (pkgcache.Config.RepoScope), set by Run once the
+	// store and the sandbox backend exist. Nil spends it for nobody.
+	packageCacheScope pkgcache.RepoScope
 	// K8sGranuleAccess is how grain reaches a k8s-granule sandbox's guest
 	// once its pod is Ready: orchestrator.K8sGranuleAccessKubectl (the
 	// default, `granule exec` over `kubectl exec`) or
