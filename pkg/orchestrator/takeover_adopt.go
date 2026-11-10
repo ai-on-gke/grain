@@ -264,6 +264,9 @@ func fileAdoptedShepherd(ctx context.Context, deps Deps, in model.AdoptPullReque
 	var approvedAt *time.Time
 	if in.Approved {
 		a := in.Requester
+		if in.Approval != nil {
+			a = *in.Approval
+		}
 		approval, approvedAt = &a, &now
 	} else {
 		origin.Reason = model.ReasonProposal
@@ -309,11 +312,13 @@ func fileAdoptedShepherd(ctx context.Context, deps Deps, in model.AdoptPullReque
 		Links:      links,
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
-		// takeover's rule, with the API's principal in the maintainer's
-		// place: a request grain approved, of a pull request whose author
-		// is a collaborator. The trust-boundary and path-trigger holds
-		// still withdraw it where a person must Submit.
-		AutoMerge: in.Approved && authorTrusted,
+		// takeover's rule, with an unlimited human principal in the
+		// maintainer's place: an approved request by an unlimited human, of a
+		// pull request whose author is a collaborator. Limited roles, agents,
+		// and external credentials never turn auto-merge on. The
+		// trust-boundary and path-trigger holds still withdraw it where a
+		// person must Submit.
+		AutoMerge: in.Approved && in.AllowAutoMerge && in.Requester.Actor.Kind == model.PrincipalHuman && authorTrusted,
 	}
 	if err := deps.Store.PutTask(ctx, task); err != nil {
 		return model.Task{}, fmt.Errorf("filing takeover task %s: %w", task.ID, err)
@@ -349,6 +354,20 @@ func updateAdoptedShepherd(ctx context.Context, deps Deps, task model.Task, in m
 		// request that would itself land proposed may not grant it.
 		return model.PullRequestAdoption{}, fmt.Errorf("%w: upgrading approved shepherd %s of %s to finish "+
 			"needs an approved request (a person, or tasks:admin on %s)", model.ErrPullRequestForbidden, task.ID, ref, ref.Repo)
+	}
+	if upgrade && task.AutoMerge && (!in.AllowAutoMerge || in.Requester.Actor.Kind != model.PrincipalHuman) {
+		return model.PullRequestAdoption{}, fmt.Errorf("%w: upgrading auto-merge shepherd %s of %s to finish "+
+			"requires an unlimited role (grain/operator)", model.ErrPullRequestForbidden, task.ID, ref)
+	}
+	if task.Approval == nil && in.Approved {
+		if in.CheckApprove != nil {
+			if err := in.CheckApprove(ctx, task); err != nil {
+				return model.PullRequestAdoption{}, err
+			}
+		} else if in.Approval != nil && in.Approval.Actor == model.OwnerTrustPrincipal {
+			return model.PullRequestAdoption{}, fmt.Errorf("%w: owner-trust only approves new filings, not existing proposed shepherd %s of %s",
+				model.ErrPullRequestForbidden, task.ID, ref)
+		}
 	}
 	var detail github.PullRequestDetail
 	pushable := false

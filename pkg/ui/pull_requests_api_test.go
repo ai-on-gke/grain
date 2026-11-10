@@ -27,8 +27,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -41,16 +43,48 @@ type fakeAdopter struct {
 	reviewed []model.ReviewPullRequestInput
 	statuses []string
 	report   model.PullRequestReport
+	store    *model.Store
+	existing map[string]string
 }
 
-func (f *fakeAdopter) AdoptPullRequest(_ context.Context, in model.AdoptPullRequestInput) (model.PullRequestAdoption, error) {
+func (f *fakeAdopter) AdoptPullRequest(ctx context.Context, in model.AdoptPullRequestInput) (model.PullRequestAdoption, error) {
+	if f.store != nil {
+		if id, ok := f.existing[in.PR.String()]; ok {
+			task, err := f.store.GetTask(ctx, id)
+			if err != nil || task == nil {
+				return model.PullRequestAdoption{}, err
+			}
+			if task.Approval == nil && in.Approved {
+				if in.CheckApprove != nil {
+					if err := in.CheckApprove(ctx, *task); err != nil {
+						return model.PullRequestAdoption{}, err
+					}
+				}
+				if err := f.store.Approve(ctx, task.ID, in.Requester, time.Now().UTC()); err != nil {
+					return model.PullRequestAdoption{}, err
+				}
+			}
+			f.adopted = append(f.adopted, in)
+			state, err := f.store.State(ctx, task.ID)
+			if err != nil {
+				return model.PullRequestAdoption{}, err
+			}
+			updated, _ := f.store.GetTask(ctx, task.ID)
+			autoMerge := updated != nil && updated.AutoMerge
+			return model.PullRequestAdoption{
+				TaskID: task.ID, State: string(state), Mode: string(in.Mode), PR: in.PR.String(),
+				Existing: true, AutoMerge: autoMerge, Spec: in.Spec, Design: in.Design,
+			}, nil
+		}
+	}
 	f.adopted = append(f.adopted, in)
 	state := model.StateQueued
 	if !in.Approved {
 		state = model.StateProposed
 	}
+	autoMerge := in.Approved && in.AllowAutoMerge && in.Requester.Actor.Kind == model.PrincipalHuman
 	return model.PullRequestAdoption{TaskID: "77", State: string(state), Mode: string(in.Mode), PR: in.PR.String(),
-		Spec: in.Spec, Design: in.Design}, nil
+		AutoMerge: autoMerge, Spec: in.Spec, Design: in.Design}, nil
 }
 
 func (f *fakeAdopter) ReviewPullRequest(_ context.Context, in model.ReviewPullRequestInput) (model.PullRequestReviewFiling, error) {
@@ -191,4 +225,221 @@ func TestGrainPRReviewDesignAndPRStatusThreadsJSON(t *testing.T) {
 	if rec = sendPR(t, srv, http.MethodPost, "/api/pull-requests/adopt", adopter, `{"pr":"acme/widgets#7","mode":"yolo"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("adopt with a bad mode answered %d, want 400", rec.Code)
 	}
+}
+
+func TestAdoptPullRequestEnforcesAutoMergeRoleApprovalWithinAndExternalApprovalRail(t *testing.T) {
+	ctx := context.Background()
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name:    "widgets-adopt-admin",
+			Scopes:  []string{"merge:write", "tasks:read", "tasks:write", "tasks:admin"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+	)
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:wade@example.com", "widgets-adopt-admin")
+	h.allow(t, "user:operator@example.com", "grain/operator")
+	h.allow(t, "user:alice@example.com", "grain/operator")
+	h.allow(t, "user:jane@example.com", "grain/operator")
+
+	fake := &fakeAdopter{store: h.client.Store, existing: map[string]string{}}
+	h.client.Config.PullRequests = fake
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	if err := h.client.Store.PutTemplate(ctx, model.Template{
+		ID:     "heavy-review",
+		Name:   "heavy review",
+		Title:  "heavy review",
+		Writes: []model.WriteTarget{{Repo: gadgets}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. New collaborator PRs: only an unlimited human role gets AllowAutoMerge.
+	code, body := h.call("operator@example.com", http.MethodPost, "/api/pull-requests/adopt", `{"pr":"acme/widgets#10"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"autoMerge":true`) {
+		t.Fatalf("operator adopt new PR: %d %s, want 200 with autoMerge:true", code, body)
+	}
+	if last := fake.adopted[len(fake.adopted)-1]; !last.Approved || !last.AllowAutoMerge {
+		t.Fatalf("operator adopt input = %+v, want Approved && AllowAutoMerge", last)
+	}
+
+	code, body = h.call("wade@example.com", http.MethodPost, "/api/pull-requests/adopt", `{"pr":"acme/widgets#11"}`)
+	if code != http.StatusOK || !strings.Contains(body, `"autoMerge":false`) {
+		t.Fatalf("limited role adopt new PR: %d %s, want 200 with autoMerge:false", code, body)
+	}
+	if last := fake.adopted[len(fake.adopted)-1]; !last.Approved || last.AllowAutoMerge {
+		t.Fatalf("limited role adopt input = %+v, want Approved && !AllowAutoMerge", last)
+	}
+
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	mint := func(name, owner string, scopes ...string) string {
+		t.Helper()
+		issued, err := h.client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+			Name: name, Owner: owner, Scopes: scopes, Repos: []string{"acme/widgets"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued.Token
+	}
+	adminTok := mint("admin-bot", "alice@example.com", "merge:write", "tasks:read", "tasks:write", "tasks:admin")
+	trustedTok := mint("trusted-bot", "jane@example.com", "merge:write", "tasks:read", "tasks:write")
+
+	rules := []model.OwnerTrustRule{{Owner: "jane@example.com", Repo: "acme/widgets"}}
+	netNone := string(model.NetworkNone)
+	if _, err := h.client.UpdateSettings(humanCtx, ui.UpdateSettingsRequest{OwnerTrust: &rules, NetworkAccess: &netNone}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, tok string
+		wantOwner bool
+	}{
+		{"external tasks:admin", adminTok, false},
+		{"external owner-trust", trustedTok, true},
+	} {
+		rec := fileAsExternal(t, h.srv, tc.tok, "/api/pull-requests/adopt", `{"pr":"acme/widgets#12"}`, nil)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"autoMerge":false`) {
+			t.Fatalf("%s adopt new PR: %d %s, want 200 with autoMerge:false", tc.name, rec.Code, rec.Body)
+		}
+		last := fake.adopted[len(fake.adopted)-1]
+		if !last.Approved || last.AllowAutoMerge {
+			t.Fatalf("%s adopt input = %+v, want Approved && !AllowAutoMerge", tc.name, last)
+		}
+		if tc.wantOwner && (last.Approval == nil || last.Approval.Actor != model.OwnerTrustPrincipal) {
+			t.Fatalf("%s approval = %+v, want OwnerTrustPrincipal", tc.name, last.Approval)
+		}
+	}
+
+	// 2. Existing unapproved shepherd tasks: limited role is gated by roleApprovalWithin.
+	seq := 0
+	seedShepherd := func(prNum int, edit func(*model.Task)) string {
+		t.Helper()
+		seq++
+		id := "8" + strconv.Itoa(1000+seq)[1:]
+		ref := "acme/widgets#" + strconv.Itoa(prNum)
+		task := model.Task{
+			ID:     id,
+			Intent: model.IntentImplement,
+			Title:  "Adopt " + ref,
+			Target: &widgets,
+			Links: []model.Link{
+				{Kind: model.LinkTakeover, Target: ref},
+				{Kind: model.LinkTakeoverMode, Target: string(model.TakeoverReviewOnly)},
+			},
+		}
+		if edit != nil {
+			edit(&task)
+		}
+		if err := h.client.Store.PutTask(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+		fake.existing[ref] = id
+		return id
+	}
+
+	for i, tc := range []struct {
+		name string
+		edit func(*model.Task)
+		want string
+	}{
+		{"autoMerge", func(tk *model.Task) { tk.AutoMerge = true }, "autoMerge"},
+		{"ungrantedCapability", func(tk *model.Task) {
+			tk.Grants = []model.Grant{{Capability: "api:deployment:read", Via: model.GrantByLabel}}
+		}, "api:deployment:read"},
+		{"outOfScopeWrites", func(tk *model.Task) { tk.Writes = []model.WriteTarget{{Repo: gadgets}} }, "acme/gadgets"},
+		{"outOfScopeReads", func(tk *model.Task) { tk.Reads = []model.RepoRef{gadgets} }, "acme/gadgets"},
+		{"widenedNetworkAccess", func(tk *model.Task) { tk.NetworkAccess = model.NetworkOpen }, "networkAccess"},
+		{"reviewTemplateId", func(tk *model.Task) { tk.ReviewTemplateID = "heavy-review" }, "reviewTemplateId"},
+	} {
+		prNum := 20 + i
+		id := seedShepherd(prNum, tc.edit)
+		payload := `{"pr":"acme/widgets#` + strconv.Itoa(prNum) + `"}`
+		code, body := h.call("wade@example.com", http.MethodPost, "/api/pull-requests/adopt", payload)
+		if code != http.StatusForbidden || !strings.Contains(body, tc.want) {
+			t.Errorf("limited role adopt existing %s (%s): %d %s, want 403 naming %q", tc.name, id, code, body, tc.want)
+		}
+		out, isErr := callControllerTool(t, h.srv, h.as("wade@example.com"), ui.ToolGrainInvoke, map[string]any{
+			"tool":      "api_adopt_pull_request",
+			"arguments": map[string]any{"pr": "acme/widgets#" + strconv.Itoa(prNum)},
+		})
+		if !isErr || !strings.Contains(out, "403") || !strings.Contains(out, tc.want) {
+			t.Errorf("limited role MCP adopt existing %s (%s): isErr=%v %s, want 403 naming %q", tc.name, id, isErr, out, tc.want)
+		}
+		wantProposed(t, h.client, id)
+	}
+
+	plainRoleID := seedShepherd(30, nil)
+	if code, body := h.call("wade@example.com", http.MethodPost, "/api/pull-requests/adopt", `{"pr":"acme/widgets#30"}`); code != http.StatusOK {
+		t.Fatalf("limited role adopt plain unapproved shepherd: %d %s, want 200", code, body)
+	}
+	wantQueued(t, h.client, plainRoleID)
+
+	// 3. Existing unapproved shepherd tasks: external gma_ tokens are gated by externalApprovalRail + X-Grain-Acting-Reason.
+	// 3a. Owner-trusted token without tasks:admin cannot approve an existing unapproved shepherd.
+	ownerTrustExistingID := seedShepherd(40, nil)
+	rec := fileAsExternal(t, h.srv, trustedTok, "/api/pull-requests/adopt", `{"pr":"acme/widgets#40"}`,
+		map[string]string{ui.ActingReasonHeader: "trying owner-trust on existing"})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "tasks:admin") {
+		t.Errorf("owner-trusted gma_ without tasks:admin on existing shepherd: %d %s, want 403 naming tasks:admin", rec.Code, rec.Body)
+	}
+	wantProposed(t, h.client, ownerTrustExistingID)
+
+	// 3b. tasks:admin token without X-Grain-Acting-Reason is refused.
+	noReasonID := seedShepherd(41, nil)
+	rec = fileAsExternal(t, h.srv, adminTok, "/api/pull-requests/adopt", `{"pr":"acme/widgets#41"}`, nil)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), ui.ActingReasonHeader) {
+		t.Errorf("tasks:admin gma_ without reason on existing shepherd: %d %s, want 403 naming %s", rec.Code, rec.Body, ui.ActingReasonHeader)
+	}
+	wantProposed(t, h.client, noReasonID)
+
+	// 3c. tasks:admin token cannot self-approve a shepherd it filed itself, or one held for a person.
+	selfFiledID := seedShepherd(42, func(tk *model.Task) {
+		tk.Origin.Attribution.Actor = model.Principal{
+			Kind: model.PrincipalAgent, ID: "external:admin-bot", Source: model.SourceExternalToken,
+		}
+	})
+	personHeldAutoMergeID := seedShepherd(43, func(tk *model.Task) { tk.AutoMerge = true })
+	personHeldTagID := seedShepherd(44, func(tk *model.Task) { tk.Tags = append(tk.Tags, model.HoldRequestedTag) })
+
+	for _, tc := range []struct {
+		prNum int
+		id    string
+		want  string
+	}{
+		{42, selfFiledID, "it filed it"},
+		{43, personHeldAutoMergeID, "auto-merge"},
+		{44, personHeldTagID, "hold_for_approval"},
+	} {
+		payload := `{"pr":"acme/widgets#` + strconv.Itoa(tc.prNum) + `"}`
+		rec = fileAsExternal(t, h.srv, adminTok, "/api/pull-requests/adopt", payload,
+			map[string]string{ui.ActingReasonHeader: "testing external approval rail"})
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("REST external adopt on PR #%d (%s): %d %s, want 403 naming %q", tc.prNum, tc.id, rec.Code, rec.Body, tc.want)
+		}
+		out, isErr := callControllerTool(t, h.srv, map[string]string{"Authorization": "Bearer " + adminTok}, ui.ToolGrainInvoke, map[string]any{
+			"tool":      "api_adopt_pull_request",
+			"arguments": map[string]any{"pr": "acme/widgets#" + strconv.Itoa(tc.prNum)},
+			"reason":    "testing external approval rail",
+		})
+		if !isErr || !strings.Contains(out, "403") || !strings.Contains(out, tc.want) {
+			t.Errorf("MCP external adopt on PR #%d (%s): isErr=%v %s, want 403 naming %q", tc.prNum, tc.id, isErr, out, tc.want)
+		}
+		wantProposed(t, h.client, tc.id)
+	}
+
+	// 3d. tasks:admin token with X-Grain-Acting-Reason approves a plain unapproved shepherd filed by someone else.
+	okExtID := seedShepherd(45, func(tk *model.Task) {
+		tk.Origin.Attribution.Actor = model.Principal{Kind: model.PrincipalHuman, ID: "contributor@example.com"}
+	})
+	rec = fileAsExternal(t, h.srv, adminTok, "/api/pull-requests/adopt", `{"pr":"acme/widgets#45"}`,
+		map[string]string{ui.ActingReasonHeader: "approving contributor shepherd"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tasks:admin gma_ with reason on plain shepherd: %d %s, want 200", rec.Code, rec.Body)
+	}
+	wantQueued(t, h.client, okExtID)
 }
