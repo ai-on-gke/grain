@@ -917,18 +917,62 @@ func TestCIRunAgentPagesCapJobsOnWideRuns(t *testing.T) {
 			len(crow.Jobs), crow.JobCount, crow.JobsTruncated, crow.Jobs)
 	}
 
-	human := do(t, srv, http.MethodGet, "/api/ci/runs", "")
-	var all struct {
+	code, body = asAgent(t, srv, "ci-reader", http.MethodGet, "/api/ci/runs?limit=1&fields=full", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET /api/ci/runs?limit=1&fields=full: %d %s", code, body)
+	}
+	var whole struct {
 		Runs []ci.Run `json:"runs"`
 	}
-	if err := json.Unmarshal(human.Body.Bytes(), &all); err != nil || len(all.Runs) == 0 {
-		t.Fatalf("human ci/runs = %v", err)
+	if err := json.Unmarshal([]byte(body), &whole); err != nil || len(whole.Runs) != 1 || len(whole.Runs[0].Jobs) != 400 || whole.Runs[0].JobsTruncated {
+		t.Errorf("agent fields=full wide row = %v (%d rows), want 1 row with all 400 jobs", err, len(whole.Runs))
 	}
-	if got := all.Runs[0]; len(got.Jobs) != 400 || got.JobsTruncated {
-		t.Errorf("person's unpaged wide row = %d jobs (truncated %v), want all 400", len(got.Jobs), got.JobsTruncated)
+
+	// CIPage.jsx polls GET /api/ci/runs?limit=50: a person's ?limit= must
+	// keep every job, full error and standalone GitHub Actions shared faults
+	// (such as when grain CI has no runs matching them).
+	faultAt := baseTime.Add(-10 * time.Minute)
+	for b := range 2 {
+		if err := client.Store.PutGitHubCIJob(context.Background(), model.GitHubCIJob{
+			Repo: "acme/widgets", CheckRunID: int64(910000 + b), Source: model.GitHubCISource,
+			App: "github-actions", Ref: fmt.Sprintf("grain/standalone-fault-%d", b),
+			Commit: fmt.Sprintf("%040x", 0x9100+b), Workflow: "Tests", RunID: int64(920000 + b),
+			RunAttempt: 1, JobName: "ui e2e", Conclusion: "failure",
+			StartedAt: &faultAt, CompletedAt: &faultAt, FailingStep: "playwright",
+			FailureTail: "--- FAIL: TestSharedBrowserFault\n    ui/e2e/fault.spec.js:12: boom\n",
+			TailSource:  "log", RecordedAt: faultAt, UpdatedAt: faultAt,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := all.Runs[1]; got.Error != declared.String() || got.ErrorTruncated {
-		t.Errorf("person's unpaged idle row lost its error (%d bytes)", len(got.Error))
+	for _, query := range []string{"", "?limit=50"} {
+		human := do(t, srv, http.MethodGet, "/api/ci/runs"+query, "")
+		var all struct {
+			Runs   []ci.Run     `json:"runs"`
+			Faults []ui.CIFault `json:"faults"`
+		}
+		if err := json.Unmarshal(human.Body.Bytes(), &all); err != nil || len(all.Runs) == 0 {
+			t.Fatalf("human ci/runs%s = %v", query, err)
+		}
+		if got := all.Runs[0]; len(got.Jobs) != 400 || got.JobsTruncated {
+			t.Errorf("person's ci/runs%s wide row = %d jobs (truncated %v), want all 400", query, len(got.Jobs), got.JobsTruncated)
+		}
+		if got := all.Runs[1]; got.Error != declared.String() || got.ErrorTruncated {
+			t.Errorf("person's ci/runs%s idle row lost its error (%d bytes)", query, len(got.Error))
+		}
+		if len(all.Faults) != 1 || all.Faults[0].Trimmed {
+			t.Errorf("person's ci/runs%s faults = %+v, want standalone GitHub CI fault whole", query, all.Faults)
+		}
+	}
+	// And when grain CI is wired with zero runs (as demo -observability
+	// starts), CIPage's ?limit=50 poll still receives the standalone fault.
+	client.Config.CI = &fakeCIRunner{}
+	emptyHuman := do(t, srv, http.MethodGet, "/api/ci/runs?limit=50", "")
+	var emptyRuns struct {
+		Faults []ui.CIFault `json:"faults"`
+	}
+	if err := json.Unmarshal(emptyHuman.Body.Bytes(), &emptyRuns); err != nil || len(emptyRuns.Faults) != 1 || emptyRuns.Faults[0].Trimmed {
+		t.Errorf("person's ci/runs?limit=50 with no grain CI runs = %+v (%v), want standalone fault", emptyRuns.Faults, err)
 	}
 }
 
