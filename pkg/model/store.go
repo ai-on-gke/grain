@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -1068,11 +1069,58 @@ func (s *Store) Comments(ctx context.Context, taskID string) ([]Comment, error) 
 // than after: what a reader holding a cursor into the conversation asks
 // for, rather than reading the whole thread again to find the tail.
 func (s *Store) CommentsAfter(ctx context.Context, taskID string, after int64) ([]Comment, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+
-		"`id`, `author_kind`, `author_id`, `author_behalf_kind`, `author_behalf_id`, "+
-		"`body`, `created_at`, `handover`, `summary`, `author_source`, `author_behalf_source`, `filed_via` "+
+	return s.queryComments(ctx, taskID, "SELECT "+commentColumns+
 		"FROM `task_comment` WHERE `task_id` = ? AND `id` > ? ORDER BY `id`",
 		taskID, after)
+}
+
+// CommentsBefore is one page of a task's conversation read backwards
+// from a cursor: the newest limit comments whose id is less than before
+// (every comment when before is 0), oldest first, and whether older ones
+// remain. It is how a reader shows the end of a long thread without
+// reading the whole of it (durable-tasks.design.md#DT-15).
+func (s *Store) CommentsBefore(ctx context.Context, taskID string, before int64, limit int) ([]Comment, bool, error) {
+	if limit <= 0 {
+		return nil, false, fmt.Errorf("reading comments on task %s: limit must be positive", taskID)
+	}
+	if before <= 0 {
+		before = math.MaxInt64
+	}
+	page, err := s.queryComments(ctx, taskID, "SELECT "+commentColumns+
+		"FROM `task_comment` WHERE `task_id` = ? AND `id` < ? ORDER BY `id` DESC LIMIT ?",
+		taskID, before, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	more := len(page) > limit
+	if more {
+		page = page[:limit]
+	}
+	slices.Reverse(page)
+	return page, more, nil
+}
+
+// LatestHandover is the newest handover comment on a task, or nil for a
+// task that has none: what a reader after only the standing summary asks
+// for, rather than reading the whole thread to find its last handover.
+func (s *Store) LatestHandover(ctx context.Context, taskID string) (*Comment, error) {
+	page, err := s.queryComments(ctx, taskID, "SELECT "+commentColumns+
+		"FROM `task_comment` WHERE `task_id` = ? AND `handover` = 1 ORDER BY `id` DESC LIMIT 1",
+		taskID)
+	if err != nil || len(page) == 0 {
+		return nil, err
+	}
+	return &page[0], nil
+}
+
+// commentColumns is the select list queryComments scans, in its order.
+const commentColumns = "`id`, `author_kind`, `author_id`, `author_behalf_kind`, `author_behalf_id`, " +
+	"`body`, `created_at`, `handover`, `summary`, `author_source`, `author_behalf_source`, `filed_via` "
+
+// queryComments runs query, a SELECT of commentColumns from taskID's
+// comments, and scans what it answers in the order it answers it.
+func (s *Store) queryComments(ctx context.Context, taskID, query string, args ...any) ([]Comment, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading comments on task %s: %w", taskID, err)
 	}

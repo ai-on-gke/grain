@@ -20,6 +20,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -312,10 +313,15 @@ func (s *CapabilityServer) handle(ctx context.Context, line []byte) []byte {
 		sink := &imageSink{}
 		out, err := t.handle(context.WithValue(ctx, imageSinkKey{}, sink), p.Arguments)
 		if err != nil {
-			return rpcReply(req.ID, map[string]any{
+			res := map[string]any{
 				"content": []map[string]any{{"type": "text", "text": err.Error()}},
 				"isError": true,
-			}, nil)
+			}
+			var we *WaitingError
+			if errors.As(err, &we) && we.Waiting != "" {
+				res["structuredContent"] = map[string]any{"waiting": we.Waiting}
+			}
+			return rpcReply(req.ID, res, nil)
 		}
 		content := []map[string]any{{"type": "text", "text": string(out)}}
 		for _, img := range sink.take() {

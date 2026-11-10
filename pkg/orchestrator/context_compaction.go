@@ -35,6 +35,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,15 +82,55 @@ func applyTaskContext(task model.Task, history History) (model.Task, History) {
 		task.Body = brief + "\n\n" + currentBriefNote
 	}
 	if through := history.Context.CompactedThrough; through > 0 {
-		kept := make([]model.Comment, 0, len(history.Comments))
-		for _, c := range history.Comments {
-			if c.ID > through {
-				kept = append(kept, c)
-			}
-		}
-		history.Comments = kept
+		history.Comments = commentsPastCursor(history.Comments, through)
 	}
 	return task, history
+}
+
+// commentsPastCursor is comments without the ones a compaction through
+// through summarised, keeping the newest handover even when it is at or
+// before the cursor: summarisedSection tells the run the summarised
+// messages are in "the handover below", so it has to be.
+func commentsPastCursor(comments []model.Comment, through int64) []model.Comment {
+	kept := make([]model.Comment, 0, len(comments))
+	var summary *model.Comment
+	for i, c := range comments {
+		switch {
+		case c.ID > through:
+			kept = append(kept, c)
+		case c.Handover:
+			summary = &comments[i]
+		}
+	}
+	if summary == nil || slices.ContainsFunc(kept, func(c model.Comment) bool { return c.Handover }) {
+		return kept
+	}
+	return append([]model.Comment{*summary}, kept...)
+}
+
+// dispatchComments is the part of task's conversation a dispatch reads:
+// the comments after its compaction cursor, and the newest handover when
+// that is not among them. A task's record keeps growing after it is
+// compacted; what its dispatch reads grows only with what was said since
+// (durable-tasks.design.md#DT-15). A task never compacted reads its
+// whole thread, which conversation.go's positional cut bounds as before.
+func dispatchComments(ctx context.Context, store *model.Store, taskID string) ([]model.Comment, error) {
+	tc, err := store.TaskContext(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	comments, err := store.CommentsAfter(ctx, taskID, tc.CompactedThrough)
+	if err != nil || tc.CompactedThrough <= 0 {
+		return comments, err
+	}
+	if slices.ContainsFunc(comments, func(c model.Comment) bool { return c.Handover }) {
+		return comments, nil
+	}
+	summary, err := store.LatestHandover(ctx, taskID)
+	if err != nil || summary == nil {
+		return comments, err
+	}
+	return append([]model.Comment{*summary}, comments...), nil
 }
 
 // currentBriefNote follows a current brief in the prompt, so a run knows
