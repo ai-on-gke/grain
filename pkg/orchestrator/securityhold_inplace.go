@@ -66,11 +66,24 @@ import (
 // hold their change at the head of the merge queue rather than withdrawing
 // its auto-merge, and whose fixes merge back through the queue.
 
-// putSecurityReview files the security review of task: putStackedReview's
-// review, working on task's own branch (putReview's inPlace).
-func putSecurityReview(ctx context.Context, store *model.Store, task model.Task,
+// putSecurityReview files the security review of task for ref:
+// putStackedReview's review, working on task's own branch (putReview's
+// inPlace) and recording ref as model.LinkReviewsPullRequest so settling an
+// earlier pull request on task can never close a review filed for ref.
+func putSecurityReview(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
 	tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
-	return putReview(ctx, store, task, tmpl, title, body, true, now)
+	reviewTask, err := newReview(ctx, store, task, tmpl, title, body, true, now)
+	if err != nil {
+		return model.Task{}, err
+	}
+	if ref != (model.PullRequestRef{}) {
+		reviewTask.Links = append(reviewTask.Links,
+			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
+	}
+	if err := store.PutTask(ctx, reviewTask); err != nil {
+		return model.Task{}, fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
+	}
+	return reviewTask, nil
 }
 
 // recordReviewerHead records, at the end of a run of review -- one working

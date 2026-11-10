@@ -39,7 +39,7 @@ func TestSchema78StoreMigratesEveryRetiredGrantAtOnce(t *testing.T) {
 	retired := []string{"grain-log", "deployment-health", "db-read", "db-write", "self-repair", "git-push-any-ref"}
 	became := []string{
 		model.GrainJournalGrant,
-		"api:deployment:read", model.GrainHealthGrant,
+		canonical("api:deployment:read"), model.GrainHealthGrant,
 		model.GrainSQLReadGrant, model.GrainSQLWriteGrant,
 		model.GrainHostExecGrant,
 		model.GitPushAnyRefGrant,
@@ -93,7 +93,7 @@ func TestSchema78StoreMigratesEveryRetiredGrantAtOnce(t *testing.T) {
 			t.Errorf("%s %s = %v, want %v", table, id, got[id], wantAll)
 		}
 	}
-	if got, want := grantRows(t, ctx, db, "task_grant", "task_id")["dup"], []string{"api:deployment:read", model.GrainHealthGrant}; !slices.Equal(got, want) {
+	if got, want := grantRows(t, ctx, db, "task_grant", "task_id")["dup"], []string{canonical("api:deployment:read"), model.GrainHealthGrant}; !slices.Equal(got, want) {
 		t.Errorf("task holding deployment-health and api:deployment:read = %v, want %v once each", got, want)
 	}
 
@@ -101,7 +101,7 @@ func TestSchema78StoreMigratesEveryRetiredGrantAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"api:deployment:read", model.GrainHealthGrant, model.GrainHostExecGrant}; !slices.Equal(after.DefaultCapabilities, want) {
+	if want := []string{canonical("api:deployment:read"), model.GrainHealthGrant, model.GrainHostExecGrant}; !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("deployment default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != 1 || !slices.Equal(after.ConsoleSessions[0].Capabilities, became) {

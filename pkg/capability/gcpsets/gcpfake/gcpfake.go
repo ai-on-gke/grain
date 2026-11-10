@@ -19,6 +19,7 @@ package gcpfake
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -58,8 +59,19 @@ type Cloud struct {
 	// AccountGranted is, by service account email, the permissions
 	// TestAccountPermissions reports and the impersonation calls check
 	// (iam.serviceAccounts.getAccessToken, getOpenIdToken); an account
-	// missing from it grants all of them.
+	// missing from it grants all of them unless RequireTokenCreator is set.
 	AccountGranted map[string][]string
+	// RequireTokenCreator makes GenerateAccessToken, GenerateIDToken and
+	// TestAccountPermissions require roles/iam.serviceAccountTokenCreator
+	// on projects/<p>/serviceAccounts/<email> in Policies (unless
+	// AccountGranted explicitly grants the permission).
+	RequireTokenCreator bool
+	// Denied names permissions that operations and TestPermissions refuse
+	// with 403 PERMISSION_DENIED.
+	Denied map[string]bool
+	// DisableKeyCreation marks projects that enforce
+	// constraints/iam.disableServiceAccountKeyCreation on CreateKey.
+	DisableKeyCreation map[string]bool
 	// Lifetimes are the lifetimes GenerateAccessToken was asked for.
 	Lifetimes []time.Duration
 	n         int
@@ -97,6 +109,14 @@ func (c *Cloud) Identity(_ context.Context, a gcpsets.Admin) (string, error) {
 	}
 	if c.DefaultIdentity != "" {
 		return c.DefaultIdentity, nil
+	}
+	if a.Credential != "" {
+		var doc struct {
+			ClientEmail string `json:"client_email"`
+		}
+		if json.Unmarshal([]byte(a.Credential), &doc) == nil && doc.ClientEmail != "" {
+			return doc.ClientEmail, nil
+		}
 	}
 	return "", fmt.Errorf("admin %s: no identity", a.Name)
 }
@@ -192,12 +212,39 @@ func (c *Cloud) exists(account string) (string, bool) {
 	return email, ok
 }
 
+func (c *Cloud) denyErr(perm, resource string) error {
+	if c.Denied[perm] {
+		return fmt.Errorf("googleapi: Error 403: Permission '%s' denied on resource '%s' (or it may not exist), PERMISSION_DENIED", perm, resource)
+	}
+	return nil
+}
+
+func policyPerms(resource string) (getPerm, setPerm string) {
+	if strings.HasPrefix(resource, "buckets/") {
+		return "storage.buckets.getIamPolicy", "storage.buckets.setIamPolicy"
+	}
+	if strings.HasPrefix(resource, "projects/") && strings.Contains(resource, "/locations/") && strings.Contains(resource, "/repositories/") {
+		return "artifactregistry.repositories.getIamPolicy", "artifactregistry.repositories.setIamPolicy"
+	}
+	if strings.HasPrefix(resource, "projects/") && strings.Contains(resource, "/serviceAccounts/") {
+		return "iam.serviceAccounts.getIamPolicy", "iam.serviceAccounts.setIamPolicy"
+	}
+	return "resourcemanager.projects.getIamPolicy", "resourcemanager.projects.setIamPolicy"
+}
+
 func (c *Cloud) CreateKey(_ context.Context, account string) (string, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.denyErr("iam.serviceAccountKeys.create", account); err != nil {
+		return "", "", err
+	}
+	p, _ := project(account)
 	email, ok := c.exists(account)
 	if !ok {
 		return "", "", fmt.Errorf("404 NOT_FOUND: %s", account)
+	}
+	if c.DisableKeyCreation[p] {
+		return "", "", fmt.Errorf("googleapi: Error 400: Key creation is not allowed on this service account. [constraints/iam.disableServiceAccountKeyCreation], FAILED_PRECONDITION")
 	}
 	if len(c.Keys[email]) >= gcpsets.KeysPerAccount {
 		return "", "", fmt.Errorf("FAILED_PRECONDITION: %s has the maximum number of keys", email)
@@ -234,6 +281,9 @@ func (c *Cloud) ListKeys(_ context.Context, account string) ([]gcpkey.KeyInfo, e
 func (c *Cloud) ListServiceAccounts(_ context.Context, p string) ([]gcpsets.ServiceAccount, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.denyErr("iam.serviceAccounts.list", "projects/"+p); err != nil {
+		return nil, err
+	}
 	if len(c.ListErrs) > 0 {
 		err := c.ListErrs[0]
 		c.ListErrs = c.ListErrs[1:]
@@ -249,6 +299,9 @@ func (c *Cloud) ListServiceAccounts(_ context.Context, p string) ([]gcpsets.Serv
 func (c *Cloud) CreateServiceAccount(_ context.Context, p, id, _, description string) (gcpsets.ServiceAccount, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.denyErr("iam.serviceAccounts.create", "projects/"+p); err != nil {
+		return gcpsets.ServiceAccount{}, err
+	}
 	if len(id) < 6 || len(id) > 30 {
 		return gcpsets.ServiceAccount{}, fmt.Errorf("400: account id %q is not 6-30 characters", id)
 	}
@@ -268,10 +321,14 @@ func (c *Cloud) CreateServiceAccount(_ context.Context, p, id, _, description st
 func (c *Cloud) DeleteServiceAccount(_ context.Context, p, email string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.denyErr("iam.serviceAccounts.delete", "projects/"+p+"/serviceAccounts/"+email); err != nil {
+		return err
+	}
 	if _, ok := c.Accounts[p][email]; !ok {
 		return fmt.Errorf("404 NOT_FOUND: %s", email)
 	}
 	delete(c.Accounts[p], email)
+	delete(c.Policies, "projects/"+p+"/serviceAccounts/"+email)
 	c.Calls["DeleteServiceAccount"]++
 	return nil
 }
@@ -279,6 +336,10 @@ func (c *Cloud) DeleteServiceAccount(_ context.Context, p, email string) error {
 func (c *Cloud) GetPolicy(_ context.Context, resource string) (*gcpsets.Policy, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	getPerm, _ := policyPerms(resource)
+	if err := c.denyErr(getPerm, resource); err != nil {
+		return nil, err
+	}
 	p := c.policy(resource)
 	out := &gcpsets.Policy{Etag: p.Etag}
 	for _, b := range p.Bindings {
@@ -290,6 +351,10 @@ func (c *Cloud) GetPolicy(_ context.Context, resource string) (*gcpsets.Policy, 
 func (c *Cloud) SetPolicy(_ context.Context, resource string, in *gcpsets.Policy) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	_, setPerm := policyPerms(resource)
+	if err := c.denyErr(setPerm, resource); err != nil {
+		return err
+	}
 	p := c.policy(resource)
 	if c.ConflictOnce {
 		c.ConflictOnce = false
@@ -305,15 +370,52 @@ func (c *Cloud) SetPolicy(_ context.Context, resource string, in *gcpsets.Policy
 	return nil
 }
 
+func (c *Cloud) filterDenied(perms []string) []string {
+	if len(c.Denied) == 0 {
+		return perms
+	}
+	var out []string
+	for _, p := range perms {
+		if !c.Denied[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (c *Cloud) TestPermissions(_ context.Context, p string, perms []string) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	granted, ok := c.Granted[p]
 	if !ok {
-		return perms, nil
+		return c.filterDenied(perms), nil
 	}
 	var out []string
 	for _, w := range perms {
+		if c.Denied[w] {
+			continue
+		}
+		for _, g := range granted {
+			if g == w {
+				out = append(out, w)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (c *Cloud) TestResourcePermissions(_ context.Context, resource string, perms []string) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	granted, ok := c.Granted[resource]
+	if !ok {
+		return nil, nil
+	}
+	var out []string
+	for _, w := range perms {
+		if c.Denied[w] {
+			continue
+		}
 		for _, g := range granted {
 			if g == w {
 				out = append(out, w)
@@ -324,13 +426,30 @@ func (c *Cloud) TestPermissions(_ context.Context, p string, perms []string) ([]
 }
 
 func (c *Cloud) accountAllows(email, perm string) bool {
-	granted, ok := c.AccountGranted[email]
-	if !ok {
+	if c.Denied[perm] {
+		return false
+	}
+	if granted, ok := c.AccountGranted[email]; ok {
+		for _, g := range granted {
+			if g == perm {
+				return true
+			}
+		}
+		return false
+	}
+	if !c.RequireTokenCreator {
 		return true
 	}
-	for _, g := range granted {
-		if g == perm {
-			return true
+	if perm != "iam.serviceAccounts.getAccessToken" && perm != "iam.serviceAccounts.getOpenIdToken" {
+		return false
+	}
+	if p, ok := gcpsets.AccountProject(email); ok {
+		if pol := c.Policies["projects/"+p+"/serviceAccounts/"+email]; pol != nil {
+			for _, b := range pol.Bindings {
+				if b.Role == "roles/iam.serviceAccountTokenCreator" && len(b.Members) > 0 {
+					return true
+				}
+			}
 		}
 	}
 	return false

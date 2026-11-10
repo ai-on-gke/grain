@@ -419,12 +419,21 @@ function Field({
   switch (kind) {
     case "choice": {
       const options = "enum" in schema ? schema.enum : [schema.const];
+      const isTopLevel = !path.includes(".") && !path.includes("[");
       const effective =
-        value === undefined && "default" in schema ? schema.default : value;
+        value === undefined && isTopLevel && "default" in schema
+          ? schema.default
+          : value;
       const index = options.findIndex(
         (o) => JSON.stringify(o) === JSON.stringify(effective),
       );
-      const optionText = (o) => (typeof o === "string" ? o : JSON.stringify(o));
+      const enumLabels = schema?.["x-grain-enum-labels"] || {};
+      const optionText = (o) =>
+        typeof o === "string" && typeof enumLabels[o] === "string"
+          ? enumLabels[o]
+          : typeof o === "string"
+            ? o
+            : JSON.stringify(o);
       const pick = (v) => onChange(v === "" ? undefined : options[Number(v)]);
       // A schema's enum can be long (every region, every role): past
       // SHORT_LIST it is searched rather than scrolled. A short one stays
@@ -611,7 +620,7 @@ function Field({
           aria-label={lbl}
           sx={{
             border: 1,
-            borderColor: "divider",
+            borderColor: error ? "error.main" : "divider",
             borderRadius: 1,
             px: 1.5,
             pt: 1,
@@ -635,6 +644,11 @@ function Field({
             path={path}
             idPrefix={idPrefix}
           />
+          {help && (
+            <FormHelperText error={Boolean(error)} sx={{ mt: 0.5 }}>
+              {help}
+            </FormHelperText>
+          )}
         </Box>
       );
     case "variant":
