@@ -1190,3 +1190,76 @@ func TestScheduledWorkflowRunsAreSkippedAndCancelledWhenRepoUsesGitHubCIMode(t *
 		t.Fatalf("started %d runs after switching to CIModeGitHub, want 1 (no new runs)", got)
 	}
 }
+
+// A schedule file that says `grain-ci: true` runs its workflow on grain
+// CI even on a ci_mode: github repository (grain/task-3878): the firing
+// starts its run, the sweep that cancels grain CI on such a repository
+// leaves that run alone, and a run that does not pass is reviewed as on
+// any other repository. ci_mode: none still drops it.
+func TestAScheduleThatOptsInRunsOnGrainCIInAGitHubCIModeRepository(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	declarationsOn(t, store, ctx, true)
+	source := nightlyWorkflowTree()
+	source.files[model.ScheduleDeclarationDir+"/nightly-check.yml"] = `
+workflow: nightly
+grain-ci: true
+daily:
+  at: "14:11"
+`
+	runDeclarations(t, store, source, baseTime)
+	id := model.RepoDeclaredID(model.DeclaredSchedule, declaringRepo, "nightly-check")
+	sched, err := store.GetSchedule(ctx, id)
+	if err != nil || sched == nil {
+		t.Fatalf("GetSchedule(%s) = %v, %v", id, sched, err)
+	}
+	if !sched.GrainCI {
+		t.Fatalf("schedule %s has GrainCI unset, want the file's grain-ci: true", id)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: declaringRepo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	runner := newFakeCI()
+	deps := workflowDeps(store, runner)
+	due := sched.NextRunAt
+	if err := orchestrator.RunCycle(ctx, deps, due); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if len(runner.requests) != 1 {
+		t.Fatalf("started %d runs on a ci_mode: github repository, want the schedule's one", len(runner.requests))
+	}
+	if req := runner.requests[0]; req.Event != ci.EventSchedule {
+		t.Errorf("run event = %q, want a schedule event, which judges no pull request", req.Event)
+	}
+
+	// A cycle with the run in flight does not cancel it.
+	if err := orchestrator.RunCycle(ctx, deps, due.Add(time.Minute)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if got, ok := runner.reasons["run1"]; ok {
+		t.Fatalf("run1 was cancelled (%q), want it left running", got)
+	}
+
+	runner.finish("run1", ci.ConclusionFailure,
+		ci.JobRun{JobID: "go-long", Conclusion: ci.ConclusionFailure})
+	if err := orchestrator.RunCycle(ctx, deps, due.Add(2*time.Hour)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if filed := scheduledTasksTagged(t, store, "schedule:"+id); len(filed) != 1 {
+		t.Fatalf("filed %d reviews of a failed run, want 1", len(filed))
+	}
+
+	// ci_mode: none is no CI at all, opt-in or not.
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: declaringRepo, CIMode: model.CIModeNone}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range scheduledTasksTagged(t, store, "schedule:"+id) {
+		closeTask(t, ctx, store, s.ID, due.Add(3*time.Hour))
+	}
+	if err := orchestrator.RunCycle(ctx, deps, due.Add(25*time.Hour)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if got := runner.started(); got != 1 {
+		t.Fatalf("started %d runs once the repository is ci_mode: none, want still 1", got)
+	}
+}

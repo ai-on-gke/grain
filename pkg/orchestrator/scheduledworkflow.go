@@ -284,7 +284,7 @@ func startScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Schedul
 			row.ScheduleID, row.Stem, model.StandingWorkOffReason(row.Repo))
 		return deps.Store.DeleteScheduledWorkflowRun(ctx, row.ScheduleID)
 	}
-	if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+	if disabled, mode, err := scheduledWorkflowGrainCIOff(ctx, deps.Store, row); err != nil {
 		return err
 	} else if disabled {
 		log.Printf("orchestrator: schedule %s's firing of %s skipped: %s",
@@ -313,6 +313,28 @@ func startScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Schedul
 	log.Printf("orchestrator: schedule %s started grain CI run %s of %s on %s %s",
 		row.ScheduleID, run.ID, workflow, row.Repo, ref)
 	return nil
+}
+
+// scheduledWorkflowGrainCIOff reports whether row's repository keeps its
+// scheduled workflow off grain CI: repoExplicitlyDisablesGrainCI, except
+// that a schedule declared with `grain-ci: true` (model.Schedule.GrainCI)
+// still runs on a ci_mode: github repository (grain/task-3878). That
+// exception is the schedule's alone -- the run is a schedule event, so it
+// is no pull request's check and posts no commit status -- which is why it
+// is read off the schedule here rather than off the repository.
+func scheduledWorkflowGrainCIOff(ctx context.Context, store *model.Store, row model.ScheduledWorkflowRun) (bool, model.CIMode, error) {
+	disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, store, row.Repo)
+	if err != nil || !disabled {
+		return disabled, mode, err
+	}
+	sched, err := store.GetSchedule(ctx, row.ScheduleID)
+	if err != nil {
+		return false, "", fmt.Errorf("orchestrator: reading schedule %s: %w", row.ScheduleID, err)
+	}
+	if sched != nil && sched.WorkflowRunsUnder(mode) {
+		return false, mode, nil
+	}
+	return true, mode, nil
 }
 
 // scheduledWorkflowRequest is the run one firing asks for, on ref and
@@ -473,7 +495,7 @@ func collectScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Sched
 		return concludeScheduledWorkflowRun(ctx, deps, row, now, ci.ConclusionErrored,
 			"this deployment no longer runs CI of its own, so the run cannot be read")
 	}
-	if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil {
+	if disabled, mode, err := scheduledWorkflowGrainCIOff(ctx, deps.Store, row); err != nil {
 		return err
 	} else if disabled {
 		reason := cancelReasonForCIMode(mode)

@@ -410,9 +410,10 @@ func (s *Store) suppressStandingWorkOff(ctx context.Context, sched Schedule, tar
 }
 
 // workflowGrainCIOff reports whether target has explicitly disabled Grain CI
-// (CIModeGitHub or CIModeNone), in which case scheduled `.grain/workflows/*.yml`
-// crons do not run on Grain CI.
-func (s *Store) workflowGrainCIOff(ctx context.Context, target RepoRef) (bool, CIMode, error) {
+// (CIModeGitHub or CIModeNone) for sched, in which case its scheduled
+// `.grain/workflows/*.yml` run does not run on Grain CI -- unless sched opts
+// in to grain CI on a ci_mode: github repository (Schedule.GrainCI).
+func (s *Store) workflowGrainCIOff(ctx context.Context, sched Schedule, target RepoRef) (bool, CIMode, error) {
 	if target == (RepoRef{}) || IsConfigRepo(target) {
 		return false, "", nil
 	}
@@ -420,10 +421,25 @@ func (s *Store) workflowGrainCIOff(ctx context.Context, target RepoRef) (bool, C
 	if err != nil {
 		return false, "", fmt.Errorf("reading %s's CI mode: %w", target, err)
 	}
-	if cfg != nil && (cfg.CIMode == CIModeGitHub || cfg.CIMode == CIModeNone) {
+	if cfg != nil && !sched.WorkflowRunsUnder(cfg.CIMode) {
 		return true, cfg.CIMode, nil
 	}
 	return false, "", nil
+}
+
+// WorkflowRunsUnder reports whether a run of this schedule's workflow
+// may start on grain CI in a repository whose ci_mode is mode: always
+// under grain's own modes, never under CIModeNone, and under
+// CIModeGitHub only when the schedule opts in (GrainCI).
+func (s Schedule) WorkflowRunsUnder(mode CIMode) bool {
+	switch mode {
+	case CIModeNone:
+		return false
+	case CIModeGitHub:
+		return s.GrainCI
+	default:
+		return true
+	}
 }
 
 func (s *Store) suppressWorkflowGrainCIOff(ctx context.Context, sched Schedule, target RepoRef,
@@ -744,7 +760,7 @@ func (s *Store) fireWorkflowSchedule(ctx context.Context, sched Schedule, stem s
 		}
 		return s.suppressStandingWorkOff(ctx, sched, sched.Target, now, loc, advance)
 	}
-	if off, mode, err := s.workflowGrainCIOff(ctx, sched.Target); err != nil || off {
+	if off, mode, err := s.workflowGrainCIOff(ctx, sched, sched.Target); err != nil || off {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}
