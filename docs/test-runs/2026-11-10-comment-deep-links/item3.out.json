@@ -1,0 +1,66 @@
+{
+ "question": {
+  "commentId": 124,
+  "author": "grain",
+  "authorKind": "automation"
+ },
+ "inboxRaw": "{\"items\":[{\"kind\":\"question\",\"task\":\"1\",\"title\":\"Director\",\"summary\":\"I'm here.\",\"path\":\"/tasks/1#comment=1\"},{\"kind\":\"question\",\"task\":\"2\",\"title\":\"Walk item 3 asker\",\"repo\":\"acme/widgets\",\"summary\":\"Retry budget: 3 or 5?\",\"path\":\"/tasks/2#comment=62\"},{\"kind\":\"question\",\"task\":\"3\",\"title\":\"Walk item 3 linker\",\"repo\":\"acme/widgets\",\"summary\":\"reply to run it again, or acknowledge to close it\",\"path\":\"/tasks/3\",\"at\":\"2026-11-10T06:18:49.084039751Z\"},{\"kind\":\"question\",\"task\":\"4\",\"title\":\"Walk item 3 asker\",\"repo\":\"acme/widgets\",\"summary\":\"Retry budget: 3 or 5?\",\"path\":\"/tasks/4#comment=124\"}]}",
+ "inboxItem": {
+  "kind": "question",
+  "task": "4",
+  "title": "Walk item 3 asker",
+  "repo": "acme/widgets",
+  "summary": "Retry budget: 3 or 5?",
+  "path": "/tasks/4#comment=124"
+ },
+ "agentComment": {
+  "id": 125,
+  "author": "grain",
+  "authorKind": "automation",
+  "body": "Blocked on [see](/tasks/4#comment=124) first.",
+  "state": "awaiting_reply"
+ },
+ "inboxPathLanding": {
+  "inViewport": true,
+  "highlighted": true,
+  "focused": true,
+  "text": "11/10/2026, 6:19:07 AM\ngrain on behalf of 4 · automation\n\nRetry budget: 3 or 5?\n\nShould the retry budget be 3 or 5?"
+ },
+ "webInboxRow": {
+  "links": [
+   "/tasks/2"
+  ],
+  "buttons": [
+   "reply",
+   "acknowledge",
+   "retry budget: 3 or 5?\nshow question"
+  ]
+ },
+ "webInboxClick": {
+  "url": "http://127.0.0.1:38819/tasks/2",
+  "questionInViewport": "absent"
+ },
+ "agentLink": {
+  "href": "/tasks/4#comment=124",
+  "target": null
+ },
+ "agentLinkLanding": {
+  "url": "/tasks/4#comment=124",
+  "inViewport": true,
+  "highlighted": true,
+  "focused": true,
+  "noReload": true
+ },
+ "errors": [
+  "Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "Failed to load resource: the server responded with a status of 404 (Not Found)",
+  "Failed to load resource: the server responded with a status of 404 (Not Found)"
+ ],
+ "notFound": [
+  "/api/repos/acme/widgets/github-branches",
+  "/api/repos/acme/widgets/github-branches",
+  "/api/repos/acme/widgets/github-branches",
+  "/api/repos/acme/widgets/github-branches"
+ ]
+}

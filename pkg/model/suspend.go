@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -127,7 +128,9 @@ func (s *Store) Suspend(ctx context.Context, susp Suspension) error {
 // since a run's outcome can be re-recorded (Store.SetRunOutcome).
 func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome, detail string, at time.Time, susp *Suspension) error {
 	if susp == nil {
-		if kind, ok := SuspensionKindOfOutcome(outcome); ok {
+		if outcome == InterruptedOutcome && strings.HasPrefix(detail, OperatorPausedDetail) {
+			susp = &Suspension{Kind: SuspendOperatorPause, Detail: detail, CreatedAt: at}
+		} else if kind, ok := SuspensionKindOfOutcome(outcome); ok {
 			susp = &Suspension{Kind: kind, Detail: detail, CreatedAt: at}
 		}
 	}
