@@ -18,6 +18,7 @@ import {
   commentPath,
   commentUrl,
   inAppHref,
+  malformedCommentHash,
   navigateInApp,
 } from "./commentLinks.js";
 
@@ -41,6 +42,25 @@ describe("commentIdFromHash", () => {
       null,
     ]) {
       expect(commentIdFromHash(hash)).toBe("");
+    }
+  });
+});
+
+describe("malformedCommentHash", () => {
+  it("is true for a #comment= naming no comment", () => {
+    for (const hash of [
+      "#comment=",
+      "#comment=abc",
+      "#comment=13x",
+      "comment=-1",
+    ]) {
+      expect(malformedCommentHash(hash)).toBe(true);
+    }
+  });
+
+  it("is false for a comment link and for any other hash", () => {
+    for (const hash of ["#comment=13", "", "#", "#task-13", "#ci", null]) {
+      expect(malformedCommentHash(hash)).toBe(false);
     }
   });
 });

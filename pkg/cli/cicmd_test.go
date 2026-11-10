@@ -1394,6 +1394,58 @@ func TestCITestHistoryReadsGitHubActionsOnAnActionsRepo(t *testing.T) {
 	}
 }
 
+func TestCITestHistoryDefaultsToGitHubActionsWithoutCapabilitiesRead(t *testing.T) {
+	at := time.Date(2026, 11, 9, 3, 0, 0, 0, time.UTC)
+	gha := ci.Run{ID: "gha:acme:widgets:77", Provider: ci.ProviderGitHubActions, Repo: "acme/widgets", Ref: "main",
+		Commit: "1234567890ab", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+		Actions: &ci.ActionsRun{RunID: 77, Workflow: ".github/workflows/nightly.yml"},
+		Jobs: []ci.JobRun{{Name: "go-long", Conclusion: ci.ConclusionFailure,
+			Steps: []ci.StepRun{{Name: "test", Output: "--- FAIL: TestThing (0.20s)\n"}}}}}
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/repos/acme/widgets/capabilities":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden: capabilities:read required"}`))
+		case "/api/ci/runs":
+			switch r.URL.Query().Get("provider") {
+			case ci.ProviderGrain:
+				json.NewEncoder(w).Encode(ui.CIRunsResponse{
+					Enabled: true, Runs: []ci.Run{{ID: "run-old"}}, Matched: 4,
+					RepoProvider: ci.ProviderGitHubActions,
+				})
+			case ci.ProviderGitHubActions:
+				listed := gha
+				listed.Jobs = []ci.JobRun{{Name: "go-long", Conclusion: ci.ConclusionFailure}}
+				json.NewEncoder(w).Encode(ui.CIRunsResponse{
+					Enabled: true, Runs: []ci.Run{listed}, Matched: 1,
+					RepoProvider: ci.ProviderGitHubActions,
+				})
+			default:
+				t.Errorf("unexpected provider %q", r.URL.Query().Get("provider"))
+			}
+		case "/api/ci/runs/gha:acme:widgets:77":
+			json.NewEncoder(w).Encode(gha)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}
+	out, err := ciCLI(t, handler, "test-history", "TestThing", "-repo", "acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Runs examined: 1 | Executions found: 1",
+		"its 4 Grain CI run(s), from before, are left out (-provider grain reads them)",
+		`2026-11-09 03:00 UTC | run gha:acme:widgets:77 (nightly.yml, main @ 1234567) | job "go-long": FAIL`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestExternalCIWaitActionsFallbackAndZeroJobMissingJobName(t *testing.T) {
 	ghaRun := ci.Run{
 		ID:         "gha:acme:other:101",
