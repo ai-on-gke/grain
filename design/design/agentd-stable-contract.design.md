@@ -239,6 +239,7 @@ that predates the list is credited from its protocol version
 | `logins` | contract v1 | `Hello.logins` is authoritative: empty means none | treats logins as unknown |
 | `agents_only` | contract v1 | `Hello.agents_only` is authoritative | treats it as unknown |
 | `features` | contract v1 | `Hello.features` itself, so silence about a feature is a statement | infers features from the protocol version |
+| `hook_policy` | contract v1 | `agy-tool-hook` and `claude-stop-hook` accept `-policy` and evaluate a staged per-run hook policy file (`pkg/agent/hookpolicy`) | stages no policy file and omits `-policy`; hooks fall back to the roster and stop rule compiled into the host binary |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -474,8 +475,9 @@ list should make that rare.
 
 Filed as separate tasks, each after this one lands:
 
-1. **V1 + V2: hook policy as staged data** -- the daemon stages a per-run
-   policy file (published tools, host-tool grants, stop-rule parameters);
+1. **V1 + V2: hook policy as staged data (done)** -- the daemon stages a
+   per-run policy file (`pkg/agent/hookpolicy`: published tools/patterns,
+   capability-server prefixes, host-tool grants, stop-rule parameters);
    agentd's `agy-tool-hook` and `claude-stop-hook` evaluate it; feature
    `hook_policy`; the daemon keeps today's behaviour for hosts without it.
 2. **V3 + V4: host-owned `logins:`** -- generic login discovery and
@@ -511,6 +513,7 @@ feature renew
 feature logins
 feature agents_only
 feature features
+feature hook_policy
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]

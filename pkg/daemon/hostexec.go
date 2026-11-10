@@ -546,6 +546,12 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
 			return nil, fmt.Errorf("%s is set to run on the host, through the host agent that dials in: %w", cliBinaryName(r.Framework), err)
 		}
+	} else {
+		hctx, cancel := context.WithTimeout(context.Background(), hostdOffersTimeout)
+		if hello, err := h.Client.Hello(hctx); err == nil {
+			h.HookPolicy = hello.Has(hostd.FeatureHookPolicy)
+		}
+		cancel()
 	}
 	return h, nil
 }
@@ -573,6 +579,7 @@ func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 	h.Grain = hello.Grain
 	h.StageRoot = hello.StageRoot
 	h.CodexAuth = hello.CodexAuth
+	h.HookPolicy = hello.Has(hostd.FeatureHookPolicy)
 	return nil
 }
 

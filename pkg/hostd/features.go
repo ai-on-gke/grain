@@ -74,6 +74,10 @@ const (
 	// FeatureFeatures: Hello.Features itself. Listed so that a peer's
 	// silence about every other feature is a statement, not an omission.
 	FeatureFeatures Feature = "features"
+	// FeatureHookPolicy: the host's agy-tool-hook and claude-stop-hook
+	// subcommands accept -policy <path> and evaluate a staged per-run
+	// hook policy file instead of a compiled-in tool roster or stop rule.
+	FeatureHookPolicy Feature = "hook_policy"
 )
 
 // Features is every feature this build implements, in the order they
@@ -89,6 +93,7 @@ var Features = []Feature{
 	FeatureLogins,
 	FeatureAgentsOnly,
 	FeatureFeatures,
+	FeatureHookPolicy,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited

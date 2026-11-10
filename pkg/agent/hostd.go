@@ -64,6 +64,10 @@ type HostdHost struct {
 	// CodexAuth is the codex login on that hostd's machine, if it has
 	// one (hostd.Hello.CodexAuth).
 	CodexAuth string
+	// HookPolicy reports whether that hostd's hook subcommands accept
+	// -policy and evaluate a staged per-run hook policy file
+	// (hostd.Hello.Has(hostd.FeatureHookPolicy)).
+	HookPolicy bool
 }
 
 func (h HostdHost) binary() string {

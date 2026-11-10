@@ -409,9 +409,11 @@ func TestHelloHasCreditsLegacyPeersFromTheirProtocol(t *testing.T) {
 		{Hello{Protocol: 4}, FeatureListen, true},
 		{Hello{Protocol: 4}, FeatureLogins, false},
 		{Hello{Protocol: 4}, FeatureFeatures, false},
+		{Hello{Protocol: 4}, FeatureHookPolicy, false},
 		{Hello{Protocol: 4, Features: []Feature{FeatureStart, FeatureFeatures}}, FeatureDetach, false},
 		{Hello{Protocol: 4, Features: []Feature{FeatureStart, "some_future_feature"}}, "some_future_feature", true},
 		{ThisHello("x"), FeatureLogins, true},
+		{ThisHello("x"), FeatureHookPolicy, true},
 	}
 	for _, c := range cases {
 		if got := c.h.Has(c.f); got != c.want {
