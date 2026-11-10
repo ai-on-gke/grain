@@ -74,7 +74,11 @@ export async function writeAccessCode(file) {
 // signIn posts code to url's sign-in route, as name (who the session
 // is recorded as), and resolves to a Playwright storage state holding the
 // session cookie it sets.
-export async function signIn(url, code = accessCode(), name = "owner@example.com") {
+export async function signIn(
+  url,
+  code = accessCode(),
+  name = "owner@example.com",
+) {
   const res = await fetch(`${url}/api/auth/access-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
