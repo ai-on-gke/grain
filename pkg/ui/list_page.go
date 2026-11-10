@@ -293,7 +293,8 @@ func ListCursorFor(offset int) string {
 // caller that pages a list it filtered itself (`grain mcp`'s
 // list_grain_tasks); a cursor it did not hand out is refused.
 func ParseListCursor(text string) (int, error) {
-	return decodeListCursor(strings.TrimSpace(text))
+	offset, _, err := decodeListCursor(strings.TrimSpace(text))
+	return offset, err
 }
 
 // describeListQuery is the sentence every paged route's tool description
