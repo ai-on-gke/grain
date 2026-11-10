@@ -157,10 +157,11 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = markRelayedReviewThreadsDecided(t.Links, questions.ReviewTaskID)
 		if reviewGateOf(*t, questions.ReviewTaskID) == model.GateReview && t.ReviewTemplateID != "" &&
-			linkTarget(*t, model.LinkReviewTask) == questions.ReviewTaskID {
+			linkTarget(*t, model.LinkReviewTask) == questions.ReviewTaskID && change.Primary(*t) == "" {
 			// Drop the finished review link so SyncReviews files a fresh
 			// re-review once this fix run pushes its changes, and reviewStateOf
-			// holds the merge until that re-review passes.
+			// holds the merge until that re-review passes. A CL needs none of
+			// this: SyncCLReviews reviews every new snapshot on its own.
 			t.Links = withoutLinks(t.Links, model.LinkReviewTask)
 			model.ClearReviewFindingsForGate(t, model.GateReview)
 		}
