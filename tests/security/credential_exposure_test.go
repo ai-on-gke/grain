@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -135,8 +136,8 @@ func TestNonAdminReadsNoPlantedCredential(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	readConsole := func() string {
-		rec := f.send(t, http.MethodGet, "/api/console/"+f.taskID+"/output", "", viewer)
+	readConsoleAt := func(offset int) string {
+		rec := f.send(t, http.MethodGet, fmt.Sprintf("/api/console/%s/output?offset=%d", f.taskID, offset), "", viewer)
 		if rec.code != http.StatusOK {
 			t.Fatalf("GET /api/console/{id}/output as grain/viewer answered %d: %s", rec.code, rec.excerpt())
 		}
@@ -150,6 +151,7 @@ func TestNonAdminReadsNoPlantedCredential(t *testing.T) {
 		}
 		return string(data)
 	}
+	readConsole := func() string { return readConsoleAt(0) }
 
 	if _, _, err := f.store.AddAllowedPrincipalWithRole(ctx, "user:"+viewer, "test", "test", "grain/viewer", time.Now()); err != nil {
 		t.Fatal(err)
@@ -219,6 +221,19 @@ func TestNonAdminReadsNoPlantedCredential(t *testing.T) {
 	}
 	if !strings.Contains(output, "[redacted") {
 		t.Errorf("the console output shows no redaction at all: %q", output)
+	}
+	// The offset is the caller's to choose: asked for what follows a
+	// point inside a credential, the route must not hand back the rest of
+	// it, which neither the known value nor its shape would match.
+	raw, _, _ := consoles.Get(f.taskID).Output(0)
+	for _, v := range printed {
+		i := strings.Index(string(raw), v)
+		if i < 0 {
+			t.Fatalf("the console's own buffer does not hold %q", v)
+		}
+		if tail := readConsoleAt(i + 1); strings.Contains(tail, v[1:]) {
+			t.Errorf("GET /api/console/{id}/output?offset=%d as grain/viewer carries all but the first byte of a credential the run printed: %q", i+1, v)
+		}
 	}
 
 	for _, pattern := range []string{"GET /api/capability-servers", "GET /api/secrets", "GET /api/agent-keys", "GET /api/github-tokens"} {
