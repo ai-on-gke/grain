@@ -25,6 +25,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/cgi"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
@@ -60,7 +63,22 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp/gchat", serveGChatMCP)
 	simHandler := sim.Handler()
+	// Smart-HTTP git for acme/widgets, so routes that clone the repository
+	// (GET /api/ci/workflows reads .grain/workflows at a ref) can be walked.
+	var gitBackend http.Handler
+	if gitPath, err := exec.LookPath("git"); err == nil && *bare != "" {
+		gitBackend = &cgi.Handler{
+			Path: gitPath,
+			Root: "/acme",
+			Args: []string{"http-backend"},
+			Env:  []string{"GIT_PROJECT_ROOT=" + filepath.Dir(*bare), "GIT_HTTP_EXPORT_ALL=1"},
+		}
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if gitBackend != nil && strings.HasPrefix(r.URL.Path, "/acme/widgets.git/") {
+			gitBackend.ServeHTTP(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/repos/") && !strings.HasPrefix(r.URL.Path, "/repos/acme/widgets") {
 			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/repos/"), "/")
 			if len(parts) >= 2 {

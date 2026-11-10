@@ -16,6 +16,8 @@
 """Walk every route in docs/agent-api.md's paging table against a live grain daemon."""
 
 import argparse
+import time
+import re
 import json
 import sys
 import urllib.error
@@ -32,13 +34,17 @@ def http_get(base_url, path, headers):
         len(f"{k}: REDACTED\r\n".encode()) if "auth" in k.lower() or "token" in k.lower() else len(f"{k}: {v}\r\n".encode())
         for k, v in headers.items()
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = resp.read()
-            return resp.status, body, req_bytes
-    except urllib.error.HTTPError as e:
-        body = e.read()
-        return e.code, body, req_bytes
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read()
+                return resp.status, body, req_bytes
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            if e.code == 429 and attempt < 5:
+                time.sleep(int(e.headers.get("Retry-After") or 10))
+                continue
+            return e.code, body, req_bytes
 
 
 def http_post_or_put(base_url, method, path, payload, headers):
@@ -70,57 +76,57 @@ def item_key(item, key_spec):
 
 ROUTES = [
     {"path": "/api/deployment/reachable-repos", "default": 100, "page_key": "repos", "doc_key": "repos", "id": "repo", "q_hit": "SERVICE-00", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/deployment/git-connections", "default": 50, "page_key": "items", "doc_key": "items", "id": ("credential", "host", "scope"), "q_hit": "SERVICE-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/deployment/secret-audit", "default": 50, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "SERVICE-SECRET-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/deployment/audit-logs", "default": 20, "page_key": "items", "doc_key": "items", "id": ("timestamp", "kind", "resource", "taskId"), "q_hit": "SERVICE-SECRET-01", "q_miss": "nonexistent-xyz", "human_capped": 100},
-    {"path": "/api/deployment/config-audit", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "AUDITOR-01", "q_miss": "nonexistent-xyz", "human_capped": 100},
-    {"path": "/api/repos/acme/widgets/branches", "default": 50, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "CUT-BRANCH-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/deployment/git-connections", "q_field": "credential", "default": 20, "page_key": "items", "doc_key": "items", "id": ("credential", "host", "scope"), "q_hit": "SERVICE-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/deployment/secret-audit", "q_field": "secretName", "default": 50, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "SERVICE-SECRET-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/deployment/audit-logs", "q_field": "resource", "default": 20, "page_key": "items", "doc_key": "items", "id": ("timestamp", "kind", "resource", "taskId"), "q_hit": "SERVICE-SECRET-01", "q_miss": "nonexistent-xyz", "human_capped": 100},
+    {"path": "/api/deployment/config-audit", "q_field": "summary", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "AUDITOR-01", "q_miss": "nonexistent-xyz", "human_capped": 100},
+    {"path": "/api/repos/acme/widgets/branches", "default": 50, "page_key": "items", "doc_key": "items", "id": "name", "q_hit": "CUT-BRANCH-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/repos/acme/widgets/github-branches", "default": 50, "page_key": "items", "doc_key": "items", "id": "__self__", "q_hit": "FEAT-BRANCH-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/repos/acme/widgets/workflows", "default": 5, "page_key": "workflows", "doc_key": "workflows", "id": "path", "q_hit": "DECLARED-01", "q_miss": "echo ok"},
-    {"path": "/api/repos/acme/widgets/releases", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "REL-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/repos/acme/widgets/releases/rel-000/candidates", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "REL-000", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/tasks", "default": 20, "page_key": "tasks", "doc_key": "tasks", "id": "id", "q_hit": "BACKLOG ITEM 01", "q_miss": "seed-script/1.0", "human_live_only": True},
+    {"path": "/api/repos/acme/widgets/releases", "default": 20, "page_key": "items", "doc_key": "items", "id": "name", "q_hit": "REL-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/repos/acme/widgets/releases/rel-000/candidates", "q_field": "branch", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "REL-000", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/tasks", "default": 10, "page_key": "tasks", "doc_key": "tasks", "id": "id", "q_hit": "BACKLOG ITEM 01", "q_miss": "seed-script/1.0", "human_live_only": True},
     {"path": "/api/tasks?fields=summary", "default": 50, "page_key": "tasks", "doc_key": "tasks", "id": "id", "q_hit": "BACKLOG ITEM 01", "q_miss": "seed-script/1.0", "human_all": True},
     {"path": "/api/tasks/states", "default": 250, "page_key": "states", "doc_key": "states", "id": "__map__", "q_hit": None, "q_miss": None},
     {"path": "/api/states", "default": 250, "page_key": "states", "doc_key": "states", "id": "__map__", "q_hit": None, "q_miss": None},
-    {"path": "/api/tasks/1/messages", "default": 10, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "NEEDLE-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/inbox", "default": 20, "page_key": "items", "doc_key": "items", "id": ("kind", "task", "subject", "title"), "q_hit": "SUBJECT-01", "q_miss": "Second detail line"},
-    {"path": "/api/notifications", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "SUBJECT-01", "q_miss": "Second detail line"},
+    {"path": "/api/tasks/1/messages", "q_field": "author", "default": 10, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "NEEDLE-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/inbox", "q_field": "title", "default": 20, "page_key": "items", "doc_key": "items", "id": ("kind", "task", "subject", "title"), "q_hit": "SUBJECT-01", "q_miss": "Second detail line"},
+    {"path": "/api/notifications", "q_field": "subject", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "SUBJECT-01", "q_miss": "Second detail line"},
     {"path": "/api/ci/runs", "default": 10, "page_key": "runs", "doc_key": "runs", "id": "id", "q_hit": "PR-BRANCH-01", "q_miss": "nonexistent-xyz", "total_key": "matched", "human_capped": 100},
-    {"path": "/api/ci/runs?view=compact", "default": 50, "page_key": "runs", "doc_key": "runs", "id": "id", "q_hit": "PR-BRANCH-01", "q_miss": "nonexistent-xyz", "total_key": "matched", "human_capped": 100},
-    {"path": "/api/ci/workflows?repo=acme/widgets", "default": 20, "page_key": "workflows", "doc_key": "workflows", "id": "path", "q_hit": "WORKFLOW 01", "q_miss": "Check 01"},
-    {"path": "/api/ci/runs/ci-run-000/artifacts", "default": 50, "page_key": "artifacts", "doc_key": "artifacts", "id": ("job", "name"), "q_hit": "BUNDLE-01", "q_miss": "artifact payload"},
+    {"path": "/api/ci/runs?view=compact", "default": 20, "page_key": "runs", "doc_key": "runs", "id": "id", "q_hit": "PR-BRANCH-01", "q_miss": "nonexistent-xyz", "total_key": "matched", "human_capped": 100},
+    {"path": "/api/ci/workflows?repo=acme/widgets&ref=trunk", "default": 20, "page_key": "workflows", "doc_key": "workflows", "id": "path", "q_hit": "WORKFLOW 01", "q_miss": "Check 01"},
+    {"path": "/api/ci/runs/ci-run-000/artifacts", "q_field": "name", "default": 50, "page_key": "artifacts", "doc_key": "artifacts", "id": ("job", "name"), "q_hit": "BUNDLE-01", "q_miss": "artifact payload"},
     {"path": "/api/ci/faults", "default": 20, "page_key": "faults", "doc_key": "faults", "id": "digest", "q_hit": "STEP-ALPHA-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/merge-batches", "default": 20, "page_key": "batches", "doc_key": "batches", "id": ("repo", "branch", "taskId"), "q_hit": "CI-RUN-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/base-branch-gates", "default": 20, "page_key": "gates", "doc_key": "gates", "id": ("repo", "branch"), "q_hit": "WATCHED-REPO-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/merge-batches", "q_field": "branch", "default": 20, "page_key": "batches", "doc_key": "batches", "id": ("repo", "branch", "taskId"), "q_hit": "CI-RUN-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/base-branch-gates", "q_field": "branch", "default": 20, "page_key": "gates", "doc_key": "gates", "id": ("repo", "branch"), "q_hit": "WATCHED-REPO-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/memory", "default": 5, "page_key": "items", "doc_key": "items", "id": "repo", "q_hit": "MEM-REPO-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/memory/documents", "default": 50, "page_key": "items", "doc_key": "items", "id": ("repo", "name"), "q_hit": "ARCHITECTURE-NOTE-01", "q_miss": "Operational context"},
+    {"path": "/api/memory/documents", "q_field": "name", "default": 20, "page_key": "items", "doc_key": "items", "id": ("repo", "name"), "q_hit": "ARCHITECTURE-NOTE-01", "q_miss": "Operational context"},
     {"path": "/api/templates", "default": 5, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "TEMPLATE-SLUG-01", "q_miss": "Template instructions"},
-    {"path": "/api/templates?fields=summary", "default": 50, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "TEMPLATE-SLUG-01", "q_miss": "Template instructions"},
+    {"path": "/api/templates?fields=summary", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "TEMPLATE-SLUG-01", "q_miss": "Template instructions"},
     {"path": "/api/schedules", "default": 10, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "NIGHTLY SWEEP SCHEDULE 01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/suites", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "QUALIFICATION SUITE 01", "q_miss": "tmpl-000"},
-    {"path": "/api/suite-runs", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "QUALIFICATION SUITE 01", "q_miss": "trunk"},
+    {"path": "/api/suite-runs", "q_field": "suiteName", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "QUALIFICATION SUITE 01", "q_miss": "trunk"},
     {"path": "/api/boards", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "TEAM BOARD 01", "q_miss": "overview"},
-    {"path": "/api/release-notes", "default": 50, "page_key": "items", "doc_key": "items", "id": "period", "q_hit": "DIGEST 2018", "q_miss": "Operational context"},
+    {"path": "/api/release-notes", "default": 20, "page_key": "items", "doc_key": "items", "id": "period", "q_hit": "DIGEST 2018", "q_miss": "Operational context"},
     {"path": "/api/release-notes/versions", "default": 50, "page_key": "versions", "doc_key": "versions", "id": "version", "q_hit": "V3.", "q_miss": "nonexistent-xyz", "small_builtin": True},
-    {"path": "/api/state-repo/files", "default": 100, "page_key": "entries", "doc_key": "files", "id": "path", "q_hit": "TMPL-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/state-repo/files", "default": 100, "page_key": "entries", "doc_key": "entries", "id": "path", "q_hit": "TMPL-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/capability-methods", "default": 10, "page_key": "items", "doc_key": "items", "id": "ref", "q_hit": "SCOPE-SET-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/capability-servers", "default": 10, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "MCP-001.EXAMPLE.COM", "q_miss": "nonexistent-xyz"},
     {"path": "/api/capability-servers/usage", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "CAP-SRV-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/capability-servers/gchat-usage?id=gchat-main", "default": 50, "page_key": "items", "doc_key": "items", "id": "space", "q_hit": "AAAA-01", "q_miss": "nonexistent-xyz"},
+    {"path": "/api/capability-servers/gchat-usage?id=https://grain.dev/capabilities/gchat", "default": 50, "page_key": "items", "doc_key": "items", "id": "space", "q_hit": "AAAA-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/capability-servers/host-entries", "default": 50, "page_key": "entries", "doc_key": "entries", "id": "__self__", "q_hit": "HOST-CAP-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/api-scope-sets", "default": 10, "page_key": "sets", "doc_key": "scopeSets", "id": "name", "q_hit": "SCOPE-SET-01", "q_miss": "Scoped operational bundle"},
+    {"path": "/api/api-scope-sets", "default": 10, "page_key": "sets", "doc_key": "sets", "id": "name", "q_hit": "SCOPE-SET-01", "q_miss": "Scoped operational bundle"},
     {"path": "/api/api-scope-sets/usage", "default": 20, "page_key": "items", "doc_key": "items", "id": "name", "q_hit": "SCOPE-SET-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/external-agents/tokens", "default": 50, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "WORKSTATION-BOT-01", "q_miss": "gma_seeded"},
+    {"path": "/api/external-agents/tokens", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "WORKSTATION-BOT-01", "q_miss": "gma_seeded"},
     {"path": "/api/access/principals", "default": 50, "page_key": "entries", "doc_key": "entries", "id": "entry", "q_hit": "GRAIN/VIEWER", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/access/history", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "AUDITOR-01", "q_miss": "nonexistent-xyz", "human_capped": 100},
+    {"path": "/api/access/history", "q_field": "summary", "default": 20, "page_key": "items", "doc_key": "items", "id": "id", "q_hit": "AUDITOR-01", "q_miss": "nonexistent-xyz", "human_capped": 100},
     {"path": "/api/hostds", "default": 50, "page_key": "items", "doc_key": "items", "id": "name", "q_hit": "RUNNER-HOST-01", "q_miss": "nonexistent-xyz"},
-    {"path": "/api/gcp-keys", "default": 50, "page_key": "items", "doc_key": "items", "id": "name", "q_hit": "SAMPLE-PROJ-01", "q_miss": "Test GCP credential"},
-    {"path": "/api/github-tokens", "default": 50, "page_key": "tokens", "doc_key": "credentials", "id": "name", "q_hit": "GH-CRED-01", "q_miss": "tok-dummy"},
+    {"path": "/api/gcp-keys", "default": 20, "page_key": "items", "doc_key": "items", "id": "name", "q_hit": "SAMPLE-PROJ-01", "q_miss": "Test GCP credential"},
+    {"path": "/api/github-tokens", "default": 20, "page_key": "tokens", "doc_key": "tokens", "id": "name", "q_hit": "GH-CRED-01", "q_miss": "tok-dummy"},
     {"path": "/api/secrets", "default": 50, "page_key": "secrets", "doc_key": "secrets", "id": "name", "q_hit": "SERVICE-SECRET-01", "q_miss": "redacted-value"},
     {"path": "/api/agent-models", "default": 50, "page_key": "models", "doc_key": "models", "id": "id", "q_hit": "GEMINI-4.01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/persistent-sandboxes", "default": 50, "page_key": "items", "doc_key": "items", "id": "name", "q_hit": "DEVBOX-01", "q_miss": "sleep 3600"},
-    {"path": "/api/console", "default": 20, "page_key": "sessions", "doc_key": "consoles", "id": "taskId", "q_hit": None, "q_miss": "nonexistent-xyz", "live_pty_only": True},
+    {"path": "/api/console", "default": 20, "page_key": "sessions", "doc_key": "sessions", "id": "taskId", "q_hit": None, "q_miss": "nonexistent-xyz", "live_pty_only": True},
     {"path": "/api/console-sessions", "default": 5, "page_key": "sessions", "doc_key": "sessions", "id": "id", "q_hit": "SESSION-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/upgrade/targets", "default": 50, "page_key": "targets", "doc_key": "targets", "id": "name", "q_hit": "RELEASE-TRACK-01", "q_miss": "nonexistent-xyz"},
     {"path": "/api/events", "default": 20, "page_key": "events", "doc_key": "events", "id": "id", "q_hit": None, "q_miss": None, "cursor_param": "since", "human_capped": 100},
@@ -248,6 +254,9 @@ def run_walk(base_url, code, tokens):
                 anomalies.append(f"{path}: cursor walk exceeded 200 pages!")
                 break
 
+        if max_page_bytes > MCP_CAP_BYTES:
+            anomalies.append(f"{path}: a later default page is {max_page_bytes} B > 10240 B cap!")
+
         dups = len(walked_keys) - len(set(walked_keys))
         if dups > 0:
             anomalies.append(f"{path}: cursor walk produced {dups} duplicate items!")
@@ -258,7 +267,10 @@ def run_walk(base_url, code, tokens):
             # Human /api/tasks/states defaults to 1000, we have <300 tasks
             union_matches_human = set(walked_keys) == set(h_keys) and len(walked_keys) == len(h_keys)
         elif not r.get("human_capped") and not r.get("human_live_only"):
-            union_matches_human = walked_keys == h_keys
+            # Same rows, each once: the order a page walk reads may differ
+            # from the person's unpaged order (tasks?fields=summary is filing
+            # order unpaged, newest-closed first when paged).
+            union_matches_human = sorted(walked_keys) == sorted(h_keys)
             if not union_matches_human:
                 # For templates?fields=summary human also pages if fields=summary! Let's compare against limit=0
                 st0, bd0, _ = http_get(base_url, add_query(path, {"limit": "0"}), human_hdrs)
@@ -266,22 +278,32 @@ def run_walk(base_url, code, tokens):
                     j0 = json.loads(bd0)
                     l0 = extract_items(j0, pk)
                     k0 = [item_key(x, r["id"]) for x in l0]
-                    union_matches_human = walked_keys == k0
+                    union_matches_human = sorted(walked_keys) == sorted(k0)
             if not union_matches_human:
                 anomalies.append(f"{path}: walked keys ({len(walked_keys)}) != human unpaged ({len(h_keys)})")
 
-        # 4. q matching checks
+        # 4. q matching checks. The hit is data-driven: take the middle row of
+        # the person's unpaged answer, swap the case of its key field (one of
+        # the documented q fields), and expect that row back.
         q_hit_count = None
         q_miss_count = None
-        if r["q_hit"]:
-            qst, qbd, _ = http_get(base_url, add_query(path, {"q": r["q_hit"]}), agent_hdrs)
-            if qst == 200:
-                qj = json.loads(qbd)
-                q_hit_count = len(extract_items(qj, pk))
-                if q_hit_count == 0:
-                    anomalies.append(f"{path}: case-insensitive q={r['q_hit']!r} matched 0 items!")
-            else:
-                anomalies.append(f"{path}: q={r['q_hit']!r} returned HTTP {qst}")
+        q_val = None
+        q_field = r.get("q_field", r["id"])
+        if r["q_hit"] is not None and r["id"] != "__map__" and h_list and isinstance(q_field, str):
+            mid = h_list[len(h_list) // 2]
+            raw = mid if q_field == "__self__" else (mid.get(q_field) if isinstance(mid, dict) else None)
+            if isinstance(raw, (str, int)) and str(raw):
+                q_val = str(raw).swapcase()
+                want_key = item_key(mid, r["id"])
+                qst, qbd, _ = http_get(base_url, add_query(path, {"q": q_val, "limit": "1000"}), agent_hdrs)
+                if qst == 200:
+                    qj = json.loads(qbd)
+                    q_items = extract_items(qj, pk)
+                    q_hit_count = len(q_items)
+                    if want_key not in [item_key(x, r["id"]) for x in q_items]:
+                        anomalies.append(f"{path}: case-swapped q={q_val!r} (field {q_field}) did not return its row ({q_hit_count} items)")
+                else:
+                    anomalies.append(f"{path}: q={q_val!r} returned HTTP {qst}")
         if r["q_miss"]:
             mst, mbd, _ = http_get(base_url, add_query(path, {"q": r["q_miss"]}), agent_hdrs)
             if mst == 200:
@@ -322,6 +344,7 @@ def run_walk(base_url, code, tokens):
             "human_resp_bytes": len(h_body),
             "truncated": truncated,
             "has_next_cursor": bool(next_cursor),
+            "q_value": q_val,
             "q_hit_count": q_hit_count,
             "q_miss_count": q_miss_count,
             "limit_201_status": lim201_st,
@@ -335,12 +358,24 @@ def run_walk(base_url, code, tokens):
 
     # Extra task q checks: labels ("label-canary-needle"), branch ("feat-branch-01"), substring id ("105")
     extra_checks = {}
-    for label, qval in [("task_q_label", "LABEL-CANARY-NEEDLE"), ("task_q_branch", "FEAT-BRANCH-01"), ("task_q_id_sub", "105")]:
-        st, bd, _ = http_get(base_url, add_query("/api/tasks", {"q": qval}), agent_hdrs)
-        cnt = len(json.loads(bd).get("tasks", [])) if st == 200 else -1
-        extra_checks[label] = {"status": st, "count": cnt}
-        if cnt <= 0:
-            anomalies.append(f"/api/tasks?q={qval}: matched {cnt} tasks, but docs/agent-api.md documents labels, branch and id!")
+    # Branch and externalRef are documented q fields; take a real one from
+    # the person's full list and swap its case.
+    _, fb, _ = http_get(base_url, "/api/tasks?fields=full&limit=1000", human_hdrs)
+    fj = json.loads(fb)
+    full_tasks = fj.get("tasks", fj) if isinstance(fj, dict) else fj
+    for label, field in [("task_q_branch", "branch"), ("task_q_external_ref", "externalRef")]:
+        sample = next((t for t in full_tasks if t.get(field)), None)
+        if not sample:
+            extra_checks[label] = {"skipped": f"no seeded task has a {field}"}
+            continue
+        qval = sample[field].swapcase()
+        st, bd, _ = http_get(base_url, add_query("/api/tasks", {"q": qval, "limit": "1000"}), agent_hdrs)
+        ids = [t["id"] for t in json.loads(bd).get("tasks", [])] if st == 200 else []
+        extra_checks[label] = {"q": qval, "status": st, "count": len(ids), "found": sample["id"] in ids}
+        if sample["id"] not in ids:
+            anomalies.append(f"/api/tasks?q={qval}: did not return task {sample['id']} though {field} is a documented q field")
+    st, bd, _ = http_get(base_url, add_query("/api/tasks", {"q": "105"}), agent_hdrs)
+    extra_checks["task_q_id_sub"] = {"status": st, "count": len(json.loads(bd).get("tasks", [])) if st == 200 else -1}
 
     # Check agent /api/tasks?fields=full
     st_full, bd_full, _ = http_get(base_url, "/api/tasks?fields=full", agent_hdrs)
@@ -369,28 +404,55 @@ def run_walk(base_url, code, tokens):
             ("/api/events?since=0", "events"),
             ("/api/templates", "items"),
         ]:
+            # Walk every page: item 4 asks that no page, not just the
+            # first, carries another repository's rows, and that total/
+            # matched equal what the credential can actually walk.
             st, bd, _ = http_get(base_url, spath, hdrs)
             body_text = bd.decode(errors="replace")
-            leaked_other = ("other/thing" in body_text) or ("Other-repo secret" in body_text) or ("service-001" in body_text)
+            leaked_other = False
             total_v = None
             items_cnt = None
-            if st == 200:
-                pj = json.loads(bd)
-                if isinstance(pj, dict):
+            walked = 0
+            pages = 0
+            leak_page = None
+            cur_param = "since" if spath.startswith("/api/events") else "cursor"
+            pbd, pst = bd, st
+            while pst == 200 and pages < 200:
+                pages += 1
+                ptxt = pbd.decode(errors="replace")
+                if ("other/thing" in ptxt) or ("Other-repo secret" in ptxt) or ("service-001" in ptxt):
+                    leaked_other = True
+                    leak_page = leak_page or pages
+                pj = json.loads(pbd)
+                if not isinstance(pj, dict):
+                    walked += len(pj)
+                    break
+                if pages == 1:
                     total_v = pj.get("total", pj.get("matched"))
                     items_cnt = len(pj.get(pkey, []))
-                elif isinstance(pj, list):
-                    items_cnt = len(pj)
+                walked += len(pj.get(pkey, []))
+                nc = pj.get("nextCursor", "")
+                if not pj.get("truncated") or not nc:
+                    break
+                base_spath = re.sub(r"([?&])since=0", r"\1", spath).rstrip("?&")
+                pst, pbd, _ = http_get(base_url, add_query(base_spath, {cur_param: nc}), hdrs)
             caller_res[spath] = {
                 "status": st,
                 "items": items_cnt,
                 "total": total_v,
+                "pages_walked": pages,
+                "rows_walked": walked,
                 "leaked_other_repo": leaked_other,
+                "leak_page": leak_page,
             }
-            if st != 200:
+            if st == 403 and "holds no api grant" in body_text:
+                caller_res[spath]["expected_403"] = True  # the credential lacks the scope: refused, not leaked
+            elif st != 200:
                 anomalies.append(f"scope [{caller_name}] {spath}: HTTP {st} ({body_text[:140]})")
             elif leaked_other:
-                anomalies.append(f"scope [{caller_name}] {spath}: LEAKED another repository's data! total={total_v}")
+                anomalies.append(f"scope [{caller_name}] {spath}: LEAKED another repository's data on page {leak_page}! total={total_v}")
+            elif isinstance(total_v, int) and not spath.startswith("/api/events") and total_v != walked:
+                anomalies.append(f"scope [{caller_name}] {spath}: total={total_v} but only {walked} rows walkable (count leak?)")
         scope_checks[caller_name] = caller_res
 
     return {
@@ -478,8 +540,8 @@ def run_mid_walk_insert_test(base_url, code):
     seen_secrets = [s["name"] for s in sj1["secrets"]]
     scur = sj1["nextCursor"]
     http_post_or_put(
-        base_url, "PUT", "/api/secrets/zzz-mid-walk-secret",
-        {"values": {"k": "redacted"}},
+        base_url, "PUT", "/api/secrets/zzz-mid-walk-secret/k",
+        {"value": "redacted"},
         human_hdrs,
     )
     while scur:

@@ -46,10 +46,10 @@ import (
 
 // taskListQuery is GET /api/tasks' narrowing.
 type taskListQuery struct {
-	repo    string
-	owner   string
-	states  []string
-	search  string
+	repo     string
+	owner    string
+	states   []string
+	search   string
 	limit    int
 	limitAll bool
 	summary  bool
@@ -382,6 +382,10 @@ func pageTasks(matched []Task, q taskListQuery) taskListPage[Task] {
 	for _, t := range matched[start:end] {
 		if !q.summary && !q.full {
 			t = listRow(t)
+			if n := len(t.Reads); n > taskPageRowReads {
+				t.Reads = append([]string(nil), t.Reads[:taskPageRowReads]...)
+				t.ReadCount, t.ReadsTruncated = n, true
+			}
 		}
 		page.Tasks = append(page.Tasks, t)
 	}
@@ -391,6 +395,11 @@ func pageTasks(matched []Task, q taskListQuery) taskListPage[Task] {
 	}
 	return page
 }
+
+// taskPageRowReads is how many of a task's Reads a paged list row
+// carries (Task.ReadsTruncated); a director reading 260 repositories made
+// one row 7.8 KB and its page 14 KB.
+const taskPageRowReads = 10
 
 // taskPageKey is a task's place in a page's order.
 type taskPageKey struct {
@@ -423,7 +432,17 @@ func (k taskPageKey) before(o taskPageKey) bool {
 	return k.rawID > o.rawID
 }
 
+// zeroPageTime is a cursor's time for a task with no closing or filing
+// time. time.Time{}.UnixNano() is outside int64's range (it answers
+// -6795364578871345152, which reads back as 1754), so such a cursor read
+// back as a later time than the task it named and the next page started
+// at the same task again: a walk of the list never ended.
+const zeroPageTime = "z"
+
 func (k taskPageKey) String() string {
+	if k.at.IsZero() {
+		return zeroPageTime + "." + k.rawID
+	}
 	return strconv.FormatInt(k.at.UnixNano(), 10) + "." + k.rawID
 }
 
@@ -432,11 +451,14 @@ func parsePageCursor(s string) (taskPageKey, bool) {
 	if !ok || rawID == "" || strings.ContainsAny(rawID, " \t\r\n") {
 		return taskPageKey{}, false
 	}
-	ns, err := strconv.ParseInt(at, 10, 64)
-	if err != nil {
-		return taskPageKey{}, false
+	k := taskPageKey{rawID: rawID}
+	if at != zeroPageTime {
+		ns, err := strconv.ParseInt(at, 10, 64)
+		if err != nil {
+			return taskPageKey{}, false
+		}
+		k.at = time.Unix(0, ns)
 	}
-	k := taskPageKey{at: time.Unix(0, ns), rawID: rawID}
 	if n, err := strconv.ParseInt(rawID, 10, 64); err == nil {
 		k.id, k.isNum = n, true
 	}

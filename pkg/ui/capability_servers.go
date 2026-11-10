@@ -86,7 +86,18 @@ type CapabilityServer struct {
 	// entry, so its Config is empty; it is listed so Settings shows its
 	// methods and who holds them beside the configured servers.
 	InProcess *CapabilityInProcessServer `json:"inProcess,omitempty"`
+	// MethodCount and MethodsTruncated say how many methods Status
+	// listed when a paged call capped Status.Methods at
+	// capabilityServerPageMethods: the api capability lists one method
+	// per scope set, which grows with the deployment.
+	MethodCount      int  `json:"methodCount,omitempty"`
+	MethodsTruncated bool `json:"methodsTruncated,omitempty"`
 }
+
+// capabilityServerPageMethods is how many of a server's methods a paged
+// GET /api/capability-servers row carries; GET /api/capability-methods
+// pages through all of them.
+const capabilityServerPageMethods = 40
 
 // CapabilityInProcessServer names an in-process server for Settings.
 type CapabilityInProcessServer struct {
@@ -1447,6 +1458,10 @@ func (s *Server) handleListCapabilityServers(w http.ResponseWriter, r *http.Requ
 				st := *servers[i].Status
 				st.MethodDetails = nil
 				st.ConfigSchema = nil
+				if n := len(st.Methods); n > capabilityServerPageMethods {
+					st.Methods = append([]string(nil), st.Methods[:capabilityServerPageMethods]...)
+					servers[i].MethodCount, servers[i].MethodsTruncated = n, true
+				}
 				servers[i].Status = &st
 			}
 		}

@@ -218,7 +218,7 @@ var routeDocs = map[string]string{
 	"GET /api/release-notes":                                               "List weekly release notes, without their full text. " + describeListQuery("a note's week period, title or author", listPageLarge),
 	"GET /api/release-notes/versions":                                      "List released grain versions whose notes this build carries. " + describeListQuery("a version string", listPageMedium),
 	"GET /api/state-repo/files":                                            "List files and directories of the exported configuration in the state repository. " + describeListQuery("a file's path", listPageDefault),
-	"GET /api/deployment/git-connections":                                  "List the deployment's git connections; narrow with host. " + describeListQuery("a connection's credential, host, kind or scope", listPageMedium),
+	"GET /api/deployment/git-connections":                                  "List the deployment's git connections; narrow with host. " + describeListQuery("a connection's credential, host, kind or scope", listPageLarge),
 	"GET /api/deployment/audit-logs":                                       "List the deployment's credential and secret audit trail, newest first. " + describeListQuery("an event's kind, resource, credential, principal or task id", listPageLarge),
 	"GET /api/deployment/secret-audit":                                     "List the deployment's newest secret resolutions. " + describeListQuery("an entry's secret name, key, principal or task id", listPageMedium),
 	"GET /api/deployment/config-audit":                                     "List configuration changes recorded in the deployment's audit trail, newest first. " + describeListQuery("an entry's actor, actorLabel, surface or summary", listPageLarge),
@@ -581,7 +581,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/templates/{id}/composition": {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for.", "approved": "false to compose the tasks unapproved."},
 	"GET /api/suites/{id}/composition":    {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
 	"POST /api/suites/composition":        {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
-	"GET /api/deployment/git-connections": listQueryDocs("credential, host, kind or scope", listPageMedium, map[string]string{
+	"GET /api/deployment/git-connections": listQueryDocs("credential, host, kind or scope", listPageLarge, map[string]string{
 		"host": "Only connections for this git host (github.com when a connection names none).",
 	}),
 	"GET /api/deployment/secret-audit": listQueryDocs("secret name, key, principal or task id", listPageMedium, nil),
@@ -648,7 +648,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/console/{id}/output": {"offset": "Only output after this byte offset."},
 	"GET /api/ci/workflows": listObjectQueryDocs("workflow path or name", listPageLarge, map[string]string{
 		"repo": "The repository (owner/name) whose workflows to list.",
-		"ref":  "The branch or commit to read them at.",
+		"ref":  "The branch or commit to read them at (required: without one the route answers 400).",
 	}),
 	"GET /api/ci/runs": {
 		"repo":       "Only runs of this repository (owner/name).",

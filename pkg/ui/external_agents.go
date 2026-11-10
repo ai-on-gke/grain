@@ -63,6 +63,14 @@ type ExternalAgentTokenView struct {
 	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
 	Active     bool       `json:"active"`
+
+	// ResolvedScopeCount and ResolvedScopesTruncated say how many resolved
+	// scopes there were when a paged list left ResolvedScopes out: a
+	// credential's resolved scopes are its scope set's (or scopes') scopes
+	// times its repositories, which grows with both, and ScopeSet, Scopes
+	// and Repos already say the same thing.
+	ResolvedScopeCount      int  `json:"resolvedScopeCount,omitempty"`
+	ResolvedScopesTruncated bool `json:"resolvedScopesTruncated,omitempty"`
 }
 
 // CreateExternalAgentTokenRequest is the request body of POST /api/external-agents/tokens.
@@ -669,6 +677,14 @@ func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Re
 	tokens = filterList(tokens, func(t ExternalAgentTokenView) bool {
 		return list.matches(t.ID, t.Name, t.Owner, t.ScopeSet)
 	})
+	if list.Paged {
+		for i := range tokens {
+			if n := len(tokens[i].ResolvedScopes); n > 0 {
+				tokens[i].ResolvedScopes = nil
+				tokens[i].ResolvedScopeCount, tokens[i].ResolvedScopesTruncated = n, true
+			}
+		}
+	}
 	writeList(w, tokens, list)
 }
 

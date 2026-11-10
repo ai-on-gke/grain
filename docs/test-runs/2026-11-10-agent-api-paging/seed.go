@@ -719,6 +719,9 @@ func main() {
 			Prefix:    raw[:12],
 			Scopes:    bareScopes,
 			Repos:     repos,
+			// The walk pages every route to its end; the default 60
+			// requests a minute would 429 it part way through.
+			RateLimit: 100000,
 			CreatedBy: "owner@example.com",
 			CreatedAt: baseTime.Add(time.Hour),
 		}); err != nil {

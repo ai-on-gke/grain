@@ -82,7 +82,7 @@ func (s *Server) handleDeploymentReachableRepos(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handleListDeploymentGitConnections(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -104,6 +104,15 @@ func (s *Server) handleListDeploymentGitConnections(w http.ResponseWriter, r *ht
 	conns = filterList(conns, func(c TeamGitConnectionView) bool {
 		return list.matches(c.Credential, c.Host, c.Kind, c.Scope)
 	})
+	if list.Paged {
+		// Every row's status repeats GitHub's published host keys, the
+		// editor's default known_hosts (about 450 bytes): a paged
+		// caller is an agent or a script, not the editor, so a page
+		// leaves them out and stays under the tool-result cap.
+		for i := range conns {
+			conns[i].Status.DefaultKnownHosts = ""
+		}
+	}
 	writeList(w, conns, list)
 }
 

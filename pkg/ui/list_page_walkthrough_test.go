@@ -378,7 +378,7 @@ func TestAllHeavyPagedRoutesStayUnderToolResultCap(t *testing.T) {
 			t.Fatalf("GET %s: %d %s", path, code, body)
 		}
 		if len(body) > mcpToolResultCap {
-			t.Errorf("agent default page for GET %s is %d bytes, want <= %d", path, len(body), mcpToolResultCap)
+			t.Errorf("agent default page for GET %s is %d bytes, want <= %d: %.900s", path, len(body), mcpToolResultCap, body)
 		}
 	}
 
@@ -501,14 +501,16 @@ func TestRepoLimitedCredentialsNeverLeakReachableReposOrTasksCounts(t *testing.T
 			}
 
 			// 2. /api/tasks, fields=summary, and fields=full never see gke-labs or its counts.
-			wantTotal := 7
-			if caller.name == "task-token" {
-				wantTotal = 8 // includes scoped-task itself on allowedRepo
-			}
+			// Seven seeded tasks plus scoped-task itself, which is filed on
+			// allowedRepo too and so is in every caller's view.
+			wantTotal := 8
 			for _, path := range []string{"/api/tasks?limit=3", "/api/tasks?fields=summary&limit=3", "/api/tasks?fields=full&limit=3"} {
 				cur := ""
 				seen := 0
-				for {
+				for pages := 0; ; pages++ {
+					if pages > 20 {
+						t.Fatalf("walking %s never reached the last page (cursor %q)", path, cur)
+					}
 					u := path
 					if cur != "" {
 						u += "&cursor=" + url.QueryEscape(cur)
@@ -536,6 +538,9 @@ func TestRepoLimitedCredentialsNeverLeakReachableReposOrTasksCounts(t *testing.T
 					if !page.Truncated {
 						break
 					}
+					if page.NextCursor == "" || page.NextCursor == cur {
+						t.Fatalf("GET %s: truncated page did not advance the cursor (%q)", u, page.NextCursor)
+					}
 					cur = page.NextCursor
 				}
 				if seen != wantTotal {
@@ -554,12 +559,270 @@ func TestRepoLimitedCredentialsNeverLeakReachableReposOrTasksCounts(t *testing.T
 	if err != nil {
 		t.Fatalf("HTTPClient.ListTasks with external token: %v", err)
 	}
-	if len(listed) != 7 {
-		t.Errorf("HTTPClient.ListTasks returned %d tasks, want 7", len(listed))
+	if len(listed) != 8 {
+		t.Errorf("HTTPClient.ListTasks returned %d tasks, want 8", len(listed))
 	}
 	for _, tk := range listed {
-		if tk.Repo != allowedRepo || tk.Description == "" {
+		if tk.Repo != allowedRepo || (tk.Description == "" && tk.ID != "scoped-task") {
 			t.Errorf("unexpected task from HTTPClient.ListTasks: repo=%q desc=%q", tk.Repo, tk.Description)
 		}
+	}
+}
+
+// docs/test-runs/2026-11-10-agent-api-paging.md: against a seeded daemon an
+// agent's default page of GET /api/deployment/git-connections was 28 KB (each
+// row's status repeated GitHub's ~450-byte known_hosts) and GET
+// /api/capability-servers was 12 KB (the api capability lists one method per
+// scope set). Both must fit the tool-result cap while a person's unpaged
+// read keeps every field.
+func TestGitConnectionsAndCapabilityServersAgentPagesFitToolResultCap(t *testing.T) {
+	t.Parallel()
+	srv, client, creds := testServerWithCreds(t)
+	ctx := context.Background()
+	if err := creds.SetToken("bot", "tok-bot"); err != nil {
+		t.Fatal(err)
+	}
+	var gitConns []model.TeamGitConnection
+	for i := range 80 {
+		gitConns = append(gitConns, model.TeamGitConnection{
+			Credential: "bot",
+			Scope:      fmt.Sprintf("acme/service-%03d-component", i),
+		})
+	}
+	methods := make([]string, 300)
+	for i := range methods {
+		methods[i] = fmt.Sprintf("ops/scope-set-%03d", i)
+	}
+	id := "https://mcp-big.example.com/cap"
+	client.Config.CapabilityServers = stubCapServerStatuses{statuses: []servers.Status{{
+		ID: id, State: servers.Attached, Transport: "http", Methods: methods,
+	}}}
+	if err := client.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.GitCredential = "bot"
+		cfg.GitConnections = gitConns
+		cfg.MCPServers = map[string]protocol.ServerConfig{id: {ServerURL: "https://mcp-big.example.com/rpc"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "agent-conns", "acme/widgets", "api:connections:read", "api:capabilities:read", "api:deployment:read")
+
+	code, body := asAgent(t, srv, "agent-conns", http.MethodGet, "/api/deployment/git-connections", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET git-connections: %d %s", code, body)
+	}
+	if len(body) > mcpToolResultCap {
+		t.Errorf("agent default git-connections page is %d bytes, want <= %d: %.600s", len(body), mcpToolResultCap, body)
+	}
+	if strings.Contains(body, "ssh-ed25519") {
+		t.Errorf("agent git-connections page repeats known_hosts on every row")
+	}
+	human := do(t, srv, http.MethodGet, "/api/deployment/git-connections", "")
+	if human.Code != http.StatusOK || !strings.Contains(human.Body.String(), "ssh-ed25519") {
+		t.Errorf("person's unpaged git-connections lost defaultKnownHosts: %d", human.Code)
+	}
+
+	code, body = asAgent(t, srv, "agent-conns", http.MethodGet, "/api/capability-servers?q=mcp-big", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET capability-servers: %d %s", code, body)
+	}
+	if len(body) > mcpToolResultCap {
+		t.Errorf("agent capability-servers page is %d bytes, want <= %d", len(body), mcpToolResultCap)
+	}
+	var page struct {
+		Items []ui.CapabilityServer `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil || len(page.Items) != 1 {
+		t.Fatalf("capability-servers page = %v %s", err, body)
+	}
+	row := page.Items[0]
+	if row.Status == nil || len(row.Status.Methods) != 40 || row.MethodCount != 300 || !row.MethodsTruncated {
+		t.Errorf("paged row methods = %d (count %d, truncated %v), want 40 of 300 truncated", len(row.Status.Methods), row.MethodCount, row.MethodsTruncated)
+	}
+	human = do(t, srv, http.MethodGet, "/api/capability-servers", "")
+	var all []ui.CapabilityServer
+	if err := json.Unmarshal(human.Body.Bytes(), &all); err != nil {
+		t.Fatalf("human capability-servers: %v", err)
+	}
+	for _, s := range all {
+		if s.ID == id && (s.Status == nil || len(s.Status.Methods) != 300 || s.MethodsTruncated) {
+			t.Errorf("person's unpaged capability-servers row lost methods")
+		}
+	}
+}
+
+// docs/test-runs/2026-11-10-agent-api-paging.md: a task with no filing or
+// closing time sorts at time.Time{}, whose UnixNano is outside int64's
+// range, so its nextCursor read back as 1754 and the next page began at
+// the same task again: an agent (or HTTPClient.ListTasks) walking the list
+// never reached its end.
+func TestTaskListCursorAdvancesPastTasksWithNoTime(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	seedAPITask(t, client, "walker", "acme/widgets", "api:tasks:read")
+	for i := range 7 {
+		if err := client.Store.PutTask(ctx, model.Task{
+			ID: fmt.Sprintf("%d", 300+i), Intent: model.IntentImplement,
+			Title: fmt.Sprintf("Timeless task %02d", i), Target: &widgets,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	cur := ""
+	for pages := 0; ; pages++ {
+		if pages > 10 {
+			t.Fatalf("walk never ended; cursor %q", cur)
+		}
+		path := "/api/tasks?limit=2"
+		if cur != "" {
+			path += "&cursor=" + url.QueryEscape(cur)
+		}
+		code, body := asAgent(t, srv, "walker", http.MethodGet, path, "", "")
+		if code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, code, body)
+		}
+		var page struct {
+			Tasks []struct {
+				ID string `json:"id"`
+			} `json:"tasks"`
+			Truncated  bool   `json:"truncated"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := json.Unmarshal([]byte(body), &page); err != nil {
+			t.Fatal(err)
+		}
+		for _, tk := range page.Tasks {
+			if seen[tk.ID] {
+				t.Fatalf("task %s on two pages (cursor %q)", tk.ID, cur)
+			}
+			seen[tk.ID] = true
+		}
+		if !page.Truncated {
+			break
+		}
+		cur = page.NextCursor
+	}
+	if len(seen) != 8 {
+		t.Errorf("walked %d tasks, want 8", len(seen))
+	}
+}
+
+// docs/test-runs/2026-11-10-agent-api-paging.md: a repo-limited agent paging
+// GET /api/events hung for good (and spun a CPU) on the page after its last
+// readable event when a full scan batch (100) of other repositories' events
+// followed it: the scan re-read the same unreadable batch forever.
+func TestEventsPageAfterLastReadableEventReturnsForRepoLimitedAgent(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, client, "events-walker", "acme/widgets", "api:tasks:read@acme/widgets")
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	other := model.RepoRef{Owner: "acme", Name: "other"}
+	now := time.Now().UTC()
+	put := func(id string, target model.RepoRef) {
+		if err := client.Store.PutTask(ctx, model.Task{
+			ID: id, Intent: model.IntentImplement, Title: "Event source " + id,
+			Target: &target, CreatedAt: &now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 3 {
+		put(fmt.Sprintf("%d", 400+i), widgets)
+	}
+	for i := range 150 {
+		put(fmt.Sprintf("%d", 500+i), other)
+	}
+
+	cur := "0"
+	walked := 0
+	for pages := 0; pages < 50; pages++ {
+		path := "/api/events?limit=1&since=" + url.QueryEscape(cur)
+		type result struct {
+			code int
+			body string
+		}
+		done := make(chan result, 1)
+		go func() {
+			code, body := asAgent(t, srv, "events-walker", http.MethodGet, path, "", "")
+			done <- result{code, body}
+		}()
+		var res result
+		select {
+		case res = <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("GET %s did not return after %d events", path, walked)
+		}
+		if res.code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, res.code, res.body)
+		}
+		var page struct {
+			Events []struct {
+				Repo string `json:"repo"`
+			} `json:"events"`
+			Truncated  bool   `json:"truncated"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := json.Unmarshal([]byte(res.body), &page); err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range page.Events {
+			if ev.Repo != "" && ev.Repo != "acme/widgets" {
+				t.Fatalf("repo-limited agent saw an event for %s", ev.Repo)
+			}
+		}
+		walked += len(page.Events)
+		if !page.Truncated || page.NextCursor == "" {
+			if walked == 0 {
+				t.Fatal("walked no events")
+			}
+			return
+		}
+		cur = page.NextCursor
+	}
+	t.Fatalf("events walk did not end in 50 pages")
+}
+
+// docs/test-runs/2026-11-10-agent-api-paging.md: the director reads every
+// target repository, so on a deployment of 260 repositories its list row
+// alone was 7.8 KB and an agent's default page of GET /api/tasks 14 KB. A
+// paged list row caps reads; the task itself still names them all.
+func TestTaskListRowCapsReadsForAgents(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, client, "reader", "acme/widgets", "api:tasks:read")
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	var reads []model.RepoRef
+	for i := range 30 {
+		reads = append(reads, model.RepoRef{Owner: "acme", Name: fmt.Sprintf("watched-repo-%03d-with-a-long-name", i)})
+	}
+	now := time.Now().UTC()
+	if err := client.Store.PutTask(ctx, model.Task{
+		ID: "777", Intent: model.IntentImplement, Title: "Director-like reader",
+		Target: &widgets, Reads: reads, CreatedAt: &now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := asAgent(t, srv, "reader", http.MethodGet, "/api/tasks?q=director-like", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/tasks: %d %s", code, body)
+	}
+	var page struct {
+		Tasks []ui.Task `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil || len(page.Tasks) != 1 {
+		t.Fatalf("page = %v %s", err, body)
+	}
+	row := page.Tasks[0]
+	if len(row.Reads) != 10 || row.ReadCount != 30 || !row.ReadsTruncated {
+		t.Errorf("list row reads = %d (count %d, truncated %v), want 10 of 30 truncated", len(row.Reads), row.ReadCount, row.ReadsTruncated)
+	}
+	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/tasks?q=director-like&fields=full", "", "")
+	if code != http.StatusOK || strings.Count(body, "watched-repo-") != 30 || strings.Contains(body, "readsTruncated") {
+		t.Errorf("fields=full row should carry every read: %d", code)
 	}
 }

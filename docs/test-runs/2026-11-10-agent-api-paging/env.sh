@@ -194,6 +194,12 @@ start_paging_env() {
 		sleep 0.1
 	done
 
+	# The seed writes externalAgentApi into the store's config, but the daemon
+	# answers from its own settings at boot; turn it on through the API so the
+	# gma_ credentials in tokens.json are admitted.
+	curl -s -o /dev/null -X PUT -H "Authorization: Bearer $(tr -d '[:space:]' <"$work/data/local-api-token")" \
+		-H 'Content-Type: application/json' -d '{"externalAgentApi":true}' "$daemon_url/api/settings"
+
 	export PAGING_WORK="$work"
 	export PAGING_DAEMON="$daemon_url"
 	export PAGING_CODE

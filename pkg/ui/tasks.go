@@ -93,6 +93,13 @@ type Task struct {
 	// model.Task.Reads, rendered as owner/name strings the same way Repo
 	// renders its single Target.
 	Reads []string `json:"reads,omitempty"`
+	// ReadCount and ReadsTruncated say how many Reads there were when a
+	// paged GET /api/tasks list row capped them at taskPageRowReads: a
+	// standing session such as the director reads every target
+	// repository, which grows with the deployment. GET /api/tasks/{id}
+	// carries them all.
+	ReadCount      int  `json:"readCount,omitempty"`
+	ReadsTruncated bool `json:"readsTruncated,omitempty"`
 	// Writes is every *other* repo this task's work may land in, with
 	// the base branch for each -- model.Task.Writes. Repo and Base above
 	// are still the one repo and branch this task's own runs push to;

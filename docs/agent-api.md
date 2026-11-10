@@ -800,7 +800,7 @@ parameters, read by `parseListQuery` (`pkg/ui/list_page.go`):
 | Parameter | Meaning |
 |---|---|
 | `q` | Only items whose natural key (the table below says which) contains this text, case-insensitively. |
-| `limit` | At most this many items; `0` for every item. An agent's call that names none is paged by default, at the route's own page size (chosen so a default page stays under the cap); a person's unparameterised call gets the whole list in the shape the UI reads. At most 1000. |
+| `limit` | At most this many items; `0` for every item. An agent's call that names none is paged by default, at the route's own page size (chosen so a default page stays under the cap); a person's unparameterised call gets the whole list in the shape the UI reads. At most 1000: a larger limit is answered as 1000, with `truncated` and `nextCursor` saying there is more (it is not refused). |
 | `cursor` | The `nextCursor` of the previous page. Opaque: pass it back, never build one (`ui.ListCursorFor` exists for a Go caller paging by hand). A cursor the route did not hand out is a 400. |
 
 When a call is paged -- an agent's always (whether through `POST /mcp`,
@@ -816,7 +816,7 @@ it. `total` is how many items matched across every page;
 | Route | Page by default | `q` matches | Other filters |
 |---|---|---|---|
 | `GET /api/deployment/reachable-repos` | 100 | the full name (`owner/name`, or `host/owner/name` on another git host) | `push=true` for only repositories the connection can push to -- those a task can be filed against -- or `push=false` for only those it cannot; `owner=`; `host=` (the deployment's default host, `github.com` unless configured, for the names that spell none). `repos` is the page; `connections` and `errors`, one entry per git connection, are whole (and omitted for repository-limited callers). |
-| `GET /api/deployment/git-connections` | 50 | credential, host, kind or scope | `host=` |
+| `GET /api/deployment/git-connections` | 20 | credential, host, kind or scope | `host=`. Each row's `status.defaultKnownHosts` (GitHub's published host keys, the same on every row) is empty on paged calls. |
 | `GET /api/deployment/secret-audit` | 50 | secret name, key, principal or task id | |
 | `GET /api/deployment/audit-logs` | 20 | kind, resource, credential, principal or task id | |
 | `GET /api/deployment/config-audit` | 20 | actor, actorLabel, surface or summary | |
@@ -825,13 +825,13 @@ it. `total` is how many items matched across every page;
 | `GET /api/repos/{owner}/{name}/workflows` | 5 | workflow path or name | `workflows` is the page. |
 | `GET /api/repos/{owner}/{name}/releases` | 20 | name, latest or prod branch | |
 | `GET /api/repos/{owner}/{name}/releases/{release}/candidates` | 20 | branch, status or release | |
-| `GET /api/tasks` | 10 (`fields=` unset or `list`) / 50 (`fields=summary`) / 5 (`fields=full`) | title, description, branch, externalRef or id | `repo`, `state`, `owner`, `externalRef`, `filed_via`, `derived_from`, `closedSince`, `closedBefore`, `fields=summary` (recommended for agents; `grain_list_tasks` calls this). `tasks` is the page. |
+| `GET /api/tasks` | 10 (`fields=` unset or `list`) / 50 (`fields=summary`) / 5 (`fields=full`) | title, description, branch, externalRef or id | `repo`, `state`, `owner`, `externalRef`, `filed_via`, `derived_from`, `closedSince`, `closedBefore`, `fields=summary` (recommended for agents; `grain_list_tasks` calls this). `tasks` is the page. A list row (`fields` unset or `list`) leaves out the description and caps `reads` at 10 (`readCount` and `readsTruncated` report the full count). `fields=full` rows carry each task's whole description, so a page of long descriptions can pass the cap; ask with a smaller `limit` or read one task with `GET /api/tasks/{id}`. |
 | `GET /api/tasks/states`, `GET /api/states` | 250 | | Lightweight `{"states": {"<id>": "<state>"}}` map; `truncated` and `nextCursor` accompany `hasMore` and `cursor`. |
 | `GET /api/tasks/{id}/messages` | 10 | author, summary or body | `after`, `agents`, `wait_ms` |
 | `GET /api/inbox` | 20 | task, title, repo, summary, subject or pull request | `repo`, `kind`. `items` is the page. |
 | `GET /api/notifications` | 20 | subject or title | `open`, `family`, `after`, `fields=list` |
 | `GET /api/ci/runs` | 10 (`view=full`) / 20 (`view=compact`) | id, repository, ref, commit, event, task id (`requestedBy`), job or workflow | `view=compact` (recommended), `repo`, `ref`, `conclusion`, `job`, `workflow`, `since`, `until`, `sort`, `order`, `provider`. `runs` is the page; `matched` (with `stored`) is the count. |
-| `GET /api/ci/workflows` | 20 | workflow path or name | `repo`, `ref`. `workflows` is the page. |
+| `GET /api/ci/workflows` | 20 | workflow path or name | `repo`, `ref` (both required: the workflows are read from the repository at that ref). `workflows` is the page. |
 | `GET /api/ci/runs/{id}/artifacts` | 50 | job or artifact name | `artifacts` is the page. |
 | `GET /api/ci/faults` | 20 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. |
 | `GET /api/merge-batches` | 20 | repository, branch, ref or run id | `repo=owner/name`. `batches` is the page. |
@@ -847,13 +847,13 @@ it. `total` is how many items matched across every page;
 | `GET /api/release-notes/versions` | 50 | version string | `versions` is the page. |
 | `GET /api/state-repo/files` | 100 | file path | `entries` is the page. |
 | `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo` |
-| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls (use `GET /api/capability-methods`). |
+| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls, and a row's `status.methods` is capped at 40 (`methodCount` and `methodsTruncated` report the full count); use `GET /api/capability-methods` for every method. |
 | `GET /api/capability-servers/usage` | 20 | capability_id | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
 | `GET /api/capability-servers/gchat-usage` | 50 | space or transport | `id` |
 | `GET /api/capability-servers/host-entries` | 50 | allowlist entry name | `entries` is the page. |
 | `GET /api/api-scope-sets` | 10 | scope set name or source | `sets` is the page. |
 | `GET /api/api-scope-sets/usage` | 20 | scope set name | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
-| `GET /api/external-agents/tokens` | 20 | id, name, owner or scope set | |
+| `GET /api/external-agents/tokens` | 20 | id, name, owner or scope set | Per-row `resolvedScopes` (scopes times repositories) is left out of paged calls: `resolvedScopeCount` says how many there are, `resolvedScopesTruncated` is set, and `scopeSet`, `scopes` and `repos` are complete. |
 | `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
 | `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
 | `GET /api/hostds` | 50 | host name or owner | |
