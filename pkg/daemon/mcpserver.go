@@ -2061,6 +2061,11 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			"Framework that forked this process (agent.RunConfig.SandboxEnvFile), naming the file the daemon "+
 			"wrote its -host-sandbox-env to")
 
+	runCredentialFile := fs.String("run-credential-file", "",
+		"path of a 0600 file holding this run's credential, which the server reaches -server with "+
+			"instead of the "+ui.RunCredentialEnv+" environment variable. Passed for a -sandbox-root run, whose daemon puts the file "+
+			"in a directory -sandbox-hide hides from run_command, so the agent's commands cannot read it")
+
 	var sandboxHideList SandboxEnv
 	fs.Var(&sandboxHideList, "sandbox-hide",
 		"absolute path, repeatable, only with -sandbox-root: a file or directory run_command runs every "+
@@ -2271,6 +2276,15 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		if cred := strings.TrimSpace(os.Getenv(ui.RunCredentialEnv)); cred != "" {
 			client.Token = cred
 			os.Unsetenv(ui.RunCredentialEnv)
+		}
+		if *runCredentialFile != "" {
+			raw, err := os.ReadFile(*runCredentialFile)
+			if err != nil {
+				return fmt.Errorf("grain mcpserver: -run-credential-file: %w", err)
+			}
+			if cred := strings.TrimSpace(string(raw)); cred != "" {
+				client.Token = cred
+			}
 		}
 		var err error
 		taskDetail, err = client.GetTask(context.Background(), *taskID)

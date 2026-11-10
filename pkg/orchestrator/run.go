@@ -3485,6 +3485,17 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				return unprepared(fmt.Errorf("minting the run's credential: %w", err))
 			}
 		}
+		// On a confined host sandbox it is kept out of every file the
+		// agent's own commands could read (hideRunCredential).
+		runCredentialFile, sandboxHide, removeRunCredential, err := hideRunCredential(runCredential, cfg.sandboxHide)
+		if err != nil {
+			return unprepared(err)
+		}
+		defer removeRunCredential()
+		mcpRunCredential := runCredential
+		if runCredentialFile != "" {
+			mcpRunCredential = ""
+		}
 		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task, runCredential)
 		if err != nil {
 			return unprepared(fmt.Errorf("serving grain-controller MCP: %w", err))
@@ -3617,9 +3628,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		}
 		runCfg := agent.RunConfig{
 			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: runTools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
-			SandboxEnvFile: cfg.sandboxEnvFile,
-			SandboxHide:    cfg.sandboxHide,
-			RunCredential:  runCredential,
+			SandboxEnvFile:    cfg.sandboxEnvFile,
+			SandboxHide:       sandboxHide,
+			RunCredential:     mcpRunCredential,
+			RunCredentialFile: runCredentialFile,
 			// The MCP servers this run's capability grants expose, each
 			// registered beside grain-sandbox (§5.2.4).
 			CapabilityMCPServers: capabilityMCPServers,

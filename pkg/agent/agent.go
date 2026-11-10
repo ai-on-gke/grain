@@ -68,6 +68,13 @@ type RunConfig struct {
 	// mcp.RunCredentialEnv (RunCredentialEnv), never on its argv. "" for
 	// none.
 	RunCredential string
+	// RunCredentialFile, set instead of RunCredential for a host-directory
+	// sandbox, is a 0600 file holding the credential in a directory
+	// SandboxHide hides from run_command (orchestrator's
+	// hideRunCredential): there every file a Framework writes is readable
+	// from the sandbox, so the credential is in none of them.
+	// SandboxEnvArgs passes it as -run-credential-file.
+	RunCredentialFile string
 	// SandboxHide is the paths the run_command of a SandboxRoot sandbox
 	// must not reach (mcp.NewHostSandboxTools): a single-tenant daemon's
 	// data directory, which holds its access code. SandboxEnvArgs turns
@@ -764,6 +771,9 @@ func SandboxEnvArgs(cfg RunConfig) []string {
 	}
 	for _, p := range cfg.SandboxHide {
 		args = append(args, "-sandbox-hide", p)
+	}
+	if cfg.RunCredentialFile != "" {
+		args = append(args, "-run-credential-file", cfg.RunCredentialFile)
 	}
 	return args
 }
