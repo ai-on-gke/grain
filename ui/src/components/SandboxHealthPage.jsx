@@ -956,7 +956,7 @@ export function SandboxClusterFree({ cluster }) {
   );
 }
 
-export function SandboxBudgetPanel({ budget, overcommit, reconciliation }) {
+function SandboxBudgetPanel({ budget, overcommit, reconciliation }) {
   if (!budget && !overcommit && !reconciliation) return null;
   const count = budget?.committedCount || 0;
   const countWord = count === 1 ? "sandbox" : "sandboxes";
@@ -1341,7 +1341,7 @@ export function daemonRestarting(daemon) {
 
 // requestedNote is the start line's account of the restarts grain asked
 // for itself, so a count above one that raises no alarm says why.
-export function requestedNote(daemon) {
+function requestedNote(daemon) {
   const n = daemon?.requestedStarts || 0;
   if (n <= 0) return "";
   return n === 1

@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -342,6 +343,7 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias CreateTaskRequest
 	var aux struct {
 		Alias
+		RawBody     *string         `json:"body,omitempty"`
 		RawPriority json.RawMessage `json:"priority,omitempty"`
 		RawGrants   json.RawMessage `json:"grants,omitempty"`
 		// capabilities: is read as propose_task reads it
@@ -354,6 +356,7 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = CreateTaskRequest(aux.Alias)
+	r.rawBody = aux.RawBody
 	if present(aux.RawCapabilities) {
 		var entries any
 		if err := json.Unmarshal(aux.RawCapabilities, &entries); err != nil {
@@ -1708,11 +1711,12 @@ func (c *Client) AttemptCapabilityAudit(ctx context.Context, taskID string, numb
 // 412 KB, about a fifth of the window" is the fact that makes the pane
 // worth opening a second time.
 type TaskPrompt struct {
-	Prompt        string `json:"prompt"`
-	Attempt       int    `json:"attempt,omitempty"`
-	Bytes         int    `json:"bytes,omitempty"`
-	Tokens        int    `json:"tokens,omitempty"`
-	ContextTokens int    `json:"contextTokens,omitempty"`
+	Prompt        string                   `json:"prompt"`
+	Attempt       int                      `json:"attempt,omitempty"`
+	Bytes         int                      `json:"bytes,omitempty"`
+	Tokens        int                      `json:"tokens,omitempty"`
+	ContextTokens int                      `json:"contextTokens,omitempty"`
+	Skills        []intree.SkillIndexEntry `json:"skills,omitempty"`
 }
 
 // TaskPrompt returns the prompt taskID's most recent attempt was given
@@ -1751,6 +1755,7 @@ func (c *Client) TaskPrompt(ctx context.Context, taskID string) (TaskPrompt, err
 				Bytes:         size.Bytes,
 				Tokens:        size.EstimatedTokens,
 				ContextTokens: size.ContextTokens,
+				Skills:        intree.ParsePromptSkills(prompt),
 			}, nil
 		}
 	}
@@ -2001,7 +2006,8 @@ type CreateTaskRequest struct {
 	// deployment-wide and per-repo layers, so a box someone typed a
 	// newline into files as no override rather than as an override that
 	// silences both.
-	PromptExtension string `json:"promptExtension"`
+	PromptExtension string              `json:"promptExtension"`
+	Skills          *model.SkillsConfig `json:"skills,omitempty"`
 	// ReviewTemplateID attaches a review to this task
 	// (model.Task.ReviewTemplateID, grain/task-284): the ID of the
 	// template a second task is filed from once this one's own work is
@@ -2218,6 +2224,10 @@ type CreateTaskRequest struct {
 	// forkPR.Base settles (model.ReadsBesides, model.WritesBesides).
 	readsFromTemplate  bool
 	writesFromTemplate bool
+
+	// rawBody captures a caller-supplied "body" JSON key so fromTemplate can
+	// refuse overriding the prompt of a template that carries a declared push set.
+	rawBody *string
 }
 
 func proposalTags(key string, held, holdRequested bool) []string {
@@ -2487,6 +2497,14 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if err := refuseTaskHostd("hostd", req.Hostd); err != nil {
 		return Task{}, err
+	}
+	var chosenSkills *model.SkillsConfig
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return Task{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
 	}
 	priority := model.DefaultTaskPriority
 	if req.Priority != nil {
@@ -2852,6 +2870,19 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		filedFrom = strings.TrimSpace(req.TemplateID)
 	}
+	var declaredPush *DeclaredPush
+	if filedFrom != "" {
+		declaredPush, err = c.templateDeclaredPush(ctx, filedFrom)
+		if err != nil {
+			return Task{}, err
+		}
+		if declaredPush != nil {
+			if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+				return Task{}, forbiddenErrorf("%s cannot set templateId: template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+					a.label(), filedFrom, declaredPush.Path)
+			}
+		}
+	}
 	// The capability catalogue (settings/capabilities.yml) refuses what
 	// it does not admit here, and names what only a person may grant:
 	// a proposal or an agent's own filing holding one is left for a
@@ -3075,6 +3106,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			if (model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability)) && !slices.Contains(delegatedPersonOnly, g.Capability) {
 				delegatedPersonOnly = append(delegatedPersonOnly, g.Capability)
 			}
+		}
+		if declaredPush != nil {
+			delegatedPersonOnly = append(delegatedPersonOnly, "declared push set from "+declaredPush.Path)
 		}
 		if len(delegatedPersonOnly) > 0 {
 			why := fmt.Sprintf("holds %s, which only a person acting directly may grant", strings.Join(delegatedPersonOnly, ", "))
@@ -3303,6 +3337,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Model:                chosenModel,
 		ModelSource:          modelSourceOfRequest(req, chosenModel),
 		PromptExtension:      strings.TrimSpace(req.PromptExtension),
+		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
 		Owner:                resolvedOwner,
@@ -3350,7 +3385,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
-	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority, taskAdmission)
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "" || declaredPush != nil, keepRunning, priority, taskAdmission)
 	if err != nil {
 		return Task{}, err
 	}
@@ -4701,7 +4736,8 @@ type UpdateTaskRequest struct {
 	// creation (model.Task.PromptExtension), so an edit here reaches any
 	// run this task has not started yet -- but not one already live,
 	// whose prompt was built when it began.
-	PromptExtension *string `json:"promptExtension,omitempty"`
+	PromptExtension *string             `json:"promptExtension,omitempty"`
+	Skills          *model.SkillsConfig `json:"skills,omitempty"`
 	// ReviewTemplateID attaches, changes or detaches this task's review
 	// (CreateTaskRequest.ReviewTemplateID sets the same field), with an
 	// empty string meaningful for the reason it is on the two above: it
@@ -5063,6 +5099,16 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}
 	var pinnedFramework string
 	var statedPin, statedModel string
+	var chosenSkills *model.SkillsConfig
+	var hasChosenSkills bool
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return Task{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
+		hasChosenSkills = true
+	}
 	if req.AgentBackendID != nil {
 		statedPin = strings.TrimSpace(*req.AgentBackendID)
 	}
@@ -5319,6 +5365,18 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			titleChanged = *req.Title != task.Title
 			task.Title = *req.Title
 		}
+		if req.Description != nil || req.PromptExtension != nil {
+			if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {
+				return err
+			} else if push != nil {
+				if req.Description != nil && *req.Description != task.Body {
+					return validationErrorf("task %s carries a declared push set from %s: description cannot be overridden", task.ID, push.Path)
+				}
+				if req.PromptExtension != nil && strings.TrimSpace(*req.PromptExtension) != task.PromptExtension {
+					return validationErrorf("task %s carries a declared push set from %s: promptExtension cannot be set", task.ID, push.Path)
+				}
+			}
+		}
 		if req.Description != nil {
 			descriptionChanged = *req.Description != task.Body
 			task.Body = *req.Description
@@ -5467,6 +5525,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if req.PromptExtension != nil {
 			task.PromptExtension = strings.TrimSpace(*req.PromptExtension)
+		}
+		if hasChosenSkills {
+			task.Skills = chosenSkills
 		}
 		if req.ReviewTemplateID != nil {
 			task.ReviewTemplateID = reviewTemplateID

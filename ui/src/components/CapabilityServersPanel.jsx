@@ -54,7 +54,7 @@ import { DISCARD_PROMPT } from "./Overlay.jsx";
 
 // The operator's guide to this page (and the Capability policy card
 // below it).
-export const CAPABILITY_SERVERS_GUIDE =
+const CAPABILITY_SERVERS_GUIDE =
   "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md";
 
 // CapabilityServersPanel is the deployment's mcpServers
@@ -94,7 +94,7 @@ const stateLabel = {
 };
 
 // What each state chip means, for its tooltip and the page's legend.
-export const stateHelp = {
+const stateHelp = {
   attached:
     "grain is connected to this server, and tasks can be granted its methods.",
   pending:
@@ -128,7 +128,7 @@ function serverState(server) {
 }
 
 // runsAt is where a server runs, as a short label and what it means.
-export function runsAt(config) {
+function runsAt(config) {
   if (!config?.command)
     return {
       key: "http",
@@ -160,7 +160,7 @@ const kindHelp = {
 
 // inProcessRuns is runsAt's answer for a server grain runs inside its
 // own process (pkg/capability/grainserver), which has no entry to read.
-export const inProcessRuns = {
+const inProcessRuns = {
   key: "in-process",
   label: "in-process",
   help: "Runs inside grain's own process: there is no command, URL or configuration, and it is always attached.",
@@ -1014,7 +1014,7 @@ const SUMMARY_MAX_CHARS = 120;
 // summarizeServer returns a one-sentence/one-clause short summary when text
 // exceeds SUMMARY_MAX_CHARS or spans multiple sentences/lines, and keeps
 // the full text for an InfoPopover.
-export function summarizeServer(text, max = SUMMARY_MAX_CHARS) {
+function summarizeServer(text, max = SUMMARY_MAX_CHARS) {
   const full = (text || "").trim();
   if (!full) return { short: "", full: "", truncated: false };
   const firstLine = full.split(/\r?\n/)[0].trim();

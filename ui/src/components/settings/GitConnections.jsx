@@ -209,7 +209,7 @@ const typeLabel = (type) =>
 
 // CredentialCheckResult is one Test's answer: whom GitHub took the token
 // for, and a ✓/✗ per repo with whether it can read and push there.
-export function CredentialCheckResult({ result, onClose }) {
+function CredentialCheckResult({ result, onClose }) {
   const identity = result.app
     ? `GitHub App installation${result.installationRepos ? ` (${result.installationRepos} repositories)` : ""}`
     : result.login
@@ -289,7 +289,7 @@ export function deploymentRepos(deployment) {
 // that is still being looked up and error when the credential names
 // nobody GitHub can say. A connection with no credential to speak of
 // (type None) is left out.
-export function commitIdentities(connections) {
+function commitIdentities(connections) {
   return distinctConnections(connections)
     .filter((c) => c?.credential && c.authType !== "none")
     .map((c) => ({
@@ -306,7 +306,7 @@ export function commitIdentities(connections) {
 // formatCommitAuthor is one commitIdentities entry as the Commit author
 // list says it: `Name <email>`, or what is still being asked, or the
 // fallback (grain's own) and why.
-export function formatCommitAuthor(author, fallback) {
+function formatCommitAuthor(author, fallback) {
   if (author.name || author.email) {
     return `${author.name || fallback} <${author.email || "no address"}>`;
   }

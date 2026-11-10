@@ -110,7 +110,7 @@ import {
 // "Timeline" rather than "Gantt" for the label, because that is what the
 // nav rail already calls the same view and a board's chip should say the
 // word the reader has seen.
-export const BOARD_KINDS = [
+const BOARD_KINDS = [
   { id: "list", label: "List" },
   { id: "kanban", label: "Kanban" },
   { id: "gantt", label: "Timeline" },
@@ -119,7 +119,7 @@ export const BOARD_KINDS = [
   { id: "tree", label: "Tree" },
 ];
 
-export const BOARD_KIND_LABELS = Object.fromEntries(
+const BOARD_KIND_LABELS = Object.fromEntries(
   BOARD_KINDS.map((k) => [k.id, k.label]),
 );
 
@@ -213,6 +213,46 @@ export function boardFolders(boards) {
     group.boards.push(b);
   }
   return { loose, folders };
+}
+
+// boardLabels disambiguates boards that share a name across folders (or
+// within one): a unique name stays as written, a name that appears in
+// more than one folder carries where it is filed ("Triage, in Ops" /
+// "Triage, outside every folder"), and two of one name in one folder fall
+// back to the board id as a final tie-break. Used wherever boards of
+// different folders share an accessible namespace -- /boards links,
+// handles and slots, pinned rail buttons, and Customize sidebar.
+export function boardLabels(boards) {
+  const list = Array.isArray(boards) ? boards : [];
+  const nameCounts = new Map();
+  const pairCounts = new Map();
+  for (const b of list) {
+    if (!b) continue;
+    nameCounts.set(b.name, (nameCounts.get(b.name) || 0) + 1);
+    const pair = `${b.folder || ""}\0${b.name}`;
+    pairCounts.set(pair, (pairCounts.get(pair) || 0) + 1);
+  }
+  const out = new Map();
+  for (const b of list) {
+    if (!b) continue;
+    const folder = b.folder || "";
+    if ((nameCounts.get(b.name) || 0) <= 1) {
+      out.set(b.id, b.name);
+      continue;
+    }
+    const where = folder ? `in ${folder}` : "outside every folder";
+    if ((pairCounts.get(`${folder}\0${b.name}`) || 0) > 1) {
+      out.set(b.id, `${b.name} (${b.id}), ${where}`);
+    } else {
+      out.set(b.id, `${b.name}, ${where}`);
+    }
+  }
+  return out;
+}
+
+export function boardLabel(boards, board) {
+  if (!board) return "";
+  return boardLabels(boards).get(board.id) || board.name;
 }
 
 // LIST_KINDS are the kinds of board that are the task list: the saved

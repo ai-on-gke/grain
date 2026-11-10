@@ -22,7 +22,7 @@ import { forceMergeOffered } from "./taskWrites.js";
 // a pause scoped to one host is keyed "<connection>@hostd/<host>" on the
 // wire (pkg/daemon's hostdPauseOwner) and reads "<connection> on host
 // <host>".
-export function pauseConnectionLabel(key) {
+function pauseConnectionLabel(key) {
   if (typeof key !== "string") return key;
   const at = key.indexOf("@hostd/");
   if (at < 0) return key;
@@ -63,7 +63,7 @@ export function pauseConnectionLabel(key) {
 //     the queue is not moving where it looks as if it should.
 //   - info: something is unfinished rather than wrong -- a team's setup
 //     steps left. Its tasks may wait on it, but nobody has been surprised.
-export const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
+const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
 // muiSeverity is the MUI Alert / palette colour of a severity.
 export function muiSeverity(severity) {
@@ -266,7 +266,7 @@ export function pipelinePauseTitle(pause) {
 
 // admissionBypasses is Task.HasPriorityDispatch for the browser: a task
 // whose admission is bypass or durable (durable includes bypass).
-export function admissionBypasses(t) {
+function admissionBypasses(t) {
   return t?.admission === "bypass" || t?.admission === "durable";
 }
 
@@ -385,7 +385,7 @@ export function setupAlertText(left) {
 
 // HOST_SANDBOXES_TITLE is the "no isolation" alert's title
 // (config.hostSandboxes).
-export const HOST_SANDBOXES_TITLE = "No isolation: runs execute on this host";
+const HOST_SANDBOXES_TITLE = "No isolation: runs execute on this host";
 
 // collectAlerts is every standing alert config describes for this viewer,
 // sorted (sortAlerts). Each is
@@ -594,7 +594,7 @@ export function collectAlerts(config, zone = "", tasks = []) {
 // This was a filled strip across the top of every page
 // (RedBaseRepairBanner) until it joined the rest here; its buttons came
 // with it.
-export function redBaseRepairAlerts(config, tasks) {
+function redBaseRepairAlerts(config, tasks) {
   return (tasks || []).filter(waitingBaseRepair).map((t) => {
     const actions = [
       { kind: "open-task", label: `Open #${t.id}`, taskId: t.id },

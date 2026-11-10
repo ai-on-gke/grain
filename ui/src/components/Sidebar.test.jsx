@@ -2107,4 +2107,34 @@ describe("Sidebar sections this browser hides", () => {
       screen.getByRole("menuitem", { name: "New session" }),
     ).not.toHaveAttribute("aria-disabled", "true");
   });
+
+  it("gives pinned same-named boards in different folders distinct accessible names", async () => {
+    const user = userEvent.setup();
+    const onOpenBoard = vi.fn();
+    localStorage.setItem(
+      "grain.pinned",
+      JSON.stringify([
+        { kind: "board", id: "board-10" },
+        { kind: "board", id: "board-11" },
+      ]),
+    );
+    const dupes = [
+      { id: "board-10", name: "Triage", folder: "Ops", kind: "list" },
+      { id: "board-11", name: "Triage", folder: "Zeta", kind: "kanban" },
+    ];
+    render(
+      <Sidebar
+        {...baseProps}
+        tasks={tasks}
+        boards={dupes}
+        onOpenBoard={onOpenBoard}
+      />,
+    );
+    const opsBtn = screen.getByRole("button", { name: "Triage, in Ops" });
+    const zetaBtn = screen.getByRole("button", { name: "Triage, in Zeta" });
+    await user.click(opsBtn);
+    expect(onOpenBoard).toHaveBeenCalledWith(dupes[0]);
+    await user.click(zetaBtn);
+    expect(onOpenBoard).toHaveBeenCalledWith(dupes[1]);
+  });
 });

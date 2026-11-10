@@ -31,7 +31,7 @@ import { looksLikeRepo } from "../RepoPicker.jsx";
 // The goal is read on a single task's own read only (Task.Goal), so a
 // task with none shows the "Add goal" control and nothing else.
 
-export const GOAL_KINDS = [
+const GOAL_KINDS = [
   ["base-green", "Base branch green"],
   ["pr-merged", "Pull request merged"],
   ["tasks-closed", "Tasks closed"],

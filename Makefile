@@ -168,7 +168,7 @@ IMAGE ?= grain:dev
 # IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
 # pre-rename name, honoured for a release (as is `make image-registry`).
 IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -515,6 +515,20 @@ security:
 # the images': the scan is of what ships, not of what is installed.
 vuln:
 	GOTOOLCHAIN=go$(GO_VERSION) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+# The release images' vulnerability gate (docs/image-vulnerability-scanning.md):
+# Trivy, pinned by scripts/scan-images.sh, over the images' OS and language
+# packages, failing on a fixable CRITICAL or HIGH finding that
+# .grain/baselines/image-vulns-allowlist.yaml does not waive. `vuln` above
+# reads Go source; this reads what ships. With no SCAN_IMAGES it scans what
+# $RELEASE_IMAGES_STATE names if that file exists, else the published
+# images at SCAN_TAG (default main). SCAN_IMAGES is name=ref pairs, such as
+# SCAN_IMAGES="grain=grain:dev hub=grain-hub:dev" for local builds.
+SCAN_TAG ?=
+SCAN_IMAGES ?=
+SCAN_OUT ?= image-vulns-report
+scan-images:
+	./scripts/scan-images.sh --out $(SCAN_OUT) $(if $(SCAN_TAG),--tag $(SCAN_TAG),) $(SCAN_IMAGES)
 
 # The sustained concurrent-load harness (tests/e2e/loadtest_test.go,
 # bwsalmon/agents#416) -- skipped by `test` above (GRAIN_LOAD_TEST unset)

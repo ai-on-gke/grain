@@ -19,7 +19,7 @@ import { useCallback, useRef } from "react";
 // outside the form (a capability list, a set of repos, a template id).
 // An unticked checkbox is absent from FormData and a ticked one is not,
 // so ticking one changes this the same way typing does.
-export function formSnapshot(form, state) {
+function formSnapshot(form, state) {
   const entries = form
     ? [...new FormData(form)].map(([key, value]) => [
         key,
