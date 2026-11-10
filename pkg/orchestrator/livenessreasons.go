@@ -270,6 +270,7 @@ const (
 	taskReasonGoalTasksClosed     = "deferred/awaiting-goal/tasks-closed"
 	taskReasonGoalPersonCloses    = "deferred/awaiting-goal/person-closes"
 	taskReasonGoalPipelineHealthy = "deferred/awaiting-goal/pipeline-healthy"
+	taskReasonGoalNightlyGreen    = "deferred/awaiting-goal/nightly-green"
 )
 
 // goalReasons is each goal kind's resting reason.
@@ -279,6 +280,7 @@ var goalReasons = map[model.GoalKind]string{
 	model.GoalTasksClosed:     taskReasonGoalTasksClosed,
 	model.GoalPersonCloses:    taskReasonGoalPersonCloses,
 	model.GoalPipelineHealthy: taskReasonGoalPipelineHealthy,
+	model.GoalNightlyGreen:    taskReasonGoalNightlyGreen,
 }
 
 // taskReasons classifies every task-lane reason.
@@ -360,6 +362,8 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonGoalTasksClosed: {class: livenessDriven, driver: "reconcileTaskGoals",
 		resource: "the tasks it names closing", escalation: stallToResource, control: "Undefer"},
 	taskReasonGoalPersonCloses: {class: livenessAwaitingPerson, control: "Close"},
+	taskReasonGoalNightlyGreen: {class: livenessDriven, driver: "reconcileTaskGoals",
+		resource: "Stage 1 (nightly) going green", escalation: stallToResource, control: "Undefer"},
 	taskReasonGoalPipelineHealthy: {class: livenessDriven, driver: "reconcileTaskGoals",
 		resource: "the pipeline being healthy", escalation: stallToResource, control: "Undefer"},
 }

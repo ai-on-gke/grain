@@ -301,6 +301,9 @@ func reconcileGitHubCITails(ctx context.Context, deps Deps, now time.Time) error
 	if err := pollConcludedGitHubWorkflowRuns(ctx, deps, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := reconcileStage1Repairs(ctx, deps, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -773,6 +776,9 @@ func handleConcludedGitHubWorkflowRun(ctx context.Context, deps Deps, run Conclu
 		errs = append(errs, err)
 	}
 	if err := recordGitHubBaseBranchRelease(ctx, deps, run, jobs, now); err != nil {
+		errs = append(errs, err)
+	}
+	if err := handleStage1Verdict(ctx, deps, run, jobs, now); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
