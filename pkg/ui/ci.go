@@ -1498,7 +1498,7 @@ func (s *Server) handleListCIFaults(w http.ResponseWriter, r *http.Request) {
 		keys := append([]string{f.Digest, string(f.Kind), f.JobName, f.Step, f.Repo}, f.Paths...)
 		return list.matches(keys...)
 	})
-	page := pageOf(faults, list)
+	page := pageOfBy(faults, list, func(f CIFault) string { return f.Repo + "\x00" + f.Digest })
 	resp := CIFaultsResponse{Enabled: true, Total: page.Total, Truncated: page.Truncated, NextCursor: page.NextCursor}
 	if len(page.Items) > 0 {
 		resp.Faults = page.Items

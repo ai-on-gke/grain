@@ -181,7 +181,7 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	out := InboxResponse{Items: filtered}
 	if list.Paged {
-		page := pageOf(filtered, list)
+		page := pageOfBy(filtered, list, inboxItemKey)
 		out.Items = page.Items
 		out.Total = page.Total
 		out.Truncated = page.Truncated
@@ -189,6 +189,13 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSON(w, http.StatusOK, out)
+}
+
+// inboxItemKey names an inbox row for paging (pageOfBy): its kind with
+// the task, notification and pull request it is about, which together
+// tell any two rows apart.
+func inboxItemKey(it InboxItem) string {
+	return it.Kind + "\x00" + it.Task + "\x00" + strconv.FormatInt(it.Notification, 10) + "\x00" + it.PR + "\x00" + it.Path
 }
 
 // inboxReadable is which repositories the caller's tasks:read reaches:

@@ -1701,7 +1701,7 @@ func (s *Server) handleListConsoleSessions(w http.ResponseWriter, r *http.Reques
 		matched := filterList(sessions, func(cs ConsoleSessionSetting) bool {
 			return list.matches(cs.ID, cs.Title, cs.TaskID, cs.Team)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(cs ConsoleSessionSetting) string { return cs.ID })
 		for i := range page.Items {
 			page.Items[i].MissingShippedDefaults = nil
 			if len(page.Items[i].AutoReads) > listPageSmall {

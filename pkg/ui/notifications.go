@@ -494,7 +494,7 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 			notifications[i].Body = listNotificationBody(notifications[i])
 		}
 	}
-	writeList(w, notifications, list)
+	writeListBy(w, notifications, list, func(n model.Notification) string { return strconv.FormatInt(n.ID, 10) })
 }
 
 // pendingReleaseFamily is the release train's "approve this release"

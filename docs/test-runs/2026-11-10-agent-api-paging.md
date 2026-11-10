@@ -146,12 +146,50 @@ This is inherent to `list_page.go`'s `o:<n>` cursor and is filed as a follow-up 
 
 **Seed coverage gaps (not exercised with >250 rows live; covered by Go tests).**
 
-- `ci/faults`, `merge-batches` and `base-branch-gates` are derived from live daemon state and answered 0 rows.
-- `capability-servers` (12 rows), `capability-servers/usage` (8) and `gchat-usage` (400: gchat not configured): the seed's `cfg.MCPServers` and `cfg.ExternalAgentAPI` are not in effect once the daemon boots.
+- ~~`ci/faults`, `merge-batches` and `base-branch-gates` answered 0 rows; `capability-servers`, `capability-servers/usage` and `gchat-usage` showed only built-ins.~~ Task 4027 seeds all six with >250 rows. See "Derived collections and capability servers (task 4027)" below.
 - `release-notes/versions` has only the 17 built-in versions.
 - `console` lists live PTYs only.
 
-Their paging and caps are covered by `list_page_test.go` and `TestAllHeavyPagedRoutesStayUnderToolResultCap`. A follow-up extends the harness.
+Their paging and caps are covered by `list_page_test.go` and `TestAllHeavyPagedRoutesStayUnderToolResultCap`.
+
+## Derived collections and capability servers (task 4027)
+
+Task 4027 extended the harness so that the six routes above are walked against more than 250 live rows, and re-walked every route on both drivers. The table above is task 3953's run. The numbers below are from 4027's runs.
+
+**Why seeded config was not in effect at boot (by design).** seed.go wrote its config row before the daemon's first start. That row had no poll interval, worker count, GitHub host or deployment id, so `model.Config.ConnectionsOnly()` read it as the row `grain connections import` leaves behind. `daemon.LoadConfig` then seeds a fresh row from the daemon's flags and carries over only what `WithConnectionsOf` names: git connections and credential, agent backends, model settings and console sessions. `MCPServers`, `ExternalAgentAPI` and `TargetRepos` were dropped. That is deliberate (bwsalmon/agents#320: the store is the record, and flags only seed a database that has no row). seed.go's server ids (`cap-srv-000`) would also have been refused: a configured capability id must be an `https://` URL. seed.go now writes only connections and console sessions before boot, and the rest is seeded on the running daemon:
+
+- **Capability servers.** [`seed_api.py`](2026-11-10-agent-api-paging/seed_api.py) uses the operator's own route, `PUT /api/capability-servers`. It adds 260 disabled servers `https://tools.example.com/capabilities/cap-NNN` (command and serverUrl in turn) and configures the built-in gchat server with 260 webhook spaces. Nothing is posted. Each environment's gchat data plane gets its own port (4251/4252), since the two daemons on one host otherwise both bind 4251 and the second gchat never configures. Templates `tmpl-NNN` each grant `cap-NNN#run`, so every server has a holder.
+- **CI faults.** Grain CI runs are only read for faults inside the 6 h window (`ci.DefaultFaultWindow`), and at most 60 of them (`ciFaultRunLimit`). seed.go's runs are dated 04:00. seed.go now also writes 520 failed GitHub Actions jobs (`gh-shared-NNN`, each failing on two branches, an hour before the seed). These are read from the store with no run limit, which gives 260 shared faults.
+- **Merge batches.** The reconciler's first cycle (`orchestrator.advanceMergeRechecks`) deleted seed.go's rows, because they had no members. Any batch that is finished, older than 90 minutes, or whose CI run is unknown or interrupted is deleted the same way. Boot also records every unfinished CI run as interrupted (`daemon.AdoptCIRuns`). `seed -phase live` runs after boot and writes 260 running re-checks, each with one member and an unfinished CI run of its own. They survived every later cycle, including the 261 cycles the capability-server PUTs woke.
+- **Base-branch gates.** A watched repository on grain CI that has not been enrolled yet is not a finding (`ui.baseBranchGateOf`). The 260 watched repositories are now on `github` CI mode. That is the "not enabled" gate, and the orchestrator does not enrol them.
+
+**Seed coverage now (both drivers):** `ci/faults` 260, `merge-batches` 260, `base-branch-gates` 260, `capability-servers` 272, `capability-servers/usage` 268, `gchat-usage` 260. Each route was walked to its end with no duplicates, the union equal to the person's answer, case-swapped `q` returning its row, and 400 for forged and foreign cursors. walk_routes.py reports no route short of rows **except `access/history`, which is defect F7 below, not a seed gap**.
+
+| Route | Doc default | Page 1 rows | Page 1 B (SQLite / PG) | Max page B (SQLite / PG) | Person unpaged B | total | Pages | Dups | Union = person |
+|---|---|---|---|---|---|---|---|---|---|
+| `/api/ci/faults` | 20 | 20 | **11,119** / **11,119** | **11,120** / **11,120** | 143,560 | 260 | 13 | 0 | yes |
+| `/api/merge-batches` | 20 | 20 | 8,281 / 8,281 | 8,465 / 8,465 | 107,466 | 260 | 13 | 0 | yes |
+| `/api/base-branch-gates` | 20 | 20 | **15,503** / **15,503** | **15,504** / **15,504** | 200,744 | 260 | 13 | 0 | yes |
+| `/api/capability-servers` | 10 | 10 | **24,016** / **24,017** | **24,016** / **24,017** | 292,449 | 272 | 28 | 0 | yes |
+| `/api/capability-servers/usage` | 20 | 20 | 4,533 / 4,533 | 4,664 / 4,664 | 146,685 | 268 | 14 | 0 | yes |
+| `/api/capability-servers/gchat-usage?id=…/gchat` | 50 | 50 | 5,313 / 5,313 | 5,314 / 5,314 | 27,302 | 260 | 6 | 0 | yes |
+| `/api/capability-methods` | 10 | 10 | 4,860 / 4,860 | **30,545** / **30,545** | 212,676 | 362 | 37 | 0 | yes |
+| `/api/ci/runs` | 10 | 10 | **220,973** / **234,292** | **221,050** / **234,292** | 638,011 | 522 | 53 | 0 | n/a |
+| `/api/ci/runs?view=compact` | 20 | 20 | **12,639** / **14,365** | **12,639** / **14,365** | 151,636 | 522 | 27 | 0 | n/a |
+| `/api/suite-runs` | 20 | 20 | **10,248** / 10,188 | **10,259** / 10,199 | 130,895 | 260 | 13 | 0 | yes |
+| `/api/access/history` | 20 | **0** | 41 / 41 | 41 / 41 | 3 | 0 | 1 | 0 | n/a |
+
+**Defects the larger seed exposed (not fixed here; filed as a follow-up `fix(ui)` task).** Bold cells above are over the 10,240 B cap or empty:
+
+- **F1 `ci/runs`: a default agent page is 221–234 KB.** One base-branch run on `acme/widgets` (ghsim has 525 declared workflows) carries 525 `jobs`, 280 KB on one row. Paged rows have no jobs cap. `view=compact` is 12.6–14.4 KB at 20 rows. The run only happens once the reconciler is woken: task 3953's walk had a 1 h poll interval and no wake, so it never saw this.
+- **F2 `ci/faults`: 11.1 KB per default page** (~586 B a row, mostly `runs`).
+- **F3 `base-branch-gates`: 15.5 KB per default page** (`detail` is ~650 B a row).
+- **F4 `capability-servers`: 24 KB per default page.** The gchat row's `config` holds 260 spaces (19.7 KB). D4 capped `status.methods` but not `config`.
+- **F5 `capability-methods`: a later page is 30.5 KB.** `…/gchat#post` has a 22.5 KB `description` and 3.3 KB `args`, both enumerating spaces.
+- **F6 `suite-runs`: 10,188–10,259 B**, just at or over the cap.
+- **F7 `access/history`: empty for people and agents alike.** `handleAccessHistory` reads the newest `maxConfigAudit` config-audit rows and only then keeps `surface == "access"`. Once the 261 capability-server PUTs were newer than every access change, the route answered 0 rows, and `?limit=5` answered 0. The surface filter has to happen in the store query.
+
+The PostgreSQL walk also had one duplicate in `deployment/audit-logs`: audit rows were written while the walk ran, and that route's newest-first offset cursor shifts under inserts. That is follow-up 1 from task 3953 (keyset cursors), not a new defect.
 
 ## Item 2: the UI is unaffected (Chromium)
 
@@ -192,7 +230,25 @@ A stdio `grain mcp` session exposes the 13-tool workstation roster: `propose_tas
 
 Each was cut in the middle by pkg/mcp's backstop. This is outside PR #709 (`pkg/cli/mcp_external.go`) and is filed as a follow-up.
 
-A dispatched task with a fake agent was not run. `POST /mcp` refuses a task identity ("not part of the agent API"), and the sandbox's MCP reaches the daemon's controller surface (`POST /api/mcp`) with `X-Grain-Acting-Task`. That surface is what the table above exercised as tasks 9000 and 9001. The follow-up harness task covers a real dispatched run.
+**A dispatched task on a fake agent (task 4027).** [`dispatch_run.py`](2026-11-10-agent-api-paging/dispatch_run.py) adds an antigravity connection whose CLI is [`fake_agent.py`](2026-11-10-agent-api-paging/fake_agent.py). It then files and approves a task on `acme/widgets` holding `api:deployment:read`, `api:tasks:read` and `api:repos:read`, and waits for its attempt. The daemon dispatched it into a real host sandbox with its own per-run HOME. The fake agent read the `mcp_config.json` grain wrote there, which named two servers:
+
+- `grain-sandbox` (stdio, `grain mcpserver`): the 13-tool sandbox roster, with no `grain_invoke`. A first try against it got `unknown tool grain_invoke`.
+- `grain-controller` (a per-run `serverUrl`): `grain_explore_scope`, `grain_filing_context`, `grain_get_task`, `grain_invoke`, `grain_list_tasks` and `grain_submit_task`. This is where a run's api grants are served. The agent called `grain_invoke` there.
+
+Each attempt succeeded with "the run made 8 tool call(s) [mcp_grain-controller_grain_invoke x8]" ([`results/dispatch-sqlite.json`](2026-11-10-agent-api-paging/results/dispatch-sqlite.json), [`results/dispatch-postgres.json`](2026-11-10-agent-api-paging/results/dispatch-postgres.json)):
+
+| `grain_invoke` call (inside the dispatched sandbox) | SQLite B | rows / total | PostgreSQL B |
+|---|---|---|---|
+| `api_deployment_reachable_repos {}` | 5,212 | 100 / 305, next cursor | 5,212 |
+| `api_deployment_reachable_repos push,owner=acme,limit=5` | 438 | 5 / 81, next cursor | 438 |
+| `api_deployment_reachable_repos q=SERVICE-01` | 708 | 10 / 10 | 708 |
+| `api_list_tasks {}` | 7,984 | 10 / 552, next cursor | 7,980 |
+| `api_list_tasks fields=summary` | 6,184 | 50 / 552, next cursor | 6,007 |
+| `api_list_tasks limit=3,q=triage` | 2,338 | 3 / 287, next cursor | 2,368 |
+| `api_events {}` | 5,210 | 20, next cursor | 5,198 |
+| `api_events since=0,limit=5` | 1,233 | 5, next cursor | 1,230 |
+
+All of these are under the 10,240 B budget, and they match the `POST /api/mcp` numbers above to within the rows filed since (the task count grew from 523 to 552). Two things are needed to get a dispatch in this harness. First, `-poll-interval 1h`, and approving a task does not wake the reconciler, so the script wakes it with a no-op capability-server action. Second, the fake agent ignores every other task the connection is offered.
 
 ## Item 4: scope
 
@@ -215,7 +271,8 @@ The repo-limited callers were task 9001 (`@acme/widgets` grants), the gma_ `repo
 
 1. `fix(ui)`: keyset cursors for newest-first offset-paged list routes, so inserts between pages neither duplicate nor skip rows.
 2. `fix(cli)`: page `grain mcp`'s `list_grain_tasks`, `grain_inbox` and `ci_runs` to fit the ~10 KB tool budget.
-3. `test`: extend the paging harness to the derived collections (CI faults, merge batches, gates, capability servers/usage/gchat) and to a dispatched fake-agent MCP run, and find out why seeded config fields are not in effect at boot.
+3. ~~`test`: extend the paging harness to the derived collections and a dispatched fake-agent MCP run~~: done in task 4027.
+4. `fix(ui)` (from task 4027): F1–F7 above, the agent-page caps on `ci/runs`, `ci/faults`, `base-branch-gates`, `capability-servers`, `capability-methods` and `suite-runs`, and `access/history`'s surface filter.
 
 ## Tests run
 
@@ -233,6 +290,8 @@ start_paging_env sqlite /var/tmp/grain-paging-sqlite          # or: PAGING_PG_DS
 W=/var/tmp/grain-paging-sqlite; D=docs/test-runs/2026-11-10-agent-api-paging
 python3 $D/walk_routes.py --url http://127.0.0.1:4281 --code "$(cat $W/data/local-api-token)" \
   --tokens-file $W/tokens.json --out /tmp/walk.json --insert-test
+python3 $D/dispatch_run.py --url http://127.0.0.1:4281 --code-file $W/data/local-api-token \
+  --work $W --out /tmp/dispatch.json
 python3 $D/mcp_calls.py --url http://127.0.0.1:4281 --code-file $W/data/local-api-token \
   --tokens-file $W/tokens.json --out /tmp/mcp.json
 # Item 2 needs the operator on the allowlist first (POST /api/access/principals user:owner@example.com grain/operator).
