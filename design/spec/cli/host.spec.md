@@ -198,6 +198,8 @@ Each of these takes `<id>`, calls the route, and prints the task. `approve` and 
 | `retry <id>` | `POST /api/tasks/{id}/retry`: clears the retry cap | |
 | `retry-merge <id>` | `POST /api/tasks/{id}/retry-merge` | |
 | `run-now <id>` | `POST /api/tasks/{id}/run-now` | |
+| `compact [-handover-file f] <id>` | `POST /api/tasks/{id}/compact`. With a handover the task is compacted now, through every comment so far; without one its next run is asked to compact first (`design/design/durable-tasks.design.md#DT-15`) | |
+| `brief [-file f -reason r] <id>` | `GET /api/tasks/{id}/context` to show the current brief, handover age and compaction cursor; with `-file`, `POST /api/tasks/{id}/brief` replaces the brief (an empty file reverts to the original description) | |
 | `resume <id>` | `POST /api/tasks/{id}/resume` | |
 | `capability <id> <capability-id> attach\|detach` | `POST /api/tasks/{id}/capabilities`. A bad verb gets `third argument must be attach or detach, got "<x>"`; fewer than three arguments get `usage: grain capability <id> <capability-id> attach\|detach` | admin |
 
@@ -227,6 +229,19 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-reason` | string |  |  | why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give when run-now approves an unapproved task |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain compact -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-handover-file` | string |  |  | compact now, to the handover in this file (- for stdin); without it, the task's next run is asked to compact first |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain brief -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-file` | string |  |  | replace the current brief with this file (- for stdin); an empty file reverts to the original description |
+| `-reason` | string |  |  | why the brief changed (required with -file) |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain resume -->
@@ -2702,4 +2717,3 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
-

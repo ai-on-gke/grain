@@ -536,7 +536,7 @@ func canonicalGrant(grant string) string {
 var PublishedTools = []string{
 	"run_command", "read_file", "edit_file", "write_file", "ask_question",
 	"request_secret", "request_access", "comment_on_issue", "nothing_needed",
-	"write_handover", "propose_task", "add_review_comment",
+	"write_handover", "compact_context", "update_brief", "propose_task", "add_review_comment",
 	"pull_request_status", "base_branch_status",
 	"reply_to_pull_request_comment", "resolve_review_thread",
 	"wait_for_checks", "list_ci_runs", "get_ci_log", "retrigger_ci",
