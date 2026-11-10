@@ -91,6 +91,21 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 	}
 	var remaining []model.ApprovalRequirement
 	now, head := c.now(), c.submittedHead(ctx, task)
+	openTriggerReview := false
+	for _, l := range task.Links {
+		if l.Kind != model.LinkPathTriggerTask {
+			continue
+		}
+		_, id, ok := strings.Cut(l.Target, "=")
+		if !ok || id == "" {
+			continue
+		}
+		rt, rObs, err := c.Store.GetTask(ctx, id)
+		if err == nil && model.StateOf(rt, rObs) != model.StateClosed {
+			openTriggerReview = true
+			break
+		}
+	}
 	released := model.WithAutoMergeChange(ctx, actor, "approved by "+user)
 	var heldFor []model.HumanReviewReason
 	if err := c.Store.UpdateTask(released, task.ID, func(t *model.Task) error {
@@ -107,6 +122,15 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 				if r.Source != model.HumanReviewSecurityFindings {
 					heldFor = append(heldFor, r)
 				}
+			}
+			if !openTriggerReview && len(model.ReviewFindingsOf(*t)) == 0 {
+				var kept []model.Link
+				for _, l := range t.Links {
+					if l.Kind != model.LinkPathTriggerHold {
+						kept = append(kept, l)
+					}
+				}
+				t.Links = kept
 			}
 			humanSubmitted(t, user, now, head)
 			t.AutoMerge = !model.HasPendingReviewHold(*t)
