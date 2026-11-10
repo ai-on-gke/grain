@@ -16,14 +16,14 @@
 # The two bases whose version is a build arg take their digest as a
 # second one. Override both together:
 #
-#   --build-arg GO_VERSION=1.23 \
-#   --build-arg GO_DIGEST=$(deploy/base-images.sh digest golang:1.23-bookworm)
+#   --build-arg GO_VERSION=1.25 \
+#   --build-arg GO_DIGEST=$(deploy/base-images.sh digest golang:1.25-bookworm)
 #
 # Overriding the version alone would pull the default version's digest
 # under the new tag, so the stages that use them check the image they got
 # is the version they were asked for and fail the build if not.
-ARG GO_VERSION=1.22
-ARG GO_DIGEST=sha256:3d699e4d15d0f8f13c9195c0632a16702b8cbdece2955af1c23b37ae5d55a253
+ARG GO_VERSION=1.26
+ARG GO_DIGEST=sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473
 ARG CLOUD_HYPERVISOR_VERSION=v53.0
 # GRANULE_KERNEL_VERSION pins the guest kernel baked into the final granule
 # image (see the "build-kernel" stage below) -- a tag of
@@ -289,7 +289,7 @@ RUN mkdir -p /out/shims/bin /out/shims/usr/bin /out/shims/usr/local/bin \
 #
 # GITHUB_PROXY is declared in fetch-chv and fetch-kernel-source only, so a
 # change to it re-runs the downloads and nothing else.
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS fetch-chv
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS fetch-chv
 ARG CLOUD_HYPERVISOR_VERSION
 ARG TARGETARCH
 ARG GITHUB_PROXY=
@@ -375,7 +375,7 @@ RUN set -eux; \
 # (pkg/hypervisor's BuildArgs), so such an image keeps the kernel it was
 # snapshotted under -- without IPv6, if that was this stage's old
 # download -- until it is rebuilt.
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS fetch-kernel-source
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS fetch-kernel-source
 ARG GRANULE_KERNEL_VERSION
 ARG GRANULE_KERNEL_SHA256
 ARG GITHUB_PROXY=
@@ -398,7 +398,7 @@ RUN set -eux; \
     fi; \
     echo "${GRANULE_KERNEL_SHA256}  linux.tar.gz" | sha256sum -c -
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS build-kernel
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS build-kernel
 ARG TARGETARCH
 ARG BUILDARCH
 RUN set -eux; \
@@ -476,7 +476,7 @@ RUN set -eux; \
 # A guest that wants sshd for an operator's own interactive access
 # installs it the way it installs anything else, in a setup script run by
 # `granule guest build`.
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS guest-rootfs-debian
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS guest-rootfs-debian
 ARG GUEST_SUITE
 RUN apt-get update && apt-get install -y --no-install-recommends \
       debootstrap ca-certificates wget \
@@ -897,7 +897,7 @@ COPY deploy/guest-image/pack-guest /pack-guest
 # file has to be in the tree pack-guest measures and packs -- once the
 # script has run there is a disk and no longer a directory to write
 # into.
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS guest-image
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS guest-image
 RUN apt-get update && apt-get install -y --no-install-recommends e2fsprogs \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=guest-customized / /rootfs

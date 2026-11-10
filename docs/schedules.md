@@ -1481,6 +1481,53 @@ no longer has, or a "success" with no job in it -- goes to
   shows that requester. The daemon logs a green settle as
   `schedule <id>'s grain CI run <run> ... passed; no review filed`.
 
+## Update: an overlap group shared across schedules (grain/task-3895)
+
+`overlap: skip` asked one question of one schedule -- is *this*
+schedule's previous firing unfinished
+(`Store.OpenTaskWithTag(ScheduleFiringTag(id))`, `HasActiveRunForSchedule`,
+`workflowFiringInFlight`) -- so two `.grain/schedules` files firing the
+same template, such as experimental/grain's release sync and its
+`sync-oss-release-safety-net`, could run concurrently, and that
+repository had to add a template step to notice.
+
+`Schedule.OverlapGroup` (`schedule.overlap_group`, schema version 134),
+written `overlap: {skip: true, group: <name>}` or `overlap-group: <name>`
+in a schedule file (the plain `overlap: skip|allow` still parses) and
+`overlap-group:` on a settings row, widens the question to every schedule
+in the same repository and group:
+
+- **Tag.** A task filed by a grouped schedule set to skip carries
+  `ScheduleOverlapGroupTag(repo, group)` --
+  `schedule-group:<owner>/<name>:<group>` -- beside its own firing tag,
+  and so does the review a grouped workflow schedule files.
+- **Check.** `Store.OverlapGroupInFlight(sched, repo, now)` walks the
+  other schedules in `(repo, group)` (`SchedulesInOverlapGroup`, ordered by
+  id) and asks each the question its own overlap check asks: an unfinished
+  suite run, an unsettled `ScheduledWorkflowRun` or a review inside its
+  hold, or an open task it filed (a standing job's task only while it is
+  running). It then sweeps open tasks carrying the group tag, so a task
+  whose schedule was renamed or withdrawn still holds the group.
+  `fireTaskSchedule`, `fireSuiteSchedule`, `fireWorkflowSchedule` and the
+  `github_workflow_run` trigger ask it after their own check -- the
+  schedule's own previous firing is the more useful thing to name when
+  both are true -- and `SuppressedFiring` asks it the same way, so the
+  schedules page says which schedule is holding this one
+  (`ScheduleSuppression.HeldByScheduleID` and `Detail`).
+- **Record.** The skip names the holder: `ScheduleSkip.HeldByScheduleID`
+  (`scheduled_firing_skip.held_by_schedule_id`) and a summary such as
+  `#4120 from schedule "Sync" (…) in overlap group "sync-oss-release" is
+  still open (running)`. The note a held firing leaves on a blocker
+  waiting on a person says which group it is held through.
+- **Scope.** The repository is the one the firing goes into (a bound
+  template's binding for a template-backed schedule), and it is part of
+  both the lookup and the tag, so one repository's declarations cannot
+  hold another repository's schedules however its groups are named.
+- **Refusals.** A group beside `overlap: allow` is refused (in a schedule
+  file, on `POST`/`PATCH /api/schedules`), since a group is a skip by
+  definition; group names are `[A-Za-z0-9][A-Za-z0-9._-]*`, at most 128
+  characters.
+
 ## Update: a workflow schedule can run on grain CI in a `ci_mode: github` repository (grain/task-3878)
 
 The agentless path above -- a `.grain/schedules` file with `workflow:`, a
@@ -1513,10 +1560,12 @@ runs grain writes are a pull request's and the release train's gates
 check and posts no status. Pull requests are still judged by GitHub
 Actions and no other `.grain/workflows` run there. `docs/declarations.md`
 ("Running on grain CI in a `ci_mode: github` repository") has the file
-format and the shape of a "script on a cadence" workflow: a job holding
-`api:tasks:read` and `api:tasks:from-template` can check whether there is
-work and file the repository's template itself, and exit 0 when there is
-none.
+format and the shape of a "script on a cadence" workflow: on repositories
+the deployment offers grain's API to in CI (`ai-on-gke/grain`, plus
+whatever the deployment's `ci_api_repos` setting adds; `docs/agent-api.md`
+§ "CI jobs"), a job holding `api:tasks:read` and
+`api:tasks:from-template` can check whether there is work and file the
+repository's template itself, and exit 0 when there is none.
 
 ## Update: a suppressed firing says so on the schedules page (grain/task-544)
 
@@ -1691,3 +1740,47 @@ system release manager wakes every 30 minutes.
 - **System schedules.** `model.SystemScheduleRecurrence` may return an
   `everyNMinutes` cadence; the seeder writes it like any other, with the
   first firing N minutes after the cycle that seeds it.
+
+## Update: a firing held by a task that never started is raised (grain/task-4086)
+
+`overlap: skip` holds a schedule's next occurrence while the task its
+previous firing filed is open. That is right for a task that is running
+or waiting on a person. It is wrong for one that has never been
+dispatched. On 2026-11-10 release-train tick #3946 was filed at the
+default priority 5 and sat `queued` for about fourteen hours behind
+about sixty tasks, many at priority 9. Every 20-minute tick behind it was
+skipped, so no release candidate was cut that day, and nothing said why.
+
+- **Kept and raised, not superseded.** Of the two fixes on offer, grain
+  keeps the starved task and raises it. Superseding it (closing it and
+  filing a new firing) would put the new task at the back of the same
+  queue, behind everything the old one had already waited out, and would
+  close a task a person might be looking at.
+- **When.** A held occurrence counts as starved once
+  `model.ScheduleStarvedAfter` (1h) has passed since it came due, or once
+  `model.ScheduleStarvedOccurrences` (3) occurrences are held behind the
+  same task, whichever comes first. Three is the hour of a 20-minute
+  train. The blocker must be the skip's open task, still `queued`, and
+  have no run at all (`Store.Runs`). A task that started and is queued
+  again (a retry or a resume) is waiting on its own backoff, which a
+  priority does not fix. A running task, or one waiting on a person,
+  holds the schedule exactly as before. The person-wait case already
+  gets `NoteHeldScheduleOnBlocker`'s note.
+- **What.** Every cycle that skips an occurrence passes its skip to
+  `Store.EscalateStarvedScheduleBlocker`. Once the occurrence is starved:
+  - The task's priority is raised to the highest priority of any other
+    queued task, and never lowered. The starved task is older than any
+    task it ties with, so the queue's FIFO order dispatches it first at
+    that priority. Dependency links still never raise a blocker
+    (task-priorities spec, TP-13). This rule applies only to a schedule's
+    own firing.
+  - A comment from the schedule tells the task why. It is written only
+    when the priority rises.
+  - A warning notification `pipeline.schedule-starved:<schedule id>`
+    (`model.FamilyScheduleStarved`) names the schedule, the task and how
+    long it has been held. It is raised once while open, and cleared when
+    the task closes.
+- **Not done: admission.** A raised priority still waits for a free
+  worker. `admission: bypass` would also start the task past a full
+  worker pool. It is not applied automatically, because only a person may
+  grant an admission above `standard`.

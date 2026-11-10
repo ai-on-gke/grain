@@ -36,13 +36,18 @@ import (
 // handlers are that work, moved into the pane where every other
 // deployment-wide credential is already set.
 //
-// They write files, not secrets-store rows, which is the decision
-// pkg/gitproxy/credentials.go's own doc comment records at length: the
-// git proxy reads one thing, and this is the one thing. That is also why
-// this is its own endpoint rather than a shape over Config.Secrets the
-// way agent_keys.go is -- the store behind it is the credential ladder
-// itself (Config.Credentials), whose availability is a separate question
-// from the secrets database's.
+// They write through the credential ladder (Config.Credentials), which
+// keeps each credential in the encrypted secrets store under
+// github-credential-<name> (pkg/gitproxy/credstore.go). These used to
+// write plaintext files, not store rows, on grain/task-137's reasoning
+// that the git proxy reads one thing; that is superseded
+// (design/design/secrets-key-protection.design.md §5, Phase 3), and
+// pkg/gitproxy/credentials.go's own doc comment says why. It is still its
+// own endpoint rather than a shape over Config.Secrets the way
+// agent_keys.go is: a credential is more than a value (an App's three
+// fields, an SSH key's pinned host, its host record and connections), and
+// the ladder is what validates and caches it -- writing a row behind its
+// back would skip both.
 //
 // Everything here is write-only in the same sense the rest of the
 // Settings pane is: a token goes in, presence and names come back, and
@@ -78,7 +83,9 @@ type gitHubTokenInfo struct {
 	// Connections is the scope of every deployment git connection naming
 	// this credential ("" for a host default, "owner" or "owner/repo"),
 	// which is what makes deleting one a question rather than a click.
-	Connections []string `json:"connections,omitempty"`
+	Connections          []string `json:"connections,omitempty"`
+	ConnectionCount      int      `json:"connectionCount,omitempty"`
+	ConnectionsTruncated bool     `json:"connectionsTruncated,omitempty"`
 	// Capability is the id a task holds to push through this token.
 	Capability string `json:"capability,omitempty"`
 	// MintError is an App-backed credential this deployment cannot
@@ -111,8 +118,9 @@ type gitHubTokenInfo struct {
 // package follows.
 type gitHubTokensResponse struct {
 	Enabled bool `json:"enabled"`
-	// Dir is where these files live, for the pane to name when it
-	// explains what it just wrote -- a path, never any content of one.
+	// Dir is the credential directory -- host records, and any credential
+	// file not yet moved into the secrets store -- for the pane to name
+	// when it explains where things are: a path, never any content of one.
 	Dir    string            `json:"dir,omitempty"`
 	Tokens []gitHubTokenInfo `json:"tokens"`
 	// DefaultName is the credential the default host's default git
@@ -331,7 +339,7 @@ func (c *Client) gitCredentialGrantHolders(ctx context.Context, name string) ([]
 // deployment's GitHub credentials, the connections naming them and the
 // local directory they live in -- a system administrator's to read.
 func (s *Server) handleListGitHubTokens(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -358,7 +366,14 @@ func (s *Server) handleListGitHubTokens(w http.ResponseWriter, r *http.Request) 
 			keys := append([]string{t.Name, t.Capability}, t.Connections...)
 			return list.matches(keys...)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(t gitHubTokenInfo) string { return t.Name })
+		for i := range page.Items {
+			page.Items[i].ConnectionCount = len(page.Items[i].Connections)
+			if len(page.Items[i].Connections) > listPageSmall {
+				page.Items[i].Connections = page.Items[i].Connections[:listPageSmall]
+				page.Items[i].ConnectionsTruncated = true
+			}
+		}
 		resp.Tokens = page.Items
 		resp.Total = page.Total
 		resp.Truncated = page.Truncated

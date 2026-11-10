@@ -192,7 +192,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
-	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+	if !grainci.RequiredFor(*task.Target) && c.Store != nil {
 		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
 		if err != nil {
 			return ci.Run{}, err
@@ -203,7 +203,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
 			}
 			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
-			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+			if !rulesRequire && (explicitDisabled || (full && !grainci.GrantedExplicitly(task.Grants))) {
 				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
 			}
 		}
@@ -1017,6 +1017,9 @@ func (c *Client) ciEnabledFor(ctx context.Context, repo model.RepoRef) (bool, er
 	if grainci.RepoUsesGrainCI(repoCfg, repo) {
 		return true, nil
 	}
+	if repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone) {
+		return false, nil
+	}
 	wfs, err := c.Store.GetRepoWorkflows(ctx, repo)
 	if err != nil {
 		return false, err
@@ -1234,7 +1237,7 @@ func ciRunMatchesQuery(run ci.Run, list listQuery) bool {
 	if list.Q == "" {
 		return true
 	}
-	keys := []string{run.ID, run.Repo, run.Ref, run.Commit, string(run.Event)}
+	keys := []string{run.ID, run.Repo, run.Ref, run.Commit, string(run.Event), run.RequestedBy}
 	if run.Actions != nil {
 		keys = append(keys, run.Actions.Workflow, run.Actions.WorkflowName)
 	}
@@ -1288,7 +1291,7 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	defaultLimit := listPageSmall
 	if compact {
-		defaultLimit = listPageMedium
+		defaultLimit = listPageLarge
 	}
 	list, err := parseListQuery(r, defaultLimit)
 	if err != nil {
@@ -1361,15 +1364,15 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		faults = s.tasks.CISharedFaults(r.Context())
 	}
 	page, truncated, nextCursor := pageCIRunResult(rawPage, list)
+	if isAgentListCaller(r) && len(faults) > listPageSmall {
+		faults = faults[:listPageSmall]
+	}
 	if compact {
 		resp := ciCompactRuns(page, faults)
 		resp.Truncated = truncated
 		resp.NextCursor = nextCursor
 		writeJSON(w, http.StatusOK, resp)
 		return
-	}
-	if isAgentListCaller(r) && len(faults) > listPageSmall {
-		faults = faults[:listPageSmall]
 	}
 	listed := make([]ci.Run, 0, len(page.Runs))
 	for _, run := range page.Runs {
@@ -1429,6 +1432,9 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 	page.Stored += actionsMatched
 	page, truncated, nextCursor := pageCIRunResult(page, list)
 	faults := s.tasks.CISharedFaults(r.Context())
+	if isAgentListCaller(r) && len(faults) > listPageSmall {
+		faults = faults[:listPageSmall]
+	}
 	if compact {
 		resp := ciCompactRuns(page, faults)
 		resp.ActionsNote = note
@@ -1436,9 +1442,6 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		resp.NextCursor = nextCursor
 		writeJSON(w, http.StatusOK, resp)
 		return
-	}
-	if isAgentListCaller(r) && len(faults) > listPageSmall {
-		faults = faults[:listPageSmall]
 	}
 	listed := make([]ci.Run, 0, len(page.Runs))
 	for _, run := range page.Runs {
@@ -1495,7 +1498,7 @@ func (s *Server) handleListCIFaults(w http.ResponseWriter, r *http.Request) {
 		keys := append([]string{f.Digest, string(f.Kind), f.JobName, f.Step, f.Repo}, f.Paths...)
 		return list.matches(keys...)
 	})
-	page := pageOf(faults, list)
+	page := pageOfBy(faults, list, func(f CIFault) string { return f.Repo + "\x00" + f.Digest })
 	resp := CIFaultsResponse{Enabled: true, Total: page.Total, Truncated: page.Truncated, NextCursor: page.NextCursor}
 	if len(page.Items) > 0 {
 		resp.Faults = page.Items

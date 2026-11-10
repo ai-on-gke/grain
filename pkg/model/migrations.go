@@ -955,6 +955,22 @@ var Migrations = []Migration{
 			"ALTER TABLE `template` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 134,
+		Description: "add schedule.overlap_group and scheduled_firing_skip.held_by_schedule_id, " +
+			"an overlap group shared by one repository's schedules (grain/task-3895)",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `overlap_group` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `scheduled_firing_skip` ADD COLUMN `held_by_schedule_id` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     135,
+		Description: "add grain_config.ci_api_repos, the repositories whose trusted CI jobs may hold api grants (grain/task-4040)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `ci_api_repos` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

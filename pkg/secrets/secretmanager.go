@@ -506,6 +506,22 @@ func (b *smBackend) token(ctx context.Context) (string, error) {
 	if b.tokCached != "" && now.Before(b.tokExpires) {
 		return b.tokCached, nil
 	}
+	tok, ttl, err := fetchMetadataToken(ctx, b.httpClient)
+	if err != nil {
+		return "", err
+	}
+	b.tokCached = tok
+	b.tokExpires = now.Add(ttl)
+	return tok, nil
+}
+
+// fetchMetadataToken asks the metadata server for the default service
+// account's access token, and how long to keep it. On GCE that is the
+// VM's account; on GKE with Workload Identity it is the Google service
+// account the pod's Kubernetes service account is bound to, which the
+// GKE metadata server answers for on the same path. Both the Secret
+// Manager backend and the KMS key source authenticate this way.
+func fetchMetadataToken(ctx context.Context, client *http.Client) (string, time.Duration, error) {
 	host := strings.TrimSpace(os.Getenv("GCE_METADATA_HOST"))
 	if host == "" {
 		host = defaultMetadataHost
@@ -515,35 +531,33 @@ func (b *smBackend) token(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(metaCtx, http.MethodGet,
 		"http://"+host+"/computeMetadata/v1/instance/service-accounts/default/token", nil)
 	if err != nil {
-		return "", fmt.Errorf("secrets: building metadata token request: %w", err)
+		return "", 0, fmt.Errorf("secrets: building metadata token request: %w", err)
 	}
 	req.Header.Set("Metadata-Flavor", "Google")
-	resp, err := b.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("secrets: metadata token: %w", err)
+		return "", 0, fmt.Errorf("secrets: metadata token: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", fmt.Errorf("secrets: metadata token: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", 0, fmt.Errorf("secrets: metadata token: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var tok struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&tok); err != nil {
-		return "", fmt.Errorf("secrets: decoding metadata token: %w", err)
+		return "", 0, fmt.Errorf("secrets: decoding metadata token: %w", err)
 	}
 	if tok.AccessToken == "" {
-		return "", errors.New("secrets: metadata server returned an empty access_token")
+		return "", 0, errors.New("secrets: metadata server returned an empty access_token")
 	}
 	ttl := 30 * time.Second
 	if tok.ExpiresIn > 120 {
 		ttl = time.Duration(tok.ExpiresIn-60) * time.Second
 	}
-	b.tokCached = tok.AccessToken
-	b.tokExpires = now.Add(ttl)
-	return tok.AccessToken, nil
+	return tok.AccessToken, ttl, nil
 }
 
 func (b *smBackend) do(ctx context.Context, method, path string, payload []byte) ([]byte, int, error) {

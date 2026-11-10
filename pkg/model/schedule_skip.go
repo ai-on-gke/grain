@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -117,6 +118,11 @@ type ScheduleSkip struct {
 	// (Store.NoteHeldScheduleOnBlocker): the one comment a person waiting
 	// on that task gets, rather than one a poll cycle.
 	NotedTaskID string
+	// HeldByScheduleID is the other schedule in this one's overlap group
+	// whose unfinished firing held this occurrence (grain/task-3895), and
+	// empty when it was held by the schedule's own previous firing. Detail
+	// then names it in words ("schedule X in overlap group \"g\"").
+	HeldByScheduleID string
 }
 
 // Summary is the skip as one line: "skipped at <time>: <why>", the
@@ -129,18 +135,36 @@ func (k ScheduleSkip) Summary() string {
 func (k ScheduleSkip) Why() string {
 	switch k.Reason {
 	case SuppressedByOpenTask:
+		if k.HeldByScheduleID != "" && k.Detail != "" {
+			if k.TaskID != "" {
+				return fmt.Sprintf("#%s from %s is still open (%s)", k.TaskID, k.Detail, k.taskState())
+			}
+			return fmt.Sprintf("the task %s filed is still open", k.Detail)
+		}
 		if k.TaskID != "" {
 			return fmt.Sprintf("#%s from the previous firing is still open (%s)", k.TaskID, k.taskState())
 		}
 		return "the task its previous firing filed is still open"
 	case SuppressedByOpenReview:
+		if k.HeldByScheduleID != "" && k.Detail != "" {
+			if k.TaskID != "" {
+				return fmt.Sprintf("review #%s of %s's last run is still open (%s)", k.TaskID, k.Detail, k.taskState())
+			}
+			return fmt.Sprintf("the review of %s's last run is still open", k.Detail)
+		}
 		if k.TaskID != "" {
 			return fmt.Sprintf("review #%s of the previous firing is still open (%s)", k.TaskID, k.taskState())
 		}
 		return "the review of the previous firing is still open"
 	case SuppressedBySuiteRun:
+		if k.HeldByScheduleID != "" && k.Detail != "" {
+			return fmt.Sprintf("the suite run from %s has not finished", k.Detail)
+		}
 		return "the suite run from the previous firing has not finished"
 	case SuppressedByWorkflowRun:
+		if k.HeldByScheduleID != "" && k.Detail != "" {
+			return fmt.Sprintf("the CI run from %s has not finished", k.Detail)
+		}
 		return "the CI run from the previous firing has not finished"
 	case SkippedPaused:
 		return "the schedule is paused"
@@ -253,6 +277,16 @@ func HeldScheduleComment(sched Schedule, k ScheduleSkip) string {
 	default:
 		waiting = "a person"
 	}
+	if k.HeldByScheduleID != "" {
+		return fmt.Sprintf("Schedule %q (%s) is held on this task: it shares overlap group %q with schedule %s, "+
+			"which filed this task, and its %s firing came due while this task was still open. It will not fire "+
+			"until this task closes. This task is waiting on %s.\n\n"+
+			"Once it closes, the held firing goes ahead once, standing in for every occurrence that came "+
+			"due in the meantime. The schedules page lists this skip with the rest of the schedule's "+
+			"skipped firings.",
+			name, sched.ID, strings.TrimSpace(sched.OverlapGroup), k.HeldByScheduleID,
+			k.Occurrence.UTC().Format("2006-01-02 15:04 MST"), waiting)
+	}
 	return fmt.Sprintf("Schedule %q (%s) is held on this task: its %s firing came due while this task "+
 		"was still open, and it will not fire until this task closes. This task is waiting on %s.\n\n"+
 		"Once it closes, the held firing goes ahead once, standing in for every occurrence that came "+
@@ -286,17 +320,19 @@ func (s *Store) RecordScheduleSkip(ctx context.Context, k ScheduleSkip) (bool, e
 			}
 			_, err := tx.ExecContext(ctx,
 				"UPDATE `scheduled_firing_skip` SET `reason` = ?, `task_id` = ?, `task_state` = ?, `detail` = ?, "+
-					"`outcome` = ?, `resolved_at` = ? WHERE `id` = ?",
+					"`outcome` = ?, `resolved_at` = ?, `held_by_schedule_id` = ? WHERE `id` = ?",
 				string(k.Reason), k.TaskID, string(k.TaskState), k.Detail,
-				string(k.Outcome), timeOf(k.ResolvedAt), id)
+				string(k.Outcome), timeOf(k.ResolvedAt), k.HeldByScheduleID, id)
 			return err
 		}
 		created = true
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO `scheduled_firing_skip` (`schedule_id`,`occurrence`,`at`,`reason`,`task_id`,`task_state`,"+
-				"`detail`,`outcome`,`resolved_at`,`fired_task_id`,`folded`,`noted_task_id`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+				"`detail`,`outcome`,`resolved_at`,`fired_task_id`,`folded`,`noted_task_id`,`held_by_schedule_id`) "+
+				"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
 			k.ScheduleID, k.Occurrence.UTC(), k.At.UTC(), string(k.Reason), k.TaskID, string(k.TaskState),
-			k.Detail, string(k.Outcome), timeOf(k.ResolvedAt), k.FiredTaskID, k.Folded, k.NotedTaskID); err != nil {
+			k.Detail, string(k.Outcome), timeOf(k.ResolvedAt), k.FiredTaskID, k.Folded, k.NotedTaskID,
+			k.HeldByScheduleID); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx,
@@ -391,14 +427,14 @@ func (s *Store) DropStrandedScheduleSkips(ctx context.Context, scheduleID string
 }
 
 const scheduleSkipColumns = "`id`,`schedule_id`,`occurrence`,`at`,`reason`,`task_id`,`task_state`," +
-	"`detail`,`outcome`,`resolved_at`,`fired_task_id`,`folded`,`noted_task_id`"
+	"`detail`,`outcome`,`resolved_at`,`fired_task_id`,`folded`,`noted_task_id`,`held_by_schedule_id`"
 
 func scanScheduleSkip(rows *sql.Rows) (ScheduleSkip, error) {
 	var k ScheduleSkip
 	var reason, state, outcome string
 	var resolved sql.NullTime
 	if err := rows.Scan(&k.ID, &k.ScheduleID, &k.Occurrence, &k.At, &reason, &k.TaskID, &state,
-		&k.Detail, &outcome, &resolved, &k.FiredTaskID, &k.Folded, &k.NotedTaskID); err != nil {
+		&k.Detail, &outcome, &resolved, &k.FiredTaskID, &k.Folded, &k.NotedTaskID, &k.HeldByScheduleID); err != nil {
 		return ScheduleSkip{}, err
 	}
 	k.Occurrence, k.At = k.Occurrence.UTC(), k.At.UTC()
@@ -486,6 +522,38 @@ func (s *Store) overlapSkip(ctx context.Context, sched Schedule, now time.Time,
 		}
 	}
 	return k
+}
+
+// overlapGroupSkip is the ScheduleSkip for a firing held by another
+// schedule in sched's overlap group (grain/task-3895): overlapSkip's
+// record, naming the holding schedule by id (HeldByScheduleID) and in
+// words (Detail).
+func (s *Store) overlapGroupSkip(ctx context.Context, sched Schedule, now time.Time,
+	sup ScheduleSuppression) *ScheduleSkip {
+
+	k := s.overlapSkip(ctx, sched, now, sup.Reason, sup.TaskID)
+	k.HeldByScheduleID = sup.HeldByScheduleID
+	var title string
+	if sup.HeldByScheduleID != "" {
+		if h, err := s.GetSchedule(ctx, sup.HeldByScheduleID); err == nil && h != nil {
+			title = h.Title
+		}
+	}
+	k.Detail = fmt.Sprintf("%s in overlap group %q", scheduleLabel(sup.HeldByScheduleID, title),
+		strings.TrimSpace(sched.OverlapGroup))
+	return k
+}
+
+// DroppedOverlapGroupSkip is overlapGroupSkip for a firing an event
+// rather than a cadence asked for (a github_workflow_run trigger): there
+// is no occurrence to hold, so the firing is dropped and recorded as such.
+func (s *Store) DroppedOverlapGroupSkip(ctx context.Context, sched Schedule, now time.Time,
+	sup ScheduleSuppression) ScheduleSkip {
+
+	sched.NextRunAt = now
+	k := s.overlapGroupSkip(ctx, sched, now, sup)
+	k.Outcome, k.ResolvedAt = ScheduleSkipDropped, &now
+	return *k
 }
 
 // droppedSkip is the ScheduleSkip for an occurrence the cadence moved on

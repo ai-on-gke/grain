@@ -738,13 +738,22 @@ const accessHistoryLimit = 100
 // surface "access", so Settings -> Access shows who changed which role,
 // when and why to a caller holding access:read without settings:read.
 func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
 	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	if !isAgentListCaller(r) && !r.URL.Query().Has("cursor") && !r.URL.Query().Has("q") {
+	capLimit := accessHistoryLimit
+	if !isAgentListCaller(r) && !q.Has("cursor") && !q.Has("q") {
 		list.Paged = false
+		if q.Has("limit") {
+			if list.Limit == 0 {
+				capLimit = maxConfigAudit
+			} else {
+				capLimit = min(list.Limit, maxConfigAudit)
+			}
+		}
 	}
 	entries, err := s.tasks.Store.ConfigAudit(r.Context(), maxConfigAudit)
 	if err != nil {
@@ -771,11 +780,11 @@ func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out = append(out, view)
-		if !list.Paged && len(out) == accessHistoryLimit {
+		if !list.Paged && len(out) == capLimit {
 			break
 		}
 	}
-	writeList(w, out, list)
+	writeListBy(w, out, list, configAuditKey)
 }
 
 func (s *Server) handleAllowPrincipal(w http.ResponseWriter, r *http.Request) {

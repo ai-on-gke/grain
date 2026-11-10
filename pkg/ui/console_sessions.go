@@ -1320,11 +1320,16 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		// newly created session starts holding what its own proposals are
 		// seeded with (grain/task-1983) while keeping session.Capabilities as
 		// the single source of truth an operator can untick (grain/task-2126).
+		// For a limited role, keep only capabilities within the caller's own role.
+		role := accessRoleFromContext(ctx)
 		seen := map[string]bool{}
 		defs := model.DefaultConsoleSessions()
 		if len(defs) > 0 {
 			for _, capability := range defs[0].Capabilities {
 				if capability == "" || seen[capability] {
+					continue
+				}
+				if role != nil && !role.Full && roleGrantRefusal(role, "capabilities", capability, c.normalizeCapabilityID) != nil {
 					continue
 				}
 				seen[capability] = true
@@ -1339,18 +1344,26 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 			if _, ok := c.capabilityByID(capability); !ok {
 				continue
 			}
+			if role != nil && !role.Full && roleGrantRefusal(role, "capabilities", capability, c.normalizeCapabilityID) != nil {
+				continue
+			}
 			seen[capability] = true
 			caps = append(caps, capability)
 		}
 	}
 
+	role := accessRoleFromContext(ctx)
 	access := model.NetworkAccess(req.NetworkAccess)
 	if access != "" && !model.ValidNetworkAccess(access) {
 		return "", nil, validationErrorf("networkAccess must be one of %s, or empty for this deployment's own default",
 			networkAccessNames())
 	}
 	if access == "" {
-		access = model.NetworkOpen
+		if role != nil && !role.Full && c.networkAccessWidens(ctx, "", string(model.NetworkOpen)) {
+			access = model.NetworkNone
+		} else {
+			access = model.NetworkOpen
+		}
 	}
 
 	var reads []model.RepoRef
@@ -1381,21 +1394,36 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		return "", nil, err
 	}
 
+	readsAll := req.ReadsAll
+	var declinedDefaults []string
+	if role != nil && !role.Full {
+		if readsAll == nil && !role.allows("tasks:read", "") {
+			off := false
+			readsAll = &off
+		}
+		for _, defID := range model.ConsoleSessionDefaultGrants() {
+			if !containsSessionGrantKey(caps, defID) && roleGrantRefusal(role, "capabilities", defID, c.normalizeCapabilityID) != nil {
+				declinedDefaults = append(declinedDefaults, defID)
+			}
+		}
+	}
+
 	newSession := model.ConsoleSession{
-		ID:              id,
-		Title:           title,
-		TitleSource:     titleSource,
-		Team:            team,
-		Capabilities:    caps,
-		NetworkAccess:   access,
-		TasksApproved:   req.TasksApproved,
-		KeepRunning:     req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
-		Hosting:         sessionHosting,
-		Reads:           reads,
-		Writes:          writes,
-		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),
-		Model:           chosenModel,
-		ReadsAll:        req.ReadsAll,
+		ID:               id,
+		Title:            title,
+		TitleSource:      titleSource,
+		Team:             team,
+		Capabilities:     caps,
+		DeclinedDefaults: declinedDefaults,
+		NetworkAccess:    access,
+		TasksApproved:    req.TasksApproved,
+		KeepRunning:      req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		Hosting:          sessionHosting,
+		Reads:            reads,
+		Writes:           writes,
+		GoogleChatSpace:  strings.TrimSpace(req.GoogleChatSpace),
+		Model:            chosenModel,
+		ReadsAll:         readsAll,
 	}
 
 	sessions = append(sessions, newSession)
@@ -1407,8 +1435,13 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return "", nil, err
 	}
+	stateRepo := c.stateRepoRef()
+	if role != nil && !role.Full && stateRepo.Owner != "" &&
+		!role.allows("settings:read", "") && !role.allows("tasks:read", stateRepo.String()) {
+		stateRepo = model.RepoRef{}
+	}
 	taskID, err := model.FileConsoleSessionTask(ctx, c.Store, newSession, model.FileConsoleSessionOptions{
-		StateRepo:       c.stateRepoRef(),
+		StateRepo:       stateRepo,
 		NetworkIsolates: c.sandboxesIsolateNetwork(),
 		Now:             now,
 	})
@@ -1668,7 +1701,13 @@ func (s *Server) handleListConsoleSessions(w http.ResponseWriter, r *http.Reques
 		matched := filterList(sessions, func(cs ConsoleSessionSetting) bool {
 			return list.matches(cs.ID, cs.Title, cs.TaskID, cs.Team)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(cs ConsoleSessionSetting) string { return cs.ID })
+		for i := range page.Items {
+			page.Items[i].MissingShippedDefaults = nil
+			if len(page.Items[i].AutoReads) > listPageSmall {
+				page.Items[i].AutoReads = page.Items[i].AutoReads[:listPageSmall]
+			}
+		}
 		writeJSON(w, http.StatusOK, ConsoleSessionSettingsResponse{
 			Sessions:   page.Items,
 			Total:      page.Total,

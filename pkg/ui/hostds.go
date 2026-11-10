@@ -341,7 +341,7 @@ func (s *Server) handleListHostds(w http.ResponseWriter, r *http.Request) {
 	out = filterList(out, func(h HostdView) bool {
 		return list.matches(h.Name, h.Owner)
 	})
-	writeList(w, out, list)
+	writeListBy(w, out, list, func(h HostdView) string { return h.Name })
 }
 
 func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {

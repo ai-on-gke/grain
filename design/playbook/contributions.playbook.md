@@ -24,7 +24,7 @@ The precise path table, enforcing files and format rules are in the spec, [`cont
 - **Tasks PR:** a PR that adds or changes `.task.grain.md` grainfiles.
 - **Review:** an agent's or a human's examination of a change. A grain agent's review of a PR is reported as the `grain/review` check.
 - **Check:** a status on a PR's head commit that GitHub can require before merge.
-- **Submit:** a person's release, in grain, of a change that grain holds for a human.
+- **Submit:** a person's approval, in grain, of a change that requires human sign-off. Submit satisfies the human approval gate only and never skips or cancels any required security or code review (`merging.design.md`).
 
 ## The design folder
 

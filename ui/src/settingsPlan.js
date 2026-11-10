@@ -139,7 +139,7 @@ const SETTING_LABELS = {
   autoUpgradeChannel: "Automatic upgrade channel",
   autoUpgradeTime: "Automatic upgrade time of day",
   autoUpgradeOn: "Automatic upgrades",
-  registry: "Hub",
+  hub: "Hub",
   registryUrl: "Hub URL",
   registryEntry: "Entry name",
   registryAuthMode: "Credential source",

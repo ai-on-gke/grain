@@ -150,20 +150,20 @@ func TestRequestSecretRecordsTheNameAndNeverAValue(t *testing.T) {
 	tool := toolNamed(t, NewMockTools(sink, nil), "request_secret")
 
 	res := tool.Handler(context.Background(), map[string]any{
-		"secret": "github-app/app-id", "reason": "the deploy needs to authenticate",
+		"secret": "deploy-bot/token", "reason": "the deploy needs to authenticate",
 	})
 	if res.IsError {
 		t.Fatalf("well-formed call errored: %s", res.Text)
 	}
 	got := sink.SecretRequest()
-	if got == nil || got.Secret != "github-app/app-id" || got.Reason != "the deploy needs to authenticate" {
+	if got == nil || got.Secret != "deploy-bot/token" || got.Reason != "the deploy needs to authenticate" {
 		t.Fatalf("SecretRequest() = %+v, want the name and reason as given", got)
 	}
 
 	// First call wins, matching what orchestrator.ProcessResult relays
 	// off agent.Result.ToolCalls.
 	tool.Handler(context.Background(), map[string]any{"secret": "other-key", "reason": "second thoughts"})
-	if sink.SecretRequest().Secret != "github-app/app-id" {
+	if sink.SecretRequest().Secret != "deploy-bot/token" {
 		t.Fatalf("SecretRequest() = %+v, want the first call's own name", sink.SecretRequest())
 	}
 
@@ -177,6 +177,70 @@ func TestRequestSecretRecordsTheNameAndNeverAValue(t *testing.T) {
 		if res := tool.Handler(context.Background(), bad); !res.IsError {
 			t.Errorf("Handler(%v) = %q, want an error", bad, res.Text)
 		}
+	}
+}
+
+// TestRequestSecretRefusesGrainsOwnCredentials pins that a run cannot
+// ask a human to set a secret grain keeps its own key material in: once
+// the git credentials, CA bundles and release-approval key moved into
+// the store, a value pasted for such a request would replace them with
+// whatever the run's question suggested.
+func TestRequestSecretRefusesGrainsOwnCredentials(t *testing.T) {
+	for _, name := range []string{
+		"github-credential-bot/token",
+		"github-credential-ci-app",
+		"release-approval-key/key.pem",
+		"sandbox-access-ca/bundle.pem",
+		"package-cache-ca",
+		"state-repo-token/token",
+		"secrets-repo-token",
+	} {
+		sink := &MockSink{}
+		tool := toolNamed(t, NewMockTools(sink, nil), "request_secret")
+		res := tool.Handler(context.Background(), map[string]any{
+			"secret": name, "reason": "rotate it", "summary": "Set " + name,
+		})
+		if !res.IsError || !strings.Contains(res.Text, "its own credentials") {
+			t.Errorf("request_secret(%q) = %q, want a refusal naming grain's own credentials", name, res.Text)
+		}
+		if got := sink.SecretRequest(); got != nil {
+			t.Errorf("request_secret(%q) recorded %+v, want nothing", name, got)
+		}
+	}
+}
+
+// TestRequestSecretRefusesCredentialsAlreadyInTheStore is the same
+// refusal for the credentials that were in the store before grain's CAs
+// and keys moved there: each has its own place in Settings, and a value
+// a run suggested pasted over one (a cosign key it generated, its own
+// model or App key) would hand the run the deployment's identity.
+func TestRequestSecretRefusesCredentialsAlreadyInTheStore(t *testing.T) {
+	for _, tc := range []struct{ what, name string }{
+		{"the default GCP minter key", "gcp-key-minter"},
+		{"a named GCP key's minter key", "gcp-key-minter-research/key.json"},
+		{"the Gemini API key", "gemini-api-key"},
+		{"the Claude OAuth token", "claude-oauth-token/value"},
+		{"the OpenAI API key", "openai-api-key"},
+		{"a custom agent backend's credential", "agent-backend-vertex/value"},
+		{"the cosign key", "image-signing/key"},
+		{"the cosign password", "image-signing/password"},
+		{"the GitHub App's id", "github-app/app-id"},
+		{"the GitHub App's private key", "github-app/private-key"},
+		{"a repository's release secret", "repo-release-0123abcd/DOCKERHUB_TOKEN"},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			sink := &MockSink{}
+			tool := toolNamed(t, NewMockTools(sink, nil), "request_secret")
+			res := tool.Handler(context.Background(), map[string]any{
+				"secret": tc.name, "reason": "rotate it", "summary": "Set " + tc.name,
+			})
+			if !res.IsError || !strings.Contains(res.Text, "its own credentials") {
+				t.Errorf("request_secret(%q) = %q, want a refusal naming grain's own credentials", tc.name, res.Text)
+			}
+			if got := sink.SecretRequest(); got != nil {
+				t.Errorf("request_secret(%q) recorded %+v, want nothing", tc.name, got)
+			}
+		})
 	}
 }
 

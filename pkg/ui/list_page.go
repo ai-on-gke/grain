@@ -87,6 +87,11 @@ type listQuery struct {
 	Limit int
 	// Offset is where the page starts, from the cursor.
 	Offset int
+	// After is the key of the row the previous page ended on, from the
+	// cursor, "" for a cursor that carries none: a keyed route resumes
+	// just past that row wherever it now sits, and at Offset only when it
+	// is gone.
+	After string
 	// Q is the lower-cased substring an item's natural key must contain,
 	// "" for no filter.
 	Q string
@@ -112,11 +117,11 @@ func parsePageBounds(r *http.Request, defaultLimit int) (listQuery, error) {
 		out.Limit = defaultLimit
 	}
 	if text := strings.TrimSpace(q.Get("cursor")); text != "" {
-		offset, err := decodeListCursor(text)
+		offset, after, err := decodeListCursor(text)
 		if err != nil {
 			return out, err
 		}
-		out.Offset, out.Paged = offset, true
+		out.Offset, out.After, out.Paged = offset, after, true
 		if out.Limit == 0 {
 			out.Limit = defaultLimit
 		}
@@ -172,10 +177,33 @@ type ListPage[T any] struct {
 }
 
 // pageOf cuts q's page out of items, which are already filtered and in
-// the order the route answers in.
+// the order the route answers in, resuming at the cursor's offset. A
+// route whose rows have a key of their own pages with pageOfBy instead,
+// so a row inserted or removed ahead of the cursor between two reads
+// neither repeats nor skips one.
 func pageOf[T any](items []T, q listQuery) ListPage[T] {
+	return pageOfBy(items, q, nil)
+}
+
+// pageOfBy is pageOf for a route whose rows key names uniquely -- an id,
+// a name, a path. Its cursor carries the key of the page's last row as
+// well as the offset after it, and a page read with that cursor starts
+// just past that row wherever it now sits: on a newest-first list a row
+// inserted at the head between two reads moves every row down one, and
+// an offset alone would answer the previous page's last row again. Only
+// when that row has gone from the list does the page start at the
+// offset. A nil key pages by offset alone.
+func pageOfBy[T any](items []T, q listQuery, key func(T) string) ListPage[T] {
 	page := ListPage[T]{Items: []T{}, Total: len(items)}
 	start := min(q.Offset, len(items))
+	if key != nil && q.After != "" {
+		for i, item := range items {
+			if key(item) == q.After {
+				start = i + 1
+				break
+			}
+		}
+	}
 	end := len(items)
 	if q.Limit > 0 && start+q.Limit < end {
 		end = start + q.Limit
@@ -183,7 +211,11 @@ func pageOf[T any](items []T, q listQuery) ListPage[T] {
 	page.Items = append(page.Items, items[start:end]...)
 	if end < len(items) {
 		page.Truncated = true
-		page.NextCursor = encodeListCursor(end)
+		last := ""
+		if key != nil && end > 0 {
+			last = key(items[end-1])
+		}
+		page.NextCursor = encodeListCursorAfter(end, last)
 	}
 	return page
 }
@@ -191,6 +223,12 @@ func pageOf[T any](items []T, q listQuery) ListPage[T] {
 // writeList answers a collection read with items: the bare list when q
 // does not page, and q's page of it when it does.
 func writeList[T any](w http.ResponseWriter, items []T, q listQuery) {
+	writeListBy(w, items, q, nil)
+}
+
+// writeListBy is writeList for a route whose rows key names uniquely,
+// paged with pageOfBy.
+func writeListBy[T any](w http.ResponseWriter, items []T, q listQuery, key func(T) string) {
 	if !q.Paged {
 		if items == nil {
 			items = []T{}
@@ -198,7 +236,7 @@ func writeList[T any](w http.ResponseWriter, items []T, q listQuery) {
 		writeJSON(w, http.StatusOK, items)
 		return
 	}
-	writeJSON(w, http.StatusOK, pageOf(items, q))
+	writeJSON(w, http.StatusOK, pageOfBy(items, q, key))
 }
 
 // filterList keeps the items of list that keep says to, in their order.
@@ -212,33 +250,50 @@ func filterList[T any](list []T, keep func(T) bool) []T {
 	return out
 }
 
-// A list cursor is the offset of the next page, encoded so a caller
-// hands it back rather than reading anything into it: the lists it pages
-// are sorted by a stable key, so an offset is as good a place to resume
-// as any, and a caller that wants the whole list pages until nextCursor
-// is empty.
+// A list cursor is the offset of the next page and, on a keyed route,
+// the key of the row the previous page ended on ("o:<offset>:<key>"),
+// encoded so a caller hands it back rather than reading anything into
+// it. A caller that wants the whole list pages until nextCursor is empty.
+// A cursor of the offset alone ("o:<offset>", as every cursor was before
+// keys) is still read, and resumes at that offset.
 const listCursorPrefix = "o:"
 
 func encodeListCursor(offset int) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(listCursorPrefix + strconv.Itoa(offset)))
+	return encodeListCursorAfter(offset, "")
 }
 
-func decodeListCursor(text string) (int, error) {
+func encodeListCursorAfter(offset int, after string) string {
+	raw := listCursorPrefix + strconv.Itoa(offset)
+	if after != "" {
+		raw += ":" + after
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func decodeListCursor(text string) (int, string, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(text)
 	if err == nil {
-		if after, ok := strings.CutPrefix(string(raw), listCursorPrefix); ok {
-			if offset, err := strconv.Atoi(after); err == nil && offset >= 0 {
-				return offset, nil
+		if rest, ok := strings.CutPrefix(string(raw), listCursorPrefix); ok {
+			number, after, _ := strings.Cut(rest, ":")
+			if offset, err := strconv.Atoi(number); err == nil && offset >= 0 {
+				return offset, after, nil
 			}
 		}
 	}
-	return 0, validationErrorf("%q is not a cursor this route handed out: pass back a previous answer's nextCursor, or leave it out for the first page", text)
+	return 0, "", validationErrorf("%q is not a cursor this route handed out: pass back a previous answer's nextCursor, or leave it out for the first page", text)
 }
 
 // ListCursorFor is the opaque cursor that starts a paged collection read
 // at offset, for a caller that pages by hand.
 func ListCursorFor(offset int) string {
 	return encodeListCursor(max(offset, 0))
+}
+
+// ParseListCursor is the offset a ListCursorFor cursor starts at, for a
+// caller that pages a list it filtered itself (`grain mcp`'s
+// list_grain_tasks); a cursor it did not hand out is refused.
+func ParseListCursor(text string) (int, error) {
+	return decodeListCursor(strings.TrimSpace(text))
 }
 
 // describeListQuery is the sentence every paged route's tool description

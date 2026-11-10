@@ -68,6 +68,12 @@ locals {
     # rollout this triggers waits for the host to be allowed to read them.
     secret_ids = { for k, _ in google_secret_manager_secret_iam_member.host_reads : k => google_secret_manager_secret.host[k].id }
 
+    # The CryptoKey files/deploy.sh hands setup.sh to wrap secrets.key
+    # with (kms.tf), or "" when secrets_key_kms is off. Read through the
+    # host's grant on it, so the rollout this triggers waits for the host
+    # to be allowed to use it.
+    secrets_kms_key = var.secrets_key_kms ? google_kms_crypto_key_iam_member.host_wraps_secrets_key[0].crypto_key_id : ""
+
     # See variables.tf's own "granule" section -- enable_granule_sandboxes on
     # with these otherwise empty (the default) is not a misconfiguration:
     # it tells scripts/setup.sh's own ensure_granule_images to build both

@@ -163,3 +163,44 @@ for (const [name, viewport] of [
     expect(pageErrors).toEqual([]);
   });
 }
+
+test("saving a hub setting in the browser sends the hub key", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto("/settings/registry");
+
+  const configCard = page.locator("#registry-config");
+  await configCard.scrollIntoViewIfNeeded();
+  const purposeInput = configCard.getByLabel("Purpose");
+  await expect(purposeInput).toBeVisible();
+  const originalPurpose = await purposeInput.inputValue();
+
+  const putPromise = page.waitForRequest(
+    (req) => req.url().endsWith("/api/settings") && req.method() === "PUT",
+  );
+  try {
+    await purposeInput.fill(`${originalPurpose} (e2e)`);
+    await purposeInput.blur();
+    const putReq = await putPromise;
+    const payload = putReq.postDataJSON();
+    expect(payload).toHaveProperty("hub");
+    expect(payload).not.toHaveProperty("registry");
+    expect(payload.hub.purpose).toBe(`${originalPurpose} (e2e)`);
+    await expect(page.getByTestId("settings-status")).toHaveText(
+      "All changes saved",
+    );
+  } finally {
+    const cur = await purposeInput.inputValue().catch(() => originalPurpose);
+    if (cur !== originalPurpose) {
+      const restoreDone = page.waitForResponse(
+        (res) =>
+          res.url().endsWith("/api/settings") &&
+          res.request().method() === "PUT",
+      );
+      await purposeInput.fill(originalPurpose);
+      await purposeInput.blur();
+      await restoreDone;
+    }
+  }
+});

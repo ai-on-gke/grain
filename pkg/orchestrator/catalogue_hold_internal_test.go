@@ -213,3 +213,61 @@ func TestRelayedProposalHoldsARequiresPersonGrant(t *testing.T) {
 		t.Fatalf("body %q does not say why it waits for a person", got.Body)
 	}
 }
+
+// A queued task holding a grant the catalogue marks requires_person is
+// held at dispatch when no person stands behind its approval (task 3971):
+// its approval is withdrawn so a person approves it, and the reason is on
+// its row. A person's own approval, and an operator's schedule firing it,
+// are let through.
+func TestCatalogueHoldHoldsARequiresPersonGrantNobodyApproved(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+			"self-debug": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{Store: store}
+	grants := []model.Grant{{Capability: "self-debug", Via: model.GrantByLabel}}
+	automation := model.Principal{Kind: model.PrincipalAutomation, ID: "reviewer"}
+	declared := model.RepoDeclaredID(model.DeclaredSchedule, widgets, "nightly")
+	for _, tc := range []struct {
+		name   string
+		by     model.Principal
+		tags   []string
+		isHeld bool
+	}{
+		{"automation", automation, nil, true},
+		{"declared schedule nobody accepted", model.SchedulePrincipal, []string{model.ScheduleFiringTag(declared)}, true},
+		{"person", model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}, nil, false},
+		{"operator schedule", model.SchedulePrincipal, []string{model.ScheduleFiringTag("sched-operator")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := model.Task{ID: "task-" + strings.ReplaceAll(tc.name, " ", "-"), Title: "t", Target: &widgets,
+				Grants: grants, Tags: tc.tags, Approval: &model.Attribution{Actor: tc.by}}
+			if err := store.PutTask(ctx, task); err != nil {
+				t.Fatal(err)
+			}
+			why := catalogueHold(ctx, deps)(task.ID)
+			if held := why != ""; held != tc.isHeld {
+				t.Fatalf("held = %v (%q), want %v", held, why, tc.isHeld)
+			}
+			got, err := store.GetTask(ctx, task.ID)
+			if err != nil || got == nil {
+				t.Fatal(err)
+			}
+			if tc.isHeld {
+				if got.Approval != nil {
+					t.Errorf("a held task kept its approval by %+v", got.Approval.Actor)
+				}
+				if wait, err := store.GrantWaitOf(ctx, task.ID); err != nil || wait == nil || !strings.Contains(wait.Resource, "nobody approved") {
+					t.Errorf("wait = %+v (%v), want one saying nobody approved it", wait, err)
+				}
+			} else if got.Approval == nil {
+				t.Errorf("a task let through lost its approval")
+			}
+		})
+	}
+}

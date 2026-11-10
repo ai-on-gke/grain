@@ -37,6 +37,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 type Config struct {
@@ -249,9 +251,16 @@ type Config struct {
 	UiRequireVerifier string
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
-	UiRequireIAP            bool
-	UiAllowedPrincipals     []string
-	DeploymentOwner         string
+	UiRequireIAP        bool
+	UiAllowedPrincipals []string
+	DeploymentOwner     string
+	// HostAccounts is -host-accounts: who each host account's requests on
+	// the API socket are recorded as (ui.HostAccountHandler). The daemon's
+	// own account maps to DeploymentOwner unless it names it.
+	HostAccounts ui.HostAccounts
+	// APISocket is -api-socket: where the API is served on a unix socket
+	// as well; "" is ui.APISocketPath(DataDir), "none" serves none.
+	APISocket               string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool
 	Actor                   string
@@ -438,14 +447,6 @@ type Config struct {
 	// runs grain from a container (bwsalmon/agents#645).
 	UpgradeImage        string
 	UpgradeImageRefFile string
-	// UpgradeImageSource selects where ModeImage pulls candidate images from
-	// ("registry"; empty uses the track or default registry source).
-	// UpgradeImageSourceLocked records that the setting came from a daemon
-	// flag or environment variable.
-	UpgradeImageSource           string
-	UpgradeImageSourceLocked     bool
-	UpgradeImageFallback         string
-	UpgradeImageFallbackExplicit bool
 	// upgradeVerifyCmd checks an image's signature before either image
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
@@ -868,6 +869,10 @@ type Config struct {
 	SandboxAccessAddr     string
 	SandboxAccessDial     string
 	SandboxAccessCASecret string
+	// caSecrets is the secrets store the sandbox-access and package-cache
+	// CA bundles are kept in (ca_store.go), set by Run once it has opened
+	// one. Nil keeps them in their <data-dir>/*.pem files.
+	caSecrets *secrets.Store
 	// K8sGranuleAccess is how grain reaches a k8s-granule sandbox's guest
 	// once its pod is Ready: orchestrator.K8sGranuleAccessKubectl (the
 	// default, `granule exec` over `kubectl exec`) or

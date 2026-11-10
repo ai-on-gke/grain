@@ -460,6 +460,7 @@ func (s *Server) routes() {
 	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
 	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
 	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
+	s.route("POST /api/pull-requests/submit", s.handleSubmitPullRequest)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
@@ -512,6 +513,8 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/local-script-approvals/{approval}/expire", s.handleExpireLocalScriptApproval)
 	s.route("POST /api/tasks/{id}/local-script-approvals/{approval}/answer", s.handleAnswerLocalScriptApproval)
 	s.route("GET /api/local-script-approvals", s.handleListLocalScriptApprovals)
+	s.route("GET /api/declarations", s.handleListDeclarationAcceptances)
+	s.route("POST /api/declarations/accept", s.handleAcceptDeclaration)
 	// What grain has learned about working here (model.Memory): read by
 	// anyone, written only by a run whose task holds the memory
 	// capability -- the nightly memory agent through update_memory -- or
@@ -709,6 +712,7 @@ func (s *Server) routes() {
 	s.route("DELETE /api/github-tokens/{name}", s.handleDeleteGitHubToken)
 
 	s.route("GET /api/secrets", s.handleListSecrets)
+	s.route("POST /api/secrets/redact", s.handleRedactSecrets)
 	s.route("PUT /api/secrets/{secret}/{key}", s.handleSetSecret)
 	s.route("DELETE /api/secrets/{secret}/{key}", s.handleDeleteSecretKey)
 	s.route("DELETE /api/secrets/{secret}", s.handleDeleteSecret)
@@ -725,6 +729,8 @@ func (s *Server) routes() {
 	s.route("POST /api/state-repo/pull-requests", s.handleOpenConfigPullRequest)
 	s.route("POST /api/state-repo/remote", s.handleSetStateRepoRemote)
 	s.route("POST /api/state-repo/secrets-key", s.handleImportSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/wrap", s.handleWrapSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/unwrap", s.handleUnwrapSecretsKey)
 	s.route("POST /api/state-repo/import-key", s.handleImportSecretsKey)
 	s.route("POST /api/state-repo/secrets-repo", s.handleSetSecretsRepo)
 	s.route("POST /api/state-repo/reset-notice", s.handleDismissResetNotice)
@@ -735,7 +741,6 @@ func (s *Server) routes() {
 	s.route("GET /api/host/top", s.handleGetHostTop)
 	s.route("GET /api/upgrade", s.handleGetUpgradeStatus)
 	s.route("POST /api/upgrade", s.handleStartUpgrade)
-	s.route("PUT /api/upgrade/source", s.handleUpdateUpgradeSource)
 	s.route("DELETE /api/upgrade/scheduled", s.handleCancelScheduledUpgrade)
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)

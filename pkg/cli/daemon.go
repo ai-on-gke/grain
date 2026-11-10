@@ -323,6 +323,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"Defaults to $GRAIN_REQUIRE_VERIFIER")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	deploymentOwner := fs.String("deployment-owner", "", "human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($"+ui.DeploymentOwnerEnv+" when unset)")
+	hostAccounts := fs.String("host-accounts", "", "comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as "+
+		"(the daemon's own account maps to -deployment-owner unless named here; $"+ui.HostAccountsEnv+" when unset)")
+	apiSocket := fs.String("api-socket", "", "unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names "+
+		"(default <data-dir>/api/grain.sock, served only when some account is mapped; \"none\" turns it off)")
 	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve allowed group: entries against this Cloud Identity API base URL "+
 		"(a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint+"; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT")
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
@@ -470,7 +474,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	// since nothing here builds or installs a binary: an image deployment
 	// passes neither, and the self-debug capability reads the source the
 	// image carries rather than a checkout a flag names (see sourceDir).
-	upgradeSource := registerUpgradeSourceFlags(fs)
+	upgradeImage := fs.String("upgrade-image", "",
+		"image repository, with no tag, that CI publishes a tag per branch to (e.g. "+
+			"docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of "+
+			"building one, and -upgrade-image-ref-file is required")
 	// Which branches an upgrade may install (bwsalmon/grain#2385). An
 	// upgrade replaces this daemon with whatever the branch builds, and a
 	// branch name says nothing about whether anybody reviewed it, so the
@@ -1156,6 +1163,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*deploymentOwner = env
 		}
 	}
+	if !passed["host-accounts"] {
+		if env := strings.TrimSpace(os.Getenv(ui.HostAccountsEnv)); env != "" {
+			*hostAccounts = env
+		}
+	}
+	parsedHostAccounts, err := ui.ParseHostAccounts(*hostAccounts)
+	if err != nil {
+		return daemon.Config{}, fs, unknownFlags, err
+	}
 	if !passed["object-store"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
 			*objectStoreURI = env
@@ -1278,6 +1294,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		DeploymentOwner:         strings.TrimSpace(*deploymentOwner),
+		HostAccounts:            parsedHostAccounts,
+		APISocket:               strings.TrimSpace(*apiSocket),
 		UiCloudIdentityEndpoint: strings.TrimSpace(*uiCloudIdentityEndpoint),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,
@@ -1380,9 +1398,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	}
 	grit.Apply(&cfg)
 	hubFlags.apply(&cfg, passed)
-	if err = upgradeSource.apply(&cfg, passed); err != nil {
-		return cfg, fs, unknownFlags, err
-	}
+	cfg.UpgradeImage = *upgradeImage
 	if cfg.HostdRemote, err = daemon.NewHostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}

@@ -47,8 +47,9 @@
 // an operator's `workflow_dispatch`, and a cron grain itself fired
 // (model.TrustedScheduleCapability) -- never on a pull request's or an
 // ordinary push's run, whose tree any agent can rewrite -- and only for
-// the repositories the deployment configured, which by default is
-// grain's own (model.GrainSourceRepo).
+// the repositories the deployment configured: grain's own
+// (model.GrainSourceRepo) and whatever grain_config.ci_api_repos adds
+// (model.Config.CIAPIRepos, read by pkg/daemon as each job resolves).
 package ciapi
 
 import (

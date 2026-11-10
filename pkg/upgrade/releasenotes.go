@@ -214,8 +214,8 @@ func parseReport(out string) (releasenotes.Report, error) {
 	return report, nil
 }
 
-// imageReleaseNotes pulls, pins and verifies the target exactly as stageImage
-// does, then asks it.
+// imageReleaseNotes pulls, pins and verifies the target exactly as
+// stageImage does, then asks it.
 func (u *Upgrader) imageReleaseNotes(ctx context.Context, p *progress, branch string, args []string) (ref string, report releasenotes.Report, refused, err error) {
 	tag, err := u.imageRef(branch)
 	if err != nil {

@@ -1425,7 +1425,7 @@ esac
 # cosign itself, from the Go module proxy when this sandbox has none:
 # pinned, so what signs a release is a version somebody chose. The
 # sandbox already has Go -- the guest build needs it.
-cosign_version="${COSIGN_VERSION:-v2.4.1}"
+cosign_version="${COSIGN_VERSION:-v2.6.5}"
 ensure_cosign() {
   command -v cosign >/dev/null 2>&1 && return 0
   echo "release-images.sh: installing cosign $cosign_version"

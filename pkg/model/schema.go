@@ -633,7 +633,15 @@ import "strconv"
 // 133 adds repository skill discovery configuration (`skills` on
 // `grain_config`, `repo_config`, `task` and `template`, and `declared_skills`
 // on `repo_config`).
-const SchemaVersion = 133
+// 134 adds `schedule`.`overlap_group` (model.Schedule.OverlapGroup) and
+// `scheduled_firing_skip`.`held_by_schedule_id`
+// (model.ScheduleSkip.HeldByScheduleID): an overlap group shared by the
+// schedules of one repository, and the schedule that held a skipped
+// firing when it was another one in that group (grain/task-3895).
+// 135 adds `grain_config`.`ci_api_repos` (model.Config.CIAPIRepos): the
+// repositories whose trusted CI jobs may hold api grants, empty for
+// grain's own only (grain/task-4040).
+const SchemaVersion = 135
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2066,6 +2074,7 @@ var Tables = []string{
   ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   ` + "`grain_ci`" + `              INTEGER  NOT NULL DEFAULT 0,
+  ` + "`overlap_group`" + `         TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2676,6 +2685,7 @@ var Tables = []string{
   ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
+  ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3026,7 +3036,8 @@ var Tables = []string{
   ` + "`resolved_at`" + `   DATETIME,
   ` + "`fired_task_id`" + ` TEXT     NOT NULL DEFAULT '',
   ` + "`folded`" + `        INTEGER  NOT NULL DEFAULT 0,
-  ` + "`noted_task_id`" + ` TEXT     NOT NULL DEFAULT ''
+  ` + "`noted_task_id`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`held_by_schedule_id`" + ` TEXT NOT NULL DEFAULT ''
 )`,
 
 	// What the merge queue had to do over again because something else
@@ -3509,6 +3520,35 @@ var Tables = []string{
   ` + "`path`" + `      TEXT NOT NULL,
   ` + "`commit`" + `    TEXT NOT NULL DEFAULT '',
   ` + "`synced_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
+	// A person's acceptance of what a repository's own declaration asks
+	// for that only a person may grant (model.DeclarationAcceptance, task
+	// 3971): one row per declared schedule, template, suite or CI job that
+	// has asked for any, with what it last asked for and what a person
+	// last accepted, who, holding which scopes, at which commit. Lists are
+	// JSON because nothing queries inside them.
+	//
+	// Grain's own record rather than settings (staterepo.SettingsTables):
+	// it is a person's grant, made through grain by somebody holding the
+	// scope, and importing one live from a branch of the state repository
+	// would let whoever can write there accept on a person's behalf. A
+	// restore brings it back with the rest of grain's record. Needs no
+	// SchemaVersion bump, for repo_workflow's own reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`declaration_acceptance`" + ` (
+  ` + "`id`" + `               TEXT     NOT NULL,
+  ` + "`kind`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`name`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`requested`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_commit`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_at`" + `     DATETIME NOT NULL,
+  ` + "`accepted`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_by`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_scopes`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_commit`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_at`" + `      DATETIME NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

@@ -121,12 +121,6 @@ type Status struct {
 	// restarting because the version on Branch was still the one this
 	// deployment already ran.
 	Unchanged bool `json:"unchanged,omitempty"`
-	// Source records which image source ("release-assets" or "registry") an
-	// image-pipeline upgrade actually used, including after any fallback.
-	Source string `json:"source,omitempty"`
-	// FallbackNote explains why an image upgrade fell back from its primary
-	// source (for example "release has no image assets; pulled from <registry>").
-	FallbackNote string `json:"fallbackNote,omitempty"`
 	// Steps is the whole sequence this upgrade runs, in order, each one
 	// carrying where it stands and what it last had to say (progress.go,
 	// grain/task-37). It is written the moment an upgrade starts, with
@@ -457,7 +451,7 @@ type Upgrader struct {
 // the same as most of this package's callers.
 func New(cfg Config) *Upgrader {
 	u := &Upgrader{cfg: cfg}
-	u.loadImageSourceOverride()
+	u.migrateLegacyImageSource()
 	return u
 }
 
@@ -1159,7 +1153,6 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		}
 	}
 
-	p.setSource(ImageSourceRegistry)
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
 	var ref string
 	if pullErr == nil {
