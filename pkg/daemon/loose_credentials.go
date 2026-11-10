@@ -40,12 +40,19 @@ import (
 //     the store is read before it, so it is inert from here on;
 //   - secrets/relay/token, into relay/token, renamed to token.migrated.
 //
+// The CA bundles move on first use instead (SecretsCAStore), and the
+// rollback writes them back too (restoreCAFiles).
+//
 // Each step logs what it did and warns about what is left; none stops the
 // daemon from starting, since every reader still falls back to the file
 // it would have read before.
 func MoveLooseCredentialsIntoStore(cfg Config, store *secrets.Store) {
 	moveGitCredentialsIntoStore(cfg.DataDir)
 	if store == nil {
+		return
+	}
+	if os.Getenv(gitproxy.CredentialsInFilesEnv) == "files" {
+		restoreCAFiles(store, cfg.DataDir)
 		return
 	}
 	importHubTokenFile(store, cfg.HubTokenFile)
@@ -78,6 +85,56 @@ func moveGitCredentialsIntoStore(dataDir string) {
 	if _, err := set.MigrateFilesToStore(); err != nil {
 		log.Printf("grain: some git credentials are still plaintext files under %s: %v", dir, err)
 	}
+}
+
+// restoreCAFiles writes each CA bundle the store holds back to its
+// <data-dir>/*.pem file and drops the store's copy: the CA half of the
+// GRAIN_GITHUB_CREDENTIALS=files rollback, so sandboxes keep trusting the
+// same CA across a downgrade.
+func restoreCAFiles(store *secrets.Store, dataDir string) {
+	if dataDir == "" {
+		return
+	}
+	for secret, file := range map[string]string{
+		SandboxAccessCASecretName: "sandbox-access-ca.pem",
+		PackageCacheCASecretName:  "package-cache-ca.pem",
+	} {
+		has, err := store.Has(secret, caBundleKey)
+		if err != nil || !has {
+			continue
+		}
+		v, err := store.Resolve(context.Background(), secret+"/"+caBundleKey)
+		if err != nil {
+			log.Printf("grain: restoring %s: %v", file, err)
+			continue
+		}
+		path := filepath.Join(dataDir, file)
+		if err := writeFileAtomic0600(path, []byte(v)); err != nil {
+			log.Printf("grain: restoring %s: %v", path, err)
+			continue
+		}
+		_ = store.DeleteKey(secret, caBundleKey)
+		_ = os.Remove(path + gitproxy.MigratedSuffix)
+		log.Printf("grain: %s=files: wrote the CA bundle %s back out of the secrets store", gitproxy.CredentialsInFilesEnv, path)
+	}
+}
+
+// writeFileAtomic0600 writes data to path through a temporary file and a
+// rename, owner-only.
+func writeFileAtomic0600(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".restore-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // importHubTokenFile stores -hub-token-file's token as the registration
