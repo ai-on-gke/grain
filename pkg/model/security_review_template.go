@@ -70,7 +70,7 @@ func securityReviewBody() string {
 		"- merge, review or CI gates loosened: auto-merge rules, required checks, baselines, " +
 		"quarantined tests, workflow triggers or permissions, the list of trust-boundary paths itself;\n" +
 		"- a repository's own `.grain` declarations reaching further: a template's `capabilities:` " +
-		"naming another repository, or its `push:` adding a ref, broadening a pattern, or adding " +
+		"(or its unified spelling, `grants:`) naming another repository, or its `push:` adding a ref, broadening a pattern, or adding " +
 		"`force: true` or `delete: true` -- each lets the runs of tasks filed from it move refs " +
 		"of this repository beyond their own branch, with no other grant, once it merges;\n" +
 		"- a security regression test deleted, skipped or made to assert less than it did;\n" +
