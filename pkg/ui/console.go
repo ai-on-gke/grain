@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/console"
 )
 
@@ -187,12 +188,41 @@ func (s *Server) handleConsoleOutput(w http.ResponseWriter, r *http.Request) {
 		offset = parsed
 	}
 	data, next, dropped := session.Output(offset)
+	// A console is a run's terminal, and sessions:read -- grain/viewer's
+	// -- reads anybody's: what it printed goes through the same redaction
+	// the Logs pane's lines do, so a credential the run cat-ed or echoed
+	// is not handed to a reader who holds no grant of it. Offsets stay the
+	// session's own, so a client asking for what follows is unaffected.
+	data = s.redactConsoleOutput(data)
 	writeJSON(w, http.StatusOK, ConsoleOutputResponse{
 		Output:  base64.StdEncoding.EncodeToString(data),
 		Offset:  next,
 		Dropped: dropped,
 		Live:    session.Info().Live,
 	})
+}
+
+// redactConsoleOutput is data with every credential the log redactor
+// knows, and every credential shape, cut out. Without a redactor of the
+// daemon's own it still cuts the shapes; one that cannot be built
+// withholds the output rather than serve it unredacted.
+func (s *Server) redactConsoleOutput(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	redactor := grainlog.NewRedactor(nil)
+	if s.tasks.Config.LogRedactor != nil {
+		var err error
+		redactor, err = s.tasks.Config.LogRedactor()
+		if err != nil || redactor == nil {
+			return []byte("\r\n[grain: this output is withheld: the credentials that would have to be redacted out of it could not be read]\r\n")
+		}
+	}
+	out, n := redactor.Text(string(data))
+	if n == 0 {
+		return data
+	}
+	return []byte(out)
 }
 
 // handleConsoleInput is somebody typing.

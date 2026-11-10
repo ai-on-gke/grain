@@ -283,6 +283,16 @@ var patterns = []pattern{
 	{"registry token", regexp.MustCompile(`\bgrc_[A-Za-z0-9_-]{16,}`), "[redacted: registry token]"},
 	{"host enrollment code", hostEnrollmentCodeRE, "[redacted: host enrollment code]"},
 	{"host credential", regexp.MustCompile(`\bghd_[0-9a-f]{32,}\b`), "[redacted: host credential]"},
+	// grain's own credentials, in the shapes grain writes them: the
+	// secrets store's private key (pkg/secrets' keyPrefix), the access
+	// code that is the daemon's LocalAPIToken (pkg/ui's newAccessCode:
+	// 160 bits of base32 in eight dash-separated groups of four), and the
+	// grain-local-<hex> token from before access codes. The header
+	// patterns above cut either one sent as X-Grain-Access-Code; these
+	// cut it bare, as `cat local-api-token` prints it.
+	{"secrets key", regexp.MustCompile(`grain-secret-key-v1:[A-Za-z0-9+/=_-]{16,}`), "[redacted: secrets key]"},
+	{"access code", regexp.MustCompile(`\b[A-Z2-7]{4}(?:-[A-Z2-7]{4}){7}\b`), "[redacted: access code]"},
+	{"access code", regexp.MustCompile(`\bgrain-local-[0-9a-f]{16,}\b`), "[redacted: access code]"},
 	// A signed token, which carries its own claims and is worth cutting
 	// whether or not this host minted it.
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "[redacted: jwt]"},
