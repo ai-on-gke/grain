@@ -920,8 +920,8 @@ func (c *Client) externalApprovalRefusal(ctx context.Context, principal string, 
 // POST /api/tasks: every grant task holds is one the credential holds
 // (agentGrantRefusal), it may push to every repository in task.Writes
 // (tasks:write) and read every one in task.Reads (tasks:read), its
-// networkAccess does not widen past this deployment's default, and its
-// review template is one externalTemplateWithin lets the credential name.
+// networkAccess does not widen past this deployment's default, it does not
+// approve its own proposals (autoApproveProposals), and its review template is one externalTemplateWithin lets the credential name.
 // It is roleApprovalWithin's ceiling for a gma_ credential: without it, a
 // credential held to one repository could approve stored work reaching
 // any other, or carrying grants it was never given. The credential is the
@@ -962,6 +962,9 @@ func (c *Client) externalApprovalWithin(ctx context.Context, principal string, t
 	}
 	if c.networkAccessWidens(ctx, "", string(task.NetworkAccess)) {
 		return refuse("networkAccess", "it widens networkAccess past this deployment's default")
+	}
+	if task.AutoApproveProposals {
+		return refuse("autoApproveProposals", "it approves its own proposals, which an external agent credential never turns on")
 	}
 	if id := strings.TrimSpace(task.ReviewTemplateID); id != "" &&
 		!(task.Target != nil && id == model.DefaultReviewTemplateID(*task.Target)) {

@@ -328,7 +328,7 @@ func TestExternalAgentRunNowApprovalNeedsAReasonAsApproveDoes(t *testing.T) {
 
 // An external credential approves only work it could have filed itself:
 // one held to acme/widgets, refused POST /api/tasks for writes or reads
-// reaching acme/gadgets, open networkAccess, a grant it does not hold or a
+// reaching acme/gadgets, open networkAccess, autoApproveProposals, a grant it does not hold or a
 // review template granting one, is refused approving -- or running now --
 // a stored person-filed acme/widgets task carrying any of them, over REST,
 // POST /mcp and POST /api/mcp's grain_invoke alike, and the task stays
@@ -365,6 +365,7 @@ func TestExternalAgentApprovalIsHeldToTheCredentialsCeiling(t *testing.T) {
 		{"writes", "(writes)", func(task *model.Task) { task.Writes = []model.WriteTarget{{Repo: gadgets}} }},
 		{"reads", "(reads)", func(task *model.Task) { task.Reads = []model.RepoRef{gadgets} }},
 		{"networkAccess", "(networkAccess)", func(task *model.Task) { task.NetworkAccess = model.NetworkOpen }},
+		{"autoApproveProposals", "(autoApproveProposals)", func(task *model.Task) { task.AutoApproveProposals = true }},
 		{"api grant", "(capabilities)", func(task *model.Task) {
 			task.Grants = append(task.Grants, model.Grant{Capability: model.APIRef("tasks:write")})
 		}},
