@@ -340,14 +340,17 @@ func TestProvisionReportsARefusedSelfActAsGrantPlainly(t *testing.T) {
 				t.Fatal("Provision succeeded although IAM refused the grant")
 			}
 			for _, want := range []string{
-				"missing " + tc.permission + " on service account " + testInstanceSA,
-				"iam.serviceAccounts.setIamPolicy on the instance service accounts (gi-*)",
+				"the hub (" + testSelfPrincipal + ") is missing " + tc.permission + " on service account " + testInstanceSA,
+				"grant the hub iam.serviceAccounts.getIamPolicy and iam.serviceAccounts.setIamPolicy on the instance service accounts (gi-*)",
+				"IAM the hub needs",
 				"compute.grant_self_act_as: false",
-				testSelfPrincipal,
 			} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("Provision error = %v\nwant it to contain %q", err, want)
 				}
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "the registry") {
+				t.Fatalf("Provision error still says \"the registry\": %v", err)
 			}
 			if len(*f.sleeps) != 0 {
 				t.Fatalf("a refusal was retried: sleeps %v", *f.sleeps)

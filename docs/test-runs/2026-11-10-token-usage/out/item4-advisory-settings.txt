@@ -1,0 +1,1 @@
+mode: advisory   max_workers: 4   effective worker cap: 4   sustainable: ≈0
