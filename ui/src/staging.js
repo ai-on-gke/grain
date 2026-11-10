@@ -31,7 +31,7 @@ export function stagingSandboxes(list) {
 // reports "restarting" for every wait between runs
 // (orchestrator.PersistentRestarting); one that has already been
 // restarted CRASH_LOOP_RESTARTS times and is waiting again is crash-looping.
-export const CRASH_LOOP_RESTARTS = 3;
+const CRASH_LOOP_RESTARTS = 3;
 
 export function stagingState(sandbox) {
   if (!sandbox || !sandbox.enabled) return "stopped";

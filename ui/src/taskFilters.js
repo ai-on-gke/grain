@@ -472,7 +472,7 @@ export function unknownConditions(filters, attributes) {
 // unknownConditionName is how one of those conditions is named: its
 // attribute, or its attribute and comparison when the comparison is
 // what could not be read.
-export function unknownConditionName({ cond, badOp }) {
+function unknownConditionName({ cond, badOp }) {
   return badOp ? `${cond?.attr}:${cond?.op}` : cond?.attr;
 }
 
@@ -1013,7 +1013,7 @@ export function defaultNarrowing(config) {
 // newest merged first (taskAttributes.js's "merged" attribute). App's
 // listDefault and selectStateFilter ask it; isNarrowed leaves the sort
 // out entirely, so this default never offers Clear on its own.
-export const MERGED_SORT = [{ attr: "merged", dir: "desc" }];
+const MERGED_SORT = [{ attr: "merged", dir: "desc" }];
 export function defaultSortFor(stateFilter) {
   return stateFilter === "merged" ? MERGED_SORT : [];
 }
