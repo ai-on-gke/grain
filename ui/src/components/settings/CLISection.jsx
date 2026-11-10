@@ -18,7 +18,7 @@ import CopyButton from "../CopyButton.jsx";
 
 // SKILL_AGENTS are the agents `grain skill install` writes a SKILL.md
 // for (pkg/cli/skill.go), each by its own flag.
-export const SKILL_AGENTS = [
+const SKILL_AGENTS = [
   { flag: "--jetski", label: "Jetski" },
   { flag: "--claude", label: "Claude Code" },
   { flag: "--codex", label: "Codex" },
@@ -28,7 +28,7 @@ export const SKILL_AGENTS = [
 // contextSlug is the context name `grain login` gives a deployment when
 // --name is left out (pkg/cli/login.go contextSlug): its hostname,
 // lowercased, with every run of other characters made one hyphen.
-export function contextSlug(host) {
+function contextSlug(host) {
   const s = String(host || "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -38,7 +38,7 @@ export function contextSlug(host) {
 
 // cliCommands are the lines Settings -> CLI shows for a deployment at
 // origin: the install line, the login line and one skill line per agent.
-export function cliCommands(origin) {
+function cliCommands(origin) {
   let host = "";
   try {
     host = new URL(origin).hostname;

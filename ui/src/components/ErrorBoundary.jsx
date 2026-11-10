@@ -27,7 +27,7 @@ import {
 // rather than to window.onerror -- so without a line of our own the e2e
 // suite's "the page threw" guard would go quiet on exactly the failures
 // it was written for (grain/task-182).
-export const RENDER_FAILED = "grain: render failed";
+const RENDER_FAILED = "grain: render failed";
 
 // ErrorBoundary keeps one render throw from taking the whole app down
 // with it (grain/task-1435). React unmounts everything above the nearest

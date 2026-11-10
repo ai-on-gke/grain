@@ -35,7 +35,7 @@ import api from "../api.js";
 // the script the server has configured now (the saved configuration, not
 // an unsaved form) in a throwaway grant audited with caller
 // settings-test.
-export const HOST_SCRIPT_TEST_TOOL = "test_script";
+const HOST_SCRIPT_TEST_TOOL = "test_script";
 
 // isHostScriptServer is a server whose attach status advertises the
 // test_script control-plane tool.

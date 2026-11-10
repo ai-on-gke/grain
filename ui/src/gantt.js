@@ -106,7 +106,7 @@ export const DEFAULT_VIEW = { range: "7d", lanes: "none" };
 
 // defaultView hands back a fresh object every time, board.js's
 // defaultColumns' own reason: the caller holds it as state and edits it.
-export function defaultView() {
+function defaultView() {
   return { ...DEFAULT_VIEW };
 }
 

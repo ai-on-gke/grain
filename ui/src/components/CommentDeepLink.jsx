@@ -18,7 +18,7 @@ import { commentIdFromHash } from "../commentLinks.js";
 
 // HIGHLIGHT_MS is how long a linked comment stays marked once it has
 // been scrolled to (.comment-highlight in style.css fades over the same).
-export const HIGHLIGHT_MS = 2500;
+const HIGHLIGHT_MS = 2500;
 
 // How long to keep looking for a comment the detail says exists but the
 // page has not drawn yet: the chat window and the timeline mount after
@@ -38,14 +38,14 @@ function shown(el) {
 // interactive task draws each comment twice: in its chat and in the
 // history folded up beneath it.
 // id is digits only (commentIdFromHash), so it needs no escaping.
-export function findCommentElement(root, id) {
+function findCommentElement(root, id) {
   const all = Array.from(root.querySelectorAll(`[data-comment-id="${id}"]`));
   return all.find(shown) || all[0] || null;
 }
 
 // revealComment opens every closed <details> el is folded inside, so a
 // comment in a collapsed group can be scrolled to.
-export function revealComment(el) {
+function revealComment(el) {
   for (
     let d = el.closest("details:not([open])");
     d;
@@ -59,7 +59,7 @@ export function revealComment(el) {
 // a fresh target, or null. A /tasks/<id> address naming some other task
 // is that task's link, not this one's: following it from here is a
 // navigation to that task, whose own pane looks for the comment.
-export function linkedComment(taskId) {
+function linkedComment(taskId) {
   const id = commentIdFromHash(window.location.hash);
   if (!id) return null;
   const m = /^\/tasks\/([^/]+)/.exec(window.location.pathname);
@@ -81,7 +81,7 @@ export function linkedComment(taskId) {
 // comments), so whether a comment belongs to the task is answered off it
 // rather than off the DOM: a comment far back in a long conversation is
 // in the detail however the page draws it.
-export function useCommentDeepLink(t) {
+function useCommentDeepLink(t) {
   const taskId = useRef(t?.id);
   taskId.current = t?.id;
   // An object rather than the bare id, so the same link followed twice

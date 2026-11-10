@@ -159,7 +159,7 @@ runs() {
 # grain/release-qualification check run, posted by app (grain's own,
 # grain-test, unless it names another).
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
-  tunnel-stress ui-e2e-long installer-variants vulns cmd-grain-stress upgrade-test)
+  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test)
 qualification() {
   local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success check2="" attempts=() a id t jobs runs=() ids
   [ "$app" = grain-test ] || app_id=15368
@@ -1076,7 +1076,7 @@ if [ -n "$api" ]; then
     first=1
     for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
       "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
-      "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
+      "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
       "pkg/cli stress under load" "upgrade from previous versions"; do
       [ $first = 1 ] || printf ','
       first=0
@@ -1141,7 +1141,7 @@ runs "$c2" "$c4"
   first=1
   for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
     "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
-    "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
+    "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
     "pkg/cli stress under load" "upgrade from previous versions"; do
     [ $first = 1 ] || printf ','
     first=0

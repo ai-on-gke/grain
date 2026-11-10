@@ -160,7 +160,7 @@ export const REPORT_SECTIONS = [
   },
 ];
 
-export const REPORT_SECTIONS_BY_ID = Object.fromEntries(
+const REPORT_SECTIONS_BY_ID = Object.fromEntries(
   REPORT_SECTIONS.map((s) => [s.id, s]),
 );
 
