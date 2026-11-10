@@ -157,7 +157,7 @@ func (s *Server) handleListConsoles(w http.ResponseWriter, r *http.Request) {
 		matched := filterList(sessions, func(cs ConsoleSession) bool {
 			return list.matches(cs.TaskID, cs.Title, cs.Repo)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(cs ConsoleSession) string { return cs.TaskID })
 		resp.Sessions = page.Items
 		resp.Total = page.Total
 		resp.Truncated = page.Truncated

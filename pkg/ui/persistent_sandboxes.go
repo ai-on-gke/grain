@@ -89,7 +89,7 @@ func (s *Server) handleListPersistentSandboxes(w http.ResponseWriter, r *http.Re
 	list = filterList(list, func(st model.PersistentSandboxStatus) bool {
 		return page.matches(st.Name, st.Repo, st.State)
 	})
-	writeList(w, list, page)
+	writeListBy(w, list, page, func(st model.PersistentSandboxStatus) string { return st.Name })
 }
 
 // handlePersistentSandboxLogs is GET /api/persistent-sandboxes/{name}/logs:

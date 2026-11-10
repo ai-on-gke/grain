@@ -813,6 +813,29 @@ it. `total` is how many items matched across every page;
 `truncated: true` says this page was cut by the limit, and `nextCursor`
 (absent on the last page) reads on from it.
 
+A list can change between two page reads, and a newest-first one
+changes at its head: a new template, notification or inbox item moves
+every row after it down one. So on the routes whose rows have a key of
+their own -- an id, a name, a path -- `nextCursor` names the row the page
+ended on as well as where the next page starts, and the next page
+starts just after that row wherever it now sits: a row added or removed
+ahead of the cursor between the two reads neither repeats the previous
+page's last row nor skips one. Only when that row itself has gone does
+the page start at the offset instead. Those routes are
+`GET /api/templates`, `GET /api/inbox`, `GET /api/notifications`,
+`GET /api/tasks/{id}/messages`, `GET /api/memory/documents`,
+`GET /api/suites`, `GET /api/suite-runs`, `GET /api/boards`,
+`GET /api/release-notes`, a repository's releases and their candidates,
+`GET /api/ci/faults`, `GET /api/merge-batches`, `GET /api/console`,
+`GET /api/console-sessions`, `GET /api/external-agents/tokens`,
+`GET /api/deployment/secret-audit`, `GET /api/deployment/config-audit`,
+`GET /api/access/history`, `GET /api/persistent-sandboxes`,
+`GET /api/hostds`, `GET /api/gcp-keys`, `GET /api/github-tokens` and
+`GET /api/secrets`. The other routes in the table page by offset alone,
+which is exact for a list that only grows at its tail; `GET /api/tasks`
+and `GET /api/events` page by their own keyset cursors. A cursor handed
+out before cursors carried a key still reads on from its offset.
+
 | Route | Page by default | `q` matches | Other filters |
 |---|---|---|---|
 | `GET /api/deployment/reachable-repos` | 100 | the full name (`owner/name`, or `host/owner/name` on another git host) | `push=true` for only repositories the connection can push to -- those a task can be filed against -- or `push=false` for only those it cannot; `owner=`; `host=` (the deployment's default host, `github.com` unless configured, for the names that spell none). `repos` is the page; `connections` and `errors`, one entry per git connection, are whole (and omitted for repository-limited callers). |
