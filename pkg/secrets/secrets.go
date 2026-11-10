@@ -98,6 +98,47 @@ const (
 	AgentCredentialKey = "value"
 )
 
+// grainHeldSecrets are the store secrets grain keeps its own key material
+// in (design/design/secrets-key-protection.design.md §5, Phase 3): the
+// sandbox-access and package-cache CAs (pkg/daemon/ca_store.go), the
+// release-approval signing key (pkg/releaseapproval/keystore.go), the
+// state and secrets repositories' tokens and the imported relay and
+// registry-registration tokens (pkg/daemon/loose_credentials.go).
+// grainHeldSecretPrefix is the git credentials' prefix
+// (gitproxy.CredentialSecretPrefix). pkg/daemon's tests check these
+// against the constants they are spelled out from.
+var grainHeldSecrets = []string{
+	"sandbox-access-ca",
+	"package-cache-ca",
+	"release-approval-key",
+	"state-repo-token",
+	"secrets-repo-token",
+	"relay",
+	HubRegistrationTokenSecret,
+}
+
+const grainHeldSecretPrefix = "github-credential-"
+
+// GrainHeld reports whether secret -- a secret's name, or a
+// "<secret>/<key>" reference -- is one grain keeps its own credentials or
+// signing material in. Each has its own place to be set (Settings ->
+// GitHub, the State pane, the hub pane) or is minted by grain itself, so
+// an agent's request_secret may not name one: a human pasting what such a
+// request suggests would replace the deployment's CA, signing key or git
+// credential with a value the agent chose.
+func GrainHeld(secret string) bool {
+	secret, _, _ = strings.Cut(secret, "/")
+	if strings.HasPrefix(secret, grainHeldSecretPrefix) {
+		return true
+	}
+	for _, s := range grainHeldSecrets {
+		if secret == s {
+			return true
+		}
+	}
+	return false
+}
+
 // ErrNoSecret is what Resolve reports when the store opened and
 // decrypted perfectly well and simply holds nothing under the name
 // asked for. It is the difference a caller for whom a credential is

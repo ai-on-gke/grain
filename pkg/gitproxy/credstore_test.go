@@ -217,6 +217,27 @@ func TestSetTokenAndRemoveOnAStoreBackedSetLeaveNoPlaintext(t *testing.T) {
 	}
 }
 
+// Rotating a migrated credential from Settings drops its rollback copy:
+// that copy is the superseded value, and nothing should keep it in
+// plaintext once the store holds its replacement.
+func TestRotatingAMigratedCredentialDropsItsPlaintextRollbackCopy(t *testing.T) {
+	dir, store := storeBackedDir(t)
+	writeFile(t, filepath.Join(dir, "bot.token"), "ghp_old\n")
+	set := mustLoad(t, dir)
+	if _, err := set.MigrateFilesToStore(); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.SetToken("bot", "ghp_rotated"); err != nil {
+		t.Fatal(err)
+	}
+	if exists(filepath.Join(dir, "bot.token"+MigratedSuffix)) {
+		t.Error("SetToken left the superseded token's plaintext rollback copy behind")
+	}
+	if v, _ := resolve(t, store, "github-credential-bot/token"); v != "ghp_rotated\n" {
+		t.Errorf("store holds %q for bot, want the rotated token", v)
+	}
+}
+
 func TestRestoreFilesFromStoreRollsBackToFiles(t *testing.T) {
 	dir, store := storeBackedDir(t)
 	writeFile(t, filepath.Join(dir, "bot.token"), "ghp_old\n")

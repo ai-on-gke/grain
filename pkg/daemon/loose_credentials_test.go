@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/releaseapproval"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
@@ -121,5 +122,29 @@ func TestRepoTokensAreKeptInTheStoreAndServedToGitFromThere(t *testing.T) {
 	}
 	if tok, err := RepoToken(dataDir, "", path)(ctx); err != nil || tok != "ghp_state" {
 		t.Fatalf("RepoToken after a rollback = %q, %v", tok, err)
+	}
+}
+
+// TestGrainHeldCoversEverySecretThisMovesIntoTheStore keeps
+// secrets.GrainHeld, which request_secret refuses, in step with the names
+// the credentials moved into the store are kept under.
+func TestGrainHeldCoversEverySecretThisMovesIntoTheStore(t *testing.T) {
+	names := append([]string{
+		gitproxy.CredentialSecretName("bot"),
+		SandboxAccessCASecretName,
+		PackageCacheCASecretName,
+		releaseapproval.KeySecret,
+		secrets.HubRegistrationTokenSecret,
+		"relay",
+	}, repoTokenNames...)
+	for _, name := range names {
+		if !secrets.GrainHeld(name) {
+			t.Errorf("secrets.GrainHeld(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"stripe-api-key", "github-app", "gemini-api-key"} {
+		if secrets.GrainHeld(name) {
+			t.Errorf("secrets.GrainHeld(%q) = true, want false", name)
+		}
 	}
 }

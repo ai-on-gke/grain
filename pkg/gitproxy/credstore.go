@@ -232,8 +232,13 @@ func (c *CredentialSet) writeKind(name, suffix string, data []byte) error {
 		return err
 	}
 	c.creds.invalidate()
-	if err := os.Remove(filepath.Join(c.dir, name+suffix)); err != nil && !os.IsNotExist(err) {
-		return err
+	// The rollback copy goes too: it is the value this write replaces,
+	// and leaving it would keep a superseded credential in plaintext.
+	path := filepath.Join(c.dir, name+suffix)
+	for _, p := range []string{path, path + MigratedSuffix} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
 }
