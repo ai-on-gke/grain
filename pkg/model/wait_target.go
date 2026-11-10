@@ -212,6 +212,9 @@ type WaitTarget struct {
 	// Outcome is one word for how a task ended (WaitOutcome*), or "" for
 	// one that has not.
 	Outcome string `json:"outcome,omitempty"`
+	// RolledOverTo is the successor of a task closed by rolling it over
+	// (WaitOutcomeRolledOver): the task carrying its work on.
+	RolledOverTo string `json:"rolledOverTo,omitempty"`
 	// ClosingNote is the last thing the task's own runs said in its
 	// conversation, bounded to maxClosingNote.
 	ClosingNote string `json:"closingNote,omitempty"`
@@ -234,6 +237,10 @@ const (
 	// MaxConsecutiveFailures attempts in a row failed (StateFailed), and
 	// nothing retries it until a human does.
 	WaitOutcomeFailed = "failed"
+	// WaitOutcomeRolledOver is a durable task closed by rolling it over
+	// to a successor (Store.Rollover). Its RolledOverTo names the
+	// successor, which a wait on it was moved onto.
+	WaitOutcomeRolledOver = RolloverOutcome
 )
 
 // ClosedPullRequestWindow is how long after a task closes grain goes on
@@ -295,6 +302,12 @@ func (s *Store) WaitTargetAt(ctx context.Context, id string, now time.Time) (*Wa
 	}
 	target := &WaitTarget{ID: task.ID, Title: task.Title, State: state, Closed: state == StateClosed}
 	switch {
+	case target.Closed && RolledOverTo(*task) != "":
+		// Its pull request, if it had one, went with the work to the
+		// successor (Store.Rollover), so a merge is the successor's to
+		// report.
+		target.Outcome = RolloverOutcome
+		target.RolledOverTo = RolledOverTo(*task)
 	case target.Closed && obs != nil && obs.PrMergedAt != nil:
 		target.Merged = true
 		target.Outcome = WaitOutcomeMerged
