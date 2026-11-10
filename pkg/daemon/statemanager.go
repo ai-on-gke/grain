@@ -226,6 +226,7 @@ func (m *StateManager) reconcileRepo(ctx context.Context) (staterepo.Settings, b
 	if err := m.repo.ConfigureMirror(ctx, settings.Remote, settings.Branch, RepoToken(m.dataDir, settings.Remote, settings.TokenFile)); err != nil {
 		return settings, false, err
 	}
+	m.repo.SetVerifier(stateRepoVerifier(m.dataDir, settings))
 	m.lastSettings = settings
 	return settings, true, nil
 }
@@ -879,6 +880,7 @@ func (m *StateManager) status(ctx context.Context) ui.StateRepoStatus {
 	mirror := false
 	if state, err := staterepo.LoadSettings(m.dataDir); err == nil {
 		mirror = state.IsMirror()
+		out.Verification = verificationStatus(state, m.repo)
 		if state != m.lastSettings {
 			out.Remote = state.Remote
 			if state.Branch != "" {
@@ -1143,6 +1145,9 @@ func (m *StateManager) SetRemote(ctx context.Context, req ui.StateRepoRemoteRequ
 		}
 		settings.Branch = branch
 	}
+	if err := applyVerification(m.dataDir, &settings, req, !sameRemote(remote, was)); err != nil {
+		return ui.StateRepoStatus{}, err
+	}
 	switch {
 	case req.Token != "":
 		path, err := writeStateRepoToken(m.dataDir, req.Token)
@@ -1160,6 +1165,7 @@ func (m *StateManager) SetRemote(ctx context.Context, req ui.StateRepoRemoteRequ
 		if err := m.repo.ConfigureMirror(ctx, settings.Remote, settings.Branch, RepoToken(m.dataDir, settings.Remote, settings.TokenFile)); err != nil {
 			return ui.StateRepoStatus{}, err
 		}
+		m.repo.SetVerifier(stateRepoVerifier(m.dataDir, settings))
 		m.lastSettings = settings
 		if settings.Remote != "" && m.db != nil {
 			if _, err := staterepo.SyncExternal(ctx, m.repo, m.db, true); err == nil {

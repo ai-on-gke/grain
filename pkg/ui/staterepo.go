@@ -67,6 +67,9 @@ type StateRepoStatus struct {
 	// Head is the commit the working tree is on, empty before the first
 	// commit exists.
 	Head string `json:"head,omitempty"`
+	// Verification is require_verified mode, for an external config
+	// repository (docs/external-config-repo.md); nil in internal mode.
+	Verification *StateRepoVerification `json:"verification,omitempty"`
 	// SchemaVersion is the schema the repository's dump was written by,
 	// and BuildSchemaVersion the one this build knows. They differ only
 	// when something is wrong, which is why both are reported rather than
@@ -272,6 +275,41 @@ type StateRepoRemoteRequest struct {
 	// Token is an optional personal access token for Remote. Empty leaves
 	// the deployment's GitHub credential ladder to answer.
 	Token string
+	// require_verified mode (StateRepoVerification); nil leaves a field
+	// as it is. AllowedSigners is the text of an ssh allowed_signers file.
+	// AcceptCommit is a held commit an operator accepts by name.
+	RequireVerified   *bool
+	RequiredApprovals *int
+	VerifiedMergers   *string
+	AllowedSigners    *string
+	AcceptCommit      string
+}
+
+// StateRepoVerification is require_verified mode for an external config
+// repository: whether it is on, what verifies a commit, and the commit it
+// is holding. Anybody who may push to that repository's branch is
+// otherwise an administrator of this deployment, since grain applies what
+// lands there without anybody's Submit.
+type StateRepoVerification struct {
+	RequireVerified   bool     `json:"requireVerified"`
+	RequiredApprovals int      `json:"requiredApprovals"`
+	VerifiedMergers   []string `json:"verifiedMergers,omitempty"`
+	// AllowedSigners is how many keys the allowed_signers file holds.
+	AllowedSigners int `json:"allowedSigners"`
+	// ForgeReviews is whether grain can read the remote's pull requests
+	// (a github.com repository); without it only signatures and
+	// acceptances verify.
+	ForgeReviews bool                 `json:"forgeReviews"`
+	Held         *StateRepoHeldCommit `json:"held,omitempty"`
+}
+
+// StateRepoHeldCommit is the commit require_verified mode is holding:
+// nothing from it on is applied until it verifies or is accepted.
+type StateRepoHeldCommit struct {
+	SHA     string    `json:"sha"`
+	Subject string    `json:"subject,omitempty"`
+	Reason  string    `json:"reason"`
+	Since   time.Time `json:"since"`
 }
 
 // SecretsRepoRequest is "back this deployment's encrypted secrets file
@@ -726,6 +764,12 @@ type stateRepoRemoteRequest struct {
 	Branch string `json:"branch"`
 	Token  string `json:"token"`
 	None   bool   `json:"none"`
+	// require_verified mode; see StateRepoRemoteRequest.
+	RequireVerified   *bool   `json:"requireVerified"`
+	RequiredApprovals *int    `json:"requiredApprovals"`
+	VerifiedMergers   *string `json:"verifiedMergers"`
+	AllowedSigners    *string `json:"allowedSigners"`
+	AcceptCommit      string  `json:"acceptCommit"`
 }
 
 // handleSetStateRepoRemote names the external Git repository this
@@ -751,9 +795,14 @@ func (s *Server) handleSetStateRepoRemote(w http.ResponseWriter, r *http.Request
 		return
 	}
 	status, err := s.tasks.Config.StateRepo.SetRemote(r.Context(), StateRepoRemoteRequest{
-		Remote: remote,
-		Branch: strings.TrimSpace(req.Branch),
-		Token:  strings.TrimSpace(req.Token),
+		Remote:            remote,
+		Branch:            strings.TrimSpace(req.Branch),
+		Token:             strings.TrimSpace(req.Token),
+		RequireVerified:   req.RequireVerified,
+		RequiredApprovals: req.RequiredApprovals,
+		VerifiedMergers:   req.VerifiedMergers,
+		AllowedSigners:    req.AllowedSigners,
+		AcceptCommit:      req.AcceptCommit,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

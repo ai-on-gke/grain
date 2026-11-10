@@ -124,7 +124,12 @@ would read it. Grain also does not check the applied commit against
 anything -- signed commits, a required review, or a merge grain itself
 made. Filed as a follow-up: document it, and offer a `require_verified`
 mode that applies only commits grain merged or commits whose forge review
-it can verify.
+it can verify. Task 3973 did both: docs/external-config-repo.md ("Who this
+makes an administrator") and the State pane now say it, and
+`require_verified` holds any commit that is not an approved or
+grain-merged pull request's merge, signed by an allowed key, or accepted
+by an unlimited role. It also narrowed `trustboundary.StateScopes` to the
+columns a change alters in `tables/grain_config.json`.
 
 ## 2. Repo-declared grants (.grain/templates, .grain/schedules)
 
