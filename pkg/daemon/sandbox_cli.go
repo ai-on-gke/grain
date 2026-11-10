@@ -342,8 +342,17 @@ type sandboxExternalCI struct{}
 var (
 	_ ci.ExternalRuns        = sandboxExternalCI{}
 	_ ci.ExternalRunsCounter = sandboxExternalCI{}
+	_ ci.ExternalRunsRepos   = sandboxExternalCI{}
 	_ ci.ExternalAttempts    = sandboxExternalCI{}
 )
+
+func (sandboxExternalCI) ServesRepo(ctx context.Context, repo string) bool {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return false
+	}
+	return ci.ExternalCIFor(ctx, client.ExternalCIRuns(), repo)
+}
 
 func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
 	client := liveSandboxCLI.Load()

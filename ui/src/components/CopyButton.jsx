@@ -43,18 +43,30 @@ export default function CopyButton({
     e.stopPropagation();
     if (!text) return;
 
+    // copyFallback copies without the Clipboard API, which a page served
+    // over plain HTTP (not localhost) does not have: execCommand("copy")
+    // fires a copy event, and the text is put on the clipboard through
+    // that event's own clipboardData. It used to select a <textarea>
+    // appended to <body> instead, and inside an open MUI Dialog -- the
+    // task pane every Copy link sits in -- the dialog's focus trap took
+    // focus straight back off it, so nothing was selected, nothing was
+    // copied, and the button still said Copied.
     const copyFallback = () => {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
+      let wrote = false;
+      const onCopy = (ev) => {
+        if (!ev.clipboardData) return;
+        ev.clipboardData.setData("text/plain", text);
+        ev.preventDefault();
+        wrote = true;
+      };
+      document.addEventListener("copy", onCopy, true);
+      let ok = false;
       try {
-        document.execCommand("copy");
+        ok = document.execCommand("copy");
       } finally {
-        document.body.removeChild(textarea);
+        document.removeEventListener("copy", onCopy, true);
       }
+      if (!ok || !wrote) throw new Error("the browser refused to copy");
     };
 
     let copiedOk = false;
