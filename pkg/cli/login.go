@@ -157,7 +157,8 @@ func expiredForContext(err error, name string) error {
 func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel selectedContext, args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	name := fs.String("name", "", "the context's name (default: from the server's host name)")
-	issue := fs.Bool("issue-token", false, "mint a scoped gma_ token for this workstation and keep it")
+	issue := fs.Bool("issue-token", false, "mint a scoped gma_ token for this workstation and keep it "+
+		"(the default when IAP or a credential source signs in a person; --issue-token=false declines)")
 	scopeSet := fs.String("scope-set", defaultLoginScopeSet, "the scope set --issue-token mints")
 	repos := fs.String("repos", "", "comma-separated repositories --issue-token limits the token to")
 	expires := fs.String("expires", "30d", "how long --issue-token's token lasts (30d, 12h, ...)")
@@ -248,6 +249,22 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	who, err := lc.AuthWhoami(ctx)
 	if err != nil {
 		return err
+	}
+	// Signed in as a person IAP or a trusted identity proxy vouched for,
+	// the workstation keeps a personal token of theirs afterwards, so the
+	// CLI needs neither the proxy's sign-in nor the access code day to
+	// day. --issue-token=false signs in through the proxy every time.
+	personal := false
+	viaIdentity := (*auth != "" && !builtinAuth[*auth]) ||
+		(*auth == "" && lc.Token == "" && tokenSource("") == "" && !ui.IsLoopbackURL(server))
+	if viaIdentity && !*tokenStdin && !*refresh && !flagWasSet(fs, "issue-token") &&
+		who.Authenticated && strings.HasPrefix(who.Principal, string(model.PrincipalHuman)+":") {
+		if who.ExternalAgentAPI {
+			*issue, personal = true, true
+		} else {
+			fmt.Fprintf(os.Stderr, "grain login: %s does not accept gma_ tokens (externalAgentApi is off in its Settings), "+
+				"so this context signs in through %s on every call rather than holding a personal token\n", server, loginVia(*auth))
+		}
 	}
 
 	store := newCredentialStore()
@@ -361,7 +378,21 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	// Never echo a password typed into the URL (http://user:pass@host)
 	// back to a terminal or a log, as `grain skill install` never writes it.
 	fmt.Printf("signed in to %s as context %s (%s)\n", skill.ScrubServerURL(server), *name, entry.Auth)
+	if personal {
+		fmt.Printf("holding a personal token for %s (%s, %s); `grain logout` revokes it, "+
+			"and `grain login %s --issue-token=false` signs in through %s each time instead\n",
+			strings.TrimPrefix(who.Principal, string(model.PrincipalHuman)+":"), entry.TokenID, *scopeSet,
+			skill.ScrubServerURL(server), loginVia(*auth))
+	}
 	return nil
+}
+
+// loginVia names what a sign-in with --auth auth went through.
+func loginVia(auth string) string {
+	if auth != "" && !builtinAuth[auth] {
+		return "the " + auth + " credential source"
+	}
+	return "IAP (a Google ID token)"
 }
 
 func cmdLogout(ctx context.Context, base *ui.HTTPClient, out *printer, sel selectedContext, args []string) error {

@@ -1202,6 +1202,7 @@ These sign a workstation in to a deployment as a named context, and say who it i
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
 - `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
 - It refuses `--token-stdin` beside `--refresh` the same way (exit `2`, `token_stdin_refresh`), and `--scope-set`, `--repos` or `--expires` without `--issue-token` (exit `2`, `needs_issue_token`): each would otherwise be ignored. A refused login writes nothing.
+- Signed in as a person through IAP (a Google ID token) or a registered credential source, with none of `--issue-token`, `--token-stdin` or `--refresh` given, `grain login` mints and keeps a personal `--scope-set` token as `--issue-token` would, so the CLI stops needing the proxy's sign-in or the access code day to day. `--issue-token=false` keeps a context that signs in through the proxy every time; a deployment with `externalAgentApi` off gets that context and a note on stderr.
 - `grain logout --local` forgets the credential without revoking its token on the server.
 
 #### `grain context list|use|show|delete`
@@ -1217,7 +1218,7 @@ _No flags._
 |---|---|---|---|---|
 | `-auth` | string |  |  | how to sign in: access-code, or a credential source this build registers |
 | `-expires` | string | `"30d"` |  | how long --issue-token's token lasts (30d, 12h, ...) |
-| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it |
+| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it (the default when IAP or a credential source signs in a person; --issue-token=false declines) |
 | `-name` | string |  |  | the context's name (default: from the server's host name) |
 | `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
 | `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
@@ -1719,7 +1720,7 @@ _No flags._
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
 
-This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md)) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
+This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md); `-host-accounts` and `-api-socket` for the unix socket the host CLI is recorded through by account, `docs/access-code.md`) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
 
 <!-- BEGIN GENERATED FLAGS: grain daemon -->
 | Flag | Type | Default | Env | Description |
