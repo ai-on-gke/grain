@@ -31,9 +31,13 @@ func TestLiteralCredentialsNamesTypedInCredentialsOnly(t *testing.T) {
 			"DB_PASSWORD":  "hunter2",
 			"LOG_LEVEL":    "debug",
 			"UPSTREAM_URL": "https://ghp_abcdefghijklmnopqrstuv@example.com",
+			// A path names where a credential is, not the credential.
+			"GOOGLE_APPLICATION_CREDENTIALS": "/var/secrets/adc.json",
+			// ...unless the path itself carries a credential's shape.
+			"GH_TOKEN_FILE": "/run/ghp_abcdefghijklmnopqrstuv",
 		},
 	}
-	if got, want := stdio.LiteralCredentials(), []string{"args[1]", "env DB_PASSWORD", "env UPSTREAM_URL"}; !slices.Equal(got, want) {
+	if got, want := stdio.LiteralCredentials(), []string{"args[1]", "env DB_PASSWORD", "env GH_TOKEN_FILE", "env UPSTREAM_URL"}; !slices.Equal(got, want) {
 		t.Errorf("stdio LiteralCredentials = %v, want %v", got, want)
 	}
 	http := ServerConfig{

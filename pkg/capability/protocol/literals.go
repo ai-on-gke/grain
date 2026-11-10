@@ -65,6 +65,18 @@ func credentialName(name string) bool {
 	return strings.HasSuffix(n, "_KEY")
 }
 
+// filePath says whether lit is a path to a file rather than a value: a
+// credential's name holding one -- GOOGLE_APPLICATION_CREDENTIALS, as
+// docs/gchat.md has a server entry set it, or a *_TOKEN_FILE -- names
+// where the credential is, not the credential itself. A path that has a
+// credential's shape in it is still caught by that shape.
+func filePath(lit string) bool {
+	if strings.ContainsAny(lit, " \t\r\n") {
+		return false
+	}
+	return strings.HasPrefix(lit, "/") || strings.HasPrefix(lit, "~/") || strings.HasPrefix(lit, "./")
+}
+
 // LiteralCredentials names, sorted, every env var and header of c whose
 // value holds a credential typed in rather than a $secret:<name>
 // reference: one under a credential's name (credentialName) with any
@@ -104,7 +116,7 @@ func (c ServerConfig) literalCredentials() map[string]string {
 		if lit == "" {
 			return
 		}
-		if _, n := (*redact.Redactor)(nil).Line(lit); n > 0 || credentialName(name) {
+		if _, n := (*redact.Redactor)(nil).Line(lit); n > 0 || (credentialName(name) && !filePath(lit)) {
 			out[kind+" "+name] = v
 		}
 	}
