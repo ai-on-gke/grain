@@ -192,6 +192,63 @@ type Definition struct {
 	// Detect returns the signals in f marking a deployment as one of
 	// this track's installs; none means it is not.
 	Detect func(f Facts) []string
+	// SwitchAwayLoses names what a deployment on this track gives up by
+	// running another edition's build -- the capability servers and
+	// other integrations the edition links in, say -- in words the
+	// upgrade pane's "switch edition" confirmation shows the operator.
+	// Empty leaves the pane's generic wording.
+	SwitchAwayLoses []string
+}
+
+// RepositoryTrack reports which track's builds the grain image
+// repository repo carries, and false when this build cannot say (a
+// repository no track names, or a pre-split one no track claims).
+//
+// Open-source repositories are checked first and always belong to
+// TrackOSS: Docker Hub's grainai/grain (however it is spelled), the
+// repository GRAIN_OSS_IMAGE_REPO names, and the legacy GHCR
+// repositories that now carry the core build -- even when a registered
+// track lists one among the repositories its deployments move off
+// (Definition.MovesFrom) or may opt into (Definition.Successors). A
+// registered track then claims its DefaultRepository, the value of its
+// RepositoryEnv, its Successors and its MovesFrom.
+//
+// It is what keeps an upgrade from crossing editions: a deployment on
+// one track pulling another's build would restart as that other edition,
+// without the integrations its own edition links in (grain/task-4153).
+func RepositoryTrack(repo string) (Track, bool) {
+	trimmed := strings.TrimSpace(repo)
+	if trimmed == "" {
+		return "", false
+	}
+	norm := ResolveLegacyRepository(trimmed)
+	if norm == DefaultOSSGrainRepository {
+		return TrackOSS, true
+	}
+	if env := strings.TrimSpace(os.Getenv(OSSImageRepoEnv)); env != "" && (env == trimmed || normalizeOSSRepo(env) == norm) {
+		return TrackOSS, true
+	}
+	for _, d := range registered() {
+		if trimmed == strings.TrimSpace(d.DefaultRepository) ||
+			slices.Contains(d.Successors, trimmed) || slices.Contains(d.MovesFrom, trimmed) {
+			return d.Track, true
+		}
+		if d.RepositoryEnv != "" {
+			if env := strings.TrimSpace(os.Getenv(d.RepositoryEnv)); env != "" && env == trimmed {
+				return d.Track, true
+			}
+		}
+	}
+	return "", false
+}
+
+// SwitchAwayLoses is the registered track's Definition.SwitchAwayLoses,
+// or nil for TrackOSS and any track that names none.
+func SwitchAwayLoses(track Track) []string {
+	if d, ok := lookup(track); ok {
+		return slices.Clone(d.SwitchAwayLoses)
+	}
+	return nil
 }
 
 var (

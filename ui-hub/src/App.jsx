@@ -1575,6 +1575,135 @@ function CreateRegisterView({
   );
 }
 
+// Entry detail polls GET /api/entries/{name} so a lifecycle change shows up
+// without a reload: quickly while the entry is moving between states, slowly
+// once it has settled.
+const DETAIL_POLL_FAST_MS = 4000;
+const DETAIL_POLL_STEADY_MS = 20000;
+const DETAIL_HISTORY_LIMIT = 20;
+const TRANSITIONAL_STATES = new Set([
+  "creating",
+  "replacing",
+  "stopping",
+  "deleting",
+]);
+
+// isTransitionalEntry reports whether e is mid-change: provisioning,
+// replacing, stopping or deleting, upgrading to a target version it is not
+// yet running, or running but unhealthy and so expected to recover or fail.
+function isTransitionalEntry(e) {
+  if (!e) return false;
+  if (TRANSITIONAL_STATES.has(e.state)) return true;
+  if (e.replace_step) return true;
+  if (e.state !== "running") return false;
+  if (
+    e.target_version &&
+    e.grain_version &&
+    e.target_version !== e.grain_version
+  ) {
+    return true;
+  }
+  return (
+    e.health === "unhealthy" ||
+    e.health === "degraded" ||
+    e.status === "degraded"
+  );
+}
+
+// The editable fields of the detail page, as projected from an entry. Each
+// key names one piece of form state; a poll only writes keys the user has not
+// changed since they were last synced from the server.
+const DETAIL_FORM_LABELS = {
+  displayName: "Display name",
+  purpose: "Purpose",
+  hostKind: "Host kind",
+  connectedPrincipal: "Connected principal",
+  ownerGroup: "Co-owning group",
+  tagsText: "Tags",
+  listed: "Listed",
+  declaredRows: "Declared scopes",
+  resizeShape: "Shape",
+  resizeDiskGb: "Boot disk",
+  upgradeVersion: "Target version",
+};
+const CATALOG_FORM_KEYS = [
+  "displayName",
+  "purpose",
+  "hostKind",
+  "connectedPrincipal",
+  "ownerGroup",
+  "tagsText",
+  "listed",
+];
+
+function detailFormFromEntry(data, shapes) {
+  const shape = data.shape || "medium";
+  const shapeDefaultDisk = (shapes || []).find(
+    (s) => s.name === shape,
+  )?.boot_disk_gb;
+  const effectiveDisk = data.boot_disk_gb || shapeDefaultDisk || "";
+  const rawDeclared =
+    data.declared_scopes ||
+    (data.scopes || []).filter((s) => s.source === "declared");
+  return {
+    displayName: data.display_name || "",
+    purpose: data.purpose || "",
+    hostKind: data.host_kind || "workstation",
+    connectedPrincipal: data.connected_principal || "",
+    ownerGroup: data.owner_group || "",
+    tagsText: (data.tags || []).join(", "),
+    listed: Boolean(data.listed),
+    declaredRows: rawDeclared.map((s) => ({
+      repo: s.repo,
+      path_prefix: s.path_prefix || "",
+      role: s.role || "primary",
+    })),
+    resizeShape: shape,
+    resizeDiskGb: effectiveDisk ? String(effectiveDisk) : "",
+    upgradeVersion: data.target_version || "",
+  };
+}
+
+function sameFormValue(a, b) {
+  if (typeof a === "object" || typeof b === "object") {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return a === b;
+}
+
+function formatFormValue(v) {
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (Array.isArray(v)) {
+    return v.length
+      ? v.map((s) => `${s.repo}/${s.path_prefix} (${s.role})`).join(", ")
+      : "none";
+  }
+  return v === "" ? "empty" : `"${v}"`;
+}
+
+function statusSnapshot(e) {
+  return {
+    state: e.state || "",
+    replace_step: e.replace_step || "",
+    status: e.status || "",
+    health: e.health || "",
+    detail: e.status_detail || e.health_detail || "",
+  };
+}
+
+function snapshotKey(s) {
+  return [s.state, s.replace_step, s.status, s.health, s.detail].join("|");
+}
+
+function formatClockTime(d) {
+  if (!d) return "";
+  return d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function EntryDetailView({
   entryName,
   me,
@@ -1619,51 +1748,171 @@ function EntryDetailView({
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [revokeCredTarget, setRevokeCredTarget] = useState(null);
 
-  const syncFromEntry = (data) => {
-    setEntry(data);
-    setDisplayName(data.display_name || "");
-    setPurpose(data.purpose || "");
-    setHostKind(data.host_kind || "workstation");
-    setConnectedPrincipal(data.connected_principal || "");
-    setOwnerGroup(data.owner_group || "");
-    setTagsText((data.tags || []).join(", "));
-    setListed(Boolean(data.listed));
-    const nextShape = data.shape || "medium";
-    setResizeShape(nextShape);
-    const shapeDefaultDisk = (shapes || []).find(
-      (s) => s.name === nextShape,
-    )?.boot_disk_gb;
-    const effectiveDisk = data.boot_disk_gb || shapeDefaultDisk || "";
-    setResizeDiskGb(effectiveDisk ? String(effectiveDisk) : "");
-    setUpgradeVersion(data.target_version || "");
-    const rawDeclared =
-      data.declared_scopes ||
-      (data.scopes || []).filter((s) => s.source === "declared");
-    setDeclaredRows(
-      rawDeclared.map((s) => ({
-        repo: s.repo,
-        path_prefix: s.path_prefix || "",
-        role: s.role || "primary",
-      })),
-    );
-  };
+  // Auto-refresh state
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [refreshError, setRefreshError] = useState("");
+  const [statusHistory, setStatusHistory] = useState([]);
+  // serverChanged maps a dirty form key to the value the server now holds.
+  const [serverChanged, setServerChanged] = useState({});
 
-  const loadEntry = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const formSetters = {
+    displayName: setDisplayName,
+    purpose: setPurpose,
+    hostKind: setHostKind,
+    connectedPrincipal: setConnectedPrincipal,
+    ownerGroup: setOwnerGroup,
+    tagsText: setTagsText,
+    listed: setListed,
+    declaredRows: setDeclaredRows,
+    resizeShape: setResizeShape,
+    resizeDiskGb: setResizeDiskGb,
+    upgradeVersion: setUpgradeVersion,
+  };
+  // formNowRef holds what the form shows now and formBaseRef what it was last
+  // synced to from the server; a key whose two values differ is dirty.
+  const formNowRef = useRef({});
+  formNowRef.current = {
+    displayName,
+    purpose,
+    hostKind,
+    connectedPrincipal,
+    ownerGroup,
+    tagsText,
+    listed,
+    declaredRows,
+    resizeShape,
+    resizeDiskGb,
+    upgradeVersion,
+  };
+  const formBaseRef = useRef(null);
+
+  // syncFromEntry shows data and merges it into the form. Keys in resetKeys
+  // (every key, with "all") take the server's value; any other key the user
+  // has edited keeps their edit, and is flagged when the server's value moved
+  // underneath it.
+  const syncFromEntry = (data, resetKeys = []) => {
+    setEntry(data);
+    const next = detailFormFromEntry(data, shapes);
+    const base = formBaseRef.current;
+    const now = formNowRef.current;
+    const nextBase = {};
+    const changed = {};
+    Object.keys(next).forEach((key) => {
+      const reset = resetKeys === "all" || resetKeys.includes(key) || !base;
+      if (!reset && !sameFormValue(now[key], base[key])) {
+        nextBase[key] = base[key];
+        if (!sameFormValue(next[key], base[key])) changed[key] = next[key];
+        return;
+      }
+      if (!sameFormValue(now[key], next[key])) formSetters[key](next[key]);
+      nextBase[key] = next[key];
+    });
+    formBaseRef.current = nextBase;
+    setServerChanged(changed);
+    setLastUpdated(new Date());
+    setRefreshError("");
+    const snap = statusSnapshot(data);
+    setStatusHistory((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && snapshotKey(last) === snapshotKey(snap)) return prev;
+      return [...prev, { ...snap, at: new Date() }].slice(
+        -DETAIL_HISTORY_LIMIT,
+      );
+    });
+  };
+  const syncRef = useRef(syncFromEntry);
+  syncRef.current = syncFromEntry;
+
+  const loadEntry = useCallback(
+    async (resetKeys = "all") => {
+      setLoading(true);
+      setError("");
+      try {
+        const data = await fetchEntry(entryName);
+        syncRef.current(data, resetKeys);
+      } catch (err) {
+        setError(err.message || `Failed to load ${entryName}`);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [entryName],
+  );
+
+  useEffect(() => {
+    formBaseRef.current = null;
+    setStatusHistory([]);
+    setServerChanged({});
+    loadEntry();
+  }, [loadEntry]);
+
+  // refreshEntry is one background poll: it never shows the loading state or
+  // the error banner, and a failure keeps the last good entry on screen.
+  const refreshInFlight = useRef(false);
+  const refreshEntry = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    const requested = entryName;
     try {
-      const data = await fetchEntry(entryName);
-      syncFromEntry(data);
+      const data = await fetchEntry(requested);
+      if (requested === entryName) syncRef.current(data);
     } catch (err) {
-      setError(err.message || `Failed to load ${entryName}`);
+      setRefreshError(err.message || "refresh failed");
     } finally {
-      setLoading(false);
+      refreshInFlight.current = false;
     }
   }, [entryName]);
 
+  const pollDelay = entry
+    ? isTransitionalEntry(entry)
+      ? DETAIL_POLL_FAST_MS
+      : DETAIL_POLL_STEADY_MS
+    : 0;
+
   useEffect(() => {
-    loadEntry();
-  }, [loadEntry]);
+    if (!pollDelay) return undefined;
+    let timer = null;
+    let cancelled = false;
+    const schedule = () => {
+      clearTimeout(timer);
+      if (cancelled || document.hidden) return;
+      timer = setTimeout(tick, pollDelay);
+    };
+    const tick = async () => {
+      await refreshEntry();
+      schedule();
+    };
+    const onVisibility = () => {
+      clearTimeout(timer);
+      if (!document.hidden) tick();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [pollDelay, refreshEntry]);
+
+  const handleDiscardEdits = () => {
+    Object.entries(serverChanged).forEach(([key, value]) => {
+      formSetters[key](value);
+      formBaseRef.current[key] = value;
+    });
+    setServerChanged({});
+  };
+
+  const serverHint = (key) =>
+    key in serverChanged ? (
+      <div
+        className="reg-hint reg-server-changed"
+        data-testid={`server-changed-${key}`}
+      >
+        Updated on the server to {formatFormValue(serverChanged[key])} while you
+        were editing; saving will overwrite it.
+      </div>
+    ) : null;
 
   const handleSaveCatalog = async (e) => {
     e.preventDefault();
@@ -1687,7 +1936,7 @@ function EntryDetailView({
         payload.connected_principal = connectedPrincipal.trim();
       }
       const updated = await updateEntry(entry.name, payload);
-      syncFromEntry(updated);
+      syncFromEntry(updated, CATALOG_FORM_KEYS);
       setNotice("Saved catalog and visibility settings.");
     } catch (err) {
       if (err.status === 409 && err.conflict) {
@@ -1721,7 +1970,7 @@ function EntryDetailView({
     setNotice("");
     try {
       await setEntryScopes(entry.name, declaredRows);
-      await loadEntry();
+      await loadEntry(["declaredRows"]);
       setNotice("Saved declared scope overrides.");
     } catch (err) {
       if (err.status === 409 && err.conflict) {
@@ -1740,7 +1989,7 @@ function EntryDetailView({
         revoke_previous: revokePrevOnRotate,
       });
       setMintedToken(res.registration_token || "");
-      await loadEntry();
+      await loadEntry([]);
       setNotice("Minted new grc_… registration credential.");
     } catch (err) {
       setError(err.message || "Failed to rotate credential");
@@ -1755,7 +2004,7 @@ function EntryDetailView({
     setNotice("");
     try {
       await revokeCredential(entry.name, credId);
-      await loadEntry();
+      await loadEntry([]);
       setNotice(`Revoked credential ${credId}.`);
     } catch (err) {
       setError(err.message || "Failed to revoke credential");
@@ -1819,7 +2068,7 @@ function EntryDetailView({
         payload.boot_disk_gb = parsedDisk;
       }
       const updated = await replaceEntry(entry.name, payload);
-      syncFromEntry(updated);
+      syncFromEntry(updated, ["resizeShape", "resizeDiskGb", "upgradeVersion"]);
       setNotice(
         `Initiated VM replacement (shape=${updated.shape}${
           updated.boot_disk_gb ? `, disk=${updated.boot_disk_gb} GB` : ""
@@ -1835,7 +2084,7 @@ function EntryDetailView({
     setNotice("");
     try {
       const updated = await upgradeEntry(entry.name, upgradeVersion.trim());
-      syncFromEntry(updated);
+      syncFromEntry(updated, ["upgradeVersion"]);
       setNotice(`Requested upgrade to ${updated.target_version || "latest"}.`);
     } catch (err) {
       setError(err.message || "Failed to upgrade instance");
@@ -1885,7 +2134,7 @@ function EntryDetailView({
     try {
       await deleteEntry(entry.name, deleteConfirmText);
       setDeleteDialogOpen(false);
-      await loadEntry();
+      await loadEntry([]);
       setNotice(`Soft-deleted ${entry.name}.`);
       if (onRefreshMe) onRefreshMe();
     } catch (err) {
@@ -1965,6 +2214,46 @@ function EntryDetailView({
           </>
         }
       />
+
+      <div
+        className={
+          refreshError
+            ? "reg-refresh-bar reg-refresh-failed"
+            : "reg-refresh-bar"
+        }
+        data-testid="entry-refresh-status"
+      >
+        <span
+          className={
+            pollDelay === DETAIL_POLL_FAST_MS
+              ? "reg-refresh-dot reg-refresh-dot-fast"
+              : "reg-refresh-dot"
+          }
+          aria-hidden="true"
+        />
+        <span>
+          Last updated{" "}
+          <time dateTime={lastUpdated ? lastUpdated.toISOString() : undefined}>
+            {formatClockTime(lastUpdated)}
+          </time>
+          {" · "}
+          {pollDelay === DETAIL_POLL_FAST_MS
+            ? `refreshing every ${DETAIL_POLL_FAST_MS / 1000}s while ${entry.state}`
+            : `refreshing every ${DETAIL_POLL_STEADY_MS / 1000}s`}
+        </span>
+        {refreshError ? (
+          <span data-testid="entry-refresh-failed" title={refreshError}>
+            · last refresh failed, showing earlier data
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className="reg-inline-link"
+          onClick={refreshEntry}
+        >
+          Refresh now
+        </button>
+      </div>
 
       {notice ? (
         <div className="reg-banner reg-banner-success" role="status">
@@ -2237,6 +2526,33 @@ function EntryDetailView({
             })}
           </div>
         ) : null}
+
+        {statusHistory.length > 0 ? (
+          <div className="reg-status-timeline">
+            <div className="reg-kv-label">Status changes seen on this page</div>
+            <ol data-testid="entry-status-timeline">
+              {statusHistory
+                .slice()
+                .reverse()
+                .map((h) => (
+                  <li key={`${h.at.getTime()}-${snapshotKey(h)}`}>
+                    <time className="reg-mono" dateTime={h.at.toISOString()}>
+                      {formatClockTime(h.at)}
+                    </time>{" "}
+                    <strong>
+                      {h.state}
+                      {h.replace_step ? ` (${h.replace_step})` : ""}
+                    </strong>
+                    {h.status ? ` · ${h.status}` : ""}
+                    {h.health ? ` · health ${h.health}` : ""}
+                    {h.detail ? (
+                      <span className="reg-hint"> — {h.detail}</span>
+                    ) : null}
+                  </li>
+                ))}
+            </ol>
+          </div>
+        ) : null}
       </section>
 
       {/* Catalog & ownership editor */}
@@ -2254,6 +2570,7 @@ function EntryDetailView({
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
               />
+              {serverHint("displayName")}
             </div>
             <div className="reg-field">
               <label className="reg-label" htmlFor="detail-owner-group">
@@ -2265,6 +2582,7 @@ function EntryDetailView({
                 value={ownerGroup}
                 onChange={(e) => setOwnerGroup(e.target.value)}
               />
+              {serverHint("ownerGroup")}
             </div>
             <div className="reg-field">
               <label className="reg-label" htmlFor="detail-tags">
@@ -2276,6 +2594,7 @@ function EntryDetailView({
                 value={tagsText}
                 onChange={(e) => setTagsText(e.target.value)}
               />
+              {serverHint("tagsText")}
             </div>
             {entry.kind === "connected" ? (
               <>
@@ -2293,6 +2612,7 @@ function EntryDetailView({
                     <option value="kubernetes">kubernetes</option>
                     <option value="other">other</option>
                   </select>
+                  {serverHint("hostKind")}
                 </div>
                 <div className="reg-field">
                   <label
@@ -2307,6 +2627,7 @@ function EntryDetailView({
                     value={connectedPrincipal}
                     onChange={(e) => setConnectedPrincipal(e.target.value)}
                   />
+                  {serverHint("connectedPrincipal")}
                 </div>
               </>
             ) : null}
@@ -2322,6 +2643,7 @@ function EntryDetailView({
               value={purpose}
               onChange={(e) => setPurpose(e.target.value)}
             />
+            {serverHint("purpose")}
           </div>
           <label className="reg-checkbox-row">
             <input
@@ -2331,10 +2653,20 @@ function EntryDetailView({
             />
             <span>Listed in organization Directory</span>
           </label>
+          {serverHint("listed")}
           <div className="reg-actions-row">
             <button type="submit" className="gs-btn gs-btn-primary">
               Save catalog metadata
             </button>
+            {CATALOG_FORM_KEYS.some((key) => key in serverChanged) ? (
+              <button
+                type="button"
+                className="gs-btn"
+                onClick={handleDiscardEdits}
+              >
+                Discard my edits
+              </button>
+            ) : null}
           </div>
         </form>
 
@@ -2542,6 +2874,7 @@ function EntryDetailView({
                 Add scope row
               </button>
             </div>
+            {serverHint("declaredRows")}
             <div className="reg-actions-row">
               <button
                 type="button"
@@ -2693,6 +3026,7 @@ function EntryDetailView({
                     </option>
                   ))}
                 </select>
+                {serverHint("resizeShape")}
               </div>
               <div className="reg-field">
                 <label className="reg-label" htmlFor="detail-resize-disk-gb">
@@ -2708,6 +3042,7 @@ function EntryDetailView({
                   onChange={(e) => setResizeDiskGb(e.target.value)}
                   placeholder="100"
                 />
+                {serverHint("resizeDiskGb")}
               </div>
               <div className="reg-field">
                 <label className="reg-label" htmlFor="detail-upgrade-version">
@@ -2720,6 +3055,7 @@ function EntryDetailView({
                   value={upgradeVersion}
                   onChange={(e) => setUpgradeVersion(e.target.value)}
                 />
+                {serverHint("upgradeVersion")}
               </div>
             </div>
             <div className="reg-actions-row">
