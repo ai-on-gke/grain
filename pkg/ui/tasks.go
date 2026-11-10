@@ -93,6 +93,13 @@ type Task struct {
 	// model.Task.Reads, rendered as owner/name strings the same way Repo
 	// renders its single Target.
 	Reads []string `json:"reads,omitempty"`
+	// ReadCount and ReadsTruncated say how many Reads there were when a
+	// paged GET /api/tasks list row capped them at taskPageRowReads: a
+	// standing session such as the director reads every target
+	// repository, which grows with the deployment. GET /api/tasks/{id}
+	// carries them all.
+	ReadCount      int  `json:"readCount,omitempty"`
+	ReadsTruncated bool `json:"readsTruncated,omitempty"`
 	// Writes is every *other* repo this task's work may land in, with
 	// the base branch for each -- model.Task.Writes. Repo and Base above
 	// are still the one repo and branch this task's own runs push to;
@@ -2456,18 +2463,39 @@ func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	q, narrowed := parseTaskListQuery(r.URL.Query())
+	rawQ := r.URL.Query()
+	if text := strings.TrimSpace(rawQ.Get("limit")); text != "" {
+		if n, err := strconv.Atoi(text); err != nil || n < 0 {
+			writeClientError(w, validationErrorf("%q is not a limit: it is how many items to answer with, a whole number (0 means every item)", rawQ.Get("limit")))
+			return
+		}
+	}
+	if text := strings.TrimSpace(rawQ.Get("cursor")); text != "" {
+		if _, ok := parsePageCursor(text); !ok {
+			writeClientError(w, validationErrorf("%q is not a cursor this route handed out: pass back a previous answer's nextCursor, or leave it out for the first page", rawQ.Get("cursor")))
+			return
+		}
+	}
+	q, narrowed := parseTaskListQuery(rawQ)
 	if q.owner != "" {
 		q.owner = s.tasks.resolveOwnerFilter(r.Context(), q.owner)
 	}
-	if isAgentListCaller(r) && !r.URL.Query().Has("fields") {
+	if isAgentListCaller(r) {
 		q.paged = true
-		if !r.URL.Query().Has("limit") {
-			q.limit = listPageLarge
-		} else if q.limit > listPageMax {
-			q.limit = listPageMax
+		if strings.TrimSpace(rawQ.Get("limit")) == "" {
+			switch {
+			case q.summary:
+				q.limit = listPageMedium
+			case q.full:
+				q.limit = listPageTiny
+			default:
+				q.limit = listPageSmall
+			}
 		}
 		narrowed = true
+	}
+	if q.paged && q.limit > listPageMax {
+		q.limit = listPageMax
 	}
 	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
@@ -2510,14 +2538,32 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	if isAgentListCaller(r) {
 		limit = 250
 	}
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+	if l := strings.TrimSpace(r.URL.Query().Get("limit")); l != "" {
+		parsed, err := strconv.Atoi(l)
+		if err != nil || parsed < 0 {
+			writeClientError(w, validationErrorf("%q is not a limit: it is how many items to answer with, a whole number (0 means at most %d)", r.URL.Query().Get("limit"), listPageMax))
+			return
+		}
+		if parsed == 0 {
+			limit = listPageMax
+		} else {
 			limit = min(parsed, listPageMax)
 		}
 	}
-	cursor := r.URL.Query().Get("cursor")
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
 	if cursor == "" {
-		cursor = r.URL.Query().Get("since")
+		cursor = strings.TrimSpace(r.URL.Query().Get("since"))
+	}
+	if cursor != "" && s.tasks != nil && s.tasks.Store != nil {
+		t, err := s.tasks.Store.GetTask(r.Context(), cursor)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		if t == nil {
+			writeClientError(w, validationErrorf("%q is not a cursor this route handed out: pass back a previous answer's nextCursor, or leave it out for the first page", cursor))
+			return
+		}
 	}
 
 	states, nextCursor, err := s.tasks.StatesPage(r.Context(), limit, cursor)
