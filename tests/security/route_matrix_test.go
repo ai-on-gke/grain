@@ -401,6 +401,8 @@ var matrixNotDecidedByScope = map[string]string{
 	"POST /mcp": "the external-agent endpoint answers only a gma_ bearer token; a person uses POST /api/mcp",
 	"POST /api/tasks/{id}/submit": "submitting turns on auto-merge, which only an unlimited role or the code may do " +
 		"(roleGrantEscalation; agents: agentTaskPatchBodyAllowed)",
+	"POST /api/pull-requests/submit": "submitting a pull request lets it merge unreviewed, which only an unlimited role or the " +
+		"code may do (submitRoutes in pkg/ui/agent_api_gate.go, as for a task's Submit)",
 	"POST /api/tasks/{id}/run-now":                                  "running an unapproved task approves it, which needs tasks:admin (roleApprovalWithin)",
 	"POST /api/notifications/{id}/investigate":                      "files a task whose grants the role must be able to give (filingEscalation)",
 	"POST /api/tasks/{id}/notify":                                   "only the task's own run raises notifications as it",
