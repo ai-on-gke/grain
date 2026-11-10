@@ -325,6 +325,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/host/top":                                                    "deployment:read",
 	"GET /api/upgrade":                                                     "deployment:read",
 	"POST /api/upgrade":                                                    "deployment:upgrade",
+	"DELETE /api/upgrade/current":                                          "deployment:upgrade",
 	"DELETE /api/upgrade/scheduled":                                        "deployment:upgrade",
 	"GET /api/upgrade/targets":                                             "deployment:read",
 	"GET /api/upgrade/release-notes":                                       "deployment:read",

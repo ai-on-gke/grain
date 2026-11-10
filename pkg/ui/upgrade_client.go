@@ -54,12 +54,22 @@ type UpgradeStatus struct {
 	Channel string
 	// Branch, Phase and Detail are the last upgrade *attempt* -- empty
 	// on a deployment that has never upgraded through this pipeline.
-	Branch     string
-	Phase      string
-	Detail     string
-	Unchanged  bool
-	StartedAt  *time.Time
-	FinishedAt *time.Time
+	Branch              string
+	Phase               string
+	Detail              string
+	Unchanged           bool
+	StartedAt           *time.Time
+	FinishedAt          *time.Time
+	GraceUntil          *time.Time
+	GraceWindowSeconds  int
+	Cancellable         bool
+	CancelBlockedReason string
+	CancelledBy         string
+	CancelReason        string
+	PreviousImage       string
+	PreviousImageLabel  string
+	PreviousRelease     string
+	PreviousCommit      string
 	// InFlightRuns is every live run, which is what an immediate upgrade
 	// would discard.
 	InFlightRuns int
@@ -120,9 +130,18 @@ func (c *HTTPClient) UpgradeStatus(ctx context.Context) (UpgradeStatus, error) {
 func (c *HTTPClient) StartUpgrade(
 	ctx context.Context, branch string, afterTasksFinish bool, requestedBy model.Principal,
 ) (UpgradeStatus, error) {
+	return c.StartUpgradeImage(ctx, branch, "", afterTasksFinish, requestedBy)
+}
+
+// StartUpgradeImage posts POST /api/upgrade with an optional explicit image
+// reference (used by image overrides and one-click rollback).
+func (c *HTTPClient) StartUpgradeImage(
+	ctx context.Context, branch, image string, afterTasksFinish bool, requestedBy model.Principal,
+) (UpgradeStatus, error) {
 	var resp upgradeStatusResponse
 	req := startUpgradeRequest{
 		Branch:           branch,
+		Image:            image,
 		AfterTasksFinish: afterTasksFinish,
 		RequestedBy:      requestedBy.ID,
 		RequestedByKind:  string(requestedBy.Kind),
@@ -131,6 +150,22 @@ func (c *HTTPClient) StartUpgrade(
 		return UpgradeStatus{}, err
 	}
 	return upgradeStatusFrom(resp), nil
+}
+
+// CancelCurrentUpgrade stops an in-progress upgrade via DELETE
+// /api/upgrade/current and reports whether one was running and cancelled. Once
+// the upgrade has passed its point of no return, the daemon answers 409
+// Conflict (*ConflictError).
+func (c *HTTPClient) CancelCurrentUpgrade(ctx context.Context, reason string) (status UpgradeStatus, cancelled bool, err error) {
+	var resp cancelScheduledUpgradeResponse
+	var body any
+	if reason != "" {
+		body = CancelUpgradeRequest{Reason: reason}
+	}
+	if err := c.do(ctx, http.MethodDelete, "/api/upgrade/current", body, &resp); err != nil {
+		return UpgradeStatus{}, false, err
+	}
+	return upgradeStatusFrom(resp.upgradeStatusResponse), resp.Cancelled, nil
 }
 
 // CancelScheduledUpgrade deletes the pending schedule -- DELETE
@@ -153,16 +188,26 @@ func (c *HTTPClient) CancelScheduledUpgrade(ctx context.Context) (status Upgrade
 // never has the other.
 func upgradeStatusFrom(resp upgradeStatusResponse) UpgradeStatus {
 	status := UpgradeStatus{
-		Enabled:      resp.Enabled,
-		Mode:         resp.Mode,
-		Channel:      resp.Channel,
-		Branch:       resp.Branch,
-		Phase:        resp.Phase,
-		Detail:       resp.Detail,
-		Unchanged:    resp.Unchanged,
-		StartedAt:    resp.StartedAt,
-		FinishedAt:   resp.FinishedAt,
-		InFlightRuns: resp.InFlightRuns,
+		Enabled:             resp.Enabled,
+		Mode:                resp.Mode,
+		Channel:             resp.Channel,
+		Branch:              resp.Branch,
+		Phase:               resp.Phase,
+		Detail:              resp.Detail,
+		Unchanged:           resp.Unchanged,
+		StartedAt:           resp.StartedAt,
+		FinishedAt:          resp.FinishedAt,
+		GraceUntil:          resp.GraceUntil,
+		GraceWindowSeconds:  resp.GraceWindowSeconds,
+		Cancellable:         resp.Cancellable,
+		CancelBlockedReason: resp.CancelBlockedReason,
+		CancelledBy:         resp.CancelledBy,
+		CancelReason:        resp.CancelReason,
+		PreviousImage:       resp.PreviousImage,
+		PreviousImageLabel:  resp.PreviousImageLabel,
+		PreviousRelease:     resp.PreviousRelease,
+		PreviousCommit:      resp.PreviousCommit,
+		InFlightRuns:        resp.InFlightRuns,
 	}
 	if resp.Running != nil {
 		status.RunningImage = resp.Running.Image

@@ -129,11 +129,32 @@ func (u *Upgrader) ImageTarget() (ImageTarget, bool) {
 
 // validateRepository is whether this deployment may pull from repo.
 func (u *Upgrader) validateRepository(repo string) error {
+	if u.Mode() == ModeKube {
+		base := strings.TrimSpace(u.cfg.Kube.Repository)
+		if base == "" && u.cfg.Kube.Track != "" {
+			base = installtrack.DefaultRepository(u.cfg.Kube.Track)
+		}
+		return installtrack.ValidateTargetRepository(base, repo)
+	}
 	base := strings.TrimSpace(u.cfg.Image.Repository)
 	if base == "" && u.cfg.Image.Track != "" {
 		base = installtrack.DefaultRepository(u.cfg.Image.Track)
 	}
 	return installtrack.ValidateTargetRepository(base, repo, u.cfg.Image.AllowedRepositories...)
+}
+
+// isRecordedRollbackImage reports whether image is the exact PreviousImage a
+// completed upgrade recorded in StatusFile, so "Roll back to <previous>" works
+// even when the previous build was pinned to a sha-... tag or digest alone.
+func (u *Upgrader) isRecordedRollbackImage(image string) bool {
+	if u.cfg.StatusFile == "" {
+		return false
+	}
+	prev, err := readStatus(u.cfg.StatusFile)
+	if err != nil || prev.PreviousImage == "" {
+		return false
+	}
+	return strings.TrimSpace(image) == strings.TrimSpace(prev.PreviousImage)
 }
 
 // ValidateImage is the check StartImage makes of an image: it returns the
@@ -143,20 +164,35 @@ func (u *Upgrader) validateRepository(repo string) error {
 // came from -- is then only the label.
 func (u *Upgrader) ValidateImage(branch, image string) (string, string, error) {
 	branch = strings.TrimSpace(branch)
-	if u.Mode() != ModeImage {
+	if u.Mode() != ModeImage && u.Mode() != ModeKube {
 		return "", "", errors.New("an explicit image only applies to a deployment that upgrades by pulling an image (-upgrade-image)")
 	}
 	o, err := ParseImageOverride(image)
 	if err != nil {
 		return "", "", err
 	}
-	if err := u.validateRepository(o.Repository); err != nil {
-		return "", "", err
+	isRollback := u.isRecordedRollbackImage(image)
+	if !isRollback {
+		if err := u.validateRepository(o.Repository); err != nil {
+			return "", "", err
+		}
+	} else if u.cfg.Refusal != "" {
+		return "", "", errors.New(u.cfg.Refusal)
 	}
 	if o.Tag != "" {
 		branch = branchForTag(o.Tag)
+	} else if isRollback && branch == "" {
+		if o.Digest != "" && len(o.Digest) >= len("sha256:")+12 {
+			branch = "sha256-" + o.Digest[len("sha256:"):len("sha256:")+12]
+		} else {
+			branch = "rollback"
+		}
 	}
-	if err := u.checkBranch(branch); err != nil {
+	if !isRollback {
+		if err := u.checkBranch(branch); err != nil {
+			return "", "", err
+		}
+	} else if err := validateBranch(branch); err != nil {
 		return "", "", err
 	}
 	ref, err := u.imageRefIn(o.Repository, branch)
@@ -184,7 +220,7 @@ func (u *Upgrader) StartImage(branch, image string) error {
 		log.Printf("upgrade: refusing an upgrade to image %q: %v", image, err)
 		return err
 	}
-	return u.start(branch, ref)
+	return u.startWithOptions(branch, ref, true)
 }
 
 // overrideRef is the reference StartImage asked the running upgrade to
@@ -198,6 +234,12 @@ func (u *Upgrader) overrideRef() string {
 // start is Start after its branch has been checked, with ref the image
 // to pull instead of the branch's tag ("" for none).
 func (u *Upgrader) start(branch, ref string) error {
+	return u.startWithOptions(branch, ref, true)
+}
+
+func (u *Upgrader) startWithOptions(branch, ref string, manual bool) error {
+	prevImg, prevRel, prevCommit := u.snapshotPrevious()
+
 	u.mu.Lock()
 	if u.done != nil {
 		u.mu.Unlock()
@@ -206,10 +248,38 @@ func (u *Upgrader) start(branch, ref string) error {
 	}
 	u.done = make(chan struct{})
 	u.override = ref
+	u.cancelled = false
+	u.cancelledBy = ""
+	u.cancelReason = ""
+	u.irreversible = false
+	u.cancelFn = nil
+	u.targetLabel = branch
+	u.previousLabel = previousDisplayFromStatus(Status{
+		Branch:          branch,
+		PreviousImage:   prevImg,
+		PreviousRelease: prevRel,
+		PreviousCommit:  prevCommit,
+	})
 	u.mu.Unlock()
 
 	now := time.Now().UTC()
-	status := Status{Branch: branch, Phase: PhaseRunning, StartedAt: &now, Process: processID}
+	var graceUntil *time.Time
+	graceWindow := time.Duration(0)
+	if manual && u.GraceWindow() > 0 {
+		graceWindow = u.GraceWindow()
+		until := now.Add(graceWindow)
+		graceUntil = &until
+	}
+	status := Status{
+		Branch:          branch,
+		Phase:           PhaseRunning,
+		StartedAt:       &now,
+		GraceUntil:      graceUntil,
+		PreviousImage:   prevImg,
+		PreviousRelease: prevRel,
+		PreviousCommit:  prevCommit,
+		Process:         processID,
+	}
 	if err := writeStatus(u.cfg.StatusFile, status); err != nil {
 		u.release()
 		log.Printf("upgrade: %s: not started: recording upgrade status in %s: %v", branch, u.cfg.StatusFile, err)
@@ -224,7 +294,7 @@ func (u *Upgrader) start(branch, ref string) error {
 		log.Printf("upgrade: %s: requested", branch)
 	}
 
-	go u.run(branch, status)
+	go u.run(branch, status, graceWindow)
 	return nil
 }
 

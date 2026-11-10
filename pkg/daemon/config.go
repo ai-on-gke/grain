@@ -457,6 +457,9 @@ type Config struct {
 	// UpgradeDrainWindow bounds how long a scheduled upgrade waits for active
 	// runs to finish before proceeding with the upgrade anyway.
 	UpgradeDrainWindow time.Duration
+	// UpgradeGraceWindow adds a countdown between confirming a manual upgrade
+	// and starting its work (0 disables the countdown).
+	UpgradeGraceWindow time.Duration
 	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
 	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
 	// and hides in-VM upgrade controls in the UI in favour of an optional

@@ -111,6 +111,8 @@ const (
 	// AutoUpgradeFailed is an upgrade that failed; a notification
 	// (FamilyUpgradeFailed) says where.
 	AutoUpgradeFailed = "failed"
+	// AutoUpgradeCancelled is an upgrade cancelled by an operator.
+	AutoUpgradeCancelled = "cancelled"
 )
 
 // GetAutoUpgradeRelease reads the record, or nil (with no error) for a

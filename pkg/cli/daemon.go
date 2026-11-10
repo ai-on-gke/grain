@@ -492,6 +492,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	upgradeDrainWindow := fs.Duration("upgrade-drain-window", 0,
 		"maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade "+
 			"(0 waits indefinitely for runs to complete normally)")
+	upgradeGraceWindow := fs.Duration("upgrade-grace-window", upgrade.DefaultGraceWindow,
+		"grace window between confirming a manual upgrade and starting its work, during which the Upgrade pane "+
+			"shows a countdown with Cancel (0 disables the countdown; $GRAIN_UPGRADE_GRACE_WINDOW when unset)")
 	upgradeImageRefFile := fs.String("upgrade-image-ref-file", "",
 		"file a successful -upgrade-image upgrade rewrites with the image the service should run, as one "+
 			"GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile "+
@@ -1142,6 +1145,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*disableSelfUpgrade = v
 		}
 	}
+	if !passed["upgrade-grace-window"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_UPGRADE_GRACE_WINDOW")); env != "" {
+			d, err := time.ParseDuration(env)
+			if err != nil || d < 0 {
+				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_UPGRADE_GRACE_WINDOW=%q must be a non-negative duration (e.g. 10s or 0)", env)
+			}
+			*upgradeGraceWindow = d
+		}
+	}
 	if !passed["management-url"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_MANAGEMENT_URL")); env != "" {
 			*managementURL = env
@@ -1305,6 +1317,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
+		UpgradeGraceWindow:     *upgradeGraceWindow,
 		DisableSelfUpgrade:     *disableSelfUpgrade,
 		ManagementURL:          strings.TrimSpace(*managementURL),
 		RebootCmd:              rebootCmd,
