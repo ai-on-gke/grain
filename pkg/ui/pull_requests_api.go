@@ -198,13 +198,11 @@ func (c *Client) checkAdoptedShepherdApproval(ctx context.Context, repo model.Re
 		if call, ok := agentCallFromContext(ctx); ok {
 			set, reason, hasGrants = call.grants, strings.TrimSpace(call.reason), true
 		} else if tok := externalTokenFromContext(ctx); tok != nil {
-			_, resolved, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+			held, resolved, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 			if err != nil {
 				return forbiddenErrorf("external agent %q has invalid grants: %v", tok.Name, err)
 			}
-			if role := accessRoleFromContext(ctx); role != nil && !role.Full {
-				resolved = resolved.Intersect(role.set).Without(role.deny)
-			}
+			_, resolved = narrowExternalGrants(held, resolved, accessRoleFromContext(ctx))
 			set, hasGrants = resolved, true
 		}
 		if hasGrants {
