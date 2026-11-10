@@ -85,6 +85,26 @@ func TestChildRedactorFallsBackWithoutADaemon(t *testing.T) {
 	}
 }
 
+// No -grain-secrets-dir still means no redactor, even with a daemon that
+// serves redaction: the git proxy's GitHub tokens are read from that
+// directory, and the daemon's store does not hold them.
+func TestChildRedactorRefusesWithoutASecretsDirEvenWithADaemon(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(ui.SecretsRedactResponse{Lines: []string{}})
+	}))
+	defer srv.Close()
+	client := ui.NewHTTPClient(srv.URL)
+	client.RetryPolicy = &ui.RetryPolicy{}
+	if r := childRedactor(client, ""); r != nil {
+		t.Fatal("childRedactor with no secrets dir = non-nil; read_grain_log would serve lines with the GitHub tokens uncut")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("daemon calls = %d, want 0", calls.Load())
+	}
+}
+
 // A daemon too old to serve redaction (404) is answered from the store
 // on disk; with no key there either, lines are withheld, never served.
 func TestChildRedactorFallsBackWhenTheDaemonDoesNotServeIt(t *testing.T) {

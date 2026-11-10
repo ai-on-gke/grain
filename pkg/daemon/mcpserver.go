@@ -1603,8 +1603,9 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 // key already loaded, so this process never opens secrets.key, nor sees
 // a single stored value -- only its own lines back, redacted. The GitHub
 // tokens of the git proxy's ladder, which are not in that store, are
-// still cut here. Nothing is asked until a tool is called, so listing
-// tools never reaches the daemon.
+// still cut here, which is why a run with no -grain-secrets-dir still
+// gets nil (the tools refuse) even with a daemon to ask. Nothing is asked
+// until a tool is called, so listing tools never reaches the daemon.
 //
 // A daemon too old to serve the route (404) is answered by reading the
 // store directly (grainLogRedactor), as this process always did, from
@@ -1619,6 +1620,18 @@ func childRedactor(client *ui.HTTPClient, secretsDir string) func([]string) ([]s
 			return nil
 		}
 		return redactor.Redact
+	}
+	if secretsDir == "" {
+		// The daemon's store is only half of what has to be cut: the git
+		// proxy ladder's GitHub tokens are read from secretsDir here, and
+		// a classic 40-hex PAT has no shape to fall back on. No
+		// -grain-secrets-dir has always meant these tools refuse
+		// (orchestrator.Config.GrainSecretsDir: "a journal nobody could
+		// redact is one nobody should be reading"), and asking the daemon
+		// does not change that.
+		fmt.Fprintln(os.Stderr, "grain mcpserver: read_grain_log is unavailable this run: "+
+			"no -grain-secrets-dir, so this process cannot tell which GitHub tokens to redact")
+		return nil
 	}
 	var (
 		mu       sync.Mutex
@@ -1660,11 +1673,7 @@ func childRedactor(client *ui.HTTPClient, secretsDir string) func([]string) ([]s
 			return withhold(lines)
 		}
 		if local == nil {
-			var known []grainlog.KnownValue
-			if secretsDir != "" {
-				known = knownGitHubTokens(secretsDir)
-			}
-			local = grainlog.NewRedactor(known)
+			local = grainlog.NewRedactor(knownGitHubTokens(secretsDir))
 		}
 		out, n := local.Redact(resp.Lines)
 		return out, resp.Redacted + n
