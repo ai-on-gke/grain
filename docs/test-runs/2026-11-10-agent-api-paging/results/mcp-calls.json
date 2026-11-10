@@ -1,0 +1,908 @@
+{
+  "rows": [
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_deployment_reachable_repos",
+      "args": {},
+      "bytes": 5212,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 305,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 100
+    },
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_deployment_reachable_repos",
+      "args": {
+        "query": {
+          "push": "true",
+          "owner": "acme",
+          "limit": "5"
+        }
+      },
+      "bytes": 438,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 81,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_deployment_reachable_repos",
+      "args": {
+        "query": {
+          "q": "SERVICE-01"
+        }
+      },
+      "bytes": 708,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 10,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 10
+    },
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_list_tasks",
+      "args": {},
+      "bytes": 7257,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 551,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 10
+    },
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_list_tasks",
+      "args": {
+        "query": {
+          "fields": "summary"
+        }
+      },
+      "bytes": 6128,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 551,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 50
+    },
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_list_tasks",
+      "args": {
+        "query": {
+          "limit": "3",
+          "q": "triage"
+        }
+      },
+      "bytes": 2266,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 287,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 3
+    },
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_events",
+      "args": {},
+      "bytes": 5209,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 20
+    },
+    {
+      "surface": "POST /mcp as gma_ full reader",
+      "tool": "api_events",
+      "args": {
+        "query": {
+          "since": "0",
+          "limit": "5"
+        }
+      },
+      "bytes": 1233,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_deployment_reachable_repos",
+      "args": {},
+      "bytes": 134,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 1,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 1
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_deployment_reachable_repos",
+      "args": {
+        "query": {
+          "push": "true",
+          "owner": "acme",
+          "limit": "5"
+        }
+      },
+      "bytes": 134,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 1,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 1
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_deployment_reachable_repos",
+      "args": {
+        "query": {
+          "q": "SERVICE-01"
+        }
+      },
+      "bytes": 99,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 0,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 0
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_list_tasks",
+      "args": {},
+      "bytes": 7057,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 263,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 10
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_list_tasks",
+      "args": {
+        "query": {
+          "fields": "summary"
+        }
+      },
+      "bytes": 5925,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 263,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 50
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_list_tasks",
+      "args": {
+        "query": {
+          "limit": "3",
+          "q": "triage"
+        }
+      },
+      "bytes": 65,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 0,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 0
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_events",
+      "args": {},
+      "bytes": 5209,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 20
+    },
+    {
+      "surface": "POST /mcp as gma_ acme/widgets",
+      "tool": "api_events",
+      "args": {
+        "query": {
+          "since": "0",
+          "limit": "5"
+        }
+      },
+      "bytes": 1233,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 5212,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 305,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 100
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {
+          "query": {
+            "push": "true",
+            "owner": "acme",
+            "limit": "5"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 438,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 81,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {
+          "query": {
+            "q": "SERVICE-01"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 708,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 10,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 10
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 7257,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 551,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 10
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {
+          "query": {
+            "fields": "summary"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 6128,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 551,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 50
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {
+          "query": {
+            "limit": "3",
+            "q": "triage"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 2266,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 287,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 3
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_events",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 5209,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 20
+    },
+    {
+      "surface": "POST /api/mcp as task 9000 grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_events",
+        "arguments": {
+          "query": {
+            "since": "0",
+            "limit": "5"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 1233,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 134,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 1,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 1
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {
+          "query": {
+            "push": "true",
+            "owner": "acme",
+            "limit": "5"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 134,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 1,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 1
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {
+          "query": {
+            "q": "SERVICE-01"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 99,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 0,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 0
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 7057,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 263,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 10
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {
+          "query": {
+            "fields": "summary"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 5925,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 263,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 50
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {
+          "query": {
+            "limit": "3",
+            "q": "triage"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 65,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 0,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 0
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_events",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 5209,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 20
+    },
+    {
+      "surface": "POST /api/mcp as task 9001 (acme/widgets only) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_events",
+        "arguments": {
+          "query": {
+            "since": "0",
+            "limit": "5"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 1233,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 5212,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 305,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 100
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {
+          "query": {
+            "push": "true",
+            "owner": "acme",
+            "limit": "5"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 438,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 81,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_deployment_reachable_repos",
+        "arguments": {
+          "query": {
+            "q": "SERVICE-01"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 708,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 10,
+      "truncated": false,
+      "hasNextCursor": false,
+      "items": 10
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 7257,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 551,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 10
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {
+          "query": {
+            "fields": "summary"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 6128,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 551,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 50
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_list_tasks",
+        "arguments": {
+          "query": {
+            "limit": "3",
+            "q": "triage"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 2266,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "total": 287,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 3
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_events",
+        "arguments": {},
+        "reason": "paging walkthrough"
+      },
+      "bytes": 5209,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 20
+    },
+    {
+      "surface": "POST /api/mcp as operator (access code) grain_invoke",
+      "tool": "grain_invoke",
+      "args": {
+        "tool": "api_events",
+        "arguments": {
+          "query": {
+            "since": "0",
+            "limit": "5"
+          }
+        },
+        "reason": "paging walkthrough"
+      },
+      "bytes": 1233,
+      "underCap": true,
+      "isError": false,
+      "error": null,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 5
+    },
+    {
+      "surface": "stdio grain mcp",
+      "tool": "list_grain_tasks",
+      "args": {},
+      "bytes": 20855,
+      "underCap": false,
+      "isError": false,
+      "error": null
+    },
+    {
+      "surface": "stdio grain mcp",
+      "tool": "list_grain_tasks",
+      "args": {
+        "repo": "acme/widgets"
+      },
+      "bytes": 20884,
+      "underCap": false,
+      "isError": false,
+      "error": null
+    },
+    {
+      "surface": "stdio grain mcp",
+      "tool": "grain_inbox",
+      "args": {},
+      "bytes": 20846,
+      "underCap": false,
+      "isError": false,
+      "error": null
+    },
+    {
+      "surface": "stdio grain mcp",
+      "tool": "ci_runs",
+      "args": {
+        "repo": "acme/widgets"
+      },
+      "bytes": 20326,
+      "underCap": false,
+      "isError": false,
+      "error": null,
+      "matched": 260,
+      "truncated": true,
+      "hasNextCursor": true,
+      "items": 20
+    }
+  ],
+  "explore": {
+    "POST /api/mcp as task 9000: repos/reachable": {
+      "bytes": 1838,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": true,
+        "q": true,
+        "since": false,
+        "push": true,
+        "owner": true,
+        "host": true
+      }
+    },
+    "POST /api/mcp as task 9000: tasks/list": {
+      "bytes": 9277,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": true,
+        "q": true,
+        "since": true,
+        "push": false,
+        "owner": true,
+        "host": false
+      }
+    },
+    "POST /api/mcp as task 9000: tasks/events": {
+      "bytes": 1667,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": false,
+        "q": false,
+        "since": true,
+        "push": false,
+        "owner": false,
+        "host": false
+      }
+    },
+    "POST /api/mcp as task 9001 (acme/widgets only): repos/reachable": {
+      "bytes": 1838,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": true,
+        "q": true,
+        "since": false,
+        "push": true,
+        "owner": true,
+        "host": true
+      }
+    },
+    "POST /api/mcp as task 9001 (acme/widgets only): tasks/list": {
+      "bytes": 7513,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": true,
+        "q": true,
+        "since": true,
+        "push": false,
+        "owner": true,
+        "host": false
+      }
+    },
+    "POST /api/mcp as task 9001 (acme/widgets only): tasks/events": {
+      "bytes": 1667,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": false,
+        "q": false,
+        "since": true,
+        "push": false,
+        "owner": false,
+        "host": false
+      }
+    },
+    "POST /api/mcp as operator (access code): repos/reachable": {
+      "bytes": 1838,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": true,
+        "q": true,
+        "since": false,
+        "push": true,
+        "owner": true,
+        "host": true
+      }
+    },
+    "POST /api/mcp as operator (access code): tasks/list": {
+      "bytes": 9277,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": true,
+        "q": true,
+        "since": true,
+        "push": false,
+        "owner": true,
+        "host": false
+      }
+    },
+    "POST /api/mcp as operator (access code): tasks/events": {
+      "bytes": 1667,
+      "isError": false,
+      "mentions": {
+        "limit": true,
+        "cursor": false,
+        "q": false,
+        "since": true,
+        "push": false,
+        "owner": false,
+        "host": false
+      }
+    }
+  },
+  "stdio_tools": [
+    "propose_task",
+    "read_grain_task",
+    "list_grain_tasks",
+    "wait_for_task",
+    "reply_to_task",
+    "comment_on_task",
+    "grain_inbox",
+    "ci_runs",
+    "ci_log",
+    "merge_queue",
+    "fs_read",
+    "fs_grep",
+    "adopt_pull_request"
+  ]
+}

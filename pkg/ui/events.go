@@ -333,10 +333,17 @@ func readAuthorizedEvents(
 	nextCursor = prevCursor
 	nextScanAfter = scanAfter
 	batchSize := max(limit+1, 100)
+	// queryAfter is where the next batch is read from. It always moves
+	// past every row read, readable or not: nextScanAfter stops moving once
+	// the page is full (so the next page starts right after its last
+	// event), and reading the next batch from there re-read the same
+	// unreadable rows forever when a full batch of them followed a full
+	// page -- a repo-limited caller's request never returned.
+	queryAfter := scanAfter
 
 	for {
 		rows, err := store.ListIntegrationEvents(ctx, model.IntegrationEventFilter{
-			AfterID: nextScanAfter,
+			AfterID: queryAfter,
 			Repo:    repo,
 			Types:   types,
 			Limit:   batchSize,
@@ -345,6 +352,7 @@ func readAuthorizedEvents(
 			return nil, prevCursor, scanAfter, false, err
 		}
 		for _, row := range rows {
+			queryAfter = row.ID
 			if !readable(row.Repo) {
 				if len(events) < limit {
 					nextScanAfter = row.ID

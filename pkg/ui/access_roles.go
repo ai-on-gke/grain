@@ -771,10 +771,10 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 		}
 	}
 	if !a.allows(scope, "") {
-		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
-			// A namespace read or event stream naming no repository is narrowed
-			// to the ones the role reaches by fsScope / eventsReadable, as an
-			// agent's is.
+		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && repo == "" {
+			// A namespace read, event stream or reachable-repos listing naming no
+			// repository is narrowed to the ones the role reaches by fsScope /
+			// eventsReadable / reposReadable, as an agent's is.
 			return nil
 		}
 		if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {

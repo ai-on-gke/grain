@@ -84,8 +84,10 @@ type DeleteAPIScopeSetRequest struct {
 // so Settings can say what removing it takes away before it does. A set
 // nothing grants is listed with no holders.
 type APIScopeSetUsage struct {
-	Name    string                  `json:"name"`
-	Holders []CapabilityGrantHolder `json:"holders"`
+	Name             string                  `json:"name"`
+	Holders          []CapabilityGrantHolder `json:"holders"`
+	HolderCount      int                     `json:"holderCount,omitempty"`
+	HoldersTruncated bool                    `json:"holdersTruncated,omitempty"`
 }
 
 // apiGrantSetName is the scope set or preset an api grant names, without
@@ -224,6 +226,15 @@ func (s *Server) handleAPIScopeSetUsage(w http.ResponseWriter, r *http.Request) 
 	out = filterList(out, func(u APIScopeSetUsage) bool {
 		return list.matches(u.Name)
 	})
+	if list.Paged {
+		for i := range out {
+			out[i].HolderCount = len(out[i].Holders)
+			if len(out[i].Holders) > maxPagedUsageHolders {
+				out[i].Holders = out[i].Holders[:maxPagedUsageHolders]
+				out[i].HoldersTruncated = true
+			}
+		}
+	}
 	writeList(w, out, list)
 }
 
