@@ -168,8 +168,21 @@ type upgradeStatusResponse struct {
 	// ImageRepoWarning is upgrade.Upgrader.RepositoryWarning: ImageRepo
 	// names no registry host, so the Upgrade button would be refused,
 	// and what to set instead. Shown before anybody presses it.
-	ImageRepoWarning string               `json:"imageRepoWarning,omitempty"`
-	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc,omitempty"`
+	ImageRepoWarning string `json:"imageRepoWarning,omitempty"`
+	// Edition is this deployment's edition as the pane names it ("oss",
+	// or its install track's name). OtherEditionImageRepos are the
+	// repositories it could pull from that carry another edition's
+	// builds -- never in ImageRepos, and offered only behind the pane's
+	// explicit "switch edition" override -- and EditionSwitchLosses is
+	// what that override's confirmation says switching gives up
+	// (pkg/upgrade/edition.go, grain/task-4153).
+	Edition                string                      `json:"edition,omitempty"`
+	OtherEditionImageRepos []upgrade.EditionRepository `json:"otherEditionImageRepos,omitempty"`
+	EditionSwitchLosses    []string                    `json:"editionSwitchLosses,omitempty"`
+	// EditionSwitch is the last upgrade's record of an explicit edition
+	// switch (upgrade.Status.EditionSwitch), nil for an ordinary one.
+	EditionSwitch *upgrade.EditionSwitch `json:"editionSwitch,omitempty"`
+	DiscardedRC   *upgrade.DiscardedRC   `json:"discardedRc,omitempty"`
 	// RetractedRelease is set when the release this deployment runs has
 	// been retracted since it upgraded onto it: the pane tells the
 	// operator to move.
@@ -306,6 +319,8 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 		FinishedAt:   status.FinishedAt,
 		InFlightRuns: inFlightRuns,
 		Scheduled:    scheduled,
+		// The record that this upgrade crossed editions on purpose.
+		EditionSwitch: status.EditionSwitch,
 	}
 	if iu, ok := up.(imageUpgrader); ok {
 		if target, ok := iu.ImageTarget(); ok {
@@ -313,6 +328,9 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 			resp.DefaultImageRepo = target.DefaultRepository
 			resp.ImageRepos = target.Repositories
 			resp.ImageRepoWarning = target.RepositoryWarning
+			resp.Edition = target.Edition
+			resp.OtherEditionImageRepos = target.OtherEditionRepositories
+			resp.EditionSwitchLosses = target.EditionSwitchLosses
 			if channel != "" && target.Repository != "" {
 				resp.DefaultImageRef = target.Repository + ":" + upgrade.TagForBranch(channel)
 			}
@@ -340,7 +358,7 @@ type retractedReleaseReporter interface {
 // see where it would pull from before choosing. Optional for the same
 // reason upgradeTargeter is: only the real upgrader has an answer.
 type imageUpgrader interface {
-	StartImage(branch, image string) error
+	StartImageWith(branch, image string, opts upgrade.ImageOptions) error
 	ImageTarget() (upgrade.ImageTarget, bool)
 }
 
@@ -698,6 +716,13 @@ type startUpgradeRequest struct {
 	// branch. Image deployments only, and only for an upgrade started
 	// now -- a schedule records a branch and nothing else.
 	Image string `json:"image,omitempty"`
+	// SwitchEdition is the explicit "switch edition" override: it lets
+	// Image be another edition's build (a Google-track deployment pulling
+	// the open-source image, or the reverse), which is otherwise refused
+	// (upgrade.ErrCrossEdition). It needs Image, cannot be scheduled, and
+	// is recorded on the upgrade's status as who switched from what to
+	// what (upgrade.Status.EditionSwitch).
+	SwitchEdition bool `json:"switchEdition,omitempty"`
 	// AfterTasksFinish asks for the upgrade to be scheduled rather than
 	// started: the queue shuts now, the work already under way is left to
 	// finish, and the cut-over happens once this deployment is idle
@@ -781,13 +806,33 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 	case req.Image != "" && !canChooseImage:
 		writeError(w, http.StatusBadRequest, errors.New("this deployment cannot upgrade onto an explicit image"))
 		return
+	case req.SwitchEdition && req.Image == "":
+		writeError(w, http.StatusBadRequest, errors.New("switching edition needs the image to switch to: "+
+			"name another edition's repository or image"))
+		return
+	case req.SwitchEdition && req.AfterTasksFinish:
+		writeError(w, http.StatusBadRequest, errors.New("an edition switch cannot be scheduled for after tasks finish: start it now"))
+		return
 	case req.AfterTasksFinish:
 		if err := s.scheduleUpgrade(r, req); err != nil {
 			writeClientError(w, err)
 			return
 		}
 	case req.Image != "":
-		if err := iu.StartImage(req.Branch, req.Image); err != nil {
+		opts := upgrade.ImageOptions{SwitchEdition: req.SwitchEdition}
+		if req.SwitchEdition {
+			// Who switched is part of the record: the agent a
+			// capability names, or this deployment's own actor for the
+			// operator at the console.
+			ctx, err := withAgentRequester(r.Context(), "an edition switch's requester", req.RequestedBy, req.RequestedByKind)
+			if err != nil {
+				writeClientError(w, err)
+				return
+			}
+			by := s.tasks.requestActor(ctx).Actor
+			opts.RequestedBy = strings.TrimSpace(string(by.Kind) + " " + by.ID)
+		}
+		if err := iu.StartImageWith(req.Branch, req.Image, opts); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
