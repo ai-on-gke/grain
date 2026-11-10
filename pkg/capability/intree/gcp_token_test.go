@@ -289,6 +289,10 @@ const fakeSubjectToken = "0123456789abcdef0123456789abcdef0123456789abcdef012345
 // script reads one, is placed holding fakeSubjectToken. It returns
 // gcloud's log, what the script printed, and activate.log.
 func runActivate(t *testing.T, script, secretFile, failArg, failMessage string) (log, output, activateLog string, err error) {
+	return runActivateWithSecret(t, script, secretFile, fakeSubjectToken, true, failArg, failMessage)
+}
+
+func runActivateWithSecret(t *testing.T, script, secretFile, secretValue string, writeSecret bool, failArg, failMessage string) (log, output, activateLog string, err error) {
 	t.Helper()
 	if _, lookErr := exec.LookPath("sh"); lookErr != nil {
 		t.Skip("no sh")
@@ -296,20 +300,27 @@ func runActivate(t *testing.T, script, secretFile, failArg, failMessage string) 
 	dir := t.TempDir()
 	if secretFile != "" {
 		local := filepath.Join(dir, "subject.token")
-		if err := os.WriteFile(local, []byte(fakeSubjectToken+"\n"), 0o600); err != nil {
-			t.Fatal(err)
+		if writeSecret {
+			// Match production placement: no trailing newline.
+			if err := os.WriteFile(local, []byte(secretValue), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
 		script = strings.ReplaceAll(script, secretFile, local)
 	}
 	logPath := filepath.Join(dir, "gcloud.log")
 	fake := "#!/bin/sh\n" +
 		"if [ \"$1\" = --version ]; then echo 'Google Cloud SDK 499.0.0'; echo 'core 2024.11.08'; exit 0; fi\n" +
-		"echo \"$*\" >> " + shellQuote(logPath) + "\n" +
+		"printf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\n" +
 		"echo 'Updated property.'\n" +
 		"case \"$*\" in *print-access-token*) echo 'ya29.c.fake-access-token';; esac\n" +
-		"case \"$*\" in *'" + failArg + "'*) echo " + shellQuote(failMessage) + " >&2; " +
-		"echo 'sent subject_token=" + fakeSubjectToken + ", got Bearer ya29.c.fake-access-token' >&2; " +
-		"echo '  \"private_key\": \"-----BEGIN PRIVATE KEY-----\\nMIIfakeKey\\n\",' >&2; exit 1;; esac\n"
+		"case \"$*\" in *'" + failArg + "'*) printf '%s\\n' " + shellQuote(failMessage) + " >&2; " +
+		"printf 'sent subject_token=%s, got Bearer ya29.c.fake-access-token+/= and jwt=eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzYSJ9.fakeSig\\n' " + shellQuote(secretValue) + " >&2; " +
+		"printf '{\"access_token\": \"tok-1-secret\", \"private_key_id\": \"keep-key-id\"}\\n' >&2; " +
+		"printf '  \"private_key\": \"-----BEGIN PRIVATE KEY-----\\\\nMIIsingleLineKey\\\\n\",\\n' >&2; " +
+		"printf 'after-single-line-key\\n' >&2; " +
+		"printf '  \\047private_key\\047: \\047MIIpyDictKey\\047\\n' >&2; " +
+		"printf '  \"private_key\": \"-----BEGIN PRIVATE KEY-----\\nMIIfakeKey\\n\",\\n' >&2; exit 1;; esac\n"
 	if err := os.WriteFile(filepath.Join(dir, "gcloud"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -377,12 +388,14 @@ func TestGCPActivateScriptsRunAndReportFailures(t *testing.T) {
 					"Google Cloud SDK 499.0.0",
 					"ERROR: (gcloud) fake failure in " + step,
 					"sent subject_token=",
+					"keep-key-id",
+					"after-single-line-key",
 				} {
 					if !strings.Contains(out, want) {
 						t.Errorf("step %s: setup output lacks %q:\n%s", step, want, out)
 					}
 				}
-				secrets := []string{"ya29.c.fake", "MIIfakeKey"}
+				secrets := []string{"ya29.c.fake", "eyJhbGciOiJSUzI1NiJ9", "tok-1-secret", "MIIsingleLineKey", "MIIpyDictKey", "MIIfakeKey"}
 				if tc.secret != "" {
 					secrets = append(secrets, fakeSubjectToken)
 				}
@@ -396,6 +409,43 @@ func TestGCPActivateScriptsRunAndReportFailures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGCPTokenActivateScriptFailsClosedOnMissingOrShortSecretFile(t *testing.T) {
+	subject := gcpTokenDir("e1-1-0") + "/org.token"
+	script := gcpTokenActivateScript(GCPKeyPath, "grain-test-proj", subject)
+
+	// Missing subject token file stops setup before gcloud runs.
+	log, out, _, err := runActivateWithSecret(t, script, subject, "", false, "print-access-token", "boom")
+	if err == nil {
+		t.Fatal("activate.sh succeeded without its subject token file")
+	}
+	if log != "" || !strings.Contains(out, "subject token file") {
+		t.Errorf("missing secret file: log=%q out=%q", log, out)
+	}
+
+	// A corrupted (< 8 byte) secret file makes redact fail closed rather
+	// than emitting unredacted gcloud output.
+	_, out, act, err := runActivateWithSecret(t, script, subject, "short", true, "print-access-token", "unredacted-detail")
+	if err == nil {
+		t.Fatal("activate.sh succeeded on failing step")
+	}
+	if strings.Contains(out, "short") || strings.Contains(out, "unredacted-detail") || strings.Contains(act, "unredacted-detail") {
+		t.Errorf("short secret file failed open:\nout=%s\nact=%s", out, act)
+	}
+	if !strings.Contains(out, "[output omitted: redaction failed]") {
+		t.Errorf("expected redaction-failed marker, got:\n%s", out)
+	}
+
+	// A secret equal to "redacted" (8 bytes, substring of "[redacted]")
+	// terminates in a single pass instead of looping forever.
+	_, out, act, err = runActivateWithSecret(t, script, subject, "redacted", true, "print-access-token", "ERROR: (gcloud) token rejected")
+	if err == nil {
+		t.Fatal("activate.sh succeeded on failing step")
+	}
+	if !strings.Contains(out, "sent subject_token=[redacted]") || strings.Contains(act, "subject_token=redacted") {
+		t.Errorf("self-matching secret was not redacted cleanly:\nout=%s\nact=%s", out, act)
 	}
 }
 
@@ -472,6 +522,7 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 			t.Fatal(err)
 		}
 		act := strings.ReplaceAll(placement(t, resp, resp.Setup).Content, GCPKeyPath, credLocal)
+		act = strings.ReplaceAll(act, cfg.CredentialSource["file"], subjLocal)
 		if err := os.WriteFile(actLocal, []byte(act), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -487,6 +538,13 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 		setupCmd.Env = env
 		if out, err := setupCmd.CombinedOutput(); err != nil {
 			t.Fatalf("activate.sh failed: %v\n%s", err, out)
+		}
+		actLog, err := os.ReadFile(filepath.Join(dir, "activate.log"))
+		if err != nil {
+			t.Fatalf("reading activate.log: %v", err)
+		}
+		if strings.Contains(string(actLog), subject) || strings.Contains(string(actLog), testOrgSA) {
+			t.Fatalf("activate.log leaked token material:\n%s", actLog)
 		}
 		printCmd := exec.Command(gcloudPath, "auth", "print-access-token")
 		printCmd.Env = env

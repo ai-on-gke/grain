@@ -474,35 +474,64 @@ func gcpTokenActivateScript(keyPath, project, subjectPath string) string {
 // for external_account credentials, and the last 40 lines of the log:
 // CapabilitySetupError's output tail, so the setup-failure comment says
 // why. Every line logged or printed passes through redact first: the
-// contents of secretFile (the token-mode subject token, empty for none),
-// access tokens, and private keys (to their END line) become [redacted].
+// contents of secretFile (the token-mode subject token, empty for none;
+// missing or short secretFile fails closed), access tokens, JWTs, OAuth
+// token fields, and private keys (to their END line) become [redacted].
 func gcpActivateScript(secretFile string, steps ...string) string {
 	return `#!/bin/sh
 set -u
 command -v gcloud >/dev/null 2>&1 || exit 0
 secret_file=` + shellQuote(secretFile) + `
+if [ -n "$secret_file" ] && { [ ! -r "$secret_file" ] || [ ! -s "$secret_file" ]; }; then
+  printf 'gcp-key setup failed: subject token file %s is missing or empty\n' "$secret_file" >&2
+  exit 1
+fi
 dir=$(dirname "$0")
 log="$dir/activate.log"
+out=""
+trap '[ -n "$out" ] && rm -f "$out"' EXIT HUP INT TERM
 umask 077
 : >"$log" || exit 1
 redact() {
-  awk -v f="$secret_file" 'BEGIN { s = ""; if (f != "" && (getline line < f) > 0) s = line; close(f) }
+  SECRET_FILE="$secret_file" awk 'BEGIN {
+    s = ""
+    f = ENVIRON["SECRET_FILE"]
+    if (f != "") {
+      if ((getline line < f) <= 0) exit 2
+      close(f)
+      sub(/\r$/, "", line)
+      if (length(line) < 8) exit 2
+      s = line
+    }
+  }
   {
-    if (length(s) >= 8) while ((i = index($0, s)) > 0) $0 = substr($0, 1, i - 1) "[redacted]" substr($0, i + length(s))
-    gsub(/ya29\.[A-Za-z0-9._-]+/, "[redacted]")
+    if (k) { if ($0 ~ /END [A-Z0-9 ]*PRIVATE KEY|["\047]/) k = 0; next }
+    if ($0 ~ /BEGIN [A-Z0-9 ]*PRIVATE KEY/) { print "[redacted]"; k = ($0 !~ /END [A-Z0-9 ]*PRIVATE KEY/ && $0 !~ /PRIVATE KEY[^"\047]*["\047]/); next }
+    if ($0 ~ /["\047]?private_key["\047]?[[:space:]]*[:=]/) { print "[redacted]"; next }
+    if (s != "") {
+      clean = ""
+      rest = $0
+      while ((i = index(rest, s)) > 0) {
+        clean = clean substr(rest, 1, i - 1) "[redacted]"
+        rest = substr(rest, i + length(s))
+      }
+      $0 = clean rest
+    }
+    gsub(/ya29\.[A-Za-z0-9._~+\/=-]+/, "[redacted]")
+    gsub(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9._-]*/, "[redacted]")
     gsub(/[Bb]earer +[A-Za-z0-9._~+\/=-]+/, "Bearer [redacted]")
-    if (k) { if ($0 ~ /END [A-Z ]*PRIVATE KEY|"/) k = 0; next }
-    if ($0 ~ /BEGIN [A-Z ]*PRIVATE KEY/) { print "[redacted]"; k = ($0 !~ /END [A-Z ]*PRIVATE KEY/); next }
-    if ($0 ~ /private_key"/) $0 = "[redacted]"
+    gsub(/"(access_token|refresh_token|id_token|client_secret|private_key_data)"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"[redacted]\"")
     print
   }'
 }
-version=$(gcloud --version 2>&1 | head -n 3 | redact)
+if ! version=$(gcloud --version 2>&1 | head -n 3 | redact); then
+  version="[output omitted: redaction failed]"
+fi
 printf '%s\n' "$version" >>"$log"
 run() {
   name=$1 quiet=$2
   shift 2
-  echo "+ $*" >>"$log"
+  printf '+ %s\n' "$*" >>"$log"
   out=$(mktemp "$dir/.activate.XXXXXX") || exit 1
   if [ "$quiet" = 1 ]; then
     "$@" </dev/null >/dev/null 2>"$out"
@@ -510,12 +539,15 @@ run() {
     "$@" </dev/null >"$out" 2>&1
   fi
   rc=$?
-  said=$(redact <"$out")
+  if ! said=$(redact <"$out"); then
+    said="[output omitted: redaction failed]"
+  fi
   rm -f "$out"
+  out=""
   [ -n "$said" ] && printf '%s\n' "$said" >>"$log"
   [ "$rc" -eq 0 ] && return 0
   {
-    echo "gcp-key setup failed at step \"$name\" (exit $rc): $*"
+    printf 'gcp-key setup failed at step "%s" (exit %s): %s\n' "$name" "$rc" "$*"
     echo "gcloud --version:"
     printf '%s\n' "$version"
     if printf '%s\n' "$said" | grep -qiE 'external_account|credential type|credential_file_override|has no property|unrecognized arguments'; then
