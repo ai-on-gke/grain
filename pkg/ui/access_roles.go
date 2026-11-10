@@ -1028,7 +1028,7 @@ func (c *Client) roleApprovalWithin(ctx context.Context, a *accessRole, task mod
 		return fmt.Errorf("%s cannot approve task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
 			a.label(), task.ID)
 	}
-	if push, err := s.templateDeclaredPush(ctx, task.TemplateID); err != nil {
+	if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {
 		return err
 	} else if push != nil {
 		return fmt.Errorf("%s cannot approve task %s (declaredPush): template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
