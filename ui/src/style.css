@@ -5399,6 +5399,11 @@ a.committed-context-sha:hover {
 /* A comment a /tasks/<id>#comment=<id> link scrolled to
    (CommentDeepLink.jsx), marked for as long as HIGHLIGHT_MS and fading
    out over it. */
+/* The linked comment is focused as well (tabindex -1, so only a script
+   focuses it), and the highlight is what marks it: no outline on top. */
+[data-comment-id][tabindex="-1"]:focus {
+  outline: none;
+}
 .comment-highlight {
   border-radius: 6px;
   animation: comment-highlight 2.5s ease-out;
@@ -5406,7 +5411,10 @@ a.committed-context-sha:hover {
 @keyframes comment-highlight {
   0%,
   40% {
-    background: color-mix(in srgb, var(--accent, #6366f1) 18%, transparent);
+    /* 8%, not more: the comment's own text has to keep 4.5:1 against
+       it in both themes (18% left dark-theme body text at 3.97:1). The
+       ring is what marks the comment. */
+    background: color-mix(in srgb, var(--accent, #6366f1) 8%, transparent);
     box-shadow: 0 0 0 2px var(--accent, #6366f1);
   }
   100% {

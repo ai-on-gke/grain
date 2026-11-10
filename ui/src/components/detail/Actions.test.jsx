@@ -995,6 +995,72 @@ describe("DetailOverlay actions", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps Run now disabled on a stale request while paused on a usage limit or by the operator", () => {
+    const { unmount } = render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          runNowAt: "2026-08-01T00:00:00Z",
+          runNowStale: true,
+        }}
+        tasks={[]}
+        config={{
+          ...config,
+          agentBackends: [{ id: "claude-1", framework: "claude" }],
+          agentPause: {
+            paused: true,
+            until: "2026-08-01T01:00:00Z",
+            reason: "quota exceeded",
+            pauses: [
+              {
+                connection: "claude-1",
+                framework: "claude",
+                until: "2026-08-01T01:00:00Z",
+                reason: "quota exceeded",
+              },
+            ],
+          },
+        }}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(
+      screen.getByText(/once the usage-limit pause ends/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/retry backoff/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Press Run now to start it now/),
+    ).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          paused: { by: "alice@example.com", at: "2026-08-01T00:01:00Z" },
+          runNowAt: "2026-08-01T00:00:00Z",
+          runNowStale: true,
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Asked for a run. It starts ahead of the queue once this task is resumed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows Reopen for a closed task, wired to the reopen endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();

@@ -1,0 +1,48 @@
+FOCUS [
+ {
+  "name": "plain timeline",
+  "focused": true,
+  "active": "LI.timeline-item comment-highlight"
+ },
+ {
+  "name": "interactive chat, 200 lines, 2nd",
+  "focused": true,
+  "active": "SECTION.cs-message cs-message--outgoing cs-message--single comment-highlight"
+ },
+ {
+  "name": "director via /tasks",
+  "focused": true,
+  "active": "SECTION.cs-message cs-message--outgoing cs-message--single comment-highlight"
+ },
+ {
+  "name": "director via /session",
+  "focused": true,
+  "active": "SECTION.cs-message cs-message--outgoing cs-message--single comment-highlight"
+ }
+]
+MALFORMED {"#comment=abc":["This link's #comment=abc does not name a comment."],"#comment=":["This link's #comment= does not name a comment."],"#comment=12abc":[],"#comment=-1":["This link's #comment=-1 does not name a comment."]}
+ERRORS []
+BACK 22 walk source
+prompt
+edit FWD highlighted true
+TABS {"Control":{"newTab":"<demo>/tasks/21#comment=211","here":"<demo>/tasks/22"},"Shift":{"newTab":null,"here":"<demo>/tasks/22"},"Meta":{"newTab":null,"here":"<demo>/tasks/21#comment=211"},"middle":{"newTab":"<demo>/tasks/21#comment=211","here":"<demo>/tasks/22"}}
+ERRORS []
+CONTRAST {
+ "light": {
+  "background": "oklab(0.529232 0.0127726 0.086619 / 0.08)",
+  "ring": "rgb(133, 102, 41) 0px 0px 0px 2px",
+  "surface": "rgb(255, 255, 255)",
+  "text": "rgb(82, 78, 70)",
+  "theme": "light"
+ },
+ "dark": {
+  "background": "oklab(0.750666 0.0228592 0.127492 / 0.08)",
+  "ring": "rgb(217, 164, 65) 0px 0px 0px 2px",
+  "surface": "rgb(20, 22, 26)",
+  "text": "rgb(184, 181, 173)",
+  "theme": "dark"
+ }
+}
+SHOT desktop {"light":{"box":{"x":261,"y":444.78125,"width":863,"height":87.171875},"hit":true},"dark":{"box":{"x":261,"y":444.78125,"width":863,"height":87.171875},"hit":true}} ERRORS []
+SHOT phone {"light":{"box":{"x":17,"y":416.46875,"width":357,"height":87.171875},"hit":true},"dark":{"box":{"x":17,"y":416.46875,"width":357,"height":87.171875},"hit":true}} ERRORS []
+  5 passed (59.4s)

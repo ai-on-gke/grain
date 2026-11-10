@@ -1,0 +1,87 @@
+=== help text ===
+  grain help hub       exit=1 "Grain Hub"=0 "Grain Registry"=0 warnings=0 first: 
+  grain help registry  exit=1 "Grain Hub"=0 "Grain Registry"=0 warnings=0 first: 
+  grain hub -h         exit=0 "Grain Hub"=1 "Grain Registry"=0 warnings=0 first: usage: grain hub <subcommand> [args]
+  grain registry -h    exit=0 "Grain Hub"=2 "Grain Registry"=1 warnings=1 first: warning: 'grain registry' is deprecated and will be removed in a future release; use 'grai
+=== seed an entry so list has something to show ===
+  registered conn-alias: grc_…
+=== CLI command word, flags and env vars (grain hub list) ===
+  grain hub list -hub-url -hub-token (baseline)                            exit=0 warnings=0 1 entries
+  grain registry list -hub-url -hub-token                                  exit=0 warnings=1 1 entries
+      | x1 warning: 'grain registry' is deprecated and will be removed in a future release; use 'grain hub' (the Grain Registry is now the Grain Hub)
+  grain hub list -registry-url -registry-token                             exit=0 warnings=2 1 entries
+      | x1 warning: -registry-token is deprecated and will be removed in a future release; use -hub-token (the Grain Registry is now the Grain Hub)
+      | x1 warning: -registry-url is deprecated and will be removed in a future release; use -hub-url (the Grain Registry is now the Grain Hub)
+  grain hub list -hub-url good -registry-url bad (new wins)                exit=0 warnings=1 1 entries
+      | x1 warning: -registry-url is deprecated and will be removed in a future release; use -hub-url (the Grain Registry is now the Grain Hub)
+  grain hub list -hub-url bad -registry-url good (new wins: fails)         exit=4 warnings=1 0 entries
+      | x1 warning: -registry-url is deprecated and will be removed in a future release; use -hub-url (the Grain Registry is now the Grain Hub)
+  grain registry list -registry-url -registry-token (3 spellings)          exit=0 warnings=3 1 entries
+      | x1 warning: 'grain registry' is deprecated and will be removed in a future release; use 'grain hub' (the Grain Registry is now the Grain Hub)
+      | x1 warning: -registry-token is deprecated and will be removed in a future release; use -hub-token (the Grain Registry is now the Grain Hub)
+      | x1 warning: -registry-url is deprecated and will be removed in a future release; use -hub-url (the Grain Registry is now the Grain Hub)
+  $GRAIN_HUB_URL/$GRAIN_HUB_TOKEN (baseline)                               exit=0 warnings=0 1 entries
+  $GRAIN_REGISTRY_URL/$GRAIN_REGISTRY_TOKEN                                exit=0 warnings=2 1 entries
+      | x1 warning: $GRAIN_REGISTRY_TOKEN is deprecated and will be removed in a future release; use $GRAIN_HUB_TOKEN (the Grain Registry is now the Grain Hub)
+      | x1 warning: $GRAIN_REGISTRY_URL is deprecated and will be removed in a future release; use $GRAIN_HUB_URL (the Grain Registry is now the Grain Hub)
+  $GRAIN_HUB_URL good + $GRAIN_REGISTRY_URL bad (new wins)                 exit=0 warnings=0 1 entries
+  $GRAIN_HUB_URL bad + $GRAIN_REGISTRY_URL good (new wins: fails)          exit=4 warnings=0 0 entries
+=== grain-hub: $GRAIN_REGISTRY_CONFIG, compute.registry_id, the grain-registry shim ===
+  GRAIN_REGISTRY_CONFIG=hub.yaml grain-hub validate                        exit=1 warnings=0 
+  GRAIN_HUB_CONFIG good + GRAIN_REGISTRY_CONFIG missing (new wins)         exit=1 warnings=0 
+  compute.registry_id: walk-old  grain-hub validate                        exit=0 warnings=1 is valid
+      | x1 warning: compute.registry_id is deprecated and will be removed in a future release; use compute.hub_id (the Grain Registry is now the Grain Hub)
+  compute.registry_id + compute.hub_id  grain-hub validate                 exit=0 warnings=0 is valid
+  grain-registry (cmd/grain-registry shim) validate                        exit=0 warnings=1 is valid
+      | x1 grain-registry: deprecated: this command is now grain-hub (./cmd/grain-hub); grain-registry will be removed in a future release
+  grain-hub validate (baseline)                                            exit=0 warnings=0 is valid
+=== grain daemon: -hub-*, -registry-*, -ui-registry-* and $GRAIN_REGISTRY_* ===
+  daemon -hub-* -ui-hub-* (baseline)                                       exit=- warnings=0 tunnel whoami HTTP 503 actor=null
+  daemon -registry-url/-entry/-token-file/-connect -ui-registry-issuer/-audience/-keys-url exit=- warnings=7 tunnel whoami HTTP 503 actor=null
+      | x1 warning: -registry-connect is deprecated and will be removed in a future release; use -hub-connect (the Grain Registry is now the Grain Hub)
+      | x1 warning: -registry-entry is deprecated and will be removed in a future release; use -hub-entry (the Grain Registry is now the Grain Hub)
+      | x1 warning: -registry-token-file is deprecated and will be removed in a future release; use -hub-token-file (the Grain Registry is now the Grain Hub)
+      | x1 warning: -registry-url is deprecated and will be removed in a future release; use -hub-url (the Grain Registry is now the Grain Hub)
+      | x1 warning: -ui-registry-audience is deprecated and will be removed in a future release; use -ui-hub-audience (the Grain Registry is now the Grain Hub)
+      | x1 warning: -ui-registry-issuer is deprecated and will be removed in a future release; use -ui-hub-issuer (the Grain Registry is now the Grain Hub)
+      | x1 warning: -ui-registry-keys-url is deprecated and will be removed in a future release; use -ui-hub-keys-url (the Grain Registry is now the Grain Hub)
+  daemon -hub-entry conn-alias -registry-entry nope -ui-hub-audience good -ui-registry-audience bad (new wins) exit=- warnings=2 tunnel whoami HTTP 503 actor=null
+      | x1 warning: -registry-entry is deprecated and will be removed in a future release; use -hub-entry (the Grain Registry is now the Grain Hub)
+      | x1 warning: -ui-registry-audience is deprecated and will be removed in a future release; use -ui-hub-audience (the Grain Registry is now the Grain Hub)
+  daemon $GRAIN_REGISTRY_{URL,ENTRY,TOKEN,CONNECT,ISSUER,AUDIENCE,KEYS_URL}, no hub flags exit=- warnings=6 tunnel whoami HTTP 503 actor=null
+      | x1 warning: $GRAIN_REGISTRY_AUDIENCE is deprecated and will be removed in a future release; use $GRAIN_HUB_AUDIENCE (the Grain Registry is now the Grain Hub)
+      | x1 warning: $GRAIN_REGISTRY_CONNECT is deprecated and will be removed in a future release; use $GRAIN_HUB_CONNECT (the Grain Registry is now the Grain Hub)
+      | x1 warning: $GRAIN_REGISTRY_ENTRY is deprecated and will be removed in a future release; use $GRAIN_HUB_ENTRY (the Grain Registry is now the Grain Hub)
+      | x1 warning: $GRAIN_REGISTRY_ISSUER is deprecated and will be removed in a future release; use $GRAIN_HUB_ISSUER (the Grain Registry is now the Grain Hub)
+      | x1 warning: $GRAIN_REGISTRY_KEYS_URL is deprecated and will be removed in a future release; use $GRAIN_HUB_KEYS_URL (the Grain Registry is now the Grain Hub)
+      | x1 warning: $GRAIN_REGISTRY_URL is deprecated and will be removed in a future release; use $GRAIN_HUB_URL (the Grain Registry is now the Grain Hub)
+  daemon $GRAIN_HUB_ENTRY good + $GRAIN_REGISTRY_ENTRY bad, $GRAIN_HUB_AUDIENCE good + old bad (new wins) exit=- warnings=0 tunnel whoami HTTP 503 actor=null
+=== settings API key "registry" -> "hub" (PUT/GET /api/settings on a plain HEAD daemon) ===
+  (no -hub-allow-insecure-http flag)
+curl: (52) Empty reply from server
+curl: (52) Empty reply from server
+  {"hub": {...}} (baseline)                                  PUT HTTP 000 -> hub.url= registry.url= hub.entry=
+head: cannot open '/tmp/alias-walk/put.json' for reading: No such file or directory
+curl: (52) Empty reply from server
+curl: (52) Empty reply from server
+  {"registry": {...}}                                        PUT HTTP 000 -> hub.url= registry.url= hub.entry=
+head: cannot open '/tmp/alias-walk/put.json' for reading: No such file or directory
+curl: (52) Empty reply from server
+curl: (52) Empty reply from server
+  {"registry": old, "hub": new} (new wins)                   PUT HTTP 000 -> hub.url= registry.url= hub.entry=
+head: cannot open '/tmp/alias-walk/put.json' for reading: No such file or directory
+curl: (52) Empty reply from server
+curl: (52) Empty reply from server
+  {"hub": new, "registry": old} (new wins, order swapped)    PUT HTTP 000 -> hub.url= registry.url= hub.entry=
+head: cannot open '/tmp/alias-walk/put.json' for reading: No such file or directory
+  daemon log deprecation lines for the settings key: 0
+=== demo: -ui-registry-* ===
+  grain demo -ui-registry-issuer/-audience/-keys-url                       exit=- warnings=3 healthz HTTP 401
+      | x1 warning: -ui-registry-audience is deprecated and will be removed in a future release; use -ui-hub-audience (the Grain Registry is now the Grain Hub)
+      | x1 warning: -ui-registry-issuer is deprecated and will be removed in a future release; use -ui-hub-issuer (the Grain Registry is now the Grain Hub)
+      | x1 warning: -ui-registry-keys-url is deprecated and will be removed in a future release; use -ui-hub-keys-url (the Grain Registry is now the Grain Hub)
+$ GRAIN_REGISTRY_CONFIG=/nonexistent-old.yaml grain-hub serve
+  warning: $GRAIN_REGISTRY_CONFIG is deprecated and will be removed in a future release; use $GRAIN_HUB_CONFIG (the Grain Registry is now the Grain Hub)
+  grain-hub: reading config /nonexistent-old.yaml: open /nonexistent-old.yaml: no such file or directory
+$ GRAIN_HUB_CONFIG=/nonexistent-new.yaml GRAIN_REGISTRY_CONFIG=/nonexistent-old.yaml grain-hub serve
+  grain-hub: reading config /nonexistent-new.yaml: open /nonexistent-new.yaml: no such file or directory

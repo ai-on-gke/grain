@@ -142,9 +142,7 @@ func Main() {
 		// runs the host agent.
 		args = []string{"host", "list"}
 	}
-	if len(args) > 0 {
-		args[0] = canonicalCommand(args[0])
-	}
+	canonicalizeCommandWord(args, os.Stderr)
 	// Inside an agent's sandbox, the read commands of
 	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
@@ -657,7 +655,7 @@ func runCLI(args []string) error {
 // dispatchCLI runs one task-CLI command against c.
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
-	warnDeprecatedCommand(rest[0], cmd)
+	warnDeprecatedCommand(os.Stderr, rest[0], cmd)
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
