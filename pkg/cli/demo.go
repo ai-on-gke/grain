@@ -109,15 +109,19 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	uiIAPAudience := fs.String("ui-iap-audience", "", "as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it")
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "as on grain daemon: the issuer a signed assertion must carry (default "+ui.GoogleIAPIssuer+")")
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "as on grain daemon: where the assertions' signing keys are published (default "+ui.GoogleIAPCertURL+")")
-	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "as on grain daemon: the exact issuer URL a signed X-Grain-Registry-Assertion must carry")
-	uiRegistryAudience := fs.String("ui-registry-audience", "", "as on grain daemon: the single audience URL a signed X-Grain-Registry-Assertion must carry")
-	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "as on grain daemon: where the hub's ES256 signing keys are published as a JWK set")
+	uiHubIssuer := fs.String("ui-hub-issuer", "", "as on grain daemon: the exact issuer URL a signed X-Grain-Hub-Assertion must carry")
+	uiHubAudience := fs.String("ui-hub-audience", "", "as on grain daemon: the single audience URL a signed X-Grain-Hub-Assertion must carry")
+	uiHubKeysURL := fs.String("ui-hub-keys-url", "", "as on grain daemon: where the hub's ES256 signing keys are published as a JWK set")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience")
 	uiRequireVerifier := fs.String("ui-require-verifier", "", "as on grain daemon: require network callers to sign in through the named IdentityVerifier (-ui-require-iap is an alias for -ui-require-verifier=iap)")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "as on grain daemon: resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint)
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
+	renamed := defineRenamedFlags(fs, "ui-hub-issuer", "ui-hub-audience", "ui-hub-keys-url")
 	if err := fs.Parse(args); err != nil {
+		return demo.Options{}, err
+	}
+	if err := renamed.resolve(); err != nil {
 		return demo.Options{}, err
 	}
 	if err := noArgs(fs, fs.Args()); err != nil {
@@ -170,9 +174,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		UiIAPAudience:       *uiIAPAudience,
 		UiIAPIssuer:         *uiIAPIssuer,
 		UiIAPKeysURL:        *uiIAPKeysURL,
-		UiRegistryIssuer:    *uiRegistryIssuer,
-		UiRegistryAudience:  *uiRegistryAudience,
-		UiRegistryKeysURL:   *uiRegistryKeysURL,
+		UiHubIssuer:         *uiHubIssuer,
+		UiHubAudience:       *uiHubAudience,
+		UiHubKeysURL:        *uiHubKeysURL,
 		UiRequireVerifier:   strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:        *uiRequireIAP,
 		UiAllowedPrincipals: ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
@@ -187,9 +191,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		IAPAudience:            *uiIAPAudience,
 		IAPIssuer:              *uiIAPIssuer,
 		IAPKeysURL:             *uiIAPKeysURL,
-		RegistryIssuer:         *uiRegistryIssuer,
-		RegistryAudience:       *uiRegistryAudience,
-		RegistryKeysURL:        *uiRegistryKeysURL,
+		HubIssuer:              *uiHubIssuer,
+		HubAudience:            *uiHubAudience,
+		HubKeysURL:             *uiHubKeysURL,
 		RequireVerifier:        iapCfg.UiRequireVerifier,
 		RequireIAP:             *uiRequireIAP,
 		AllowedPrincipals:      iapCfg.UiAllowedPrincipals,

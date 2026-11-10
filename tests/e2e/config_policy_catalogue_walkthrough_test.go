@@ -136,8 +136,11 @@ func TestConfigPolicyHoldWalkthrough(t *testing.T) {
 			t.Fatalf("state=%s automerge=%v, want awaiting_submit with auto-merge off; links=%+v comments=%s",
 				st, got.AutoMerge, got.Links, w.comments(task.ID))
 		}
-		if hasSecurityHoldLink(got) {
-			t.Errorf("a hold only a person's Submit releases carries a releasable hold link: %+v", got.Links)
+		// The security review is a gate of its own beside the person's:
+		// a state-privilege path adds the human-only hold, it does not
+		// replace the review.
+		if linkTarget(got, model.LinkHumanOnlyHold) == "" {
+			t.Errorf("a hold only a person's Submit releases has no human-only hold: %+v", got.Links)
 		}
 		comments := w.comments(task.ID)
 		if !strings.Contains(comments, "state-privilege") {

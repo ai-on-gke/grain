@@ -248,7 +248,7 @@ func TestDemoGitHubSimDrivesWorkflowRunScheduleAndReleaseTriage(t *testing.T) {
 		}
 	}
 	if !slices.ContainsFunc(reviews[0].Grants, func(g model.Grant) bool {
-		return g.Capability == model.APIGrantPrefix+"ci-read@"+repo.String()
+		return g.Capability == model.APIGrantString("ci-read", repo.String())
 	}) {
 		t.Errorf("review task grants = %+v, want the read-only CI grant on %s", reviews[0].Grants, repo)
 	}

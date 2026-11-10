@@ -73,8 +73,10 @@ type CapabilityPolicyPreview struct {
 // configured server's capability_id with every holder of a reference to
 // it. A server nothing grants is listed with no holders.
 type CapabilityServerUsage struct {
-	ID      string                  `json:"id"`
-	Holders []CapabilityGrantHolder `json:"holders"`
+	ID               string                  `json:"id"`
+	Holders          []CapabilityGrantHolder `json:"holders"`
+	HolderCount      int                     `json:"holderCount,omitempty"`
+	HoldersTruncated bool                    `json:"holdersTruncated,omitempty"`
 }
 
 // CapabilityPolicy reads the stored policy.
@@ -135,7 +137,9 @@ func (c *Client) PreviewCapabilityPolicy(ctx context.Context, next model.Capabil
 		configured = cfg.MCPServers
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	holders, err := c.grantHolders(ctx, model.IsCapabilityRef)
+	holders, err := c.grantHolders(ctx, func(s string) bool {
+		return model.IsCapabilityRef(model.CanonicalGrantKey(s))
+	})
 	if err != nil {
 		return CapabilityPolicyPreview{}, err
 	}
@@ -383,13 +387,32 @@ func (s *Server) handlePreviewCapabilityPolicy(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, out)
 }
 
+const maxPagedUsageHolders = 3
+
 func (s *Server) handleCapabilityServerUsage(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.CapabilityServerUsage(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	out = filterList(out, func(u CapabilityServerUsage) bool {
+		return list.matches(u.ID)
+	})
+	if list.Paged {
+		for i := range out {
+			out[i].HolderCount = len(out[i].Holders)
+			if len(out[i].Holders) > maxPagedUsageHolders {
+				out[i].Holders = out[i].Holders[:maxPagedUsageHolders]
+				out[i].HoldersTruncated = true
+			}
+		}
+	}
+	writeList(w, out, list)
 }
 
 // CapabilityPolicy is GET /api/capability-policy.
@@ -415,9 +438,7 @@ func (c *HTTPClient) PreviewCapabilityPolicy(ctx context.Context, p model.Capabi
 
 // CapabilityServerUsage is GET /api/capability-servers/usage.
 func (c *HTTPClient) CapabilityServerUsage(ctx context.Context) ([]CapabilityServerUsage, error) {
-	var out []CapabilityServerUsage
-	err := c.do(ctx, http.MethodGet, "/api/capability-servers/usage", nil, &out)
-	return out, err
+	return doList[CapabilityServerUsage](c, ctx, "/api/capability-servers/usage")
 }
 
 // capabilityPolicyFor is the stored policy and the configured servers
@@ -486,7 +507,7 @@ func (d DroppedDefault) Note() string {
 // attached to the task stored as id: 400 for one it denies the task. A
 // task that is not there is the edit's own error to report.
 func (c *Client) policyEditRefusalFor(ctx context.Context, id, grant string) error {
-	if !model.IsCapabilityRef(grant) {
+	if !model.IsCapabilityRef(model.CanonicalGrantKey(grant)) {
 		return nil
 	}
 	task, err := c.Store.GetTask(ctx, model.NormalizeTaskID(id))

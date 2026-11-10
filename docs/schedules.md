@@ -1481,6 +1481,91 @@ no longer has, or a "success" with no job in it -- goes to
   shows that requester. The daemon logs a green settle as
   `schedule <id>'s grain CI run <run> ... passed; no review filed`.
 
+## Update: an overlap group shared across schedules (grain/task-3895)
+
+`overlap: skip` asked one question of one schedule -- is *this*
+schedule's previous firing unfinished
+(`Store.OpenTaskWithTag(ScheduleFiringTag(id))`, `HasActiveRunForSchedule`,
+`workflowFiringInFlight`) -- so two `.grain/schedules` files firing the
+same template, such as experimental/grain's release sync and its
+`sync-oss-release-safety-net`, could run concurrently, and that
+repository had to add a template step to notice.
+
+`Schedule.OverlapGroup` (`schedule.overlap_group`, schema version 134),
+written `overlap: {skip: true, group: <name>}` or `overlap-group: <name>`
+in a schedule file (the plain `overlap: skip|allow` still parses) and
+`overlap-group:` on a settings row, widens the question to every schedule
+in the same repository and group:
+
+- **Tag.** A task filed by a grouped schedule set to skip carries
+  `ScheduleOverlapGroupTag(repo, group)` --
+  `schedule-group:<owner>/<name>:<group>` -- beside its own firing tag,
+  and so does the review a grouped workflow schedule files.
+- **Check.** `Store.OverlapGroupInFlight(sched, repo, now)` walks the
+  other schedules in `(repo, group)` (`SchedulesInOverlapGroup`, ordered by
+  id) and asks each the question its own overlap check asks: an unfinished
+  suite run, an unsettled `ScheduledWorkflowRun` or a review inside its
+  hold, or an open task it filed (a standing job's task only while it is
+  running). It then sweeps open tasks carrying the group tag, so a task
+  whose schedule was renamed or withdrawn still holds the group.
+  `fireTaskSchedule`, `fireSuiteSchedule`, `fireWorkflowSchedule` and the
+  `github_workflow_run` trigger ask it after their own check -- the
+  schedule's own previous firing is the more useful thing to name when
+  both are true -- and `SuppressedFiring` asks it the same way, so the
+  schedules page says which schedule is holding this one
+  (`ScheduleSuppression.HeldByScheduleID` and `Detail`).
+- **Record.** The skip names the holder: `ScheduleSkip.HeldByScheduleID`
+  (`scheduled_firing_skip.held_by_schedule_id`) and a summary such as
+  `#4120 from schedule "Sync" (…) in overlap group "sync-oss-release" is
+  still open (running)`. The note a held firing leaves on a blocker
+  waiting on a person says which group it is held through.
+- **Scope.** The repository is the one the firing goes into (a bound
+  template's binding for a template-backed schedule), and it is part of
+  both the lookup and the tag, so one repository's declarations cannot
+  hold another repository's schedules however its groups are named.
+- **Refusals.** A group beside `overlap: allow` is refused (in a schedule
+  file, on `POST`/`PATCH /api/schedules`), since a group is a skip by
+  definition; group names are `[A-Za-z0-9][A-Za-z0-9._-]*`, at most 128
+  characters.
+
+## Update: a workflow schedule can run on grain CI in a `ci_mode: github` repository (grain/task-3878)
+
+The agentless path above -- a `.grain/schedules` file with `workflow:`, a
+grain CI run, a review only when it does not pass -- never ran on a
+`ci_mode: github` repository: `Store.fireWorkflowSchedule` dropped the
+firing (`workflowGrainCIOff`), `startScheduledWorkflowRun` deleted one
+already recorded, and the sweep in `reconcileCI` cancelled any grain CI run
+on such a repository. So a repository whose PRs are judged by GitHub
+Actions paid a full agent run for every cadenced check, even one that only
+asked "is there anything to do?" and nearly always answered no.
+
+`Schedule.GrainCI` (`schedule.grain_ci`, schema version 131), written as
+`grain-ci: true` on a schedule file with `workflow:` and on a settings
+row, is a schedule-only exception. `Schedule.WorkflowRunsUnder(mode)` is the
+one answer all four places ask: true under grain's own modes, false under
+`ci_mode: none`, and under `ci_mode: github` only with `GrainCI`.
+
+- **Firing.** `workflowGrainCIOff` takes the schedule and asks it.
+- **Starting and collecting.** `scheduledWorkflowGrainCIOff` reads the
+  firing's schedule (`ScheduledWorkflowRun.ScheduleID`) when the repository
+  disables grain CI, and lets an opted-in one through.
+- **The cancel sweep.** `scheduledRunKeepsGrainCI` leaves a running run
+  alone when its `RequestedBy` is `workflow-schedule:<id>` (or an infra
+  re-run of one) and that schedule opts in.
+
+Nothing else changes, because nothing else was ever on this path: the run
+is a `schedule` event, which judges no pull request, and the only check
+runs grain writes are a pull request's and the release train's gates
+(`releaseGateWorkflowStems`), so a schedule's own workflow starts no PR
+check and posts no status. Pull requests are still judged by GitHub
+Actions and no other `.grain/workflows` run there. `docs/declarations.md`
+("Running on grain CI in a `ci_mode: github` repository") has the file
+format and the shape of a "script on a cadence" workflow: on repositories
+the deployment offers grain's API to in CI (`ai-on-gke/grain` by default;
+`docs/agent-api.md`), a job holding `api:tasks:read` and
+`api:tasks:from-template` can check whether there is work and file the
+repository's template itself, and exit 0 when there is none.
+
 ## Update: a suppressed firing says so on the schedules page (grain/task-544)
 
 The bound above stops an unread review holding a schedule for ever. It

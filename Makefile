@@ -17,12 +17,14 @@
 # instructions kept in sync by hand.
 
 BIN := bin
-CMDS := grain grit grain-registry
+CMDS := grain grit grain-hub
 # Commands built the same way, but only when asked for by name and never
 # by `build` (so not into the image, which runs `make build`):
 # grain-agentd is the agents-only, rootless hostd for a machine that is
 # not the daemon's (docs/grain-agentd.md), and nothing ships it yet.
-EXTRA_CMDS := grain-agentd
+# grain-registry is grain-hub under its pre-rename name (cmd/grain-registry,
+# a shim kept for one release).
+EXTRA_CMDS := grain-agentd grain-registry
 
 BUILDVCS ?= auto
 
@@ -86,11 +88,17 @@ EDITION ?=
 # main of its own and names it here. `make image` passes it on to the
 # Dockerfile as MAIN_GRAIN.
 MAIN_grain ?= ./cmd/grain
-MAIN_grain-registry ?= ./cmd/grain-registry
+# The Grain Hub's main; MAIN_grain-registry is its name from before the
+# Grain Registry was renamed, still honoured for a release. It has no
+# default of its own: one would win the $(or ...) below, and bin/grain-hub
+# and the hub image would be built from the cmd/grain-registry shim, which
+# warns that it is deprecated every time it starts. `make grain-registry`
+# falls back to ./cmd/grain-registry by the rule's own $(or ...).
+MAIN_grain-hub ?= $(or $(MAIN_grain-registry),./cmd/grain-hub)
 # The same for bin/grain-agentd: a build that registers a transport or
 # host-tool grants of its own (pkg/agentd) names its own main here.
 MAIN_grain-agentd ?= ./cmd/grain-agentd
-LDFLAGS := $(strip \
+LDFLAGS := $(strip -s -w \
 	$(if $(RELEASE),-X github.com/ai-on-gke/grain/pkg/version.Release=$(RELEASE),) \
 	$(if $(EDITION),-X github.com/ai-on-gke/grain/pkg/version.Edition=$(EDITION),) \
 	$(if $(SANDBOX_IMAGE),-X github.com/ai-on-gke/grain/pkg/daemon.DefaultSandboxImage=$(SANDBOX_IMAGE),) \
@@ -160,8 +168,10 @@ CONTAINER_USER ?= $(shell id -u):$(shell id -g)
 # from .git. GO_VERSION is passed for the same reason `builder` passes
 # it -- one version, read out of go.mod.
 IMAGE ?= grain:dev
-IMAGE_REGISTRY ?= grain-registry:dev
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
+# IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
+# pre-rename name, honoured for a release (as is `make image-registry`).
+IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -198,9 +208,9 @@ frontend:
 	find pkg/ui/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui && npm ci --omit=dev && npm run build
-	find pkg/registry/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
+	find pkg/hub/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
-	cd ui-registry && npm ci --omit=dev && npm run build
+	cd ui-hub && npm ci --omit=dev && npm run build
 
 # BUILDVCS is passed explicitly rather than left to `go build`'s default
 # (which is this same `auto`) so that turning it off is a documented word
@@ -242,7 +252,7 @@ frontend:
 # CGO_ENABLED alone: `go test -race` requires it (the race detector is a
 # cgo library), and nothing about testing this module ships anywhere.
 $(CMDS) $(EXTRA_CMDS):
-	CGO_ENABLED=0 go build -buildvcs=$$(./scripts/buildvcs.sh $(BUILDVCS)) -ldflags "$(LDFLAGS)" -o $(BIN)/$@ $(or $(MAIN_$@),./cmd/$@)
+	CGO_ENABLED=0 go build -buildvcs=$$(./scripts/buildvcs.sh $(BUILDVCS)) -trimpath -ldflags "$(LDFLAGS)" -o $(BIN)/$@ $(or $(MAIN_$@),./cmd/$@)
 
 cli: grain
 
@@ -316,7 +326,7 @@ container-build: builder
 test: frontend
 	go test -race -timeout 30m ./...
 	cd ui && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
-	cd ui-registry && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
+	cd ui-hub && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
 
 # The same suite, turned up: what .github/workflows/nightly.yml runs
 # while nobody is waiting for it.
@@ -392,7 +402,7 @@ playwright-browsers:
 
 test-e2e-suite:
 	cd ui && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
-	cd ui-registry && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
+	cd ui-hub && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
 
 test-e2e: frontend playwright-browsers test-e2e-suite
 
@@ -508,6 +518,20 @@ security:
 # the images': the scan is of what ships, not of what is installed.
 vuln:
 	GOTOOLCHAIN=go$(GO_VERSION) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+# The release images' vulnerability gate (docs/image-vulnerability-scanning.md):
+# Trivy, pinned by scripts/scan-images.sh, over the images' OS and language
+# packages, failing on a fixable CRITICAL or HIGH finding that
+# .grain/baselines/image-vulns-allowlist.yaml does not waive. `vuln` above
+# reads Go source; this reads what ships. With no SCAN_IMAGES it scans what
+# $RELEASE_IMAGES_STATE names if that file exists, else the published
+# images at SCAN_TAG (default main). SCAN_IMAGES is name=ref pairs, such as
+# SCAN_IMAGES="grain=grain:dev hub=grain-hub:dev" for local builds.
+SCAN_TAG ?=
+SCAN_IMAGES ?=
+SCAN_OUT ?= image-vulns-report
+scan-images:
+	./scripts/scan-images.sh --out $(SCAN_OUT) $(if $(SCAN_TAG),--tag $(SCAN_TAG),) $(SCAN_IMAGES)
 
 # The sustained concurrent-load harness (tests/e2e/loadtest_test.go,
 # bwsalmon/agents#416) -- skipped by `test` above (GRAIN_LOAD_TEST unset)
@@ -657,7 +681,7 @@ fmt:
 # be pure waste.
 fmt-frontend:
 	cd ui && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
-	cd ui-registry && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check && npx prettier --check ../ui-shared
+	cd ui-hub && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check && npx prettier --check ../ui-shared
 
 clean:
 	rm -rf $(BIN) $(CONTAINER_CACHE)
@@ -675,13 +699,16 @@ image:
 		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
 		-t $(IMAGE) -f Dockerfile .
 
-image-registry:
+image-hub:
 	$(CONTAINER_ENGINE) build \
 		--build-arg GO_IMAGE=$(GO_IMAGE) \
 		--build-arg GO_VERSION=$(GO_VERSION) \
 		--build-arg BUILDVCS=$(BUILDVCS) \
-		--build-arg MAIN_GRAIN_REGISTRY=$(MAIN_grain-registry) \
+		--build-arg MAIN_GRAIN_HUB=$(MAIN_grain-hub) \
 		$(if $(GIT_REVISION),--build-arg GIT_REVISION=$(GIT_REVISION),) \
 		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
 		$(if $(EDITION),--build-arg EDITION=$(EDITION),) \
-		-t $(IMAGE_REGISTRY) -f Dockerfile.registry .
+		-t $(IMAGE_HUB) -f Dockerfile.hub .
+
+# image-registry is image-hub under its pre-rename name, for a release.
+image-registry: image-hub

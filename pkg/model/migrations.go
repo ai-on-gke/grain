@@ -808,7 +808,7 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     116,
-		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/hub.design.md)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
 		},
@@ -928,6 +928,40 @@ var Migrations = []Migration{
 			taskRunUsageTaskIndex,
 			usageCapacityTable,
 			usageSettingTable,
+		},
+	},
+	{
+		Version:     131,
+		Description: "add schedule.grain_ci, a schedule whose workflow firing runs on grain CI even on a ci_mode: github repository",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `grain_ci` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version: 132,
+		Description: "rewrite every stored grant still spelled api:<what>[@repo] (or a non-canonical api reference), repo-read:<repo> or repo-write:<repo> " +
+			"to https://grain.dev/capabilities/api#<what>[{repo}] and repo#read / #write {repo} across the grant tables, task_grant_wait, " +
+			"default and CI capability lists and console sessions (unified-grants slice 4)",
+		Up: migrateCanonicalGrants,
+	},
+	{
+		Version:     133,
+		Description: "add repository skill discovery configuration columns (skills on grain_config, repo_config, task and template, and declared_skills on repo_config)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `declared_skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `template` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 134,
+		Description: "add schedule.overlap_group and scheduled_firing_skip.held_by_schedule_id, " +
+			"an overlap group shared by one repository's schedules (grain/task-3895)",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `overlap_group` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `scheduled_firing_skip` ADD COLUMN `held_by_schedule_id` TEXT NOT NULL DEFAULT ''",
 		},
 	},
 }

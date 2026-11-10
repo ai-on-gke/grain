@@ -531,6 +531,11 @@ func Reconcilers() []Reconciler {
 		// repository's ref moves rather than when a clock comes round
 		// (reconcileGitRefSchedules).
 		{Name: "git-ref-schedules", Reconcile: reconcileGitRefSchedules},
+		// Outbound per-release docs/releases/vX.Y.Z.md task filing for
+		// repositories declaring .grain/templates/release-notes.yml
+		// (releasenotes.go). Before "target-repos" and "dispatch" so a
+		// task filed this tick is checked and dispatchable this tick.
+		{Name: "release-notes", Reconcile: reconcileReleaseNotes},
 		// Immediately after "schedule", so that a workflow schedule which
 		// came due on this tick has its CI run started on this tick
 		// rather than on the next one -- and so that the run finishing
@@ -834,6 +839,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -923,6 +929,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -1955,7 +1962,13 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 				gc.TemplateName = tmpl.Name
 			}
 		}
-		if _, err := cat.ValidateGrants(gc); err != nil {
+		verdict, err := cat.ValidateGrants(gc)
+		if err == nil && len(verdict.RequiresPerson) > 0 {
+			if why := catalogueRequiresPersonHold(ctx, deps, *task, verdict.RequiresPerson); why != "" {
+				return why
+			}
+		}
+		if err != nil {
 			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
 				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
 			}); serr != nil {
@@ -1974,6 +1987,35 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 		}
 		return ""
 	}
+}
+
+// catalogueRequiresPersonHold holds task when the capability catalogue
+// says only a person may give grants it holds and nobody stands behind
+// its approval (model.Store.PersonStandsBehind): a review, a suite pass,
+// a repository's declared schedule whose acceptance does not cover them,
+// anything an agent or automation approved (task 3971). The approval is
+// withdrawn, so the task waits in the proposals for a person -- whose
+// Approve the catalogue already asks for a person (catalogueApprovalRefusal)
+// -- with the reason on its row. "" when it may run.
+func catalogueRequiresPersonHold(ctx context.Context, deps Deps, task model.Task, needsPerson []string) string {
+	ok, err := deps.Store.PersonStandsBehind(ctx, task, needsPerson)
+	if err != nil {
+		log.Printf("orchestrator: checking who approved %s for the capability catalogue: %v", task.ID, err)
+		return "held by settings/capabilities.yml: who approved the task could not be read to check it"
+	}
+	if ok {
+		return ""
+	}
+	why := model.CatalogueRequiresPersonNote(needsPerson) + ", and nobody approved it"
+	if err := deps.Store.WithdrawApproval(ctx, task.ID); err != nil {
+		log.Printf("orchestrator: returning %s to the proposals for a person: %v", task.ID, err)
+	}
+	if err := deps.Store.SetGrantWait(ctx, model.GrantWait{
+		TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: why, WaitingAt: deps.Config.now(),
+	}); err != nil {
+		log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", task.ID, err)
+	}
+	return "held by settings/capabilities.yml: " + why
 }
 
 // changeTargetHold holds a queued task whose change target refuses it as it
@@ -2862,7 +2904,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		tools:              tools,
 		sandboxRoot:        sandboxRoot,
 		placer:             placer,
-		mint:               deps.MintSandboxToken,
+		mint:               mintSandboxTokenFor(deps, d.TaskID, d.Attempt),
 		credentialIdentity: deps.CredentialGitIdentity,
 	})
 	defer stopRecreating()

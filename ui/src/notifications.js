@@ -291,17 +291,25 @@ export async function decideRelease(release, approve, options = {}) {
     approve && Boolean(options.shortSoakOk ?? release.shortSoak);
   const allowBreaking =
     approve && Boolean(options.allowBreaking ?? release.breaking);
+  // Only the train's SHORT SOAK warning says the soak fell short: a
+  // person can tick Allow short soak on a release that soaked its full
+  // time, and the question must not then tell them it did not.
+  const soakSentence = release.shortSoak
+    ? `It ${release.soak || "has no recorded soak"}, under the minimum.`
+    : release.soak
+      ? `It ${release.soak}, and the release train did not flag it as short.`
+      : "It has no recorded soak.";
   const question = !approve
     ? `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`
     : shortSoakOk && allowBreaking
       ? `Approve ${release.version} on a SHORT SOAK and with BREAKING changes outside a major release? ` +
-        `It ${release.soak || "has no recorded soak"}, under the minimum. ${breakingDetail(release)}. ` +
+        `${soakSentence} ${breakingDetail(release)}. ` +
         `This accepts both (short_soak_ok, allow_breaking), tags ${release.version}, moves latest onto it and publishes its images.`
       : allowBreaking
         ? `Approve ${release.version} with BREAKING changes outside a major release? ${breakingDetail(release)}. ` +
           `This accepts the breaking changes (allow_breaking), tags ${release.version}, moves latest onto it and publishes its images.`
         : shortSoakOk
-          ? `Approve ${release.version} on a SHORT SOAK? It ${release.soak || "has no recorded soak"}, under the minimum. ` +
+          ? `Approve ${release.version} on a SHORT SOAK? ${soakSentence} ` +
             `This accepts the short soak (short_soak_ok), tags ${release.version}, moves latest onto it and publishes its images.`
           : `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`;
   if (!window.confirm(question)) return false;

@@ -15,15 +15,34 @@
 import { useState } from "react";
 import { Alert, Button } from "@mui/material";
 import api from "../../api.js";
-import { isApiGrant } from "../../apiGrants.js";
+import { isLegacyApiGrant } from "../../apiGrants.js";
+import { knownRepos } from "../../state.js";
+import { declaredPushRef } from "../Declared.jsx";
 import GrantsPicker from "../GrantsPicker.jsx";
+import { useTaskReads, useTaskWrites } from "./taskRepoAccess.js";
 
-export default function CapabilityToggles({ t, config, act }) {
+export default function CapabilityToggles({
+  t,
+  config,
+  act,
+  tasks = [],
+  showError = () => {},
+}) {
+  // The repos this task reads and writes are lines of the same list
+  // (unified-grants slice 5), each still saved as its whole reads or
+  // writes set (taskRepoAccess.js), beside its own repo and base and
+  // any push: refs its declared template widens it to, read only.
+  const [reads, changeReads] = useTaskReads(t, act, showError);
+  const [writes, setWrites, commitWrites] = useTaskWrites(t, act, showError);
+  const repoOptions = knownRepos(config, tasks);
+  const push = (t.declaredPush?.refs || []).map(
+    (r) => `${t.declaredPush.repo} ${declaredPushRef(r)}`,
+  );
   const held = t.capabilities || [];
   // Capability server grants, with their arguments, the agent API's grants
   // (apiGrants.js), and any bare capability id an older store still holds
   // are GrantsPicker's below, one list.
-  const apiSelected = held.filter(isApiGrant);
+  const apiSelected = held.filter(isLegacyApiGrant);
   const [capabilitiesChanged, setCapabilitiesChanged] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
@@ -94,8 +113,29 @@ export default function CapabilityToggles({ t, config, act }) {
         onSubmit={submitGrant}
         onRemove={removeGrant}
         idPrefix={`task-${t.id}`}
+        repos={{
+          target: t.repo || "",
+          base: t.base || "",
+          targetNote: "this task's repo -- change it under Repos",
+          reads,
+          writes,
+          readOptions: repoOptions,
+          writeOptions: repoOptions,
+          onReadsChange: changeReads,
+          onWritesChange: setWrites,
+          onWritesCommit: commitWrites,
+          push,
+        }}
         policyRepo={t.repo || ""}
       />
+      {t.state === "running" && (reads.length > 0 || writes.length > 0) && (
+        <p className="hint">
+          This run&apos;s sandbox was checked out when it started, so a repo
+          added now is not cloned into it and the agent is not told about it --
+          comment if the run needs to know. Fetching is allowed or refused as
+          the repos stand, so a removal takes effect immediately.
+        </p>
+      )}
       {t.state === "running" && capabilitiesChanged && (
         <Alert
           severity="info"

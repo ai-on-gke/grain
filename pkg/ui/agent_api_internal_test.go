@@ -134,6 +134,8 @@ func TestTaskMutationResponseClassificationIsTotal(t *testing.T) {
 			rawVal = `1`
 		case reflect.Slice:
 			rawVal = `[]`
+		case reflect.Struct:
+			rawVal = `{}`
 		}
 		sample := []byte(`{"` + tag + `":` + rawVal + `}`)
 		if got := editedPatchResponseKeys(sample); !slices.Equal(got, []string{tag}) {
@@ -1064,6 +1066,200 @@ func TestPatchTouchesTaskGrantsCoversPriorityDispatch(t *testing.T) {
 	for _, body := range []string{`{"priority": 7}`, `{"priority": null}`, `{"title": "x"}`} {
 		if patchTouchesTaskGrants([]byte(body)) {
 			t.Errorf("patchTouchesTaskGrants(%s) = true, want false", body)
+		}
+	}
+}
+
+func TestExternalTemplateWithinMatchesBothAPIGrantSpellings(t *testing.T) {
+	tok := &model.ExternalAgentToken{Name: "bot"}
+	allowAcme := func(r string) bool { return r == "acme/widgets" }
+
+	// Credential holds canonical .../api#ci:read={"repo":"acme/widgets"},
+	// declared .grain/templates/*.yml holds legacy api:ci:read@acme/widgets.
+	if err := externalTemplateWithin(
+		tok,
+		[]string{model.APIGrantString("ci:read", "acme/widgets")},
+		model.Template{ID: "t", Grants: []model.Grant{{Capability: "api:ci:read@acme/widgets"}}},
+		allowAcme,
+	); err != nil {
+		t.Errorf("canonical held vs legacy template grant refused: %v", err)
+	}
+	// Legacy held vs canonical template grant.
+	if err := externalTemplateWithin(
+		tok,
+		[]string{"api:ci:read@acme/widgets"},
+		model.Template{ID: "t", Grants: []model.Grant{{Capability: model.APIGrantString("ci:read", "acme/widgets")}}},
+		allowAcme,
+	); err != nil {
+		t.Errorf("legacy held vs canonical template grant refused: %v", err)
+	}
+	// Mismatched repo is still refused.
+	if err := externalTemplateWithin(
+		tok,
+		[]string{model.APIGrantString("ci:read", "acme/widgets")},
+		model.Template{ID: "t", Grants: []model.Grant{{Capability: "api:ci:read@acme/other"}}},
+		allowAcme,
+	); err == nil {
+		t.Error("template escalating repo scope was admitted")
+	}
+}
+
+func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
+	c := &Client{}
+	for _, bad := range []string{
+		model.APICapabilityServerID,
+		model.APIRef("ci:write") + `={"bogus":1}`,
+		model.APIRef("ci:write") + `={"repo":"not-a-repo"}`,
+		model.APIRef("tasks:fly"),
+	} {
+		if got, ok := c.capabilityByID(bad); ok {
+			t.Errorf("capabilityByID(%q) = %+v, true; want false", bad, got)
+		}
+	}
+	if _, ok := c.capabilityByID(model.APIGrantString("ci:write", "acme/widgets")); !ok {
+		t.Error("capabilityByID rejected valid canonical repo-limited api grant")
+	}
+}
+
+// agentAPISingleReadRoutes are the scoped GET routes that read one record,
+// one file, one health/status snapshot, a fixed-size enum, or a capped
+// namespace path rather than a growing collection. Every other scoped GET
+// route must declare a bounding query parameter (limit, lines, tail,
+// offset, or buckets) in routeQueries so no new api_* list tool can ship
+// unbounded.
+var agentAPISingleReadRoutes = map[string]bool{
+	"GET /api/actions-cache":                                         true,
+	"GET /api/agent-backends/{id}/codex-auth":                        true,
+	"GET /api/agent-keys":                                            true,
+	"GET /api/capability-policy":                                     true,
+	"GET /api/ci/cache":                                              true,
+	"GET /api/ci/runs/{id}":                                          true,
+	"GET /api/ci/runs/{id}/artifacts/{job}/{name}":                   true,
+	"GET /api/config":                                                true,
+	"GET /api/database":                                              true,
+	"GET /api/deployment":                                            true,
+	"GET /api/deployment/repos/{owner}/{name}/config":                true,
+	"GET /api/fs/ci/{path...}":                                       true,
+	"GET /api/fs/config/{path...}":                                   true,
+	"GET /api/fs/deploy/{path...}":                                   true,
+	"GET /api/fs/memory/{path...}":                                   true,
+	"GET /api/fs/src/{path...}":                                      true,
+	"GET /api/fs/task/{path...}":                                     true,
+	"GET /api/gcp-keys/{name}":                                       true,
+	"GET /api/git-ambient-sources":                                   true,
+	"GET /api/hostds/{name}/install":                                 true,
+	"GET /api/logs":                                                  true,
+	"GET /api/memory/documents/{name}":                               true,
+	"GET /api/package-cache":                                         true,
+	"GET /api/pause":                                                 true,
+	"GET /api/persistent-sandboxes/{name}/logs":                      true,
+	"GET /api/pipeline-pause":                                        true,
+	"GET /api/pull-requests/status":                                  true,
+	"GET /api/refs/{ref}/summary":                                    true,
+	"GET /api/registry":                                              true,
+	"GET /api/registry/status":                                       true,
+	"GET /api/release-approval-key":                                  true,
+	"GET /api/release-notes/stats":                                   true,
+	"GET /api/release-notes/versions/{version}":                      true,
+	"GET /api/release-notes/{period}":                                true,
+	"GET /api/repos/{owner}/{name}/base-repair-bypasses-human-gates": true,
+	"GET /api/repos/{owner}/{name}/candidates/{id}/qualification":    true,
+	"GET /api/repos/{owner}/{name}/capabilities":                     true,
+	"GET /api/repos/{owner}/{name}/ci-capabilities":                  true,
+	"GET /api/repos/{owner}/{name}/ci-mode":                          true,
+	"GET /api/repos/{owner}/{name}/compare":                          true,
+	"GET /api/repos/{owner}/{name}/declarations":                     true,
+	"GET /api/repos/{owner}/{name}/ignore-github-ci":                 true,
+	"GET /api/repos/{owner}/{name}/lifecycle":                        true,
+	"GET /api/repos/{owner}/{name}/merge-on-green":                   true,
+	"GET /api/repos/{owner}/{name}/prompt-extension":                 true,
+	"GET /api/repos/{owner}/{name}/qualification-plan":               true,
+	"GET /api/repos/{owner}/{name}/release":                          true,
+	"GET /api/repos/{owner}/{name}/release-creation":                 true,
+	"GET /api/repos/{owner}/{name}/releases/{release}":               true,
+	"GET /api/repos/{owner}/{name}/require-branch-up-to-date":        true,
+	"GET /api/repos/{owner}/{name}/settings":                         true,
+	"GET /api/repos/{owner}/{name}/setup-command":                    true,
+	"GET /api/repos/{owner}/{name}/unfixable-checks":                 true,
+	"GET /api/repos/{owner}/{name}/watch-default-branch":             true,
+	"GET /api/repos/{owner}/{name}/work-ownership":                   true,
+	"GET /api/restart-watch":                                         true,
+	"GET /api/sandboxes":                                             true,
+	"GET /api/schedules/{id}/composition":                            true,
+	"GET /api/settings":                                              true,
+	"GET /api/settings/cli-run":                                      true,
+	"GET /api/state-repo":                                            true,
+	"GET /api/suite-runs/{id}":                                       true,
+	"GET /api/suites/{id}/composition":                               true,
+	"GET /api/tasks/wait":                                            true,
+	"GET /api/tasks/{id}":                                            true,
+	"GET /api/tasks/{id}/attachments/{attachmentId}":                 true,
+	"GET /api/tasks/{id}/attempts/{number}/capability-audit":         true,
+	"GET /api/tasks/{id}/attempts/{number}/transcript":               true,
+	"GET /api/tasks/{id}/prompt":                                     true,
+	"GET /api/tasks/{id}/tree":                                       true,
+	"GET /api/templates/{id}/composition":                            true,
+	"GET /api/upgrade":                                               true,
+	"GET /api/upgrade/release-notes":                                 true,
+	"GET /api/usage":                                                 true,
+}
+
+func hasBoundingQueryParam(q map[string]string) bool {
+	for _, k := range []string{"limit", "lines", "tail", "offset", "buckets"} {
+		if _, ok := q[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// TestEveryAgentAPIListRouteIsBounded holds every scoped GET route to
+// either a bounding query parameter or agentAPISingleReadRoutes, and
+// checks that every cursor-paged route is documented in docs/agent-api.md.
+func TestEveryAgentAPIListRouteIsBounded(t *testing.T) {
+	doc := readRepoFile(t, "docs/agent-api.md")
+	getRoutes := map[string]bool{}
+	for _, r := range AgentAPIRoutes() {
+		if r.Method != http.MethodGet {
+			continue
+		}
+		getRoutes[r.Pattern] = true
+		q := routeQueries[r.Pattern]
+		bounded := hasBoundingQueryParam(q)
+		single := agentAPISingleReadRoutes[r.Pattern]
+		switch {
+		case !bounded && !single:
+			t.Errorf("%s (%s) is neither bounded in routeQueries nor classified as a single-record read in agentAPISingleReadRoutes", r.Pattern, r.Tool)
+		case bounded && single:
+			t.Errorf("%s is bounded in routeQueries and also listed in agentAPISingleReadRoutes", r.Pattern)
+		}
+		if _, hasCursor := q["cursor"]; hasCursor {
+			if !strings.Contains(doc, "`"+r.Pattern+"`") {
+				t.Errorf("docs/agent-api.md does not document paged route %s", r.Pattern)
+			}
+		}
+	}
+	for pattern := range agentAPISingleReadRoutes {
+		if !getRoutes[pattern] {
+			t.Errorf("agentAPISingleReadRoutes names %s, which is not a scoped GET route", pattern)
+		}
+	}
+}
+
+// TestAgentRepoDefaultRoutesTakeRepo holds every route the gate defaults
+// ?repo= on for a single-repository caller (agentRepoDefaultRoutes) to
+// declaring repo in routeQueries: queryCallRepo reads a named ?repo= only
+// on a route that declares it, so a route listed here without one would
+// have the repository a caller names ignored for authorisation while the
+// default is still injected -- and the handler behind it has to narrow by
+// repo for the default to mean anything (agent_repo_default_routes_test.go).
+func TestAgentRepoDefaultRoutesTakeRepo(t *testing.T) {
+	for pattern := range agentRepoDefaultRoutes {
+		if !routeHasQuery(pattern, "repo") {
+			t.Errorf("%s is in agentRepoDefaultRoutes but routeQueries does not declare repo for it", pattern)
+		}
+		if !strings.HasPrefix(pattern, "GET ") {
+			t.Errorf("%s is in agentRepoDefaultRoutes, which is for GET collection reads only", pattern)
 		}
 	}
 }

@@ -55,13 +55,6 @@ export function splitRef(ref) {
   return { capability: ref.slice(0, i), method: ref.slice(i + 1) };
 }
 
-// encodeGrant is model.EncodeCapabilityGrant: the reference alone with no
-// arguments, otherwise reference=<JSON>.
-export function encodeGrant(ref, args) {
-  if (args == null) return ref;
-  return `${ref}=${JSON.stringify(args)}`;
-}
-
 // SECRET_NAME is what a secret-looking argument is called. with: values
 // are recorded in plain text on the task and shown in its pane, so a
 // field like this is never offered (docs/capabilities.md).
@@ -123,6 +116,7 @@ const ANNOTATIONS = new Set([
   // set over an existing service account). Grain enforces it when a
   // grant is filed, not the form, and every value is still a choice.
   "x-grain-person-granted",
+  "x-grain-enum-labels",
 ]);
 const KIND_KEYWORDS = {
   choice: ["enum", "const", "type"],
@@ -437,7 +431,7 @@ export function validateValue(
 }
 
 // formatValue is one argument's value as a chip shows it.
-export function formatValue(v) {
+function formatValue(v) {
   if (Array.isArray(v)) return v.map(formatValue).join(", ");
   if (v && typeof v === "object")
     return Object.entries(v)
@@ -448,7 +442,7 @@ export function formatValue(v) {
 
 // BUILTIN_CAPABILITY_PREFIX is the namespace of grain's built-in
 // capability servers' canonical ids (intree.CanonicalIDPrefix).
-export const BUILTIN_CAPABILITY_PREFIX = "https://grain.dev/capabilities/";
+const BUILTIN_CAPABILITY_PREFIX = "https://grain.dev/capabilities/";
 
 // builtinServerName is the in-tree server a capability id names, or ""
 // for any other server's: "gcp" for https://grain.dev/capabilities/gcp.
@@ -491,7 +485,7 @@ function nonDefaultArgs(args, schema) {
 export const GRANT_ARGS_MAX = 32;
 
 // truncate is text cut to max characters, the last of them an ellipsis.
-export function truncate(text, max = GRANT_ARGS_MAX) {
+function truncate(text, max = GRANT_ARGS_MAX) {
   const s = String(text ?? "");
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
@@ -499,7 +493,7 @@ export function truncate(text, max = GRANT_ARGS_MAX) {
 // serverShortName is how a chip names a capability server: the built-in
 // server's own name ("workspace"), otherwise the host of its URL, or the
 // capability id itself when it is no URL at all.
-export function serverShortName(capability) {
+function serverShortName(capability) {
   const builtin = builtinServerName(capability);
   if (builtin) return builtin;
   try {
@@ -558,7 +552,7 @@ export function describeGrant(grant, { method, config } = {}) {
 }
 
 // grantDetail is every normalized argument, for the chip's tooltip.
-export function grantDetail(args) {
+function grantDetail(args) {
   const entries = Object.entries(args || {});
   if (entries.length === 0) return "no arguments";
   return entries.map(([k, v]) => `${k}: ${formatValue(v)}`).join("\n");

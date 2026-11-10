@@ -307,13 +307,13 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
-	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept "+
-		"the identity in it (e.g. \"https://grain.example.com\"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, "+
-		"-ui-registry-audience, and -ui-registry-keys-url must be set to enable the \"registry\" IdentityVerifier")
-	uiRegistryAudience := fs.String("ui-registry-audience", "", "the single audience URL a signed X-Grain-Registry-Assertion must carry "+
-		"(e.g. \"https://<name>.<instance-domain>\"); defaults to $GRAIN_REGISTRY_AUDIENCE")
-	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "where the hub's ES256 signing keys are published as a JWK set "+
-		"(e.g. \"https://grain.example.com/.well-known/jwks.json\"); defaults to $GRAIN_REGISTRY_KEYS_URL")
+	uiHubIssuer := fs.String("ui-hub-issuer", "", "the exact issuer URL a signed X-Grain-Hub-Assertion must carry for the UI/API to accept "+
+		"the identity in it (e.g. \"https://grain.example.com\"); defaults to $GRAIN_HUB_ISSUER. All three of -ui-hub-issuer, "+
+		"-ui-hub-audience, and -ui-hub-keys-url must be set to enable the \"registry\" IdentityVerifier")
+	uiHubAudience := fs.String("ui-hub-audience", "", "the single audience URL a signed X-Grain-Hub-Assertion must carry "+
+		"(e.g. \"https://<name>.<instance-domain>\"); defaults to $GRAIN_HUB_AUDIENCE")
+	uiHubKeysURL := fs.String("ui-hub-keys-url", "", "where the hub's ES256 signing keys are published as a JWK set "+
+		"(e.g. \"https://grain.example.com/.well-known/jwks.json\"); defaults to $GRAIN_HUB_KEYS_URL")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
 		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
 		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
@@ -323,6 +323,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"Defaults to $GRAIN_REQUIRE_VERIFIER")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	deploymentOwner := fs.String("deployment-owner", "", "human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($"+ui.DeploymentOwnerEnv+" when unset)")
+	hostAccounts := fs.String("host-accounts", "", "comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as "+
+		"(the daemon's own account maps to -deployment-owner unless named here; $"+ui.HostAccountsEnv+" when unset)")
+	apiSocket := fs.String("api-socket", "", "unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names "+
+		"(default <data-dir>/api/grain.sock, served only when some account is mapped; \"none\" turns it off)")
 	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve allowed group: entries against this Cloud Identity API base URL "+
 		"(a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint+"; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT")
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
@@ -553,7 +557,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
 	grit := daemon.RegisterGritFlags(fs)
-	registryFlags := registerRegistryFlags(fs)
+	hubFlags := registerHubFlags(fs)
 
 	// The CI job cache's bounds (ci.DirCacheOptions). Seeds, like the CI
 	// history's four below and unlike what they were until
@@ -1057,8 +1061,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	// than being the end of the process; anything else about this line
 	// -- a value a defined flag cannot take -- still is, on one line
 	// rather than behind the whole flag list (daemon_unknown_flags.go).
+	// The Grain Hub's flags were the Grain Registry's, -registry-url and
+	// the rest; the old names parse for a release (renamed_flags.go).
+	renamed := defineRenamedFlags(fs, append(hubDaemonFlagNames, "ui-hub-issuer", "ui-hub-audience", "ui-hub-keys-url")...)
 	unknownFlags, err := readDaemonFlags(fs, args)
 	if err != nil {
+		return daemon.Config{}, fs, unknownFlags, err
+	}
+	if err := renamed.resolve(); err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
 	if *flagNames {
@@ -1138,6 +1148,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		if env := strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv)); env != "" {
 			*deploymentOwner = env
 		}
+	}
+	if !passed["host-accounts"] {
+		if env := strings.TrimSpace(os.Getenv(ui.HostAccountsEnv)); env != "" {
+			*hostAccounts = env
+		}
+	}
+	parsedHostAccounts, err := ui.ParseHostAccounts(*hostAccounts)
+	if err != nil {
+		return daemon.Config{}, fs, unknownFlags, err
 	}
 	if !passed["object-store"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
@@ -1254,13 +1273,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
-		UiRegistryIssuer:        *uiRegistryIssuer,
-		UiRegistryAudience:      *uiRegistryAudience,
-		UiRegistryKeysURL:       *uiRegistryKeysURL,
+		UiHubIssuer:             *uiHubIssuer,
+		UiHubAudience:           *uiHubAudience,
+		UiHubKeysURL:            *uiHubKeysURL,
 		UiRequireVerifier:       strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		DeploymentOwner:         strings.TrimSpace(*deploymentOwner),
+		HostAccounts:            parsedHostAccounts,
+		APISocket:               strings.TrimSpace(*apiSocket),
 		UiCloudIdentityEndpoint: strings.TrimSpace(*uiCloudIdentityEndpoint),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,
@@ -1361,7 +1382,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
-	registryFlags.apply(&cfg, passed)
+	hubFlags.apply(&cfg, passed)
 	if err = upgradeSource.apply(&cfg, passed); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
@@ -1378,5 +1399,5 @@ func checkConfig(cfg daemon.Config) error {
 	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
 		return err
 	}
-	return checkRegistryConfig(cfg)
+	return checkHubConfig(cfg)
 }

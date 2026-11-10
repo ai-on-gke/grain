@@ -7,9 +7,7 @@ Publishing assets needs nothing but the repository's own `GITHUB_TOKEN` with
 `contents: write`; installing from them needs nothing but HTTPS to
 github.com and a Docker engine — no registry, no registry credential.
 
-The Google edition publishes the same way, with the same contract, so one
-loader (`pkg/upgrade`'s `release-assets` source) reads both. Contract v2
-(operator-approved 2026-11-04) replaces v1 where they differ.
+Contract v2 (operator-approved 2026-11-04) replaces v1 where they differ.
 
 ## The contract
 
@@ -169,16 +167,16 @@ commit the git tag `latest` names, with copies of that commit's
 existed has no `sha-<short>` release; the automatic run warns and skips
 it, and asking for it by name fails.
 
-`promote.yml` and `publish-release.yml`, and `release-train-assets.yml`
-for an rc tag, also build the release's grain CLI in a `cli` job holding
-only `contents: read` (`scripts/build-cli.sh`, `RELEASE=<release>`) and
-hand it to a `cli-assets` job that runs `scripts/release-assets.sh
-cli-publish` once the release itself is published. `promote-release.yml`
-builds none: a release it approves gets its CLI from `promote.yml`'s next
-run, which publishes it for the release the git tag `latest` names. Both
-jobs are skipped once the release carries its `checksums.txt`;
-`promote.yml`'s automatic run skips a release that does not exist
-(`RELEASE_CLI_SKIP_UNRELEASED=true`), as `promote` does. Every
+`promote.yml`, `promote-release.yml` and `publish-release.yml`, and
+`release-train-assets.yml` for an rc tag, also build the release's grain
+CLI in a `cli` job holding only `contents: read` (`scripts/build-cli.sh`,
+`RELEASE=<release>`) and hand it to a `cli-assets` job that runs
+`scripts/release-assets.sh cli-publish` once the release itself is
+published, so `GET /cli/install.sh` works as soon as a promotion or rc
+publish finishes. Both jobs are skipped once the release carries its
+`checksums.txt`; `promote.yml`'s automatic run skips both building and
+publishing when neither the GitHub Release nor its `sha-<short>` assets
+exist (`RELEASE_CLI_SKIP_UNRELEASED=true`), as `promote` does. Every
 `cli-assets` job queues in one concurrency group per release
 (`grain-cli-assets-<release>`), so no two runs upload the same release's
 CLI at once.
@@ -200,10 +198,9 @@ sha-<short> <version> <release>...` (an rc as `vX.Y.0-rc.N` and
   instead, as before. A name with no release at all falls back to
   `docker.io/grainai/grain`. `GRAIN_IMAGE_VERIFY_KEY` (cosign) applies to
   registry images only. The unit's `-upgrade-image` stays the registry
-  repository (`docker.io/grainai/grain`), never a manifest ref: the
-  daemon's `release-assets` upgrade source
-  ([release-asset-upgrades.md](release-asset-upgrades.md)) maps it to this
-  repository's releases and falls back to it.
+  repository (`docker.io/grainai/grain`), never a manifest ref: subsequent
+  in-place upgrades (`pkg/upgrade`) pull from that container registry
+  (`docker pull`).
 - `scripts/install-grain.sh -version vX.Y.Z` installs the CLI the same
   way; `-image REPO [-key cosign.pub]` pulls a registry image instead.
 
@@ -231,20 +228,17 @@ kubelet look the name up on Docker Hub. Without a mirror, the
 
 ## Existing deployments
 
-Existing OSS installs upgrade from a registry: `docker.io/grainai/grain`
+Existing OSS installs upgrade from a container registry: `docker.io/grainai/grain`
 since the Docker Hub move, `ghcr.io/bwsalmon/grain/grain` before it. Nothing
-here deletes any of those images, and Docker Hub keeps receiving every
-build. The core loader's `release-assets` source maps both repositories to
-this one's releases and falls back to the registry when a release has no
-manifest, so an install whose running build contains that loader moves
-over on its next upgrade.
+here deletes any of those images, Docker Hub keeps receiving every build, and
+the alias table in `pkg/installtrack/installtrack.go` transitions pre-move
+`ghcr.io/bwsalmon/grain/*` installs onto `docker.io/grainai/*`.
 
-An install still running a build from before the loader and the Docker Hub
-alias table only ever looks at GHCR, whose tags stopped moving when the
-GHCR pipeline broke. It can reach the new loader only through one last
-GHCR publish of a current `main` build — an operator step, from a scratch
-clone at that commit, with a `bwsalmon` classic PAT holding
-`write:packages`:
+An install still running a build from before the Docker Hub alias table only
+ever looks at GHCR, whose tags stopped moving when the GHCR pipeline broke. It
+can reach the alias table only through one last GHCR publish of a current
+`main` build — an operator step, from a scratch clone at that commit, with a
+`bwsalmon` classic PAT holding `write:packages`:
 
 ```sh
 export RELEASE_IMAGE_REPO=bwsalmon/grain GRAIN_CI_REPO=ai-on-gke/grain \
@@ -252,9 +246,9 @@ export RELEASE_IMAGE_REPO=bwsalmon/grain GRAIN_CI_REPO=ai-on-gke/grain \
   PACKAGE_PUBLISH_TOKEN=<pat>
 GRAIN_CI_REF=main bash scripts/release-images.sh all        # :sha-<7>, :main
 GRAIN_CI_REF=candidate bash scripts/release-images.sh all   # only if an install follows candidate
-# once a release containing the loader is promoted (git tag latest on it):
+# once a release containing the alias table is promoted (git tag latest on it):
 bash scripts/release-images.sh promote vX.Y.Z               # :vX.Y.Z, :latest
 ```
 
-Once such an install has upgraded, it reads release assets (and Docker Hub
-as the fallback) and never needs GHCR again.
+Once such an install has upgraded, it pulls from Docker Hub and never needs
+GHCR again.

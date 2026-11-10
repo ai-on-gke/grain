@@ -42,3 +42,4 @@ node_modules/
 
 # A CI cache tests of pkg/cli start in their own directory, as above.
 /pkg/cli/state/
+/image-vulns-report/

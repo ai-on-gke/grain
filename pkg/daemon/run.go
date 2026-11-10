@@ -38,13 +38,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
-	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -394,6 +394,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// the UI's own open of the secrets (ui_server.go), never to this one,
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
+	retrySecretsKey(ctx, secretStore)
 	// A dispatch condition's text (DispatchConditions) is served to
 	// every queued task's reason, which an agent reads from its sandbox,
 	// so it is redacted with the same list the journal is read through
@@ -882,7 +883,7 @@ func Run(ctx context.Context, cfg Config) error {
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
 		WithCapabilityServers(capabilityServers).
 		withHostdCapabilityServers(hostdCapabilityServers)
-	registryMgr := NewRegistryManager(RegistryManagerOptions{
+	registryMgr := NewHubManager(HubManagerOptions{
 		Store:      store,
 		Secrets:    secretStore,
 		LiveConfig: live.Current,
@@ -898,7 +899,7 @@ func Run(ctx context.Context, cfg Config) error {
 			return api.HealthOK, ""
 		},
 	})
-	live.WithRegistry(registryMgr)
+	live.WithHub(registryMgr)
 	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}

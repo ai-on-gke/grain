@@ -111,7 +111,7 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 func pipelineStewardTemplate(stateRepo RepoRef) *Template {
 	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+2)
 	for _, preset := range PipelineStewardAPIPresets {
-		grants = append(grants, Grant{Capability: APIGrantPrefix + preset, Via: GrantByGrain})
+		grants = append(grants, Grant{Capability: APIRef(preset), Via: GrantByGrain})
 	}
 	// What self-debug became (SelfDebugGrants): its api preset for the
 	// task readers and grain#source for grain's own source.
@@ -262,21 +262,25 @@ func writeRedRCSection(b *strings.Builder) {
 		"title has the marker: message it and name it in your report. If `main` is red too, the " +
 		"base-branch repair is the fix. Do not file another; name `<rc_tag>` in your report, since a red `main` already stops the train " +
 		"cutting.\n")
-	b.WriteString("3. **`rc.2` red: decide whether trunk churn broke it.** Compare its failure with " +
-		"`rc.1`'s (`pipeline.rc-failed:vX.Y.Z-rc.1`). The train cuts `rc.3` from `release/vX.Y.Z`, " +
-		"which it branches from `rc.2`'s commit, and only targeted `fix:` commits go there. If `rc.2` " +
-		"failed on a regression `rc.1` did not have, file the fix on `main` first, then a second " +
-		"`propose_task` with `branch: release/vX.Y.Z` that cherry-picks it (`Backported-from: " +
-		"<main_sha>`), `depends_on` the first, and has the same `" + RCBlockerMarker("vX.Y.Z-rc.2") +
-		"` title. If it failed the way `rc.1` did, `rc.1`'s fix did not work. Say so, then file the " +
-		"fix and its backport the same way.\n")
+	b.WriteString("3. **From `rc.2` on, compare with the candidate before.** Every candidate is cut " +
+		"from `main`'s newest known-good commit; there is no `release/vX.Y.Z` branch to backport to, so " +
+		"fixes land on `main` only and the next cut picks them up. Compare the failure with the " +
+		"previous candidate's (`pipeline.rc-failed:vX.Y.Z-rc.(N-1)`). If it failed on a regression the " +
+		"previous one did not have, trunk churn broke it: triage the \"new since\" range. If it failed " +
+		"the way the previous one did, that candidate's fix did not work. Say so, and file the next " +
+		"fix the same way. A candidate tagged `-discarded` with `Discard-Reason: daily-cap` or " +
+		"`Discard-Reason: held-over` was dropped by the daily cap without being judged: it is not red, " +
+		"and there is nothing to triage.\n")
 	b.WriteString("4. **Escalate after " + strconv.Itoa(ReleaseMaxRCAttempts) + " red candidates.** Once " +
 		"`rc." + strconv.Itoa(ReleaseMaxRCAttempts) + "` is red (RELEASE_MAX_RC_ATTEMPTS), grain raises " +
-		"`pipeline.release-escalated:vX.Y.Z` to the person's Inbox and the train cuts no more of that " +
-		"version. File no more blockers for it. Put your triage beside it with `grain notify` subject " +
+		"`pipeline.release-escalated:vX.Y.Z` to the person's Inbox, once. The train does not stop: it " +
+		"keeps cutting `rc." + strconv.Itoa(ReleaseMaxRCAttempts+1) + "`, `rc." +
+		strconv.Itoa(ReleaseMaxRCAttempts+2) + "` and on from `main` until the day releases, and your " +
+		"`" + RCBlockerMarker("<rc_tag>") + "` tasks still hold each next cut. Keep triaging each red " +
+		"candidate as above. Put your triage beside the escalation with `grain notify` subject " +
 		"`agent.<your task id>:release-escalated:vX.Y.Z`. Give the suspect commits of each red " +
-		"candidate, whether they share a cause, and your recommendation: reset (another candidate once " +
-		"the fixes you name land) or advance to the next version. A person decides.\n\n")
+		"candidate, whether they share a cause, and what would make the version converge. A person " +
+		"decides.\n\n")
 	b.WriteString("`pipeline.flake-budget:<repo>:<item>` is a qualification item that spent " +
 		strconv.Itoa(FlakeBudgetRetries) + " flake retries in a day. Propose one de-flake task for it " +
 		"(a quarantine entry is a person's review), unless one is already open. " +

@@ -1973,8 +1973,8 @@ describe("AutoUpgradeSettings", () => {
   });
 });
 
-describe("ImageSourceSettings on UpgradePanel", () => {
-  it("shows release-asset source, fallback note, and saves source changes when unlocked", async () => {
+describe("Registry image mode on UpgradePanel", () => {
+  it("renders registry pull description without release-asset source selector", async () => {
     const baseStatus = {
       enabled: true,
       mode: "image",
@@ -1983,84 +1983,14 @@ describe("ImageSourceSettings on UpgradePanel", () => {
       phase: "done",
       branch: "main",
       source: "registry",
-      fallbackNote:
-        "release has no image assets; pulled from docker.io/grainai/grain",
-      detail:
-        "release has no image assets; pulled from docker.io/grainai/grain",
+      detail: "pulled docker.io/grainai/grain:main",
       imageRepo: "docker.io/grainai/grain",
       defaultImageRepo: "docker.io/grainai/grain",
       imageRepos: ["docker.io/grainai/grain"],
       imageSource: {
-        source: "release-assets",
+        source: "registry",
         sourceDefault: true,
         locked: false,
-        fallback: "registry",
-        releaseRepository: "github.com/ai-on-gke/grain",
-        manifestAsset: "images.json",
-        checksumSuffix: ".sha256",
-      },
-    };
-
-    let putBody = null;
-    api.mockImplementation((url, opts) => {
-      if (
-        String(url).includes("/api/upgrade/source") &&
-        opts?.method === "PUT"
-      ) {
-        putBody = JSON.parse(opts.body);
-        return Promise.resolve({
-          ...baseStatus,
-          imageSource: {
-            source: "registry",
-            sourceDefault: false,
-            locked: false,
-          },
-        });
-      }
-      if (String(url).includes("/api/upgrade/targets")) {
-        return Promise.resolve({
-          targets: [{ name: "main", kind: "channel", allowed: true }],
-          default: "main",
-        });
-      }
-      return Promise.resolve(baseStatus);
-    });
-
-    const user = userEvent.setup();
-    render(<UpgradePanel showError={() => {}} />);
-
-    expect(
-      await screen.findByText(/Last upgrade: release has no image assets/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByDisplayValue("github.com/ai-on-gke/grain"),
-    ).not.toBeDisabled();
-
-    await user.click(screen.getByRole("combobox", { name: /^source$/i }));
-    await user.click(
-      screen.getByRole("option", { name: /Container registry only/i }),
-    );
-    expect(putBody).toEqual({ mode: "registry", releaseRepository: "" });
-  });
-
-  it("renders read-only when locked by a daemon flag or environment variable", async () => {
-    const lockedStatus = {
-      enabled: true,
-      mode: "image",
-      channel: "main",
-      running: { image: "docker.io/grainai/grain:main" },
-      phase: "done",
-      branch: "main",
-      source: "release-assets",
-      detail: "loaded grain-image.tar.gz",
-      imageRepo: "docker.io/grainai/grain",
-      imageSource: {
-        source: "release-assets",
-        sourceDefault: false,
-        locked: true,
-        releaseRepository: "ghe.internal.example/platform/grain",
-        manifestAsset: "images.json",
-        checksumSuffix: ".sha256",
       },
     };
 
@@ -2071,17 +2001,19 @@ describe("ImageSourceSettings on UpgradePanel", () => {
           default: "main",
         });
       }
-      return Promise.resolve(lockedStatus);
+      return Promise.resolve(baseStatus);
     });
 
     render(<UpgradePanel showError={() => {}} />);
 
     expect(
-      await screen.findByText("Read-only (set by flag/env)"),
+      await screen.findByText(
+        /Pulls the image CI published for the branch below/i,
+      ),
     ).toBeInTheDocument();
     expect(
-      screen.getByDisplayValue("ghe.internal.example/platform/grain"),
-    ).toBeDisabled();
+      screen.queryByTestId("upgrade-image-source"),
+    ).not.toBeInTheDocument();
   });
 
   it("replaces in-VM upgrade and SQLite migration controls with an external management notice when selfUpgradeDisabled is set", async () => {

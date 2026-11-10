@@ -224,6 +224,9 @@ func hasPullRequest(task model.Task) bool {
 // other order would post a fresh copy of the note every cycle for as
 // long as the close kept failing.
 func closeFinishedReview(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
+	if err := clearReviewFindingsOnCleanReview(ctx, store, task); err != nil {
+		return err
+	}
 	if err := closeTask(ctx, store, task.ID, now, "review finished", func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
@@ -819,26 +822,23 @@ func escalateUnfinishedReview(ctx context.Context, store *model.Store,
 
 	var comment string
 	if reviewTaskID == "" {
-		// The other way the wait can run out: no review task was ever
-		// filed at all, so SyncReviews has been failing for this task for
-		// the whole deadline -- a template deleted out from under it is
-		// the one way that happens on purpose.
 		comment = fmt.Sprintf(
 			"%s has been waiting more than %s for the review attached to it, and no "+
 				"review task was ever filed -- the template it names (`%s`) may be gone. "+
-				"The merge queue has stopped waiting and moved on to the next task in "+
-				"%s; %s merges as soon as it reads clean, reviewed or not. Check the "+
-				"daemon's log for what filing the review failed on.",
+				"The merge queue has stepped around it to the next task in %s; %s remains "+
+				"held until its required review finishes or an operator overrides the review "+
+				"gate under merge:force with a reason. Check the daemon's log for what filing "+
+				"the review failed on.",
 			ref, humanDuration(defaultReviewTaskDeadline), task.ReviewTemplateID, ref.Repo, ref,
 		)
 	} else {
 		comment = fmt.Sprintf(
 			"The review filed for %s never finished -- task %s was filed to review it more "+
 				"than %s ago and still hasn't run to completion -- so the merge queue has "+
-				"stopped waiting on it and moved on to the next task in %s. Have a look at "+
-				"%s (its run, or its own checks, may be stuck); %s itself merges as soon as "+
-				"it reads clean, reviewed or not, so close or finish the review depending on "+
-				"which you want.",
+				"stepped around it to the next task in %s. Have a look at %s (its run, or "+
+				"its own checks, may be stuck); %s remains held until that required review "+
+				"finishes cleanly, or an operator overrides the review gate under merge:force "+
+				"with a reason.",
 			ref, reviewTaskID, humanDuration(defaultReviewTaskDeadline), ref.Repo,
 			reviewTaskID, ref,
 		)

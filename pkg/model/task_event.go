@@ -73,13 +73,27 @@ const (
 	// is their reason for denying one.
 	TaskEventAccessGranted TaskEventKind = "access-granted"
 	TaskEventAccessDenied  TaskEventKind = "access-denied"
+	// TaskEventGateOverridden records an operator's merge:force override of
+	// named merge gates, with Reason = the operator's typed reason and
+	// Detail = the overridden gates and commit SHA.
+	TaskEventGateOverridden TaskEventKind = "gate-overridden"
+	// TaskEventGrantAttached and TaskEventGrantDetached record one grant
+	// given to or taken from a task after it was filed: a capability, or
+	// a repository read or write (unified-grants Q5). Detail is the
+	// grant's canonical string, Grant.Key -- its reference, then "=" and
+	// its normalized with: -- so a repo#write names its repo and base.
+	TaskEventGrantAttached TaskEventKind = "grant-attached"
+	TaskEventGrantDetached TaskEventKind = "grant-detached"
 )
 
 // TransitionReopened is the timeline's name for a reopen. It is not one
 // of StateOf's answers -- a reopened task is in whatever state its record
 // implies -- but the moment it came back is worth a step of its own, the
 // same way the close it undid is.
-const TransitionReopened State = "reopened"
+const (
+	TransitionReopened       State = "reopened"
+	TransitionGateOverridden State = "gate_overridden"
+)
 
 // TaskEvent is one close or reopen of a task, a change to its
 // auto-merge, or a note of who took one of the actions above.
@@ -343,6 +357,8 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionHumanReviewRequested
 		case TaskEventHumanReviewReleased:
 			state = TransitionHumanReviewReleased
+		case TaskEventGateOverridden:
+			state = TransitionGateOverridden
 		default:
 			// A note about an action, not a step (TaskEventSubmitted, ...).
 			continue

@@ -971,3 +971,123 @@ func TestAdmissionRejudgesNormalizedDefaultArgsAgainstPolicyAndCatalogue(t *test
 		t.Fatalf("grant wait = %+v, %v; want %s", wait, err, model.CatalogueWaitCapability)
 	}
 }
+
+// CapabilityPolicy rules targeting https://grain.dev/capabilities/api#<scope>
+// must be enforced at task admission even when the task holds no pass-minting
+// capability reference (HasCapabilityRef == false), or alongside pass-minting
+// references before any external server mints.
+func TestAdmissionEnforcesCapabilityPolicyOnAPIGrants(t *testing.T) {
+	caller := &mintCaller{}
+	deps, store, ctx, _ := passHarness(t, caller)
+	if err := store.PutConfig(ctx, model.Config{
+		CapabilityPolicy: model.CapabilityPolicy{
+			Rules: []model.CapabilityPolicyRule{
+				{Capability: model.APIRef("ci-read"), Deny: true},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Task with only canonical .../api#ci-read (no external CapabilityServers needed).
+	noServersDeps := deps
+	noServersDeps.CapabilityServers = nil
+	admitNoServers := capabilityAdmitter(noServersDeps, admitAll)
+	for i, grant := range []string{model.APIRef("ci-read"), "api:ci-read"} {
+		id := string(rune('a'+i)) + "100"
+		if err := store.PutTask(ctx, model.Task{
+			ID:     id,
+			Title:  "api policy check",
+			Target: &widgets,
+			Grants: []model.Grant{{Capability: grant, Via: model.GrantByLabel}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		adm, err := admitNoServers(ctx, dispatch.Candidate{TaskID: id, RunID: dispatch.RunID(id, 1), Attempt: 1})
+		if err != nil || adm.Admitted {
+			t.Fatalf("grant %q: admit = %+v, %v; want policy refusal", grant, adm, err)
+		}
+		if comments, _ := store.Comments(ctx, id); len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "capability policy denies") {
+			t.Errorf("grant %q: comments = %+v, want capability policy refusal comment", grant, comments)
+		}
+	}
+
+	// Allowed API grant dispatches cleanly without CapabilityServers.
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "102",
+		Title:  "allowed api grant",
+		Target: &widgets,
+		Grants: []model.Grant{{Capability: model.APIRef("tasks:read"), Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if adm, err := admitNoServers(ctx, dispatch.Candidate{TaskID: "102", RunID: dispatch.RunID("102", 1), Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("allowed api grant admit = %+v, %v; want admitted", adm, err)
+	}
+
+	// 2. Task holding both gcp-key and denied api#ci-read is refused before gcp-key mints.
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "103",
+		Title:  "mixed grants",
+		Target: &widgets,
+		Grants: []model.Grant{
+			{Capability: passTestCap + "#gcp-key", Via: model.GrantByLabel},
+			{Capability: model.APIRef("ci-read"), Via: model.GrantByLabel},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admit := capabilityAdmitter(deps, admitAll)
+	if adm, err := admit(ctx, dispatch.Candidate{TaskID: "103", RunID: dispatch.RunID("103", 1), Attempt: 1}); err != nil || adm.Admitted {
+		t.Fatalf("mixed grants admit = %+v, %v; want policy refusal", adm, err)
+	}
+	if got := caller.called(); len(got) != 0 {
+		t.Errorf("external server called %q when api grant was denied by policy", got)
+	}
+}
+
+// A task's own reads and writes are the …/repo#read and #write grants
+// they project to (unified-grants §3): a capability policy deny rule
+// naming one refuses the task at admission, while an allow rule written
+// for CI jobs' {repo} grants refuses no task, and a task with neither is
+// admitted.
+func TestAdmissionEnforcesCapabilityPolicyOnTaskRepoAccess(t *testing.T) {
+	caller := &mintCaller{}
+	deps, store, ctx, _ := passHarness(t, caller)
+	if err := store.PutConfig(ctx, model.Config{
+		CapabilityPolicy: model.CapabilityPolicy{
+			Rules: []model.CapabilityPolicyRule{
+				{Capability: model.RepoWriteRef, Deny: true, RunKinds: []string{model.CapabilityRunTask}},
+				{Capability: model.RepoReadRef, RunKinds: []string{model.CapabilityRunCI}},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deps.CapabilityServers = nil
+	admit := capabilityAdmitter(deps, admitAll)
+	docs := model.RepoRef{Owner: "acme", Name: "docs"}
+	for _, tc := range []struct {
+		id     string
+		task   model.Task
+		admits bool
+	}{
+		{"r200", model.Task{Reads: []model.RepoRef{docs}}, true},
+		{"w201", model.Task{Writes: []model.WriteTarget{{Repo: docs, Base: "main"}}}, false},
+		{"n202", model.Task{}, true},
+	} {
+		tc.task.ID, tc.task.Title, tc.task.Target = tc.id, "repo access policy check", &widgets
+		if err := store.PutTask(ctx, tc.task); err != nil {
+			t.Fatal(err)
+		}
+		adm, err := admit(ctx, dispatch.Candidate{TaskID: tc.id, RunID: dispatch.RunID(tc.id, 1), Attempt: 1})
+		if err != nil || adm.Admitted != tc.admits {
+			t.Fatalf("%s: admit = %+v, %v; want admitted %v", tc.id, adm, err, tc.admits)
+		}
+		if !tc.admits {
+			if comments, _ := store.Comments(ctx, tc.id); len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "capability policy denies") {
+				t.Errorf("%s: comments = %+v, want capability policy refusal comment", tc.id, comments)
+			}
+		}
+	}
+}

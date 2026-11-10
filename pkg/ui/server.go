@@ -74,8 +74,12 @@ type Server struct {
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
-	access            accessLimiter
-	accessCode        atomic.Pointer[accessCodeFile]
+	access     accessLimiter
+	accessCode atomic.Pointer[accessCodeFile]
+	// accessCodeMode is the code's mode file and accessCodeNotices the
+	// throttle on its recovery-use notifications (access_code_mode.go).
+	accessCodeMode    atomic.Pointer[accessCodeFile]
+	accessCodeNotices accessNoticeThrottle
 	externalLimiter   *externalAgentLimiter
 	defaultGroupsOnce sync.Once
 	defaultGroups     GroupMemberChecker
@@ -123,17 +127,17 @@ func NewServerWithClient(client *Client) *Server {
 
 const maxTunnelRequestBodyBytes = 64 << 20 // 64 MiB cap on non-upgraded tunnel request bodies
 
-// RegistryTunnelHandler returns an http.Handler for serving accepted mux
-// streams on an outbound registry tunnel (-registry-connect). Every tunneled
+// HubTunnelHandler returns an http.Handler for serving accepted mux
+// streams on an outbound registry tunnel (-hub-connect). Every tunneled
 // request is gated unconditionally behind the "registry" IdentityVerifier
 // (X-Grain-Registry-Assertion, Source == "registry")—including open routes like
 // /api/config, /api/auth/*, and /api/hostd/connect—and loopback or access-code
 // shortcuts (grain_access cookies, X-Grain-Access-Code headers, and bearer
 // access codes) are unconditionally rejected.
-func (s *Server) RegistryTunnelHandler() http.Handler {
+func (s *Server) HubTunnelHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w.Header())
-		r = r.Clone(withRegistryTunnelRequest(r.Context()))
+		r = r.Clone(withHubTunnelRequest(r.Context()))
 		if strings.TrimSpace(r.RemoteAddr) == "" || isLoopbackRequest(r) {
 			r.RemoteAddr = "tunnel-stream-remote"
 		}
@@ -145,17 +149,17 @@ func (s *Server) RegistryTunnelHandler() http.Handler {
 				Audience:              s.tasks.Config.IAPAudience,
 				Issuer:                s.tasks.Config.IAPIssuer,
 				KeysURL:               s.tasks.Config.IAPKeysURL,
-				RegistryIssuer:        s.tasks.Config.RegistryIssuer,
-				RegistryAudience:      s.tasks.Config.RegistryAudience,
-				RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
-				RequireVerifier:       string(AuthMethodRegistry),
+				HubIssuer:             s.tasks.Config.HubIssuer,
+				HubAudience:           s.tasks.Config.HubAudience,
+				HubKeysURL:            s.tasks.Config.HubKeysURL,
+				RequireVerifier:       string(AuthMethodHub),
 				RequireIAP:            false,
 				LocalAPIToken:         "",
 				AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 			}))
 		} else {
 			cfg, _ := IAPConfigFromContext(r.Context())
-			cfg.RequireVerifier = string(AuthMethodRegistry)
+			cfg.RequireVerifier = string(AuthMethodHub)
 			cfg.RequireIAP = false
 			cfg.LocalAPIToken = ""
 			r = r.WithContext(WithIAPConfig(r.Context(), cfg))
@@ -176,12 +180,12 @@ func (s *Server) RegistryTunnelHandler() http.Handler {
 			writeError(w, http.StatusUnauthorized, errors.New("bearer access codes are not accepted over the hub tunnel"))
 			return
 		}
-		cv := verifyRegistryTunnelCaller(r)
+		cv := verifyHubTunnelCaller(r)
 		r = r.WithContext(withCallerVerification(r.Context(), &cv))
 		if !cv.present || cv.err != nil {
 			err := cv.err
 			if err == nil {
-				err = errors.New(errVerifierRequired(string(AuthMethodRegistry)))
+				err = errors.New(errVerifierRequired(string(AuthMethodHub)))
 			}
 			writeAssertionRefused(w, r, err)
 			return
@@ -201,22 +205,30 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	tunnelReq := isRegistryTunnelRequest(r)
+	tunnelReq := isHubTunnelRequest(r)
 	if s.tasks != nil {
 		iapCfg := IAPConfig{
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
-			RegistryIssuer:        s.tasks.Config.RegistryIssuer,
-			RegistryAudience:      s.tasks.Config.RegistryAudience,
-			RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
+			HubIssuer:             s.tasks.Config.HubIssuer,
+			HubAudience:           s.tasks.Config.HubAudience,
+			HubKeysURL:            s.tasks.Config.HubKeysURL,
 			RequireVerifier:       s.tasks.Config.RequireVerifier,
 			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 		}
+		if s.accessCodeModeNow() == AccessCodeOff && strings.TrimSpace(r.Header.Get(ActingTaskHeader)) == "" {
+			// Off: no code is accepted, so every check of it -- the gate,
+			// the sign-in, a session cookie -- refuses alike. A run's own
+			// plumbing (ActingTaskHeader, held to its task's grants) still
+			// reaches the daemon with it until runs carry a credential of
+			// their own (docs/access-code.md).
+			iapCfg.LocalAPIToken = ""
+		}
 		if tunnelReq {
-			iapCfg.RequireVerifier = string(AuthMethodRegistry)
+			iapCfg.RequireVerifier = string(AuthMethodHub)
 			iapCfg.RequireIAP = false
 			iapCfg.LocalAPIToken = ""
 		}
@@ -314,7 +326,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
-			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
+			src := trustedRequestSource(r)
+			r = r.WithContext(withRequestSource(r.Context(), src))
+			if src == model.SourceAccessCode {
+				var admitted bool
+				if r, admitted = s.admitAccessCodeRequest(w, r); !admitted {
+					return
+				}
+			}
 		}
 	}
 	r = r.WithContext(model.WithEventActor(r.Context(), RequestActor(r.Context())))
@@ -383,9 +402,9 @@ func (s *Server) routes() {
 	s.route("POST /api/settings/plan", s.handlePlanSettings)
 	s.route("GET /api/settings/cli-run", s.handleGetCLIRunSettings)
 	s.route("PUT /api/settings/cli-run", s.handleUpdateCLIRunSettings)
-	s.route("GET /api/registry", s.handleGetRegistry)
-	s.route("POST /api/registry/heartbeat", s.handleTriggerRegistryHeartbeat)
-	s.route("GET /api/registry/status", s.handleGetRegistryInstanceStatus)
+	s.route("GET /api/registry", s.handleGetHub)
+	s.route("POST /api/registry/heartbeat", s.handleTriggerHubHeartbeat)
+	s.route("GET /api/registry/status", s.handleGetHubInstanceStatus)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
@@ -441,6 +460,7 @@ func (s *Server) routes() {
 	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
 	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
 	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
+	s.route("POST /api/pull-requests/submit", s.handleSubmitPullRequest)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
@@ -493,6 +513,8 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/local-script-approvals/{approval}/expire", s.handleExpireLocalScriptApproval)
 	s.route("POST /api/tasks/{id}/local-script-approvals/{approval}/answer", s.handleAnswerLocalScriptApproval)
 	s.route("GET /api/local-script-approvals", s.handleListLocalScriptApprovals)
+	s.route("GET /api/declarations", s.handleListDeclarationAcceptances)
+	s.route("POST /api/declarations/accept", s.handleAcceptDeclaration)
 	// What grain has learned about working here (model.Memory): read by
 	// anyone, written only by a run whose task holds the memory
 	// capability -- the nightly memory agent through update_memory -- or
@@ -690,6 +712,7 @@ func (s *Server) routes() {
 	s.route("DELETE /api/github-tokens/{name}", s.handleDeleteGitHubToken)
 
 	s.route("GET /api/secrets", s.handleListSecrets)
+	s.route("POST /api/secrets/redact", s.handleRedactSecrets)
 	s.route("PUT /api/secrets/{secret}/{key}", s.handleSetSecret)
 	s.route("DELETE /api/secrets/{secret}/{key}", s.handleDeleteSecretKey)
 	s.route("DELETE /api/secrets/{secret}", s.handleDeleteSecret)
@@ -706,6 +729,8 @@ func (s *Server) routes() {
 	s.route("POST /api/state-repo/pull-requests", s.handleOpenConfigPullRequest)
 	s.route("POST /api/state-repo/remote", s.handleSetStateRepoRemote)
 	s.route("POST /api/state-repo/secrets-key", s.handleImportSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/wrap", s.handleWrapSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/unwrap", s.handleUnwrapSecretsKey)
 	s.route("POST /api/state-repo/import-key", s.handleImportSecretsKey)
 	s.route("POST /api/state-repo/secrets-repo", s.handleSetSecretsRepo)
 	s.route("POST /api/state-repo/reset-notice", s.handleDismissResetNotice)
@@ -838,6 +863,7 @@ func (s *Server) routes() {
 	s.route("POST /api/access/principals", s.handleAllowPrincipal)
 	s.route("PATCH /api/access/principals/{entry}", s.handleSetPrincipalRole)
 	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
+	s.route("GET /api/access/history", s.handleAccessHistory)
 
 	// Controller MCP server (mcp_endpoint.go) shared by external BYO
 	// harnesses and built-in sessions/tasks holding api:* grants.

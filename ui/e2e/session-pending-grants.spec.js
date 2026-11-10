@@ -50,31 +50,55 @@ async function fakeLiveRun(page, taskID) {
 
 // fakeRunningTask answers taskID's detail as running with an open
 // attempt, leaving every other request to the demo.
+//
+// The session page polls the task's detail on its own, so a poll can
+// still be inside this handler when the page navigates or closes. Its
+// response is then disposed under it ("apiResponse.json: Response has
+// been disposed"), and nobody is waiting for that answer any more, so
+// the handler lets it go rather than failing the test.
+const goneAway = (err) => /disposed|closed|cancel|handled/i.test(String(err));
+
 async function fakeRunningTask(page, taskID) {
   await page.route(new RegExp(`/api/tasks/${taskID}$`), async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];
-    const response = await route.fetch({ headers });
-    const body = await response.json();
-    await route.fulfill({
-      response,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...body,
-        state: "running",
-        activityBySetup: false,
-        attempts: [
-          ...(body.attempts || []).map((a) => ({
-            ...a,
-            finishedAt: a.finishedAt || "2026-09-08T10:05:00Z",
-          })),
-          { number: 99, startedAt: "2026-09-08T11:00:00Z" },
-        ],
-      }),
-    });
+    let response, body;
+    try {
+      response = await route.fetch({ headers });
+      body = await response.json();
+    } catch (err) {
+      if (goneAway(err)) return;
+      throw err;
+    }
+    await route
+      .fulfill({
+        response,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          state: "running",
+          activityBySetup: false,
+          attempts: [
+            ...(body.attempts || []).map((a) => ({
+              ...a,
+              finishedAt: a.finishedAt || "2026-09-08T10:05:00Z",
+            })),
+            { number: 99, startedAt: "2026-09-08T11:00:00Z" },
+          ],
+        }),
+      })
+      .catch((err) => {
+        if (!goneAway(err)) throw err;
+      });
   });
 }
+
+// A poll still in fakeRunningTask's handler when the page goes would
+// otherwise be reported against whichever test is running when it lands.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
 
 for (const [name, size] of Object.entries(SIZES)) {
   test(`offers to apply a grant saved during a live run (${name})`, async ({
@@ -239,7 +263,8 @@ test("saves a grant removed from a session during a live run", async ({
   page,
   request,
 }) => {
-  const removed = "api:capabilities:detach";
+  const removed = "https://grain.dev/capabilities/api#capabilities:detach";
+  const removedLabel = "api:capabilities:detach";
   const before = (
     await (await request.get("/api/console-sessions")).json()
   ).sessions.find((s) => s.id === "director");
@@ -261,7 +286,7 @@ test("saves a grant removed from a session during a live run", async ({
         r.request().method() === "PUT" &&
         /\/api\/console-sessions\/director$/.test(r.url()),
     );
-    await page.getByRole("button", { name: `Remove ${removed}` }).click();
+    await page.getByRole("button", { name: `Remove ${removedLabel}` }).click();
     expect((await saved).status()).toBe(200);
     const { sessions } = await (
       await request.get("/api/console-sessions")

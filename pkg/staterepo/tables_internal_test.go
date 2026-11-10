@@ -398,6 +398,11 @@ var notSettings = []string{
 	// list until each repository has been polled once.
 	"repo_declaration",
 	"repo_declaration_sync",
+	// A person's acceptance of a declaration's grants
+	// (model.DeclarationAcceptance, task 3971): a grant made through
+	// grain by somebody holding the scope, which a branch of this
+	// repository must not be able to make on a person's behalf.
+	"declaration_acceptance",
 	// A declared template's `push:` list (grain/task-2536), the same kind
 	// of row again: re-read from the repository's default branch by every
 	// sync, and never a setting anybody proposes.
@@ -451,7 +456,7 @@ var notSettings = []string{
 	"secret_resolution_audit",
 	"credential_access_audit",
 	// Non-secret catalogue of secret names and keys stored in Google Cloud
-	// Secret Manager (-secrets-backend=secretmanager, design/design/registry.design.md):
+	// Secret Manager (-secrets-backend=secretmanager, design/design/hub.design.md):
 	// written live by secrets.Store alongside Secret Manager mutations, and
 	// kept out of grain/config so a config-repo merge never overwrites or
 	// erases the instance's secret catalogue.

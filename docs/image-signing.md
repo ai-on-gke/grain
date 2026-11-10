@@ -1,6 +1,6 @@
 # Image signing
 
-grain/task-1773, following #2386 and grain/task-1706. See also [release-asset-upgrades.md](release-asset-upgrades.md) for how `release-assets` upgrades verify `images.json` SHA-256 digests, `.sha256` sidecars, Docker image IDs, and `-upgrade-verify-cmd` on tarballs loaded without registry `RepoDigests`.
+grain/task-1773, following #2386 and grain/task-1706.
 
 ## The gap this closes
 
@@ -176,6 +176,20 @@ placeholder is replaced with the release's `cosign.pub`, every upgrade is
 refused at its signature step, while the daemon itself runs normally. No
 `--output` flag is passed, because the Kubernetes path reads the verified
 digest out of cosign's default JSON.
+
+The image's cosign is a v3 release (v3.1.4) while the release signs with
+v2 (`COSIGN_VERSION`, v2.4.1). That mix works because the signer writes
+cosign's legacy `.sig` signature, which every verifier reads: v2.4.1,
+v2.6.5 and v3.1.4 each verified the others' `--tlog-upload=false`
+signatures with the flags above, and printed the same
+`critical.image.docker-manifest-digest` JSON. The reverse is not true.
+cosign v3's default `sign` writes a new-format bundle (an OCI referrer)
+that v2.4.1's `verify` reports as "no signatures found", and v3 refuses
+`--tlog-upload=false` unless `--use-signing-config=false` is also given.
+Deployments still running an image with the v2.4.1 verifier must be
+able to verify the next release. So a move of the signer to v3 has to
+pass `--use-signing-config=false --new-bundle-format=false`, or wait
+until no supported image carries a v2.4.1 verifier.
 
 ### No verifier configured: warn, don't refuse
 

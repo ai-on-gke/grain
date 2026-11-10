@@ -318,6 +318,7 @@ var settingsDiffRows = []settingsDiffRow{
 	// line of output rather than breaking the two-column shape of every
 	// line around it.
 	{"promptExtension", "prompt extension", func(s ui.Settings) any { return s.PromptExtension }},
+	{"skills", "skills", func(s ui.Settings) any { return model.EncodeSkillsConfig(s.Skills) }},
 	{"taskBranchTemplate", "task branch template", func(s ui.Settings) any { return s.TaskBranchTemplate }},
 	{"deploymentId", "deployment id", func(s ui.Settings) any { return s.DeploymentID }},
 	{"repairTemplateID", "repair template", func(s ui.Settings) any { return s.RepairTemplateID }},
@@ -379,8 +380,8 @@ var settingsDiffRows = []settingsDiffRow{
 	{"autoGrantContextReads", "auto-grant context reads", func(s ui.Settings) any { return strings.Join(s.AutoGrantContextReads, ", ") }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
 	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
-	{"registry", "registry connection", func(s ui.Settings) any {
-		b, _ := json.Marshal(s.Registry)
+	{"hub", "hub connection", func(s ui.Settings) any {
+		b, _ := json.Marshal(settingsHubConfig(s))
 		return string(b)
 	}},
 }

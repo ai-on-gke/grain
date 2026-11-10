@@ -741,6 +741,9 @@ type Config struct {
 	// onto new ad-hoc tasks when neither the caller nor a template names one
 	// (empty or unattended means unattended).
 	DefaultHosting Hosting
+	// Skills is the deployment-wide default repository skill discovery
+	// configuration (nil means DefaultSkillFolders with discovery enabled).
+	Skills *SkillsConfig
 	// PromptExtension is the standing instruction text every run
 	// dispatched on this deployment is given on top of the prompt grain
 	// builds for it (grain/task-114) -- prompt_extension.go's own doc
@@ -953,10 +956,10 @@ type Config struct {
 	// context repository. Stored as JSON in one column.
 	AutoGrantContextReads []string
 	// Registry configures self-registration and periodic heartbeating with a
-	// grain registry as a connected entry (design/design/registry.design.md).
+	// grain hub as a connected entry (design/design/hub.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in
 	// grain_config.registry; registration tokens live in pkg/secrets.
-	Registry RegistryConfig
+	Hub HubConfig
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows

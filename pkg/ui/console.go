@@ -76,8 +76,11 @@ type ConsoleSessionsResponse struct {
 	// Enabled is whether this deployment serves consoles at all. False
 	// means Sessions is empty because there is nowhere for one to run,
 	// not because nobody has opened one.
-	Enabled  bool             `json:"enabled"`
-	Sessions []ConsoleSession `json:"sessions"`
+	Enabled    bool             `json:"enabled"`
+	Sessions   []ConsoleSession `json:"sessions"`
+	Total      int              `json:"total,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+	NextCursor string           `json:"nextCursor,omitempty"`
 }
 
 // ConsoleOutputResponse is what GET /api/console/{task}/output answers
@@ -116,6 +119,11 @@ type consoleResizeRequest struct {
 // handleListConsoles is the Consoles section: every session running now,
 // newest first.
 func (s *Server) handleListConsoles(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	if s.tasks.Config.Consoles == nil {
 		writeJSON(w, http.StatusOK, ConsoleSessionsResponse{})
 		return
@@ -144,7 +152,18 @@ func (s *Server) handleListConsoles(w http.ResponseWriter, r *http.Request) {
 			Bytes:     info.Bytes,
 		})
 	}
-	writeJSON(w, http.StatusOK, ConsoleSessionsResponse{Enabled: true, Sessions: sessions})
+	resp := ConsoleSessionsResponse{Enabled: true, Sessions: sessions}
+	if list.Paged {
+		matched := filterList(sessions, func(cs ConsoleSession) bool {
+			return list.matches(cs.TaskID, cs.Title, cs.Repo)
+		})
+		page := pageOf(matched, list)
+		resp.Sessions = page.Items
+		resp.Total = page.Total
+		resp.Truncated = page.Truncated
+		resp.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleConsoleOutput is a client's poll: everything this session has
@@ -253,6 +272,15 @@ func (s *Server) console(w http.ResponseWriter, r *http.Request) (*console.Sessi
 		if task == nil {
 			writeError(w, http.StatusNotFound, console.ErrNoSession)
 			return nil, false
+		}
+		if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
+			allowedRepo := func(need APIScope, targetRepo string) bool {
+				return targetRepo == "" || a.allows(need, targetRepo)
+			}
+			if err := s.tasks.roleTaskWithin(r.Context(), a, *task, "access console of", allowedRepo, s.normalizeCapFn()); err != nil {
+				writeError(w, http.StatusForbidden, err)
+				return nil, false
+			}
 		}
 	}
 	session := s.tasks.Config.Consoles.Get(id)

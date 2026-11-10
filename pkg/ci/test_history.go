@@ -16,6 +16,7 @@ package ci
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -39,12 +40,16 @@ const (
 
 // TestExecution records a single execution or occurrence of a test within a CI run/job.
 type TestExecution struct {
-	RunID     string              `json:"runId"`
-	Repo      string              `json:"repo"`
-	Ref       string              `json:"ref"`
-	Commit    string              `json:"commit,omitempty"`
-	JobID     string              `json:"jobId"`
-	JobName   string              `json:"jobName,omitempty"`
+	RunID   string `json:"runId"`
+	Repo    string `json:"repo"`
+	Ref     string `json:"ref"`
+	Commit  string `json:"commit,omitempty"`
+	JobID   string `json:"jobId"`
+	JobName string `json:"jobName,omitempty"`
+	// Provider is the CI that ran it (ProviderGrain, ProviderGitHubActions),
+	// and Workflow, for a GitHub Actions run, the workflow's file or name.
+	Provider  string              `json:"provider,omitempty"`
+	Workflow  string              `json:"workflow,omitempty"`
 	Status    TestExecutionStatus `json:"status"`
 	StartedAt *time.Time          `json:"startedAt,omitempty"`
 	Duration  time.Duration       `json:"duration,omitempty"`
@@ -72,6 +77,28 @@ type TestHistoryReport struct {
 	// having no history.
 	QuarantinedRate float64         `json:"quarantinedRate"`
 	RecentRuns      []TestExecution `json:"recentRuns,omitempty"`
+	// Sources are the CI providers the runs examined came from, each with
+	// how many runs and the window they span: what the counts above are
+	// counted over, so a history read from a retired CI mode's month-old
+	// runs says so rather than passing for a current one.
+	Sources []TestHistorySource `json:"sources,omitempty"`
+	// PassesUncounted is that some runs examined were GitHub Actions',
+	// which grain keeps only the failing jobs' log tails of: a pass of
+	// the test there is not observed, so Passed and the rates undercount
+	// its passes.
+	PassesUncounted bool `json:"passesUncounted,omitempty"`
+	// Notes are what the reader of the runs said about them: runs left
+	// out, a forge that could not be read.
+	Notes []string `json:"notes,omitempty"`
+}
+
+// TestHistorySource is one CI provider's share of the runs a
+// TestHistoryReport examined.
+type TestHistorySource struct {
+	Provider string     `json:"provider"`
+	Runs     int        `json:"runs"`
+	Oldest   *time.Time `json:"oldest,omitempty"`
+	Newest   *time.Time `json:"newest,omitempty"`
 }
 
 var (
@@ -92,11 +119,36 @@ func QueryTestHistory(runs []Run, testName string) TestHistoryReport {
 
 	var executions []TestExecution
 
+	sources := map[string]*TestHistorySource{}
+	var order []string
 	for _, run := range runs {
+		provider := ProviderOf(run)
+		src := sources[provider]
+		if src == nil {
+			src = &TestHistorySource{Provider: provider}
+			sources[provider] = src
+			order = append(order, provider)
+		}
+		src.Runs++
+		if at := run.StartedAt; at != nil {
+			if src.Oldest == nil || at.Before(*src.Oldest) {
+				src.Oldest = at
+			}
+			if src.Newest == nil || at.After(*src.Newest) {
+				src.Newest = at
+			}
+		}
+		if provider == ProviderGitHubActions {
+			report.PassesUncounted = true
+		}
 		for _, job := range run.Jobs {
 			execs := extractJobTestExecutions(run, job, testName)
 			executions = append(executions, execs...)
 		}
+	}
+
+	for _, provider := range order {
+		report.Sources = append(report.Sources, *sources[provider])
 	}
 
 	// Sort recent executions newest first by StartedAt or Run ID
@@ -139,7 +191,41 @@ func QueryTestHistory(runs []Run, testName string) TestHistoryReport {
 }
 
 func extractJobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
+	results := jobTestExecutions(run, job, targetTest)
+	provider, workflow := ProviderOf(run), historyWorkflow(run, job)
+	for i := range results {
+		results[i].Provider = provider
+		results[i].Workflow = workflow
+	}
+	return results
+}
+
+// historyWorkflow is the workflow a GitHub Actions run's job belongs to,
+// its file's name where grain knows it: "" for grain CI's runs.
+func historyWorkflow(run Run, job JobRun) string {
+	if ProviderOf(run) != ProviderGitHubActions {
+		return ""
+	}
+	if a := run.Actions; a != nil {
+		if a.Workflow != "" {
+			return path.Base(a.Workflow)
+		}
+		if a.WorkflowName != "" {
+			return a.WorkflowName
+		}
+	}
+	if job.WorkflowPath != "" {
+		return path.Base(job.WorkflowPath)
+	}
+	return job.Workflow
+}
+
+func jobTestExecutions(run Run, job JobRun, targetTest string) []TestExecution {
 	var results []TestExecution
+	startedAt := job.StartedAt
+	if startedAt == nil {
+		startedAt = run.StartedAt
+	}
 
 	// 1. Check Job FailureSummary
 	if job.FailureSummary != nil && len(job.FailureSummary.Tests) > 0 {
@@ -160,7 +246,7 @@ func extractJobTestExecutions(run Run, job JobRun, targetTest string) []TestExec
 					JobID:     job.JobID,
 					JobName:   job.Name,
 					Status:    status,
-					StartedAt: job.StartedAt,
+					StartedAt: startedAt,
 					Duration:  job.Duration(time.Now()),
 					Message:   tf.Message,
 					Location:  tf.Location,
@@ -195,7 +281,7 @@ func extractJobTestExecutions(run Run, job JobRun, targetTest string) []TestExec
 							JobID:     job.JobID,
 							JobName:   job.Name,
 							Status:    status,
-							StartedAt: job.StartedAt,
+							StartedAt: startedAt,
 							Duration:  job.Duration(time.Now()),
 						})
 					}
@@ -212,7 +298,7 @@ func extractJobTestExecutions(run Run, job JobRun, targetTest string) []TestExec
 							JobID:     job.JobID,
 							JobName:   job.Name,
 							Status:    TestStatusPass,
-							StartedAt: job.StartedAt,
+							StartedAt: startedAt,
 							Duration:  job.Duration(time.Now()),
 						})
 					}
@@ -229,7 +315,7 @@ func extractJobTestExecutions(run Run, job JobRun, targetTest string) []TestExec
 							JobID:     job.JobID,
 							JobName:   job.Name,
 							Status:    TestStatusSkipped,
-							StartedAt: job.StartedAt,
+							StartedAt: startedAt,
 							Duration:  job.Duration(time.Now()),
 						})
 					}
@@ -238,8 +324,11 @@ func extractJobTestExecutions(run Run, job JobRun, targetTest string) []TestExec
 		}
 
 		// 3. Fallback: If step outputs were not retained (e.g. summarized run list)
-		// and the job succeeded, and is a test job or general workflow
-		if !hasStepOutput && len(results) == 0 && job.Conclusion == ConclusionSuccess {
+		// and the job succeeded, and is a test job or general workflow.
+		// Not for a GitHub Actions job: grain keeps no log of one that
+		// passed, so its passing says nothing of whether this test ran.
+		if !hasStepOutput && len(results) == 0 && job.Conclusion == ConclusionSuccess &&
+			ProviderOf(run) != ProviderGitHubActions {
 			if isTestJob(job) {
 				results = append(results, TestExecution{
 					RunID:     run.ID,
@@ -249,7 +338,7 @@ func extractJobTestExecutions(run Run, job JobRun, targetTest string) []TestExec
 					JobID:     job.JobID,
 					JobName:   job.Name,
 					Status:    TestStatusPass,
-					StartedAt: job.StartedAt,
+					StartedAt: startedAt,
 					Duration:  job.Duration(time.Now()),
 				})
 			}
@@ -312,8 +401,21 @@ func (r TestHistoryReport) Render() string {
 	}
 	fmt.Fprintf(&b, "Test History: %s%s\n", r.TestName, repoClause)
 	fmt.Fprintf(&b, "Runs examined: %d | Executions found: %d\n", r.RunsExamined, r.Executions)
+	for _, src := range r.Sources {
+		fmt.Fprintf(&b, "  • %s: %d run(s)%s\n", providerLabel(src.Provider), src.Runs, historyWindow(src.Oldest, src.Newest))
+	}
+	if r.PassesUncounted {
+		b.WriteString("  GitHub Actions runs count only this test's failures: grain keeps the log tails of failed jobs alone, so a pass there is not seen and the rates below are over the executions found, not over every run.\n")
+	}
+	for _, note := range r.Notes {
+		fmt.Fprintf(&b, "  Note: %s\n", note)
+	}
 
 	if r.Executions == 0 {
+		if r.PassesUncounted {
+			b.WriteString("\nNo recorded failures of this test in the requested runs.")
+			return b.String()
+		}
 		b.WriteString("\nNo recorded executions found for this test in the requested runs.")
 		return b.String()
 	}
@@ -353,6 +455,9 @@ func (r TestHistoryReport) Render() string {
 			if commitShort != "" {
 				refInfo = fmt.Sprintf("%s @ %s", refInfo, commitShort)
 			}
+			if exec.Workflow != "" {
+				refInfo = exec.Workflow + ", " + refInfo
+			}
 			jobName := exec.JobName
 			if jobName == "" {
 				jobName = exec.JobID
@@ -376,4 +481,28 @@ func (r TestHistoryReport) Render() string {
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// providerLabel is a provider's name as a report says it.
+func providerLabel(provider string) string {
+	switch provider {
+	case ProviderGrain:
+		return "Grain CI"
+	case ProviderGitHubActions:
+		return "GitHub Actions"
+	}
+	return provider
+}
+
+// historyWindow is " (oldest .. newest)" for a source's runs, or "" when
+// none of them says when it started.
+func historyWindow(oldest, newest *time.Time) string {
+	const layout = "2006-01-02 15:04 UTC"
+	switch {
+	case oldest == nil || newest == nil:
+		return ""
+	case oldest.Equal(*newest):
+		return " (" + oldest.UTC().Format(layout) + ")"
+	}
+	return " (" + oldest.UTC().Format(layout) + " .. " + newest.UTC().Format(layout) + ")"
 }

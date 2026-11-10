@@ -83,7 +83,7 @@ func TestTheBinaryCarriesThisRepositorysNotes(t *testing.T) {
 			t.Error("README.md was embedded as a release")
 		}
 	}
-	for _, want := range []string{"v1.8.0", "v1.2.0"} {
+	for _, want := range []string{"v3.2.0", "v3.1.1", "v3.1.0", "v1.8.0", "v1.2.0"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("List lacks %s: %v", want, names)
 		}
@@ -102,6 +102,9 @@ func TestTheBinaryCarriesThisRepositorysNotes(t *testing.T) {
 	}
 	if _, ok := Get("1.8.0"); !ok {
 		t.Error("Get(1.8.0) did not accept a version without its v")
+	}
+	if v32, ok := Get("v3.2.0"); !ok || v32.Date != "2026-11-09" || v32.Commit != "cba7d44bb" {
+		t.Errorf("Get(v3.2.0) = (%+v, %v), want 2026-11-09 cba7d44bb", v32.Version, ok)
 	}
 	if _, ok := Get("v0.0.1"); ok {
 		t.Error("Get found notes for a release that has none")

@@ -1,6 +1,7 @@
 # Roles for allowed users, groups and service accounts
 
-Status: implemented with this doc (task 2969).
+Status: implemented with this doc (task 2969). Verified admins changing
+dangerous and deny roles on others: task 3864 (§3).
 
 Until now the database allowlist (`allowed_principal`, Settings → Access,
 `grain access allow|deny|list`) admitted people at full operator
@@ -75,15 +76,42 @@ a service account (unchanged).
   in-process callers. They hold no role and pass no scope check. They
   can add and remove any entry and assign any role.
 - **A verified session whose role holds `access:write`** can add and
-  remove entries and assign roles, but only roles no wider than its own.
-  A role is no wider when the caller holds every one of its resolved
-  scopes on every repository that scope reaches. The caller cannot
-  assign a role that is marked "only a person may grant" (§4), and it
-  cannot change or remove an entry whose current role is wider than its
-  own, is marked that way, or denies scopes (lifting a deny widens
-  everybody the entry matches, perhaps the caller too, and a deny grants
-  nothing for "no wider" to compare). Only an unlimited admin can do
-  those things.
+  remove entries and assign roles, but only within its own role: it
+  must hold every resolved scope of the entry's current role **and** of
+  the new one, on every repository that scope reaches
+  (`accessRole.noWiderThan`, dangerous scopes included). For a role that
+  denies scopes, it must also hold every scope the deny names, since
+  lifting a deny gives those scopes back. A caller whose own role is
+  narrower is refused, naming the scope it lacks.
+- **Verified admins may change dangerous and deny roles on others**
+  (task 3864). A change whose current or new role holds a dangerous
+  scope (§4) or denies scopes is allowed to a verified **person** (not a
+  verified service account) under the rule above, and needs a non-empty
+  reason, refused with a `400` naming `--reason` otherwise. A person
+  holding `grain/operator` therefore manages other admins from Settings
+  → Access or `grain access` without the access code. Every such change
+  is recorded in `config_audit` (§8).
+- **Never on oneself.** The caller's own entries are its `user:` entry
+  and every `group:` entry Cloud Identity says it belongs to (a failed
+  lookup counts as a match). On an entry that matches the caller:
+  - a change that adds or widens what *that entry* grants is refused
+    (`self_escalation`). The comparison is per entry, so a person who
+    is already a full admin through a group still cannot add or raise
+    their own `user:` entry (or remove and re-add a matching entry at a
+    wider role);
+  - adding or lifting a deny is refused (`self_access_change`). Another
+    admin, or the access code, can do it;
+  - narrowing it, or removing it, is allowed but must be confirmed:
+    without `confirmSelf` (`PATCH` body, `DELETE ?confirmSelf=1`,
+    `--confirm-self`) it is refused with code `confirm_self`, and the UI
+    asks the person and resends.
+- **The last full admin stays.** A verified session may not remove, or
+  change to a role that is not full, the only `user:` or `group:` entry
+  whose role resolves to every scope (`last_admin`). The message says
+  the access code can still recover the deployment. The access code is
+  not held to this, since it is the recovery path itself.
+- Refusals of a verified admin's change end with a one-line statement
+  of these rules, so the person refused can tell what would be allowed.
 - **Agents and sandboxes may not change the list by any route.**
   `POST`, `PATCH` and `DELETE /api/access/principals` refuse an acting
   task, a console session and an external agent token, whatever api
@@ -96,13 +124,26 @@ a service account (unchanged).
 
 For an agent, a set marked "only a person may grant it" (`Person`,
 forced on by any dangerous scope) means exactly that. For a human role,
-it means **assigning the role needs an unlimited admin**, and the
-assignment must carry a reason (the request's `reason`, or the
-`X-Grain-Acting-Reason` header). The reason is recorded in
+it means **assigning the role needs a person** -- the access code, or a
+verified person whose own role holds every scope of it (§3) -- and the
+assignment must carry a reason (the request's `reason`, `DELETE`'s
+`?reason=`, or the `X-Grain-Acting-Reason` header). From a verified
+session the same holds for changing or removing an entry at such a
+role, or at a role that denies scopes. The reason is recorded in
 `config_audit` with the change. This applies to the default as well:
 `grain access allow user:x` without `--role` assigns `grain/operator`,
-so it needs the access code and a `--reason`. The one-time flag import
-is automation and records its source instead.
+so it needs a `--reason`. The one-time flag import is automation and
+records its source instead.
+
+An access-code admin is no longer anonymous. The change is recorded
+under the name the code's session signed in with, `access-code:<name>`
+([access-code.md](../access-code.md#who-the-code-is-recorded-as)), and
+every other mutation the code makes goes into the same access history
+under the surface `access-code`. In the code's **recovery** mode
+(`grain access-code mode recovery`), managing access and settings is
+all a code session may do once a person with a full role can sign in
+with a verified identity. So the code stays the way back in for role
+changes, but it stops being an everyday admin credential.
 
 Holding a dangerous scope through a role does not make a person give a
 reason for each call. Per-call reasons stay an agent rule.
@@ -160,6 +201,11 @@ never widen a person.
 `useAccess()`/`can(scope)`. It shows the caller's role in Settings →
 Access, and it hides or disables actions the caller's scopes don't
 cover: adding, removing and re-roling entries without `access:write`.
+A role change or removal that involves a dangerous or deny role
+(`AccessRoleChoice.person`, `.denies`) opens a panel with a required
+reason field; a `confirm_self` answer turns it into a confirmation, and
+any other refusal is shown on it with the server's explanation. The
+**Access history** card lists `GET /api/access/history`.
 The server stays the enforcement point. Hiding a button is a courtesy,
 not a check.
 
@@ -185,10 +231,16 @@ A refusal is a 403 in the same shape as an agent refusal:
 > `alice@example.com (role grain/viewer) holds no scope tasks:write, which POST /api/tasks needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)`
 
 A repository refusal names the repository instead. Refusals are logged
-as `grain api: refused {human, alice@example.com} ...`. Every role
-assignment, at add time or by `PATCH`, is recorded in `config_audit`
-under surface `access`, with the old and new roles and the reason, for
-example `role user:bob@x.com grain/operator -> grain/viewer (rotation)`.
+as `grain api: refused {human, alice@example.com} ...`. Every change to
+the list -- an add, a role change by `PATCH`, a removal -- is recorded
+in `config_audit` under surface `access` with who made it (the verified
+person, or the access code), when, the old and new roles and the
+reason, for example
+`role user:bob@x.com grain/operator -> grain/viewer (rotation)` or
+`removed user:bob@x.com (was grain/operator) (offboarded)`.
+`GET /api/access/history` (`access:read`) lists those rows newest first,
+so a role limited to access administration reads them without
+`settings:read`, and Settings → Access shows them.
 
 Tasks created by a verified session (`user:` or `serviceAccount:`) record
 that identity as both `Task.Proposer` (shown on the timeline's **Proposed**

@@ -62,24 +62,25 @@ also have left it off.
 
 ## Granting scopes
 
-A grant is one capability name per scope or preset:
+Each scope, preset and [scope set](#scope-sets) is a method of grain's
+in-process capability server `https://grain.dev/capabilities/api`
+([unified-grants.design.md](../design/design/unified-grants.design.md) §1),
+with an optional `repo` argument limiting it to one repository:
 
-| Grant | Grants |
-|---|---|
-| `api:tasks:write` | one scope, on every repository |
-| `api:task-admin` | a preset's scopes |
-| `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
-| `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
+| Stored grant | Legacy input alias | Grants |
+|---|---|---|
+| `https://grain.dev/capabilities/api#tasks:write` | `api:tasks:write` | one scope, on every repository |
+| `https://grain.dev/capabilities/api#task-admin` | `api:task-admin` | a preset's scopes |
+| `https://grain.dev/capabilities/api#ci:write={"repo":"bwsalmon/grain"}` | `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
+| `https://grain.dev/capabilities/api#ops/triage` | `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
 
-Each scope and preset is also a method of grain's in-process capability
-server `https://grain.dev/capabilities/api`
-([unified-grants.design.md](../design/design/unified-grants.design.md) §1):
-`https://grain.dev/capabilities/api#ci:write` with `{repo: bwsalmon/grain}`
-is the same grant as `api:ci:write@bwsalmon/grain`, and every check that
-reads grants (admission, the proposal and approval rules, the capability
-policy) reads the two as one. `GET /api/capability-methods` lists the
-server. For now grain still records the `api:` spelling, so a reference
-sent in is stored as the `api:` name it stands for.
+`GET /api/capability-methods` lists the server alongside other capability
+servers. Writers across the UI, CLI, REST API and orchestrator record the
+canonical `https://grain.dev/capabilities/api#<scope-or-preset>` reference
+(with `={"repo":"<owner/name>"}` when repository-limited, omitting empty
+`with:` arguments), while `model.CanonicalGrant` continues reading both
+canonical references and legacy `api:<scope>[@repo]` strings from
+unmigrated store rows and `.grain/` declarations.
 
 A template, schedule or task can also write the grant as the `api`
 capability with arguments, which is the same thing spelled for a
@@ -92,10 +93,13 @@ capabilities:
   - {capability: api, with: {scopes: ["ci:read", "tasks:*"]}}
 ```
 
-Each entry becomes the grant names above (`api:ops/triage`,
-`api:grain/ci-read@bwsalmon/grain`, `api:ci:read`, `api:tasks:read`,
-...) when it is read, so admission, policy and the proposal gate see
-nothing new. A `set` naming no set is refused there and then.
+Each entry becomes the canonical grant references above
+(`https://grain.dev/capabilities/api#ops/triage`,
+`https://grain.dev/capabilities/api#grain/ci-read={"repo":"bwsalmon/grain"}`,
+`https://grain.dev/capabilities/api#ci:read`,
+`https://grain.dev/capabilities/api#tasks:read`, ...) when it is read, so
+admission, policy and the proposal gate see one grant shape. A `set`
+naming no set is refused there and then.
 
 Grant several names for several scopes, or several repositories. A task
 whose only grant for a scope is repo-limited reaches just those
@@ -491,13 +495,13 @@ outright, and so is every other write and every deployment-wide read
 `sessions:*`, `memory:*`, `deployment:*`). A preset holding any of them
 (`task-admin`, `release-manager`, ...) is refused whole, as is a scope
 set only a person may grant, and a grant limited to another repository
-(`api:ci:read@acme/widgets` on a job of `bwsalmon/grain`).
+(`api:ci:read@acme/widgets` on a job of `ai-on-gke/grain`).
 
 The trust rules are those of `repo-write`. A job is given its api grants
 only on a post-merge `release`, an operator's `workflow_dispatch`, or a
 cron grain fired itself, never on a pull request's or an ordinary push's
 run. They are honoured only for the repositories the deployment offers
-grain's API to in CI, which is grain's own (`bwsalmon/grain`). Like
+grain's API to in CI, which is grain's own (`ai-on-gke/grain`). Like
 repository access, a job is granted them by declaring them: they are
 not taken from the repository's CI capabilities list.
 
@@ -784,6 +788,97 @@ auto-submit do not release it. `POST /api/tasks/{id}/human-review/release`
 agent is refused there, and on Submit or a `PATCH` turning auto-merge on
 while the hold stands. See [merging.design.md](../design/design/merging.design.md#gates).
 
+## Paging a list
+
+An MCP tool result carries about 10 KB before the client elides it, and
+some of the API's lists grow with the deployment rather than with
+anything the caller chose -- what a credential reaches, the memory
+index, a repository's branches -- so no `api_*` list tool answers with
+an unbounded body. Every list route that can grow takes the same three
+parameters, read by `parseListQuery` (`pkg/ui/list_page.go`):
+
+| Parameter | Meaning |
+|---|---|
+| `q` | Only items whose natural key (the table below says which) contains this text, case-insensitively. |
+| `limit` | At most this many items; `0` for every item. An agent's call that names none is paged by default, at the route's own page size (chosen so a default page stays under the cap); a person's unparameterised call gets the whole list in the shape the UI reads. At most 1000: a larger limit is answered as 1000, with `truncated` and `nextCursor` saying there is more (it is not refused). |
+| `cursor` | The `nextCursor` of the previous page. Opaque: pass it back, never build one (`ui.ListCursorFor` exists for a Go caller paging by hand). A cursor the route did not hand out is a 400. |
+
+When a call is paged -- an agent's always (whether through `POST /mcp`,
+`POST /api/mcp`'s `grain_invoke`, or a `gma_` external-agent token), a
+person's when it names `q`, `limit` or `cursor` -- the answer says so
+rather than silently cutting the list short: a route that answered a
+bare list answers `{items, total, truncated, nextCursor}`, and a route
+that answered an object carries `total`, `truncated` and `nextCursor` on
+it. `total` is how many items matched across every page;
+`truncated: true` says this page was cut by the limit, and `nextCursor`
+(absent on the last page) reads on from it.
+
+| Route | Page by default | `q` matches | Other filters |
+|---|---|---|---|
+| `GET /api/deployment/reachable-repos` | 100 | the full name (`owner/name`, or `host/owner/name` on another git host) | `push=true` for only repositories the connection can push to -- those a task can be filed against -- or `push=false` for only those it cannot; `owner=`; `host=` (the deployment's default host, `github.com` unless configured, for the names that spell none). `repos` is the page; `connections` and `errors`, one entry per git connection, are whole (and omitted for repository-limited callers). |
+| `GET /api/deployment/git-connections` | 20 | credential, host, kind or scope | `host=`. Each row's `status.defaultKnownHosts` (GitHub's published host keys, the same on every row) is empty on paged calls. |
+| `GET /api/deployment/secret-audit` | 50 | secret name, key, principal or task id | |
+| `GET /api/deployment/audit-logs` | 20 | kind, resource, credential, principal or task id | |
+| `GET /api/deployment/config-audit` | 20 | actor, actorLabel, surface or summary | |
+| `GET /api/repos/{owner}/{name}/branches` | 50 | the branch's name | |
+| `GET /api/repos/{owner}/{name}/github-branches` | 50 | the branch's name | |
+| `GET /api/repos/{owner}/{name}/workflows` | 5 | workflow path or name | `workflows` is the page. |
+| `GET /api/repos/{owner}/{name}/releases` | 20 | name, latest or prod branch | |
+| `GET /api/repos/{owner}/{name}/releases/{release}/candidates` | 20 | branch, status or release | |
+| `GET /api/tasks` | 10 (`fields=` unset or `list`) / 50 (`fields=summary`) / 5 (`fields=full`) | title, description, branch, externalRef or id | `repo`, `state`, `owner`, `externalRef`, `filed_via`, `derived_from`, `closedSince`, `closedBefore`, `fields=summary` (recommended for agents; `grain_list_tasks` calls this). `tasks` is the page. A list row (`fields` unset or `list`) leaves out the description and caps `reads` at 10 (`readCount` and `readsTruncated` report the full count). `fields=full` rows carry each task's whole description, so a page of long descriptions can pass the cap; ask with a smaller `limit` or read one task with `GET /api/tasks/{id}`. |
+| `GET /api/tasks/states`, `GET /api/states` | 250 | | Lightweight `{"states": {"<id>": "<state>"}}` map; `truncated` and `nextCursor` accompany `hasMore` and `cursor`. |
+| `GET /api/tasks/{id}/messages` | 10 | author, summary or body | `after`, `agents`, `wait_ms` |
+| `GET /api/inbox` | 20 | task, title, repo, summary, subject or pull request | `repo`, `kind`. `items` is the page. |
+| `GET /api/notifications` | 20 | subject or title | `open`, `family`, `after`, `fields=list` |
+| `GET /api/ci/runs` | 10 (`view=full`) / 20 (`view=compact`) | id, repository, ref, commit, event, task id (`requestedBy`), job or workflow | `view=compact` (recommended), `repo`, `ref`, `conclusion`, `job`, `workflow`, `since`, `until`, `sort`, `order`, `provider`. `runs` is the page; `matched` (with `stored`) is the count. |
+| `GET /api/ci/workflows` | 20 | workflow path or name | `repo`, `ref` (both required: the workflows are read from the repository at that ref). `workflows` is the page. |
+| `GET /api/ci/runs/{id}/artifacts` | 50 | job or artifact name | `artifacts` is the page. |
+| `GET /api/ci/faults` | 20 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. |
+| `GET /api/merge-batches` | 20 | repository, branch, ref or run id | `repo=owner/name`. `batches` is the page. |
+| `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. |
+| `GET /api/memory` | 5 | repository, author or text | `repo=owner/name` for one repository's standing memory; `repo=` (empty) for the deployment's own. |
+| `GET /api/memory/documents` | 20 | name, repo or summary | `repo=owner/name` for one repository's documents; `repo=` (empty) for the deployment's own. |
+| `GET /api/templates` | 5 (`fields=summary`: 20) | id, name, title or repository | `repo=owner/name`; `fields=summary` omits each template's prompt description. |
+| `GET /api/schedules` | 10 | name, id, repository, template, suite, source or declared path | `kind` (`schedule`, `workflow`), `sort`, `f`, `fields=full` (inline prompt descriptions are omitted on paged calls unless `fields=full`). |
+| `GET /api/suites` | 20 | id or name | |
+| `GET /api/suite-runs` | 20 | suite name or id | `repo=owner/name` |
+| `GET /api/boards` | 20 | id, name or folder | |
+| `GET /api/release-notes` | 20 | week period, title or author | |
+| `GET /api/release-notes/versions` | 50 | version string | `versions` is the page. |
+| `GET /api/state-repo/files` | 100 | file path | `entries` is the page. |
+| `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo` |
+| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls, and a row's `status.methods` is capped at 40 (`methodCount` and `methodsTruncated` report the full count); use `GET /api/capability-methods` for every method. |
+| `GET /api/capability-servers/usage` | 20 | capability_id | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
+| `GET /api/capability-servers/gchat-usage` | 50 | space or transport | `id` |
+| `GET /api/capability-servers/host-entries` | 50 | allowlist entry name | `entries` is the page. |
+| `GET /api/api-scope-sets` | 10 | scope set name or source | `sets` is the page. |
+| `GET /api/api-scope-sets/usage` | 20 | scope set name | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
+| `GET /api/external-agents/tokens` | 20 | id, name, owner or scope set | Per-row `resolvedScopes` (scopes times repositories) is left out of paged calls: `resolvedScopeCount` says how many there are, `resolvedScopesTruncated` is set, and `scopeSet`, `scopes` and `repos` are complete. |
+| `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
+| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
+| `GET /api/hostds` | 50 | host name or owner | |
+| `GET /api/gcp-keys` | 20 | key name, project id or service account email | |
+| `GET /api/github-tokens` | 20 | credential name, capability or connection scope | `tokens` is the page; per-row `connections` is capped on paged calls (`connectionCount` and `connectionsTruncated`). |
+| `GET /api/secrets` | 50 | secret name or key | `secrets` is the page. |
+| `GET /api/agent-models` | 50 | model id, label or family | `framework`, `backend`. `models` is the page. |
+| `GET /api/persistent-sandboxes` | 50 | sandbox name, repository or state | |
+| `GET /api/console` | 20 | task id, title or repository | `sessions` is the page. |
+| `GET /api/console-sessions` | 5 | session id, title, task id or team | `sessions` is the page; `capabilities` and `missingShippedDefaults` are omitted on paged calls. |
+| `GET /api/upgrade/targets` | 50 | target name or kind | `targets` is the page. |
+
+`GET /api/events` (`limit` default 20 for agents / 100 otherwise, `since`,
+`repo`, `types`), `GET /api/pipeline/changes` (`limit`, `after`) and
+`GET /api/unmatched-failures` (`limit`, `window`) bound event and
+failure windows in their own vocabularies, described on their tools. For
+example, "which repository can I file against?" is one call:
+
+```json
+{"query": {"push": "true", "owner": "gke-labs", "q": "bouncer"}}
+```
+
+and reading every repository a credential reaches is a loop on
+`nextCursor` until the answer carries none.
+
 ## The controller MCP server (`POST /api/mcp`)
 
 `grain-controller` is one stateless Streamable HTTP MCP server on the
@@ -871,7 +966,14 @@ Who the caller is decides what `grain_explore_scope` shows and
   allows (every non-internal route for the access code or
   `grain/operator`; limited roles see and invoke only the scopes and
   repositories their role covers, with refusals naming the missing
-  scope).
+  scope). A harness using the access code should name its person in
+  `X-Grain-Access-Name`, so its calls are recorded as
+  `access-code:<name>` rather than as nobody. In the code's recovery
+  mode it reaches only access and settings routes, and with the code
+  off it is refused
+  ([access-code.md](access-code.md#bootstrap-and-recovery-only-grain-access-code-mode)).
+  Runs are unaffected: their requests carry `X-Grain-Acting-Task` and
+  are held to their task's grants in every mode.
 
 Every `grain_invoke` re-enters the route table through the same gate
 the REST call would, so the attribution, audit row and rails are the
@@ -1118,7 +1220,7 @@ task" behave as follows:
 | `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
 | Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. Approval is the exception: see the next row. |
 | Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's origin names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions, a reason included (`X-Grain-Acting-Reason`, `grain_invoke`'s `reason`, `grain approve`/`grain run-now -reason`): approve is destructive under `tasks:admin`, so neither approves without one. That is `tasks:admin` on the task's repository, or, for a task with no repository, `tasks:admin` on every repository: a credential holding `tasks:admin` only for some repositories approves neither way a task that names none. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
-| Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents/{name}`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
+| Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents`, `GET /api/memory/documents/{name}`, `GET /api/suite-runs`, `GET /api/ci/faults`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
 | External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
 
 ### Worked example

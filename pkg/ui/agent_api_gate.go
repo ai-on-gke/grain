@@ -365,10 +365,10 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil {
 		return call, err
 	}
-	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && call.repo == "" && set.Has(scope) {
-		// A namespace read or event stream naming no repository is narrowed
-		// to the ones the grant reaches by fsScope / eventsReadable, not
-		// refused for naming none.
+	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && call.repo == "" && set.Has(scope) {
+		// A namespace read, event stream or reachable-repos listing naming no
+		// repository is narrowed to the ones the grant reaches by fsScope /
+		// eventsReadable / reposReadable, not refused for naming none.
 		capAllowed = true
 	}
 	if isRepoNarrowedTasksRead(pattern, r) && call.repo == "" && set.Has(scope) {
@@ -423,6 +423,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
 	if err := s.agentRails(ctx, acting, pattern, method, scope, call.targetTask, r.PathValue("id")); err != nil {
+		return call, err
+	}
+	if err := s.agentStandingDeclaredPush(ctx, pattern, r.PathValue("id")); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
@@ -627,8 +630,14 @@ var agentRepoDefaultRoutes = map[string]bool{
 	"GET /api/ci/runs":                 true,
 	"GET /api/ci/workflows":            true,
 	"GET /api/merge-batches":           true,
+	"GET /api/base-branch-gates":       true,
 	"GET /api/pipeline/changes":        true,
+	"GET /api/memory":                  true,
 	"GET /api/memory/documents/{name}": true,
+	"GET /api/memory/documents":        true,
+	"GET /api/templates":               true,
+	"GET /api/suite-runs":              true,
+	"GET /api/ci/faults":               true,
 }
 
 // sandboxChannelGuard enforces the additional restrictions required when an
@@ -1692,9 +1701,17 @@ func grantNamesIn(raw json.RawMessage) []string {
 // none, and may not ask for "open" -- nor, on a deployment whose default is
 // open, for "". A config that cannot be read is taken as none.
 func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
+	if s.tasks == nil {
+		return (limit == "" || limit == model.NetworkNone) &&
+			strings.TrimSpace(access) != "" && model.NormalizeNetworkAccess(model.NetworkAccess(access)) != model.NetworkNone
+	}
+	return s.tasks.networkAccessWidens(ctx, limit, access)
+}
+
+func (c *Client) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
 	deployment := model.NetworkNone
-	if s.tasks != nil && s.tasks.Store != nil {
-		if cfg, err := s.tasks.Store.GetConfig(ctx); err == nil && cfg != nil {
+	if c != nil && c.Store != nil {
+		if cfg, err := c.Store.GetConfig(ctx); err == nil && cfg != nil {
 			deployment = model.NormalizeNetworkAccess(cfg.NetworkAccess)
 		}
 	}
@@ -1720,6 +1737,20 @@ type filingEscalationOpts struct {
 }
 
 func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
+	if s.tasks != nil {
+		return s.tasks.gateTemplate(ctx, id)
+	}
+	id = strings.TrimSpace(id)
+	if model.IsSystemTemplateID(id) {
+		if tmpl := model.FileableSystemTemplate(id); tmpl != nil {
+			return tmpl
+		}
+		return model.SystemTemplate(id, model.RepoRef{})
+	}
+	return nil
+}
+
+func (c *Client) gateTemplate(ctx context.Context, id string) *model.Template {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil
@@ -1730,10 +1761,10 @@ func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
 		}
 		return model.SystemTemplate(id, model.RepoRef{})
 	}
-	if s.tasks == nil || s.tasks.Store == nil {
+	if c == nil || c.Store == nil {
 		return nil
 	}
-	tmpl, err := s.tasks.Store.GetTemplate(ctx, id)
+	tmpl, err := c.Store.GetTemplate(ctx, id)
 	if err != nil {
 		return nil
 	}
@@ -1779,7 +1810,7 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 	allowedRepo func(APIScope, string) bool, pattern string, scope APIScope, repo string,
 	body []byte, opts filingEscalationOpts) error {
 	if opts.role == nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return errAgentAutoMerge
 		}
 		if personOnlyChangeReview[pattern] {
@@ -2021,6 +2052,8 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 					return err
 				}
+			} else if err := s.checkDeclaredPushID(ctx, fullID, key, opts); err != nil {
+				return err
 			}
 		case "templateid":
 			var id string
@@ -2029,15 +2062,15 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			}
 			tmpl := s.gateTemplate(ctx, id)
 			if tmpl == nil {
+				if err := s.checkDeclaredPushID(ctx, id, key, opts); err != nil {
+					return err
+				}
 				continue // the handler says it is not there
 			}
 			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 				return err
 			}
 		case "templateids":
-			if opts.role == nil && opts.external == nil {
-				continue
-			}
 			var ids []string
 			if json.Unmarshal(raw, &ids) != nil {
 				continue
@@ -2047,10 +2080,12 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 						return err
 					}
+				} else if err := s.checkDeclaredPushID(ctx, id, key, opts); err != nil {
+					return err
 				}
 			}
 		case "suiteid":
-			if opts.role == nil || s.tasks == nil || s.tasks.Store == nil {
+			if s.tasks == nil || s.tasks.Store == nil {
 				continue
 			}
 			var id string
@@ -2058,11 +2093,26 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				continue
 			}
 			suite, err := s.tasks.Store.GetSuite(ctx, strings.TrimSpace(id))
-			if err != nil || suite == nil {
+			if err != nil {
+				return err
+			}
+			if suite == nil {
 				continue
 			}
-			if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
-				return err
+			if opts.role != nil {
+				if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, it := range suite.Items {
+				if tmpl := s.gateTemplate(ctx, it.TemplateID); tmpl != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+						return err
+					}
+				} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, opts); err != nil {
+					return err
+				}
 			}
 		case "reviewtemplateid":
 			// The template a task's review is filed from once its work
@@ -2124,14 +2174,75 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		}
 	}
 	if opts.role != nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return fmt.Errorf("%s cannot submit work (autoMerge): letting a change merge unreviewed requires an unlimited role (grain/operator)", opts.role.label())
+		}
+		if pattern == "POST /api/tasks/{id}/human-review/release" {
+			return fmt.Errorf("%s cannot release human-review hold: releasing a human-review hold requires an unlimited role (grain/operator)", opts.role.label())
+		}
+		if pattern == "POST /api/tasks/{id}/force-merge" {
+			return fmt.Errorf("%s cannot force-merge work: forcing a merge requires an unlimited role (grain/operator)", opts.role.label())
 		}
 		if pattern == "POST /api/suites" && !bodyExplicitlyDisablesAutoMerge(fields) {
 			return fmt.Errorf("%s cannot set autoMerge: suites default autoMerge to true, which requires an unlimited role (pass \"autoMerge\": false)", opts.role.label())
 		}
+		if pattern == "POST /api/tasks" || pattern == "POST /api/schedules" {
+			if err := roleApprovedTargetRefusal(opts.role, pattern, repo, fields); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []jsonField) error {
+	approves := pattern == "POST /api/schedules"
+	var probe model.Task
+	if r, err := model.ParseRepo(strings.TrimSpace(repo)); err == nil {
+		probe.Target = &r
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "approved", "interactive":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil && on {
+				approves = true
+			}
+		case "writes":
+			var targets []WriteTarget
+			if json.Unmarshal(f.raw, &targets) == nil {
+				for _, t := range targets {
+					if r, err := model.ParseRepo(strings.TrimSpace(t.Repo)); err == nil {
+						probe.Writes = append(probe.Writes, model.WriteTarget{Repo: r, Base: t.Base})
+					}
+				}
+			}
+		case "changetarget", "change_target":
+			var ct model.ChangeTarget
+			if json.Unmarshal(f.raw, &ct) == nil && ct.Kind != "" {
+				probe.ChangeTarget = &ct
+			}
+		}
+	}
+	if !approves {
+		return nil
+	}
+	if why := model.ConfigRepoProposalHold(probe); why != "" {
+		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
+	}
+	if needs, why := model.ChangeTargetNeedsPersonApproval(probe.ChangeTarget); needs {
+		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
+	}
+	return nil
+}
+
+// submitRoutes are the two spellings of a person's Submit: a task's, and
+// `grain pr submit`'s by its pull request. Each records the approval a
+// change waits on (and, with overrideGates, forces its merge), so neither
+// is an agent's or a limited role's to call, whichever one is used.
+var submitRoutes = map[string]bool{
+	"POST /api/tasks/{id}/submit":    true,
+	"POST /api/pull-requests/submit": true,
 }
 
 func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
@@ -2150,8 +2261,101 @@ func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
 	return disabled
 }
 
+var errAgentDeclaredPush = errors.New("an agent cannot file, schedule, or modify a template that carries a declared push set")
+
+func (s *Server) checkDeclaredPushID(ctx context.Context, templateID, key string, opts filingEscalationOpts) error {
+	id := strings.TrimSpace(templateID)
+	push, err := s.templateDeclaredPush(ctx, id)
+	if err != nil {
+		return err
+	}
+	if push == nil {
+		return nil
+	}
+	if opts.role != nil {
+		return fmt.Errorf("%s cannot set %s: template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+			opts.role.label(), key, id, push.Path)
+	}
+	return fmt.Errorf("template %s carries a declared push set (%s): %w", id, push.Path, errAgentDeclaredPush)
+}
+
+func (s *Server) agentStandingDeclaredPush(ctx context.Context, pattern, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" || s.tasks == nil || s.tasks.Store == nil {
+		return nil
+	}
+	switch pattern {
+	case "PATCH /api/templates/{id}":
+		push, err := s.templateDeclaredPush(ctx, id)
+		if err != nil {
+			return err
+		}
+		if push != nil {
+			return fmt.Errorf("template %s carries a declared push set (%s): %w", id, push.Path, errAgentDeclaredPush)
+		}
+	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
+		sched, err := s.tasks.Store.GetSchedule(ctx, id)
+		if err != nil {
+			return fmt.Errorf("reading schedule %s: %w", id, err)
+		}
+		if sched == nil {
+			return nil
+		}
+		if sched.TemplateID != nil && strings.TrimSpace(*sched.TemplateID) != "" {
+			tid := strings.TrimSpace(*sched.TemplateID)
+			push, err := s.templateDeclaredPush(ctx, tid)
+			if err != nil {
+				return err
+			}
+			if push != nil {
+				return fmt.Errorf("schedule %s fires template %s, which carries a declared push set (%s): %w",
+					sched.ID, tid, push.Path, errAgentDeclaredPush)
+			}
+		}
+		if sched.SuiteID != nil && strings.TrimSpace(*sched.SuiteID) != "" {
+			suite, err := s.tasks.Store.GetSuite(ctx, strings.TrimSpace(*sched.SuiteID))
+			if err != nil {
+				return fmt.Errorf("reading suite %s: %w", strings.TrimSpace(*sched.SuiteID), err)
+			}
+			if suite != nil {
+				for _, it := range suite.Items {
+					push, err := s.templateDeclaredPush(ctx, it.TemplateID)
+					if err != nil {
+						return err
+					}
+					if push != nil {
+						return fmt.Errorf("schedule %s runs suite %s containing template %s, which carries a declared push set (%s): %w",
+							sched.ID, suite.ID, it.TemplateID, push.Path, errAgentDeclaredPush)
+					}
+				}
+			}
+		}
+	case "PATCH /api/suites/{id}":
+		suite, err := s.tasks.Store.GetSuite(ctx, id)
+		if err != nil {
+			return fmt.Errorf("reading suite %s: %w", id, err)
+		}
+		if suite != nil {
+			for _, it := range suite.Items {
+				push, err := s.templateDeclaredPush(ctx, it.TemplateID)
+				if err != nil {
+					return err
+				}
+				if push != nil {
+					return fmt.Errorf("suite %s contains template %s, which carries a declared push set (%s): %w",
+						suite.ID, it.TemplateID, push.Path, errAgentDeclaredPush)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, key string, held []string, set APIGrantSet,
 	allowedRepo func(APIScope, string) bool, scope APIScope, repo string, opts filingEscalationOpts) error {
+	if err := s.checkDeclaredPushID(ctx, tmpl.ID, key, opts); err != nil {
+		return err
+	}
 	switch {
 	case opts.role != nil:
 		if err := roleTemplateWithin(opts.role, key, tmpl, allowedRepo, opts.normalize); err != nil {
@@ -2227,6 +2431,8 @@ func (s *Server) checkRoleSuite(ctx context.Context, suite model.Suite, key stri
 			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 				return err
 			}
+		} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, opts); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2734,6 +2940,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		// tasks:admin, a task PATCH's capabilities:admin, tasks:admin and
 		// capabilities:detach -- read the narrower of the two.
 		set = set.Intersect(role.set).Without(role.deny)
+		held = grantListFromSet(set)
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
@@ -2747,7 +2954,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	// templates:read even when the credential is narrowed to specific
 	// repositories.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
 		(pattern == "GET /api/config" && (set.Has(scope) || set.Has("deployment:read"))) ||
 		(pattern == "GET /api/templates" && set.Has(scope))
 	if !set.Has(scope) && !adminPatch && !fsAllowed && !detach {
@@ -2822,6 +3029,9 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
 	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, call.reason, body); err != nil {
+		return call, err
+	}
+	if err := s.agentStandingDeclaredPush(ctx, pattern, r.PathValue("id")); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
@@ -2964,19 +3174,19 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	}); ok {
 		return repo, nil, err
 	}
-	// If the credential is restricted to a single repository and calls a
-	// read-only collection endpoint that accepts ?repo=, default the filter
-	// to that repository so listing works without repeating the repo parameter.
-	if r.Method == http.MethodGet && len(tok.Repos) == 1 && !isRepoNarrowedTasksRead(pattern, r) {
-		switch pattern {
-		case "GET /api/tasks", "GET /api/ci/runs", "GET /api/ci/workflows",
-			"GET /api/merge-batches", "GET /api/pipeline/changes", "GET /api/memory/documents/{name}":
+	// If the credential is restricted to a single repository for this scope and
+	// calls a read-only collection endpoint that accepts ?repo= (other than
+	// GET /api/templates, which serves both bound and deployment-wide unbound
+	// templates via templateAllowedForGrants), default the filter to that
+	// repository so listing works whether narrowed via tok.Repos or @repo.
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && pattern != "GET /api/templates" && !isRepoNarrowedTasksRead(pattern, r) && !set.Allows(scope, "") {
+		if repos := set.Repos(scope); len(repos) == 1 {
 			q := r.URL.Query()
 			if q.Get("repo") == "" {
-				q.Set("repo", tok.Repos[0])
+				q.Set("repo", repos[0])
 				r.URL.RawQuery = q.Encode()
 			}
-			return tok.Repos[0], nil, nil
+			return repos[0], nil, nil
 		}
 	}
 	return "", nil, nil
@@ -3073,12 +3283,23 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 // holds, never a grant only a person may give, and push or read access only
 // to repositories the credential covers.
 func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl model.Template, allowedRepo func(string) bool) error {
+	heldKeys := make([]string, 0, len(held))
+	for _, h := range held {
+		for _, c := range model.CanonicalLegacyGrants(h) {
+			heldKeys = append(heldKeys, model.CanonicalGrantKey(c))
+		}
+	}
 	for _, g := range tmpl.Grants {
 		if model.IsPersonOnlyGrant(g.Capability) {
 			return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 		}
-		if !slices.Contains(held, g.Capability) {
-			return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
+		for _, needed := range model.CanonicalLegacyGrants(g.Capability) {
+			if model.IsPersonOnlyGrant(needed) {
+				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
+			}
+			if !slices.Contains(heldKeys, model.CanonicalGrantKey(needed)) {
+				return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
+			}
 		}
 	}
 	for _, w := range tmpl.Writes {
@@ -3212,6 +3433,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/withdraw-approval":       taskRespSingle,
 	"POST /api/tasks/{id}/park-until":              taskRespNone,
 	"POST /api/pull-requests/review":               taskRespNone,
+	"POST /api/pull-requests/submit":               taskRespNone,
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
@@ -3461,6 +3683,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.NoPort != nil, "noPort")
 	add(req.FixesBaseBranch != nil, "fixesBaseBranch")
 	add(req.PromptExtension != nil, "promptExtension")
+	add(req.Skills != nil, "skills")
 	add(req.ReviewTemplateID != nil, "reviewTemplateId")
 	add(req.Reads != nil, "reads")
 	add(req.Writes != nil, "writes")

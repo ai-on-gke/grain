@@ -86,7 +86,18 @@ type CapabilityServer struct {
 	// entry, so its Config is empty; it is listed so Settings shows its
 	// methods and who holds them beside the configured servers.
 	InProcess *CapabilityInProcessServer `json:"inProcess,omitempty"`
+	// MethodCount and MethodsTruncated say how many methods Status
+	// listed when a paged call capped Status.Methods at
+	// capabilityServerPageMethods: the api capability lists one method
+	// per scope set, which grows with the deployment.
+	MethodCount      int  `json:"methodCount,omitempty"`
+	MethodsTruncated bool `json:"methodsTruncated,omitempty"`
 }
+
+// capabilityServerPageMethods is how many of a server's methods a paged
+// GET /api/capability-servers row carries; GET /api/capability-methods
+// pages through all of them.
+const capabilityServerPageMethods = 40
 
 // CapabilityInProcessServer names an in-process server for Settings.
 type CapabilityInProcessServer struct {
@@ -247,7 +258,10 @@ type CapabilityServerHostEntries struct {
 	// Missing are grain's own entries (hostd.EnsureBuiltins' list for
 	// this build) the allowlist lacks: grain adds them itself at hostd's
 	// next start, and each says how to add it now.
-	Missing []HostdMissingEntry `json:"missing,omitempty"`
+	Missing    []HostdMissingEntry `json:"missing,omitempty"`
+	Total      int                 `json:"total,omitempty"`
+	Truncated  bool                `json:"truncated,omitempty"`
+	NextCursor string              `json:"nextCursor,omitempty"`
 }
 
 // HostdMissingEntry is one of grain's own allowlist entries hostd lacks.
@@ -842,8 +856,19 @@ func refusedConfigField(config map[string]any, msg string) string {
 		if name, _ := set["name"].(string); name != m[1] {
 			continue
 		}
-		if strings.Contains(msg, "role ceiling") {
+		switch {
+		case strings.Contains(msg, "role ceiling"), strings.Contains(msg, "grants no roles"), strings.Contains(msg, "is not a role"):
 			return fmt.Sprintf("permission_sets[%d].roles", i)
+		case strings.Contains(msg, "and pool_max are exclusive"):
+			return fmt.Sprintf("permission_sets[%d].pool_max", i)
+		case strings.Contains(msg, "resource_scope"):
+			return fmt.Sprintf("permission_sets[%d].resource_scope", i)
+		case strings.Contains(msg, "is not a project id"), strings.Contains(msg, "project is required"), strings.Contains(msg, `is not one of admin`) && !strings.Contains(msg, "service account "):
+			return fmt.Sprintf("permission_sets[%d].project", i)
+		case strings.Contains(msg, "service_account ") || strings.Contains(msg, "service account "):
+			return fmt.Sprintf("permission_sets[%d].service_account", i)
+		case strings.Contains(msg, "credential must be"), strings.Contains(msg, "credential: token and accounts"):
+			return fmt.Sprintf("permission_sets[%d].credential", i)
 		}
 		return fmt.Sprintf("permission_sets[%d]", i)
 	}
@@ -1414,7 +1439,34 @@ func (s *Server) respondWithCapabilityServers(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleListCapabilityServers(w http.ResponseWriter, r *http.Request) {
-	s.respondWithCapabilityServers(w, r)
+	list, err := parseListQuery(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	servers, err := s.tasks.ListCapabilityServers(r.Context())
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	servers = filterList(servers, func(srv CapabilityServer) bool {
+		return list.matches(srv.ID, srv.Config.Command, srv.Config.ServerURL)
+	})
+	if list.Paged {
+		for i := range servers {
+			if servers[i].Status != nil {
+				st := *servers[i].Status
+				st.MethodDetails = nil
+				st.ConfigSchema = nil
+				if n := len(st.Methods); n > capabilityServerPageMethods {
+					st.Methods = append([]string(nil), st.Methods[:capabilityServerPageMethods]...)
+					servers[i].MethodCount, servers[i].MethodsTruncated = n, true
+				}
+				servers[i].Status = &st
+			}
+		}
+	}
+	writeList(w, servers, list)
 }
 
 func (s *Server) handleSetCapabilityServer(w http.ResponseWriter, r *http.Request) {
@@ -1517,16 +1569,40 @@ func (s *Server) handleTestGChatPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGChatUsage(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	res, err := s.tasks.GChatUsage(r.Context(), r.URL.Query().Get("id"))
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	res = filterList(res, func(u intree.GChatUsage) bool {
+		return list.matches(u.Space, u.Transport)
+	})
+	writeList(w, res, list)
 }
 
 func (s *Server) handleCapabilityServerHostEntries(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.tasks.HostCapabilityEntries(hostd.ForDisplay(r.Context())))
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	out := s.tasks.HostCapabilityEntries(hostd.ForDisplay(r.Context()))
+	if list.Paged {
+		matched := filterList(out.Entries, func(entry string) bool {
+			return list.matches(entry)
+		})
+		page := pageOf(matched, list)
+		out.Entries = page.Items
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // wakeReconciler asks the reconcile loop for a tick now, so a saved
@@ -1539,9 +1615,7 @@ func (s *Server) wakeReconciler() {
 
 // ListCapabilityServers is GET /api/capability-servers.
 func (c *HTTPClient) ListCapabilityServers(ctx context.Context) ([]CapabilityServer, error) {
-	var out []CapabilityServer
-	err := c.do(ctx, http.MethodGet, "/api/capability-servers", nil, &out)
-	return out, err
+	return doList[CapabilityServer](c, ctx, "/api/capability-servers")
 }
 
 // SetCapabilityServer is PUT /api/capability-servers.
@@ -1588,9 +1662,7 @@ func (c *HTTPClient) TestGChatPost(ctx context.Context, req TestGChatPostRequest
 
 // GChatUsage is GET /api/capability-servers/gchat-usage.
 func (c *HTTPClient) GChatUsage(ctx context.Context, id string) ([]intree.GChatUsage, error) {
-	var out []intree.GChatUsage
-	err := c.do(ctx, http.MethodGet, "/api/capability-servers/gchat-usage?id="+url.QueryEscape(id), nil, &out)
-	return out, err
+	return doList[intree.GChatUsage](c, ctx, "/api/capability-servers/gchat-usage?id="+url.QueryEscape(id))
 }
 
 // CapabilityServerHostEntries is GET /api/capability-servers/host-entries.

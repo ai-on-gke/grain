@@ -24,6 +24,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
 // A config change a session proposed in its own chat
@@ -175,7 +176,41 @@ func (c *Client) pendingConfigChangeFor(ctx context.Context, id, headSHA, verb s
 	if headSHA != obs.PendingConfigChange.HeadSHA {
 		return nil, ErrConfigChangeMoved
 	}
+	if verb == "approve" {
+		if err := configChangeScopeRefusal(ctx, *obs.PendingConfigChange); err != nil {
+			return nil, err
+		}
+	}
 	return obs.PendingConfigChange, nil
+}
+
+// configChangeScopeRefusal refuses a limited role's approval of a config
+// change that confers more than the role holds (task 3965): approving
+// merges and applies the change at once, so a person holding only
+// settings:write who approved a change adding a host script or widening
+// a scope set would have made a capabilities:admin grant they could not
+// make directly. What the change confers is read from the paths it
+// touches, and in tables/grain_config.json from the columns it alters
+// (trustboundary.StateScopes): a max_workers edit needs settings:write
+// alone, an mcp_servers one capabilities:admin. An unlimited session, the
+// deployment's owner holding the access code, holds every scope.
+func configChangeScopeRefusal(ctx context.Context, pending model.PendingConfigChange) error {
+	role := accessRoleFromContext(ctx)
+	if role == nil || role.Full {
+		return nil
+	}
+	var missing []string
+	for _, sc := range trustboundary.StateScopes(pending.Files, pending.Columns) {
+		if !role.allows(APIScope(sc), "") {
+			missing = append(missing, sc)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return forbiddenErrorf("%s cannot approve this configuration change: it touches %s, which confers %s once applied, "+
+		"and the role does not hold it. Ask a person holding %s to approve it (docs/access-code.md)",
+		role.label(), strings.Join(pending.Files, ", "), strings.Join(missing, " and "), strings.Join(missing, " and "))
 }
 
 // ApproveConfigChange merges the change task id is parked on into

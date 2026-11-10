@@ -647,8 +647,8 @@ func TestProposeTaskAcceptsUnifiedGrantsAndRefusesMixedSpellings(t *testing.T) {
 	if p.Repo != "acme/app" || p.Branch != "release" {
 		t.Errorf("Repo, Branch = %q, %q, want acme/app, release", p.Repo, p.Branch)
 	}
-	if len(p.Capabilities) != 1 || p.Capabilities[0] != "api:tasks:read@acme/app" {
-		t.Errorf("Capabilities = %v, want [api:tasks:read@acme/app]", p.Capabilities)
+	if want := model.APIGrantString("tasks:read", "acme/app"); len(p.Capabilities) != 1 || p.Capabilities[0] != want {
+		t.Errorf("Capabilities = %v, want [%s]", p.Capabilities, want)
 	}
 	if len(p.Reads) != 1 || p.Reads[0] != "acme/docs" {
 		t.Errorf("Reads = %v, want [acme/docs]", p.Reads)

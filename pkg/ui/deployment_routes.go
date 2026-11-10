@@ -16,10 +16,8 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -74,13 +72,48 @@ func (s *Server) handleGetDeployment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeploymentReachableRepos(w http.ResponseWriter, r *http.Request) {
-	res, err := s.tasks.ReachableRepos(r.Context(), model.DefaultTeamID)
+	filter, err := reachableReposFilterFrom(r)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	res, err := s.reachableReposForRequest(r, filter)
 	writeDeploymentResult(w, res, err)
 }
 
 func (s *Server) handleListDeploymentGitConnections(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	conns, err := s.tasks.ListTeamGitConnections(r.Context(), model.DefaultTeamID, requestPerson(r.Context()))
-	writeDeploymentResult(w, conns, err)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	if host := strings.TrimSpace(r.URL.Query().Get("host")); host != "" {
+		conns = filterList(conns, func(c TeamGitConnectionView) bool {
+			h := c.Host
+			if h == "" {
+				h = "github.com"
+			}
+			return strings.EqualFold(h, host)
+		})
+	}
+	conns = filterList(conns, func(c TeamGitConnectionView) bool {
+		return list.matches(c.Credential, c.Host, c.Kind, c.Scope)
+	})
+	if list.Paged {
+		// Every row's status repeats GitHub's published host keys, the
+		// editor's default known_hosts (about 450 bytes): a paged
+		// caller is an agent or a script, not the editor, so a page
+		// leaves them out and stays under the tool-result cap.
+		for i := range conns {
+			conns[i].Status.DefaultKnownHosts = ""
+		}
+	}
+	writeList(w, conns, list)
 }
 
 func (s *Server) handleCreateDeploymentGitConnection(w http.ResponseWriter, r *http.Request) {
@@ -179,24 +212,59 @@ func (s *Server) handleDeploymentBroadcast(w http.ResponseWriter, r *http.Reques
 // handleGetDeploymentSecretAudit is the deployment's newest secret
 // resolutions.
 func (s *Server) handleGetDeploymentSecretAudit(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.tasks.ListTeamSecretAuditWithUser(r.Context(), model.DefaultTeamID, requestPerson(r.Context()), 100)
-	writeDeploymentResult(w, entries, err)
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	fetchLimit := 100
+	if list.Paged {
+		fetchLimit = maxTeamAuditLogs
+	}
+	entries, err := s.tasks.ListTeamSecretAuditWithUser(r.Context(), model.DefaultTeamID, requestPerson(r.Context()), fetchLimit)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	entries = filterList(entries, func(e model.SecretAuditEntry) bool {
+		return list.matches(e.SecretName, e.Key, e.Principal, e.TaskID)
+	})
+	writeList(w, entries, list)
 }
 
 // handleGetDeploymentAuditLogs is the deployment's audit trail, newest
 // first: secret resolutions and credential accesses, ?limit= of them.
 func (s *Server) handleGetDeploymentAuditLogs(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			writeError(w, http.StatusBadRequest, errors.New("limit must be a positive integer"))
-			return
-		}
-		limit = min(n, maxTeamAuditLogs)
+	q := r.URL.Query()
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
 	}
-	entries, err := s.tasks.ListTeamAuditLogsWithUser(r.Context(), model.DefaultTeamID, requestPerson(r.Context()), limit)
-	writeDeploymentResult(w, entries, err)
+	// AuditSection.jsx polls ?limit=100 expecting a bare JSON array when
+	// neither cursor nor q is named by a person.
+	if !isAgentListCaller(r) && !q.Has("cursor") && !q.Has("q") {
+		limit := 100
+		if q.Has("limit") {
+			if list.Limit == 0 {
+				limit = maxTeamAuditLogs
+			} else {
+				limit = min(list.Limit, maxTeamAuditLogs)
+			}
+		}
+		entries, err := s.tasks.ListTeamAuditLogsWithUser(r.Context(), model.DefaultTeamID, requestPerson(r.Context()), limit)
+		writeDeploymentResult(w, entries, err)
+		return
+	}
+	entries, err := s.tasks.ListTeamAuditLogsWithUser(r.Context(), model.DefaultTeamID, requestPerson(r.Context()), maxTeamAuditLogs)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	entries = filterList(entries, func(e model.TeamAuditEvent) bool {
+		return list.matches(e.Kind, e.Resource, e.Credential, e.Principal, e.TaskID)
+	})
+	writeList(w, entries, list)
 }
 
 // UpdateDeploymentRequest is PUT /api/deployment's body: the deployment's
@@ -264,11 +332,7 @@ func (c *HTTPClient) BroadcastDeploymentMessage(ctx context.Context, req Broadca
 
 // ListDeploymentGitConnections is GET /api/deployment/git-connections.
 func (c *HTTPClient) ListDeploymentGitConnections(ctx context.Context) ([]TeamGitConnectionView, error) {
-	var views []TeamGitConnectionView
-	if err := c.do(ctx, http.MethodGet, "/api/deployment/git-connections", nil, &views); err != nil {
-		return nil, err
-	}
-	return views, nil
+	return doList[TeamGitConnectionView](c, ctx, "/api/deployment/git-connections")
 }
 
 // AddDeploymentGitConnection is POST /api/deployment/git-connections.

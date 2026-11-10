@@ -419,6 +419,54 @@ func listOrNone(xs []string) string {
 	return strings.Join(xs, ", ")
 }
 
+// ProviderTestHistory is test's history across the newest limit runs
+// matching f, read from c (TestHistory). A repository whose CI is GitHub
+// Actions (ci_mode: github), named by f.Repo with no f.Provider, has its
+// history read from its Actions runs alone: its grain CI runs are a
+// retired mode's, and the report says how many it left out, as it says
+// what the forge's half of the listing was short of.
+func ProviderTestHistory(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, limit int, test string) (ci.TestHistoryReport, error) {
+	defaulted := false
+	leftOut := -1
+	if f.Provider == "" && f.Repo != "" {
+		if defaults, err := c.RepoDefaults(ctx, f.Repo); err == nil {
+			if defaults.CIMode == string(model.CIModeGitHub) {
+				f.Provider, defaulted = ci.ProviderGitHubActions, true
+			}
+		} else {
+			grain := f
+			grain.Provider = ci.ProviderGrain
+			if probe, perr := c.FindCIRuns(ctx, grain, 1); perr != nil {
+				return ci.TestHistoryReport{}, perr
+			} else if probe.RepoProvider == ci.ProviderGitHubActions {
+				f.Provider, defaulted, leftOut = ci.ProviderGitHubActions, true, probe.Matched
+			}
+		}
+	}
+	page, err := c.FindCIRuns(ctx, f, limit)
+	if err != nil {
+		return ci.TestHistoryReport{}, err
+	}
+	report := TestHistory(ctx, c, page.Runs, test, f.Repo)
+	if page.ActionsNote != "" {
+		report.Notes = append(report.Notes, "GitHub Actions: "+page.ActionsNote)
+	}
+	if defaulted {
+		if leftOut < 0 {
+			grain := f
+			grain.Provider = ci.ProviderGrain
+			if left, err := c.FindCIRuns(ctx, grain, 1); err == nil {
+				leftOut = left.Matched
+			}
+		}
+		if leftOut > 0 {
+			report.Notes = append(report.Notes, fmt.Sprintf(
+				"%s's CI is GitHub Actions: its %d Grain CI run(s), from before, are left out (-provider grain reads them)", f.Repo, leftOut))
+		}
+	}
+	return report, nil
+}
+
 // TestHistory is test's history across runs, a listing newest first,
 // as the in-sandbox `grain ci test-history` reports it
 // (ci.QueryTestHistory). Each run is read from src in full, because a

@@ -288,6 +288,7 @@ Calls `POST /api/tasks/{id}/force-merge` with the reason. It overrides the merge
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-head` | string |  |  | the head commit you reviewed; the override is for it alone |
+| `-override-gates` | string |  |  | comma-separated unsatisfied gates to override (e.g. security-review, review, ci); required when any review gate is pending or has findings |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/force_merge_is_not_a_tool_test.go`: `TestNoAgentFacingToolCanForceAMerge`.
@@ -943,7 +944,7 @@ This is grain's own CI, from the operator's side.
 - `artifact` (`artifacts`) downloads from `/api/ci/runs/{id}/artifacts/{job}/{name}`.
 - `wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]` ([external-cli #XC-26](../external-cli/external-cli.spec.md#XC-26)) polls `GET /api/ci/runs/{id}` until the run, or every job `-jobs` names, has a verdict. `-pr` and `-ref` attach to the newest run on that branch still in flight, else the newest; `-pr` finds the branch from the grain task tracking the pull request (`GET /api/tasks`). It waits the global `-timeout` (default `30m`) as a whole and accrues no wait credit. It prints the sandbox's wait answer (`gitproxy.CLIWaitResponse`, as [`grain ci wait` in a sandbox](sandbox.spec.md#CLI-91) reads it) plus `repo`, `ref` and `failing` (each failing job's step, failing tests and any shared fault from `GET /api/ci/faults`). It exits `0` green, `1` on `failure`/`cancelled`/`timed_out`, and `5` when `-timeout` runs out while the run is still going.
 - `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. GitHub Actions runs are refused. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
-- `test-history <test-name> [-repo r] [-limit N]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report).
+- `test-history <test-name> [-repo r] [-limit N] [-provider grain|github-actions]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report). For a `-repo` whose CI mode is `github` (`GET /api/repos/{owner}/{name}/capabilities`) and no `-provider`, it reads that repository's GitHub Actions runs alone -- each read in full carries the failing log tails grain recorded of its jobs -- and notes how many grain CI runs it left out; the report names each provider's runs and their window, and says that Actions runs count failures only.
 
 <!-- BEGIN GENERATED FLAGS: grain ci -->
 | Flag | Type | Default | Env | Description |
@@ -1041,6 +1042,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-limit` | int | `20` |  | how many of the newest runs to look through (at most 100) |
+| `-provider` | string |  |  | only this CI's runs: grain or github-actions (default: github-actions for a -repo whose CI is GitHub Actions, grain otherwise) |
 | `-repo` | string |  |  | only this repository's runs, as owner/name (default: every repository's) |
 <!-- END GENERATED FLAGS -->
 
@@ -1146,13 +1148,14 @@ _No flags._
 
 ---
 
-### 4.15 `grain pr adopt|review|status <pr>` {#CLI-65}
+### 4.15 `grain pr adopt|review|status|submit <pr>` {#CLI-65}
 
 The external half of pull-request coordination ([`external-cli.spec.md`](../external-cli/external-cli.spec.md) #XC-28, #XC-29). `<pr>` is `owner/name#n` or the pull request's GitHub URL; anything else **MUST** fail with a usage error before any request is sent. Every verb takes `-json` and the global `-json`. The in-sandbox `grain pr` ([`sandbox.spec.md`](sandbox.spec.md)) is a different command about the task's own branch.
 
 1. `grain pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]` calls `POST /api/pull-requests/adopt` (scope `merge:write`, and `tasks:write` on the pull request's repository) and prints the shepherd task's ID, state and mode. `-mode` defaults to `review-only`; `finish` on a pull request a review-only shepherd already holds upgrades that task in place. A filing that lands `proposed` says it waits for a person.
 2. `grain pr review <pr> [-design] [-spec <path>]` calls `POST /api/pull-requests/review` (scope `tasks:write`, and `repos:read` on the repository) and prints the review task. `-design` asks for a design review: `design/spec/contributions/contributions.spec.md` conventions and overlapping designs under `design/`.
-3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each merge gate and its state, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+4. `grain pr submit <pr> [-override-gates <gates> -reason <why> [-head <sha>]]` calls `POST /api/pull-requests/submit`. Without `-override-gates`, it needs `tasks:write` on the repository, records the caller's Submit approval only, and never skips or cancels any required review gate. With `-override-gates`, it needs `merge:force` on the repository and a non-empty `-reason`, explicitly names every unsatisfied gate being skipped (such as `security-review`, `review`, `ci`), and records the audited override on the task and pull request while keeping any running reviews alive post-merge.
 
 #### `grain pr`
 
@@ -1190,6 +1193,17 @@ _No flags._
 | `-threads` | bool |  |  | list every inline review thread's file, line and body |
 <!-- END GENERATED FLAGS -->
 
+#### `grain pr submit`
+
+<!-- BEGIN GENERATED FLAGS: grain pr submit -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-head` | string |  |  | the head commit SHA reviewed when overriding gates |
+| `-json` | bool |  |  | print the submit result as JSON |
+| `-override-gates` | string |  |  | comma-separated unsatisfied gates to override under merge:force (e.g. security-review, review, ci); never implied |
+| `-reason` | string |  |  | required reason when -override-gates is set, recorded on the task and pull request |
+<!-- END GENERATED FLAGS -->
+
 **Pinned by:** `pkg/cli/prcmd_test.go`, `pkg/ui/pull_requests_api_test.go`: `TestGrainPRReviewDesignAndPRStatusThreadsJSON`; `pkg/orchestrator/takeover_adopt_test.go`: `TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace`, `TestAdoptPullRequestLinksSpecAndDesignIntoConformanceReviewAndProposalGate`, `TestPullRequestReviewDesignAndStatusThreads`.
 
 ---
@@ -1201,6 +1215,7 @@ These sign a workstation in to a deployment as a named context, and say who it i
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
 - `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
 - It refuses `--token-stdin` beside `--refresh` the same way (exit `2`, `token_stdin_refresh`), and `--scope-set`, `--repos` or `--expires` without `--issue-token` (exit `2`, `needs_issue_token`): each would otherwise be ignored. A refused login writes nothing.
+- Signed in as a person through IAP (a Google ID token) or a registered credential source, with none of `--issue-token`, `--token-stdin` or `--refresh` given, `grain login` mints and keeps a personal `--scope-set` token as `--issue-token` would, so the CLI stops needing the proxy's sign-in or the access code day to day. `--issue-token=false` keeps a context that signs in through the proxy every time; a deployment with `externalAgentApi` off gets that context and a note on stderr.
 - `grain logout --local` forgets the credential without revoking its token on the server.
 
 #### `grain context list|use|show|delete`
@@ -1216,7 +1231,7 @@ _No flags._
 |---|---|---|---|---|
 | `-auth` | string |  |  | how to sign in: access-code, or a credential source this build registers |
 | `-expires` | string | `"30d"` |  | how long --issue-token's token lasts (30d, 12h, ...) |
-| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it |
+| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it (the default when IAP or a credential source signs in a person; --issue-token=false declines) |
 | `-name` | string |  |  | the context's name (default: from the server's host name) |
 | `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
 | `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
@@ -1288,130 +1303,142 @@ _No flags._
 
 ---
 
-### 4.17 `grain registry <subcommand>` {#CLI-109}
+### 4.17 `grain hub <subcommand>` {#CLI-109}
 
-Self-registers a grain deployment in a grain registry (`design/design/registry.design.md`), queries the organization directory and path router, and manages hosted (`instance`) and self-registered (`connected`) entries.
-- `status` (also bare `grain registry`) calls `GET /api/registry` and prints connection state, registry URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
+Self-registers a grain deployment in a grain hub (`design/design/hub.design.md`), queries the organization directory and path router, and manages hosted (`instance`) and self-registered (`connected`) entries.
+- `status` (also bare `grain hub`) calls `GET /api/registry` and prints connection state, hub URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
 - `list` calls `GET /api/entries` for the caller's entries (or `-all` for admins), with optional `-owner`, `-owner-group`, `-kind`, `-status`, `-listed`, `-conflict`, and `-include-deleted` filters, appending `detail=<status_detail>` when an entry carries a lifecycle or health detail.
 - `directory` calls `GET /api/directory` across listed catalog entries with optional `-q`, `-repo`, `-tag`, `-status`, `-kind`, `-host-kind`, `-owner`, and `-limit` filters.
 - `route` calls `GET /api/route` to resolve the primary and ranked candidate entries covering `-repo` and `-path` (with optional `-include-offline`).
 - `show` calls `GET /api/entries/{name}` and prints full metadata, lifecycle step and `status_detail`/`health_detail` (`Step:`, `Detail:`, `Health:`), boot disk size (`Disk:`), tunnel status, scopes, conflicts, and credential metadata.
 - `create` calls `POST /api/entries` (`kind = "instance"`) to provision a hosted VM entry (generating a random name when `<name>` is omitted).
-- `register` creates or updates a `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous registry URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon and prints the `-registry-connect` configuration snippet.
-- `unregister` deletes the entry on the registry (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
+- `register` creates or updates a `connected` entry on the hub (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous hub URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the hub without contacting a local daemon and prints the `-hub-connect` configuration snippet.
+- `unregister` deletes the entry on the hub (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
 - `update`, `scopes`, `rotate-credential`, `upgrade`, `resize`, `delete`, `restore`, `transfer`, and `accept-transfer` manage entry catalog fields, declared scopes, `grc_...` credentials, VM lifecycle replacements, soft-deletion/restoration, and two-step ownership transfers.
-- `stop` and `start` call `POST /api/entries/{name}/stop` and `POST /api/entries/{name}/start` on a hosted `instance` entry the caller manages: `stop` moves it to `stopping` → `stopped` (no VM, externalised state kept) and `start` boots it again (a visit to a stopped entry also wakes it). Both are human-only on the registry (a delegating app is refused), take the same target flags as `upgrade`, and print the entry's new lifecycle `state`; a `connected` entry is refused with `invalid_entry_kind`.
+- `stop` and `start` call `POST /api/entries/{name}/stop` and `POST /api/entries/{name}/start` on a hosted `instance` entry the caller manages: `stop` moves it to `stopping` → `stopped` (no VM, externalised state kept) and `start` boots it again (a visit to a stopped entry also wakes it). Both are human-only on the hub (a delegating app is refused), take the same target flags as `upgrade`, and print the entry's new lifecycle `state`; a `connected` entry is refused with `invalid_entry_kind`.
 
-**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` on the local daemon (unless `-standalone` is set); remote registry control-plane subcommands authenticate directly to `-registry-url` with OIDC or `-registry-token`.
+**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` on the local daemon (unless `-standalone` is set); remote hub control-plane subcommands authenticate directly to `-hub-url` with OIDC or `-hub-token`.
 
-<!-- BEGIN GENERATED FLAGS: grain registry -->
+<!-- BEGIN GENERATED FLAGS: grain hub -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry status`
+#### `grain hub status`
 
-<!-- BEGIN GENERATED FLAGS: grain registry status -->
+<!-- BEGIN GENERATED FLAGS: grain hub status -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry list`
+#### `grain hub list`
 
-<!-- BEGIN GENERATED FLAGS: grain registry list -->
+<!-- BEGIN GENERATED FLAGS: grain hub list -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-all` | bool |  |  | list all entries across the hub (admin only) |
 | `-conflict` | bool |  |  | filter entries that have active primary scope conflicts |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-include-deleted` | bool |  |  | include soft-deleted entries within their 30-day reservation window |
 | `-kind` | string |  |  | filter by entry kind: instance or connected |
 | `-listed` | bool |  |  | filter by listed state |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-owner` | string |  |  | filter by owner email |
 | `-owner-group` | string |  |  | filter by co-owning group |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-status` | string |  |  | filter by status: online, degraded, or offline |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry directory`
+#### `grain hub directory`
 
-<!-- BEGIN GENERATED FLAGS: grain registry directory -->
+<!-- BEGIN GENERATED FLAGS: grain hub directory -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-host-kind` | string |  |  | filter by host kind: registry-vm, workstation, kubernetes, or other |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-kind` | string |  |  | filter by entry kind: instance or connected |
 | `-limit` | int |  |  | maximum number of entries to return |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-owner` | string |  |  | filter by owner email |
 | `-q` | string |  |  | free-text search across name, display name, purpose, owner, tags, and scopes |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-repo` | string |  |  | filter by repository (<owner/name>) |
 | `-status` | string |  |  | filter by status: online, degraded, or offline |
 | `-tag` | string |  |  | filter by catalog tag |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry route`
+#### `grain hub route`
 
-<!-- BEGIN GENERATED FLAGS: grain registry route -->
+<!-- BEGIN GENERATED FLAGS: grain hub route -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-include-offline` | bool |  |  | include offline candidates in route resolution |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-path` | string |  |  | path within repository |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-repo` | string |  |  | repository (<owner/name>) |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry show`
+#### `grain hub show`
 
-<!-- BEGIN GENERATED FLAGS: grain registry show -->
+<!-- BEGIN GENERATED FLAGS: grain hub show -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry create`
+#### `grain hub create`
 
-<!-- BEGIN GENERATED FLAGS: grain registry create -->
+<!-- BEGIN GENERATED FLAGS: grain hub create -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-ssh` | bool | `true` |  | enable OS Login break-glass SSH access |
 | `-disk-gb` | int |  |  | boot disk size in GB (20..4000; defaults to shape default) |
 | `-display-name` | string |  |  | human-readable display name in the hub directory |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-listed` | bool |  |  | include this entry in default hub directory listings |
 | `-name` | string |  |  | entry name (defaults to a random generated name when omitted) |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-owner-group` | string |  |  | optional co-owning group principal |
 | `-purpose` | string |  |  | short description of this hosted grain's purpose |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-scope` | value |  |  | declared repository scope <owner/repo>[:<path_prefix>[:<primary\|secondary>]] (repeatable) |
-| `-shape` | string |  |  | VM shape name (defaults to registry default shape) |
+| `-shape` | string |  |  | VM shape name (defaults to hub default shape) |
 | `-ship-logs` | bool |  |  | enable fleet log shipping |
 | `-tags` | string |  |  | comma-separated catalog tags |
 | `-zone` | string |  |  | optional GCE zone override |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry register`
+#### `grain hub register`
 
-<!-- BEGIN GENERATED FLAGS: grain registry register -->
+<!-- BEGIN GENERATED FLAGS: grain hub register -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-connected-principal` | string |  |  | optional workload service account email authorized to connect on behalf of this entry |
 | `-display-name` | string |  |  | human-readable display name in the hub directory |
-| `-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name in the Grain Hub ($GRAIN_REGISTRY_ENTRY; or positional <entry>) |
+| `-entry` | string |  | $GRAIN_HUB_ENTRY | entry name in the Grain Hub ($GRAIN_HUB_ENTRY; or positional <entry>) |
 | `-host-kind` | string |  |  | connected entry host kind: "workstation", "kubernetes", or "other" |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-listed` | bool | `true` |  | include this entry in default hub directory listings |
 | `-mint-token` | bool |  |  | mint a fresh grc_... registration credential for this connected entry |
 | `-oidc` | bool |  |  | use OIDC ID tokens for registration and daemon heartbeats instead of minting a grc_... token |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-owner-group` | string |  |  | optional group principal that co-owns this entry |
 | `-purpose` | string |  |  | short description of this grain's purpose |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-rotate-token` | bool |  |  | rotate an existing connected entry's grc_... registration credential |
 | `-scope` | value |  |  | declared repository scope <owner/repo>[:<path_prefix>[:<primary\|secondary>]] (repeatable) |
 | `-standalone` | bool |  |  | register on the hub without writing settings or secrets to a local grain daemon |
@@ -1419,248 +1446,286 @@ _No flags._
 | `-token-file` | string |  |  | with -standalone, write a minted grc_... token to this file (mode 0600) instead of printing it |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry unregister`
+#### `grain hub unregister`
 
-<!-- BEGIN GENERATED FLAGS: grain registry unregister -->
+<!-- BEGIN GENERATED FLAGS: grain hub unregister -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name in the Grain Hub ($GRAIN_REGISTRY_ENTRY; or positional <entry>) |
+| `-entry` | string |  | $GRAIN_HUB_ENTRY | entry name in the Grain Hub ($GRAIN_HUB_ENTRY; or positional <entry>) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for deleting the entry on the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-keep-remote` | bool |  |  | clear the daemon's local hub settings and credential without deleting the entry on the hub |
 | `-oidc` | bool |  |  | authenticate remote entry deletion with an OIDC ID token |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for deleting the entry on the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-standalone` | bool |  |  | delete the entry on the hub without contacting a local grain daemon |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry update`
+#### `grain hub update`
 
-<!-- BEGIN GENERATED FLAGS: grain registry update -->
+<!-- BEGIN GENERATED FLAGS: grain hub update -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-ssh` | bool |  |  | enable or disable break-glass SSH |
 | `-connected-principal` | string |  |  | connected workload principal |
 | `-display-name` | string |  |  | human-readable display name |
 | `-host-kind` | string |  |  | connected entry host kind: workstation, kubernetes, or other |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-listed` | bool |  |  | mark entry listed in directory |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-owner-group` | string |  |  | co-owning group principal |
 | `-purpose` | string |  |  | short purpose description |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-shape` | string |  |  | target VM shape |
 | `-ship-logs` | bool |  |  | enable or disable fleet log shipping |
 | `-tags` | string |  |  | comma-separated catalog tags |
 | `-unlisted` | bool |  |  | mark entry unlisted in directory |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry scopes`
+#### `grain hub scopes`
 
-<!-- BEGIN GENERATED FLAGS: grain registry scopes -->
+<!-- BEGIN GENERATED FLAGS: grain hub scopes -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-clear` | bool |  |  | clear all declared scope overrides on the entry |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-set` | value |  |  | declared scope <owner/repo>[:<path_prefix>[:<primary\|secondary>]] (repeatable) |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry rotate-credential`
+#### `grain hub rotate-credential`
 
-<!-- BEGIN GENERATED FLAGS: grain registry rotate-credential -->
+<!-- BEGIN GENERATED FLAGS: grain hub rotate-credential -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-cred-id` | string |  |  | specific credential UUID to replace or expire |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-label` | string |  |  | optional label for the new grc_... credential |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-overlap` | duration |  |  | grace period before previous credentials expire (for example 1h) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-revoke-previous` | bool |  |  | immediately revoke previous active credentials |
 | `-token-file` | string |  |  | write the newly minted grc_... token to this file (mode 0600) |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry upgrade`
+#### `grain hub upgrade`
 
-<!-- BEGIN GENERATED FLAGS: grain registry upgrade -->
+<!-- BEGIN GENERATED FLAGS: grain hub upgrade -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
-| `-version` | string |  |  | target grain release version (defaults to registry's current pinned release) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
+| `-version` | string |  |  | target grain release version (defaults to hub's current pinned release) |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry resize`
+#### `grain hub resize`
 
-<!-- BEGIN GENERATED FLAGS: grain registry resize -->
+<!-- BEGIN GENERATED FLAGS: grain hub resize -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-disk-gb` | int |  |  | boot disk size in GB (20..4000; defaults to shape default) |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-shape` | string |  |  | target VM shape name |
 | `-version` | string |  |  | optional target grain version to apply during replacement |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry delete`
+#### `grain hub delete`
 
-<!-- BEGIN GENERATED FLAGS: grain registry delete -->
+<!-- BEGIN GENERATED FLAGS: grain hub delete -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-confirm` | string |  |  | type the entry name to confirm deletion |
 | `-delete-disk` | bool |  |  | immediately purge the instance database/disk instead of retaining it for the 30-day restore window |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-yes` | bool |  |  | confirm deletion without repeating the entry name |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry restore`
+#### `grain hub restore`
 
-<!-- BEGIN GENERATED FLAGS: grain registry restore -->
+<!-- BEGIN GENERATED FLAGS: grain hub restore -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry stop`
+#### `grain hub stop`
 
-<!-- BEGIN GENERATED FLAGS: grain registry stop -->
+<!-- BEGIN GENERATED FLAGS: grain hub stop -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry start`
+#### `grain hub start`
 
-<!-- BEGIN GENERATED FLAGS: grain registry start -->
+<!-- BEGIN GENERATED FLAGS: grain hub start -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry transfer`
+#### `grain hub transfer`
 
-<!-- BEGIN GENERATED FLAGS: grain registry transfer -->
+<!-- BEGIN GENERATED FLAGS: grain hub transfer -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-cancel` | bool |  |  | withdraw the entry's pending transfer offer instead of making one |
 | `-clear-owner-group` | bool |  |  | clear the entry's co-owning group |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-owner-group` | string |  |  | optional co-owning group to set alongside transfer |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-to` | string |  |  | email of the new individual owner to offer transfer to |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry accept-transfer`
+#### `grain hub accept-transfer`
 
-<!-- BEGIN GENERATED FLAGS: grain registry accept-transfer -->
+<!-- BEGIN GENERATED FLAGS: grain hub accept-transfer -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
 #### Delegating apps and consent grants
 
-`grain registry delegating-apps list|create|disable|enable` is the registry-admin surface for `registry.delegating_apps` (`GET`/`POST /api/admin/delegating-apps`, `PATCH /api/admin/delegating-apps/<name>`): `create` takes the app's short name and `-principal`, a service-account email with or without the `serviceAccount:` prefix (the registry stores the prefixed form, so a bare email can no longer register an app that reads as `app_not_registered`). `grain registry grants list|create|revoke` is the person-facing surface for `registry.delegation_grants` (`GET`/`POST /api/delegation-grants`, `DELETE /api/delegation-grants/<grant-id|app>`): every grant is the signed-in person's own, and `revoke` takes a `dlg_…` ID or the app's name. Both verbs take the same `-registry-url` / `-registry-token` / `-oidc-audience` target flags as the rest of `grain registry`; `help` (or no verb) prints each group's usage.
+`grain hub delegating-apps list|create|disable|enable` is the registry-admin surface for `registry.delegating_apps` (`GET`/`POST /api/admin/delegating-apps`, `PATCH /api/admin/delegating-apps/<name>`): `create` takes the app's short name and `-principal`, a service-account email with or without the `serviceAccount:` prefix (the registry stores the prefixed form, so a bare email can no longer register an app that reads as `app_not_registered`). `grain hub grants list|create|revoke` is the person-facing surface for `registry.delegation_grants` (`GET`/`POST /api/delegation-grants`, `DELETE /api/delegation-grants/<grant-id|app>`): every grant is the signed-in person's own, and `revoke` takes a `dlg_…` ID or the app's name. Both verbs take the same `-hub-url` / `-hub-token` / `-oidc-audience` target flags as the rest of `grain hub`; `help` (or no verb) prints each group's usage.
 
-#### `grain registry delegating-apps create`
+#### `grain hub delegating-apps create`
 
-<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps create -->
+<!-- BEGIN GENERATED FLAGS: grain hub delegating-apps create -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-description` | string |  |  | what the app does with the access it is granted |
 | `-display-name` | string |  |  | name people see when granting consent (defaults to the app name) |
 | `-homepage` | string |  |  | URL describing the app |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-max-access` | string | `"write"` |  | most access a grant to this app may carry: read or write |
 | `-max-grant-ttl` | duration |  |  | longest a grant to this app may last before it has to be renewed; 0 means 90 days |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-owner` | string |  |  | person accountable for the app (defaults to you) |
 | `-owner-group` | string |  |  | optional group co-owning the app |
 | `-principal` | string |  |  | service account the app calls as: an email, or serviceAccount:<email> |
 | `-redirect-uri` | value |  |  | consent redirect URI the app may use (repeatable) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-require-subject-token` | bool |  |  | require a subject token alongside on-behalf-of requests |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry delegating-apps disable`
+#### `grain hub delegating-apps disable`
 
-<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps disable -->
+<!-- BEGIN GENERATED FLAGS: grain hub delegating-apps disable -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry delegating-apps enable`
+#### `grain hub delegating-apps enable`
 
-<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps enable -->
+<!-- BEGIN GENERATED FLAGS: grain hub delegating-apps enable -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry delegating-apps list`
+#### `grain hub delegating-apps list`
 
-<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps list -->
+<!-- BEGIN GENERATED FLAGS: grain hub delegating-apps list -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry grants create`
+#### `grain hub grants create`
 
-<!-- BEGIN GENERATED FLAGS: grain registry grants create -->
+<!-- BEGIN GENERATED FLAGS: grain hub grants create -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-access` | string |  |  | read or write (defaults to the app's max access) |
 | `-entry` | value |  |  | entry the app may reach on your behalf, or "*" for every entry you can reach (repeatable) |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-ttl` | duration |  |  | how long the grant lasts, capped at the app's max grant TTL; 0 means 30 days |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry grants list`
+#### `grain hub grants list`
 
-<!-- BEGIN GENERATED FLAGS: grain registry grants list -->
+<!-- BEGIN GENERATED FLAGS: grain hub grants list -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
 | `-include-revoked` | bool |  |  | also list grants you have revoked |
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-#### `grain registry grants revoke`
+#### `grain hub grants revoke`
 
-<!-- BEGIN GENERATED FLAGS: grain registry grants revoke -->
+<!-- BEGIN GENERATED FLAGS: grain hub grants revoke -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -registry-url) |
-| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the hub ($GRAIN_REGISTRY_TOKEN) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub ($GRAIN_REGISTRY_URL) |
+| `-hub-token` | string |  | $GRAIN_HUB_TOKEN | bearer token for authenticating to the hub ($GRAIN_HUB_TOKEN) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub ($GRAIN_HUB_URL) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
+| `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestRegistryCLIStopStart`, `TestDaemonRegistryFlags`; `pkg/cli/registry_delegation_test.go`: `TestRegistryCLIDelegatingAppsAndGrants`.
+**Pinned by:** `pkg/cli/hub_test.go`: `TestHubCLIRegisterStatusUnregister`, `TestHubCLISubcommands`, `TestHubCLIStopStart`, `TestDaemonHubFlags`; `pkg/cli/hub_delegation_test.go`: `TestHubCLIDelegatingAppsAndGrants`.
 
 ---
 
@@ -1668,7 +1733,7 @@ _No flags._
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
 
-This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-registry-issuer`, `-ui-registry-audience`, `-ui-registry-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md)) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
+This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md); `-host-accounts` and `-api-socket` for the unix socket the host CLI is recorded through by account, `docs/access-code.md`) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
 
 <!-- BEGIN GENERATED FLAGS: grain daemon -->
 | Flag | Type | Default | Env | Description |
@@ -1678,6 +1743,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-agy-path` | string |  |  | path to the Antigravity CLI binary (agy) agent/antigravity runs as a subprocess; empty resolves "agy" against $PATH instead. Only used by a run driven by the "antigravity" framework |
 | `-agy-run` | string |  |  | where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release |
 | `-allow-unisolated-host-sandboxes` | bool |  |  | let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user |
+| `-api-socket` | string |  |  | unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names (default <data-dir>/api/grain.sock, served only when some account is mapped; "none" turns it off) |
 | `-as` | string |  |  | principal the UI/API attributes tasks and comments it creates to (defaults to the OS user) |
 | `-backup-gcs-bucket` | string |  |  | GCS bucket for scheduled backups; when set, upload to GCS instead of Google Drive |
 | `-backup-google-credentials-file` | string |  |  | Google credential JSON for scheduled backups; omitted uses Application Default Credentials |
@@ -1747,6 +1813,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-grit-client-token` | value |  |  | client token (<id>.<secret>) sent in Grit-Client when -grit-url is set |
 | `-grit-experimental` | bool |  |  | allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI |
 | `-grit-url` | value |  |  | EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred) |
+| `-host-accounts` | string |  | $GRAIN_HOST_ACCOUNTS | comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as (the daemon's own account maps to -deployment-owner unless named here; $GRAIN_HOST_ACCOUNTS when unset) |
 | `-host-sandbox-env` | value |  |  | NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone |
 | `-host-sandboxes` | bool |  |  | dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed |
 | `-hostd-reattach-timeout` | duration | `15m0s` |  | how long a run's agent CLI, running detached on a host whose connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once |
@@ -1754,6 +1821,16 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-hostd-token-file` | string |  | $GRAIN_HOSTD_TOKEN | deprecated, for one release: file holding a shared token a host on another machine dials in to /api/hostd/connect with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, which gives it a token of its own |
 | `-hostd-token-name` | string | `"remote"` |  | the host name a host dialing in with -hostd-token-file's shared token is known by |
 | `-hostd-token-owner` | string |  |  | the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not |
+| `-hub-auth-mode` | string |  | $GRAIN_HUB_TOKEN | credential mode for hub heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-connect` | bool |  | $GRAIN_HUB_CONNECT | supervise an outbound wss://<hub-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url) |
+| `-hub-display-name` | string |  |  | human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-entry` | string |  | $GRAIN_HUB_ENTRY | entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_HUB_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-host-kind` | string |  |  | connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-listed` | bool | `true` |  | include this connected entry in default hub directory listings (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-oidc-audience` | string |  |  | OIDC ID token audience when -hub-auth-mode=oidc (defaults to -hub-url) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-purpose` | string |  |  | short description of this grain deployment's purpose in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-token-file` | string |  | $GRAIN_HUB_TOKEN | fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_HUB_TOKEN is also consulted) |
+| `-hub-url` | string |  | $GRAIN_HUB_URL | base URL of the Grain Hub this daemon self-registers with ($GRAIN_HUB_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
 | `-iap-backend-service` | string |  |  | GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-iap-resource` | string |  |  | IAP web resource whose IAP access is reconciled from the teams and access list too, e.g. projects/<NUMBER>/iap_web/compute/services/<SERVICE>; empty or "none" disables it (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-container` | string | `"grain"` |  | name of grain's own container within that Deployment (only used with -k8s-sandboxes and -upgrade-image) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
@@ -1816,16 +1893,16 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-poll-interval` | duration | `10s` |  | how often to run a reconcile cycle (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-postgres-url` | string |  |  | PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL) |
 | `-reboot-cmd` | value |  |  | one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot. |
-| `-registry-auth-mode` | string |  | $GRAIN_REGISTRY_TOKEN | credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
-| `-registry-connect` | bool |  | $GRAIN_REGISTRY_CONNECT | supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_REGISTRY_CONNECT; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url) |
-| `-registry-display-name` | string |  |  | human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
-| `-registry-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
-| `-registry-host-kind` | string |  |  | connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
-| `-registry-listed` | bool | `true` |  | include this connected entry in default hub directory listings (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
-| `-registry-oidc-audience` | string |  |  | OIDC ID token audience when -registry-auth-mode=oidc (defaults to -registry-url) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
-| `-registry-purpose` | string |  |  | short description of this grain deployment's purpose in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
-| `-registry-token-file` | string |  | $GRAIN_REGISTRY_TOKEN | fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_REGISTRY_TOKEN is also consulted) |
-| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the Grain Hub this daemon self-registers with ($GRAIN_REGISTRY_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-auth-mode` | value |  |  | deprecated: renamed to -hub-auth-mode |
+| `-registry-connect` | bool |  |  | deprecated: renamed to -hub-connect |
+| `-registry-display-name` | value |  |  | deprecated: renamed to -hub-display-name |
+| `-registry-entry` | value |  |  | deprecated: renamed to -hub-entry |
+| `-registry-host-kind` | value |  |  | deprecated: renamed to -hub-host-kind |
+| `-registry-listed` | bool |  |  | deprecated: renamed to -hub-listed |
+| `-registry-oidc-audience` | value |  |  | deprecated: renamed to -hub-oidc-audience |
+| `-registry-purpose` | value |  |  | deprecated: renamed to -hub-purpose |
+| `-registry-token-file` | value |  |  | deprecated: renamed to -hub-token-file |
+| `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-relay-audience` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-auth-token-file` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-iap-jwt-audience` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
@@ -1866,27 +1943,26 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ui-allowed-hosts` | string |  |  | comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off |
 | `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
 | `-ui-cloud-identity-endpoint` | string |  | $GRAIN_CLOUD_IDENTITY_ENDPOINT | resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT |
+| `-ui-hub-audience` | string |  | $GRAIN_HUB_AUDIENCE | the single audience URL a signed X-Grain-Hub-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_HUB_AUDIENCE |
+| `-ui-hub-issuer` | string |  | $GRAIN_HUB_ISSUER | the exact issuer URL a signed X-Grain-Hub-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_HUB_ISSUER. All three of -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url must be set to enable the "registry" IdentityVerifier |
+| `-ui-hub-keys-url` | string |  | $GRAIN_HUB_KEYS_URL | where the hub's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_HUB_KEYS_URL |
 | `-ui-iap-audience` | string |  | $GRAIN_IAP_AUDIENCE | the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted |
 | `-ui-iap-issuer` | string |  | $GRAIN_IAP_ISSUER | the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then https://cloud.google.com/iap |
 | `-ui-iap-keys-url` | string |  | $GRAIN_IAP_KEYS_URL | where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key |
 | `-ui-open` | bool |  |  | open the UI in the system's default browser once it's listening |
-| `-ui-registry-audience` | string |  | $GRAIN_REGISTRY_AUDIENCE | the single audience URL a signed X-Grain-Registry-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_REGISTRY_AUDIENCE |
-| `-ui-registry-issuer` | string |  | $GRAIN_REGISTRY_ISSUER | the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url must be set to enable the "registry" IdentityVerifier |
-| `-ui-registry-keys-url` | string |  | $GRAIN_REGISTRY_KEYS_URL | where the hub's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_REGISTRY_KEYS_URL |
+| `-ui-registry-audience` | value |  |  | deprecated: renamed to -ui-hub-audience |
+| `-ui-registry-issuer` | value |  |  | deprecated: renamed to -ui-hub-issuer |
+| `-ui-registry-keys-url` | value |  |  | deprecated: renamed to -ui-hub-keys-url |
 | `-ui-require-iap` | bool |  | $GRAIN_IAP_AUDIENCE, $GRAIN_REQUIRE_IAP | accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers, and serve no "Enter access code" page, so network callers sign in through IAP alone (docs/access-code.md); needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP |
 | `-ui-require-verifier` | string |  | $GRAIN_REQUIRE_VERIFIER | require network callers to sign in through the named IdentityVerifier (e.g. "iap", "registry", or a registered verifier): accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers (or through a verifier that declares AccessCodeWins), and serve no "Enter access code" page (-ui-require-iap is an alias for -ui-require-verifier=iap). Defaults to $GRAIN_REQUIRE_VERIFIER |
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
-| `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK) |
+| `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none" or "registry" (legacy "release-assets" logs a deprecation warning and maps to "none"; or GRAIN_UPGRADE_IMAGE_FALLBACK) |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
-| `-upgrade-image-source` | string |  |  | where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE) |
+| `-upgrade-image-source` | string |  |  | where -upgrade-image pulls candidate container images from: "registry" (docker pull, the default; legacy "release-assets" logs a deprecation warning and maps to "registry"; or GRAIN_UPGRADE_IMAGE_SOURCE) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
-| `-upgrade-release-asset` | string |  |  | daemon tarball asset name on releases when images.json is not used (e.g. grain-image.tar.gz, or GRAIN_UPGRADE_RELEASE_ASSET) |
-| `-upgrade-release-checksum` | string |  |  | checksum asset name or suffix (starting with '.') for release-asset tarballs; defaults to .sha256 (or GRAIN_UPGRADE_RELEASE_CHECKSUM) |
-| `-upgrade-release-repo` | string |  |  | host-qualified repository (<host>/<owner>/<name>) whose releases carry upgrade image assets; defaults to the repository mapped from -upgrade-image or registered by the edition (or GRAIN_UPGRADE_RELEASE_REPO) |
 | `-upgrade-restart-cmd` | value |  |  | one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below. |
-| `-upgrade-sandbox-release-asset` | value |  |  | per-sandbox-image release asset mapping as <role-or-repo>=<asset> -- repeat for each image, e.g. -upgrade-sandbox-release-asset=guest=grain-guest.tar.gz (or comma-separated in GRAIN_UPGRADE_SANDBOX_RELEASE_ASSETS) |
 | `-upgrade-src-dir` | string |  |  | git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature |
 | `-upgrade-verify-cmd` | value |  |  | one argument of the command that verifies an -upgrade-image image's signature before anything runs it -- repeat for every argument, e.g. -upgrade-verify-cmd=cosign -upgrade-verify-cmd=verify -upgrade-verify-cmd=--key=/etc/grain/cosign.pub -upgrade-verify-cmd=--insecure-ignore-tlog=true (docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead unverified and say so. |
 <!-- END GENERATED FLAGS -->
@@ -1941,12 +2017,15 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-stalled-tasks` | bool |  |  | hand the UI the orchestrator's stall deadlines and seed a queued task, a run and a deferral past them, for the Inbox's stuck-task group |
 | `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
 | `-ui-cloud-identity-endpoint` | string |  |  | as on grain daemon: resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com |
+| `-ui-hub-audience` | string |  |  | as on grain daemon: the single audience URL a signed X-Grain-Hub-Assertion must carry |
+| `-ui-hub-issuer` | string |  |  | as on grain daemon: the exact issuer URL a signed X-Grain-Hub-Assertion must carry |
+| `-ui-hub-keys-url` | string |  |  | as on grain daemon: where the hub's ES256 signing keys are published as a JWK set |
 | `-ui-iap-audience` | string |  |  | as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it |
 | `-ui-iap-issuer` | string |  |  | as on grain daemon: the issuer a signed assertion must carry (default https://cloud.google.com/iap) |
 | `-ui-iap-keys-url` | string |  |  | as on grain daemon: where the assertions' signing keys are published (default https://www.gstatic.com/iap/verify/public_key) |
-| `-ui-registry-audience` | string |  |  | as on grain daemon: the single audience URL a signed X-Grain-Registry-Assertion must carry |
-| `-ui-registry-issuer` | string |  |  | as on grain daemon: the exact issuer URL a signed X-Grain-Registry-Assertion must carry |
-| `-ui-registry-keys-url` | string |  |  | as on grain daemon: where the hub's ES256 signing keys are published as a JWK set |
+| `-ui-registry-audience` | value |  |  | deprecated: renamed to -ui-hub-audience |
+| `-ui-registry-issuer` | value |  |  | deprecated: renamed to -ui-hub-issuer |
+| `-ui-registry-keys-url` | value |  |  | deprecated: renamed to -ui-hub-keys-url |
 | `-ui-require-iap` | bool |  |  | as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience |
 | `-ui-require-verifier` | string |  |  | as on grain daemon: require network callers to sign in through the named IdentityVerifier (-ui-require-iap is an alias for -ui-require-verifier=iap) |
 | `-unconfigured` | bool |  |  | serve a deployment with no agent model and no git credential configured, as a fresh install has |
@@ -2209,7 +2288,11 @@ This covers where the installation's state repository lives and what it holds. T
 | `prepare-upgrade` | export a store this build cannot open, for the next start to migrate. Prints `prepared FROM TO DIR`, `current N` or `none` |
 | `check [-migrate] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive |
 | `key show` / `key path` | print the secrets public key / where the private key is read from |
-| `key import [-key-file F]` | install a private key from `-key-file` or stdin |
+| `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
+| `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |
+| `key retired delete (-all \| NAME...)` | delete replaced keys by exact name. Refuses the live key, anything that is not an archive beside it, and the archive the secrets file is still encrypted to when the live key does not open it |
+| `key wrap -kms KEY` | wrap the private key with the Cloud KMS key `KEY` (`projects/P/locations/L/keyRings/R/cryptoKeys/K`), in the daemon when one answers and in this process otherwise. It wraps, unwraps the result and compares before replacing the file by a rename, then lists the plaintext copies of a private key it can still see (`secrets.key.replaced-*`, `/run/grain-secrets`) and notes the escrow ([secrets key protection §6.2](../../design/secrets-key-protection.design.md#SKP-6-2)) |
+| `key unwrap` | put the private key back in plaintext form, verified against KMS and read back before it is done. Run it before downgrading to a build that cannot read the wrapped form |
 
 <!-- BEGIN GENERATED FLAGS: grain state -->
 _No flags._
@@ -2255,13 +2338,33 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain state key retired -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain state key retired delete -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-all` | bool |  |  | delete every retired key |
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain state key import -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-key-file` | string |  |  | file holding the private key; defaults to reading stdin |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
+<!-- BEGIN GENERATED FLAGS: grain state key wrap -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-kms` | string |  |  | the Cloud KMS key to wrap with: projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k> (required) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain state key unwrap -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_retired_test.go`; `pkg/cli/state_wrap_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
 
 ### 6.5 `grain backup`, `grain export`, `grain import` {#CLI-54}
 
@@ -2288,6 +2391,7 @@ The export and import usage is hand-written. Their flags:
 | `-passphrase-file` | both | passphrase file, or `-` for stdin |
 | `-key-file` | both | 64-hex-character key file, or `-` for stdin |
 | `-passphrase`, `-password`, `-key` | both | deprecated literal forms |
+| `-plaintext` | export | allow an unencrypted bundle that carries `secrets/secrets.key`; without a passphrase or key, export refuses one unless this is set |
 
 <!-- BEGIN GENERATED FLAGS: grain backup -->
 _No flags._
@@ -2510,9 +2614,11 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 | Subcommand | Request |
 |---|---|
 | `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with its role, who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
-| `allow [--role <set>] [--reason <why>] [--label <name>] <user:<email>\|group:<email>\|serviceAccount:<email>\|delegate:<email>>` (also `add`) | `POST /api/access/principals {"entry","role","reason","label"}`. `--role` defaults to `grain/operator` (or `grain/delegated` for `delegate:`), whose dangerous scopes need the access code and a `--reason`. `--label` sets an optional short identifier (`[a-z][a-z0-9-]{0,31}`) on `delegate:` entries. Adding an existing entry is a no-op that keeps its role |
-| `role [--reason <why>] <entry> <set>` | `PATCH /api/access/principals/{entry} {"role","reason"}`. Prints `<entry>: role <old> -> <new>` |
-| `deny <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}` |
+| `allow [--role <set>] [--reason <why>] [--label <name>] <user:<email>\|group:<email>\|serviceAccount:<email>\|delegate:<email>>` (also `add`) | `POST /api/access/principals {"entry","role","reason","label"}`. `--role` defaults to `grain/operator` (or `grain/delegated` for `delegate:`), whose dangerous scopes need a `--reason`, and from a signed-in person a role of their own that holds every scope of it. `--label` sets an optional short identifier (`[a-z][a-z0-9-]{0,31}`) on `delegate:` entries. Adding an existing entry is a no-op that keeps its role |
+| `role [--reason <why>] [--confirm-self] <entry> <set>` | `PATCH /api/access/principals/{entry} {"role","reason","confirmSelf"}`. Prints `<entry>: role <old> -> <new>` |
+| `deny [--reason <why>] [--confirm-self] <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}?reason=<why>&confirmSelf=1` |
+
+A change involving a role that holds a dangerous scope or denies scopes needs `--reason`, which is recorded in the access history with the old and new role. With the access code anything may be changed. A signed-in person changes another entry only when their own role holds every scope of its current and new role; they may not widen, or add or lift a deny on, an entry that matches them (their `user:` entry or a `group:` they are in), narrowing one needs `--confirm-self` (refused with code `confirm_self` otherwise), and the last `user:`/`group:` entry holding a full admin role is never removed or narrowed (`last_admin`; the access code still can).
 
 Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line (`usage: grain access allow <user:<email>|group:<email>>`). This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist.
 

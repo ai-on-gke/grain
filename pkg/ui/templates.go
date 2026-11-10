@@ -123,6 +123,7 @@ type Template struct {
 	KeepRunning  bool                        `json:"keepRunning,omitempty"`
 	Admission    string                      `json:"admission,omitempty"`
 	Hosting      string                      `json:"hosting,omitempty"`
+	Skills       *model.SkillsConfig         `json:"skills,omitempty"`
 	Reads        []string                    `json:"reads,omitempty"`
 	Writes       []WriteTarget               `json:"writes,omitempty"`
 	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
@@ -212,6 +213,7 @@ func templateFrom(t model.Template) Template {
 		KeepRunning:   t.KeepRunning,
 		Admission:     string(t.Admission),
 		Hosting:       string(t.Hosting),
+		Skills:        t.Skills.Clone(),
 		NetworkAccess: string(t.NetworkAccess),
 		Model:         t.Model,
 		CustomFields:  customFieldValues(t.CustomFields),
@@ -357,11 +359,12 @@ type CreateTemplateRequest struct {
 	// (model.Template.Model), or "" to leave it to the team's default.
 	Model string `json:"model"`
 	// Interactive sets model.Template.Interactive.
-	Interactive      bool   `json:"interactive"`
-	KeepRunning      bool   `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
-	Admission        string `json:"admission,omitempty"`
-	Hosting          string `json:"hosting,omitempty"`
+	Interactive      bool                `json:"interactive"`
+	KeepRunning      bool                `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool               `json:"keep_running,omitempty"`
+	Admission        string              `json:"admission,omitempty"`
+	Hosting          string              `json:"hosting,omitempty"`
+	Skills           *model.SkillsConfig `json:"skills,omitempty"`
 	// Hostd is read only to be refused (TaskHostdRefusal): a template's
 	// tasks have no hostd of their own.
 	Hostd        string                      `json:"hostd,omitempty"`
@@ -432,6 +435,14 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 	if err != nil {
 		return Template{}, validationErrorf("%v", err)
 	}
+	var chosenSkills *model.SkillsConfig
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return Template{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
+	}
 	capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("template "+req.Name, req.Capabilities)
 	if hadLegacy {
 		admission = model.MaxAdmission(admission, legacyAdm)
@@ -496,6 +507,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		KeepRunning:   req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
 		Admission:     admission,
 		Hosting:       hosting,
+		Skills:        chosenSkills,
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
 		Model:         chosenModel,
 		Reads:         reads,
@@ -575,6 +587,22 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 		target = parsed
 	}
 	comp := model.ComposeTemplateTask(*tmpl, req.Fields, target, req.Base, req.Approved)
+	if push, err := c.templateDeclaredPush(ctx, id); err != nil {
+		return req, err
+	} else if push != nil {
+		if strings.TrimSpace(req.Description) != "" && req.Description != comp.Body {
+			return req, validationErrorf("template %s carries a declared push set from %s: description cannot be overridden when filing from it",
+				id, push.Path)
+		}
+		if req.rawBody != nil && strings.TrimSpace(*req.rawBody) != "" && *req.rawBody != comp.Body {
+			return req, validationErrorf("template %s carries a declared push set from %s: body cannot be overridden when filing from it",
+				id, push.Path)
+		}
+		if strings.TrimSpace(req.PromptExtension) != "" {
+			return req, validationErrorf("template %s carries a declared push set from %s: promptExtension cannot be set when filing from it",
+				id, push.Path)
+		}
+	}
 
 	if strings.TrimSpace(req.Title) == "" {
 		req.Title = comp.Title
@@ -619,6 +647,9 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	}
 	if strings.TrimSpace(req.Hosting) == "" && comp.Hosting != "" {
 		req.Hosting = string(comp.Hosting)
+	}
+	if req.Skills == nil && comp.Skills != nil {
+		req.Skills = comp.Skills.Clone()
 	}
 	if req.Priority == nil && comp.Priority != 0 {
 		p := comp.Priority
@@ -781,11 +812,12 @@ type UpdateTemplateRequest struct {
 	// clears it, so the template's tasks go back to the team's default.
 	Model *string `json:"model,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
-	Interactive      *bool   `json:"interactive,omitempty"`
-	KeepRunning      *bool   `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool   `json:"keep_running,omitempty"`
-	Admission        *string `json:"admission,omitempty"`
-	Hosting          *string `json:"hosting,omitempty"`
+	Interactive      *bool               `json:"interactive,omitempty"`
+	KeepRunning      *bool               `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool               `json:"keep_running,omitempty"`
+	Admission        *string             `json:"admission,omitempty"`
+	Hosting          *string             `json:"hosting,omitempty"`
+	Skills           *model.SkillsConfig `json:"skills,omitempty"`
 	// Hostd is read only to be refused (TaskHostdRefusal).
 	Hostd        *string                      `json:"hostd,omitempty"`
 	Capabilities *[]string                    `json:"capabilities,omitempty"`
@@ -861,6 +893,16 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 			return Template{}, validationErrorf("%v", err)
 		}
 		chosenHosting = &h
+	}
+	var chosenSkills *model.SkillsConfig
+	var hasChosenSkills bool
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return Template{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
+		hasChosenSkills = true
 	}
 	var grants []model.Grant
 	var legacyAdmission model.Admission
@@ -1019,6 +1061,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 		}
 		if hadLegacyHosting {
 			t.Hosting = model.MaxHosting(t.Hosting, legacyHosting)
+		}
+		if hasChosenSkills {
+			t.Skills = chosenSkills
 		}
 		if req.NetworkAccess != nil {
 			t.NetworkAccess = model.NetworkAccess(*req.NetworkAccess)
@@ -1247,22 +1292,44 @@ func (c *Client) nameDependents(ctx context.Context, deps []dependent) (string, 
 // --- handlers ------------------------------------------------------------
 
 func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
-	list, err := s.tasks.ListTemplates(r.Context())
+	summary := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("fields")), "summary")
+	defaultLimit := listPageTiny
+	if summary {
+		defaultLimit = listPageLarge
+	}
+	list, err := parseListQuery(r, defaultLimit)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	templates, err := s.tasks.ListTemplates(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
 	if call, ok := agentCallFromContext(r.Context()); ok && !call.grants.Allows("templates:read", "") {
-		filtered := make([]Template, 0, len(list))
-		for _, t := range list {
+		filtered := make([]Template, 0, len(templates))
+		for _, t := range templates {
 			if !templateAllowedForGrants(t, call.grants) {
 				continue
 			}
 			filtered = append(filtered, t)
 		}
-		list = filtered
+		templates = filtered
 	}
-	writeJSON(w, http.StatusOK, list)
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
+		templates = filterList(templates, func(t Template) bool { return strings.EqualFold(t.Repo, repo) })
+	}
+	templates = filterList(templates, func(t Template) bool {
+		return list.matches(t.ID, t.Name, t.Title, t.Repo)
+	})
+	if summary {
+		for i := range templates {
+			templates[i].Description = ""
+		}
+		list.Paged = true
+	}
+	writeList(w, templates, list)
 }
 
 func templateAllowedForGrants(t Template, grants APIGrantSet) bool {

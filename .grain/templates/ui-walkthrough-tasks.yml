@@ -8,17 +8,24 @@ body: |
 
   ## Coverage
 
-  - Open Inbox directly and from the rail; inspect its proposal,
-    parked-question, review-decision ("Ship as is" or a reply),
+  - Open Inbox directly and from the rail; inspect its base-branch repair,
+    proposal, parked-question, review-decision ("Ship as is" or a reply),
     submit-for-merge, unblock-merge, approve-on-GitHub, local-script
-    approval, stalled and config-repo sync groups, counts (waiting
-    local-script calls and config-repo sync failures included in the
-    rail's Inbox count), row navigation, and empty-state behaviour.
-    Collapse and expand sections by click and keyboard (`Enter`/`Space`),
-    confirming Notifications starts collapsed with its count still shown
-    and section state survives a reload. A stalled row shows its sub-case
-    and offers the control that sub-case names (Run now, Cancel, Undefer
-    or Retry merge); press one and confirm the row leaves the group.
+    approval, stalled, config-repo sync and Notifications groups, counts
+    (waiting local-script calls, open notifications and config-repo sync
+    failures included in the rail's Inbox count), group bulk actions
+    (Approve all, Defer all, Acknowledge all with confirmation), row
+    navigation, `keep_running` row markers, role-gated read-only rendering
+    when the signed-in role lacks write scopes, and empty vs task-load
+    failure states (confirming a cold `/api/tasks` failure never claims
+    nothing is waiting). Collapse and expand sections by click and
+    keyboard (`Enter`/`Space`), confirming Notifications starts collapsed
+    with its count still shown (including pending-release Approve /
+    Approve short soak with its soak badge, Reject, Acknowledge and
+    Investigate) and section state survives a reload. A stalled row shows
+    its sub-case and offers the control that sub-case names (Run now,
+    Cancel, Undefer or Retry merge); press one and confirm the row leaves
+    the group.
   - Approve the seeded proposal from the Inbox, answer the seeded parked
     question, and exercise inline changelist actions where seeded or
     stubbed (Mail, Publish replies, Sync, and Submit offered inline only
@@ -26,64 +33,94 @@ body: |
     and lands in the expected task state.
   - Create tasks from the global New task form using both the queued and
     the proposed path, from the rail's create menu, from a template
-    (confirming the template picker carries the template's priority until
-    edited, while a template with input fields opens Use… instead), and
-    from `/new?field.<name>=` links (including the notice naming any link
-    values left out by a `settings/new-task-form.yml` configuration).
-    Exercise repo/no-repo choice, description, attachments, base branch
-    (and a `<fork-owner>:<branch>` fork head label when Create a new
-    branch is unticked, confirming well-formed labels are explained and
-    malformed ones refused), Task priority (whole number ≥ 1, with zero,
-    negative and non-whole values refused in the shared wording),
-    reviewers on a changelist task, auto-merge (including an explicit off
-    surviving holds and edits), capabilities (the Grain API group and
-    capability policy verdicts included, a ticked capability that is not
-    ready staying ticked, and the toast naming default grants dropped by
-    policy on filing), custom fields, the advanced
-    agent/model/network/resource options (the model picker offers only
-    models the deployment's enabled connections advertise, and a refused
-    field inside Advanced options opens them), cancel, and submission.
+    (confirming the template picker carries the template's priority even
+    when restoring a saved draft until edited, while a template with input
+    fields opens Use… instead), and from `/new?field.<name>=` links
+    (including the notice naming any link values left out by a
+    `settings/new-task-form.yml` configuration). Exercise repo/no-repo
+    choice (and the off-allowlist target repo warning), description,
+    attachments, base branch (and a `<fork-owner>:<branch>` fork head
+    label when Create a new branch is unticked, confirming well-formed
+    labels are explained while malformed ones are refused and hold Create
+    task disabled), Task priority (whole number ≥ 1, with `1e3`-style
+    exponents normalized and zero, negative and non-whole values refused
+    in the shared wording), Owner and Reviewers, auto-merge (including an
+    explicit off surviving holds and edits), Don't port (`noPort`), This
+    fixes a red base branch (`fixesBaseBranch`), Keep running, grants (the
+    Grain API group including canonical `https://grain.dev/capabilities/api`
+    references and capability policy verdicts, `Escape` inside Add grant…
+    closing only the menu, a ticked capability that is not ready staying
+    ticked, and the toast naming default grants dropped by policy on
+    filing), custom fields, the advanced agent/model/network/resource
+    options (the model picker offers only models the deployment's enabled
+    connections advertise, and a refused field inside Advanced options
+    opens them), cancel, and submission.
   - Use Tasks and its state views and Blocked view from the rail, plus
-    the state and Origin filters (Imported issue included). Exercise
-    search, sort, compound narrowing (including clearing it), URL
-    persistence, browser Back/Forward, and refresh. On the rows, confirm
-    blocked shows as its own state oval, a change in the merge queue
-    reads "Merging", non-default task priority shows its badge, a live
-    task carries its sub-case chip with the reason on hover, an imported
-    GitHub issue carries its `imported` chip naming the source issue (and
-    "Imported" with Approve while unapproved), an external pull request
-    carries its outlined PR chip, and a proposal its agent held for
-    approval carries the "held for approval by <task>" chip until
-    approved.
+    the State, Admission (`Standard`, `Bypass queue`, `Durable`), Human
+    review, External ref and Origin (`Imported issue` and `External agent`
+    included) filters, confirming an unknown filter value on a closed
+    attribute marks itself as matching nothing and repo matching is
+    case-insensitive. Exercise search, sort (Admission rank included),
+    compound narrowing (including `owner:any:me` and clearing all filters),
+    closed-task scroll paging and server-side closed search/`owner`/`externalRef`
+    queries (`Load older closed tasks` / `Search older closed tasks`,
+    keeping closed hits in place), stale task-list notices and retry when
+    polling fails mid-session, URL persistence, browser Back/Forward, and
+    refresh. On the rows, confirm blocked shows as its own state oval, a
+    change in the merge queue reads "Merging", non-default task priority
+    shows its badge, a live task carries its sub-case chip with the reason
+    on hover, an imported GitHub issue carries its `imported` chip naming
+    the source issue (and "Imported" with Approve while unapproved), an
+    external pull request carries its outlined PR chip naming
+    `owner/repo#N`, and a proposal its agent held for approval carries the
+    "held for approval by <task>" chip until approved.
   - Open task detail from several entry points; edit
-    title/description/repo/base/priority/reviewers/custom
-    fields/auto-merge, approve a proposal, defer it with and without a
-    date, pick it back up, close and reopen a task (confirming the
-    timeline records who closed or reopened it and wraps long reasons at
-    phone width), stop an active turn and use Retry to lift the operator
-    stop, and inspect attempts, transcripts (and an attempt's capability
-    audit), chat and CI links as far as the seeded data permits.
+    title/description/repo/base/priority/owner/external ref/reviewers/keep
+    running/custom fields/auto-merge, follow the `ref` link into the
+    `externalRef`-filtered task list, approve a proposal, defer it with
+    and without a date, pick it back up, close and reopen a task
+    (confirming the timeline records the principal or grain reason that
+    closed or reopened it and wraps long reasons at phone width), stop an
+    active turn and use Retry to lift the operator stop, and inspect
+    attempts, per-run and task-total token usage on the timeline,
+    transcripts (and an attempt's capability audit), attached
+    image thumbnails in the full-screen viewer (closing via `X`, backdrop
+    or `Escape`, paging multiple images with arrows/keys and `i / N`
+    counter, and Download), Mermaid diagrams in markdown (zoom, fullscreen
+    and invalid-syntax fallback), chat and CI links as far as the seeded
+    data permits.
   - Pause and resume an open task from its page and from its chat pane
-    (Pause, Pause now for a running one, Resume) and confirm it keeps
-    its state and its place; Force merge a task whose run is stuck
-    waiting on CI, and Re-run CI or Retry merge where the task offers
-    them, confirming each asks first where it should and that the task
-    page follows without a reload.
+    (Pause, Pause now for a running one -- confirming Pause now asks first
+    before discarding unpushed work -- and Resume) and confirm it keeps
+    its state and its place; exercise Admission (`Standard`, `Bypass
+    queue`, `Durable`), Hosting (`Unattended`, `Interactive console`),
+    Keep running and `This fixes a red <base>` on open tasks; Force merge
+    a task whose run is stuck waiting on CI, and Re-run CI or Retry merge
+    where the task offers them, confirming each asks first where it should
+    and that the task page follows without a reload.
   - On task detail, exercise the sections a task can carry: its goal
     card (including `on_limit` hold vs notify behaviour and cleared goals
     leaving no stale card); add and remove a dependency and confirm the
     chips (state and title on hover), the blocked view and the Blocked
     rail count follow; the work tree a task belongs to, nested under who
-    filed what, with its done count and links; the merge policy lines its
-    repository's merge rules require, with the rule behind each; the
-    grain CI verdict and its link into CI, plus changelist chip,
-    presubmit, review and behind badges and disabled-Submit explanations
-    on a CL task; a pending-secret request box (and that its value never
-    appears in the timeline); a suspended agent session (`resume_later`
-    park reason preserved); cross-team approvals and their withdraw
-    control; a host-script approval request with its stdin preview,
-    approved and denied; an inline config-repo change card (diff,
-    validation status, Approve & Apply and Reject); a parked question's
+    filed what, with its done count, links and the current task shown as
+    plain text rather than a self-link; Committed context
+    (`#committed-context`, target and read-only repo badges, `@<rev>`
+    links and manifest files); human-review (`Release hold`), security and
+    path-trigger hold callouts with their review-task links; the merge
+    policy lines its repository's merge rules require, with the rule
+    behind each; the grain CI verdict and its link into CI, plus
+    changelist chip, presubmit, review and behind badges and
+    disabled-Submit explanations on a CL task; a pending-secret request
+    box (and that its value never appears in the timeline); a pending
+    `request_access` card (per-item unticking for `Grant all` vs
+    `Grant M of N`, dangerous/person-only marks, current holds, earlier
+    answers, and `Deny` with required `Why?` reason); a suspended agent
+    session (`resume_later` park reason preserved); cross-team approvals
+    and their withdraw control; a host-script approval request with its
+    stdin preview, approved and denied; an inline config-repo change card
+    (diff, validation status, Approve & Apply and Reject against a real
+    `grain/config`, gated on `settings:write`); a parked question's
     callout; the full prompt; the live attempt transcript; and the
     Internal PR link into the pull request page's diff.
   - Select several rows, exercise the batch bar's actions (Approve,

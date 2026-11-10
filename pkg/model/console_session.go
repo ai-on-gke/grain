@@ -458,22 +458,22 @@ func defaultConsoleSessionCapabilities() []string {
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
 	caps := []string{
-		APIGrantPrefix + "self-debug",
+		APIRef("self-debug"),
 		GrainSourceGrant,
 		GrainJournalGrant,
-		APIGrantPrefix + "deployment:read",
+		APIRef("deployment:read"),
 		GrainHealthGrant,
 		BootstrapPlaybooksGrant,
-		APIGrantPrefix + "task-admin",
-		APIGrantPrefix + "capabilities:read",
-		APIGrantPrefix + "capabilities:detach",
-		APIGrantPrefix + "settings:read",
-		APIGrantPrefix + "repos:read",
-		APIGrantPrefix + "releases:read",
-		APIGrantPrefix + "schedules:read",
-		APIGrantPrefix + "templates:read",
-		APIGrantPrefix + "suites:read",
-		APIGrantPrefix + "dispatch:read",
+		APIRef("task-admin"),
+		APIRef("capabilities:read"),
+		APIRef("capabilities:detach"),
+		APIRef("settings:read"),
+		APIRef("repos:read"),
+		APIRef("releases:read"),
+		APIRef("schedules:read"),
+		APIRef("templates:read"),
+		APIRef("suites:read"),
+		APIRef("dispatch:read"),
 	}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
@@ -508,7 +508,11 @@ func MissingShippedConsoleSessionCapabilities(id string, held []string) []string
 	}
 	var missing []string
 	for _, capID := range def.Capabilities {
-		if capID == "" || slices.Contains(held, capID) || slices.Contains(missing, capID) {
+		if capID == "" || slices.Contains(missing, capID) {
+			continue
+		}
+		key := CanonicalGrantKey(capID)
+		if slices.ContainsFunc(held, func(h string) bool { return h == capID || CanonicalGrantKey(h) == key }) {
 			continue
 		}
 		missing = append(missing, capID)
@@ -993,7 +997,8 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"`/settings/...`, `/system/...`, etc.) must always be a relative path (such as " +
 		"`[Task #31](/tasks/31)` or `[Settings → CI](/settings/ci)`) and never an absolute " +
 		"`http://127.0.0.1:...` or `http://localhost:...` URL, so links work when viewed " +
-		"through UberProxy or any reverse proxy.\n\n")
+		"through UberProxy or any reverse proxy. To point at one comment in a task's " +
+		"conversation, add its comment id as the fragment: `[comment](/tasks/31#comment=13)`.\n\n")
 
 	b.WriteString("When you have nothing further to say, stop. The conversation stays open and " +
 		"the next message picks it back up, so there is no need to keep going, to summarise " +

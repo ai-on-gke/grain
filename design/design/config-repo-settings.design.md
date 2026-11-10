@@ -536,8 +536,8 @@ From `ui/src/components/NewTaskOverlay.jsx` and `ui/src/components/GrantsPicker.
 | `repo` | `RepoField` ("Repos — the first is the one this task's own work lands in", includes `NO_REPO` and custom `changeTarget` options) | `shown` | `defaultRepo` (current page repo) or `""` |
 | `newBranch` | `Checkbox` ("Create a new branch") + `TextField` (`newBranchName`, "New branch name") | `shown` (when `!noRepo`) | `false` / `""` |
 | `base` | `BranchField` ("Base branch" or "Create from") | `shown` (when git repo target) | `lastBaseForRepo(tasks, repo)` or `""` |
-| `writes` | `WriteReposField` (additional writable `{repo, base}` rows) | `shown` (when git repo target) | `[]` |
-| `reads` | `ReadOnlyReposField` ("Read-only repos") | `shown` | `[]` |
+| `writes` | `…/repo#write` lines in the `grants` list (`RepoGrants.jsx`, unified-grants slice 5); draws nothing in its own place, and a hidden one is left out of the list | `shown` (when git repo target) | `[]` |
+| `reads` | `…/repo#read` lines in the `grants` list (as `writes`) | `shown` | `[]` |
 | `autoMerge` | `Checkbox` ("Auto-merge once checks pass") | `shown` (when git repo target) | `!!config.autoMergeByDefault` |
 | `noPort` | `Checkbox` ("Don't port to the repo's paired branches") | `shown` (when git repo target) | `false` |
 | `fixesBaseBranch` | `Checkbox` ("This fixes a red `<branch>`") | `shown` (when `!noRepo`) | `false` |
@@ -758,7 +758,7 @@ $$\text{Built-in Defaults} \longrightarrow \text{Deployment (`default`)} \longri
 1. **Runtime policy filtering in the picker:**
    - The capabilities offered in `GrantsPicker` and pre-populated by `capabilities.defaults` are intersected with `catalogue.AllowedFor(GrantContext{Repo: selectedRepo, TemplateID: selectedTemplate, Kind: "task"})` (§3) and `CapabilityPolicy` (`pkg/model/capability_ref.go`).
    - If a capability is `ci_only: true`, disabled, or restricted to `repos: ["ai-on-gke/grain"]`, it is automatically excluded from the picker and from defaults when `bwsalmon/silo` is selected.
-   - Capabilities listed in `capabilities.hidden` are omitted from the `GrantsPicker` dropdown menu (unless already held on the draft/task, in which case `useHeldIds` keeps the chip removable), while remaining enabled at runtime for templates or schedules that declare them.
+   - Capabilities listed in `capabilities.hidden` are omitted from the `GrantsPicker` dropdown menu (a grant already held on the draft/task still renders as its own row, with its Remove button, outside that menu), while remaining enabled at runtime for templates or schedules that declare them.
 2. **Config PR validation (`staterepo.Check`):**
    - Validates `settings/new-task-form.yml` on every config PR:
      - Rejects unknown field IDs or invalid `visibility` values (`shown`, `more`, `hidden`).

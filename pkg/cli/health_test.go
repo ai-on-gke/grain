@@ -21,9 +21,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
-	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -87,22 +87,22 @@ func TestGrainHealthShowsRegisteredCountersUntilUnregistered(t *testing.T) {
 	}
 }
 
-func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
+func TestGrainHealthSurfacesHubFailuresAndScopeConflicts(t *testing.T) {
 	const code = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
 	store, _ := sqlitetest.Open(t)
 	srv := ui.NewServer(ui.Config{
 		Actor:         ui.DefaultActor("operator@example.com"),
 		LocalAPIToken: code,
-		RegistryStatus: func(_ context.Context) (model.RegistrySnapshot, error) {
-			return model.RegistrySnapshot{
+		HubStatus: func(_ context.Context) (model.HubSnapshot, error) {
+			return model.HubSnapshot{
 				Enabled: true,
-				State:   model.RegistryStateError,
-				Config: model.RegistryConfig{
-					URL:   "https://registry.example.com",
+				State:   model.HubStateError,
+				Config: model.HubConfig{
+					URL:   "https://hub.example.com",
 					Entry: "grain-west",
 				},
 				ConsecutiveFailures: 3,
-				LastError:           "registry API PUT /api/entries/grain-west/heartbeat returned 503: upstream unavailable",
+				LastError:           "hub API 503: upstream unavailable",
 				ScopeConflicts: []api.ScopeConflict{
 					{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler", ConflictingEntry: "grain-east", ConflictingOwner: "east@example.com"},
 				},
@@ -117,8 +117,8 @@ func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
 		t.Fatalf("grain health: %v", err)
 	}
 	for _, want := range []string{
-		"registry (grain-west @ https://registry.example.com): error",
-		"last error (3 failure(s)): registry API PUT /api/entries/grain-west/heartbeat returned 503",
+		"hub (grain-west @ https://hub.example.com): error",
+		"last error (3 failure(s)): hub API 503: upstream unavailable",
 		"scope conflict on acme/widgets/pkg/autoscaler: claimed by grain-east (east@example.com)",
 	} {
 		if !strings.Contains(out, want) {

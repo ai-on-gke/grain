@@ -328,12 +328,20 @@ func (c *Client) dropSessionNotOwnedBy(name, owner string) {
 }
 
 func (s *Server) handleListHostds(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.ListHostds(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	out = filterList(out, func(h HostdView) bool {
+		return list.matches(h.Name, h.Owner)
+	})
+	writeList(w, out, list)
 }
 
 func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {
@@ -444,9 +452,7 @@ func (c *Client) auditHostd(ctx context.Context, name, summary string) {
 
 // ListHostds is GET /api/hostds.
 func (c *HTTPClient) ListHostds(ctx context.Context) ([]HostdView, error) {
-	var out []HostdView
-	err := c.do(ctx, http.MethodGet, "/api/hostds", nil, &out)
-	return out, err
+	return doList[HostdView](c, ctx, "/api/hostds")
 }
 
 // CreateHostd is POST /api/hostds: the new hostd and its token, shown

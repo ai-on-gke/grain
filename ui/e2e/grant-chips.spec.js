@@ -53,19 +53,23 @@ for (const [label, size] of [
     await page.goto("/");
     const row = page.locator(".task-row", { hasText: title });
     await row.scrollIntoViewIfNeeded();
-    const chip = row.locator(`[data-grant-chip="method"]`);
+    await expect(
+      row.locator(`[data-grant-chip="method"]`, { hasText: "api › ci:read" }),
+    ).toHaveCount(1);
+    const chip = row.locator(`[data-grant-chip="method"]`, {
+      hasText: "capabilities.demo.grain.example › cloud-key",
+    });
     await expect(chip).toHaveCount(1);
-    await expect(chip).toContainText(
-      "capabilities.demo.grain.example › cloud-key",
-    );
     // The stored form is never the label.
     await expect(row).not.toContainText(SERVER);
     await expect(row).not.toContainText("{");
 
-    // Every chip stays inside the row, and the row inside the page.
+    // Every visible chip stays inside the row, and the row inside the page.
     const rowBox = await row.boundingBox();
     expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(size.width + 0.5);
-    for (const c of await row.locator("[data-grant-chip]").all()) {
+    for (const c of await row
+      .locator("[data-grant-chip]:not(.chip-overflow)")
+      .all()) {
       const b = await c.boundingBox();
       expect(b.x).toBeGreaterThanOrEqual(rowBox.x - 0.5);
       expect(b.x + b.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5);

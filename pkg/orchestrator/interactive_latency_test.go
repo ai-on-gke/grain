@@ -391,7 +391,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 	t.Run("in-process subsequent exchanges complete under 250ms", func(t *testing.T) {
 		store, ctx := openStore(t)
 		settings(t, store, func(cfg *model.Config) {
-			cfg.SessionSandboxIdleTTL = 2 * time.Second
+			cfg.SessionSandboxIdleTTL = inProcessExchangeIdleTTL
 			cfg.ConsoleSessions = []model.ConsoleSession{{
 				ID: model.DirectorSessionID, Title: "Director",
 				Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
@@ -407,6 +407,9 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 		ag := &recordingSessionAgent{
 			onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 				turnReachedAt[turn] = time.Now()
+				if turn == 3 {
+					endInProcessSessionWait(t, ctx, store)
+				}
 				if turn < 3 {
 					go func(nextTurn int) {
 						// Not until the session is parked waiting for
@@ -448,11 +451,12 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			Framework:  orchestrator.StaticFramework(ag),
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
-				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          model.NewCapabilityRegistry(),
-				SessionSandboxIdleTTL: 2 * time.Second,
-				WaitForSessionReply:   true,
-				CancelPollInterval:    5 * time.Millisecond,
+				StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				Capabilities: model.NewCapabilityRegistry(),
+				// SessionSandboxIdleTTL is left to the stored setting,
+				// which turn 3 shortens (endInProcessSessionWait).
+				WaitForSessionReply: true,
+				CancelPollInterval:  5 * time.Millisecond,
 			},
 		}
 

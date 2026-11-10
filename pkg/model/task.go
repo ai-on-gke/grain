@@ -99,7 +99,7 @@ type AuthSource string
 
 const (
 	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
-	SourceRegistry      AuthSource = "registry"       // a verified registry assertion
+	SourceHub           AuthSource = "registry"       // a verified registry assertion
 	SourceToken         AuthSource = "token"          // a per-user API token (future)
 	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
 	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback
@@ -108,6 +108,10 @@ const (
 	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
 	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
 	SourceInternal      AuthSource = "internal"       // grain itself
+	// SourceHostAccount is a caller on the daemon's unix socket whose
+	// account the kernel named (SO_PEERCRED) and the daemon's
+	// -host-accounts map (or -deployment-owner) named a person for.
+	SourceHostAccount AuthSource = "host-account"
 )
 
 // unverifiedSources are the sources that establish nobody in particular:
@@ -645,25 +649,71 @@ type Grant struct {
 // A capability reference is covered only by a reference with the same
 // canonical capability and deep-equal normalized args
 // (UncoveredCapabilityRefs, design/spec/capabilities/capabilities.spec.md §2.3.4).
+// A grant only a person may give (IsPersonOnlyGrant) is never covered,
+// matching protocol.Covers on reference grants and EscalatedCapabilities
+// on named grants.
 //
 // Both sides are read through CanonicalGrant into the spelling slice 2
 // stores (StoredGrantSpelling), so an api reference and the api:<scope>
-// it stands for compare equal.
+// it stands for compare equal, and retired one-release aliases match
+// the canonical grant(s) they became (CanonicalLegacyGrants) in either
+// direction.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
 	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
-	have := make(map[string]bool, len(allowed))
-	for _, g := range allowed {
-		have[g.Capability] = true
-	}
+	have := heldNonRefGrants(allowed)
 	for _, g := range grants {
+		if IsPersonOnlyGrant(g.Capability) {
+			return false
+		}
 		if IsCapabilityRef(g.Capability) {
 			continue
 		}
-		if !have[g.Capability] {
+		if !nonRefGrantCovered(g.Capability, have, allowed) {
 			return false
 		}
 	}
 	return len(UncoveredCapabilityRefs(grants, allowed)) == 0
+}
+
+// heldNonRefGrants returns the non-reference grant names covered by grants,
+// including the non-reference canonical grants any retired bare capability in
+// grants expanded into. Assumes grants has passed through storedGrantSpellings.
+func heldNonRefGrants(grants []Grant) map[string]bool {
+	have := make(map[string]bool, len(grants))
+	for _, g := range grants {
+		have[g.Capability] = true
+		for _, c := range CanonicalLegacyGrants(g.Capability) {
+			c = StoredGrantSpelling(c)
+			if !IsCapabilityRef(c) {
+				have[c] = true
+			}
+		}
+	}
+	return have
+}
+
+// nonRefGrantCovered reports whether capability (already in StoredGrantSpelling
+// and not a capability reference) is covered by parent: either held directly in
+// have, or a retired alias whose canonical replacement grants are every one
+// covered by have and UncoveredCapabilityRefs(..., parent).
+func nonRefGrantCovered(capability string, have map[string]bool, parent []Grant) bool {
+	if have[capability] {
+		return true
+	}
+	repl := CanonicalLegacyGrants(capability)
+	if len(repl) == 0 || (len(repl) == 1 && StoredGrantSpelling(repl[0]) == capability) {
+		return false
+	}
+	var refs []Grant
+	for _, c := range repl {
+		c = StoredGrantSpelling(c)
+		if IsCapabilityRef(c) {
+			refs = append(refs, Grant{Capability: c})
+		} else if !have[c] {
+			return false
+		}
+	}
+	return len(refs) == 0 || len(UncoveredCapabilityRefs(refs, parent)) == 0
 }
 
 // SameBranch reports whether two tasks' work lands in the same place:
@@ -1267,6 +1317,14 @@ const (
 	// SecurityReviewTemplateID. LinkReviewTask's shape, kept apart from
 	// it so a task can carry both its declared review and a security one.
 	LinkSecurityReviewTask LinkKind = "security-review-task"
+	// LinkReviewsPullRequest records, on a review task grain filed against
+	// a task's pull request, which pull request ("owner/repo#number") that
+	// review was filed to read. A reopened or multi-attempt task can open a
+	// second pull request in the same repository after an earlier one has
+	// settled; naming the pull request on the review itself ensures
+	// settling one pull request never closes a review filed for another.
+	// Provenance and scoping only; blocks nothing.
+	LinkReviewsPullRequest LinkKind = "reviews-pr"
 	// LinkPushesReviewedBranch marks a review task that works on the
 	// reviewed change's own branch rather than one of its own (-> the
 	// reviewed task's ID): its Branch is the reviewed task's, the git
@@ -1394,6 +1452,20 @@ const (
 	// trust-boundary auto-merge withdrawal) under
 	// RepoConfig.BaseRepairBypassesHumanGates while the base branch was red.
 	LinkBaseRepairBypass LinkKind = "base-repair-bypass"
+	// LinkReviewFindings records that a required review of this task's pull
+	// request failed its gate -- left findings or open questions, had fixes
+	// closed without merging, or could not be filed (-> ReviewFindingsRecord
+	// JSON). Cleared only by a clean re-review after fixes or an explicit
+	// merge:force gate override, never by Submit.
+	LinkReviewFindings LinkKind = "review-findings"
+	// LinkGateOverride records an operator's explicit merge:force override
+	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
+	LinkGateOverride LinkKind = "gate-override"
+	// LinkHumanApproved records a person's persisted Submit approval of a
+	// pull request head (-> HumanSubmittedByTarget), kept after
+	// LinkHumanSubmitted is consumed so the UI and merge gates know who
+	// approved which commit.
+	LinkHumanApproved LinkKind = "human-approved"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
@@ -1754,6 +1826,9 @@ type Task struct {
 	// Hosting says whether this task runs unattended or opens an interactive
 	// terminal console attached to its sandbox (unattended or console).
 	Hosting Hosting `json:"hosting,omitempty"`
+	// Skills is the per-task repository skill discovery override (nil defers
+	// to the target repository and deployment defaults).
+	Skills *SkillsConfig `json:"skills,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a

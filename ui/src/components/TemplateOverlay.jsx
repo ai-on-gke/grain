@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -36,7 +36,6 @@ import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
 import { StaleEditNotice, isStaleEdit, withReload } from "./StaleEdit.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
-import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import {
   TemplateFieldsEditor,
   templateFieldsPayload,
@@ -44,7 +43,6 @@ import {
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
 import { taskPriority, wholeNumber } from "../wholeNumber.js";
-import WriteReposField from "./WriteReposField.jsx";
 import { targetableRepos } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
 import AdmissionField from "./AdmissionField.jsx";
@@ -104,10 +102,8 @@ function TemplateOverlay({
   // and are shown together by GrantsPicker.
   const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
   const capabilityIds = capabilities.filter(isBareGrant);
-  const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(
-    (id) => isCapabilityRef(id) && !isApiGrant(id),
-  );
+  const apiIds = capabilities.filter(isLegacyApiGrant);
+  const capabilityRefs = capabilities.filter(isCapabilityRef);
   const methodGrants = localGrantHandlers(
     [...capabilityIds, ...capabilityRefs],
     (rest) =>
@@ -118,7 +114,7 @@ function TemplateOverlay({
       ]),
   );
   // reads is state for the reason capabilities is: its picker
-  // (ReadOnlyReposField) is a search box, not a form field submit could
+  // (the Grants list's repo#read lines, RepoGrants.jsx) is a search box, not a form field submit could
   // read the answer off.
   const [reads, setReads] = useState(template?.reads || []);
   // writes is the extra writeable repos ({repo, base} objects,
@@ -384,23 +380,7 @@ function TemplateOverlay({
               repo={repo}
               warnMissing="tasks filed from this template fail until it is cut"
             />
-            <WriteReposField
-              options={repoOptions}
-              value={writes}
-              onChange={setWrites}
-            />
           </Box>
-          <ReadOnlyReposField
-            options={repoOptions}
-            value={reads}
-            onChange={setReads}
-            // The saved binding: a bound template's firings all target
-            // that repo, so reading it says nothing there. An unbound
-            // template passes "" and is offered everything -- which repo
-            // its firings target is not decided here, so no read of them
-            // can be redundant yet.
-            target={template?.repo || ""}
-          />
           <TextField
             name="reviewers"
             label="Reviewers"
@@ -521,6 +501,20 @@ function TemplateOverlay({
             onSubmit={methodGrants.onSubmit}
             onRemove={methodGrants.onRemove}
             idPrefix="template"
+            // The repos its tasks read and write are grants here too
+            // (unified-grants slice 5). An unbound template has no target
+            // line: which repo its firings target is not decided here.
+            repos={{
+              target: repo,
+              base: template?.base || "",
+              targetNote: "the template's bound repo -- change it above",
+              reads,
+              writes,
+              readOptions: repoOptions,
+              writeOptions: repoOptions,
+              onReadsChange: setReads,
+              onWritesChange: setWrites,
+            }}
             policyRepo={repo}
           />
           {/* Renders nothing at all on a deployment that declares no

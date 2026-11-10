@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -85,8 +86,9 @@ func standingJSON(st DispatchStanding) (string, error) {
 // run's outcome (SuspensionKind.Outcome), its suspend_kind, the
 // task_suspension row, the failure streak (which a suspension does not
 // move) and the Run now request the run spent (settleRunNow, which puts
-// it back for every kind) are all one transaction, so no crash can leave
-// a suspended run whose task has lost its standing.
+// it back for the kinds SuspensionKind.KeepsRunNow names) are all one
+// transaction, so no crash can leave a suspended run whose task has lost
+// its standing.
 //
 // It writes nothing a run never writes: not task.order_key, not the
 // base-branch repair mark, not the task's grants (DT-3). s.Standing is
@@ -126,7 +128,9 @@ func (s *Store) Suspend(ctx context.Context, susp Suspension) error {
 // since a run's outcome can be re-recorded (Store.SetRunOutcome).
 func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome, detail string, at time.Time, susp *Suspension) error {
 	if susp == nil {
-		if kind, ok := SuspensionKindOfOutcome(outcome); ok {
+		if outcome == InterruptedOutcome && strings.HasPrefix(detail, OperatorPausedDetail) {
+			susp = &Suspension{Kind: SuspendOperatorPause, Detail: detail, CreatedAt: at}
+		} else if kind, ok := SuspensionKindOfOutcome(outcome); ok {
 			susp = &Suspension{Kind: kind, Detail: detail, CreatedAt: at}
 		}
 	}

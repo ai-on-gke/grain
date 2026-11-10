@@ -313,6 +313,17 @@ func (c *Client) GrantAccessRequest(ctx context.Context, id string, decision Acc
 		return validationErrorf("choose at least one item to grant, or deny the request")
 	}
 
+	role := accessRoleFromContext(ctx)
+	if role != nil && !role.Full {
+		allowedRepo := func(need APIScope, targetRepo string) bool {
+			targetRepo = strings.TrimSpace(targetRepo)
+			return targetRepo == "" || role.allows(need, targetRepo)
+		}
+		if err := c.roleTaskWithin(ctx, role, *task, "grant access on", allowedRepo, c.normalizeCapabilityID); err != nil {
+			return forbiddenErrorf("%s", err.Error())
+		}
+	}
+
 	// Reads, writes and network access in one edit, the task pane's own;
 	// then each grant through the grants editor's path.
 	var update UpdateTaskRequest
@@ -322,6 +333,37 @@ func (c *Client) GrantAccessRequest(ctx context.Context, id string, decision Acc
 		view := c.checkAccessItem(ctx, *task, it)
 		if view.Error != "" {
 			return validationErrorf("%s: %s", it.Label(), view.Error)
+		}
+		if role != nil && !role.Full {
+			switch it.Kind {
+			case model.AccessRead:
+				if !role.allows("tasks:read", view.Repo) {
+					return forbiddenErrorf("%s cannot grant read access to %s: role does not hold tasks:read on %s",
+						role.label(), view.Repo, view.Repo)
+				}
+			case model.AccessWrite:
+				if parsed, err := model.ParseRepo(view.Repo); err == nil && model.IsConfigRepo(parsed) {
+					return forbiddenErrorf("%s cannot grant push access to %s: requires an unlimited role (grain/operator)",
+						role.label(), view.Repo)
+				}
+				if !role.allows("tasks:write", view.Repo) {
+					return forbiddenErrorf("%s cannot grant push access to %s: role does not hold tasks:write on %s",
+						role.label(), view.Repo, view.Repo)
+				}
+			case model.AccessNetwork:
+				if c.networkAccessWidens(ctx, "", it.Access) {
+					return forbiddenErrorf("%s cannot grant networkAccess %q: widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
+						role.label(), it.Access)
+				}
+			case model.AccessGrant:
+				grantName := view.Grant
+				if grantName == "" {
+					grantName, _ = (GrantRequest{Capability: it.Capability, With: it.With}).grantString()
+				}
+				if err := roleGrantRefusal(role, "capabilities", grantName, c.normalizeCapabilityID); err != nil {
+					return forbiddenErrorf("%s", err.Error())
+				}
+			}
 		}
 		if view.Held {
 			continue

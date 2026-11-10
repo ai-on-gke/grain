@@ -148,8 +148,21 @@ func useCLIEnvDataDir() {
 
 // cliHTTPClient is the http.Client every task-CLI call is sent with.
 func cliHTTPClient(connect, call time.Duration) *http.Client {
+	return cliSocketHTTPClient("", connect, call)
+}
+
+// cliSocketHTTPClient is cliHTTPClient dialing the unix socket at socket
+// for every request, whatever host its URL names; "" dials the URL's.
+func cliSocketHTTPClient(socket string, connect, call time.Duration) *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DialContext = (&net.Dialer{Timeout: connect, KeepAlive: 30 * time.Second}).DialContext
+	dialer := &net.Dialer{Timeout: connect, KeepAlive: 30 * time.Second}
+	t.DialContext = dialer.DialContext
+	if socket != "" {
+		t.Proxy = nil
+		t.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socket)
+		}
+	}
 	t.TLSHandshakeTimeout = connect
 	t.ResponseHeaderTimeout = call
 	return &http.Client{Transport: &stickyTimeout{next: t}}
@@ -206,6 +219,18 @@ func tokenSource(flagToken string) string {
 		}
 	}
 	return ""
+}
+
+// hostSocket is the daemon's API socket the CLI dials in place of server
+// (ui.HostAPISocket): only for a server on this host, and only when
+// nothing else -- -token, the environment's token, a context's own
+// credential -- says how to sign in, since on the socket the caller is
+// who its account maps to.
+func hostSocket(server, credential string) string {
+	if credential != "" || !ui.IsLoopbackURL(server) {
+		return ""
+	}
+	return ui.HostAPISocket()
 }
 
 // cliTarget is what explainDaemonError needs to know about where the CLI
@@ -286,6 +311,9 @@ func credentialHint(server, tokenSource string) string {
 		return "the token from " + tokenSource + " was refused"
 	case strings.HasPrefix(tokenSource, "context "):
 		return "the credential of " + tokenSource + " was refused; run grain login --refresh"
+	case strings.HasPrefix(tokenSource, "the API socket "):
+		return "this account was refused on " + tokenSource + ": the daemon's -host-accounts (or -deployment-owner) maps it to nobody " +
+			"the allowlist admits; set " + ui.APISocketEnv + "=none to sign in over -server instead"
 	case !ui.IsLoopbackURL(server):
 		return "no -token was given; pass a token with -token or set GRAIN_TOKEN"
 	}

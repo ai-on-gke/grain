@@ -385,8 +385,10 @@ func TestTheKubernetesDeploymentRunsAsANonRootUidThatOwnsItsVolume(t *testing.T)
 // every other test in this file because none of them starts the
 // container the manifest describes.
 func TestTheKubernetesContainerKeepsTheCapabilityItsOwnImageNeeds(t *testing.T) {
-	if !strings.Contains(read(t, "Dockerfile"), "setcap cap_net_bind_service=+ep /usr/local/bin/grain") {
-		t.Fatal("the Dockerfile no longer setcaps /usr/local/bin/grain with cap_net_bind_service -- if that line " +
+	df := read(t, "Dockerfile")
+	if !strings.Contains(df, "setcap cap_net_bind_service=+ep /src/bin/grain") ||
+		!strings.Contains(df, "COPY --from=build /src/bin/grain /usr/local/bin/grain") {
+		t.Fatal("the Dockerfile no longer setcaps /src/bin/grain with cap_net_bind_service before copying to /usr/local/bin/grain -- if that line " +
 			"moved or was renamed, this test and the one it guards (NET_BIND_SERVICE below) should move with it")
 	}
 	caps := grainContainer(t, grainDeployment(t)).SecurityContext.Capabilities

@@ -14,6 +14,7 @@
 
 import { test, expect } from "./fixtures.js";
 import { chooseOption } from "./searchSelect.js";
+import { repoGrantBox } from "./repoGrants.js";
 
 test.describe("Multi-branch task configuration and cross-branch proposals", () => {
   let originalTargetRepos = [];
@@ -60,15 +61,16 @@ test.describe("Multi-branch task configuration and cross-branch proposals", () =
     // Open Advanced options to configure extra write targets
     await page.getByText(/Advanced options/).click();
 
-    // Add extra write target 1: same repository on release/1.0
-    await page.getByLabel(/Another repo/).fill("acme/widgets");
+    // Add extra write target 1: same repository on release/1.0, a
+    // repo#write grant in the Grants list
+    await (await repoGrantBox(page, "write")).fill("acme/widgets");
     await page.keyboard.press("Enter");
     const writeBaseInputs = page.getByLabel("Base branch in acme/widgets");
     await expect(writeBaseInputs).toHaveCount(1);
     await writeBaseInputs.first().fill("release/1.0");
 
     // Add extra write target 2: another repository acme/tools on main
-    await page.getByLabel(/Another repo/).fill("acme/tools");
+    await (await repoGrantBox(page, "write")).fill("acme/tools");
     await page.keyboard.press("Enter");
     const toolsBaseInput = page.getByLabel("Base branch in acme/tools");
     await expect(toolsBaseInput).toHaveCount(1);
@@ -131,7 +133,9 @@ test.describe("Multi-branch task configuration and cross-branch proposals", () =
     await expect(base2Input).toHaveValue("main");
 
     // Test removing write target
-    const removeWidgets = detailPaper.getByTitle("Remove acme/widgets");
+    const removeWidgets = detailPaper.getByRole("button", {
+      name: "Remove acme/widgets · release/1.1 · write",
+    });
     await removeWidgets.click();
     await expect(
       detailPaper.getByLabel("Base branch in acme/widgets"),

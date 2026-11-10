@@ -20,7 +20,7 @@ import Markdown from "./Markdown.jsx";
 // PREVIEW_DELAY_MS is how long the branch box has to sit still before
 // its target is asked for release notes. Asking pulls the target's image,
 // so a branch being typed is not asked about one keystroke at a time.
-export const PREVIEW_DELAY_MS = 800;
+const PREVIEW_DELAY_MS = 800;
 
 // NOT_IN_THIS_BUILD is pkg/upgrade.NotInThisBuild, the words the pane
 // uses for a target with no notes to show for what it brings.

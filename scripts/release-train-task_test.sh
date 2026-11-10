@@ -277,27 +277,30 @@ run_tick
 expect_eq "hold cleared: exit" "$status" 0
 expect_eq "hold cleared: cuts rc.2 on c2" "$(remote_tag v2.2.0-rc.2)" "$c2"
 
-# 5. Once rc.2 is dropped and origin/release/v2.2.0 exists with a fix: commit,
-#    queries release.yml on release/v2.2.0 and cuts v2.2.0-rc.3.
+# 5. Once rc.2 is dropped, rc.3 is cut from main's newest green commit, like
+#    every rc (no release/v2.2.0 convergence branch since 2026-11-09).
 (
   cd "$work/seed"
   git fetch -q origin --tags
   GIT_COMMITTER_DATE="@$((now - 200)) +0000" git tag -a v2.2.0-rc.2-discarded "$c2" -m "rc2 dropped"
-  git checkout -q -b release/v2.2.0 "$c2"
+  git checkout -q main
+  git reset -q --hard "$c2"
   echo three >> feature.txt
   git add feature.txt
-  GIT_COMMITTER_DATE="@$((now - 100)) +0000" git commit -q -m "fix: cherry-picked convergence fix" -m "Backported-from: $c2"
-  git push -q origin release/v2.2.0 --tags
+  GIT_COMMITTER_DATE="@$((now - 100)) +0000" git commit -q -m "fix: the regression rc.2 hit"
+  git push -q origin main --tags
 )
-c3="$(git -C "$work/seed" rev-parse release/v2.2.0)"
-green_workflow release/v2.2.0 release.yml "$c3"
+c3="$(git -C "$work/seed" rev-parse main)"
+green_workflow main tests.yml "$c1" "$c2" "$c3"
+green_workflow main release.yml "$c1" "$c2" "$c3"
 jq -cn --arg sha "$c2" --arg t "$(iso $((now - 90)))" \
   '{total_count:1, check_runs:[{id:12, name:"grain/rc-hold", head_sha:$sha, status:"completed", conclusion:"success", started_at:$t, app:{slug:"grain-forge"}}], grain_app:"grain-forge"}' \
   > "$work/fixtures/checks-$c2-grain_rc-hold.json"
 run_tick
-expect_eq "rc.3 convergence: exit" "$status" 0
-expect_has "rc.3 convergence: queries release branch" "$calls" "--ref release/v2.2.0 --workflow release.yml"
-expect_eq "rc.3 convergence: cuts rc.3 on c3" "$(remote_tag v2.2.0-rc.3)" "$c3"
+expect_eq "rc.3 from main: exit" "$status" 0
+expect_has "rc.3 from main: queries main" "$calls" "--ref main --workflow release.yml"
+expect_not_has "rc.3 from main: no release branch" "$calls" "--ref release/v2.2.0"
+expect_eq "rc.3 from main: cuts rc.3 on c3" "$(remote_tag v2.2.0-rc.3)" "$c3"
 
 # 6. A task that cannot read CI (grain-ci stripped, no api:ci-read) fails with
 #    grain's own refusal, the command that hit it and the grant it needs.

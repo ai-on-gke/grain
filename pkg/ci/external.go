@@ -49,6 +49,21 @@ type ExternalRunsCounter interface {
 	FindExternalRunsCounted(ctx context.Context, f RunFilter, limit int) (runs []Run, matched int, note string)
 }
 
+// ExternalRunsRepos is an optional extension of ExternalRuns that says
+// whether a repository's CI is this provider's (for GitHub Actions, a
+// repository on ci_mode: github): one whose history is read from it
+// rather than from grain CI's runs, which there are a retired mode's.
+type ExternalRunsRepos interface {
+	ServesRepo(ctx context.Context, repo string) bool
+}
+
+// ExternalCIFor reports whether repo's CI is ext's (ExternalRunsRepos),
+// false for an ext that cannot say.
+func ExternalCIFor(ctx context.Context, ext ExternalRuns, repo string) bool {
+	r, ok := ext.(ExternalRunsRepos)
+	return ok && repo != "" && r.ServesRepo(ctx, repo)
+}
+
 // FindExternalRunsCounted calls ext's ExternalRunsCounter when it has one,
 // falling back to FindExternalRuns with len(runs) as matched.
 func FindExternalRunsCounted(ctx context.Context, ext ExternalRuns, f RunFilter, limit int) (runs []Run, matched int, note string) {

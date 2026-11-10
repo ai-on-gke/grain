@@ -241,7 +241,11 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range task.Grants {
-		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", model.GCPKeySandboxAgentGrant}, g.Capability) {
+		if !slices.Contains([]string{
+			model.APIRef("tasks:read"),
+			model.APIGrantString("tasks:read", "acme/widgets"),
+			model.GCPKeySandboxAgentGrant,
+		}, g.Capability) {
 			t.Errorf("task 2 was granted %s by an agent", g.Capability)
 		}
 	}
@@ -319,6 +323,7 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 		{http.MethodPatch, "/api/tasks/2", `{"autoApproveProposals":true}`},
 		{http.MethodPatch, "/api/tasks/2", `{"auto_approve_proposals":true}`},
 		{http.MethodPost, "/api/tasks/2/submit", `{}`},
+		{http.MethodPost, "/api/pull-requests/submit", `{"pr":"acme/widgets#2"}`},
 		// Mailing a CL and publishing its replies are a person's.
 		{http.MethodPost, "/api/tasks/2/change-mail", `{"reviewers":["alice"]}`},
 		{http.MethodPost, "/api/tasks/2/change-publish", `{}`},

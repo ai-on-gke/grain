@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
 // DefaultMaxNamespaceConcurrentRequests is the default per-sandbox concurrency
@@ -113,6 +114,29 @@ func (p *GitProxy) authenticateSandboxGrant(w http.ResponseWriter, r *http.Reque
 	return grant, true
 }
 
+// checkGrantBinding enforces per-attempt token binding (TaskID and Attempt) when
+// NamespaceScopes is wired and the token carries a task or attempt binding.
+// Returns (denied, status, reason).
+func (p *GitProxy) checkGrantBinding(ctx context.Context, grant Grant) (bool, int, string) {
+	if p == nil || p.NamespaceScopes == nil || (grant.TaskID == "" && grant.Attempt <= 0) {
+		return false, 0, ""
+	}
+	modelScope, live, err := p.NamespaceScopes.SandboxNamespaceScope(ctx, grant.Sandbox)
+	if err != nil {
+		return true, http.StatusInternalServerError, "failed to resolve sandbox namespace scope"
+	}
+	if !live {
+		return true, http.StatusForbidden, "no live task run on this sandbox"
+	}
+	if grant.TaskID != "" && modelScope.TaskID != "" && grant.TaskID != modelScope.TaskID {
+		return true, http.StatusForbidden, fmt.Sprintf("sandbox token belongs to task %s, not live task %s", grant.TaskID, modelScope.TaskID)
+	}
+	if grant.Attempt > 0 && modelScope.Attempt > 0 && grant.Attempt != modelScope.Attempt {
+		return true, http.StatusForbidden, fmt.Sprintf("sandbox token belongs to attempt %d, not current attempt %d", grant.Attempt, modelScope.Attempt)
+	}
+	return false, 0, ""
+}
+
 // resolveSandboxScope resolves grant's sandbox to the live run's NamespaceScope
 // and verifies per-attempt token binding (TaskID and Attempt), answering 403 on
 // any mismatch.
@@ -143,6 +167,27 @@ func (p *GitProxy) resolveSandboxScope(w http.ResponseWriter, r *http.Request, g
 
 func isNamespacePath(path string) bool {
 	return path == "/fs" || strings.HasPrefix(path, "/fs/")
+}
+
+// stripForwardedSandboxHeader reports whether header k must be removed before
+// ServeAPIHTTP forwards a sandbox's request into p.API with RemoteAddr == "".
+func stripForwardedSandboxHeader(k string) bool {
+	lower := strings.ToLower(k)
+	switch lower {
+	case "authorization", "proxy-authorization", "cookie", "forwarded", "x-real-ip", "x-user-ldap":
+		return true
+	}
+	if strings.EqualFold(k, webauth.IAPAssertionHeader) ||
+		strings.EqualFold(k, webauth.RegistryAssertionHeader) ||
+		strings.EqualFold(k, webauth.HubAssertionHeader) {
+		return true
+	}
+	for _, prefix := range []string{"x-grain-", "x-forwarded-", "x-auth-request-", "cf-access-", "tailscale-user-"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isAPIPath(path string) bool {
@@ -243,7 +288,7 @@ func (p *GitProxy) forwardToAPI(w http.ResponseWriter, r *http.Request, modelSco
 		reason = strings.TrimSpace(r.Header.Get("X-Grain-Reason"))
 	}
 	for k := range in.Header {
-		if strings.EqualFold(k, "Authorization") || strings.HasPrefix(strings.ToLower(k), "x-grain-") {
+		if stripForwardedSandboxHeader(k) {
 			in.Header.Del(k)
 		}
 	}

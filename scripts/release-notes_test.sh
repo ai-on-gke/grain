@@ -115,7 +115,10 @@ g tag v3.1.0
 pr 2 "refactor: shuffle the config loader" "refactor: shuffle the config loader" \
   "Loads it lazily.
 
-BREAKING CHANGE: GRAIN_CONFIG is read once, at start"
+BREAKING CHANGE: GRAIN_CONFIG is read once,
+at start, and kept until exit.
+
+Origin: task 1"
 commit "feat(api)!: drop the v1 endpoints"
 commit "docs: say so"
 g tag v3.2.0
@@ -133,7 +136,7 @@ run v3.2.0 v3.1.0 v3.2.0
 check "breaking changes listed first" 0 "## Breaking changes
 
 - refactor: shuffle the config loader (#2)
-  - GRAIN_CONFIG is read once, at start
+  - GRAIN_CONFIG is read once, at start, and kept until exit.
 - feat(api)!: drop the v1 endpoints (" "## Features
 
 - feat(api)!: drop the v1 endpoints (" "## Other changes
@@ -200,6 +203,17 @@ check "RELEASE_MAJOR raised does not let a minor release through" 3 "refusing to
 
 RELEASE_MAJOR=3 run check-breaking v4.0.0 v3.2.0 v4.0.0
 check "a major release RELEASE_MAJOR does not ask for is refused" 3 "refusing to promote v4.0.0" "RELEASE_MAJOR=3"
+
+# A bare BREAKING CHANGE trailer with no description text after the colon still
+# triggers check-breaking rather than slipping past the gate.
+g checkout -q -b bare-breaking v4.0.0
+commit "refactor: drop legacy flag" "BREAKING CHANGE:"
+g tag v4.1.0
+g checkout -q main
+g branch -q -D bare-breaking
+run check-breaking v4.1.0 v4.0.0 v4.1.0
+check "a bare BREAKING CHANGE trailer still trips check-breaking" 3 "refusing to promote v4.1.0" "- refactor: drop legacy flag"
+g tag -d v4.1.0
 
 # --- write -------------------------------------------------------------------
 

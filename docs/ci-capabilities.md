@@ -141,10 +141,11 @@ jobs:
 The arguments, the environment each built-in reads its credential from, and
 what each mint places are in
 [docs/capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name).
-The one provider core still registers in-process, the `release-gate-read`
-alias, is granted the older way, from this repository's list or by declaring
-the alias. (`github-sandbox` was the other until schema migration 124 made it
-`https://grain.dev/capabilities/github#sandbox-repo`.)
+Core registers no in-process provider any more: the last, the
+`release-gate-read` alias, was retired by unified-grants slice 4, and the
+bare name is now read as the `https://grain.dev/capabilities/api#release-gate-read`
+preset it stood for (below). (`github-sandbox` was the other until schema
+migration 124 made it `https://grain.dev/capabilities/github#sandbox-repo`.)
 A job naming a reference has it minted before its sandbox is
 built, through the server attached for it in `mcpServers`: the reference
 need not be in the repository's CI capabilities, the deployment's
@@ -171,6 +172,21 @@ The model proxies are retired onto grain's in-process
 the run's own team connection, as the retired providers did. The bare
 names remain one-release aliases, and as references they reach only a job
 that declares them.
+
+## A person accepts what only a person may grant
+
+A workflow file is the repository's to write, so a job that declares a
+capability only a person may grant is asking for it, not granted it. That
+covers a GCP key, a host script, a GitHub credential or a dangerous
+`api:<scope>` (`model.DeclaredGrantNeedsPerson`). Such a job fails before
+anything is minted, with an error naming what it waits for, until a person
+accepts that set for the job. Accept it on **Settings → Capabilities →
+Repository declarations**. Accepting takes `capabilities:admin` for a
+capability server's grant, and the scope itself for an `api:` grant. Once
+accepted, the job runs as before while it declares nothing beyond the
+accepted set. A job that adds a held capability is refused again, and
+shows as awaiting acceptance, until a person accepts the new set.
+Acceptance is per job: the repository plus the job's name.
 
 ## Which trees are trusted with them
 
@@ -507,7 +523,13 @@ holds and to the job's own repository.
 §6) the deployment state it needs to choose a commit and judge a soak.
 It is the built-in preset `api:release-gate-read` (`ci:read`,
 `tasks:read`, `sandboxes:read`, and `tasks:from-template` limited to
-`release-notes`), and its bare name is an alias for it:
+`release-notes`), and its bare name is an alias for it. A job may declare
+it as `release-gate-read`, `api:release-gate-read` or
+`https://grain.dev/capabilities/api#release-gate-read`; all three resolve
+through the same CI api provider (`ciapi.DynamicProvider`), since slice 4 of
+[unified-grants.design.md](../design/design/unified-grants.design.md) retired
+the separate `release-gate-read` provider `daemon.CapabilityProviders` used to
+register:
 
 | Request | Answers with |
 | --- | --- |

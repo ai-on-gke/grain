@@ -25,7 +25,6 @@ import {
   Box,
   Button,
   Chip,
-  IconButton,
   Link,
   ListItemIcon,
   ListItemText,
@@ -34,24 +33,29 @@ import {
   MenuList,
   Popover,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
-import CloseIcon from "@mui/icons-material/Close";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import CapabilityArgsForm from "./CapabilityArgsForm.jsx";
+import GrantLine, { RemoveButton, sectionSx } from "./GrantLine.jsx";
+import RepoGrants, {
+  REPO_READ_REF,
+  RepoGrantMenuItems,
+  repoGrantMenuRows,
+} from "./RepoGrants.jsx";
 import InfoPopover from "./InfoPopover.jsx";
-import SearchSelect from "./SearchSelect.jsx";
 import { capabilityMethods, checkGrants } from "./capabilityMethods.js";
 import {
+  API_ARGS_SCHEMA,
+  API_CAPABILITY_SERVER,
   DANGEROUS_API_HINT,
-  apiGrantId,
+  apiRef,
   apiShortName,
   groupApiRows,
+  isApiCapabilityRef,
   isApiGrant,
   splitApiGrant,
-  storedApiGrant,
 } from "../apiGrants.js";
 import {
   builtinServerName,
@@ -116,7 +120,7 @@ const asList = (m) => (Array.isArray(m) ? m : []);
 // SAVE_DELAY_MS is how long an argument section waits after the last
 // edit before saving it, so typing a word is one write rather than one
 // per keystroke.
-export const SAVE_DELAY_MS = 500;
+const SAVE_DELAY_MS = 500;
 
 // liveErrorsOf is the schema's own check of a with: value -- none for a
 // schema the form edits as raw JSON, which only the server can judge.
@@ -174,6 +178,11 @@ export default function GrantsPicker({
   formCapabilities = null,
   label = "Grants",
   helpText = "",
+  // repos is the task's repository access, drawn as grants among the
+  // rest (RepoGrants.jsx, unified-grants slice 5): its target, the repos
+  // it reads and writes, and declared push: refs. null where the form
+  // has no repository access to edit (Settings' default lists, CI).
+  repos = null,
 }) {
   const all = grants || [];
   const bareHeld = useMemo(
@@ -183,32 +192,45 @@ export default function GrantsPicker({
       ),
     [all],
   );
-  const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
-  const refs = useMemo(
-    () => all.filter((id) => isCapabilityRef(id) && !isApiGrant(id)),
+  // Canonical https://grain.dev/capabilities/api#<scope> grants are
+  // capability server methods like any other, edited with their {repo}
+  // argument among the method sections; only legacy api:<scope>[@repo]
+  // strings from unmigrated rows stay in the api group.
+  const apiHeld = useMemo(
+    () => all.filter((id) => isApiGrant(id) && !isApiCapabilityRef(id)),
     [all],
   );
+  const refs = useMemo(() => all.filter(isCapabilityRef), [all]);
   const offered = config?.capabilities || [];
   const { presets, areas } = groupApiRows(offered);
   const apiRowOf = (id) => {
     const [target] = splitApiGrant(id);
     return offered.find((c) => splitApiGrant(c.id)[0] === target);
   };
-  const repos = config?.targetRepos || [];
 
   const [methods, setMethods] = useState(null);
   const [loadError, setLoadError] = useState("");
   const [checks, setChecks] = useState({});
   const [anchor, setAnchor] = useState(null);
   const [query, setQuery] = useState("");
-  const [apiRepo, setApiRepo] = useState("");
   // drafts are argument sections not granted yet: {id, method, value,
   // server: {fields, message}}, each shown after its method's grants.
   const [drafts, setDrafts] = useState([]);
+  // repoDrafts is the repository grants picked from "Add grant…" and not
+  // given a repo yet: "read" or "write", each a repo picker in the list.
+  const [repoDrafts, setRepoDrafts] = useState([]);
   const [error, setError] = useState("");
   const listRef = useRef(null);
   const addButtonRef = useRef(null);
   const restoreFocus = useRef(false);
+  const popoverAction = useRef(null);
+  // Reposition synchronously before paint when filtering or method loading
+  // shrinks a viewport-clamped menu: MUI's own Popover repositions in a
+  // post-paint useEffect, leaving one frame where the filtered row sits above
+  // the repositioned paper so an immediate click lands on the backdrop.
+  useLayoutEffect(() => {
+    if (anchor) popoverAction.current?.updatePosition();
+  }, [anchor, query, methods, offered.length, formCapabilities]);
 
   // The method listing is fetched only where there is something in it --
   // /api/config's count says so -- or a grant to show. A change in that
@@ -250,8 +272,10 @@ export default function GrantsPicker({
           if (!live.current) return null;
           loaded.current = true;
           setLoadError("");
-          setMethods(asList(m));
-          return asList(m);
+          // Only methods: a row without a ref is nothing to grant.
+          const listed = asList(m).filter((x) => typeof x?.ref === "string");
+          setMethods(listed);
+          return listed;
         })
         .catch((err) => {
           if (live.current) setLoadError(err.message);
@@ -271,6 +295,7 @@ export default function GrantsPicker({
   const absentKey = methods
     ? refs
         .map((g) => parseGrant(g).ref)
+        .filter((ref) => !isApiCapabilityRef(ref))
         .filter((ref, i, list) => list.indexOf(ref) === i)
         .filter((ref) => !methods.some((m) => m.ref === ref))
         .join("\n")
@@ -342,6 +367,16 @@ export default function GrantsPicker({
   const addMethod = (method) => {
     setAnchor(null);
     setError("");
+    if (isApiCapabilityRef(method.ref)) {
+      if (refs.includes(method.ref)) {
+        addDraft(method, {});
+        return;
+      }
+      Promise.resolve(
+        onSubmit({ capability: method.ref, with: undefined }, null),
+      ).catch((err) => setError(err.message));
+      return;
+    }
     if (!hasArguments(method.args)) {
       Promise.resolve(
         onSubmit({ capability: method.ref, with: undefined }, null),
@@ -364,10 +399,22 @@ export default function GrantsPicker({
   };
 
   const toggleApi = (row) => {
-    const id = apiGrantId(row.id, apiRepo);
-    const held = apiHeld.some((s) => storedApiGrant(s) === id);
-    const rest = apiHeld.filter((s) => storedApiGrant(s) !== id);
-    onApiChange(held ? rest : [...rest, id]);
+    const ref = apiRef(apiShortName(row.id));
+    const heldRef = refs.includes(ref)
+      ? ref
+      : refs.find((g) => parseGrant(g).ref === ref);
+    if (heldRef) {
+      removeMethod(heldRef);
+      return;
+    }
+    if (apiHeld.some((id) => splitApiGrant(id)[0] === row.id)) {
+      onApiChange(apiHeld.filter((id) => splitApiGrant(id)[0] !== row.id));
+      return;
+    }
+    setError("");
+    Promise.resolve(onSubmit({ capability: ref, with: undefined }, null)).catch(
+      (err) => setError(err.message),
+    );
   };
 
   const closeMenu = useCallback((focusButton = false) => {
@@ -554,10 +601,67 @@ export default function GrantsPicker({
     };
   };
 
+  // methodOf is ref's method as GET /api/capability-methods lists it. An
+  // api scope always takes its optional {repo} argument
+  // (grainserver.buildAPIServer), so its section keeps the inline repo
+  // field before that listing loads -- and if a listing leaves the
+  // schema out -- rather than switching shape under someone's click.
+  const methodOf = (ref) => {
+    const listed = byRef[ref];
+    if (isApiCapabilityRef(ref)) {
+      if (listed && hasArguments(listed.args)) return listed;
+      const row = apiRowOf(ref);
+      return {
+        ref,
+        capability: API_CAPABILITY_SERVER,
+        method: listed?.method || apiShortName(ref),
+        description:
+          listed?.description ||
+          (row ? row.summary || row.description || "" : ""),
+        args: API_ARGS_SCHEMA,
+        requiresArgs: false,
+      };
+    }
+    return listed || null;
+  };
+
   // methodState is what is wrong with a held method grant, if anything.
   const methodState = (g) => {
     const { ref } = parseGrant(g);
     const check = checks[g];
+    if (isApiCapabilityRef(ref)) {
+      const row = apiRowOf(ref);
+      if (
+        !row &&
+        offered.some((c) => isApiGrant(c.id)) &&
+        !(methods && byRef[ref])
+      ) {
+        return {
+          severity: "error",
+          badge: "no longer offered",
+          suffix: " (no longer offered)",
+          textNote: "No longer offered -- remove it.",
+          note: "No longer offered -- remove it.",
+        };
+      }
+      if (check && check.error && !check.unchecked)
+        return {
+          severity: "warning",
+          badge: "no longer validates",
+          suffix: " (no longer validates)",
+          note: `These arguments no longer validate under the server's current schema: ${check.error}`,
+        };
+      if (row?.dangerous) {
+        return {
+          severity: "warning",
+          badge: "dangerous",
+          suffix: " (dangerous)",
+          textNote: DANGEROUS_API_HINT,
+          note: DANGEROUS_API_HINT,
+        };
+      }
+      return policyState(ref);
+    }
     if (methods && !byRef[ref] && confirmedMissing.has(ref))
       return {
         severity: "warning",
@@ -591,8 +695,9 @@ export default function GrantsPicker({
   // edit in it, rather than being drawn anew.
   let argsIndex = 0;
   const methodSections = ({ ref, grants: gs, drafts: ds }) => {
-    const method = byRef[ref] || ds[0]?.method;
+    const method = methodOf(ref) || ds[0]?.method;
     const withArgs = method && hasArguments(method.args);
+    const isApiRef = isApiCapabilityRef(ref);
     const total = gs.length + ds.length;
     const another = withArgs && !disabled ? () => addMethod(method) : undefined;
     const items = [
@@ -629,19 +734,36 @@ export default function GrantsPicker({
       }
       const state = g ? methodState(g) : policyState(ref);
       const d = describeGrant(g || ref, { method, config });
+      const sectionLabel = isApiRef
+        ? `api:${method.method}`
+        : methodMenuLabel(ref, method.method);
+      const sectionAriaLabel = isApiRef
+        ? `${d.args ? `${sectionLabel} · ${d.args}` : sectionLabel}${state?.suffix || ""}`
+        : `${d.args ? `${d.label} · ${d.args}` : d.label}${state?.suffix || ""}`;
       return (
         <ArgsSection
           key={key}
           method={method}
           grant={g || null}
           draft={draft || null}
-          label={methodMenuLabel(ref, method.method)}
-          ariaLabel={`${d.args ? `${d.label} · ${d.args}` : d.label}${state?.suffix || ""}`}
+          label={sectionLabel}
+          ariaLabel={sectionAriaLabel}
           state={state}
           idPrefix={`${idPrefix}-args-${argsIndex++}`}
           disabled={disabled}
           onSave={async (value, replacing) => {
-            await onSubmit({ capability: ref, with: value }, replacing);
+            const normalizedWith =
+              isApiRef &&
+              value &&
+              typeof value === "object" &&
+              !Array.isArray(value) &&
+              (!value.repo || Object.keys(value).length === 0)
+                ? undefined
+                : value;
+            await onSubmit(
+              { capability: ref, with: normalizedWith },
+              replacing,
+            );
             if (!replacing && draft) dropDraft(draft.id);
           }}
           onRemove={
@@ -701,11 +823,22 @@ export default function GrantsPicker({
         rows: shown,
       });
   }
+  const repoRows = repoGrantMenuRows(repos, matches);
+  if (repoRows.length > 0)
+    menuGroups.unshift({
+      key: "repos",
+      kind: "repo",
+      title: "Repository access",
+      rows: repoRows,
+    });
   const shownMethods = sortByDisplay(
     formCapabilities,
     (methods || []).filter(
       (m) =>
-        !isApiGrant(m.ref) &&
+        !isApiCapabilityRef(m.ref) &&
+        // A task's read access is its reads list, offered above as
+        // "Read a repository"; the listed method is a CI job's.
+        !(repos && m.ref === REPO_READ_REF) &&
         formOffers(m.ref) &&
         matches(m.ref, m.method, m.description),
     ),
@@ -720,9 +853,11 @@ export default function GrantsPicker({
     });
 
   const apiItem = (row) => {
-    const id = apiGrantId(row.id, apiRepo);
     const name = row.displayLabel || apiShortName(row.id);
-    const held = apiHeld.some((s) => storedApiGrant(s) === id);
+    const ref = apiRef(apiShortName(row.id));
+    const held =
+      refs.some((g) => parseGrant(g).ref === ref) ||
+      apiHeld.some((id) => splitApiGrant(id)[0] === row.id);
     return (
       <MenuItem
         key={row.id}
@@ -895,9 +1030,28 @@ export default function GrantsPicker({
 
   const anyApi = presets.length > 0 || areas.length > 0;
   const anyMethods = (methods || []).some((m) => !isApiGrant(m.ref));
-  const held = bareHeld.length + apiHeld.length + refs.length + drafts.length;
+  const reposHeld = repos
+    ? (repos.target ? 1 : 0) +
+      (repos.reads || []).length +
+      (repos.writes || []).length +
+      (repos.push || []).length
+    : 0;
+  const held =
+    bareHeld.length +
+    apiHeld.length +
+    refs.length +
+    drafts.length +
+    reposHeld +
+    repoDrafts.length;
   const stillLoading = count > 0 && methods === null;
-  if (!anyApi && !anyMethods && held === 0 && !loadError && !stillLoading)
+  if (
+    !repos &&
+    !anyApi &&
+    !anyMethods &&
+    held === 0 &&
+    !loadError &&
+    !stillLoading
+  )
     return null;
 
   const regionId = `${idPrefix}-grants`;
@@ -919,8 +1073,10 @@ export default function GrantsPicker({
       >
         {helpText || (
           <>
-            What the agent may use: grain&apos;s own API (docs/agent-api.md) and
-            capability server methods (docs/capabilities.md).
+            What the agent may use:{" "}
+            {repos ? "the repositories it may read and write, " : ""}
+            grain&apos;s own API (docs/agent-api.md) and capability server
+            methods (docs/capabilities.md).
           </>
         )}
       </Typography>
@@ -941,6 +1097,20 @@ export default function GrantsPicker({
           <Typography variant="body2" color="text.secondary">
             None granted
           </Typography>
+        )}
+        {repos && (
+          <RepoGrants
+            repos={repos}
+            drafts={repoDrafts}
+            disabled={disabled}
+            onDropDraft={(i) => {
+              setRepoDrafts((ds) => ds.filter((_, j) => j !== i));
+              // The picker that had focus is gone with its draft: focus
+              // goes back to "Add grant…" rather than to the page, where
+              // the overlay's own keys (Escape) would no longer reach.
+              setTimeout(() => addButtonRef.current?.focus(), 0);
+            }}
+          />
         )}
         {bareHeld.map(bareLine)}
         {apiHeld.map(apiLine)}
@@ -975,10 +1145,12 @@ export default function GrantsPicker({
         </Button>
       )}
       <Popover
+        action={popoverAction}
         open={menuOpen}
         anchorEl={anchor}
         data-open-popover={menuOpen ? "" : undefined}
         onClose={(_event, reason) => closeMenu(reason === "escapeKeyDown")}
+        transitionDuration={0}
         onKeyDown={(e) => {
           if (e.key === "Escape" && !e.defaultPrevented) {
             e.preventDefault();
@@ -1016,24 +1188,6 @@ export default function GrantsPicker({
               }
             }}
           />
-          {anyApi && repos.length > 0 && (
-            <SearchSelect
-              margin="dense"
-              id={`${regionId}-repo`}
-              label="Grain API grants apply to"
-              value={apiRepo}
-              onChange={setApiRepo}
-              helperText={
-                apiRepo
-                  ? `An API grant picked here is limited to ${apiRepo} (api:<scope>@${apiRepo}).`
-                  : undefined
-              }
-              options={[
-                { value: "", label: "All repositories" },
-                ...repos.map((r) => ({ value: r, label: r })),
-              ]}
-            />
-          )}
         </Box>
         <MenuList
           ref={listRef}
@@ -1062,7 +1216,15 @@ export default function GrantsPicker({
             >
               {g.title}
             </ListSubheader>,
-            ...g.rows.map(g.kind === "api" ? apiItem : methodItem),
+            ...(g.kind === "repo"
+              ? RepoGrantMenuItems({
+                  rows: g.rows,
+                  onPick: (kind) => {
+                    setAnchor(null);
+                    setRepoDrafts((ds) => [...ds, kind]);
+                  },
+                })
+              : g.rows.map(g.kind === "api" ? apiItem : methodItem)),
           ])}
           {menuGroups.length === 0 && (
             <MenuItem disabled>
@@ -1085,115 +1247,6 @@ export default function GrantsPicker({
         </Alert>
       )}
     </Box>
-  );
-}
-
-const sectionSx = {
-  border: 1,
-  borderColor: "divider",
-  borderRadius: 1,
-  minWidth: 0,
-};
-
-// GrantLine is a grant with nothing to set, on one line: its label (the
-// whole grant in its tooltip), a caption, a warning badge, and remove.
-function GrantLine({
-  grant,
-  kind,
-  label,
-  ariaLabel,
-  tip,
-  caption,
-  info,
-  badge,
-  onRemove,
-}) {
-  return (
-    <Box
-      role="group"
-      data-grant={grant}
-      data-grant-kind={kind}
-      aria-label={ariaLabel}
-      className="grant-line"
-      sx={{
-        ...sectionSx,
-        display: "flex",
-        alignItems: "center",
-        gap: 1,
-        pl: 1,
-        pr: onRemove ? 0.25 : 1,
-        py: 0.25,
-        minHeight: 32,
-      }}
-    >
-      <Tooltip
-        title={
-          <Box
-            component="span"
-            sx={{
-              display: "block",
-              whiteSpace: "pre-line",
-              wordBreak: "break-word",
-            }}
-            data-grant-tooltip
-          >
-            {tip}
-          </Box>
-        }
-        describeChild
-      >
-        <Typography
-          variant="body2"
-          component="span"
-          tabIndex={0}
-          className="grant-label"
-          noWrap
-          sx={{ flexShrink: 1, minWidth: 0, fontWeight: 500 }}
-        >
-          {label}
-        </Typography>
-      </Tooltip>
-      <InfoPopover title={info} label={label} />
-      {caption && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          noWrap
-          sx={{ flex: "1 1 0", minWidth: 0 }}
-        >
-          {caption}
-        </Typography>
-      )}
-      {!caption && <Box sx={{ flex: "1 1 0" }} />}
-      {badge && (
-        <Chip
-          size="small"
-          variant="outlined"
-          color={badge.color}
-          icon={<WarningAmberIcon />}
-          label={badge.label}
-          className="grant-badge"
-          sx={{ height: 20, fontSize: "0.7rem", flexShrink: 0 }}
-        />
-      )}
-      {onRemove && <RemoveButton label={ariaLabel} onClick={onRemove} />}
-    </Box>
-  );
-}
-
-function RemoveButton({ label, onClick }) {
-  return (
-    <Tooltip title="Remove">
-      <IconButton
-        size="small"
-        aria-label={`Remove ${label}`}
-        className="grant-remove"
-        onClick={onClick}
-        sx={{ flexShrink: 0 }}
-      >
-        <CloseIcon fontSize="small" />
-      </IconButton>
-    </Tooltip>
   );
 }
 

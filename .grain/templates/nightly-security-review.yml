@@ -6,6 +6,7 @@ base: main
 # the pin because a model looks unavailable from inside a sandbox.
 model: fable-5.1-high
 auto-merge: true
+nothing-needed: close
 body: |
   Review everything merged to `main` since the last security review for
   security defects, the way the one-off 2.4 audit did
@@ -54,8 +55,13 @@ body: |
 
   ## 3. Report
 
-  - Commit `docs/security/audits/YYYY-MM-DD.md` (today's date, UTC) to
-    this task's branch, following the shape of
+  - If no commits merged to `main` since the most recent report under
+    `docs/security/audits/`, finish with `nothing_needed` naming that commit
+    rather than committing an empty audit (never `comment_on_issue`, which
+    parks a branchless task in `awaiting_reply` and holds the daily
+    `overlap: skip` schedule).
+  - Otherwise commit `docs/security/audits/YYYY-MM-DD.md` (today's date, UTC)
+    to this task's branch, following the shape of
     `docs/security/audits/2026-10-25-2.4-audit.md`:
     - the date, the `origin/main` commit reviewed up to, and the range;
     - the commits reviewed;
@@ -65,7 +71,8 @@ body: |
       already covers it);
     - what was examined and found sound, so the next night can tell what
       was looked at.
-  - Leave the same summary as the closing note (`comment_on_issue`).
+  - Put the same summary in the commit body (which becomes the pull request
+    description), push the branch, and wait for CI checks to pass.
 
   ## 4. Fix tasks
 

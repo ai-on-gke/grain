@@ -15,6 +15,7 @@
 import { test, expect } from "./fixtures.js";
 
 import { chooseOption } from "./searchSelect.js";
+import { repoGrantBox } from "./repoGrants.js";
 import { execFileSync } from "node:child_process";
 
 test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
@@ -250,22 +251,22 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       );
 
     // Add extra write repo relationship
-    const writeRepoInput = page.getByLabel(/Another repo/i);
+    const writeRepoInput = await repoGrantBox(page, "write");
     await writeRepoInput.click();
     await page.getByRole("menuitem").getByText("acme/gadgets").click();
     await expect(page.getByLabel("Base branch in acme/gadgets")).toBeVisible();
     await page.getByLabel("Base branch in acme/gadgets").fill("candidate");
 
     // Add read-only repo relationship
-    const readRepoInput = page.getByLabel(/Read-only repos/i);
-    await readRepoInput.click();
+    await (await repoGrantBox(page, "read")).click();
     await page.getByRole("menuitem").getByText(longRepo).click();
     await expect(
-      page.locator(".MuiChip-root").filter({ hasText: longRepo }),
+      page.getByRole("group", { name: `${longRepo} · read` }),
     ).toBeVisible();
 
     // Escape with the suggestion list open closes the list, not the
     // drawer: the form and what was typed into it are still there.
+    const readRepoInput = await repoGrantBox(page, "read");
     await readRepoInput.click();
     await expect(page.getByRole("menuitem").first()).toBeVisible();
     await page.keyboard.press("Escape");
@@ -364,9 +365,12 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         .filter({ hasText: /GitHub sandbox/i }),
     ).toBeVisible();
     await page.getByRole("tab", { name: "Agents" }).click();
+    // The menu row is named api:<scope>; slice 3 stores and shows the
+    // grant as its canonical https://grain.dev/capabilities/api#<scope>.
+    const keptGrant = `https://grain.dev/capabilities/api#${addedGrant.replace(/^api:/, "")}`;
     const kept = page
       .getByTestId("repo-default-grants")
-      .locator(`[data-grant="${addedGrant}"]`);
+      .locator(`[data-grant="${keptGrant}"]`);
     await expect(kept).toBeVisible();
     // Take it off again: every spec file a worker runs shares one demo
     // store, and a repo default would follow every acme/widgets task.

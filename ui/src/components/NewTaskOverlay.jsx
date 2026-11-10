@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import AccessGate from "./AccessGate.jsx";
-import { isApiGrant } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { checkGrants, localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -69,8 +69,6 @@ import {
 } from "./CustomFields.jsx";
 import { GlyphLabel } from "./ItemGlyph.jsx";
 import ModelSelect from "./ModelSelect.jsx";
-import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
-import WriteReposField from "./WriteReposField.jsx";
 import RepoField, { NO_REPO } from "./RepoField.jsx";
 import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import SearchSelect from "./SearchSelect.jsx";
@@ -183,7 +181,15 @@ export default function NewTaskOverlay({
   // blank from the template (ui.Client.fromTemplate) after applying the
   // layer's hidden defaults -- so a field this form states, a hidden
   // default included, beats the template's own value for it.
-  const [fromTemplate, setFromTemplate] = useState(templateId);
+  // A restored draft keeps the template it was being filled from: the
+  // page that opened the form on it is gone after a reload, and without
+  // it the draft filed as a plain task at priority 5 instead of the
+  // template's own (2026-11-10 intake walkthrough).
+  const [fromTemplate, setFromTemplate] = useState(
+    () =>
+      templateId ||
+      (typeof draft?.templateId === "string" ? draft.templateId : ""),
+  );
   // The templates the picker offers: those with no input fields of
   // their own, which this form has nowhere to fill in ("Use…" on the
   // Templates page does), plus whichever one is picked now.
@@ -205,6 +211,7 @@ export default function NewTaskOverlay({
   const templatePickerShown =
     formTemplates.length > 0 &&
     (templateId !== "" ||
+      fromTemplate !== "" ||
       Object.keys(config?.newTaskForm?.templates || {}).length > 0);
   const liveDraft = draftDiscarded ? null : draft;
 
@@ -392,9 +399,10 @@ export default function NewTaskOverlay({
     () =>
       draft?.dependsOn ?? asDependencies(openingDefault("dependsOn"), tasks),
   );
-  // reads is the read-only repos picked below, held here rather than
-  // left as a form field for the reason capabilities and dependsOn are:
-  // its picker (ReadOnlyReposField) is a search box over knownRepos, not
+  // reads is the read-only repos picked in the Grants list (repo#read
+  // lines, RepoGrants.jsx), held here rather than left as a form field
+  // for the reason capabilities and dependsOn are: its picker is a
+  // search box over knownRepos, not
   // an <input> FormData could read the answer off.
   const [reads, setReads] = useState(
     () => draft?.reads ?? asList(openingDefault("reads")),
@@ -432,10 +440,8 @@ export default function NewTaskOverlay({
   // removed or left as it is.
   const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
   const capabilityIds = capabilities.filter(isBareGrant);
-  const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(
-    (id) => isCapabilityRef(id) && !isApiGrant(id),
-  );
+  const apiIds = capabilities.filter(isLegacyApiGrant);
+  const capabilityRefs = capabilities.filter(isCapabilityRef);
   const formCapabilities = taskForm.capabilities;
   const methodGrants = localGrantHandlers(
     [...capabilityIds, ...capabilityRefs],
@@ -800,6 +806,7 @@ export default function NewTaskOverlay({
         atFront,
         priority,
         customFields,
+        templateId: fromTemplate,
         edited: [...formEdited.current],
       });
     } else {
@@ -836,6 +843,7 @@ export default function NewTaskOverlay({
     atFront,
     priority,
     customFields,
+    fromTemplate,
   ]);
 
   // Switching repo or template re-applies the defaults
@@ -1380,19 +1388,12 @@ export default function NewTaskOverlay({
       )}
     </>
   );
-  const writesNode = (
-    <>
-      {!changeTarget && (
-        <>
-          <WriteReposField
-            options={writeOptions}
-            value={writes}
-            onChange={edit("writes", setWrites)}
-          />
-        </>
-      )}
-    </>
-  );
+  // The repos this task reads and writes are lines of the Grants list
+  // (GrantsPicker's repos, unified-grants slice 5), not fields of their
+  // own: the reads and writes ids keep their places in
+  // settings/new-task-form.yml for their visibility and defaults, but
+  // draw nothing where they stand.
+  const writesNode = null;
   const repoNode = (
     <>
       {/* One block for every repo this task may change, not two
@@ -1503,21 +1504,7 @@ export default function NewTaskOverlay({
       </Box>
     </>
   );
-  const readsNode = (
-    <>
-      <ReadOnlyReposField
-        options={repoOptions}
-        value={reads}
-        onChange={edit("reads", setReads)}
-        // The repo picked right above, not a saved one: this form is
-        // where both halves are chosen, so the read-only picker should
-        // stop offering the target the moment it is named -- the same
-        // value WriteReposField gets, and "" for a task filed with no
-        // repo at all, which has no target for a read to collide with.
-        target={noRepo ? "" : repo}
-      />
-    </>
-  );
+  const readsNode = null;
   const reviewersNode = (
     <>
       <TextField
@@ -1653,6 +1640,21 @@ export default function NewTaskOverlay({
         onSubmit={methodGrants.onSubmit}
         onRemove={methodGrants.onRemove}
         idPrefix="new-task"
+        repos={{
+          target: noRepo ? "" : repo,
+          base: noRepo ? "" : base,
+          reads: F.reads.visibility === "hidden" ? undefined : reads,
+          writes:
+            F.writes.visibility === "hidden" || changeTarget
+              ? undefined
+              : writes,
+          // The repo picked above is not offered to read or write: it is
+          // the target already (ui.refuseTargetAmongReads/Writes).
+          readOptions: repoOptions,
+          writeOptions,
+          onReadsChange: edit("reads", setReads),
+          onWritesChange: edit("writes", setWrites),
+        }}
         policyRepo={noRepo ? "" : repo || config?.defaultTarget || ""}
         formCapabilities={taskForm.configured ? formCapabilities : null}
         label={F.grants.label || undefined}
@@ -2233,7 +2235,8 @@ export default function NewTaskOverlay({
   const fieldDraws = {
     newBranch: !noRepo,
     base: !changeTarget,
-    writes: !changeTarget,
+    writes: false,
+    reads: false,
     autoMerge: !changeTarget,
     noPort: !changeTarget,
     fixesBaseBranch: !noRepo,

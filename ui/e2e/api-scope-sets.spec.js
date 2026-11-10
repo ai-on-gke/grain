@@ -234,10 +234,19 @@ test("offers a scope set declared after startup in the Grants picker", async ({
     });
     expect(granted.ok()).toBe(true);
     const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
-    expect(JSON.stringify(detail)).toContain(`api:${name}`);
-    await request.post(`/api/tasks/${task.id}/capabilities`, {
+    expect(detail.capabilities).toContain(
+      `https://grain.dev/capabilities/api#${name}`,
+    );
+    const detached = await request.post(`/api/tasks/${task.id}/capabilities`, {
       data: { id: `api:${name}`, attach: false },
     });
+    expect(detached.ok()).toBe(true);
+    const afterDetach = await (
+      await request.get(`/api/tasks/${task.id}`)
+    ).json();
+    expect(afterDetach.capabilities || []).not.toContain(
+      `https://grain.dev/capabilities/api#${name}`,
+    );
   } finally {
     await request.post("/api/api-scope-sets/delete", { data: { name } });
   }

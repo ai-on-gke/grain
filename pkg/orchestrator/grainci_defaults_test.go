@@ -59,7 +59,7 @@ func TestProcessResultAppliesDefaultsToProposedTasks(t *testing.T) {
 	for _, grant := range proposal.Grants {
 		got[grant.Capability] = grant.Via
 	}
-	for _, capability := range []string{"self-debug", grainci.Grant} {
+	for _, capability := range []string{model.APIRef("self-debug"), model.GrainSourceGrant, grainci.Grant} {
 		if via, ok := got[capability]; !ok || via != model.GrantByDefault {
 			t.Errorf("%s grant = %q, %v; want %q, true", capability, via, ok, model.GrantByDefault)
 		}
@@ -236,11 +236,13 @@ func TestProcessResultAttachesRequestedCapabilitiesToProposedTasks(t *testing.T)
 	for _, grant := range proposal.Grants {
 		got[grant.Capability] = grant.Via
 	}
-	if got["self-debug"] != model.GrantByDefault {
-		t.Errorf("self-debug via = %q, want GrantByDefault", got["self-debug"])
+	for _, defCap := range []string{model.APIRef("self-debug"), model.GrainSourceGrant} {
+		if got[defCap] != model.GrantByDefault {
+			t.Errorf("%s via = %q, want GrantByDefault (grants=%+v)", defCap, got[defCap], proposal.Grants)
+		}
 	}
-	if got["gcp-key"] != model.GrantByLabel {
-		t.Errorf("gcp-key via = %q, want GrantByLabel", got["gcp-key"])
+	if got[model.GCPKeySandboxAgentGrant] != model.GrantByLabel {
+		t.Errorf("%s via = %q, want GrantByLabel (grants=%+v)", model.GCPKeySandboxAgentGrant, got[model.GCPKeySandboxAgentGrant], proposal.Grants)
 	}
 }
 

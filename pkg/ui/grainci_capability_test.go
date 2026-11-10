@@ -214,7 +214,7 @@ func TestDeclaredTemplateWithCIReadOrLegacyGrainCIFilesOnGitHubModeRepo(t *testi
 	if _, err := store.SyncRepoDeclarations(ctx, repo, strings.Repeat("a", 40), declared, now, time.UTC); err != nil {
 		t.Fatalf("SyncRepoDeclarations: %v", err)
 	}
-	wantCap := model.APIGrantPrefix + "ci-read@" + repo.String()
+	wantCap := model.APIGrantString("ci-read", repo.String())
 	for _, stem := range []string{"release-train", "legacy-ci"} {
 		tmplID := model.RepoDeclaredID(model.DeclaredTemplate, repo, stem)
 		task, err := c.CreateTask(ctx, ui.CreateTaskRequest{

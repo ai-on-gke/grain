@@ -98,10 +98,10 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 			Arguments: map[string]any{
 				"id":           "bare-legacy-cap",
 				"title":        "Bare legacy capability name",
-				"body":         "Must keep bare capability label intact rather than expanding retired aliases",
+				"body":         "Expands one-release retired aliases like ui.Client.CreateTask",
 				"repo":         "acme/app",
 				"branch":       "main",
-				"capabilities": []any{"self-repair"},
+				"capabilities": []any{"self-repair", "self-debug"},
 			},
 		},
 	}}
@@ -145,16 +145,26 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	if capsRef.Approval == nil || !capsRef.AutoMerge {
 		t.Errorf("caps-api-ref proposal held unexpectedly: approval=%+v autoMerge=%v", capsRef.Approval, capsRef.AutoMerge)
 	}
-	if len(capsRef.Grants) != 1 || capsRef.Grants[0].Capability != "api:tasks:read@acme/app" {
-		t.Errorf("caps-api-ref Grants = %+v, want [api:tasks:read@acme/app]", capsRef.Grants)
+	if want := model.APIGrantString("tasks:read", "acme/app"); len(capsRef.Grants) != 1 || capsRef.Grants[0].Capability != want {
+		t.Errorf("caps-api-ref Grants = %+v, want [%s]", capsRef.Grants, want)
 	}
 
 	bareLegacy := byTitle["Bare legacy capability name"]
 	if bareLegacy.Approval != nil {
 		t.Errorf("bare-legacy-cap proposal approved unexpectedly: %+v", bareLegacy.Approval)
 	}
-	if len(bareLegacy.Grants) != 1 || bareLegacy.Grants[0].Capability != "self-repair" || bareLegacy.Grants[0].Via != model.GrantByLabel {
-		t.Errorf("bare-legacy-cap Grants = %+v, want [{Capability:self-repair Via:label}]", bareLegacy.Grants)
+	wantExpanded := []model.Grant{
+		{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
+		{Capability: model.GrainHostExecGrant, Via: model.GrantByLabel},
+		{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
+	}
+	if len(bareLegacy.Grants) != len(wantExpanded) {
+		t.Fatalf("bare-legacy-cap Grants = %+v, want %+v", bareLegacy.Grants, wantExpanded)
+	}
+	for i, want := range wantExpanded {
+		if !bareLegacy.Grants[i].Equal(want) {
+			t.Errorf("bare-legacy-cap Grants[%d] = %+v, want %+v", i, bareLegacy.Grants[i], want)
+		}
 	}
 }
 

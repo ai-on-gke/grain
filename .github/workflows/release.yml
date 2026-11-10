@@ -134,7 +134,16 @@ jobs:
           short="${COMMIT:0:7}"
           images=(sandbox sandbox-k8s grain)
           names="sandbox,sandbox-k8s,grain"
-          if git cat-file -e "${COMMIT}:Dockerfile.registry" 2>/dev/null &&
+          # The hub image: a commit since the Grain Hub rename builds it
+          # from Dockerfile.hub (build_hub_image) and publishes it as hub
+          # and, for one release, as registry too; one before the rename
+          # built it from Dockerfile.registry (build_registry_image) as
+          # registry alone.
+          if git cat-file -e "${COMMIT}:Dockerfile.hub" 2>/dev/null &&
+             git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_hub_image()'; then
+            images+=(hub registry)
+            names="sandbox,sandbox-k8s,grain,hub,registry"
+          elif git cat-file -e "${COMMIT}:Dockerfile.registry" 2>/dev/null &&
              git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_registry_image()'; then
             images+=(registry)
             names="sandbox,sandbox-k8s,grain,registry"
@@ -383,6 +392,45 @@ jobs:
 
       - name: Build the images
         run: bash ./scripts/release-images.sh build
+
+      # The vulnerability gate (docs/image-vulnerability-scanning.md):
+      # every image `build` recorded, scanned before anything is signed or
+      # any moving tag is published. A fixable CRITICAL or HIGH finding
+      # that .grain/baselines/image-vulns-allowlist.yaml does not waive
+      # stops the release here, the way a failing suite does; the two
+      # sandbox sha- tags `build` already pushed stay unsigned and unnamed.
+      - name: Date the vulnerability database
+        id: trivy-db
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the scanner and its vulnerability database
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/trivy
+            ~/.cache/grain
+          key: trivy-${{ runner.os }}-${{ steps.trivy-db.outputs.day }}
+          restore-keys: |
+            trivy-${{ runner.os }}-
+
+      - name: Scan the images for vulnerabilities
+        env:
+          IMAGE_VULNS_SARIF_CATEGORY: release-images
+        run: |
+          bash ./scripts/scan-images.sh --state "$RELEASE_IMAGES_STATE" --out image-vulns-report \
+            --title "Release image vulnerabilities"
+
+      # No code scanning upload from here: that needs security-events:
+      # write on the job that holds the release's packages: write and
+      # signing identity. nightly.yml's image-vulns job scans and uploads
+      # every RC's published images instead.
+      - name: Keep the vulnerability reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-vulns-${{ github.sha }}
+          path: image-vulns-report
+          if-no-files-found: ignore
 
       - name: Run the container e2e suite against what is about to be published
         run: |

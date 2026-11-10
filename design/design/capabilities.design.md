@@ -55,7 +55,7 @@ Three layers decide, all in grain rather than in the server (spec §4.2.2):
 - **The capability policy**, `grain_config.capability_policy` (`model.CapabilityPolicy.Permits`), is a list of allow and deny rules over reference patterns, repositories, run kinds and CI events. An untrusted CI run (a fork, or an author without write access) holds no reference unless an allow rule opts it in. Settings previews what a change would newly refuse.
 - **Approval rules** (`unified-grants.design.md` §2). An agent can pass on only grants its own task holds (`GrantsSubsetOf`). A proposal asking for more is filed for a person. Some grants are **person-only**, which an agent can never grant or pass on: dangerous `api:` scopes (`IsDangerousGrant`), raising a task's `admission` setting above `standard` (§4.1, whose old grant names `priority-dispatch` and `durable` stay person-only input aliases, `IsPersonOnlyGrant`), methods a linked server marks `protocol.RequirePersonGrant` (`…/grain#host-exec`), and arguments a server marks person-granted (`x-grain-person-granted`, such as a gcp set over an existing service account). `…/grain#sql` with `write: true` is dangerous.
 
-Grain's own API is granted as `api:<scope>` or `api:<preset>`, optionally limited with `@owner/name` ([`docs/agent-api.md`](../../docs/agent-api.md)). It is the planned `…/api` in-process server, but is not yet recorded under that reference (unified-grants slices 2–4).
+Grain's own API is granted through the in-process `https://grain.dev/capabilities/api` server as `https://grain.dev/capabilities/api#<scope-or-preset>`, optionally repository-limited with `with: {repo: "<owner/name>"}` ([`docs/agent-api.md`](../../docs/agent-api.md)). Writers record canonical `…/api#<scope-or-preset>` and `…/repo#read` / `#write` references (unified-grants slice 3, [Task #3317](/tasks/3317)), and schema migration 132 (slice 4, [Task #3321](/tasks/3321)) rewrote every stored grant still in a legacy spelling to its reference. `model.CanonicalGrant` keeps reading legacy `api:<scope>[@repo]` and `repo-read:` / `repo-write:` strings from `.grain/` declarations, which live in other people's repositories and are never migrated, and from a grain/config written by an older binary, which the import rewrites as it arrives.
 
 ## CI capabilities
 
@@ -72,7 +72,7 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 `daemon.CapabilityProviders` still registers only:
 
-- the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4), which mints no credential of its own (it hands a CI job the daemon's own release-gate callback).
+- the CI alias `release-gate-read`, which minted no credential of its own (it handed a CI job the daemon's own release-gate callback), was retired by unified-grants slice 4: its bare name in `.grain/workflows` resolves as the `…/api#release-gate-read` preset through `ciapi.DynamicProvider`, and `daemon.CapabilityProviders` registers nothing.
 
 The seam an edition used to contribute a bare provider (`capability.RegisterProvider`) is removed, and so is the Settings → **Legacy capabilities** tab that listed them (task 2876): its GitHub host, GCP settings and secrets are the **Deployment credentials** card on Settings → Capabilities. The bare names stay readable as aliases for one release; every migration that rewrites them stays, so an old database or config-repo export still upgrades.
 

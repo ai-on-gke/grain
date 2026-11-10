@@ -535,10 +535,10 @@ type SandboxHealthResponse struct {
 	// (capabilityServersDown). Absent while every server is attached or
 	// only waiting to be configured for the first time.
 	CapabilityServers []CapabilityServerDown `json:"capabilityServers,omitempty"`
-	// Registry reports the deployment's connected-entry grain registry
+	// Registry reports the deployment's connected-entry grain hub
 	// heartbeat status and any scope conflicts when registry self-registration
 	// is configured; nil when disabled.
-	Registry *RegistryHealth `json:"registry,omitempty"`
+	Hub *HubHealth `json:"registry,omitempty"`
 	// Daemon is the health of the process answering this request
 	// (Config.Daemon). Absent where nothing can speak for it.
 	Daemon *DaemonHealth `json:"daemon,omitempty"`
@@ -1057,7 +1057,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, DispatchBlocked: s.tasks.dispatchBlocked(),
 			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
-			CapabilityServers: s.tasks.capabilityServersDown(), Registry: s.tasks.registryHealth(r.Context())})
+			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
@@ -1076,7 +1076,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		StandingSandboxes:    s.tasks.standingSandboxes(),
 		Counters:             healthCounterSections(),
 		CapabilityServers:    s.tasks.capabilityServersDown(),
-		Registry:             s.tasks.registryHealth(r.Context()),
+		Hub:                  s.tasks.hubHealth(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {

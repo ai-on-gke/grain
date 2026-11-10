@@ -117,18 +117,18 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 	}
 	wantGrants := []string{
 		model.ConsoleSessionCIReadGrant,
-		"api:deployment:read",
-		"api:self-debug",
-		"api:task-admin",
-		"api:capabilities:read",
-		"api:capabilities:detach",
-		"api:settings:read",
-		"api:repos:read",
-		"api:releases:read",
-		"api:schedules:read",
-		"api:templates:read",
-		"api:suites:read",
-		"api:dispatch:read",
+		model.APIRef("deployment:read"),
+		model.APIRef("self-debug"),
+		model.APIRef("task-admin"),
+		model.APIRef("capabilities:read"),
+		model.APIRef("capabilities:detach"),
+		model.APIRef("settings:read"),
+		model.APIRef("repos:read"),
+		model.APIRef("releases:read"),
+		model.APIRef("schedules:read"),
+		model.APIRef("templates:read"),
+		model.APIRef("suites:read"),
+		model.APIRef("dispatch:read"),
 		model.BootstrapPlaybooksGrant,
 		model.GrainHealthGrant,
 		model.GrainJournalGrant,
@@ -824,7 +824,7 @@ func TestWhatASessionProposesWaitsUnlessTheDeploymentSaysOtherwise(t *testing.T)
 			if state != tc.want {
 				t.Fatalf("the proposal reads %q, want %q", state, tc.want)
 			}
-			noted := strings.Contains(proposal.Body, "`self-repair`")
+			noted := strings.Contains(proposal.Body, "`"+model.GrainHostExecGrant+"`")
 			if want := slices.Contains(tc.caps, any("self-repair")); noted != want {
 				t.Errorf("escalation note in body = %v, want %v: %q", noted, want, proposal.Body)
 			}
@@ -1836,11 +1836,37 @@ func TestSessionWarmSandboxCapacityEvictionEvictsOldestIdleFirst(t *testing.T) {
 	}
 }
 
+// inProcessExchangeIdleTTL is the session idle TTL the in-process
+// continuation tests store while their turns are exchanged. Turn 1's wait
+// has to outlast the test's own GetObservation + AddComment before the next
+// message lands, which under -race -shuffle=on with the package's parallel
+// tests contending on SQLite has taken 4-8s -- past the 1-2s these tests
+// used to wait, ending the run on turn 1. The wait after the final turn is
+// not left to run this out: that turn calls endInProcessSessionWait.
+const inProcessExchangeIdleTTL = 30 * time.Second
+
+// endInProcessSessionWait is called from a session's final turn: it
+// shortens the stored session idle TTL, which an in-process wait re-reads
+// every CancelPollInterval when its Config.SessionSandboxIdleTTL came from
+// the store, so the wait after this turn ends at once and the run with it.
+// Only for a deps.Config that leaves SessionSandboxIdleTTL unset.
+func endInProcessSessionWait(t *testing.T, ctx context.Context, store *model.Store) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		t.Errorf("reading settings to end the session's wait: %v", err)
+		return
+	}
+	cfg.SessionSandboxIdleTTL = time.Millisecond
+	if err := store.PutConfig(ctx, *cfg); err != nil {
+		t.Errorf("shortening the session idle TTL to end the session's wait: %v", err)
+	}
+}
+
 func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
 	settings(t, store, func(cfg *model.Config) {
-		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.SessionSandboxIdleTTL = inProcessExchangeIdleTTL
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID: model.DirectorSessionID, Title: "Director",
 			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
@@ -1854,6 +1880,9 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	ag := &recordingSessionAgent{
 		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 			seenPrompts = append(seenPrompts, cfg.ContinuePrompt)
+			if turn == 2 {
+				endInProcessSessionWait(t, ctx, store)
+			}
 			if turn == 1 {
 				// Once the run is parked in its in-process idle wait after
 				// turn 1 -- it marks the question pending when it has relayed
@@ -1905,13 +1934,11 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
 			Capabilities: orchestrator.SessionTestRegistry(),
-			// The message wakes the wait the moment it lands
-			// (Store.CommentAdded), so this only bounds the idle wait after
-			// turn 2 that ends the run, and need only outlast a loaded
-			// runner's posting of the message after turn 1.
-			SessionSandboxIdleTTL: 2 * time.Second,
-			WaitForSessionReply:   true,
-			CancelPollInterval:    20 * time.Millisecond,
+			// SessionSandboxIdleTTL is left to the stored setting
+			// (inProcessExchangeIdleTTL), which turn 2 shortens to end the
+			// run (endInProcessSessionWait).
+			WaitForSessionReply: true,
+			CancelPollInterval:  20 * time.Millisecond,
 		},
 	}
 
@@ -2026,6 +2053,9 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 		ag := &recordingSessionAgent{
 			onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 				if turn == 2 {
+					if inProcess {
+						endInProcessSessionWait(t, ctx, store)
+					}
 					// Simulate the agent's first tool call on turn 2.
 					if len(cfg.Tools) > 0 {
 						_ = cfg.Tools[0].Handler(ctx, map[string]any{"path": "."})
@@ -2076,6 +2106,11 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 				CancelPollInterval:    5 * time.Millisecond,
 			},
 		}
+		if inProcess {
+			// The stored setting, read live, so turn 2 can end the wait
+			// (endInProcessSessionWait).
+			deps.Config.SessionSandboxIdleTTL = 0
+		}
 
 		t1 := baseTime.Add(time.Minute)
 		replyToSession(t, store, director.ID, t1)
@@ -2125,7 +2160,7 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 	}
 	cold := best("before (cold sandbox acquire + setup)", -1*time.Second, false, 200*time.Millisecond)
 	warm := best("after (warm sandbox reuse)", 30*time.Minute, false, 200*time.Millisecond)
-	inProc := best("after (in-process session continuation)", time.Second, true, 200*time.Millisecond)
+	inProc := best("after (in-process session continuation)", inProcessExchangeIdleTTL, true, 200*time.Millisecond)
 
 	if cold.acquires != 2 || cold.runs != 2 || cold.reused {
 		t.Errorf("cold path: acquires=%d runs=%d reused=%v, want a fresh sandbox for each of 2 runs",
@@ -2329,7 +2364,7 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 	// 1. Operator edits the active console session task via PATCH /api/tasks/{id}
 	// even though a state repo (grain/config) is configured.
 	hostScriptCap := `https://grain.dev/capabilities/host-script#host-script={"script":"cluster-autoscaler"}`
-	caps := []string{model.GrainSourceGrant, "api:tasks:admin", "api:release-manager", hostScriptCap}
+	caps := []string{model.GrainSourceGrant, model.APIRef("tasks:admin"), model.APIRef("release-manager"), hostScriptCap}
 	reads := []string{"acme/docs", "acme/widgets"}
 	writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
 	chosenModel := "claude-opus-4"
@@ -3121,4 +3156,86 @@ func TestShippedDirectorTasksApprovedStickyOverridesAcrossReconciles(t *testing.
 			t.Errorf("saved TasksApproved=false proposal 2 state = %q, want %q", p2.State, model.StateProposed)
 		}
 	})
+}
+
+// Upgrading from pre-slice-3 api:<what> session snapshots and DeclinedDefaults
+// to canonical https://grain.dev/capabilities/api#<what> defaults must not
+// re-attach capabilities an operator previously removed or declined, nor
+// duplicate grants already held in legacy spelling.
+func TestUpgradingSessionSnapshotAcrossAPISpellingsDoesNotRegrantRemovedCapabilities(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	// Simulate pre-slice-3 state: task holds only legacy "api:capabilities:detach"
+	// (operator removed "api:task-admin" and "api:ci-read"), while the stored
+	// console_session_sync snapshot still lists legacy "api:..." strings.
+	if err := store.UpdateTask(ctx, director.ID, func(tk *model.Task) error {
+		tk.Grants = []model.Grant{{Capability: "api:capabilities:detach", Via: model.GrantByGrain}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacyCaps := make([]string, 0, len(model.DefaultConsoleSessions()[0].Capabilities))
+	for _, c := range model.DefaultConsoleSessions()[0].Capabilities {
+		legacyCaps = append(legacyCaps, model.StoredGrantSpelling(c))
+	}
+	if err := model.RecordSyncedConsoleSession(ctx, store, director.ID, model.ConsoleSessionConfigSnapshot{
+		Title:           director.Title,
+		NetworkAccess:   director.NetworkAccess,
+		TasksApproved:   true,
+		KeepRunning:     true,
+		Capabilities:    legacyCaps,
+		OfferedDefaults: []string{"api:ci-read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runSessions(t, store, baseTime.Add(time.Minute))
+	after, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range after.Grants {
+		key := model.CanonicalGrantKey(g.Capability)
+		if key == model.APIRef("task-admin") || key == model.ConsoleSessionCIReadGrant {
+			t.Errorf("upgrade sync re-attached operator-removed capability %q (all grants: %+v)", g.Capability, after.Grants)
+		}
+	}
+	detachCount := 0
+	for _, g := range after.Grants {
+		if model.CanonicalGrantKey(g.Capability) == model.APIRef("capabilities:detach") {
+			detachCount++
+		}
+	}
+	if detachCount != 1 {
+		t.Errorf("capabilities:detach count = %d in %+v, want 1", detachCount, after.Grants)
+	}
+
+	// Also verify legacy DeclinedDefaults: ["api:ci-read"] keeps ci-read off a newly filed session.
+	settings(t, store, func(cfg *model.Config) {
+		cfg.ConsoleSessions = append(model.DefaultConsoleSessions(), model.ConsoleSession{
+			ID:               "ops",
+			Title:            "Ops",
+			Capabilities:     []string{},
+			DeclinedDefaults: []string{"api:ci-read"},
+		})
+	})
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+	var opsTask *model.Task
+	for _, st := range sessionTasks(t, store) {
+		if st.Title == "Ops" {
+			stCopy := st
+			opsTask = &stCopy
+		}
+	}
+	if opsTask == nil {
+		t.Fatal("ops session task was not created")
+	}
+	for _, g := range opsTask.Grants {
+		if model.CanonicalGrantKey(g.Capability) == model.ConsoleSessionCIReadGrant {
+			t.Errorf("ops session with DeclinedDefaults:[\"api:ci-read\"] received %q", g.Capability)
+		}
+	}
 }

@@ -18,6 +18,7 @@ import {
   settingsSectionLabel,
   systemTabLabel,
 } from "./settingsSections.js";
+import { boardLabel } from "./boards.js";
 
 export const DEFAULT_PINNED_ITEMS = [{ kind: "view", id: "inbox" }];
 
@@ -181,7 +182,7 @@ export const PINNED_COLOR_OPTIONS = [
 // grain.pinnedNav.<user>.<team> lists here.
 export const PINNED_STORAGE_KEY = "grain.pinned";
 
-export function cleanPinnedItem(item) {
+function cleanPinnedItem(item) {
   const clean = { kind: item.kind, id: item.id };
   if (item.kind === "view") {
     if (item.id === "system" && typeof item.tab === "string" && item.tab)
@@ -325,7 +326,7 @@ export function getPinnedItemInfo(item, { sessions = [], boards = [] } = {}) {
   if (item.kind === "board") {
     const b = boards.find((board) => board.id === item.id);
     return {
-      label: b ? b.name : item.id,
+      label: b ? boardLabel(boards, b) : item.id,
       glyph: customIcon || null,
       dot: !customIcon,
       color: customColor,

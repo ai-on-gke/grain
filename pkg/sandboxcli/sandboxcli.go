@@ -203,7 +203,7 @@ var sandboxCommandFlags = map[string][]string{
 	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider", "format"},
 	"ci show":               nil,
 	"ci checks":             {"repo", "name", "format"},
-	"ci test-history":       {"limit", "repo"},
+	"ci test-history":       {"limit", "repo", "provider"},
 	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
 	"ci artifact":           {"o", "run", "task", "repo"},
 	"ci wait":               {"jobs", "timeout", "resume"},
@@ -510,7 +510,7 @@ func (c *sandboxCLI) run(args []string) error {
 		if err != nil {
 			return err
 		}
-		q := p.query("limit", "repo")
+		q := p.query("limit", "repo", "provider")
 		q.Set("test", test)
 		return c.get("/cli/ci/test-history", q, c.out)
 	case "ci log":

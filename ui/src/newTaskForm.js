@@ -104,7 +104,7 @@ function repoLayer(repos, repo) {
 }
 
 // newTaskFormLayers is the layers that apply, lowest precedence first.
-export function newTaskFormLayers(form, { repo, templateId, boardId } = {}) {
+function newTaskFormLayers(form, { repo, templateId, boardId } = {}) {
   if (!form) return [];
   return [
     form.default,
@@ -192,7 +192,7 @@ export function formFieldsIn(resolved, visibility) {
   ).sort((a, b) => resolved.fields[a].order - resolved.fields[b].order);
 }
 
-// grantNames is what the picker's offered and hidden lists name a grant
+// grantNames is what the picker's offered, hidden and display lists name a grant
 // by: an api grant in either its api:<name> or
 // https://grain.dev/capabilities/api#<name> spelling (without @repo or
 // with:), and a capability server method by its server as well as by
@@ -211,13 +211,17 @@ function grantNames(id) {
     }
   }
   const hash = bare.indexOf("#");
-  if (hash > 0) out.push(bare.slice(0, hash));
+  if (hash > 0) {
+    const server = bare.slice(0, hash);
+    if (!out.includes(server)) out.push(server);
+  }
   return out;
 }
 
 // pickerAllows is whether the capability picker may offer id, by the
 // resolved form's capabilities.offered and .hidden. A grant already held
-// is the caller's to keep showing (useHeldIds): this is only the menu.
+// keeps its own row, with its Remove button, outside the menu
+// (GrantsPicker): this filters only the menu.
 export function pickerAllows(formCaps, id) {
   if (!formCaps) return true;
   const names = grantNames(id);

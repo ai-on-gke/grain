@@ -9,6 +9,8 @@ Usage of grain daemon:
     	where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
   -allow-unisolated-host-sandboxes
     	let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user
+  -api-socket string
+    	unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names (default <data-dir>/api/grain.sock, served only when some account is mapped; "none" turns it off)
   -as string
     	principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)
   -backup-gcs-bucket string
@@ -147,6 +149,8 @@ Usage of grain daemon:
     	allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI
   -grit-url url
     	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred)
+  -host-accounts string
+    	comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as (the daemon's own account maps to -deployment-owner unless named here; $GRAIN_HOST_ACCOUNTS when unset)
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
@@ -161,6 +165,26 @@ Usage of grain daemon:
     	the host name a host dialing in with -hostd-token-file's shared token is known by (default "remote")
   -hostd-token-owner string
     	the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not
+  -hub-auth-mode string
+    	credential mode for hub heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-connect
+    	supervise an outbound wss://<hub-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)
+  -hub-display-name string
+    	human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-entry string
+    	entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_HUB_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-host-kind string
+    	connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-listed
+    	include this connected entry in default hub directory listings (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) (default true)
+  -hub-oidc-audience string
+    	OIDC ID token audience when -hub-auth-mode=oidc (defaults to -hub-url) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-purpose string
+    	short description of this grain deployment's purpose in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-token-file string
+    	fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_HUB_TOKEN is also consulted)
+  -hub-url string
+    	base URL of the Grain Hub this daemon self-registers with ($GRAIN_HUB_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
   -iap-backend-service string
     	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -iap-resource string
@@ -285,26 +309,26 @@ Usage of grain daemon:
     	PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)
   -reboot-cmd sudo systemctl reboot
     	one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot.
-  -registry-auth-mode string
-    	credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+  -registry-auth-mode value
+    	deprecated: renamed to -hub-auth-mode
   -registry-connect
-    	supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_REGISTRY_CONNECT; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url)
-  -registry-display-name string
-    	human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-entry string
-    	entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-host-kind string
-    	connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	deprecated: renamed to -hub-connect
+  -registry-display-name value
+    	deprecated: renamed to -hub-display-name
+  -registry-entry value
+    	deprecated: renamed to -hub-entry
+  -registry-host-kind value
+    	deprecated: renamed to -hub-host-kind
   -registry-listed
-    	include this connected entry in default hub directory listings (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) (default true)
-  -registry-oidc-audience string
-    	OIDC ID token audience when -registry-auth-mode=oidc (defaults to -registry-url) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-purpose string
-    	short description of this grain deployment's purpose in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-token-file string
-    	fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_REGISTRY_TOKEN is also consulted)
-  -registry-url string
-    	base URL of the Grain Hub this daemon self-registers with ($GRAIN_REGISTRY_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	deprecated: renamed to -hub-listed
+  -registry-oidc-audience value
+    	deprecated: renamed to -hub-oidc-audience
+  -registry-purpose value
+    	deprecated: renamed to -hub-purpose
+  -registry-token-file value
+    	deprecated: renamed to -hub-token-file
+  -registry-url value
+    	deprecated: renamed to -hub-url
   -relay-audience string
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-auth-token-file string
@@ -385,6 +409,12 @@ Usage of grain daemon:
     	deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access'
   -ui-cloud-identity-endpoint string
     	resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT
+  -ui-hub-audience string
+    	the single audience URL a signed X-Grain-Hub-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_HUB_AUDIENCE
+  -ui-hub-issuer string
+    	the exact issuer URL a signed X-Grain-Hub-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_HUB_ISSUER. All three of -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url must be set to enable the "registry" IdentityVerifier
+  -ui-hub-keys-url string
+    	where the hub's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_HUB_KEYS_URL
   -ui-iap-audience string
     	the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted
   -ui-iap-issuer string
@@ -393,12 +423,12 @@ Usage of grain daemon:
     	where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key
   -ui-open
     	open the UI in the system's default browser once it's listening
-  -ui-registry-audience string
-    	the single audience URL a signed X-Grain-Registry-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_REGISTRY_AUDIENCE
-  -ui-registry-issuer string
-    	the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url must be set to enable the "registry" IdentityVerifier
-  -ui-registry-keys-url string
-    	where the hub's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_REGISTRY_KEYS_URL
+  -ui-registry-audience value
+    	deprecated: renamed to -ui-hub-audience
+  -ui-registry-issuer value
+    	deprecated: renamed to -ui-hub-issuer
+  -ui-registry-keys-url value
+    	deprecated: renamed to -ui-hub-keys-url
   -ui-require-iap
     	accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers, and serve no "Enter access code" page, so network callers sign in through IAP alone (docs/access-code.md); needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP
   -ui-require-verifier string
@@ -410,23 +440,15 @@ Usage of grain daemon:
   -upgrade-image string
     	image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required
   -upgrade-image-fallback string
-    	fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK)
+    	fallback image source when the primary source cannot fetch a candidate daemon image: "none" or "registry" (legacy "release-assets" logs a deprecation warning and maps to "none"; or GRAIN_UPGRADE_IMAGE_FALLBACK)
   -upgrade-image-ref-file string
     	file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image)
   -upgrade-image-source string
-    	where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE)
+    	where -upgrade-image pulls candidate container images from: "registry" (docker pull, the default; legacy "release-assets" logs a deprecation warning and maps to "registry"; or GRAIN_UPGRADE_IMAGE_SOURCE)
   -upgrade-install-path string
     	where a successful upgrade's binary is installed to (required with -upgrade-src-dir)
-  -upgrade-release-asset string
-    	daemon tarball asset name on releases when images.json is not used (e.g. grain-image.tar.gz, or GRAIN_UPGRADE_RELEASE_ASSET)
-  -upgrade-release-checksum string
-    	checksum asset name or suffix (starting with '.') for release-asset tarballs; defaults to .sha256 (or GRAIN_UPGRADE_RELEASE_CHECKSUM)
-  -upgrade-release-repo string
-    	host-qualified repository (<host>/<owner>/<name>) whose releases carry upgrade image assets; defaults to the repository mapped from -upgrade-image or registered by the edition (or GRAIN_UPGRADE_RELEASE_REPO)
   -upgrade-restart-cmd value
     	one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below.
-  -upgrade-sandbox-release-asset value
-    	per-sandbox-image release asset mapping as <role-or-repo>=<asset> -- repeat for each image, e.g. -upgrade-sandbox-release-asset=guest=grain-guest.tar.gz (or comma-separated in GRAIN_UPGRADE_SANDBOX_RELEASE_ASSETS)
   -upgrade-src-dir string
     	git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature
   -upgrade-verify-cmd value

@@ -46,6 +46,52 @@ const test = base.extend(pageErrors);
 // daemon itself, with nothing stubbed.
 test.setTimeout(120_000);
 
+// landSubmitted waits for a submitted grain/config change to land. Submit
+// records a person's approval only; when the change touches the config
+// repository's trust boundary, grain files a security review -- possibly
+// on its first merge-queue look, after the Submit -- and no agent runs it
+// on this daemon. So the override a person holding merge:force would take
+// is taken here, once, explicitly and with a reason, the moment a review
+// gate is seen standing. It returns the reviews that override left running
+// against the merged commit.
+async function landSubmitted(
+  request,
+  url,
+  id,
+  landed,
+  message,
+  timeout = 90_000,
+) {
+  const deadline = Date.now() + timeout;
+  let overridden = [];
+  while (Date.now() < deadline) {
+    if (await landed()) return overridden;
+    if (overridden.length === 0) {
+      const detail = await (await request.get(`${url}/api/tasks/${id}`)).json();
+      const standing = (detail.mergeGates || []).filter(
+        (g) =>
+          (g.id === "security-review" || g.id === "review") &&
+          g.state !== "passed" &&
+          g.state !== "overridden",
+      );
+      if (standing.length > 0) {
+        const res = await request.post(`${url}/api/tasks/${id}/force-merge`, {
+          data: {
+            reason:
+              "e2e: no agent runs the config repository's security review here",
+            head: detail.ci?.commit || undefined,
+            overrideGates: standing.map((g) => g.id),
+          },
+        });
+        expect(res.ok(), await res.text()).toBeTruthy();
+        overridden = standing.map((g) => g.reviewTask).filter(Boolean);
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(message);
+}
+
 test("takes grain/config through its native pull request and restart", async ({
   page,
 }) => {
@@ -299,19 +345,30 @@ test("takes grain/config through its native pull request and restart", async ({
     // on the next reconciliation rather than waiting out the two-minute check
     // registration grace used for GitHub.
     await page.goto(`${daemon.url}/tasks/${task.id}`);
-    await expect(page.getByRole("button", { name: "Submit" })).toBeVisible();
+    const submit = page.getByRole("button", { name: /^Submit/ });
+    await expect(submit).toBeVisible();
     const submittedAt = Date.now();
-    await page.getByRole("button", { name: "Submit" }).click();
+    await submit.click();
 
-    await eventually(
-      async () => {
-        const detail = await taskDetail(page.request, daemon.url, task.id);
-        return detail.state === "closed" ? detail : null;
-      },
+    const leftRunning = await landSubmitted(
+      page.request,
+      daemon.url,
+      task.id,
+      async () =>
+        (await taskDetail(page.request, daemon.url, task.id)).state ===
+        "closed",
       "the submitted native pull request did not merge",
       20_000,
     );
     expect(Date.now() - submittedAt).toBeLessThan(20_000);
+    // The override keeps the security review running against the merged
+    // commit; this daemon has one worker and no agent to finish it, so it
+    // is put aside here to leave the worker for the task below.
+    for (const reviewId of leftRunning) {
+      await page.request.post(`${daemon.url}/api/tasks/${reviewId}/close`, {
+        data: {},
+      });
+    }
 
     await eventually(async () => {
       const response = await page.request.get(`${daemon.url}/api/templates`);

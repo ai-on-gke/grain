@@ -53,6 +53,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -86,11 +87,11 @@ const (
 	// account's key, and a second framework built on one would want this
 	// same secret rather than a copy of it under another name.
 	OpenAIAPIKeySecret = "openai-api-key"
-	// RegistryRegistrationTokenSecret holds the per-entry registration
+	// HubRegistrationTokenSecret holds the per-entry registration
 	// credential ("grc_...") a connected grain authenticates its registry
-	// heartbeats with (design/design/registry.design.md). Stored under
+	// heartbeats with (design/design/hub.design.md). Stored under
 	// AgentCredentialKey ("value") and never exported into grain/config.
-	RegistryRegistrationTokenSecret = "registry-registration-token"
+	HubRegistrationTokenSecret = "registry-registration-token"
 	// AgentCredentialKey is the one key each of the secrets above holds.
 	// "value" rather than a per-secret name ("api-key", "token")
 	// so nothing has to remember which is which: the secret's own name
@@ -222,7 +223,23 @@ type Config struct {
 	// one (in which case grain cannot start; there is no half state where
 	// it runs without being able to read its own secrets).
 	KeyFile string
+	// KeySource is where the key is loaded from. Nil means
+	// FileKeySource{Path: KeyFile}, which is every install so far.
+	// KeyFile is still where Open mints a fresh install's key and where
+	// ImportKey writes one.
+	KeySource KeySource
 }
+
+// keySource is cfg's KeySource, defaulted to the key file.
+func (cfg Config) keySource() KeySource {
+	if cfg.KeySource != nil {
+		return cfg.KeySource
+	}
+	return FileKeySource{Path: cfg.KeyFile}
+}
+
+// KeySource is where this store loads its key from.
+func (s *Store) KeySource() KeySource { return s.cfg.keySource() }
 
 // Store resolves a name to secret material held in an encrypted file or in
 // Google Cloud Secret Manager. The zero value is not useful; build one with
@@ -244,6 +261,128 @@ type Store struct {
 	// ensureMu makes Ensure's check-then-set one step, so two attaches
 	// of the same server never generate two values.
 	ensureMu sync.Mutex
+	// keyMu guards key, the private key as cfg's KeySource last gave
+	// it. It is loaded once and kept for the life of the Store rather
+	// than re-read on every load and save: a source may be a KMS unwrap,
+	// and even a file is one more open of the key per Resolve.
+	// ImportKey drops it, and so does a load that finds the file sealed
+	// to some other key (another process -- `grain state key import`
+	// with the daemon running -- may have installed one).
+	keyMu sync.Mutex
+	key   *Key
+	// keyErr is the last KMS failure loading the key, and keyRetryAt
+	// when the next attempt may be made: until then every use of the
+	// store answers keyErr rather than calling KMS again, and each
+	// failure doubles keyBackoff up to maxKeyBackoff. Only KMS failures
+	// (ErrKMS) are held like this; they are the ones that put
+	// themselves right.
+	keyErr     error
+	keyRetryAt time.Time
+	keyBackoff time.Duration
+	// lastUnwrap is when KMS last handed this store its key.
+	lastUnwrap time.Time
+	// now is time.Now, replaceable in tests.
+	now func() time.Time
+}
+
+const (
+	minKeyBackoff = 5 * time.Second
+	maxKeyBackoff = 5 * time.Minute
+)
+
+func (s *Store) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// currentKey is the cached key, loading it on first use.
+func (s *Store) currentKey() (Key, error) {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	if s.key != nil {
+		return *s.key, nil
+	}
+	if s.keyErr != nil && s.clock().Before(s.keyRetryAt) {
+		return Key{}, s.keyErr
+	}
+	k, err := s.cfg.keySource().Load(context.Background())
+	if err != nil {
+		if errors.Is(err, ErrKMS) {
+			s.keyBackoff = min(max(2*s.keyBackoff, minKeyBackoff), maxKeyBackoff)
+			s.keyErr, s.keyRetryAt = err, s.clock().Add(s.keyBackoff)
+		}
+		return Key{}, err
+	}
+	if s.keyErr != nil {
+		log.Printf("grain: the secrets key unwrapped after earlier failures; the store is readable again")
+	}
+	s.keyErr, s.keyBackoff = nil, 0
+	if info, ierr := ReadKeyFileInfo(s.cfg.KeyFile); ierr == nil && info.Protection == ProtectionKMS {
+		s.lastUnwrap = s.clock()
+	}
+	s.key = &k
+	return k, nil
+}
+
+// KeyRetryIn is how long until the store will next try to load a key
+// KMS failed to unwrap, or 0 when it is not waiting on one.
+func (s *Store) KeyRetryIn() time.Duration {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	if s.key != nil || s.keyErr == nil {
+		return 0
+	}
+	return max(s.keyRetryAt.Sub(s.clock()), 0)
+}
+
+// WaitingOnKMS reports whether the store's key is not loaded because
+// KMS last failed to unwrap it.
+func (s *Store) WaitingOnKMS() bool {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	return s.key == nil && s.keyErr != nil
+}
+
+// KeyProtection is how this store's key is protected at rest, for
+// `grain state status` and Settings -> State.
+type KeyProtection struct {
+	// Mode is ProtectionFile (a plaintext key file) or ProtectionKMS.
+	Mode string `json:"mode"`
+	// KMSKey is the Cloud KMS key that wraps it, in KMS mode.
+	KMSKey string `json:"kmsKey,omitempty"`
+	// LastUnwrap is when this process last unwrapped the key, zero if
+	// it has not.
+	LastUnwrap time.Time `json:"lastUnwrap,omitempty"`
+	// Error is why the key could not be unwrapped, while that lasts.
+	Error string `json:"error,omitempty"`
+}
+
+// KeyProtection reports how the key is held. It reads the key file's
+// header and never calls KMS.
+func (s *Store) KeyProtection() KeyProtection {
+	out := KeyProtection{Mode: ProtectionFile}
+	if s.backend != BackendFile || s.cfg.KeyFile == "" {
+		return out
+	}
+	if info, err := ReadKeyFileInfo(s.cfg.KeyFile); err == nil {
+		out.Mode, out.KMSKey = info.Protection, info.KMSKey
+	}
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	out.LastUnwrap = s.lastUnwrap
+	if s.key == nil && s.keyErr != nil {
+		out.Error = s.keyErr.Error()
+	}
+	return out
+}
+
+// forgetKey drops the cached key, so the next use loads it again.
+func (s *Store) forgetKey() {
+	s.keyMu.Lock()
+	s.key = nil
+	s.keyMu.Unlock()
 }
 
 // Backend reports which storage backend this Store uses (BackendFile or
@@ -281,7 +420,7 @@ func Open(cfg Config) *Store {
 		s.openErr = errors.New("secrets: both a file and a key file are required")
 		return s
 	}
-	_, err := ReadKeyFile(cfg.KeyFile)
+	_, err := s.currentKey()
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrNoKey):
@@ -301,7 +440,13 @@ func Open(cfg Config) *Store {
 			s.openErr = writeErr
 			return s
 		}
+		s.key = &key
 		s.created = true
+	case errors.Is(err, ErrKMS):
+		// KMS is down, or has been told not to answer this host. The
+		// store stays open and every use says so; currentKey tries
+		// again with backoff, so the store unlocks when KMS answers
+		// without anything restarting.
 	default:
 		s.openErr = err
 	}
@@ -340,7 +485,7 @@ func (s *Store) PublicKey() (string, error) {
 	if s.backend == BackendSecretManager {
 		return "", nil
 	}
-	key, err := ReadKeyFile(s.cfg.KeyFile)
+	key, err := s.currentKey()
 	if err != nil {
 		return "", err
 	}
@@ -388,15 +533,17 @@ func (s *Store) ImportKey(k Key) error {
 	case err != nil && !os.IsNotExist(err):
 		return fmt.Errorf("secrets: reading %s: %w", s.cfg.File, err)
 	}
-	if existing, err := ReadKeyFile(s.cfg.KeyFile); err == nil && existing.String() != k.String() {
+	if existing, err := os.ReadFile(s.cfg.KeyFile); err == nil && strings.TrimSpace(string(existing)) != k.String() {
 		archived := s.cfg.KeyFile + ".replaced-" + time.Now().UTC().Format("20060102-150405")
 		if err := os.Rename(s.cfg.KeyFile, archived); err != nil {
 			return fmt.Errorf("secrets: keeping the key %s replaces: %w", s.cfg.KeyFile, err)
 		}
 	}
 	if err := WriteKeyFile(s.cfg.KeyFile, k); err != nil {
+		s.forgetKey()
 		return err
 	}
+	s.forgetKey()
 	// Whatever Open could not do -- and the one thing it refuses to do is
 	// mint a key over an encrypted file it cannot read -- it can do now.
 	s.openErr, s.created = nil, false
@@ -478,20 +625,36 @@ func (s *Store) load() (*contents, error) {
 		return nil, err
 	}
 	data, err := os.ReadFile(s.cfg.File)
-	if os.IsNotExist(err) {
-		return &contents{Version: 1, Secrets: map[string]map[string]string{}}, nil
-	}
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("secrets: reading %s: %w", s.cfg.File, err)
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
+		// No ciphertext to check the cached key against, so nothing
+		// would notice if another process (`grain state key import`
+		// on an empty store, with the daemon running) had installed a
+		// different key since: the next save would seal the file to
+		// the replaced one, which the key file no longer is, and the
+		// store would not open after a restart. Drop the cache so that
+		// save loads the key afresh. A store is empty only until its
+		// first write, so this costs a source nothing in steady state.
+		s.forgetKey()
 		return &contents{Version: 1, Secrets: map[string]map[string]string{}}, nil
 	}
-	key, err := ReadKeyFile(s.cfg.KeyFile)
+	key, err := s.currentKey()
 	if err != nil {
 		return nil, err
 	}
 	plain, err := Decrypt(key, data)
+	if errors.Is(err, ErrWrongKey) {
+		// The key this Store cached is not the one the file is sealed
+		// to. Something else may have installed the right one since;
+		// look once more before calling the store unreadable.
+		s.forgetKey()
+		if key, err = s.currentKey(); err != nil {
+			return nil, err
+		}
+		plain, err = Decrypt(key, data)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +673,7 @@ func (s *Store) load() (*contents, error) {
 // commit racing the daemon's own sync -- never sees a half-written
 // ciphertext, which would decrypt to nothing at all.
 func (s *Store) save(c *contents) error {
-	key, err := ReadKeyFile(s.cfg.KeyFile)
+	key, err := s.currentKey()
 	if err != nil {
 		return err
 	}

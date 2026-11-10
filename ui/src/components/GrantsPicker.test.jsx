@@ -234,17 +234,19 @@ describe("GrantsPicker", () => {
     expect(within(menu).getByText("Nothing matches")).toBeTruthy();
   });
 
-  it("adds an api grant, limited to a repository, and removes one from its line", async () => {
+  it("adds a canonical api grant, edits its with: {repo} limit inline, and still removes legacy api: lines", async () => {
     serve({ current: [] });
     const onApiChange = vi.fn();
+    const onSubmit = vi.fn().mockResolvedValue();
+    const onRemove = vi.fn().mockResolvedValue();
     const user = userEvent.setup();
     const { rerender } = render(
       <GrantsPicker
         grants={["gcp-key", "api:tasks:admin"]}
         config={config}
         onApiChange={onApiChange}
-        onSubmit={vi.fn()}
-        onRemove={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
       />,
     );
     // Held grants are one list of sections, bare capability ids included.
@@ -257,34 +259,80 @@ describe("GrantsPicker", () => {
       within(held).getByLabelText("api:tasks:admin (dangerous)"),
     ).toBeTruthy();
 
+    // Picking ci:read writes the canonical .../api#ci:read reference, and the
+    // legacy "Grain API grants apply to" dropdown is gone.
     await user.click(screen.getByRole("button", { name: "Add grant…" }));
-    await user.click(screen.getByLabelText("Grain API grants apply to"));
-    await user.click(screen.getByRole("option", { name: "acme/widgets" }));
+    expect(screen.queryByLabelText("Grain API grants apply to")).toBeNull();
     await user.click(screen.getByRole("menuitemcheckbox", { name: "ci:read" }));
-    expect(onApiChange).toHaveBeenLastCalledWith([
-      "api:tasks:admin",
-      "api:ci:read@acme/widgets",
-    ]);
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      {
+        capability: "https://grain.dev/capabilities/api#ci:read",
+        with: undefined,
+      },
+      null,
+    );
 
+    // Rerender with the canonical grant recorded, then fill in with: {repo}
+    // inline on its section and blur to save.
     rerender(
       <GrantsPicker
-        grants={["api:tasks:admin", "api:gone:read"]}
+        grants={[
+          "https://grain.dev/capabilities/api#ci:read",
+          "https://grain.dev/capabilities/api#tasks:admin",
+          "https://grain.dev/capabilities/api#gone:read",
+          "api:tasks:admin",
+          "api:gone:read",
+        ]}
         config={config}
         onApiChange={onApiChange}
-        onSubmit={vi.fn()}
-        onRemove={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
       />,
     );
     await user.keyboard("{Escape}");
-    expect(
-      screen.getByLabelText("api:gone:read (no longer offered)"),
-    ).toBeTruthy();
-    const line = screen.getByLabelText("api:tasks:admin (dangerous)");
-    expect(line).toHaveAttribute("data-grant-kind", "api");
-    expect(within(line).getByText("dangerous")).toBeTruthy();
-    expect(within(line).getByText("Approve tasks")).toBeTruthy();
+
+    const ciSection = screen.getByLabelText("api:ci:read");
+    const repoInput = within(ciSection).getByLabelText(/^repo/);
+    await user.type(repoInput, "acme/widgets");
+    await user.tab();
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenLastCalledWith(
+        {
+          capability: "https://grain.dev/capabilities/api#ci:read",
+          with: { repo: "acme/widgets" },
+        },
+        "https://grain.dev/capabilities/api#ci:read",
+      ),
+    );
+
+    // Canonical dangerous and no-longer-offered sections carry their alerts,
+    // and removing a canonical grant calls onRemove.
+    const goneItems = screen.getAllByLabelText(
+      "api:gone:read (no longer offered)",
+    );
+    expect(goneItems).toHaveLength(2);
+    const canonicalDangerous = screen
+      .getAllByLabelText("api:tasks:admin (dangerous)")
+      .find((el) => el.getAttribute("data-grant-kind") === "method");
+    expect(canonicalDangerous).toBeTruthy();
     await user.click(
-      within(line).getByRole("button", {
+      within(canonicalDangerous).getByRole("button", {
+        name: "Remove api:tasks:admin (dangerous)",
+      }),
+    );
+    expect(onRemove).toHaveBeenCalledWith(
+      "https://grain.dev/capabilities/api#tasks:admin",
+    );
+
+    // Unmigrated legacy api: grants still render and remove via onApiChange.
+    const legacyLine = screen
+      .getAllByLabelText("api:tasks:admin (dangerous)")
+      .find((el) => el.getAttribute("data-grant-kind") === "api");
+    expect(legacyLine).toBeTruthy();
+    expect(within(legacyLine).getByText("dangerous")).toBeTruthy();
+    expect(within(legacyLine).getByText("Approve tasks")).toBeTruthy();
+    await user.click(
+      within(legacyLine).getByRole("button", {
         name: "Remove api:tasks:admin (dangerous)",
       }),
     );
@@ -312,6 +360,40 @@ describe("GrantsPicker", () => {
       { capability: hostScript.ref, with: undefined },
       null,
     );
+  });
+
+  // settings/new-task-form.yml's capabilities.hidden narrows the "Add
+  // grant…" menu only. A grant the draft already holds is drawn as its own
+  // line, outside the menu, so it stays removable while hidden. (The
+  // legacy checklists needed useHeldIds for this; GrantsPicker does not.)
+  it("keeps a held grant removable when the form hides it from the menu", async () => {
+    serve({ current: [hostScript, gcpKey] });
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={config}
+        formCapabilities={{
+          offered: null,
+          hidden: [hostScript.ref],
+          display: {},
+        }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    expect(
+      await screen.findByRole("menuitem", { name: /gcp-key/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /host-script/ })).toBeNull();
+    await user.keyboard("{Escape}");
+    await user.click(
+      await screen.findByRole("button", { name: /^Remove .*host-script/ }),
+    );
+    expect(onRemove).toHaveBeenCalledWith(hostScript.ref);
   });
 
   // cloudKey has a required argument with no default (account) and one
@@ -864,24 +946,13 @@ describe("GrantsPicker", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     onClose.mockClear();
 
-    // 2. Dirty pane with nested SearchSelect listbox open: first Escape closes
-    // the repo listbox, second Escape closes Add grant… without prompting,
-    // third Escape asks DISCARD_PROMPT.
+    // 2. Dirty pane: first Escape closes Add grant… without prompting,
+    // second Escape asks DISCARD_PROMPT.
     dirty = true;
     await user.click(addBtn);
     expect(
       await screen.findByRole("menu", { name: "Grants to add" }),
     ).toBeInTheDocument();
-    await user.click(screen.getByLabelText("Grain API grants apply to"));
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
-
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("listbox")).toBeNull();
-    expect(
-      screen.getByRole("menu", { name: "Grants to add" }),
-    ).toBeInTheDocument();
-    expect(confirm).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu", { name: "Grants to add" })).toBeNull();
@@ -913,7 +984,7 @@ describe("GrantsPicker", () => {
     confirm.mockRestore();
   });
 
-  it("leaves https://grain.dev/capabilities/api methods out of the method group and owns held api references", async () => {
+  it("leaves https://grain.dev/capabilities/api methods out of the generic method menu and edits held api references as their own sections", async () => {
     const apiMethod = {
       ref: "https://grain.dev/capabilities/api#ci:read",
       capability: "https://grain.dev/capabilities/api",
@@ -945,15 +1016,16 @@ describe("GrantsPicker", () => {
     expect(
       screen.getByLabelText("api:tasks:admin (dangerous)"),
     ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("api:ci:read on acme/widgets"),
-    ).toBeInTheDocument();
-    // Held api references must not be rendered a second time as method grants
-    // or sent to POST /api/capability-grants/check.
+    // Slice 3: a held api reference is its own section, its repository
+    // limit the {repo} argument edited inline rather than an @repo suffix.
+    const ciSection = screen.getByLabelText("api:ci:read · repo: acme/widgets");
+    expect(ciSection).toHaveAttribute("data-grant-kind", "method");
+    expect(within(ciSection).getByLabelText(/^repo/)).toHaveValue(
+      "acme/widgets",
+    );
+    // Held api references are not drawn a second time under a generic
+    // method label.
     expect(screen.queryByLabelText(/grain\.dev ›/)).toBeNull();
-    expect(
-      api.mock.calls.filter(([p]) => p === "/api/capability-grants/check"),
-    ).toHaveLength(0);
 
     await user.click(screen.getByRole("button", { name: "Add grant…" }));
     const menu = await screen.findByRole("menu", { name: "Grants to add" });
@@ -969,10 +1041,10 @@ describe("GrantsPicker", () => {
     });
     expect(adminItem).toHaveAttribute("aria-checked", "true");
     await user.click(adminItem);
-    expect(onApiChange).toHaveBeenLastCalledWith([
-      'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
-    ]);
-    expect(onRemove).not.toHaveBeenCalled();
+    expect(onRemove).toHaveBeenLastCalledWith(
+      "https://grain.dev/capabilities/api#tasks:admin",
+    );
+    expect(onApiChange).not.toHaveBeenCalled();
   });
 
   // docs/test-plans/2026-11-09.md §1 item 3: when GET

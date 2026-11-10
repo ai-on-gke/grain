@@ -192,11 +192,6 @@ func (g sandboxCLIGate) WaitForGitHubChecks(ctx context.Context, taskID string,
 	return a.WaitForGitHubChecks(ctx, taskID, timeout, poll, onPoll)
 }
 
-// NewWaitCreditor returns a gitproxy.CLIWaitCreditor backed by credits.
-func NewWaitCreditor(credits *orchestrator.RunWaitCredits) gitproxy.CLIWaitCreditor {
-	return waitCreditAdapter{credits: credits}
-}
-
 // CreditCLIWait is gitproxy.CLIWaitCreditor over the same registry
 // CreditWaitForTask credits, reported as its own source so that a run's
 // CLI waits add to its MCP waits rather than competing with them
@@ -347,8 +342,17 @@ type sandboxExternalCI struct{}
 var (
 	_ ci.ExternalRuns        = sandboxExternalCI{}
 	_ ci.ExternalRunsCounter = sandboxExternalCI{}
+	_ ci.ExternalRunsRepos   = sandboxExternalCI{}
 	_ ci.ExternalAttempts    = sandboxExternalCI{}
 )
+
+func (sandboxExternalCI) ServesRepo(ctx context.Context, repo string) bool {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return false
+	}
+	return ci.ExternalCIFor(ctx, client.ExternalCIRuns(), repo)
+}
 
 func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
 	client := liveSandboxCLI.Load()

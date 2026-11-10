@@ -246,11 +246,12 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 }
 
 // canonicalizeDeclaredGrants rewrites retired bare capability names (such as
-// bootstrap-playbooks or self-debug) on declared templates and schedules to
-// the canonical grant(s) they became, and maps a declared grain#ci / grain-ci
-// grant to repo-scoped api:ci-read@<repo> so applyGrainCIGrant does not strip
-// it on a ci_mode: github repository, deduplicating by capability so primary
-// keys on template_grant and schedule_grant never collide.
+// bootstrap-playbooks or self-debug) and legacy api:/repo-read:/repo-write:
+// spellings on declared templates and schedules to their canonical stored
+// references, and maps a declared grain#ci / grain-ci grant to repo-scoped
+// api#ci-read {repo} so applyGrainCIGrant does not strip it on a ci_mode:
+// github repository, deduplicating by capability so primary keys on
+// template_grant and schedule_grant never collide.
 func canonicalizeDeclaredGrants(repo RepoRef, grants []Grant) []Grant {
 	if len(grants) == 0 {
 		return nil
@@ -263,8 +264,9 @@ func canonicalizeDeclaredGrants(repo RepoRef, grants []Grant) []Grant {
 				continue
 			}
 			if IsGrainCIGrant(cap) && !repo.IsZero() {
-				cap = APIGrantPrefix + "ci-read@" + repo.String()
+				cap = APIGrantString("ci-read", repo.String())
 			}
+			cap, _ = CanonicalStoredGrant(cap)
 			if seen[cap] {
 				continue
 			}
@@ -307,6 +309,7 @@ func deleteDeclared(ctx context.Context, tx *sql.Tx, row RepoDeclaration) error 
 			cfg.DeclaredSetupCommand = ""
 			cfg.DeclaredPortBranches = nil
 			cfg.DeclaredPortTypes = nil
+			cfg.DeclaredSkills = nil
 			if err := putRepoConfig(ctx, tx, *cfg); err != nil {
 				return err
 			}

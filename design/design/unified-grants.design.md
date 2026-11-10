@@ -1,11 +1,24 @@
 # Unified grants: one grant model, one Grants picker
 
-Status: design, with slice 1 (UI only) landed alongside it (task 1060)
-and slice 2 (read both) landed from task 3304: `model.Grant` is
+Status: design, with slice 1 (UI only) landed alongside it (task 1060),
+slice 2 (read both) landed from task 3304, and slice 3 (write canonical
+references) implemented in [Task #3317](/tasks/3317) (held to merge
+after slice 2 ships in a release): `model.Grant` is
 `{Capability, With, Via, Folder}`, `model.CanonicalGrant` reads every
-spelling, `…/api` and the task-level `…/repo#target`/`#read`/`#write`
-are in-process servers, and the fidelity fixture is
-`pkg/model/canonical_grant_test.go`. Slices 3–5 have not started, and
+spelling, writers across `pkg/model`, `pkg/ui`, `pkg/cli`,
+`pkg/repodecl` and `pkg/orchestrator` record canonical `…/api#<what>`
+(with `{repo}` when repository-limited) and `…/repo#read`/`#write`
+references, `GrantsPicker.jsx` edits `with: {repo}` inline on `…/api`
+grants, and the fidelity fixture is `pkg/model/canonical_grant_test.go`.
+Slice 4 (migrate once) is implemented in [Task #3321](/tasks/3321):
+schema migration 132, grain/config's `grants:` read as one key with
+`reads:`/`writes:`, `grants:` in `.grain/` templates and schedules, and
+the `release-gate-read` provider retired (§3's "As built" notes say what
+it does and what it left for later). Slice 5 (repository grants in the
+picker) is implemented in [Task #3322](/tasks/3322); see "Slice 5 as
+built" under Slices. Reads and writes stay stored in their own tables.
+[Task #3882](/tasks/3882) decided to keep them there, with a grant
+projection and a deny-only policy check (§3, slice 4), and
 slice 6, the per-capability conversions of §4, is mostly done; §4's
 table says which, and the remaining slices and conversions are filed from
 [Task #3274](/tasks/3274). The overview of capabilities as a whole is
@@ -154,6 +167,26 @@ once with a fidelity test.**
 - **Slice 3 (write one).** Writers switch to references. This is the
   first change an older binary cannot read, so it lands in the release
   after slice 2 ships.
+  *As built ([Task #3317](/tasks/3317)):* `NormalizeCapabilityNames` and
+  `NormalizeCapabilityGrants` canonicalize `api:<what>[@repo]` and
+  `…/api#<what>[=...]` to `https://grain.dev/capabilities/api#<what>`
+  (omitting empty `with:` and encoding `={"repo":"<owner/name>"}` when
+  repository-limited) and rewrite `repo-read:<repo>` /
+  `repo-write:<repo>` to `…/repo#read` / `…/repo#write`. Writers across
+  `pkg/model` (defaults, console sessions, system templates, external
+  agent tokens, `{capability: api, with: ...}` and scope-set helpers,
+  proposal seeding, `SplitRequestGrants`), `pkg/repodecl`, `pkg/ui`,
+  `pkg/cli` (brace-aware comma splitting for `-default-capabilities` and
+  `grain repo capabilities -set`), and `pkg/orchestrator` emit canonical
+  references, while `model.CanonicalGrant` continues reading legacy
+  `api:`, `repo-read:`, and `repo-write:` strings from unmigrated store
+  rows and `.grain/` declarations. `protocol.ValidMethod` gained `.` and
+  `/` segments (`len <= 63`) and `grainserver` lists `APIScopeSetsInEffect()`
+  live on `https://grain.dev/capabilities/api` so slash-named scope sets
+  (`ops/triage`, `grain/task-admin`) normalize and list as methods.
+  `GrantsPicker.jsx` drops the top-level "Grain API grants apply to"
+  dropdown and edits `with: {repo}` inline on `…/api#<what>` sections
+  while still rendering and removing unmigrated `api:` lines.
 - **Slice 4 (migrate once).** One store migration rewrites
   `task_grant`, `schedule_grant`, `template_grant`, repo config's
   `default_capabilities` / `ci_capabilities`, console sessions'
@@ -164,17 +197,108 @@ once with a fidelity test.**
   old again must be byte-identical, and the approval predicates above
   must return the same answer on both forms for every (proposer, child)
   pair in the fixture.
+  *As built ([Task #3321](/tasks/3321)):* schema migration 132
+  (`model.MigrateCanonicalGrants`, `canonical_grant_migration.go`) reads
+  every grant string off the store, as migration 88 did, and rewrites
+  each one `CanonicalStoredGrant` changes -- `api:<what>[@repo]`, an api
+  reference in a non-canonical spelling (`={}`, an unprinted repo), and
+  any `repo-read:`/`repo-write:` a state-repository import brought in
+  after 88 -- in `task_grant`, `template_grant`, `schedule_grant`,
+  `task_grant_wait`, both `default_capabilities`, `ci_capabilities`,
+  `capability_policy`'s catalogue defaults, and the console sessions'
+  capabilities and `declinedDefaults`. A row whose
+  reference its owner already holds is dropped. Bare in-process names
+  (`release-gate-read` among them) and every other reference are left as
+  they are. A grain/config import at the current schema runs the same
+  rewrite, so a mixed-version or hand-edited file's legacy spellings land
+  as one key with their references. The fidelity test is
+  `pkg/model/sqlite/canonical_grant_migration_test.go`: every migrated row
+  is its reference, old → `CanonicalGrant` → old is byte-identical, the
+  approval predicates (`GrantsSubsetOf`, `EscalatedCapabilities`,
+  `LandsWhereGranted`, `ReviewGrants`, `TemplateWithinTask`, dangerous and
+  person-only, the capability policy, the api scope set) answer every
+  (proposer, child) pair alike before and after, and a second run is a
+  no-op; the earlier migration tests read their expectations through
+  `CanonicalStoredGrant` since every store now ends at 132. Not done here:
+  `task_read`/`task_write` (and the template and schedule tables) are
+  **not** projected into grant rows. A `…/repo#read` grant row outside
+  CI is refused by the capability policy (`CIOnlyRefusal`), and the
+  `task_ready` view, dispatch, liveness and metrics join those tables
+  directly. Slice 5 ([Task #3322](/tasks/3322)) kept that storage too,
+  editing reads and writes in the picker as lists, so moving it is a
+  follow-up of its own; until then `TaskRepoGrants` is the projection,
+  as for `#target` (Q2).
+  *Storage decision ([Task #3882](/tasks/3882)):* the read and write
+  tables (`task_read`/`task_write`, `template_*`, `schedule_*`) **stay
+  the source of truth, and are not mirrored** into the grant tables.
+  `Target`/`Base` stay columns (Q2) for the same reason. About thirty SQL
+  sites join the read/write tables directly: the `task_ready` view,
+  `pkg/dispatch`, `pkg/orchestrator` (liveness, targetrepos, cycle),
+  `pkg/metrics`, the postgres adapter, `pkg/trustboundary`, the repo-case
+  renames, and the grain/config import. Moving them all is one large
+  change with nothing to gain at its end. A mirror would be a second copy
+  every one of those writers had to keep in step. It would also be a
+  `#read` row in `task_grant` that every grant reader (admission,
+  prompts, the catalogue, the export) had to learn to skip. The grant form
+  is a pair of functions at the model boundary instead.
+  `model.TaskRepoGrants` projects Reads and Writes to `…/repo#read {repo}`
+  and `…/repo#write {repo, base}`. `model.TaskRepoAccessOf` is its
+  inverse: it reads grant rows back into Reads and Writes and leaves every
+  other grant (`#target`, a CI job's `{repo}`-only `#write`, a `refs`
+  widening) where it was. A future move of storage would use the same two
+  functions at Store load and save. The fidelity test
+  (`TestRepoAccessReadBackFromGrantRowsKeepsItsAnswers`, beside migration
+  132's) stores each fixture's access as those grant rows in `task_grant`,
+  `template_grant` and `schedule_grant`, and reads it back through
+  `TaskRepoAccessOf`. The result must be the same access, and
+  `UngrantedWrites`, `UngrantedReads`, `LandsWhereGranted`, `SameBranch`,
+  `TemplateWithinTask` (its `mayRead` and `WriteTargetFor`) and the
+  policy must give the same answer for every (proposer, child) pair.
+  *Policy:* a task's own access goes through
+  `CapabilityPolicy.PermitsTaskRepoGrant`. That is `Permits` without the
+  CI-only refusal, and it applies deny rules only: who may read or push a
+  repository is still for `mayRead`/`UngrantedWrites` to decide, so the
+  policy can narrow access but never has to admit it. An allow rule
+  written for CI jobs' `{repo}` grants therefore refuses no task. What
+  sets a task's access apart from a CI job's `#read {repo}`, which has
+  the same shape, is where it comes from: Reads, never `task_grant`.
+  `Permits` still refuses a `#read` in a task's capabilities as a CI
+  grant pasted onto a task. Admission (`checkTaskGrantsPolicy`) applies
+  the check to every task that reads or writes beyond its target, so a
+  deny rule on `…/repo#write` for `runKinds: [task]` now holds such a
+  task back.
 - **State-repo export (grain/config).** The exported YAML gains
   `grants:` lists. `capabilities:`, `reads:` and `writes:` keep being
   read (`declschema`), and for a release keep being *written* beside
   `grants:`, so a grain/config shared by two versions round-trips. The
   import merge
   treats the two spellings as one key.
+  *As built ([Task #3321](/tasks/3321)):* a template's or schedule's
+  `grants:` (template_grant/schedule_grant) is exported in canonical
+  references, and on import an entry that is a task-level repository
+  grant -- `…/repo#read {repo}` or `…/repo#write {repo, base}`, as a
+  string or `{capability, with}` -- is a row of the read or write table,
+  and one `reads:`/`writes:` already names is held once
+  (`pkg/staterepo/decl.go`, `projectedRepoRow`). The export keeps
+  repository access under `reads:` and `writes:` only for now: the
+  previous release reads every `grants:` entry as a grant row
+  (`decodeCompanion`), so writing `#read`/`#write` there would hand its
+  template tasks a CI-only grant. Writing them into `grants:` as well
+  lands with that follow-up, a release after this reader.
+  *Still waiting ([Task #3882](/tasks/3882)):* when task 3882 was done,
+  no versioned release contained this reader. Merge `29192f3f8` came
+  after `v3.4.0`, so the export still writes `reads:`/`writes:` only.
+  Writing `#read`/`#write` into `grants:` as well is filed to follow the
+  first release that has it.
 - **Repository declarations.** `.grain/templates/*.yml` and
   `.grain/schedules/*.yml` accept `grants:` beside `capabilities:`,
   `reads:`, `writes:` and `push:` indefinitely. These live in other
   people's repositories, so nothing is migrated there, and `push:` stays
   the way a declaration widens refs.
+  *As built ([Task #3321](/tasks/3321)):* `grants:` is accepted in a
+  repository (`declschema`, `repodecl.declaredGrants`) as the unified
+  spelling of `capabilities:`, read as one list with it and held to its
+  rule; `reads:` and `writes:` stay refused there, as they always were.
 - **API presets** need nothing. They become methods of `…/api`, and the
   alias table (`apiAliasCapabilities`) keeps `self-upgrade` and
   `pipeline-control` meaning their presets until §4 retires them.
@@ -222,7 +346,7 @@ is removed too (PR #985).
 | `console` | task setting `hosting: unattended \| console` (§4.1) | **done** (task 3145): a `hosting` column (`unattended \| console`) on tasks, templates and schedules, with `default_hosting` on repository and deployment settings and `hosting` on console sessions; `Task.HasConsole` is `NormalizeHosting(Hosting) == HostingConsole` (`pkg/orchestrator/console.go`), separate from `Interactive` and with no person-only rule, and each change is a `hosting-changed` task event with old value, new value and actor. Schema migration 123 moved stored `console` grants from tasks, templates, schedules, default/CI capability lists and console sessions into the column and dropped the catalogue and policy entries (Q10); `pkg/capability/console` and its `daemon.CapabilityProviders` entry are removed, the task pane has a **Hosting** select (`Unattended` / `Interactive console`), as do the template and schedule editors (`HostingField`, task 3319; a console session is always `console`), and the bare name is a one-release input alias mapped to `console` with a deprecation warning |
 | `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **done** (task 3144): an `admission` column (`standard \| bypass \| durable`) on tasks, templates and schedules, with `default_admission` on repository and deployment settings; `Task.HasPriorityDispatch` is `Admission >= bypass` and `priorityDispatchTaskSQL` the column predicate. Only a person may raise it above `standard` (agent-filed tasks and proposals asking for more wait for a person; the pipeline steward template and console sessions set it by construction), and each change is an `admission-changed` task event with old value, new value and actor. Schema migration 122 moved stored grants from tasks, templates, schedules, default capability lists and console sessions into the column and dropped the catalogue and policy entries (Q10); `pkg/capability/prioritydispatch` and its `daemon.CapabilityProviders` entry are removed, the task pane's toggle is an **Admission** select, and the bare name is a one-release input alias mapped to `bypass` with a deprecation warning |
 | `durable` | task setting `admission: durable` (§4.1) | **done** (task 3144): with `priority-dispatch` above; `Task.IsDurable` is `Admission == durable` and `durableTaskSQL` the column predicate, a row holding both grants migrated to `durable`, `pkg/capability/durable` and its `daemon.CapabilityProviders` entry removed, and the bare name a one-release input alias mapped to `durable` with a deprecation warning |
-| `release-gate-read` (CI) | `…/api#release-gate-read` preset | **already an alias**: the bare name is read as `api:release-gate-read` and served through `ciapi.NewAlias`, which `daemon.CapabilityProviders` still registers. It retires with api grants becoming references (slices 2–4) |
+| `release-gate-read` (CI) | `…/api#release-gate-read` preset | **done** (task 3321, slice 4): `ciapi.NewAlias` is no longer registered in `daemon.CapabilityProviders`, which now registers nothing. A CI job's `release-gate-read`, `api:release-gate-read` and `…/api#release-gate-read` all resolve through `ciapi.DynamicProvider` (the bare name via `ciapi.Aliases`), so `.grain/workflows` keep declaring it, and it stays a bare string in stored CI capability lists |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | **done** (task 2364): provider removed, `https://grain.dev/capabilities/grain#ci` added on the in-process `…/grain` server (still granted solely from a repository's CI Mode and refused when attached by hand), stored grants rewritten to `https://grain.dev/capabilities/grain#ci={}` by schema migration 96 (repo_config.ci_capabilities included) |
 | `image-signing`, `registry-push`, `package-publish` (CI) | `…/release#image-signing`, `…/release#registry-push`, `…/release#package-publish` | **done** (task 2432): the three providers removed from the daemon's registry; `…/release` is an in-process server (`pkg/capability/release`) whose mints are the retired providers' own Resolve and Materialize for the CI job in the mint's context (`model.WithCIMint`). The CI-only, event (image-signing: `release`; the others: `release`, `workflow_dispatch`, and package-publish grain's trusted schedule) and repository-list rules are declared by the server (`capability.Method.CI`, `model.CIGrantRule`) and enforced ahead of `capability_policy`, which can only narrow them. Stored grants rewritten to `…#<name>={}` by schema migration 101; the bare names remain one-release aliases |
@@ -366,10 +490,11 @@ template editor and the schedule editor (`GrantsPicker.jsx`).
   repository access. A method is granted at once when its defaults
   (`initialValue`) already pass; one with a required argument still to
   fill in is a draft section in the list until it passes, then granted.
-  The API repository limit is the "Grain API grants apply to" select
-  until api grants carry `with: {repo}`. Then it becomes their argument
-  form like any other. The menu re-reads `GET /api/capability-methods`
-  every time it opens (task 1056).
+  The API repository limit is edited inline via `with: {repo}` on each
+  `https://grain.dev/capabilities/api#<what>` section alongside
+  capability server methods (the former "Grain API grants apply to"
+  select was retired in slice 3, [Task #3317](/tasks/3317)). The menu
+  re-reads `GET /api/capability-methods` every time it opens (task 1056).
 - **Repo access** becomes a grant whose form picks repository, branch
   and read/write. The target repository stays its own field at the top
   of the form (it decides the branch, the clone and the pull request),
@@ -398,8 +523,50 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
 4. **Migrate once,** with the fidelity test, including grain/config export.
 5. **Repo grants in the picker.** `…/repo#read`/`#write` chips and form,
    `ReadOnlyReposField`/`WriteReposField` retired, `push:` shown
-   read-only on template-filed tasks.
+   read-only on template-filed tasks. Implemented in
+   [Task #3322](/tasks/3322); see below.
 6. **Per-capability conversions** from §4, one task each.
+
+### Slice 5 as built
+
+- **Still stored as reads and writes.** `GrantsPicker` takes a `repos`
+  prop (`ui/src/components/RepoGrants.jsx`) with the form's target,
+  base, reads and writes, and hands every edit back as the whole next
+  reads or writes list, the way the retired fields did. Nothing about
+  `POST /api/tasks`, `PATCH /api/tasks/{id}` or the template and
+  schedule bodies changed; `model.TaskRepoGrants` is still how a reader
+  that takes grants sees them.
+- **Lines.** The task's own repo and base is a `…/repo#target` line
+  (`<owner>/<repo> · <base> · target`) with no remove button: the repo
+  and base branch fields stay at the top of the form (Q2). Each read is
+  `<owner>/<repo> · read` with ×; each write is `<owner>/<repo> · write`
+  with ×, its base branch edited in place under it, and named
+  `<owner>/<repo> · <base> · write`. A template-filed task's declared
+  `push:` refs (`declaredPush` on the task) are read-only
+  `<repo> <ref> · push` lines in the task pane.
+- **Add grant….** A "Repository access" group, first in the menu,
+  offers "Read a repository" and "Write a repository". Either opens a
+  repo picker in the list (it does not offer the target, or a repo
+  already read, to read; or a repo already written, to write -- the
+  target on another branch is a write of its own). The listed
+  `…/repo#read` method is a CI job's grant and is left out of the
+  menu where the form edits reads; `…/repo#write` stays listed for
+  `{refs, force}` widenings (Q3).
+- **Where.** The new task overlay (its `reads` and `writes` form fields
+  keep their ids, visibility and defaults in
+  `settings/new-task-form.yml` but draw nothing of their own; a hidden
+  one is left out of the list), the task pane's Access section (the
+  Repos section keeps only the target and base), the template editor,
+  the schedule editor (where the form edits reads and writes at all),
+  and the director's console session page (no target line). Settings'
+  default-capabilities lists already use `GrantsPicker` and carry no
+  repository access, so they take no `repos`.
+- **Audit (Q5).** A `PATCH /api/tasks/{id}` that changes reads or writes
+  records one `grant-attached` or `grant-detached` task event per grant
+  it adds or removes, its detail the grant's canonical string
+  (`Grant.Key`: `https://grain.dev/capabilities/repo#write={"base":"publish","repo":"acme/docs"}`).
+  Capability edits through `POST /api/tasks/{id}/capabilities` record
+  the same two kinds.
 
 ## Open questions for the operator
 
@@ -422,7 +589,8 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
   today's behaviour first.
 - **Q5.** Should repo reads/writes edits produce the same grant
   attach/detach audit events as capabilities once they are grants?
-  Recommended: yes.
+  Recommended: yes. **Done in slice 5 ([Task #3322](/tasks/3322)):**
+  `grant-attached` / `grant-detached` task events, for both.
 - **Q6.** `gemini-key`: model-proxy (`{vendor: gemini}`) or a `gcp`
   server method?
   **Answered (task 1061, operator): a `gcp` server method.** Folding it

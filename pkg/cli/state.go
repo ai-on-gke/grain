@@ -31,6 +31,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -80,7 +81,19 @@ Commands:
   key show                  print this installation's secrets public key
   key path                  print where the private key is read from
   key import [-key-file F]  install a secrets private key this operator holds,
-                            reading it from -key-file or stdin
+                            reading it from -key-file or stdin; the key it replaces
+                            is kept beside it as secrets.key.replaced-<time>
+  key retired [list]        list those replaced keys, with their public halves
+  key retired delete (-all | NAME...)
+                            delete replaced keys; refuses the one the secrets
+                            file is still encrypted to
+  key wrap -kms KEY         wrap the private key with the Cloud KMS key KEY
+                            (projects/P/locations/L/keyRings/R/cryptoKeys/K), in
+                            the daemon when one is running; verifies the round
+                            trip before writing, and lists plaintext copies left
+  key unwrap                put the private key back in plaintext form (needs
+                            KMS); run it before downgrading past the build that
+                            wrapped it
 `
 
 func stateCmd(args []string) {
@@ -190,6 +203,7 @@ func stateStatus(ctx context.Context, dataDir string, out io.Writer) error {
 	reportUndeliveredResets(ctx, repo, out)
 	reportLatestSnapshot(dataDir, out)
 	reportSecretsKey(dataDir, out)
+	reportRetiredKeys(dataDir, out)
 	return nil
 }
 
@@ -342,6 +356,15 @@ func plural(n int, one, many string) string {
 // must not create the thing it reports on.
 func reportSecretsKey(dataDir string, out io.Writer) {
 	path := daemon.SecretsConfig(dataDir).KeyFile
+	if info, err := secrets.ReadKeyFileInfo(path); err == nil && info.Protection == secrets.ProtectionKMS {
+		fmt.Fprintf(out, "secrets key: %s (wrapped by Cloud KMS key %s)\n", path, info.KMSKey)
+		fmt.Fprintf(out, "            public key %s\n", info.Public)
+		fmt.Fprintf(out, "            this file is useless without decrypt on that KMS key, and the daemon\n")
+		fmt.Fprintf(out, "            unwraps it once at start. Back it up all the same; run\n")
+		fmt.Fprintf(out, "            `grain state key unwrap` before downgrading to a build older than\n")
+		fmt.Fprintf(out, "            the one that wrapped it.\n")
+		return
+	}
 	key, err := secrets.ReadKeyFile(path)
 	switch {
 	case errors.Is(err, secrets.ErrNoKey):
@@ -358,6 +381,32 @@ func reportSecretsKey(dataDir string, out io.Writer) {
 	fmt.Fprintf(out, "            file restored beside it. Seed it back with GRAIN_SECRETS_KEY\n")
 	fmt.Fprintf(out, "            (scripts/setup.sh) on a deploy, or install one you are holding\n")
 	fmt.Fprintf(out, "            with `grain state key import`.\n")
+}
+
+// reportRetiredKeys lists the keys `grain state key import` moved aside
+// (secrets.key.replaced-*). Each is a whole private key that still opens
+// anything sealed to it -- an old secrets-repository commit, a backup --
+// so an operator should know they are there, and decide to keep or
+// delete them, rather than find out from a disk image.
+func reportRetiredKeys(dataDir string, out io.Writer) {
+	retired, err := secrets.RetiredKeys(daemon.SecretsConfig(dataDir).KeyFile)
+	if err != nil {
+		fmt.Fprintf(out, "retired keys: unreadable: %v\n", err)
+		return
+	}
+	if len(retired) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "retired keys: %d private key(s) replaced by `grain state key import`, kept beside it:\n", len(retired))
+	for _, rk := range retired {
+		pub := rk.Public
+		if pub == "" {
+			pub = "(not a readable key)"
+		}
+		fmt.Fprintf(out, "            %s  %s\n", rk.Name, pub)
+	}
+	fmt.Fprintf(out, "            each still opens whatever was sealed to it; once nothing you keep\n")
+	fmt.Fprintf(out, "            needs one, remove it with `grain state key retired delete NAME`.\n")
 }
 
 func stateSync(ctx context.Context, dataDir string) error {
@@ -535,10 +584,22 @@ func stateCheck(ctx context.Context, dataDir string, args []string) error {
 // reading it is `cat` on a file they already own, and a command that
 // prints one invites it into a terminal's scrollback.
 func stateKey(dataDir string, args []string) error {
-	store := daemon.OpenSecrets(dataDir)
 	if len(args) == 0 {
-		return errors.New("usage: grain state key show|path|import")
+		return errors.New("usage: grain state key show|path|import|wrap|unwrap|retired")
 	}
+	switch args[0] {
+	case "wrap", "unwrap":
+		// Before opening the store too: the daemon holds the key, and
+		// the change is made there (stateKeyWrap).
+		return stateKeyWrap(context.Background(), dataDir, args[0], args[1:], os.Stdout)
+	}
+	if args[0] == "retired" {
+		// Before opening the store, which would mint a key on a data
+		// directory that has none: listing and deleting archives must
+		// not create the thing they are about.
+		return stateKeyRetired(daemon.SecretsConfig(dataDir), os.Stdout, args[1:])
+	}
+	store := daemon.OpenSecrets(dataDir)
 	switch args[0] {
 	case "show", "path":
 		if err := noArgsFor("grain state key "+args[0], args[1:]); err != nil {
@@ -561,6 +622,82 @@ func stateKey(dataDir string, args []string) error {
 	default:
 		return fmt.Errorf("unknown key command %q", args[0])
 	}
+}
+
+// stateKeyRetired lists, or deletes, the secrets.key.replaced-* archives
+// ImportKey leaves beside the key.
+//
+// Delete takes names (as listed) or -all, never a pattern, and refuses
+// the one archive the secrets file is still sealed to: that would be
+// the only key that opens it.
+func stateKeyRetired(cfg secrets.Config, out io.Writer, args []string) error {
+	const usage = "usage: grain state key retired [list] | delete (-all | NAME...)"
+	if len(args) == 0 || args[0] == "list" {
+		if len(args) > 1 {
+			return errors.New(usage)
+		}
+		retired, err := secrets.RetiredKeys(cfg.KeyFile)
+		if err != nil {
+			return err
+		}
+		if len(retired) == 0 {
+			fmt.Fprintf(out, "no retired keys beside %s\n", cfg.KeyFile)
+			return nil
+		}
+		for _, rk := range retired {
+			fmt.Fprintf(out, "%s\t%s\t%s\n", rk.Name, rk.Public, rk.ModTime.Format(time.RFC3339))
+		}
+		return nil
+	}
+	if args[0] != "delete" {
+		return errors.New(usage)
+	}
+	fs := flag.NewFlagSet("grain state key retired delete", flag.ContinueOnError)
+	all := fs.Bool("all", false, "delete every retired key")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	names := fs.Args()
+	if *all == (len(names) > 0) {
+		return errors.New(usage)
+	}
+	retired, err := secrets.RetiredKeys(cfg.KeyFile)
+	if err != nil {
+		return err
+	}
+	byName := map[string]secrets.RetiredKey{}
+	for _, rk := range retired {
+		byName[rk.Name] = rk
+	}
+	if *all {
+		for _, rk := range retired {
+			names = append(names, rk.Name)
+		}
+	}
+	var sealedTo string
+	if data, err := os.ReadFile(cfg.File); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if sealedTo, err = secrets.Recipient(data); err != nil {
+			return fmt.Errorf("reading which key %s is encrypted to: %w", cfg.File, err)
+		}
+	}
+	live, _ := secrets.ReadKeyFileInfo(cfg.KeyFile)
+	for _, name := range names {
+		rk, ok := byName[name]
+		if !ok {
+			return fmt.Errorf("no retired key %q beside %s (see `grain state key retired`)", name, cfg.KeyFile)
+		}
+		if sealedTo != "" && rk.Public == sealedTo && live.Public != sealedTo {
+			return fmt.Errorf("refusing to delete %s: %s is encrypted to it and not to the live key -- "+
+				"install it again with `grain state key import` first", name, cfg.File)
+		}
+	}
+	for _, name := range names {
+		if err := secrets.DeleteRetiredKey(cfg.KeyFile, name); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "deleted %s\n", name)
+	}
+	return nil
 }
 
 // stateKeyImport installs a key the operator already holds, which is

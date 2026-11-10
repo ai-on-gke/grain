@@ -36,6 +36,13 @@ import { heldForRunNow, pausedUntil, pauseSubject } from "../../alerts.js";
 import { forceMergeOffered } from "../../taskWrites.js";
 import TaskLink from "./TaskLink.jsx";
 import AccessGate from "../AccessGate.jsx";
+import GateOverrideDialog from "../GateOverrideDialog.jsx";
+import MergeGatesList, {
+  needsHumanApproval,
+  overrideReviewButtonLabel,
+  submitButtonLabel,
+  unsatisfiedReviewGates,
+} from "../MergeGatesList.jsx";
 import { ReviewActions } from "../ClReview.jsx";
 import ClSubmitActions from "../ClSubmit.jsx";
 import { HOSTING_HELP } from "../HostingField.jsx";
@@ -96,11 +103,53 @@ function sentenceCase(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
+// runNowIsStale is whether t's Run now request is one a run was already
+// started for and gave back (ui.Task.RunNowStale): no newer than the
+// start of one of t's attempts. Dispatch holds such a request to the
+// retry backoff or its suspension's resume time, so the pane keeps Run
+// now offered -- pressing it re-stamps the request, which starts at once
+// -- and says what holds the task rather than promising the next cycle.
+// The attempts are read too, for a server that does not send the flag.
+function runNowIsStale(t) {
+  if (!t?.runNowAt) return false;
+  if (t.runNowStale) return true;
+  const asked = Date.parse(t.runNowAt);
+  if (!Number.isFinite(asked) || !Array.isArray(t.attempts)) return false;
+  return t.attempts.some((a) => {
+    const started = Date.parse(a?.startedAt);
+    return Number.isFinite(started) && asked <= started;
+  });
+}
+
+// runNowHint is what the pane says under Run now while t has a request
+// standing: that it was asked for, or -- for a stale one -- what is
+// actually holding the task.
+function runNowHint(t, stale, frameworkPaused) {
+  if (isTaskPaused(t)) {
+    return "Asked for a run. It starts ahead of the queue once this task is resumed.";
+  }
+  if (!stale) {
+    return "Asked for a run. It starts on the next dispatch cycle, or as soon as there is capacity for it.";
+  }
+  if (frameworkPaused) {
+    return "A run was already started for the last Run now and gave it back. It starts ahead of the queue once the usage-limit pause ends.";
+  }
+  const holding =
+    t.activityBySetup && t.activity
+      ? ` It is ${t.activity.replace(/^waiting: /, "")}.`
+      : " It waits out the retry backoff that run earned.";
+  return `A run was already started for the last Run now and gave it back.${holding} Press Run now to start it now.`;
+}
+
 export default function Actions({ t, config, act, onOpenTask }) {
   const zone = useTimeZone();
   const closable = closablePullRequest(t);
   const frameworkPaused = taskPause(t, config);
+  const staleRunNow = runNowIsStale(t);
+  const runNowRestamps = staleRunNow && !isTaskPaused(t) && !frameworkPaused;
   const [closePullRequest, setClosePullRequest] = useState(false);
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const pendingReviewGates = unsatisfiedReviewGates(t);
   // The wake date beside the Defer button, local to this overlay for
   // closePullRequest's own reason: it is a choice about this deferral,
   // and a date left in a field is not a preference. Empty is the
@@ -394,14 +443,19 @@ export default function Actions({ t, config, act, onOpenTask }) {
           review left findings, or the change touches a path only a person
           may release. Nothing automatic ends it -- only Submit, or Release
           hold, each recorded with who pressed it. */}
+      {(t.pullRequest ||
+        (t.state === "running" && t.ci?.commit) ||
+        t.gateOverride) && <MergeGatesList t={t} onOpenTask={onOpenTask} />}
       {t.humanReviewHold?.length > 0 && t.state !== "closed" && (
         <Alert
           severity="warning"
           sx={{ fontSize: "0.8rem" }}
           data-testid="human-review-hold"
         >
-          <strong>Held for a person&apos;s review.</strong> This change will not
-          merge itself until somebody presses Submit or Release hold.
+          <strong>Held for a person&apos;s review.</strong>{" "}
+          {t.humanReviewHold.every((r) => r.category === "security-findings")
+            ? "Security review left findings: this change will not merge until fixes pass a fresh security review, or an admin overrides the security-review gate."
+            : "This change will not merge itself until somebody presses Submit or Release hold."}
           <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
             {t.humanReviewHold.map((r, i) => (
               <li key={i} data-testid="human-review-reason">
@@ -421,27 +475,31 @@ export default function Actions({ t, config, act, onOpenTask }) {
               </li>
             ))}
           </ul>
-          <AccessGate scope="tasks:write" repo={t.repo}>
-            <Button
-              variant="outlined"
-              color="inherit"
-              size="small"
-              sx={{ mt: 1, whiteSpace: "nowrap" }}
-              data-testid="release-human-review"
-              title="Release the hold without merging: recorded with your name. It merges itself again only where grain would have let it; Submit merges it."
-              onClick={() =>
-                act(
-                  () =>
-                    api(`/api/tasks/${t.id}/human-review/release`, {
-                      method: "POST",
-                    }),
-                  t.id,
-                )
-              }
-            >
-              Release hold
-            </Button>
-          </AccessGate>
+          {t.humanReviewHold.some(
+            (r) => r.category !== "security-findings",
+          ) && (
+            <AccessGate scope="tasks:write" repo={t.repo}>
+              <Button
+                variant="outlined"
+                color="inherit"
+                size="small"
+                sx={{ mt: 1, whiteSpace: "nowrap" }}
+                data-testid="release-human-review"
+                title="Release the hold without merging: recorded with your name. It merges itself again only once every required review gate has passed."
+                onClick={() =>
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}/human-review/release`, {
+                        method: "POST",
+                      }),
+                    t.id,
+                  )
+                }
+              >
+                Release hold
+              </Button>
+            </AccessGate>
+          )}
         </Alert>
       )}
       {t.pullRequest &&
@@ -454,7 +512,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
             data-testid="security-hold"
           >
             {t.securityHold
-              ? `Security hold (${t.securityHold}): this change touches grain's trust boundary, so it merges automatically only once its security review finishes without findings. Submit merges it without waiting.`
+              ? `Security hold (${t.securityHold}): this change touches grain's trust boundary, so all gates must pass before it merges. Submit records your approval and merges automatically once the security review and CI pass.`
               : "This change touches grain's trust boundary and will not merge automatically: read its security review, then Submit."}
             {t.securityReviewTask && (
               <>
@@ -527,6 +585,39 @@ export default function Actions({ t, config, act, onOpenTask }) {
       {t.pullRequest &&
         !t.autoMerge &&
         t.state !== "closed" &&
+        t.reviewFindings?.some((f) => f.gate !== "security-review") && (
+          <Alert
+            severity="warning"
+            sx={{ fontSize: "0.8rem" }}
+            data-testid="review-findings"
+          >
+            <strong>Held on review findings.</strong> A required review left
+            unresolved findings; clearing the gate takes fixes and a clean
+            re-review, or an explicit gate override.
+            <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
+              {t.reviewFindings
+                .filter((f) => f.gate !== "security-review")
+                .map((f, i) => (
+                  <li key={i}>
+                    {f.summary}
+                    {f.reviewTask && (
+                      <>
+                        {" "}
+                        (
+                        <TaskLink id={f.reviewTask} onOpenTask={onOpenTask}>
+                          review task {f.reviewTask}
+                        </TaskLink>
+                        )
+                      </>
+                    )}
+                  </li>
+                ))}
+            </ul>
+          </Alert>
+        )}
+      {t.pullRequest &&
+        !t.autoMerge &&
+        t.state !== "closed" &&
         t.reviewQuestions && (
           <Alert
             severity="info"
@@ -535,8 +626,8 @@ export default function Actions({ t, config, act, onOpenTask }) {
           >
             Review needs your decision: it fixed what it could and left
             questions only you can settle, in the conversation below. Reply with
-            your decision and another run carries it out, or ship it as it
-            stands.{" "}
+            your decision so another run carries it out and a fresh review
+            clears the gate.{" "}
             <TaskLink id={t.reviewQuestions} onOpenTask={onOpenTask}>
               Review: task {t.reviewQuestions}
             </TaskLink>
@@ -550,14 +641,15 @@ export default function Actions({ t, config, act, onOpenTask }) {
       {/* A CL's Submit and Sync, Submit disabled with its reasons until
           the CL is submittable (ClSubmit.jsx). */}
       {t.clSubmit && <ClSubmitActions t={t} act={act} />}
-      {t.pullRequest && !t.autoMerge && (
+      {needsHumanApproval(t) && (
         <AccessGate scope="tasks:write" repo={t.repo}>
           <Button
-            variant={t.reviewQuestions ? "outlined" : "contained"}
+            variant="contained"
+            data-testid="submit-task"
             title={
-              t.reviewQuestions
-                ? "Submit the change as it stands, leaving the review's questions open."
-                : undefined
+              pendingReviewGates.length > 0
+                ? "Record your approval now. Submit never skips or cancels a review: grain merges automatically once every required review and CI check pass."
+                : "Approve and put this pull request on grain's merge queue."
             }
             onClick={() =>
               act(
@@ -566,7 +658,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
               )
             }
           >
-            {t.reviewQuestions ? "Ship as is" : "Submit"}
+            {submitButtonLabel(t)}
           </Button>
         </AccessGate>
       )}
@@ -834,16 +926,34 @@ export default function Actions({ t, config, act, onOpenTask }) {
         (t.pullRequest || (t.state === "running" && t.ci?.commit)) &&
         forceMergeOffered(config, t) && (
           <AccessGate scope="merge:force" repo={t.repo}>
-            <Button
-              variant="outlined"
-              color="warning"
-              title="Merge this change now, overriding the merge queue's own decision. A reason is required and is recorded on the task and on the pull request, along with what was not green at the time. A branch that does not merge cleanly is still refused: no override can authorise a merge GitHub will not perform."
-              onClick={forceMerge}
-            >
-              Force merge
-            </Button>
+            {pendingReviewGates.length > 0 ? (
+              <Button
+                variant="outlined"
+                color="warning"
+                data-testid="override-review-gates"
+                title="Explicitly override unsatisfied review gates and merge now. Requires merge:force, confirming the pull request number, and a recorded reason."
+                onClick={() => setOverrideOpen(true)}
+              >
+                {overrideReviewButtonLabel(pendingReviewGates)}
+              </Button>
+            ) : (
+              <Button
+                variant="outlined"
+                color="warning"
+                title="Merge this change now, overriding the merge queue's own decision. A reason is required and is recorded on the task and on the pull request, along with what was not green at the time. A branch that does not merge cleanly is still refused: no override can authorise a merge GitHub will not perform."
+                onClick={forceMerge}
+              >
+                Force merge
+              </Button>
+            )}
           </AccessGate>
         )}
+      <GateOverrideDialog
+        open={overrideOpen}
+        onClose={() => setOverrideOpen(false)}
+        t={t}
+        onSubmit={(fn) => act(fn, t.id)}
+      />
       {/* Retry also resumes a turn an operator stopped (ui.Client.Retry),
           which is what the stopped task's status line and its merge-queue
           row ("reply or press Retry to resume") offer. */}
@@ -880,7 +990,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
         <AccessGate scope="dispatch:write" repo={t.repo}>
           <Button
             variant="outlined"
-            disabled={Boolean(t.runNowAt)}
+            disabled={Boolean(t.runNowAt) && !runNowRestamps}
             title={
               t.pullRequest
                 ? `Put an agent on this task next, ahead of the queue. Work continues on the branch ${t.pullRequest} is open from, and nothing merges it while that run is in flight.`
@@ -900,12 +1010,11 @@ export default function Actions({ t, config, act, onOpenTask }) {
       {/* The seconds between the click and a dispatch cycle picking the
           task up, which is the one stretch where a button that worked
           looks like one that did not (ui.TaskDetail.RunNowAt -- the
-          request, cleared the moment its run starts). */}
+          request, cleared the moment its run starts) -- or, for a request
+          a run already gave back, what is holding the task now. */}
       {t.runNowAt && t.state !== "running" && (
-        <p className="hint">
-          {isTaskPaused(t)
-            ? "Asked for a run. It starts ahead of the queue once this task is resumed."
-            : "Asked for a run. It starts on the next dispatch cycle, or as soon as there is capacity for it."}
+        <p className="hint run-now-hint">
+          {runNowHint(t, staleRunNow, frameworkPaused)}
         </p>
       )}
       {/* Manual mode: under a pause Run now passes, this is the button

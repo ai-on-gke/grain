@@ -26,6 +26,23 @@ export const API_GRANT_PREFIX = "api:";
 export const API_CAPABILITY_SERVER = "https://grain.dev/capabilities/api";
 export const API_REF_PREFIX = `${API_CAPABILITY_SERVER}#`;
 
+// API_ARGS_SCHEMA is the with: schema every method on
+// https://grain.dev/capabilities/api declares (grainserver.buildAPIServer):
+// one optional repo limit, so GrantsPicker can render the inline repo field
+// before /api/capability-methods finishes loading (or in offline unit tests).
+export const API_ARGS_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    repo: {
+      type: "string",
+      pattern: "^([A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+      description:
+        "Limit the grant to this repository, owner/name; omit for every repository.",
+    },
+  },
+};
+
 function validRepoLimit(repo) {
   return (
     typeof repo === "string" &&
@@ -37,14 +54,42 @@ function validRepoLimit(repo) {
 }
 
 // isApiGrant reports whether id is an agent API grant name at all,
-// valid or not, in either its api:<name>[@repo] or
-// https://grain.dev/capabilities/api#<name>[={"repo":...}] spelling: a
+// valid or not, in either its canonical
+// https://grain.dev/capabilities/api#<name>[={"repo":...}] spelling (what
+// slice 3 writes) or the legacy api:<name>[@repo] one (unmigrated store
+// rows, .grain/ declarations and GET /api/config's metadata rows): a
 // picker leaves every one of them to ApiGrantPicker / GrantsPicker,
 // which can also remove one that no longer parses.
 export function isApiGrant(id) {
   if (typeof id !== "string") return false;
   const s = id.trim();
   return s.startsWith(API_GRANT_PREFIX) || s.startsWith(API_REF_PREFIX);
+}
+
+// isLegacyApiGrant reports whether id is an api grant in the legacy
+// api:<name>[@repo] spelling only. GrantsPicker edits canonical
+// https://grain.dev/capabilities/api#<name> grants among the capability
+// server methods (with their {repo} argument), so the forms that feed it
+// split a grant list on this rather than on isApiGrant: a canonical api
+// grant goes with the method refs, and only a legacy one with the api ids.
+export function isLegacyApiGrant(id) {
+  return isApiGrant(id) && !isApiCapabilityRef(id);
+}
+
+// isApiCapabilityRef reports whether id is a canonical
+// https://grain.dev/capabilities/api#<what>[=<json>] grant string.
+export function isApiCapabilityRef(id) {
+  if (typeof id !== "string") return false;
+  const trimmed = id.trim();
+  const eq = trimmed.indexOf("=");
+  const ref = eq < 0 ? trimmed : trimmed.slice(0, eq);
+  return ref.startsWith(API_REF_PREFIX);
+}
+
+// apiRef is the canonical capability reference for shortName ("ci:write" ->
+// "https://grain.dev/capabilities/api#ci:write").
+export function apiRef(shortName) {
+  return `${API_REF_PREFIX}${shortName}`;
 }
 
 // withoutApiRows is a capability listing with the api rows taken out,
@@ -120,7 +165,7 @@ export function apiShortName(id) {
 
 // apiArea is a scope's area -- "tasks" for tasks:write -- which is what
 // the picker groups scopes under.
-export function apiArea(row) {
+function apiArea(row) {
   const scope = apiShortName(row.id);
   const colon = scope.indexOf(":");
   return colon < 0 ? scope : scope.slice(0, colon);

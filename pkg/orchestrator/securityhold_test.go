@@ -159,19 +159,72 @@ func TestSecurityHoldIgnoresAChangeThatWasNeverGoingToMergeItself(t *testing.T) 
 	store, ctx := openStore(t)
 	sim, client := newSim(t, "acme", "widgets", "main")
 	task := finishTouching(t, ctx, store, sim, "t1", "pkg/gitproxy/proxy.go", false)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		model.DeclineAutoMerge(tk, "author")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
 	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
 		t.Fatalf("ProcessResult: %v", err)
 	}
 	got := reloaded(t, ctx, store, task.ID)
-	if linkOf(got, model.LinkSecurityReviewTask) != "" {
-		t.Fatalf("a change already waiting for a human got a review filed: %+v", got.Links)
+	reviewID := linkOf(got, model.LinkSecurityReviewTask)
+	if reviewID == "" || linkOf(got, model.LinkSecurityHold) == "" {
+		t.Fatalf("a trust-boundary change with auto-merge off still requires a security review gate: %+v", got.Links)
+	}
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded(t, ctx, store, task.ID).AutoMerge {
+		t.Fatal("a clean security review must not bypass auto_merge: false")
 	}
 }
 
-// Baselines and suppressions can never auto-merge: the review is filed,
-// but nothing it does gives auto-merge back.
+// A task filed without auto-merge -- no explicit decline, just never asked
+// to merge itself -- waits for a person's Submit as it always has. Its
+// trust-boundary change is now reviewed before that Submit, but the
+// review passing is the security-review gate passing, not the person's:
+// it must not hand the change an auto-merge it never had.
+func TestSecurityHoldOnAChangeFiledWithoutAutoMergeStillWaitsForSubmit(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	task := finishTouching(t, ctx, store, sim, "t1", "pkg/gitproxy/proxy.go", false)
+
+	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	reviewID := linkOf(got, model.LinkSecurityReviewTask)
+	if reviewID == "" || linkOf(got, model.LinkSecurityHold) == "" {
+		t.Fatalf("a trust-boundary change with auto-merge off still requires a security review gate: %+v", got.Links)
+	}
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got = reloaded(t, ctx, store, task.ID)
+	if got.AutoMerge {
+		t.Fatalf("a clean security review turned on auto-merge for a change filed without it: links=%+v", got.Links)
+	}
+	var approval *model.MergeGate
+	for _, g := range model.ComputeMergeGates(got, nil, nil) {
+		if g.ID == model.GateApproval {
+			approval = &g
+		}
+	}
+	if approval == nil || approval.State.Satisfied() {
+		t.Fatalf("the person's approval gate is not standing after the review passed: %+v", approval)
+	}
+}
+
+// Baselines and suppressions can never auto-merge: the review is filed as its
+// own gate, and when it finishes clean the human-only gate still holds.
 func TestSecurityHoldOnSuppressionsIsNeverReleasedByAReview(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
@@ -184,7 +237,7 @@ func TestSecurityHoldOnSuppressionsIsNeverReleasedByAReview(t *testing.T) {
 	}
 	got := reloaded(t, ctx, store, task.ID)
 	reviewID := linkOf(got, model.LinkSecurityReviewTask)
-	if got.AutoMerge || linkOf(got, model.LinkSecurityHold) != "" || reviewID == "" {
+	if got.AutoMerge || linkOf(got, model.LinkSecurityHold) == "" || linkOf(got, model.LinkHumanOnlyHold) == "" || reviewID == "" {
 		t.Fatalf("automerge=%v links=%+v", got.AutoMerge, got.Links)
 	}
 
@@ -397,8 +450,8 @@ func TestSecurityHoldOnAnUnreadableFileListIsNeverReleasedByAReview(t *testing.T
 	if got.AutoMerge || reviewID == "" {
 		t.Fatalf("an unclassifiable change was not held: automerge=%v links=%+v", got.AutoMerge, got.Links)
 	}
-	if linkOf(got, model.LinkSecurityHold) != "" {
-		t.Errorf("the hold on an unclassifiable change is marked releasable: links=%+v", got.Links)
+	if linkOf(got, model.LinkSecurityHold) == "" || linkOf(got, model.LinkHumanOnlyHold) == "" {
+		t.Errorf("expected both security-review and human-only gates on an unclassifiable change: links=%+v", got.Links)
 	}
 
 	completeReview(t, ctx, store, reviewID)
@@ -578,11 +631,11 @@ func TestSecurityReviewIsClosedWhenTheChangeItReviewsMerges(t *testing.T) {
 	// Its silence must not read as a pass: the merged change says the
 	// review never finished, in grain and on the pull request.
 	got := reloaded(t, ctx, store, task.ID)
-	if notes := strings.Join(commentBodies(t, ctx, store, task.ID), "\n"); !strings.Contains(notes, "closed unfinished") ||
+	if notes := strings.Join(commentBodies(t, ctx, store, task.ID), "\n"); !strings.Contains(notes, "nobody has reviewed this change's security") ||
 		!strings.Contains(notes, reviewID) {
 		t.Errorf("the merged change does not say its review was cut short: %s", notes)
 	}
-	if pr := strings.Join(prCommentBodies(t, client, got), "\n"); !strings.Contains(pr, "closed unfinished") {
+	if pr := strings.Join(prCommentBodies(t, client, got), "\n"); !strings.Contains(pr, "nobody has reviewed this change's security") {
 		t.Errorf("the pull request does not say its review was cut short: %s", pr)
 	}
 }
@@ -621,6 +674,140 @@ func TestSecurityReviewThatFinishedIsLeftAloneByTheMerge(t *testing.T) {
 	}
 	if notes := strings.Join(commentBodies(t, ctx, store, task.ID), "\n"); strings.Contains(notes, "closed unfinished") {
 		t.Errorf("the change was told a finished review was cut short: %s", notes)
+	}
+}
+
+// Task 3546 / 3827's shape: a task opens and merges PR #1 in its target
+// repository, reopens and pushes a second trust-boundary pull request PR #2 in
+// the same repository. SyncPullRequests must neither close PR #2's security
+// review as unfinished nor re-close the task on PR #1's settled LinkFixes link
+// until PR #2 itself settles.
+func TestReopenedTaskSecondPullRequestKeepsItsSecurityReviewAndTaskOpenUntilSecondPRSettles(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	task := finishTouching(t, ctx, store, sim, "t3546", "README.md", true)
+	branch := model.BranchName(task.ID)
+	run(t, sim.BareRepo, "git", "branch", branch+"-pr1", branch)
+
+	res1 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed first PR"})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, res1, "t3546-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult #1: %v", err)
+	}
+	setMergeable(sim, true)
+	sim.CheckRuns[branch] = greenCheck
+
+	mergeTime1 := baseTime.Add(10 * time.Minute)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, mergeTime1); err != nil {
+		t.Fatalf("SyncPullRequests (merge PR #1): %v", err)
+	}
+	// Real GitHub freezes a merged pull request's head commit at merge time
+	// rather than resolving refs/heads/<branch> after later pushes.
+	for i := range sim.PullRequests {
+		if sim.PullRequests[i].Merged && sim.PullRequests[i].Head == branch {
+			sim.PullRequests[i].Head = branch + "-pr1"
+		}
+	}
+	obs1, err := store.GetObservation(ctx, task.ID)
+	if err != nil || obs1 == nil || obs1.ClosedAt == nil || obs1.PrMergedAt == nil {
+		t.Fatalf("observation after PR #1 merged = %+v (err %v), want ClosedAt and PrMergedAt set", obs1, err)
+	}
+	pr1 := model.TaskPullRequest(reloaded(t, ctx, store, task.ID))
+	if pr1 == nil || pr1.Number <= 0 {
+		t.Fatalf("first pull request = %v, want a positive PR number", pr1)
+	}
+
+	// Reopen the task (clearing ClosedAt and CompletedAt while PrMergedAt from
+	// PR #1 still stands on Observation), push a trust-boundary change on the
+	// branch, and finish a second run that opens PR #2 in the same repository.
+	reopenTime := baseTime.Add(20 * time.Minute)
+	if err := store.ObserveField(ctx, task.ID, reopenTime, func(o *model.Observation) {
+		o.ClosedAt = nil
+		o.CompletedAt = nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pushBranch(t, sim.BareRepo, branch)
+	pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "second change on trust boundary\n")
+	task = reloaded(t, ctx, store, task.ID)
+	res2 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed second PR"})
+	finishTime2 := baseTime.Add(30 * time.Minute)
+	if err := orchestrator.ProcessResult(ctx, store, client, task, res2, "t3546-2", finishTime2); err != nil {
+		t.Fatalf("ProcessResult #2: %v", err)
+	}
+
+	held := reloaded(t, ctx, store, task.ID)
+	pr2 := model.TaskPullRequest(held)
+	if pr2 == nil || pr2.Number <= pr1.Number {
+		t.Fatalf("active pull request = %v, want newer than %v (links %+v)", pr2, pr1, held.Links)
+	}
+	reviewID := linkOf(held, model.LinkSecurityReviewTask)
+	if reviewID == "" {
+		t.Fatalf("expected security review filed for PR #2, got links %+v", held.Links)
+	}
+	reviewTask := reloaded(t, ctx, store, reviewID)
+	if gotPR := linkOf(reviewTask, model.LinkReviewsPullRequest); gotPR != pr2.String() {
+		t.Fatalf("review LinkReviewsPullRequest = %q, want %q", gotPR, pr2)
+	}
+	obsAfterLink, err := store.GetObservation(ctx, task.ID)
+	if err != nil || obsAfterLink == nil || obsAfterLink.PrMergedAt != nil || obsAfterLink.ClosedAt != nil {
+		t.Fatalf("observation after opening PR #2 = %+v (err %v), want stale PrMergedAt cleared and task open", obsAfterLink, err)
+	}
+	links, err := store.OpenPullRequestLinks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].TaskID != task.ID || links[0].PullRequest != pr2.String() {
+		t.Fatalf("OpenPullRequestLinks = %+v, want only %s", links, pr2)
+	}
+
+	setMergeable(sim, true)
+	sim.CheckRuns[branch] = greenCheck
+
+	// Across repeated sync cycles while PR #2's security review is still open,
+	// neither the review nor the task may be closed by PR #1's settled state.
+	for i := 1; i <= 3; i++ {
+		tick := finishTime2.Add(time.Duration(i) * time.Minute)
+		if err := orchestrator.SyncSecurityHolds(ctx, store, client, tick); err != nil {
+			t.Fatalf("cycle %d SyncSecurityHolds: %v", i, err)
+		}
+		if err := orchestrator.SyncPullRequests(ctx, store, client, tick); err != nil {
+			t.Fatalf("cycle %d SyncPullRequests: %v", i, err)
+		}
+		if st, err := store.State(ctx, reviewID); err != nil || st == model.StateClosed {
+			t.Fatalf("cycle %d: review state = %q (%v), want open while PR #2 awaits review", i, st, err)
+		}
+		if st, err := store.State(ctx, task.ID); err != nil || st != model.StateAwaitingSubmit {
+			t.Fatalf("cycle %d: task state = %q (%v), want awaiting_submit while held", i, st, err)
+		}
+		if notes := strings.Join(commentBodies(t, ctx, store, reviewID), "\n"); strings.Contains(notes, "unfinished") {
+			t.Fatalf("cycle %d: review prematurely closed unfinished: %s", i, notes)
+		}
+	}
+
+	// Once PR #2's security review completes cleanly, the hold releases, PR #2
+	// merges, and only then does the task close with PR #2's merge recorded.
+	completeReview(t, ctx, store, reviewID)
+	settleTime := finishTime2.Add(10 * time.Minute)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, settleTime); err != nil {
+		t.Fatalf("SyncSecurityHolds after review: %v", err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, settleTime); err != nil {
+		t.Fatalf("SyncPullRequests after review: %v", err)
+	}
+	detail2, err := client.GetPullRequest(pr2.Repo.Owner, pr2.Repo.Name, pr2.Number)
+	if err != nil || !detail2.Merged {
+		t.Fatalf("PR #2 detail = %+v (err %v), want merged", detail2, err)
+	}
+	if st, err := store.State(ctx, task.ID); err != nil || st != model.StateClosed {
+		t.Fatalf("task state after PR #2 merged = %q (%v), want closed", st, err)
+	}
+	finalObs, err := store.GetObservation(ctx, task.ID)
+	if err != nil || finalObs == nil || finalObs.PrMergedAt == nil || finalObs.ClosedAt == nil {
+		t.Fatalf("final observation = %+v (err %v), want PrMergedAt and ClosedAt set for PR #2", finalObs, err)
+	}
+	if notes := strings.Join(commentBodies(t, ctx, store, reviewID), "\n"); strings.Contains(notes, "unfinished") {
+		t.Errorf("cleanly completed review was marked unfinished: %s", notes)
 	}
 }
 
@@ -718,6 +905,54 @@ func TestSecurityHoldCarriesAClearanceToAHeadThatChangedNoTrustBoundaryPatch(t *
 	if !mergedBranch(sim, branch) {
 		t.Fatalf("a reviewed change whose head moved off the list did not merge: links=%+v",
 			reloaded(t, ctx, store, task.ID).Links)
+	}
+}
+
+// A clearance carried to a head that changed no trust-boundary patch is
+// the review's to carry, not the person's: their Submit was about the head
+// they read, and the files that changed since -- off the list, but perhaps
+// watched by a `human: required` trigger judged next -- are ones they never
+// saw. The carry leaves no approval behind naming the new head.
+func TestCarriedClearanceDoesNotCarryAPersonsApprovalToTheNewHead(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	task := finishTouching(t, ctx, store, sim, "t1", "pkg/ui/server.go", true)
+	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	reviewID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	_, read, ok := strings.Cut(linkOf(reloaded(t, ctx, store, task.ID), model.LinkTrustBoundaryCleared), "@")
+	if !ok || read == "" {
+		t.Fatalf("no clearance recorded after the clean review: %+v", reloaded(t, ctx, store, task.ID).Links)
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkHumanApproved,
+			Target: model.HumanSubmittedByTarget("alice", baseTime.Add(time.Hour), read)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	branch := model.BranchName(task.ID)
+	pushFile(t, sim.BareRepo, branch, "docs/notes.md", "changed after alice read it\n")
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(2*time.Hour)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	_, carriedTo, _ := strings.Cut(linkOf(got, model.LinkTrustBoundaryCleared), "@")
+	if carriedTo == "" || strings.EqualFold(carriedTo, read) {
+		t.Fatalf("the clearance was not carried to the new head: %+v", got.Links)
+	}
+	for _, kind := range []model.LinkKind{model.LinkHumanApproved, model.LinkHumanSubmitted} {
+		if marker := linkOf(got, kind); marker != "" && strings.EqualFold(model.HumanSubmittedHead(marker), carriedTo) {
+			t.Fatalf("alice's approval of %s was carried to %s, which she never read: %s", read, carriedTo, marker)
+		}
 	}
 }
 

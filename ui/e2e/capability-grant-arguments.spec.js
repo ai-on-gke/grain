@@ -110,7 +110,7 @@ test("grants a method with arguments on a new task, twice, and refuses an invali
   );
 
   // Add another: the same method, different arguments.
-  await grants.getByRole("button", { name: "Add another" }).click();
+  await grants.getByRole("button", { name: "Add another cloud-key" }).click();
   section = draftSection(grants);
   await expect(section).toBeVisible();
   await pickAccount(page, section, "prod");

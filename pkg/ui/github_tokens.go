@@ -78,7 +78,9 @@ type gitHubTokenInfo struct {
 	// Connections is the scope of every deployment git connection naming
 	// this credential ("" for a host default, "owner" or "owner/repo"),
 	// which is what makes deleting one a question rather than a click.
-	Connections []string `json:"connections,omitempty"`
+	Connections          []string `json:"connections,omitempty"`
+	ConnectionCount      int      `json:"connectionCount,omitempty"`
+	ConnectionsTruncated bool     `json:"connectionsTruncated,omitempty"`
 	// Capability is the id a task holds to push through this token.
 	Capability string `json:"capability,omitempty"`
 	// MintError is an App-backed credential this deployment cannot
@@ -122,7 +124,10 @@ type gitHubTokensResponse struct {
 	DefaultName string `json:"defaultName,omitempty"`
 	// RestartRequired is any row's NeedsRestart, so the pane can show one
 	// banner rather than reading every row to find out whether to.
-	RestartRequired bool `json:"restartRequired"`
+	RestartRequired bool   `json:"restartRequired"`
+	Total           int    `json:"total,omitempty"`
+	Truncated       bool   `json:"truncated,omitempty"`
+	NextCursor      string `json:"nextCursor,omitempty"`
 }
 
 // deploymentGitConnections is the deployment's git connections, nil when
@@ -328,7 +333,47 @@ func (c *Client) gitCredentialGrantHolders(ctx context.Context, name string) ([]
 // deployment's GitHub credentials, the connections naming them and the
 // local directory they live in -- a system administrator's to read.
 func (s *Server) handleListGitHubTokens(w http.ResponseWriter, r *http.Request) {
-	s.respondWithGitHubTokens(w, r)
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	credentials := s.tasks.Config.Credentials
+	if credentials == nil {
+		writeJSON(w, http.StatusOK, gitHubTokensResponse{Enabled: false, Tokens: []gitHubTokenInfo{}})
+		return
+	}
+	tokens := s.tasks.gitHubTokens(r.Context())
+	restart := false
+	for _, token := range tokens {
+		restart = restart || token.NeedsRestart
+	}
+	resp := gitHubTokensResponse{
+		Enabled:         true,
+		Dir:             credentials.Dir(),
+		Tokens:          tokens,
+		DefaultName:     s.tasks.defaultGitCredential(s.tasks.deploymentGitConnections(r.Context())),
+		RestartRequired: restart,
+	}
+	if list.Paged {
+		matched := filterList(tokens, func(t gitHubTokenInfo) bool {
+			keys := append([]string{t.Name, t.Capability}, t.Connections...)
+			return list.matches(keys...)
+		})
+		page := pageOf(matched, list)
+		for i := range page.Items {
+			page.Items[i].ConnectionCount = len(page.Items[i].Connections)
+			if len(page.Items[i].Connections) > listPageSmall {
+				page.Items[i].Connections = page.Items[i].Connections[:listPageSmall]
+				page.Items[i].ConnectionsTruncated = true
+			}
+		}
+		resp.Tokens = page.Items
+		resp.Total = page.Total
+		resp.Truncated = page.Truncated
+		resp.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type setGitHubTokenRequest struct {

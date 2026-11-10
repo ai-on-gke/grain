@@ -27,7 +27,7 @@ import ModelsSection from "./components/settings/ModelsSection.jsx";
 import TasksSection from "./components/settings/TasksSection.jsx";
 import GitSection from "./components/settings/GitSection.jsx";
 import UpgradeSection from "./components/settings/UpgradeSection.jsx";
-import RegistrySection from "./components/settings/RegistrySection.jsx";
+import HubSection from "./components/settings/HubSection.jsx";
 import CLISection from "./components/settings/CLISection.jsx";
 
 // Models and Git read their own /api/settings and /api/deployment; an
@@ -77,7 +77,7 @@ const SECTIONS = {
   tasks: <TasksSection s={s} config={{}} />,
   git: <GitSection showError={vi.fn()} />,
   upgrade: <UpgradeSection config={{}} showError={vi.fn()} />,
-  registry: <RegistrySection s={s} />,
+  registry: <HubSection s={s} />,
   cli: <CLISection s={s} config={{}} />,
 };
 

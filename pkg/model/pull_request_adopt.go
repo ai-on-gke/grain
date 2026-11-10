@@ -15,6 +15,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -176,11 +177,25 @@ type AdoptPullRequestInput struct {
 	Spec   string
 	Design string
 	// Requester is who the shepherd is filed for: its Origin, and its
-	// Approval when Approved.
+	// Approval when Approved (unless Approval overrides it, e.g. for
+	// owner-trust).
 	Requester Attribution
+	// Approval, when non-nil and Approved is true, records who approved a
+	// newly filed shepherd task instead of Requester (such as
+	// OwnerTrustPrincipal on behalf of an external credential's owner).
+	Approval *Attribution
 	// Approved files the shepherd queued; false files it proposed, and
 	// grain files nothing on the pull request until a person approves it.
 	Approved bool
+	// AllowAutoMerge permits turning AutoMerge on when adopting a trusted
+	// collaborator's pull request. True only when the requester is an
+	// unlimited human principal -- never an agent, external credential,
+	// service account, delegated app, or limited role.
+	AllowAutoMerge bool
+	// CheckApprove, when non-nil, gates approving an already-stored
+	// unapproved shepherd task in updateAdoptedShepherd under the same
+	// role ceiling and approval rails as POST /api/tasks/{id}/approve.
+	CheckApprove func(ctx context.Context, task Task) error
 }
 
 // PullRequestAdoption is POST /api/pull-requests/adopt's answer.
@@ -239,6 +254,9 @@ type PullRequestReport struct {
 	// MergeQueue is "queued", "held: review", "held: ci", "merged" or
 	// "not-queued".
 	MergeQueue string `json:"mergeQueue"`
+	// Gates lists each required merge gate on the pull request and its
+	// current state.
+	Gates []MergeGate `json:"gates,omitempty"`
 }
 
 // PullRequestShepherd is the shepherd half of a PullRequestReport.

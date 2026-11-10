@@ -67,13 +67,39 @@ test("adds a permission set, tests it, and grants the set on a task", async ({
   const config = card.getByTestId("capability-server-config");
 
   // Admin credential source defaults to ambient; add a permission set directly.
+  // New sets default to "token (recommended, no keys)" (managed token mode).
   await addListItem(config, "permission_sets", "permission_sets");
+  const credCombo = config
+    .locator(".MuiFormControl-root", {
+      has: page.locator('[data-arg="permission_sets[2].credential"]'),
+    })
+    .last()
+    .getByRole("combobox");
+  await expect(credCombo).toHaveText("token (recommended, no keys)");
+  // Assert layout geometry: the credential select fits cleanly inside the
+  // permission_sets group box with no horizontal overflow.
+  const listBox = await config
+    .locator('[data-arg-list="permission_sets"]')
+    .boundingBox();
+  const comboBox = await credCombo.boundingBox();
+  expect(comboBox.x).toBeGreaterThanOrEqual(listBox.x);
+  expect(comboBox.x + comboBox.width).toBeLessThanOrEqual(
+    listBox.x + listBox.width,
+  );
   await field(config, "permission_sets[2].name").fill("e2e-reader");
   await field(config, "permission_sets[2].project").fill("e2e-project");
   await addListItem(config, "permission_sets[2].roles", "roles");
   await field(config, "permission_sets[2].roles[0]").fill(
     "roles/storage.objectViewer",
   );
+
+  // Validation explains the modes when pool_max is combined with token mode.
+  await field(config, "permission_sets[2].pool_max").fill("2");
+  await config.getByRole("button", { name: "Save server settings" }).click();
+  await expect(config).toContainText(
+    "credential: token and pool_max are exclusive",
+  );
+  await field(config, "permission_sets[2].pool_max").fill("");
 
   await config.getByRole("button", { name: "Save server settings" }).click();
   await expect(config).toHaveCount(0);

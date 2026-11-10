@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package grainclient provides a typed Go client wrapping pkg/registry/api and
+// Package grainclient provides a typed Go client wrapping pkg/hub/api and
 // Grain's public HTTP, SSE integration-event, externalRef rollup, and
 // committed-context APIs.
 package grainclient
@@ -21,10 +21,10 @@ import (
 	"errors"
 	"time"
 
-	registryapi "github.com/ai-on-gke/grain/pkg/registry/api"
+	registryapi "github.com/ai-on-gke/grain/pkg/hub/api"
 )
 
-// Re-exported types and constants from github.com/ai-on-gke/grain/pkg/registry/api
+// Re-exported types and constants from github.com/ai-on-gke/grain/pkg/hub/api
 // so callers in grain-plc can work through a single client package.
 type (
 	Entry               = registryapi.Entry

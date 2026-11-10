@@ -141,7 +141,10 @@ type InboxItem struct {
 
 // InboxResponse is GET /api/inbox's body.
 type InboxResponse struct {
-	Items []InboxItem `json:"items"`
+	Items      []InboxItem `json:"items"`
+	Total      int         `json:"total,omitempty"`
+	Truncated  bool        `json:"truncated,omitempty"`
+	NextCursor string      `json:"nextCursor,omitempty"`
 }
 
 // handleInbox answers GET /api/inbox?repo=&kind=: the questions and
@@ -149,6 +152,11 @@ type InboxResponse struct {
 // notifications, pull requests held at a gate that needs a person, and
 // unapproved proposals -- only on repositories the caller may read.
 func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	q := r.URL.Query()
 	kind := strings.TrimSpace(q.Get("kind"))
 	if kind != "" && !slices.Contains(InboxKinds, kind) {
@@ -165,24 +173,35 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	out := InboxResponse{Items: []InboxItem{}}
+	filtered := make([]InboxItem, 0, len(items))
 	for _, it := range items {
-		if kind == "" || it.Kind == kind {
-			out.Items = append(out.Items, it)
+		if (kind == "" || it.Kind == kind) && list.matches(it.Task, it.Title, it.Repo, it.Summary, it.Subject, it.PR) {
+			filtered = append(filtered, it)
 		}
+	}
+	out := InboxResponse{Items: filtered}
+	if list.Paged {
+		page := pageOf(filtered, list)
+		out.Items = page.Items
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSON(w, http.StatusOK, out)
 }
 
 // inboxReadable is which repositories the caller's tasks:read reaches:
-// an external-agent token's own grants, and everything for anyone else
-// (a person, the local CLI), whose task list is already the one they
-// may see.
+// an external-agent token's own grants; a limited role's, or an agent
+// run's, as the event stream reads them (eventsReadable); and everything
+// for anyone else (the access code, the local CLI). A role limited to
+// some repositories was once shown every repository's inbox -- titles,
+// questions and pending secret names included (task 3981).
 func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 	tok := externalTokenFromContext(r.Context())
 	if tok == nil {
-		return func(string) bool { return true }
+		readable, _ := s.eventsReadable(r)
+		return readable
 	}
 	_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 	if err != nil {
@@ -217,6 +236,11 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			summary := t.QuestionSummary
 			if summary == "" {
 				summary = "reply to run it again, or acknowledge to close it"
+			}
+			// A question's item links to the question itself, not just
+			// to the top of the task's conversation.
+			if obs != nil && obs.PendingQuestionCommentID != nil {
+				path = model.CommentPath(t.ID, *obs.PendingQuestionCommentID)
 			}
 			questions = append(questions, InboxItem{Kind: InboxQuestion, Task: t.ID, Title: t.Title, Repo: t.Repo,
 				Summary: summary, Path: path, At: t.EndedAt})

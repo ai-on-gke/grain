@@ -238,6 +238,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		AgentBackends:               ptr([]model.AgentBackend{{ID: "backend-1", Name: "Primary", Framework: model.AgentFrameworks()[0], Models: []string{"gemini-3.1-pro"}}}),
 		DefaultModel:                ptr("gemini-3.1-pro"),
 		PromptExtension:             ptr("be brief"),
+		Skills:                      model.NewSkillsConfig(ptr(true), ptr([]string{".claude/skills"})),
 		RepairTemplateID:            ptr("custom-repair-template"),
 		TaskBranchTemplate:          ptr("alice/grain/task-{id}"),
 		DeploymentID:                ptr("prod"),
@@ -245,7 +246,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		DefaultAdmission:            ptr("bypass"),
 		DefaultHosting:              ptr("console"),
 		SettingsLocked:              ptr(true),
-		Registry: &model.RegistryConfig{
+		Hub: &model.HubConfig{
 			URL:         "https://registry.example.com",
 			Entry:       "grain-dev",
 			DisplayName: "Dev Grain",

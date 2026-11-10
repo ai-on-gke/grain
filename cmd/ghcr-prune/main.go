@@ -157,7 +157,7 @@ func run(args []string, out io.Writer) error {
 	usernameFlag := fs.String("username", "", "Docker Hub login username when -registry=docker.io (default: DOCKERHUB_USERNAME, PACKAGE_PUBLISH_USERNAME, or grainai)")
 	owner := fs.String("owner", "", "GitHub owner of the source repository (and GHCR package owner when -registry=ghcr.io)")
 	repo := fs.String("repo", "", "GitHub repository name for live branch lookup (and GHCR package prefix when -registry=ghcr.io)")
-	packages := fs.String("packages", "grain,sandbox,sandbox-base,sandbox-k8s,sandbox-k8s-base,registry", "comma-separated package names, relative to the repository")
+	packages := fs.String("packages", "grain,sandbox,sandbox-base,sandbox-k8s,sandbox-k8s-base,hub,registry", "comma-separated package names, relative to the repository")
 	tokenFlag := fs.String("token", "", "registry token (DOCKER_PAT/PACKAGE_PUBLISH_TOKEN on Docker Hub; GITHUB_TOKEN/GHCR_TOKEN on ghcr.io)")
 	// 48 hours -- and, on top of it, the most recent build of every
 	// branch that still exists, which is what a branch tag amounts to

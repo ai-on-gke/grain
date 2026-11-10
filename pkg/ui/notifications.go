@@ -476,17 +476,25 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 		}
 		f.After = after
 	}
-	list, err := s.tasks.ListNotifications(r.Context(), f)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
+	notifications, err := s.tasks.ListNotifications(r.Context(), f)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	notifications = filterList(notifications, func(n model.Notification) bool {
+		return list.matches(n.Subject, n.Title)
+	})
 	if strings.EqualFold(strings.TrimSpace(q.Get("fields")), "list") {
-		for i := range list {
-			list[i].Body = listNotificationBody(list[i])
+		for i := range notifications {
+			notifications[i].Body = listNotificationBody(notifications[i])
 		}
 	}
-	writeJSON(w, http.StatusOK, list)
+	writeList(w, notifications, list)
 }
 
 // pendingReleaseFamily is the release train's "approve this release"

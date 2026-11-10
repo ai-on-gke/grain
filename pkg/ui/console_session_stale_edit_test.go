@@ -110,7 +110,7 @@ func TestAdoptShippedDefaultsFromAStaleTabKeepsAGrantMadeSince(t *testing.T) {
 	}
 
 	after := directorRow(t, srv)
-	if !slices.Contains(after.Capabilities, tabBGrant) {
+	if !slices.Contains(after.Capabilities, model.CanonicalGrantKey(tabBGrant)) {
 		t.Errorf("after tab A adopted shipped defaults, Capabilities = %v: tab B's %s was lost", after.Capabilities, tabBGrant)
 	}
 	for _, want := range tabA.MissingShippedDefaults {
@@ -119,7 +119,7 @@ func TestAdoptShippedDefaultsFromAStaleTabKeepsAGrantMadeSince(t *testing.T) {
 		}
 	}
 	for _, kept := range tabA.Capabilities {
-		if !slices.Contains(after.Capabilities, kept) {
+		if !slices.Contains(after.Capabilities, model.CanonicalGrantKey(kept)) {
 			t.Errorf("after adopting, Capabilities = %v, lost %s the row already held", after.Capabilities, kept)
 		}
 	}
@@ -154,8 +154,8 @@ func TestConsoleSessionCapabilitiesSaveFromAStaleCopyIsRefused(t *testing.T) {
 	}
 	moved := directorRow(t, srv)
 
-	// Tab A unticks api:deployment:read from the copy it read first.
-	staleNext := slices.DeleteFunc(slices.Clone(tabA.Capabilities), func(c string) bool { return c == "api:deployment:read" })
+	// Tab A unticks .../api#deployment:read from the copy it read first.
+	staleNext := slices.DeleteFunc(slices.Clone(tabA.Capabilities), func(c string) bool { return c == model.APIRef("deployment:read") })
 	b, _ := json.Marshal(map[string]any{"capabilities": staleNext, "expectCapabilities": tabA.Capabilities})
 	wantStale(t, do(t, srv, http.MethodPut, "/api/console-sessions/"+model.DirectorSessionID, string(b)))
 	if now := directorRow(t, srv); !slices.Equal(now.Capabilities, moved.Capabilities) {
@@ -167,13 +167,13 @@ func TestConsoleSessionCapabilitiesSaveFromAStaleCopyIsRefused(t *testing.T) {
 	fresh := directorRow(t, srv)
 	reversed := slices.Clone(fresh.Capabilities)
 	slices.Reverse(reversed)
-	next := slices.DeleteFunc(slices.Clone(fresh.Capabilities), func(c string) bool { return c == "api:deployment:read" })
+	next := slices.DeleteFunc(slices.Clone(fresh.Capabilities), func(c string) bool { return c == model.APIRef("deployment:read") })
 	if code, body := putDirector(t, srv, map[string]any{"capabilities": next, "expectCapabilities": reversed}); code != http.StatusOK {
 		t.Fatalf("save from a fresh copy: status = %d: %s", code, body)
 	}
 	after := directorRow(t, srv)
-	if slices.Contains(after.Capabilities, "api:deployment:read") || !slices.Contains(after.Capabilities, "api:tasks:read") {
-		t.Errorf("after the fresh save, Capabilities = %v, want api:deployment:read gone and api:tasks:read kept", after.Capabilities)
+	if slices.Contains(after.Capabilities, model.APIRef("deployment:read")) || !slices.Contains(after.Capabilities, model.APIRef("tasks:read")) {
+		t.Errorf("after the fresh save, Capabilities = %v, want %s gone and %s kept", after.Capabilities, model.APIRef("deployment:read"), model.APIRef("tasks:read"))
 	}
 
 	// Without expectCapabilities a whole-list save is applied as before,

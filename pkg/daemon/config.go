@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 type Config struct {
@@ -236,22 +237,29 @@ type Config struct {
 	UiIAPAudience string
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
-	// UiRegistryIssuer, UiRegistryAudience and UiRegistryKeysURL are
-	// -ui-registry-issuer, -ui-registry-audience and -ui-registry-keys-url:
+	// UiHubIssuer, UiHubAudience and UiHubKeysURL are
+	// -ui-hub-issuer, -ui-hub-audience and -ui-hub-keys-url:
 	// what a signed X-Grain-Registry-Assertion must carry, and where the
-	// registry's ES256 JWKS is published (ui.Config.RegistryIssuer and the rest).
-	UiRegistryIssuer   string
-	UiRegistryAudience string
-	UiRegistryKeysURL  string
+	// registry's ES256 JWKS is published (ui.Config.HubIssuer and the rest).
+	UiHubIssuer   string
+	UiHubAudience string
+	UiHubKeysURL  string
 	// UiRequireVerifier is -ui-require-verifier (ui.Config.RequireVerifier):
 	// network callers must sign in through the named IdentityVerifier, and
 	// the access code works over unforwarded loopback only.
 	UiRequireVerifier string
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
-	UiRequireIAP            bool
-	UiAllowedPrincipals     []string
-	DeploymentOwner         string
+	UiRequireIAP        bool
+	UiAllowedPrincipals []string
+	DeploymentOwner     string
+	// HostAccounts is -host-accounts: who each host account's requests on
+	// the API socket are recorded as (ui.HostAccountHandler). The daemon's
+	// own account maps to DeploymentOwner unless it names it.
+	HostAccounts ui.HostAccounts
+	// APISocket is -api-socket: where the API is served on a unix socket
+	// as well; "" is ui.APISocketPath(DataDir), "none" serves none.
+	APISocket               string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool
 	Actor                   string
@@ -438,19 +446,14 @@ type Config struct {
 	// runs grain from a container (bwsalmon/agents#645).
 	UpgradeImage        string
 	UpgradeImageRefFile string
-	// UpgradeImageSource selects where ModeImage loads candidate images from
-	// ("release-assets" or "registry"; empty uses the track or default
-	// release-assets-with-registry-fallback behavior). UpgradeImageSourceLocked
-	// records that the setting came from a daemon flag or environment variable
-	// so Settings -> Upgrade renders it read-only.
+	// UpgradeImageSource selects where ModeImage pulls candidate images from
+	// ("registry"; empty uses the track or default registry source).
+	// UpgradeImageSourceLocked records that the setting came from a daemon
+	// flag or environment variable.
 	UpgradeImageSource           string
 	UpgradeImageSourceLocked     bool
 	UpgradeImageFallback         string
 	UpgradeImageFallbackExplicit bool
-	UpgradeReleaseRepo           string
-	UpgradeReleaseAsset          string
-	UpgradeReleaseChecksum       string
-	UpgradeSandboxReleaseAssets  map[string]string
 	// upgradeVerifyCmd checks an image's signature before either image
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
@@ -894,14 +897,14 @@ type Config struct {
 	networkAccess model.NetworkAccess
 
 	// Registry configures self-registration and background heartbeats to a
-	// grain registry (model.Config.Registry, design/design/registry.design.md).
-	// RegistryTokenFile is the optional flags-only path to a registration
+	// grain hub (model.Config.Registry, design/design/hub.design.md).
+	// HubTokenFile is the optional flags-only path to a registration
 	// credential file when secret registry-registration-token is not set.
-	// RegistryConnect (-registry-connect / $GRAIN_REGISTRY_CONNECT) enables
+	// HubConnect (-hub-connect / $GRAIN_HUB_CONNECT) enables
 	// the outbound tunnel supervisor dialing wss://<registry-host>/api/entries/<name>/connect.
-	Registry          model.RegistryConfig
-	RegistryTokenFile string
-	RegistryConnect   bool
+	Hub          model.HubConfig
+	HubTokenFile string
+	HubConnect   bool
 }
 
 // limits is the sandbox pool this deployment is rationing right now --
@@ -1002,7 +1005,7 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("k8s-priority-class-interactive", prev.K8sPriorityClasses.Interactive, c.K8sPriorityClasses.Interactive)
 	note("k8s-priority-class-agent", prev.K8sPriorityClasses.Agent, c.K8sPriorityClasses.Agent)
 	note("k8s-priority-class-ci", prev.K8sPriorityClasses.CI, c.K8sPriorityClasses.CI)
-	note("registry", prev.Registry, c.Registry)
+	note("registry", prev.Hub, c.Hub)
 	return changes
 }
 
@@ -1277,16 +1280,16 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	warn("k8s-priority-class-agent", c.K8sPriorityClasses.Agent, mc.K8sPriorityClassAgent)
 	warn("k8s-priority-class-ci", c.K8sPriorityClasses.CI, mc.K8sPriorityClassCI)
 	// 'grain settings' has no registry flags: the stored registry target
-	// moves with 'grain registry register' (which retargets, re-mints and
+	// moves with 'grain hub register' (which retargets, re-mints and
 	// clears the old credential) or Settings -> Registry, so say that
 	// rather than send an operator to a command that cannot do it.
-	warnRegistry := func(flag string, flagVal, storedVal string) {
+	warnHub := func(flag string, flagVal, storedVal string) {
 		if flagVal != "" && flagVal != storedVal {
-			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain registry register -registry-url <url> -entry <name>' or Settings -> Hub to change it", flag, flagVal, storedVal)
+			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain hub register -hub-url <url> -entry <name>' or Settings -> Hub to change it", flag, flagVal, storedVal)
 		}
 	}
-	warnRegistry("registry-url", c.Registry.URL, mc.Registry.URL)
-	warnRegistry("registry-entry", c.Registry.Entry, mc.Registry.Entry)
+	warnHub("hub-url", c.Hub.URL, mc.Hub.URL)
+	warnHub("hub-entry", c.Hub.Entry, mc.Hub.Entry)
 }
 
 // limits is this configuration's whole sandbox pool, as everything that
@@ -1588,7 +1591,7 @@ func (c Config) ToModelConfig() model.Config {
 	mc.K8sPriorityClassInteractive = c.K8sPriorityClasses.Interactive
 	mc.K8sPriorityClassAgent = c.K8sPriorityClasses.Agent
 	mc.K8sPriorityClassCI = c.K8sPriorityClasses.CI
-	mc.Registry = c.Registry
+	mc.Hub = c.Hub
 	return mc
 }
 
@@ -1753,7 +1756,7 @@ func (c Config) WithModelConfig(mc model.Config) Config {
 		Agent:       mc.K8sPriorityClassAgent,
 		CI:          mc.K8sPriorityClassCI,
 	}
-	c.Registry = mc.Registry
+	c.Hub = mc.Hub
 	return c
 }
 

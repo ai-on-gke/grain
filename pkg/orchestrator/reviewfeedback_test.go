@@ -172,8 +172,7 @@ func TestAReviewsFindingsTakeTheChangeItReviewsOffAutomaticMerge(t *testing.T) {
 		t.Fatal("a review that finished and reported must not be escalated as one that never finished")
 	}
 
-	// The click. ui.Client.Submit is exactly this, and the change lands
-	// the moment it reads clean afterwards.
+	// Submit alone never merges over open review findings.
 	if err := store.UpdateTask(ctx, reviewed.ID, func(tk *model.Task) error {
 		tk.AutoMerge = true
 		return nil
@@ -183,8 +182,26 @@ func TestAReviewsFindingsTakeTheChangeItReviewsOffAutomaticMerge(t *testing.T) {
 	if err := orchestrator.SyncPullRequests(ctx, store, client, late.Add(time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
+	if sim.PullRequests[0].Merged {
+		t.Fatal("a submitted change must not merge while review findings remain unresolved")
+	}
+
+	// An explicit force-merge override with a reason merges it.
+	forceAt := late.Add(2 * time.Minute)
+	headSHA := prHeadOf(t, client, reloaded(t, ctx, store, reviewed.ID))
+	if err := store.ObserveField(ctx, reviewed.ID, forceAt, func(o *model.Observation) {
+		o.ForceMergeAt = &forceAt
+		o.ForceMergeReason = "override review finding after manual audit"
+		o.ForceMergeBy = "alice"
+		o.ForceMergeHeadSHA = headSHA
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, late.Add(3*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
 	if !sim.PullRequests[0].Merged {
-		t.Fatal("a submitted change merges once its review's findings have been read")
+		t.Fatal("an explicit force-merge override with a reason merges the change")
 	}
 }
 

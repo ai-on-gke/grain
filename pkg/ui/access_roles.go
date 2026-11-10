@@ -78,6 +78,11 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/notifications/{id}/investigate":                      "tasks:write",
 	"GET /api/local-script-approvals":                               "capabilities:read",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": "capabilities:admin",
+	// Accepting a declaration takes the scopes its set needs, which
+	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal):
+	// a dangerous api grant needs its own scope, not capabilities:admin.
+	"GET /api/declarations":         "capabilities:read",
+	"POST /api/declarations/accept": scopeSignedIn,
 }
 
 // operatorOnlyRoutes are the internal routes no limited role reaches: a
@@ -89,6 +94,7 @@ var operatorOnlyRoutes = map[string]bool{
 	"PUT /api/tasks/{id}/session-title":                             true,
 	"POST /api/tasks/{id}/staged-attachments":                       true,
 	"POST /api/tasks/{id}/db/query":                                 true,
+	"POST /api/secrets/redact":                                      true,
 	"POST /api/tasks/{id}/db/execute":                               true,
 	"POST /api/tasks/{id}/notify":                                   true,
 	"POST /api/tasks/{id}/delivered":                                true,
@@ -106,6 +112,11 @@ var operatorOnlyRoutes = map[string]bool{
 	"POST /api/hostds/pending/{id}/accept":                          true,
 	"POST /api/hostds/pending/{id}/reject":                          true,
 	"/staging/{name}/{path...}":                                     true,
+	// Repointing grain/config at another remote hands everything the
+	// config repository grants -- host scripts, scope sets, secrets
+	// bindings -- to whoever can push there, on the next sync, with no
+	// Submit (task 3965). settings:write alone is not enough for that.
+	"POST /api/state-repo/remote": true,
 }
 
 // accessRole is what a verified session's matching allowlist entries let
@@ -132,6 +143,24 @@ type accessRole struct {
 	DelegatingApp string
 	ViaLabel      string
 	ViaAccess     string
+	personRole    *accessRole
+	// matches reports whether an allowlist entry admits this session --
+	// its own user: entry, or a group: it is a member of -- so a change
+	// to the list can tell an entry that is the caller's own
+	// (docs/design/access-rbac.md §3). Nil matches the user: entry only.
+	matches func(ctx context.Context, entry string) (bool, error)
+}
+
+// matchesEntry reports whether entry admits the session a describes. A
+// group whose membership cannot be looked up is reported with the error.
+func (a *accessRole) matchesEntry(ctx context.Context, entry string) (bool, error) {
+	if a.matches != nil {
+		return a.matches(ctx, entry)
+	}
+	if strings.HasPrefix(entry, "group:") {
+		return false, errors.New("group membership checker unavailable")
+	}
+	return strings.EqualFold(entry, "user:"+a.Who) || strings.EqualFold(entry, "serviceAccount:"+a.Who), nil
 }
 
 // allows reports whether the role grants scope on repo.
@@ -223,7 +252,7 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 			a.Missing = append(a.Missing, role)
 			continue
 		}
-		grants = append(grants, model.APIGrantPrefix+role)
+		grants = append(grants, model.APIRef(role))
 		for sc := range roleDenies(role) {
 			a.deny[sc] = true
 		}
@@ -241,7 +270,7 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 	return a
 }
 
-// roleGrantList is the api:<role> list resolveAccessRoles built, or -- when a
+// roleGrantList is the .../api#<role> list resolveAccessRoles built, or -- when a
 // role's deny vetoed a scope -- the remaining per-scope grants from set so
 // grant-escalation checks cannot pass on a vetoed scope.
 func roleGrantList(grants []string, set APIGrantSet, deny map[APIScope]bool) []string {
@@ -252,11 +281,11 @@ func roleGrantList(grants []string, set APIGrantSet, deny map[APIScope]bool) []s
 	for _, sc := range set.Scopes() {
 		repos := set.Repos(sc)
 		if len(repos) == 0 {
-			out = append(out, model.APIGrantPrefix+string(sc))
+			out = append(out, model.APIRef(string(sc)))
 			continue
 		}
 		for _, r := range repos {
-			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+			out = append(out, model.APIGrantString(string(sc), r))
 		}
 	}
 	return out
@@ -365,11 +394,11 @@ func grantListFromSet(set APIGrantSet) []string {
 	for _, sc := range set.Scopes() {
 		repos := set.Repos(sc)
 		if len(repos) == 0 {
-			out = append(out, model.APIGrantPrefix+string(sc))
+			out = append(out, model.APIRef(string(sc)))
 			continue
 		}
 		for _, r := range repos {
-			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+			out = append(out, model.APIGrantString(string(sc), r))
 		}
 	}
 	return out
@@ -415,6 +444,7 @@ func intersectAccessRoles(personEmail, appEmail, viaLabel, viaAccess string, per
 		DelegatingApp: appEmail,
 		ViaLabel:      viaLabel,
 		ViaAccess:     viaAccess,
+		personRole:    personAR,
 	}
 }
 
@@ -439,7 +469,7 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 				personEmail: personEmail,
 				appEmail:    appEmail,
 				label:       delegateDisplayLabel(id.Via),
-				verifier:    string(AuthMethodRegistry),
+				verifier:    string(AuthMethodHub),
 			}
 			logRefusedDelegate(personEmail, appEmail)
 			return de
@@ -473,9 +503,35 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 		return err
 	}
 	if slot, ok := ctx.Value(accessRoleSlotKey{}).(*accessRoleSlot); ok && slot != nil {
-		slot.role = resolveAccessRoles(normalizeIdentityEmail(id.Email), roles)
+		email := normalizeIdentityEmail(id.Email)
+		slot.role = resolveAccessRoles(email, roles)
+		slot.role.matches = s.entryMatcher(id.Kind, email)
 	}
 	return nil
+}
+
+// entryMatcher is accessRole.matches for a verified session of kind as
+// email: the entry naming it directly, or a group: entry it is a member of
+// (groups never admit a service account, docs/design/access-rbac.md §2).
+func (s *Server) entryMatcher(kind model.PrincipalKind, email string) func(ctx context.Context, entry string) (bool, error) {
+	return func(ctx context.Context, entry string) (bool, error) {
+		prefix, value, ok := strings.Cut(entry, ":")
+		if !ok {
+			return false, nil
+		}
+		switch prefix {
+		case "user":
+			return kind == model.PrincipalHuman && strings.EqualFold(value, email), nil
+		case "serviceAccount":
+			return kind == model.PrincipalService && strings.EqualFold(value, email), nil
+		case "group":
+			if kind != model.PrincipalHuman {
+				return false, nil
+			}
+			return s.groupChecker().IsMember(ctx, value, email)
+		}
+		return false, nil
+	}
 }
 
 // externalTokenOwnerCap refuses an external agent token wider than its
@@ -694,7 +750,8 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 	var repo string
 	if s.tasks != nil && s.tasks.Store != nil {
 		var target string
-		if id := r.PathValue("id"); id != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
+		if id := r.PathValue("id"); id != "" &&
+			(strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") || strings.HasPrefix(pathOf(pattern), "/api/console/{id}")) {
 			target = id
 		}
 		callRepo, callErr := s.agentCallRepo(r.Context(), r, pattern, target, body, nil, a.set, scope, false)
@@ -716,11 +773,14 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 			}
 		}
 	}
+	if repo == "" && (pattern == "GET /api/persistent-sandboxes/{name}/logs" || pattern == "POST /api/persistent-sandboxes/{name}/{action}") {
+		repo = s.persistentSandboxRepo(r.Context(), r.PathValue("name"))
+	}
 	if !a.allows(scope, "") {
-		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
-			// A namespace read or event stream naming no repository is narrowed
-			// to the ones the role reaches by fsScope / eventsReadable, as an
-			// agent's is.
+		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && repo == "" {
+			// A namespace read, event stream or reachable-repos listing naming no
+			// repository is narrowed to the ones the role reaches by fsScope /
+			// eventsReadable / reposReadable, as an agent's is.
 			return nil
 		}
 		if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
@@ -850,14 +910,37 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		}
 	case "PATCH /api/templates/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			if existing, err := s.tasks.Store.GetTemplate(ctx, r.PathValue("id")); err == nil && existing != nil {
+			id := r.PathValue("id")
+			existing, err := s.tasks.Store.GetTemplate(ctx, id)
+			if err != nil {
+				return fmt.Errorf("reading template %s: %w", id, err)
+			}
+			if existing != nil {
 				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, opts)
+			}
+			return s.checkDeclaredPushID(ctx, id, "template", opts)
+		}
+	case "POST /api/schedules":
+		if !a.has("tasks:write") {
+			return fmt.Errorf("%s cannot create a schedule: firing scheduled tasks needs tasks:write", a.label())
+		}
+		if repo != "" {
+			if !a.allows("tasks:write", repo) {
+				return fmt.Errorf("%s cannot set repo: role does not hold tasks:write on %s", a.label(), repo)
+			}
+			if parsed, err := model.ParseRepo(repo); err == nil {
+				if why := model.ConfigRepoProposalHold(model.Task{Target: &parsed}); why != "" {
+					return fmt.Errorf("%s cannot create a schedule: %s, which requires an unlimited role (grain/operator)", a.label(), why)
+				}
 			}
 		}
 	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
 		if s.tasks != nil && s.tasks.Store != nil {
 			sched, err := s.tasks.Store.GetSchedule(ctx, r.PathValue("id"))
-			if err != nil || sched == nil {
+			if err != nil {
+				return fmt.Errorf("reading schedule %s: %w", r.PathValue("id"), err)
+			}
+			if sched == nil {
 				return nil
 			}
 			schedRepo := ""
@@ -874,6 +957,14 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 			}
 			if sched.KeepRunning {
 				return fmt.Errorf("%s cannot modify or run schedule %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
+					a.label(), sched.ID)
+			}
+			if why := model.ConfigRepoProposalHold(model.Task{Target: &sched.Target, Writes: sched.Writes}); why != "" {
+				return fmt.Errorf("%s cannot modify or run schedule %s: %s, which requires an unlimited role (grain/operator)",
+					a.label(), sched.ID, why)
+			}
+			if s.networkAccessWidens(ctx, "", string(sched.NetworkAccess)) {
+				return fmt.Errorf("%s cannot modify or run schedule %s (networkAccess): widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
 					a.label(), sched.ID)
 			}
 			if sched.AutoApproveProposals && !a.allows("tasks:admin", schedRepo) {
@@ -907,10 +998,16 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
 						return err
 					}
+				} else if err := s.checkDeclaredPushID(ctx, *sched.TemplateID, "templateId", opts); err != nil {
+					return err
 				}
 			}
 			if sched.SuiteID != nil && *sched.SuiteID != "" {
-				if suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID); err == nil && suite != nil {
+				suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID)
+				if err != nil {
+					return fmt.Errorf("reading suite %s: %w", *sched.SuiteID, err)
+				}
+				if suite != nil {
 					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
 						return err
 					}
@@ -919,23 +1016,103 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		}
 	case "PATCH /api/suites/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			if suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id")); err == nil && suite != nil {
+			suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id"))
+			if err != nil {
+				return fmt.Errorf("reading suite %s: %w", r.PathValue("id"), err)
+			}
+			if suite != nil {
 				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
 		}
 	case "POST /api/tasks/{id}/approve", "POST /api/tasks/{id}/run-now":
 		if s.tasks != nil && s.tasks.Store != nil {
 			task, err := s.tasks.Store.GetTask(ctx, model.NormalizeTaskID(r.PathValue("id")))
-			if err != nil || task == nil || task.Approval != nil {
-				// Running an approved task now is dispatch:write alone.
+			if err != nil || task == nil {
 				return nil
 			}
+			if task.Approval != nil {
+				if pattern == "POST /api/tasks/{id}/approve" {
+					return nil
+				}
+				// Running an already-approved task needs dispatch:write rather
+				// than tasks:admin, while still holding the run to grants and
+				// settings within the caller's own role.
+				return s.tasks.roleTaskWithin(ctx, a, *task, "run", allowedRepo, normalize)
+			}
 			return s.roleApprovalWithin(ctx, a, *task, allowedRepo, normalize)
+		}
+	case "PATCH /api/tasks/{id}",
+		"POST /api/tasks/{id}/retry",
+		"POST /api/tasks/{id}/reopen",
+		"POST /api/tasks/{id}/undefer",
+		"POST /api/tasks/{id}/resume",
+		"POST /api/tasks/{id}/comments",
+		"POST /api/tasks/{id}/reply":
+		if s.tasks != nil && s.tasks.Store != nil {
+			task, err := s.tasks.Store.GetTask(ctx, model.NormalizeTaskID(r.PathValue("id")))
+			if err != nil || task == nil {
+				return nil
+			}
+			verb := "modify"
+			switch pattern {
+			case "POST /api/tasks/{id}/retry":
+				verb = "retry"
+			case "POST /api/tasks/{id}/reopen":
+				verb = "reopen"
+			case "POST /api/tasks/{id}/undefer":
+				verb = "undefer"
+			case "POST /api/tasks/{id}/resume":
+				verb = "resume"
+			case "POST /api/tasks/{id}/comments":
+				verb = "comment on"
+			case "POST /api/tasks/{id}/reply":
+				verb = "reply to"
+			}
+			return s.tasks.roleTaskWithin(ctx, a, *task, verb, allowedRepo, normalize)
+		}
+	case "PUT /api/console-sessions/{id}",
+		"POST /api/console-sessions/{id}/restart",
+		"POST /api/console-sessions/{id}/cancel",
+		"DELETE /api/console-sessions/{id}":
+		if s.tasks != nil && s.tasks.Store != nil {
+			return s.tasks.roleConsoleSessionWithin(ctx, a, r.PathValue("id"), allowedRepo, normalize)
 		}
 	case "POST /api/suite-runs":
 		// suiteId in the body is already checked by filingEscalation.
 	}
 	return nil
+}
+
+func (s *Server) persistentSandboxRepo(ctx context.Context, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || s.tasks == nil {
+		return ""
+	}
+	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
+		if list, err := ps.List(ctx); err == nil {
+			for _, st := range list {
+				if st.Name == name && strings.TrimSpace(st.Repo) != "" {
+					if canonical, cerr := s.agentCanonicalRepo(st.Repo); cerr == nil {
+						return canonical
+					}
+					return strings.TrimSpace(st.Repo)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func grantDeniedByRole(a *accessRole, name string) bool {
+	if a == nil || len(a.deny) == 0 {
+		return false
+	}
+	for _, sc := range APIGrantsOf([]string{strings.TrimSpace(name)}).Scopes() {
+		if a.deny[sc] {
+			return true
+		}
+	}
+	return false
 }
 
 // roleApprovalWithin refuses a limited role approving stored task -- by
@@ -946,6 +1123,11 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 // carries must be one filingEscalation would have let it set on POST /api/tasks.
 func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task model.Task,
 	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	return s.tasks.roleApprovalWithin(ctx, a, task, allowedRepo, normalize)
+}
+
+func (c *Client) roleApprovalWithin(ctx context.Context, a *accessRole, task model.Task,
+	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
 	repo := taskRepo(&task)
 	if !a.allows("tasks:admin", repo) {
 		if repo == "" {
@@ -953,54 +1135,190 @@ func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task mod
 		}
 		return fmt.Errorf("%s cannot approve task %s: approving work needs tasks:admin on %s", a.label(), task.ID, repo)
 	}
+	return c.roleTaskWithin(ctx, a, task, "approve", allowedRepo, normalize)
+}
+
+// roleTaskWithin refuses a limited role acting on stored task when task carries
+// grants, writes, reads, settings or review templates beyond what the role may
+// attach or run.
+func (c *Client) roleTaskWithin(ctx context.Context, a *accessRole, task model.Task, verb string,
+	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	isSession := task.IsConsoleSession()
+	if isSession && verb != "approve" && !a.has("sessions:write") && verb != "access console of" {
+		return fmt.Errorf("%s cannot %s task %s: standing console sessions require scope sessions:write", a.label(), verb, task.ID)
+	}
+	if isSession && verb == "comment on" && a.Delegated && a.personRole != nil {
+		// Messaging a console session through an authorized delegating app
+		// (e.g. grain/delegated, which holds sessions:write and tasks:write
+		// without dangerous scopes) attributes the session turn to the verified
+		// human speaker (AU-26, sessionTurnAuthor); once the intersection
+		// admits sessions:write, hold the session's envelope to that speaker's
+		// own role.
+		if a.personRole.Full {
+			return nil
+		}
+		a = a.personRole
+		allowedRepo = func(need APIScope, targetRepo string) bool {
+			targetRepo = strings.TrimSpace(targetRepo)
+			if targetRepo == "" {
+				return true
+			}
+			return a.allows(need, targetRepo)
+		}
+	}
 	if task.AutoMerge {
-		return fmt.Errorf("%s cannot approve task %s (autoMerge): auto-merge requires an unlimited role (grain/operator)",
-			a.label(), task.ID)
+		return fmt.Errorf("%s cannot %s task %s (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+			a.label(), verb, task.ID)
 	}
 	if task.KeepRunning {
-		return fmt.Errorf("%s cannot approve task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
-			a.label(), task.ID)
+		return fmt.Errorf("%s cannot %s task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
+			a.label(), verb, task.ID)
+	}
+	if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {
+		return err
+	} else if push != nil {
+		return fmt.Errorf("%s cannot %s task %s (declaredPush): template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+			a.label(), verb, task.ID, strings.TrimSpace(task.TemplateID), push.Path)
 	}
 	if why := model.ConfigRepoProposalHold(task); why != "" {
-		return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)", a.label(), task.ID, why)
+		return fmt.Errorf("%s cannot %s task %s: %s, which requires an unlimited role (grain/operator)", a.label(), verb, task.ID, why)
 	}
 	if needs, why := model.ChangeTargetNeedsPersonApproval(task.ChangeTarget); needs {
-		return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)", a.label(), task.ID, why)
+		return fmt.Errorf("%s cannot %s task %s: %s, which requires an unlimited role (grain/operator)", a.label(), verb, task.ID, why)
 	}
-	if s.networkAccessWidens(ctx, "", string(task.NetworkAccess)) {
-		return fmt.Errorf("%s cannot approve task %s (networkAccess): widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
-			a.label(), task.ID)
+	netAccess := string(task.NetworkAccess)
+	var sessionCfg *model.ConsoleSession
+	if sessionID, ok := model.ConsoleSessionIDOf(task); ok {
+		if cfg, err := c.consoleSessionConfig(ctx); err == nil {
+			if sess, found := model.ConsoleSessionByID(model.ConsoleSessionsOr(cfg.ConsoleSessions), sessionID); found {
+				sessionCfg = &sess
+				netAccess = string(sess.NetworkAccess)
+			}
+		}
+	}
+	if c.networkAccessWidens(ctx, "", netAccess) {
+		return fmt.Errorf("%s cannot %s task %s (networkAccess): widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
+			a.label(), verb, task.ID)
 	}
 	for _, g := range task.Grants {
+		if verb != "approve" && g.Via == model.GrantByDefault && !grantDeniedByRole(a, g.Capability) {
+			continue
+		}
 		if err := roleGrantRefusal(a, "capabilities", g.Capability, normalize); err != nil {
 			return err
 		}
 	}
-	if name := admissionGrantName(task.Admission); name != "" {
-		if err := roleGrantRefusal(a, "admission", name, normalize); err != nil {
-			return err
+	if !(isSession && verb != "approve" && model.NormalizeAdmission(task.Admission) == model.AdmissionDurable) {
+		if name := admissionGrantName(task.Admission); name != "" {
+			if err := roleGrantRefusal(a, "admission", name, normalize); err != nil {
+				return err
+			}
 		}
 	}
 	for _, w := range task.Writes {
 		if !allowedRepo("tasks:write", w.Repo.String()) {
-			return fmt.Errorf("%s cannot approve task %s (writes): role does not hold tasks:write on %s",
-				a.label(), task.ID, w.Repo)
+			return fmt.Errorf("%s cannot %s task %s (writes): role does not hold tasks:write on %s",
+				a.label(), verb, task.ID, w.Repo)
 		}
 	}
-	for _, rd := range task.Reads {
-		if !allowedRepo("tasks:read", rd.String()) {
-			return fmt.Errorf("%s cannot approve task %s (reads): role does not hold tasks:read on %s",
-				a.label(), task.ID, rd)
+	if sessionCfg != nil {
+		if sessionCfg.TasksApproved && !a.allows("tasks:admin", "") {
+			return fmt.Errorf("%s cannot %s task %s (tasksApproved): approving session proposals needs tasks:admin",
+				a.label(), verb, task.ID)
+		}
+		if sessionCfg.ReadsAllRepos() && !a.allows("tasks:read", "") {
+			return fmt.Errorf("%s cannot %s task %s (readsAll): reading every repository requires tasks:read without repository limits",
+				a.label(), verb, task.ID)
+		}
+		stateRepo := c.stateRepoRef()
+		for _, rd := range task.Reads {
+			if stateRepo.Owner != "" && rd.Same(stateRepo) && a.allows("settings:read", "") {
+				continue
+			}
+			if !allowedRepo("tasks:read", rd.String()) {
+				return fmt.Errorf("%s cannot %s task %s (reads): role does not hold tasks:read on %s",
+					a.label(), verb, task.ID, rd)
+			}
+		}
+	} else {
+		for _, rd := range task.Reads {
+			if !allowedRepo("tasks:read", rd.String()) {
+				return fmt.Errorf("%s cannot %s task %s (reads): role does not hold tasks:read on %s",
+					a.label(), verb, task.ID, rd)
+			}
 		}
 	}
 	if id := strings.TrimSpace(task.ReviewTemplateID); id != "" &&
 		!(task.Target != nil && id == model.DefaultReviewTemplateID(*task.Target)) {
-		if tmpl := s.gateTemplate(ctx, id); tmpl != nil &&
+		if tmpl := c.gateTemplate(ctx, id); tmpl != nil &&
 			!(task.Target != nil && tmpl.ID == model.DefaultReviewTemplateID(*task.Target)) {
 			if err := roleTemplateWithin(a, "reviewTemplateId", *tmpl, allowedRepo, normalize); err != nil {
 				why := strings.TrimPrefix(err.Error(), a.label()+" cannot set reviewTemplateId: ")
-				return fmt.Errorf("%s cannot approve task %s (reviewTemplateId): %s", a.label(), task.ID, why)
+				return fmt.Errorf("%s cannot %s task %s (reviewTemplateId): %s", a.label(), verb, task.ID, why)
 			}
+		}
+	}
+	return nil
+}
+
+func (c *Client) roleConsoleSessionWithin(ctx context.Context, a *accessRole, id string,
+	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	cfg, err := c.consoleSessionConfig(ctx)
+	if err != nil {
+		return err
+	}
+	session, ok := model.ConsoleSessionByID(model.ConsoleSessionsOr(cfg.ConsoleSessions), strings.TrimSpace(id))
+	if !ok {
+		return nil
+	}
+	if session.KeepRunning {
+		return fmt.Errorf("%s cannot modify console session %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
+			a.label(), session.ID)
+	}
+	if why := model.ConfigRepoProposalHold(model.Task{Writes: session.Writes}); why != "" {
+		return fmt.Errorf("%s cannot modify console session %s: %s, which requires an unlimited role (grain/operator)",
+			a.label(), session.ID, why)
+	}
+	if session.TasksApproved && !a.allows("tasks:admin", "") {
+		return fmt.Errorf("%s cannot modify console session %s (tasksApproved): approving proposals needs tasks:admin",
+			a.label(), session.ID)
+	}
+	if c.networkAccessWidens(ctx, "", string(session.NetworkAccess)) {
+		return fmt.Errorf("%s cannot modify console session %s (networkAccess): widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
+			a.label(), session.ID)
+	}
+	if session.ReadsAllRepos() && !a.allows("tasks:read", "") {
+		return fmt.Errorf("%s cannot modify console session %s (readsAll): reading every repository requires tasks:read without repository limits",
+			a.label(), session.ID)
+	}
+	for _, capName := range session.Capabilities {
+		if err := roleGrantRefusal(a, "capabilities", capName, normalize); err != nil {
+			return err
+		}
+	}
+	for _, defID := range model.ConsoleSessionDefaultGrants() {
+		if session.DeclinesDefault(defID) {
+			continue
+		}
+		if err := roleGrantRefusal(a, "capabilities", defID, normalize); err != nil {
+			return err
+		}
+	}
+	for _, w := range session.Writes {
+		if !allowedRepo("tasks:write", w.Repo.String()) {
+			return fmt.Errorf("%s cannot modify console session %s (writes): role does not hold tasks:write on %s",
+				a.label(), session.ID, w.Repo)
+		}
+	}
+	for _, rd := range session.Reads {
+		if !allowedRepo("tasks:read", rd.String()) {
+			return fmt.Errorf("%s cannot modify console session %s (reads): role does not hold tasks:read on %s",
+				a.label(), session.ID, rd)
+		}
+	}
+	if openID, err := c.Store.TaskIDWithTag(ctx, model.ConsoleSessionTag(session.ID)); err == nil && openID != "" {
+		if openTask, err := c.Store.GetTask(ctx, openID); err == nil && openTask != nil {
+			return c.roleTaskWithin(ctx, a, *openTask, "modify", allowedRepo, normalize)
 		}
 	}
 	return nil

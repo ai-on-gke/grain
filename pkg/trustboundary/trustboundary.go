@@ -29,10 +29,12 @@ package trustboundary
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -41,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v26"
+const Version = "trust-boundary/v28"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +83,28 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v28 adds the six sibling surfaces the post-merge security review of v26
+// found unclassified across scripts/ and pkg/ (task 3926, finding 3.1 of
+// task 3905): scripts/granule/ (build-granule-image.sh and guest-inputs.sh,
+// which scripts/release-images.sh runs to compute the guest cache key and
+// build the runtime baked into every Granule VM guest image) and
+// scripts/release-patch.sh (which cuts release/vX.Y.Z branches and tags
+// patch releases) to release-machinery; scripts/grain-instance-init.sh and
+// scripts/bake-gce-release-image.sh (which bake and boot as root on every
+// hosted Grain Hub GCE VM instance) to setup-scripts; pkg/hostinit/ (which
+// runs host initialization steps including build-granule-image.sh) to
+// exec-sandbox; and pkg/installtrack/ (which defines track image
+// repositories and MovesFrom migration targets read by pkg/upgrade) to
+// upgrade-images.
+//
+// v27 adds pkg/hubenv/ to auth-routes and keeps cmd/grain-registry/ and
+// pkg/registry/ alongside pkg/hub/ and cmd/grain-hub/ in credential-proxy
+// (task 3762, found in the security review of task 3710): pkg/hubenv/ reads
+// GRAIN_HUB_{ISSUER,AUDIENCE,KEYS_URL,TOKEN,URL,ENTRY,CONNECT,CONFIG} and
+// their pre-rename GRAIN_REGISTRY_* spellings for pkg/webauth/, pkg/daemon/
+// and pkg/hub/, and cmd/grain-registry/ stays a live shim binary for one
+// release.
 //
 // v26 adds what the security review of task 3597 (task 3624) found beside
 // scripts/build-cli.sh: the workstation CLI installer (pkg/ui/cli_install.sh,
@@ -128,7 +152,7 @@ type Category struct {
 // review of task 3284): pkg/webauth/, which verifies Cloud IAP JWTs and
 // X-Grain-Registry-Assertion ES256 JWTs, admits domains, groups and
 // service principals, and runs the proxy-auth Fetch-Metadata/Origin CSRF
-// checks (auth-routes); and pkg/registry/ with cmd/grain-registry/, which
+// checks (auth-routes); and pkg/hub/ with cmd/grain-hub/, which
 // verify front-door IAP assertions, decide entry visibility and
 // X-Grain-On-Behalf-Of delegation, sign X-Grain-Registry-Assertion JWTs,
 // strip edge credentials and IAP cookies before forwarding over tunnels,
@@ -275,7 +299,7 @@ var Categories = []Category{
 	{
 		ID:          "auth-routes",
 		Description: "authentication, principals, request guards and the UI/API route table",
-		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/"},
+		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/", "pkg/hubenv/"},
 		files: []string{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
@@ -394,6 +418,7 @@ var Categories = []Category{
 		prefixes: []string{
 			"pkg/orchestrator/", "pkg/mcp/", "pkg/granule/", "pkg/safepath/",
 			"pkg/k8s/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/", "pkg/sandboximage/",
+			"pkg/hostinit/",
 			"third_party/granule/",
 		},
 		// What every backend is wired with, what is forwarded into
@@ -406,10 +431,11 @@ var Categories = []Category{
 		prefixes: []string{
 			"pkg/gitproxy/", "pkg/modelproxy/", "pkg/pkgcache/", "pkg/relay/", "pkg/tunnel/",
 			"cmd/grain-relay/", "cmd/grain-connect/",
-			// grain-registry: the IAP front door, entry visibility and
-			// on-behalf-of delegation, the assertion signer, the edge
-			// credential stripping before a tunnel, and grc_ credentials.
-			"pkg/registry/", "cmd/grain-registry/",
+			// grain-hub (and its pre-rename grain-registry shim and package path):
+			// the IAP front door, entry visibility and on-behalf-of delegation,
+			// the assertion signer, the edge credential stripping before a tunnel,
+			// and grc_ credentials.
+			"pkg/hub/", "cmd/grain-hub/", "pkg/registry/", "cmd/grain-registry/",
 		},
 	},
 	{
@@ -470,14 +496,19 @@ var Categories = []Category{
 			"it does not weaken a check that refuses anybody but a person (`GRAIN_CI_REQUESTED_BY_KIND`)",
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
+		// Guest-image cache-key and runtime build helpers invoked by
+		// scripts/release-images.sh.
+		prefixes: []string{"scripts/granule/"},
 		files: []string{
 			"scripts/release-images.sh",
 			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
-			// What the release jobs run besides: the patch-tag guard
-			// that refuses a vX.Y.Z not cut from its release branch, the
-			// version every published image is tagged with, and the host
-			// setup the publishing job sources.
-			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			// What the release jobs run besides: the patch-release branch
+			// and tag script, the patch-tag guard that refuses a vX.Y.Z not
+			// cut from its release branch, the version every published
+			// image is tagged with, and the host setup the publishing job
+			// sources.
+			"scripts/release-patch.sh", "scripts/patch-tag-guard.sh",
+			"scripts/build-version.sh", "scripts/grain-ci-host.sh",
 			// The VCS-stamp flag every release binary and image is built
 			// with, the Docker Hub login the publishing jobs run with
 			// DOCKER_PAT, and the registry and repository names every
@@ -553,7 +584,7 @@ var Categories = []Category{
 	{
 		ID:          "upgrade-images",
 		Description: "how a deployment picks, assembles and runs the images it upgrades to",
-		prefixes:    []string{"pkg/upgrade/", "pkg/lifecycle/"},
+		prefixes:    []string{"pkg/upgrade/", "pkg/lifecycle/", "pkg/installtrack/"},
 	},
 	{
 		ID:          "setup-scripts",
@@ -562,6 +593,9 @@ var Categories = []Category{
 			"scripts/setup.sh",
 			// Loads a release's image and installs the binary out of it.
 			"scripts/install-grain.sh",
+			// Bake the per-release Grain Hub GCE VM image and run at boot as
+			// root on every hosted Grain Hub GCE VM instance.
+			"scripts/grain-instance-init.sh", "scripts/bake-gce-release-image.sh",
 			// Served unauthenticated and run as root on every hostd machine,
 			// and the route that renders it and decides who sees what.
 			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",
@@ -764,6 +798,220 @@ var NeverAutoMergePaths = []string{
 	".github/**",
 	".grain/**",
 	"schema-version",
+}
+
+// stateScopePaths is what a config-repository change to each path confers
+// once staterepo.Apply imports it, said as the API scopes a person must
+// hold to make the same change directly (ui's route scopes): a change
+// that adds a host script or widens a scope set is a capabilities:admin
+// grant whichever route it took, and one that binds a credential is a
+// secrets:write one. Every other path needs settings:write alone, which
+// approving any config change already asks for (task 3965).
+var stateScopePaths = []struct {
+	glob   string
+	scopes []string
+}{
+	// Capability servers (mcp_servers: host scripts, gcp admins and role
+	// ceilings), capability policy and default capabilities live in the
+	// deployment's config row; repo_config carries each repository's
+	// capabilities; api_scope_set is what every role and api:* grant
+	// resolves to.
+	{"tables/grain_config.json", []string{"capabilities:admin"}},
+	{"tables/repo_config.json", []string{"capabilities:admin"}},
+	{"tables/api_scope_set.json", []string{"capabilities:admin"}},
+	{"settings/capabilities.yml", []string{"capabilities:admin"}},
+	{ConfigPolicyPath, []string{"capabilities:admin"}},
+	// What templates, schedules, suites, sessions and qualification
+	// plans hand the tasks they file: grants, reads, writes, approval.
+	{"settings/templates.yml", []string{"capabilities:admin"}},
+	{"settings/schedules.yml", []string{"capabilities:admin"}},
+	{"settings/suites.yml", []string{"capabilities:admin"}},
+	{"settings/new-task-form.yml", []string{"capabilities:admin"}},
+	{"tables/template*.json", []string{"capabilities:admin"}},
+	{"tables/schedule*.json", []string{"capabilities:admin"}},
+	{"tables/suite*.json", []string{"capabilities:admin"}},
+	{"tables/qualification*.json", []string{"capabilities:admin"}},
+	{"tables/console_session.json", []string{"capabilities:admin"}},
+	{"tables/repo_workflow.json", []string{"capabilities:admin"}},
+	// What a sandbox runs and the secrets bound into it.
+	{"tables/standing_sandbox.json", []string{"capabilities:admin"}},
+	{"tables/persistent_sandbox.json", []string{"capabilities:admin"}},
+	{"tables/standing_sandbox_secret.json", []string{"capabilities:admin", "secrets:write"}},
+	{"tables/standing_sandbox_env.json", []string{"capabilities:admin", "secrets:write"}},
+	// Credentials and keys.
+	{"tables/gcp_key.json", []string{"capabilities:admin", "secrets:write"}},
+	{"tables/git_credential.json", []string{"secrets:write"}},
+	{"tables/repo_git_credential.json", []string{"secrets:write"}},
+	{"tables/agent_backend.json", []string{"connections:write"}},
+	// Code the daemon runs.
+	{"scripts/**", []string{"capabilities:admin"}},
+	{"workflows/**", []string{"capabilities:admin"}},
+	{".github/**", []string{"capabilities:admin"}},
+	{".grain/**", []string{"capabilities:admin"}},
+	{"schema-version", []string{"capabilities:admin"}},
+}
+
+// GrainConfigPath is the deployment's config row in the config
+// repository: one file holding plain settings beside the columns that
+// grant (mcp_servers, capability_policy, default_capabilities, ...).
+const GrainConfigPath = "tables/grain_config.json"
+
+// grainConfigSettingsColumns are the tables/grain_config.json columns a
+// change to which confers nothing beyond settings:write: worker and merge
+// limits, sandbox sizing, CI retention, display defaults. It is an allow
+// list on purpose. Every other column -- capability servers and policy,
+// default capabilities, approval and auto-merge defaults, console
+// sessions, the sandbox image and setup script, network access, the
+// forge host, sign-in, Kubernetes placement, and any column a later
+// schema adds -- is judged by grainConfigColumnScopes, and confers
+// capabilities:admin there unless it names something narrower.
+var grainConfigSettingsColumns = map[string]bool{
+	"poll_interval_ms": true, "max_workers": true, "max_mergers": true,
+	"max_merges_per_repo": true, "merge_batch_size": true, "merge_gather_window_ms": true,
+	"max_ci_jobs": true, "max_agent_turns": true, "newest_first": true,
+	"sandbox_cpus": true, "sandbox_memory_mb": true, "sandbox_disk_gb": true,
+	"sandbox_cpu_overcommit": true, "sandbox_memory_overcommit": true, "sandbox_disk_overcommit": true,
+	"sandbox_overcommit": true, "sandbox_memory_reserve_mb": true,
+	"sandbox_disk_floor_share": true, "sandbox_disk_floor_min_mb": true,
+	"show_closed_by_default": true, "default_filters": true, "default_model": true,
+	"judgement_model": true, "environment_name": true, "time_zone": true,
+	"upgrade_check_mode": true, "upgrade_check_pauses": true,
+	"package_cache_enabled": true, "package_cache_size_gb": true,
+	"actions_cache_enabled": true, "actions_cache_size_gb": true,
+	"ci_run_history": true, "ci_step_output_mb": true, "ci_step_output_days": true,
+	"ci_run_output_kb": true, "ci_cache_mb": true, "ci_cache_entries": true, "ci_cache_days": true,
+	"ci_artifact_mb": true, "ci_artifact_run_mb": true, "ci_artifact_file_mb": true,
+	"ci_artifact_days": true, "ci_jobs_per_run": true, "ci_age_boost_ms": true,
+	"ci_reserve_after_ms": true, "base_ci_red_streak": true,
+	"max_auto_submit_depth": true, "max_auto_submit_fan_out": true,
+}
+
+// grainConfigColumnScopes is what a change to one tables/grain_config.json
+// column confers, beyond settings:write.
+func grainConfigColumnScopes(column string) []string {
+	switch {
+	case grainConfigSettingsColumns[column]:
+		return nil
+	case column == "git_credential" || column == "git_connections":
+		return []string{"secrets:write"}
+	case column == "agent_backends" || column == "agent_backend_id" || column == "model_settings":
+		return []string{"connections:write"}
+	}
+	return []string{"capabilities:admin"}
+}
+
+// ChangedColumns is the columns that differ between two versions of a
+// config-repository table file -- a JSON array of row objects, as
+// staterepo exports it -- sorted, each once, and whether it could say.
+// A row added or removed changes every column it carries; a file that is
+// missing on one side (nil) is all rows added or removed. ok is false
+// when either side is not that shape, and a caller must then judge the
+// change by its path alone.
+func ChangedColumns(before, after []byte) (columns []string, ok bool) {
+	rows := func(data []byte) (map[string]map[string]json.RawMessage, bool) {
+		out := map[string]map[string]json.RawMessage{}
+		if data == nil {
+			return out, true
+		}
+		var list []map[string]json.RawMessage
+		if err := json.Unmarshal(data, &list); err != nil {
+			return nil, false
+		}
+		for i, row := range list {
+			key := fmt.Sprintf("#%d", i)
+			if id, ok := row["id"]; ok {
+				key = string(id)
+			}
+			out[key] = row
+		}
+		return out, true
+	}
+	a, okA := rows(before)
+	b, okB := rows(after)
+	if !okA || !okB {
+		return nil, false
+	}
+	set := map[string]bool{}
+	compare := func(x, y map[string]map[string]json.RawMessage) {
+		for key, row := range x {
+			other := y[key]
+			for col, v := range row {
+				w, present := other[col]
+				if !present || !jsonEqual(v, w) {
+					set[col] = true
+				}
+			}
+		}
+	}
+	compare(a, b)
+	compare(b, a)
+	columns = make([]string, 0, len(set))
+	for col := range set {
+		columns = append(columns, col)
+	}
+	sort.Strings(columns)
+	return columns, true
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return bytes.Equal(a, b)
+	}
+	return reflect.DeepEqual(x, y)
+}
+
+// StateScopes is every API scope, beyond the settings:write any config
+// change needs, that a person must hold to let a change to these
+// grain/config paths merge: what the change confers once it is applied
+// (stateScopePaths), sorted, each once. A path outside settings/ and
+// tables/ that stateScopePaths does not name (prose aside) confers
+// capabilities:admin, since what it would do once applied is not
+// something this build can say.
+//
+// columns, where it has an entry for a path, is the columns the change
+// alters in that file (ChangedColumns), and the path is judged by them
+// instead: so far only tables/grain_config.json, where a plain settings
+// edit (max_workers, time_zone) needs settings:write alone and one to
+// mcp_servers or default_capabilities still needs capabilities:admin. A
+// path with no entry -- a change recorded before columns were, or a file
+// ChangedColumns could not read -- is judged by its path, which for
+// grain_config.json is capabilities:admin.
+func StateScopes(paths []string, columns map[string][]string) []string {
+	set := map[string]bool{}
+	for _, raw := range paths {
+		p := cleanStatePath(raw)
+		if p == "" {
+			continue
+		}
+		if cols, ok := columns[p]; ok && p == GrainConfigPath {
+			for _, col := range cols {
+				for _, sc := range grainConfigColumnScopes(col) {
+					set[sc] = true
+				}
+			}
+			continue
+		}
+		matched := false
+		for _, e := range stateScopePaths {
+			if MatchStatePath(e.glob, p) {
+				matched = true
+				for _, sc := range e.scopes {
+					set[sc] = true
+				}
+			}
+		}
+		if !matched && !strings.HasPrefix(p, "settings/") && !strings.HasPrefix(p, "tables/") &&
+			!strings.HasSuffix(p, ".md") {
+			set["capabilities:admin"] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for sc := range set {
+		out = append(out, sc)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ConfigPolicy is the parsed representation of settings/config-policy.yml.

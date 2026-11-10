@@ -33,6 +33,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -71,9 +73,14 @@ func (s *Server) persistentSandboxes(w http.ResponseWriter) (PersistentSandboxes
 
 // handleListPersistentSandboxes is GET /api/persistent-sandboxes.
 func (s *Server) handleListPersistentSandboxes(w http.ResponseWriter, r *http.Request) {
+	page, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	ps := s.tasks.Config.PersistentSandboxes
 	if ps == nil {
-		writeJSON(w, http.StatusOK, []model.PersistentSandboxStatus{})
+		writeList(w, []model.PersistentSandboxStatus{}, page)
 		return
 	}
 	list, err := ps.List(r.Context())
@@ -81,10 +88,10 @@ func (s *Server) handleListPersistentSandboxes(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if list == nil {
-		list = []model.PersistentSandboxStatus{}
-	}
-	writeJSON(w, http.StatusOK, list)
+	list = filterList(list, func(st model.PersistentSandboxStatus) bool {
+		return page.matches(st.Name, st.Repo, st.State)
+	})
+	writeList(w, list, page)
 }
 
 // handlePersistentSandboxLogs is GET /api/persistent-sandboxes/{name}/logs:
@@ -100,6 +107,23 @@ func (s *Server) handlePersistentSandboxLogs(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, fmt.Errorf("persistent sandbox %q is not running", r.PathValue("name")))
 		return
 	}
+	redactor := grainlog.NewRedactor(nil)
+	if s.tasks != nil && s.tasks.Config.LogRedactor != nil {
+		var err error
+		redactor, err = s.tasks.Config.LogRedactor()
+		if err != nil || redactor == nil {
+			if err == nil {
+				err = errors.New("no redactor")
+			}
+			writeError(w, http.StatusInternalServerError, apierror.Expose(fmt.Errorf(
+				"this log cannot be shown: the credentials that would have to be redacted out of it "+
+					"could not be read, and it is not served unredacted instead: %w", err)))
+			return
+		}
+	}
+	// Text, not Line: the log is many lines, and a private key's body
+	// is only cut by the pass that sees the lines after its header.
+	logs, _ = redactor.Text(logs)
 	if r.URL.Query().Get("format") == "text" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

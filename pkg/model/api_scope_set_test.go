@@ -175,7 +175,7 @@ func TestGrantingBySetNameResolvesItsScopes(t *testing.T) {
 	}
 	// mcpserver is handed the scopes, since it cannot read the sets.
 	names := APIScopeSetGrantNames("api:ops/triage")
-	if !slices.Contains(names, "api:ci:read@bwsalmon/grain") || slices.ContainsFunc(names, func(n string) bool { return strings.Contains(n, "tasks:admin") }) {
+	if !slices.Contains(names, APIGrantString("ci:read", "bwsalmon/grain")) || slices.ContainsFunc(names, func(n string) bool { return strings.Contains(n, "tasks:admin") }) {
 		t.Errorf("expanded names = %v", names)
 	}
 	if got := APIScopeSetGrantNames("api:grain/task-admin"); !slices.Equal(got, []string{"api:grain/task-admin"}) {
@@ -186,7 +186,7 @@ func TestGrantingBySetNameResolvesItsScopes(t *testing.T) {
 	if err := json.Unmarshal([]byte(`["self-debug", {"capability": "api", "with": {"set": ["ops/triage", "grain/ci-read"], "scopes": ["ci:read"]}}]`), &list); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"self-debug", "api:ci:read", "api:grain/ci-read", "api:ops/triage"}; !slices.Equal([]string(list), want) {
+	if want := []string{"self-debug", APIRef("ci:read"), APIRef("grain/ci-read"), APIRef("ops/triage")}; !slices.Equal([]string(list), want) {
 		t.Errorf("capabilities = %v, want %v", list, want)
 	}
 	if err := json.Unmarshal([]byte(`[{"capability": "api", "with": {"set": "nope"}}]`), &list); err == nil {

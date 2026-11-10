@@ -22,7 +22,7 @@ import Markdown from "./Markdown.jsx";
 // asker gave, the task's own (Task.QuestionSummary, which the daemon
 // derives for a question stored without one), or failing both the
 // question's first line.
-export function questionSummaryOf(question, t) {
+function questionSummaryOf(question, t) {
   if (question?.summary) return question.summary;
   if (t?.questionSummary) return t.questionSummary;
   const first = (question?.body || "")

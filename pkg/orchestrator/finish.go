@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/forkhead"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -1963,22 +1964,25 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// here would otherwise file a proposal against a non-grain
 			// repo holding a grant its proposer was given by grain, and
 			// so unapproved (model.EscalatedCapabilities).
-			cap = model.StoredGrantSpelling(cap)
-			if cap == "" || grainci.IsGrant(cap) {
-				continue
-			}
-			found := false
-			for _, g := range grants {
-				if g.Capability == cap {
-					found = true
-					break
+			//
+			// Retired one-release aliases expand via CanonicalLegacyGrants
+			// and api grants are written as canonical api#* references,
+			// matching ui.Client.creationGrants so a relayed proposal stores
+			// the exact same grant set as its live twin.
+			for _, expanded := range expandProposalGrant(cap) {
+				found := false
+				for _, g := range grants {
+					if g.Capability == expanded {
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{
-					Capability: cap,
-					Via:        model.GrantByLabel,
-				})
+				if !found {
+					grants = append(grants, model.Grant{
+						Capability: expanded,
+						Via:        model.GrantByLabel,
+					})
+				}
 			}
 		}
 		customFields, droppedFields, err := proposedCustomFields(ctx, store, p)
@@ -2601,12 +2605,13 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 	seen := make(map[string]bool, len(ids))
 	grants := make([]model.Grant, 0, len(ids))
 	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] || grainci.IsGrant(id) {
-			continue
+		for _, expanded := range expandProposalGrant(id) {
+			if seen[expanded] {
+				continue
+			}
+			seen[expanded] = true
+			grants = append(grants, model.Grant{Capability: expanded, Via: model.GrantByDefault})
 		}
-		seen[id] = true
-		grants = append(grants, model.Grant{Capability: id, Via: model.GrantByDefault})
 	}
 	if target != nil {
 		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *target)
@@ -2684,7 +2689,7 @@ func proposalSeeding(ctx context.Context, store *model.Store, target *model.Repo
 	}
 	seeding := &model.ProposalSeeding{Catalogue: catalogue, GrantContext: model.TaskGrantContext(proposal)}
 	if cfg != nil {
-		seeding.DeploymentDefaults = append([]string(nil), cfg.DefaultCapabilities...)
+		seeding.DeploymentDefaults = expandProposalGrantNames(cfg.DefaultCapabilities)
 	}
 	if target != nil {
 		repo := *target
@@ -2694,10 +2699,63 @@ func proposalSeeding(ctx context.Context, store *model.Store, target *model.Repo
 			return nil, err
 		}
 		if repoCfg != nil {
-			seeding.RepoDefaults = append([]string(nil), repoCfg.DefaultCapabilities...)
+			seeding.RepoDefaults = expandProposalGrantNames(repoCfg.DefaultCapabilities)
 		}
 	}
 	return seeding, nil
+}
+
+// expandProposalGrant expands retired one-release capability aliases via
+// model.CanonicalLegacyGrants, writes api and repository grants in either
+// spelling as their canonical references, and normalizes in-process capability
+// references to recorded form, matching ui.Client.normalizeCapabilityIDs.
+// grain-ci / grain#ci is omitted so the target repository's CI Mode decides it.
+func expandProposalGrant(cap string) []string {
+	cap = strings.TrimSpace(cap)
+	if cap == "" || grainci.IsGrant(cap) {
+		return nil
+	}
+	expanded := model.CanonicalLegacyGrants(cap)
+	out := make([]string, 0, len(expanded))
+	for _, part := range expanded {
+		part = strings.TrimSpace(part)
+		if part == "" || grainci.IsGrant(part) {
+			continue
+		}
+		// An api or repository grant in either spelling is written as its
+		// canonical reference (unified-grants slice 3), as
+		// model.NormalizeCapabilityNames writes it for the live call; one
+		// that does not parse is kept as given, for the filing checks to
+		// refuse as they would live.
+		if strings.HasPrefix(part, model.APIGrantPrefix) || model.IsAPIGrantRef(part) ||
+			strings.HasPrefix(part, model.RepoReadCapabilityPrefix) || strings.HasPrefix(part, model.RepoWriteCapabilityPrefix) {
+			if names, err := model.NormalizeCapabilityNames([]string{part}, nil); err == nil && len(names) == 1 {
+				part = names[0]
+			}
+		}
+		if model.IsCapabilityRef(part) && grainserver.IsInProcessGrant(part) {
+			if names, err := model.NormalizeCapabilityNames([]string{part}, grainserver.Lookup(nil)); err == nil && len(names) == 1 {
+				part = names[0]
+			}
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func expandProposalGrantNames(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		for _, expanded := range expandProposalGrant(id) {
+			if seen[expanded] {
+				continue
+			}
+			seen[expanded] = true
+			out = append(out, expanded)
+		}
+	}
+	return out
 }
 
 // newestFirst is model.Config.NewestFirst, read fresh from the store --

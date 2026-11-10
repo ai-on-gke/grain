@@ -34,8 +34,11 @@ import (
 // read out of the binary (pkg/releasenotes) so that showing them needs
 // no access to the repository.
 type releaseVersions struct {
-	Running  string                 `json:"running,omitempty"`
-	Versions []releasenotes.Version `json:"versions"`
+	Running    string                 `json:"running,omitempty"`
+	Versions   []releasenotes.Version `json:"versions"`
+	Total      int                    `json:"total,omitempty"`
+	Truncated  bool                   `json:"truncated,omitempty"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
 }
 
 // handleListReleaseVersions answers GET /api/release-notes/versions.
@@ -43,11 +46,22 @@ type releaseVersions struct {
 // with -- so, like the weekly notes, the handler checks nothing the
 // server's own sign-in check has not.
 func (s *Server) handleListReleaseVersions(w http.ResponseWriter, r *http.Request) {
-	versions := releasenotes.List()
-	if versions == nil {
-		versions = []releasenotes.Version{}
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, releaseVersions{Running: version.Get().Release, Versions: versions})
+	versions := filterList(releasenotes.List(), func(v releasenotes.Version) bool {
+		return list.matches(v.Version)
+	})
+	page := pageOf(versions, list)
+	writeJSON(w, http.StatusOK, releaseVersions{
+		Running:    version.Get().Release,
+		Versions:   page.Items,
+		Total:      page.Total,
+		Truncated:  page.Truncated,
+		NextCursor: page.NextCursor,
+	})
 }
 
 // handleGetReleaseVersion answers GET /api/release-notes/versions/{version}

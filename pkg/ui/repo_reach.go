@@ -26,6 +26,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -119,12 +120,121 @@ type ConnectionReachError struct {
 // Available, Reason and Repos are what the endpoint has always said;
 // Errors lists each connection whose listing failed, even when another's
 // succeeded; Connections is every connection's status, failed or not.
+// Total, Truncated and NextCursor are the page's bookkeeping
+// (list_page.go): how many repositories matched the call's filters
+// across every page, whether Repos was cut short by its limit, and when
+// it was, the cursor that reads on.
 type ReachableReposResult struct {
 	Available   bool                     `json:"available"`
 	Reason      string                   `json:"reason"`
 	Repos       []gitproxy.ReachableRepo `json:"repos"`
 	Errors      []ConnectionReachError   `json:"errors"`
 	Connections []ReachConnection        `json:"connections"`
+	Total       int                      `json:"total"`
+	Truncated   bool                     `json:"truncated"`
+	NextCursor  string                   `json:"nextCursor,omitempty"`
+}
+
+// ReachableReposFilter narrows GET /api/deployment/reachable-repos to the
+// repositories an agent is actually asking after -- "which repo can I
+// file against?" -- rather than everything the credentials list: those
+// the connection can push to (Push), one owner's, one host's, and those
+// whose full name contains Q; then listQuery's page of what is left.
+type ReachableReposFilter struct {
+	// Push is nil for every repository, true for only those the
+	// credential can push to, false for only those it cannot.
+	Push *bool
+	// Owner keeps one owner's repositories, case-insensitively.
+	Owner string
+	// Host keeps one git host's repositories: the deployment's default
+	// host (github.com unless configured otherwise), which a repository
+	// name never spells out, or another host, which it does.
+	Host string
+	list listQuery
+}
+
+// reachableReposFilterFrom reads the filter from r's query.
+func reachableReposFilterFrom(r *http.Request) (ReachableReposFilter, error) {
+	q := r.URL.Query()
+	f := ReachableReposFilter{Owner: strings.TrimSpace(q.Get("owner")), Host: strings.TrimSpace(q.Get("host"))}
+	if text := strings.TrimSpace(q.Get("push")); text != "" {
+		switch strings.ToLower(text) {
+		case "1", "true", "yes":
+			f.Push = new(bool)
+			*f.Push = true
+		case "0", "false", "no":
+			f.Push = new(bool)
+		default:
+			return f, validationErrorf("push must be true (only repositories the connection can push to) or false (only those it cannot), not %q", text)
+		}
+	}
+	if f.Host != "" {
+		h, err := model.NormalizeGitHost(f.Host)
+		if err != nil {
+			return f, validationErrorf("host %q is not a git host name", f.Host)
+		}
+		f.Host = h
+	}
+	list, err := parseListQuery(r, listPageDefault)
+	if err != nil {
+		return f, err
+	}
+	f.list = list
+	return f, nil
+}
+
+// keeps reports whether repo passes f's filters; defaultHost is the host
+// a repository name without one is on.
+func (f ReachableReposFilter) keeps(repo gitproxy.ReachableRepo, defaultHost string) bool {
+	if f.Push != nil && repo.Push != *f.Push {
+		return false
+	}
+	if !f.list.matches(repo.Repo) {
+		return false
+	}
+	if f.Owner == "" && f.Host == "" {
+		return true
+	}
+	ref, err := model.ParseRepo(repo.Repo)
+	if err != nil {
+		return false
+	}
+	if f.Owner != "" && !strings.EqualFold(ref.Owner, f.Owner) {
+		return false
+	}
+	if f.Host != "" {
+		host := ref.Host
+		if host == "" {
+			host = defaultHost
+		}
+		if !model.SameGitHost(host, f.Host, defaultHost) {
+			return false
+		}
+	}
+	return true
+}
+
+// narrow applies f to res in place: the repositories it keeps, in their
+// order, and the page of them the call asked for. Connections and Errors
+// are per connection, a handful at most, and are left whole.
+func (f ReachableReposFilter) narrow(res *ReachableReposResult, defaultHost string) {
+	kept := filterList(res.Repos, func(repo gitproxy.ReachableRepo) bool { return f.keeps(repo, defaultHost) })
+	page := pageOf(kept, f.list)
+	res.Repos, res.Total, res.Truncated, res.NextCursor = page.Items, page.Total, page.Truncated, page.NextCursor
+}
+
+// ReachableReposFiltered is ReachableRepos narrowed by f.
+func (c *Client) ReachableReposFiltered(ctx context.Context, team string, f ReachableReposFilter) (ReachableReposResult, error) {
+	res, err := c.ReachableRepos(ctx, team)
+	if err != nil {
+		return res, err
+	}
+	defaultHost := model.DefaultGitHost
+	if c.Config.GitReach != nil && c.Config.GitReach.Host != "" {
+		defaultHost = c.Config.GitReach.Host
+	}
+	f.narrow(&res, defaultHost)
+	return res, nil
 }
 
 // ReachableRepos is what the team's Git credentials can reach, for the
@@ -254,4 +364,51 @@ func (c *Client) ReachableRepos(ctx context.Context, team string) (ReachableRepo
 	})
 	out.Available = true
 	return out, nil
+}
+
+// reposReadable reports which repositories r's caller holds repos:read on, and
+// whether that grant is unrestricted across every repository.
+func (s *Server) reposReadable(r *http.Request) (func(string) bool, bool) {
+	ctx := r.Context()
+	call, isAgent := agentCallFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	if role != nil && role.Full {
+		role = nil
+	}
+	if !isAgent && role == nil {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			return func(string) bool { return false }, false
+		}
+		return func(string) bool { return true }, true
+	}
+	if isAgent {
+		if call.grants.Allows("repos:read", "") {
+			return func(string) bool { return true }, true
+		}
+		return func(repo string) bool { return call.grants.Allows("repos:read", repo) }, false
+	}
+	if role.allows("repos:read", "") {
+		return func(string) bool { return true }, true
+	}
+	return func(repo string) bool { return role.allows("repos:read", repo) }, false
+}
+
+func (s *Server) reachableReposForRequest(r *http.Request, filter ReachableReposFilter) (ReachableReposResult, error) {
+	res, err := s.tasks.ReachableRepos(r.Context(), model.DefaultTeamID)
+	if err != nil {
+		return res, err
+	}
+	if readable, unrestricted := s.reposReadable(r); !unrestricted {
+		res.Repos = filterList(res.Repos, func(rr gitproxy.ReachableRepo) bool {
+			return readable(rr.Repo)
+		})
+		res.Connections = []ReachConnection{}
+		res.Errors = []ConnectionReachError{}
+	}
+	defaultHost := model.DefaultGitHost
+	if s.tasks.Config.GitReach != nil && s.tasks.Config.GitReach.Host != "" {
+		defaultHost = s.tasks.Config.GitReach.Host
+	}
+	filter.narrow(&res, defaultHost)
+	return res, nil
 }

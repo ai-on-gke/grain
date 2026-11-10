@@ -161,10 +161,13 @@ type ConsoleSessionSettingsResponse struct {
 	// unconfigured capability would go on being tickable here after the
 	// rest of the app stopped offering them (configuredCapabilities,
 	// ui/src/state.js).
-	Capabilities []Capability `json:"capabilities"`
+	Capabilities []Capability `json:"capabilities,omitempty"`
 	// NetworkAccessOptions is model.NetworkAccesses() as strings, for
 	// the same reason Settings carries it.
-	NetworkAccessOptions []string `json:"networkAccessOptions"`
+	NetworkAccessOptions []string `json:"networkAccessOptions,omitempty"`
+	Total                int      `json:"total,omitempty"`
+	Truncated            bool     `json:"truncated,omitempty"`
+	NextCursor           string   `json:"nextCursor,omitempty"`
 }
 
 // UpdateConsoleSessionRequest is PUT /api/console-sessions/{id}: the
@@ -384,11 +387,11 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 						if g.Capability == "" || legacyAdm || legacyHost {
 							continue
 						}
-						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) &&
+						if g.Via == model.GrantByDefault && !containsSessionGrantKey(s.Capabilities, g.Capability) &&
 							(!model.IsConsoleSessionDefaultGrant(g.Capability) || s.DeclinesDefault(g.Capability)) {
 							continue
 						}
-						if !slices.Contains(capabilities, g.Capability) {
+						if !containsSessionGrantKey(capabilities, g.Capability) {
 							capabilities = append(capabilities, g.Capability)
 						}
 					}
@@ -784,10 +787,10 @@ func (c *Client) updateConsoleSession(ctx context.Context, id string, req Update
 		// unticked: declined, so it stays off when the session's task is
 		// filed again, and ticked again, no longer.
 		declined := slices.DeleteFunc(slices.Clone(session.DeclinedDefaults), func(id string) bool {
-			return model.IsConsoleSessionDefaultGrant(id) && slices.Contains(ids, id)
+			return model.IsConsoleSessionDefaultGrant(id) && containsSessionGrantKey(ids, id)
 		})
 		for _, id := range model.ConsoleSessionDefaultGrants() {
-			if !slices.Contains(ids, id) && !slices.Contains(declined, id) {
+			if !containsSessionGrantKey(ids, id) && !containsSessionGrantKey(declined, id) {
 				declined = append(declined, id)
 			}
 		}
@@ -1165,11 +1168,18 @@ func (c *Client) sandboxesIsolateNetwork() bool {
 // from the task: given already, so one an operator then removes is not
 // given back, while one the task never had still reaches it on the next
 // sync.
+func containsSessionGrantKey(list []string, capability string) bool {
+	key := model.CanonicalGrantKey(capability)
+	return slices.ContainsFunc(list, func(s string) bool {
+		return model.CanonicalGrantKey(s) == key
+	})
+}
+
 func consoleSessionHeldDefaults(grants []model.Grant) []string {
 	var out []string
 	for _, g := range grants {
-		if model.IsConsoleSessionDefaultGrant(g.Capability) && !slices.Contains(out, g.Capability) {
-			out = append(out, g.Capability)
+		if model.IsConsoleSessionDefaultGrant(g.Capability) && !containsSessionGrantKey(out, g.Capability) {
+			out = append(out, model.CanonicalGrantKey(g.Capability))
 		}
 	}
 	return out
@@ -1310,11 +1320,16 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		// newly created session starts holding what its own proposals are
 		// seeded with (grain/task-1983) while keeping session.Capabilities as
 		// the single source of truth an operator can untick (grain/task-2126).
+		// For a limited role, keep only capabilities within the caller's own role.
+		role := accessRoleFromContext(ctx)
 		seen := map[string]bool{}
 		defs := model.DefaultConsoleSessions()
 		if len(defs) > 0 {
 			for _, capability := range defs[0].Capabilities {
 				if capability == "" || seen[capability] {
+					continue
+				}
+				if role != nil && !role.Full && roleGrantRefusal(role, "capabilities", capability, c.normalizeCapabilityID) != nil {
 					continue
 				}
 				seen[capability] = true
@@ -1329,18 +1344,26 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 			if _, ok := c.capabilityByID(capability); !ok {
 				continue
 			}
+			if role != nil && !role.Full && roleGrantRefusal(role, "capabilities", capability, c.normalizeCapabilityID) != nil {
+				continue
+			}
 			seen[capability] = true
 			caps = append(caps, capability)
 		}
 	}
 
+	role := accessRoleFromContext(ctx)
 	access := model.NetworkAccess(req.NetworkAccess)
 	if access != "" && !model.ValidNetworkAccess(access) {
 		return "", nil, validationErrorf("networkAccess must be one of %s, or empty for this deployment's own default",
 			networkAccessNames())
 	}
 	if access == "" {
-		access = model.NetworkOpen
+		if role != nil && !role.Full && c.networkAccessWidens(ctx, "", string(model.NetworkOpen)) {
+			access = model.NetworkNone
+		} else {
+			access = model.NetworkOpen
+		}
 	}
 
 	var reads []model.RepoRef
@@ -1371,21 +1394,36 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		return "", nil, err
 	}
 
+	readsAll := req.ReadsAll
+	var declinedDefaults []string
+	if role != nil && !role.Full {
+		if readsAll == nil && !role.allows("tasks:read", "") {
+			off := false
+			readsAll = &off
+		}
+		for _, defID := range model.ConsoleSessionDefaultGrants() {
+			if !containsSessionGrantKey(caps, defID) && roleGrantRefusal(role, "capabilities", defID, c.normalizeCapabilityID) != nil {
+				declinedDefaults = append(declinedDefaults, defID)
+			}
+		}
+	}
+
 	newSession := model.ConsoleSession{
-		ID:              id,
-		Title:           title,
-		TitleSource:     titleSource,
-		Team:            team,
-		Capabilities:    caps,
-		NetworkAccess:   access,
-		TasksApproved:   req.TasksApproved,
-		KeepRunning:     req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
-		Hosting:         sessionHosting,
-		Reads:           reads,
-		Writes:          writes,
-		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),
-		Model:           chosenModel,
-		ReadsAll:        req.ReadsAll,
+		ID:               id,
+		Title:            title,
+		TitleSource:      titleSource,
+		Team:             team,
+		Capabilities:     caps,
+		DeclinedDefaults: declinedDefaults,
+		NetworkAccess:    access,
+		TasksApproved:    req.TasksApproved,
+		KeepRunning:      req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		Hosting:          sessionHosting,
+		Reads:            reads,
+		Writes:           writes,
+		GoogleChatSpace:  strings.TrimSpace(req.GoogleChatSpace),
+		Model:            chosenModel,
+		ReadsAll:         readsAll,
 	}
 
 	sessions = append(sessions, newSession)
@@ -1397,8 +1435,13 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return "", nil, err
 	}
+	stateRepo := c.stateRepoRef()
+	if role != nil && !role.Full && stateRepo.Owner != "" &&
+		!role.allows("settings:read", "") && !role.allows("tasks:read", stateRepo.String()) {
+		stateRepo = model.RepoRef{}
+	}
 	taskID, err := model.FileConsoleSessionTask(ctx, c.Store, newSession, model.FileConsoleSessionOptions{
-		StateRepo:       c.stateRepoRef(),
+		StateRepo:       stateRepo,
 		NetworkIsolates: c.sandboxesIsolateNetwork(),
 		Now:             now,
 	})
@@ -1644,9 +1687,33 @@ func (c *Client) DeleteConsoleSession(ctx context.Context, id string) error {
 
 // handleListConsoleSessions is GET /api/console-sessions.
 func (s *Server) handleListConsoleSessions(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageTiny)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	sessions, err := s.tasks.ListConsoleSessions(r.Context())
 	if err != nil {
 		writeClientError(w, err)
+		return
+	}
+	if list.Paged {
+		matched := filterList(sessions, func(cs ConsoleSessionSetting) bool {
+			return list.matches(cs.ID, cs.Title, cs.TaskID, cs.Team)
+		})
+		page := pageOf(matched, list)
+		for i := range page.Items {
+			page.Items[i].MissingShippedDefaults = nil
+			if len(page.Items[i].AutoReads) > listPageSmall {
+				page.Items[i].AutoReads = page.Items[i].AutoReads[:listPageSmall]
+			}
+		}
+		writeJSON(w, http.StatusOK, ConsoleSessionSettingsResponse{
+			Sessions:   page.Items,
+			Total:      page.Total,
+			Truncated:  page.Truncated,
+			NextCursor: page.NextCursor,
+		})
 		return
 	}
 	// The same two readings GET /api/config's own capability listing is

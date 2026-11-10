@@ -16,7 +16,7 @@ import { MenuItem, TextField } from "@mui/material";
 
 // ADMISSION_HELP is the task pane's own wording for each admission value
 // (detail/Actions.jsx, design/design/unified-grants.design.md §4.1).
-export const ADMISSION_HELP = {
+const ADMISSION_HELP = {
   standard: "Queued with ordinary work, under the worker limit.",
   bypass:
     "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",

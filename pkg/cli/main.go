@@ -142,9 +142,7 @@ func Main() {
 		// runs the host agent.
 		args = []string{"host", "list"}
 	}
-	if len(args) > 0 {
-		args[0] = canonicalCommand(args[0])
-	}
+	canonicalizeCommandWord(args, os.Stderr)
 	// Inside an agent's sandbox, the read commands of
 	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
@@ -270,9 +268,13 @@ func Main() {
 // longer shows: "hostd" (the host agent) and "hostds" (the host
 // registry) are both "host" now, which users see. Neither is in usage
 // or the CLI spec; both keep working for scripts and installed units.
+//
+// "registry" is "hub" now that the Grain Registry is the Grain Hub; it
+// warns (warnDeprecatedCommand) and goes after a release.
 var hiddenCommandAliases = map[string]string{
-	"hostd":  "host",
-	"hostds": "host",
+	"hostd":    "host",
+	"hostds":   "host",
+	"registry": "hub",
 }
 
 // canonicalCommand is the command word cmd is spelled as now.
@@ -413,13 +415,14 @@ Commands:
   reopen <id>                          reopen a closed task
   retry <id>                           clear a failed task's retry cap so it dispatches again
   retry-merge <id>                     put a pull request the merge queue gave up on back on the queue
-  force-merge <id> <reason...>         merge this change anyway, overriding the queue's own decision --
-                                       an operator's action, recorded with the reason on the task and
-                                       the pull request, and refused if the branch does not merge cleanly;
-                                       -head <sha> names the commit you reviewed, and the override is
-                                       withdrawn if anything else is pushed before the merge
-  pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
-                                       (-threads) a pull request grain did not open (see prcmd.go)
+  force-merge [-override-gates g] <id> <reason...>
+                                       merge this change anyway, overriding the queue's own decision --
+                                       an operator's action (merge:force), recorded with the reason on
+                                       the task and pull request, and refused if the branch does not
+                                       merge cleanly; -override-gates must explicitly name any skipped
+                                       review gate (e.g. security-review); -head <sha> pins the commit
+  pr adopt|review|status|submit <pr>   adopt (-mode review-only|finish), review (-design), report on
+                                       (-threads), or approve/submit a pull request (see prcmd.go)
   run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -462,7 +465,7 @@ Commands:
                                        block until a run has a verdict (-timeout, default 30m), with each
                                        failing job and any shared fault: exit 0 green, 1 red, 5 timed out
   ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache
-  ci test-history <test> [-repo r] [-limit N]
+  ci test-history <test> [-repo r] [-limit N] [-provider grain|github-actions]
                                        pass, fail and flake history of one test across recent runs
   merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
                                        merge gates (deploy://merge-queue; see mergequeue.go)
@@ -494,7 +497,7 @@ Commands:
                                        snippet, accept or reject the hosts that join, and manage hosts
   host register|install|set-owner      the legacy host registry: register a host with its owner, the
                                        identity it dials in through IAP as, and print how to install it
-  registry status|register|unregister  self-register this deployment with a Grain Hub and inspect
+  hub status|register|unregister       self-register this deployment with a Grain Hub and inspect
                                        heartbeats and self-reported scopes (Settings -> Hub)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
@@ -642,6 +645,10 @@ func runCLI(args []string) error {
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
+	if sock := hostSocket(c.BaseURL, target.tokenSource); sock != "" {
+		c.HTTP, c.Socket = cliSocketHTTPClient(sock, *connectTimeout, *callTimeout), sock
+		target.tokenSource = "the API socket " + sock
+	}
 	err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
 	if err == nil {
 		warnIfCommandSkillStale(rest[0], sel)
@@ -652,6 +659,7 @@ func runCLI(args []string) error {
 // dispatchCLI runs one task-CLI command against c.
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
+	warnDeprecatedCommand(os.Stderr, rest[0], cmd)
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
@@ -731,8 +739,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
 	case "host":
 		return cmdHostds(ctx, c, out, cmdArgs)
-	case "registry":
-		return cmdRegistry(ctx, c, out, cmdArgs)
+	case "hub":
+		return cmdHub(ctx, c, out, cmdArgs)
 	case "access":
 		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":

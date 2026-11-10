@@ -76,7 +76,7 @@ func (c *Client) pullRequestAdopter() (PullRequestAdopter, error) {
 func pullRequestCallRepo(r *http.Request, pattern string, body []byte) (string, bool, error) {
 	var raw string
 	switch pattern {
-	case "POST /api/pull-requests/adopt", "POST /api/pull-requests/review":
+	case "POST /api/pull-requests/adopt", "POST /api/pull-requests/review", "POST /api/pull-requests/submit":
 		var req struct {
 			PR string `json:"pr"`
 		}
@@ -123,33 +123,140 @@ func requirePullRequestScopes(ctx context.Context, repo string, scopes ...APISco
 // whether it lands approved, under #XC-17's rules: an unlimited person's
 // request is approved; a limited role's or an agent's only with
 // tasks:admin on the repository, or when the deployment's owner-trust
-// policy trusts an external credential's owner there. Everything else
-// lands proposed.
-func (c *Client) pullRequestFiling(ctx context.Context, repo model.RepoRef) (model.Attribution, bool, error) {
+// policy trusts an external credential's owner there (recorded under
+// OwnerTrustPrincipal on behalf of that owner). Everything else lands
+// proposed.
+func (c *Client) pullRequestFiling(ctx context.Context, repo model.RepoRef) (model.Attribution, *model.Attribution, bool, error) {
 	actor := c.requestActor(ctx)
 	if actor.Actor.Kind != model.PrincipalAgent {
 		if a := accessRoleFromContext(ctx); a != nil && !a.Full {
-			return actor, a.allows("tasks:admin", repo.String()), nil
+			return actor, nil, a.allows("tasks:admin", repo.String()), nil
 		}
-		return actor, true, nil
+		return actor, nil, true, nil
 	}
 	if call, ok := agentCallFromContext(ctx); ok && call.grants.Allows("tasks:admin", repo.String()) {
-		return actor, true, nil
+		return actor, nil, true, nil
 	}
 	tok := externalTokenFromContext(ctx)
 	if tok == nil {
-		return actor, false, nil
+		return actor, nil, false, nil
 	}
 	owner := tok.OwnerPrincipal()
 	if owner == nil {
-		return actor, false, nil
+		return actor, nil, false, nil
 	}
 	cfg, err := c.Store.GetConfig(ctx)
 	if err != nil {
-		return actor, false, err
+		return actor, nil, false, err
 	}
 	trusted := cfg != nil && model.OwnerTrustedForTask(cfg.OwnerTrust, owner.ID, repo.String(), nil, nil)
-	return actor, trusted, nil
+	if !trusted {
+		return actor, nil, false, nil
+	}
+	approval := model.Attribution{Actor: model.OwnerTrustPrincipal, OnBehalfOf: owner}
+	return actor, &approval, true, nil
+}
+
+// checkAdoptedShepherdApproval gates updateAdoptedShepherd's approval of an
+// already-stored unapproved shepherd task under the same role ceiling,
+// external/agent approval rails, and destructive tasks:admin reason
+// requirements that POST /api/tasks/{id}/approve enforces.
+func (c *Client) checkAdoptedShepherdApproval(ctx context.Context, repo model.RepoRef, task model.Task) error {
+	if err := c.catalogueApprovalRefusal(ctx, task); err != nil {
+		return err
+	}
+	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+		var norm func(string) (string, error)
+		if c != nil && c.Store != nil {
+			norm = c.normalizeCapabilityID
+		}
+		allowedRepo := func(need APIScope, targetRepo string) bool {
+			targetRepo = strings.TrimSpace(targetRepo)
+			if targetRepo == "" {
+				return true
+			}
+			return a.allows(need, targetRepo)
+		}
+		if err := c.roleApprovalWithin(ctx, a, task, allowedRepo, norm); err != nil {
+			return forbiddenErrorf("%s", err)
+		}
+	}
+	by := c.requestActor(ctx).Actor
+	if by.Kind != model.PrincipalAgent {
+		return nil
+	}
+	targetRepo := repo.String()
+	if task.Target != nil {
+		targetRepo = c.canonicalRepo(*task.Target).String()
+	} else {
+		targetRepo = ""
+	}
+	if isExternalAgent(by) {
+		var set APIGrantSet
+		var reason string
+		hasGrants := false
+		if call, ok := agentCallFromContext(ctx); ok {
+			set, reason, hasGrants = call.grants, strings.TrimSpace(call.reason), true
+		} else if tok := externalTokenFromContext(ctx); tok != nil {
+			_, resolved, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+			if err != nil {
+				return forbiddenErrorf("external agent %q has invalid grants: %v", tok.Name, err)
+			}
+			if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+				resolved = resolved.Intersect(role.set).Without(role.deny)
+			}
+			set, hasGrants = resolved, true
+		}
+		if hasGrants {
+			if !set.Allows("tasks:admin", targetRepo) {
+				return forbiddenErrorf("%s cannot approve task %s: it is not approved, and adopting it would approve it first, "+
+					"which an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person "+
+					"approves it (docs/agent-api.md)", by.ID, task.ID)
+			}
+			if reason == "" {
+				return forbiddenErrorf("%s cannot approve task %s without a reason: it is not approved, and adopting it would "+
+					"approve it first, which is destructive (scope tasks:admin) as POST /api/tasks/{id}/approve is: give a reason "+
+					"(X-Grain-Acting-Reason, grain_invoke's reason)", by.ID, task.ID)
+			}
+		}
+		return c.externalApprovalRefusal(ctx, by.ID, task)
+	}
+	if call, ok := agentCallFromContext(ctx); ok {
+		if !call.grants.Allows("tasks:admin", targetRepo) {
+			return forbiddenErrorf("task %s cannot approve task %s: approving work needs api:tasks:admin", by.ID, task.ID)
+		}
+		if strings.TrimSpace(call.reason) == "" {
+			return forbiddenErrorf("task %s cannot approve task %s without a reason: it is not approved, and adopting it would "+
+				"approve it first, which is destructive (scope tasks:admin) as POST /api/tasks/{id}/approve is: give a reason (%s)",
+				by.ID, task.ID, ActingReasonHeader)
+		}
+	}
+	me := model.NormalizeTaskID(by.ID)
+	acting, err := c.Store.GetTask(ctx, me)
+	if err != nil {
+		return err
+	}
+	proposer, chain, err := c.proposalLineage(ctx, task, me)
+	if err != nil {
+		return err
+	}
+	if len(chain) > 0 {
+		how := "it proposed it"
+		if len(chain) > 1 {
+			how = "it is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
+		}
+		return forbiddenErrorf("task %s cannot approve task %s: %s, and an agent never approves its own proposals, "+
+			"directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them "+
+			"(docs/agent-api.md)", me, task.ID, how)
+	}
+	if holds, err := c.proposalPersonHolds(ctx, task, proposer, acting); err != nil {
+		return err
+	} else if len(holds) > 0 {
+		return forbiddenErrorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
+			"approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)",
+			me, task.ID, strings.Join(holds, "; "))
+	}
+	return c.agentMayApprove(ctx, task)
 }
 
 // pullRequestRef parses raw with its repository as this deployment
@@ -182,13 +289,18 @@ func (c *Client) AdoptPullRequest(ctx context.Context, req AdoptPullRequestReque
 	if err != nil {
 		return model.PullRequestAdoption{}, validationErrorf("mode: %v", err)
 	}
-	requester, approved, err := c.pullRequestFiling(ctx, ref.Repo)
+	requester, approval, approved, err := c.pullRequestFiling(ctx, ref.Repo)
 	if err != nil {
 		return model.PullRequestAdoption{}, err
 	}
+	role := accessRoleFromContext(ctx)
+	allowAutoMerge := requester.Actor.Kind == model.PrincipalHuman && !isDelegatedRequest(ctx) && (role == nil || role.Full)
 	return adopter.AdoptPullRequest(ctx, model.AdoptPullRequestInput{
 		PR: ref, Mode: mode, Spec: strings.TrimSpace(req.Spec), Design: strings.TrimSpace(req.Design),
-		Requester: requester, Approved: approved,
+		Requester: requester, Approval: approval, Approved: approved, AllowAutoMerge: allowAutoMerge,
+		CheckApprove: func(ctx context.Context, task model.Task) error {
+			return c.checkAdoptedShepherdApproval(ctx, ref.Repo, task)
+		},
 	})
 }
 
@@ -205,7 +317,7 @@ func (c *Client) ReviewPullRequest(ctx context.Context, req ReviewPullRequestReq
 	if err := requirePullRequestScopes(ctx, ref.Repo.String(), "repos:read"); err != nil {
 		return model.PullRequestReviewFiling{}, err
 	}
-	requester, approved, err := c.pullRequestFiling(ctx, ref.Repo)
+	requester, _, approved, err := c.pullRequestFiling(ctx, ref.Repo)
 	if err != nil {
 		return model.PullRequestReviewFiling{}, err
 	}
@@ -283,6 +395,19 @@ func (s *Server) handlePullRequestStatus(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleSubmitPullRequest(w http.ResponseWriter, r *http.Request) {
+	var req SubmitPullRequestRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	out, err := s.tasks.SubmitPullRequest(r.Context(), req)
+	if err != nil {
+		writePullRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // AdoptPullRequest is POST /api/pull-requests/adopt over the wire.
 func (c *HTTPClient) AdoptPullRequest(ctx context.Context, req AdoptPullRequestRequest) (model.PullRequestAdoption, error) {
 	var out model.PullRequestAdoption
@@ -305,5 +430,12 @@ func (c *HTTPClient) PullRequestStatus(ctx context.Context, pr string, threads b
 	}
 	var out model.PullRequestReport
 	err := c.do(ctx, http.MethodGet, "/api/pull-requests/status?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// SubmitPullRequest is POST /api/pull-requests/submit over the wire.
+func (c *HTTPClient) SubmitPullRequest(ctx context.Context, req SubmitPullRequestRequest) (SubmitPullRequestResult, error) {
+	var out SubmitPullRequestResult
+	err := c.do(ctx, http.MethodPost, "/api/pull-requests/submit", req, &out)
 	return out, err
 }

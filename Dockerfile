@@ -136,7 +136,7 @@ ARG GO_IMAGE=golang
 # both versions. Dockerfile.build pins the same value, and
 # TestEveryBaseImageIsPinnedByDigest keeps the two equal.
 ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
-ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # The docker CLI is copied out of this image rather than apt-installed:
 # Debian's own `docker.io` package pulls in the whole daemon --
 # containerd, runc, iptables, a systemd unit -- to get one client binary
@@ -145,11 +145,16 @@ ARG DOCKER_CLI_IMAGE=docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a
 # distroless base with nothing else in it), and this pin is the whole of
-# what decides which bytes it is. The version is the one
-# scripts/release-images.sh signs with (its COSIGN_VERSION default); the
-# two need not move together, since a signature from one cosign verifies
-# under another, but a bump of one is the moment to look at the other.
-ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31
+# what decides which bytes it is. This cosign only ever verifies, so it
+# is a v3 release while scripts/release-images.sh still signs with v2
+# (its COSIGN_VERSION default): v3 verifies the legacy `.sig`
+# signatures v2 writes, with the same flags and the same JSON on stdout
+# the Kubernetes upgrade path reads its digest from. The signer has to
+# keep writing that legacy format for as long as images carrying the
+# old v2.4.1 verifier are in the field -- v2.4.1 cannot find a v3
+# new-format bundle -- so a bump of one is the moment to look at the
+# other, but they need not move together.
+ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 
@@ -167,14 +172,14 @@ ENV GOTOOLCHAIN=local
 # same reason Dockerfile.build does -- and, as there, Debian 12's own
 # nodejs/npm are recent enough for the pinned Vite version, with no
 # NodeSource repo to add.
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates libcap2-bin \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY Dockerfile .grain-ca.cr[t] /tmp/
 RUN if [ -f /tmp/.grain-ca.crt ]; then \
 		cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt \
 		&& update-ca-certificates; \
-	fi && rm -f /tmp/.grain-ca.crt
+	fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /src
@@ -233,7 +238,8 @@ ARG RELEASE=
 # grain, unless a build with a main of its own says otherwise (the
 # Makefile's MAIN_grain).
 ARG MAIN_GRAIN=./cmd/grain
-RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_IMAGE=${K8S_SANDBOX_IMAGE} GRAIN_IMAGE_REF=${GRAIN_IMAGE_REF} RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN}
+RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_IMAGE=${K8S_SANDBOX_IMAGE} GRAIN_IMAGE_REF=${GRAIN_IMAGE_REF} RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN} \
+	&& setcap cap_net_bind_service=+ep /src/bin/grain
 
 # granule only -- not `granule` or `granule-mem-agent`, which run inside
 # each sandbox VM's own container (the image
@@ -251,8 +257,8 @@ RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_I
 # over it. Without this, a checkout the stage's git cannot read simply
 # moves the failed build four lines down.
 RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/granule github.com/gke-labs/granule/cmd/granule \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/github-webhook ./cmd/github-webhook \
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/granule github.com/gke-labs/granule/cmd/granule \
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/github-webhook ./cmd/github-webhook \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/grain-sandbox ./cmd/grain-sandbox
 
 # kubectl, for a deployment running -k8s-sandboxes: pkg/k8s creates,
@@ -275,9 +281,9 @@ RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
 # `curl: (6) Could not resolve host: dl.k8s.io`, a DNS blip on a step
 # that had passed in about a second on the commit before. --retry alone
 # does not count a failed lookup as transient, hence --retry-all-errors.
-ARG KUBECTL_VERSION=v1.37.0
-ARG KUBECTL_SHA256_AMD64=6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
-ARG KUBECTL_SHA256_ARM64=922df28df248cc00a9e025f947704f1d1482de64ece54cfe57e61f19eaf1eef3
+ARG KUBECTL_VERSION=v1.37.2
+ARG KUBECTL_SHA256_AMD64=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+ARG KUBECTL_SHA256_ARM64=fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
 RUN set -eu; \
 	arch="$(dpkg --print-architecture)"; \
 	case "$arch" in \
@@ -355,9 +361,12 @@ LABEL org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
 # takes only the binary out of this image, so none of it reaches the host.
 ENV GRAIN_IN_CONTAINER=1
 
-# libcap2-bin is installed, used, and removed in this one layer: setcap
-# below is the only thing that needs it, and leaving it in the image
-# would hand a task's own `bash -c` a tool for handing out capabilities.
+# libcap2-bin is installed, used on /usr/sbin/nft, and purged in this one
+# layer: leaving it in the image would hand a task's own `bash -c` a tool
+# for handing out capabilities. /usr/local/bin/grain gets its
+# CAP_NET_BIND_SERVICE file capability in the build stage before COPY so
+# BuildKit carries the extended attribute in that single COPY layer rather
+# than copying up the whole ~75MB binary a second time here.
 #
 # systemd is here for /bin/journalctl and nothing else -- see this file's
 # header. --no-install-recommends keeps it to the binaries and their
@@ -370,34 +379,80 @@ ENV GRAIN_IN_CONTAINER=1
 # Debian 12's default PostgreSQL 15: scripts/setup.sh provisions a
 # `postgres:16-bookworm` local server by default, and `pg_dump` refuses
 # to dump a server whose major version is newer than its own.
+# `create_main_cluster = false` prevents postgresql-common's postinst
+# from initializing an unused 38MB cluster at /var/lib/postgresql/16/main
+# (embedded clusters run `initdb` against `<data-dir>/postgres`).
 RUN set -eu; \
+	printf '%s\n' \
+		'path-exclude /usr/share/i18n/locales/*' \
+		'path-exclude /usr/share/i18n/charmaps/*' \
+		> /etc/dpkg/dpkg.cfg.d/grain-slim; \
 	apt-get update -o Acquire::Retries=3 \
 	&& apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
 		bash \
 		ca-certificates \
 		curl \
 		git \
+		libcap2-bin \
 		nftables \
 		openssh-client \
 		postgresql-common \
 		procps \
 		systemd \
 		tini; \
+	setcap cap_net_admin=+ep /usr/sbin/nft; \
+	apt-get purge -y --auto-remove libcap2-bin; \
 	test -f /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
+	mkdir -p /etc/postgresql-common/createcluster.d; \
+	echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.d/no-main-cluster.conf; \
 	echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
 		> /etc/apt/sources.list.d/pgdg.list; \
 	apt-get update -o Acquire::Retries=3 \
 	&& apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
 		postgresql-16 \
-		postgresql-client-16 \
-		postgresql-contrib-16; \
+		postgresql-client-16; \
 	rm -f /etc/apt/sources.list.d/pgdg.list; \
-	rm -rf /var/lib/apt/lists/*; \
+	rm -rf /var/lib/apt/lists/* /var/cache/debconf/*-old /var/log/apt/* /var/log/dpkg.log /var/log/alternatives.log; \
 	(useradd --system --uid 1000 --user-group --create-home --shell /bin/bash grain || true); \
 	chmod 0666 /etc/passwd /etc/group
 
 ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
 
+# Three of this daemon's listeners want a privileged port -- which an
+# unprivileged process cannot bind. The UI/API binds -ui-addr, and
+# scripts/setup.sh's own default for that is port 80; the package cache's
+# DNS interception binds 53, and the listeners its answers redirect a
+# sandbox's fetch to bind 443 and 80 of the address sandboxes reach this
+# host at (pkg/cli/packagecache.go).
+#
+# The unit setup.sh writes runs this container as the host's own
+# unprivileged `grain` account (never root), so systemd's
+# AmbientCapabilities, which is how the pre-container unit granted this,
+# has no equivalent here: a non-root process in a container gets no
+# capability from --cap-add alone. A file capability (set on /src/bin/grain
+# in the build stage before COPY below) does what is needed instead -- with
+# CAP_NET_BIND_SERVICE in the container's bounding set (the unit passes
+# --cap-add=NET_BIND_SERVICE, unconditionally now that it is not only the
+# UI's port at stake) this binary, and only this binary, gains it; every
+# other process in the container, a task's `bash -c` included, gets nothing.
+#
+# /usr/sbin/nft got CAP_NET_ADMIN in the apt layer above the same way, for
+# the host nftables chain that keeps a granule NetworkNone sandbox off the
+# network from outside its VM (pkg/orchestrator/granule_firewall.go). The
+# daemon fails such a sandbox's Acquire when it cannot install that chain,
+# and this image has no sudo for runNFT's fallback, so without this
+# NetworkNone cannot run on a container deployment at all. setup.sh adds
+# NET_ADMIN to the bounding set only when granule is on (docker_run_args);
+# without it the capability is never raised and nft is an ordinary binary.
+#
+# Unlike the grain binary's grant, this one is not only the daemon's:
+# the container runs --network host, so any process in it that runs nft
+# can change the host's firewall, a host-directory sandbox's own commands
+# included. That was weighed and accepted (grain/task-1364): every
+# deployment that gets NET_ADMIN here also has the host's docker socket
+# mounted in, which is already root-equivalent on the host for those same
+# processes. The guest VMs get nothing from it -- they run in their own
+# containers and network namespaces.
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /src/bin/grain /usr/local/bin/grain
 COPY --from=build /out/granule /usr/local/bin/granule
@@ -412,47 +467,6 @@ COPY --from=build /out/kubectl /usr/local/bin/kubectl
 COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
 # pkg/cli/daemon.go's defaultSourceDir -- keep the two in step.
 COPY --from=build /src-export /usr/local/share/grain/src
-
-# Three of this daemon's listeners want a privileged port -- which an
-# unprivileged process cannot bind. The UI/API binds -ui-addr, and
-# scripts/setup.sh's own default for that is port 80; the package cache's
-# DNS interception binds 53, and the listeners its answers redirect a
-# sandbox's fetch to bind 443 and 80 of the address sandboxes reach this
-# host at (pkg/cli/packagecache.go).
-#
-# The unit setup.sh writes runs this container as the host's own
-# unprivileged `grain` account (never root), so systemd's
-# AmbientCapabilities, which is how the pre-container unit granted this,
-# has no equivalent here: a non-root process in a container gets no
-# capability from --cap-add alone. A file capability does exactly what is
-# needed instead -- with CAP_NET_BIND_SERVICE in the container's bounding
-# set (the unit passes --cap-add=NET_BIND_SERVICE, unconditionally now
-# that it is not only the UI's port at stake) this binary, and only this
-# binary, gains it; every other process in the container, a task's
-# `bash -c` included, gets nothing.
-#
-# /usr/sbin/nft gets CAP_NET_ADMIN the same way, for the host nftables
-# chain that keeps a granule NetworkNone sandbox off the network from
-# outside its VM (pkg/orchestrator/granule_firewall.go). The daemon fails
-# such a sandbox's Acquire when it cannot install that chain, and this
-# image has no sudo for runNFT's fallback, so without this NetworkNone
-# cannot run on a container deployment at all. setup.sh adds NET_ADMIN to
-# the bounding set only when granule is on (docker_run_args); without it
-# the capability is never raised and nft is an ordinary binary.
-#
-# Unlike the grain binary's grant, this one is not only the daemon's:
-# the container runs --network host, so any process in it that runs nft
-# can change the host's firewall, a host-directory sandbox's own commands
-# included. That was weighed and accepted (grain/task-1364): every
-# deployment that gets NET_ADMIN here also has the host's docker socket
-# mounted in, which is already root-equivalent on the host for those same
-# processes. The guest VMs get nothing from it -- they run in their own
-# containers and network namespaces.
-RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
-	&& setcap cap_net_bind_service=+ep /usr/local/bin/grain \
-	&& setcap cap_net_admin=+ep /usr/sbin/nft \
-	&& apt-get purge -y libcap2-bin && apt-get autoremove -y \
-	&& rm -rf /var/lib/apt/lists/*
 
 # The Claude Code CLI, from the pinned release's own binary with its
 # digest checked, rather than through https://claude.ai/install.sh. That
