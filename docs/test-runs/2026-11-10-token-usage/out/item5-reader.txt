@@ -1,0 +1,21 @@
+== reader token (external agent, scopes [deployment:read]): GET /api/usage
+HTTP 403
+== reader: PUT /api/usage/settings
+{"error":"external agent API is disabled in Settings (externalAgentApi: false)"}
+
+HTTP 403
+== reader: grain usage -mode auto
+grain: external agent API is disabled in Settings (externalAgentApi: false)
+exit=0
+== after externalAgentApi: true
+== reader: GET /api/usage
+sory","minWorkers":2,"retentionDays":7,"budgets":[{"connection":"agy-walk","tokens":5000000,"window":"5h"}]}}
+
+HTTP 200
+== reader: PUT /api/usage/settings
+{"error":"external:usage-reader holds no api grant for scope settings:write, which PUT /api/usage/settings needs"}
+
+HTTP 403
+== reader: grain usage -mode auto
+exit=3
+grain: external:usage-reader holds no api grant for scope settings:write, which PUT /api/usage/settings needs
