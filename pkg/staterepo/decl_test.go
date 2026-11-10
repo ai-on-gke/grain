@@ -327,6 +327,7 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 				map[string]any{"capability": model.RepoReadRef, "with": map[string]any{"repo": "acme/tools"}},
 				model.RepoWriteRef + `={"base":"main","repo":"acme/site"}`,
 				map[string]any{"capability": model.APIRef("tasks:read"), "with": map[string]any{}},
+				model.APIRef("tasks:read"),
 			}
 		}
 	})
@@ -374,6 +375,22 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 		}
 		if got, want := entry["grants"], []any{model.APIGrantString("ci:read", "acme/widgets"), model.APIRef("tasks:read")}; !reflect.DeepEqual(got, want) {
 			t.Errorf("exported grants: = %#v, want %#v (the repository access stays under reads: and writes:)", got, want)
+		}
+	}
+
+	for _, bad := range []any{
+		map[string]any{"capability": model.APIRef("tasks:read"), "with": "not-a-map"},
+		map[string]any{"capability": model.APIRef("ci:read") + `={"repo":"acme/widgets"}`, "with": map[string]any{"repo": "acme/other"}},
+	} {
+		editSettings(t, work, "template", func(entries []map[string]any) {
+			for _, entry := range entries {
+				if entry["id"] == "tpl-1" {
+					entry["grants"] = []any{bad}
+				}
+			}
+		})
+		if _, err := staterepo.Check(ctx, db, work, model.SchemaVersion); err == nil {
+			t.Errorf("Check accepted malformed grant %#v", bad)
 		}
 	}
 }

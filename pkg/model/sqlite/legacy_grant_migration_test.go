@@ -590,12 +590,13 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 		!slices.Equal([]string(tq.Restrictions.Kinds), []string{"task"}) {
 		t.Fatalf("apiScopes.presets[test-quarantine] = %+v, want conservative intersection", tq)
 	}
-	if want := []string{"api:pipeline-control", "release-gate-read"}; !slices.Equal(cat.Defaults.Task, want) {
+	if want := []string{canonical("api:pipeline-control"), "release-gate-read"}; !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("catalogue.defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	// Migration 90 rewrites release-notes and memory to api:release-notes and
-	// api:memory; migration 128 then drops disabled api:memory from defaults.
-	if want := []string{"api:release-notes"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+	// api:memory; migration 128 then drops disabled api:memory from defaults,
+	// and migration 131 stores api:release-notes as its canonical reference.
+	if want := []string{canonical("api:release-notes")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 		t.Errorf("catalogue.defaults.repos[acme/widgets].task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 	}
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:memory"}}); err == nil {
@@ -1271,13 +1272,13 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 		if cat == nil {
 			t.Fatal("CapabilityPolicy.Catalogue nil")
 		}
-		if want := []string{"api:tasks:read", model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Task, want) {
+		if want := []string{canonical("api:tasks:read"), model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Task, want) {
 			t.Errorf("Catalogue.Defaults.Task = %v, want %v", cat.Defaults.Task, want)
 		}
 		if want := []string{model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.CI, want) {
 			t.Errorf("Catalogue.Defaults.CI = %v, want %v", cat.Defaults.CI, want)
 		}
-		if want := []string{model.GitHubSandboxRepoGrant, "api:tasks:read"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+		if want := []string{model.GitHubSandboxRepoGrant, canonical("api:tasks:read")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 		}
 		if want := []string{"release-gate-read", model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {

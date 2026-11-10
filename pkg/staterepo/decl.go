@@ -437,8 +437,8 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 						_, _, projected := projectedRepoRow(r)
 						return projected
 					})
-				}
-				if f.shape == shapeRepos || f.shape == shapeWrites {
+					out = appendUniqueGrants(out, rows, k.parent)
+				} else if f.shape == shapeRepos || f.shape == shapeWrites {
 					out = appendUniqueRows(out, rows)
 				} else {
 					out = append(out, rows...)
@@ -516,6 +516,22 @@ func projectedRepoRow(r map[string]any) (kind string, row map[string]any, ok boo
 func appendUniqueRows(out, rows []map[string]any) []map[string]any {
 	for _, r := range rows {
 		if !slices.ContainsFunc(out, func(o map[string]any) bool { return reflect.DeepEqual(o, r) }) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// appendUniqueGrants is out with each of rows whose (parent, capability) is
+// not already in it appended: a grant table's primary key is (parent,
+// capability), and two entries in `grants:` that fold to the same string
+// (such as `{capability: …/api#tasks:read, with: {}}` beside
+// `…/api#tasks:read`) are one row.
+func appendUniqueGrants(out, rows []map[string]any, parent string) []map[string]any {
+	for _, r := range rows {
+		if !slices.ContainsFunc(out, func(o map[string]any) bool {
+			return o[parent] == r[parent] && o["capability"] == r["capability"]
+		}) {
 			out = append(out, r)
 		}
 	}
@@ -1521,6 +1537,12 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 				// (unified-grants §1): the with: arguments fold into the
 				// stored <reference>=<json> string.
 				if with, ok := named["with"]; ok && with != nil {
+					if _, isObj := with.(map[string]any); !isObj {
+						return nil, fail(fmt.Sprintf("%s: with: must be a mapping", name))
+					}
+					if strings.Contains(strings.TrimSpace(name), "=") {
+						return nil, fail(fmt.Sprintf("%s: capability already carries =<json> arguments beside with:", name))
+					}
 					data, err := json.Marshal(with)
 					if err != nil {
 						return nil, fail(fmt.Sprintf("%s: with: %v", name, err))

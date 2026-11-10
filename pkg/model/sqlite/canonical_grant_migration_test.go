@@ -114,6 +114,20 @@ func TestMigration131StoresCanonicalReferencesWithFidelity(t *testing.T) {
 			DeclinedDefaults: []string{"api:tasks:read"}},
 		{ID: "quiet", Title: "Quiet", Capabilities: []string{model.GrainSourceGrant}},
 	}
+	cfg.CapabilityPolicy = model.CapabilityPolicy{
+		Catalogue: &model.CapabilityCatalogue{
+			Defaults: model.CatalogueDefaults{
+				Task: []string{"api:tasks:read", "release-gate-read"},
+				CI:   []string{"api:ci:read", "repo-read:acme/docs", model.APIRef("ci:read")},
+				Repos: map[string]model.CatalogueRepoDefaults{
+					"acme/widgets": {
+						Task: []string{"api:ci-read@acme/widgets"},
+						CI:   []string{"release-gate-read", "repo-write:acme/widgets"},
+					},
+				},
+			},
+		},
+	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +233,22 @@ func TestMigration131StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	}
 	if got, want := gotCfg.ConsoleSessions[1].Capabilities, []string{model.GrainSourceGrant}; !slices.Equal(got, want) {
 		t.Errorf("quiet capabilities = %v, want them unchanged", got)
+	}
+	cat := gotCfg.CapabilityPolicy.Catalogue
+	if cat == nil {
+		t.Fatal("capability policy catalogue was dropped")
+	}
+	if want := []string{model.APIRef("tasks:read"), "release-gate-read"}; !slices.Equal(cat.Defaults.Task, want) {
+		t.Errorf("catalogue task defaults = %v, want %v", cat.Defaults.Task, want)
+	}
+	if want := []string{model.APIRef("ci:read"), model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "docs"})}; !slices.Equal(cat.Defaults.CI, want) {
+		t.Errorf("catalogue CI defaults = %v, want %v", cat.Defaults.CI, want)
+	}
+	if want := []string{model.APIGrantString("ci-read", "acme/widgets")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+		t.Errorf("catalogue repo task defaults = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
+	}
+	if want := []string{"release-gate-read", model.RepoWriteGrant(widgets)}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
+		t.Errorf("catalogue repo CI defaults = %v, want %v", cat.Defaults.Repos["acme/widgets"].CI, want)
 	}
 	repo, err := store.GetRepoConfig(ctx, widgets)
 	if err != nil {

@@ -200,8 +200,9 @@ once with a fidelity test.**
   reference in a non-canonical spelling (`={}`, an unprinted repo), and
   any `repo-read:`/`repo-write:` a state-repository import brought in
   after 88 -- in `task_grant`, `template_grant`, `schedule_grant`,
-  `task_grant_wait`, both `default_capabilities`, `ci_capabilities` and the
-  console sessions' capabilities and `declinedDefaults`. A row whose
+  `task_grant_wait`, both `default_capabilities`, `ci_capabilities`,
+  `capability_policy`'s catalogue defaults, and the console sessions'
+  capabilities and `declinedDefaults`. A row whose
   reference its owner already holds is dropped. Bare in-process names
   (`release-gate-read` among them) and every other reference are left as
   they are. A grain/config import at the current schema runs the same

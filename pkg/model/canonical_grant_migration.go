@@ -82,10 +82,11 @@ func CanonicalStoredGrants(names []string) (out []string, changed bool) {
 // state-repository import after it) -- is rewritten to CanonicalStoredGrant's
 // reference in task_grant, template_grant, schedule_grant, task_grant_wait,
 // grain_config.default_capabilities, repo_config.default_capabilities and
-// ci_capabilities, and the console sessions' capabilities and declined
-// defaults. A row whose reference its owner already holds is dropped rather
-// than duplicated (rewriteLegacyGrantsMulti). The names are read off the store,
-// as migration 88's are, since api grants are parameterized by scope and repo.
+// ci_capabilities, capability_policy's catalogue defaults, and the console
+// sessions' capabilities and declined defaults. A row whose reference its
+// owner already holds is dropped rather than duplicated (rewriteLegacyGrantsMulti).
+// The names are read off the store, as migration 88's are, since api grants
+// are parameterized by scope and repo.
 //
 // A task's Target/Base, Reads and Writes stay their own columns and tables:
 // they are projected as #target, #read and #write grants by TaskRepoGrants,
@@ -108,6 +109,9 @@ func MigrateCanonicalGrants(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames); err != nil {
+		return err
+	}
+	if err := rewriteCatalogueDefaults(ctx, tx, renames); err != nil {
 		return err
 	}
 	return rewriteConsoleSessionDeclinedDefaults(ctx, tx, renames)
@@ -165,6 +169,27 @@ func canonicalGrantRenames(ctx context.Context, tx *sql.Tx) (map[string][]string
 					add(name)
 				}
 				for _, name := range s.DeclinedDefaults {
+					add(name)
+				}
+			}
+		}},
+		{"SELECT `capability_policy` FROM `grain_config`", func(stored string) {
+			policy, err := DecodeCapabilityPolicy(stored)
+			if err != nil || policy.Catalogue == nil {
+				return
+			}
+			cat := policy.Catalogue
+			for _, name := range cat.Defaults.Task {
+				add(name)
+			}
+			for _, name := range cat.Defaults.CI {
+				add(name)
+			}
+			for _, rd := range cat.Defaults.Repos {
+				for _, name := range rd.Task {
+					add(name)
+				}
+				for _, name := range rd.CI {
 					add(name)
 				}
 			}
@@ -231,6 +256,58 @@ func rewriteConsoleSessionDeclinedDefaults(ctx context.Context, tx *sql.Tx, rena
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE `grain_config` SET `console_sessions` = ? WHERE `id` = 1", string(data)); err != nil {
 		return fmt.Errorf("grain_config.console_sessions: rewriting declined defaults: %w", err)
+	}
+	return nil
+}
+
+// rewriteCatalogueDefaults rewrites the capability policy's catalogue
+// defaults (task, CI, and per-repository task and CI lists) without touching
+// policy rules, which already hold capability reference patterns.
+func rewriteCatalogueDefaults(ctx context.Context, tx *sql.Tx, renames map[string][]string) error {
+	var stored string
+	err := tx.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
+	if err == sql.ErrNoRows || (err == nil && strings.TrimSpace(stored) == "") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("grain_config.capability_policy: reading: %w", err)
+	}
+	policy, err := DecodeCapabilityPolicy(stored)
+	if err != nil || policy.Catalogue == nil {
+		return nil
+	}
+	cat := policy.Catalogue
+	rename := func(names []string) ([]string, bool) {
+		if next, did := renameCapabilityListMulti(names, renames); did {
+			return next, true
+		}
+		return names, false
+	}
+	var changed, did bool
+	if cat.Defaults.Task, did = rename(cat.Defaults.Task); did {
+		changed = true
+	}
+	if cat.Defaults.CI, did = rename(cat.Defaults.CI); did {
+		changed = true
+	}
+	for repo, rd := range cat.Defaults.Repos {
+		var task, ci bool
+		rd.Task, task = rename(rd.Task)
+		rd.CI, ci = rename(rd.CI)
+		if task || ci {
+			cat.Defaults.Repos[repo] = rd
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := EncodeCapabilityPolicy(policy)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE `grain_config` SET `capability_policy` = ? WHERE `id` = 1", encoded); err != nil {
+		return fmt.Errorf("grain_config.capability_policy: rewriting catalogue defaults: %w", err)
 	}
 	return nil
 }
