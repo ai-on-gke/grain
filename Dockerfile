@@ -149,7 +149,10 @@ ARG DOCKER_CLI_IMAGE=docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349
 # scripts/release-images.sh signs with (its COSIGN_VERSION default); the
 # two need not move together, since a signature from one cosign verifies
 # under another, but a bump of one is the moment to look at the other.
-ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31
+# Not v3 yet: v3 signs `--tlog-upload=false` only with
+# `--use-signing-config=false`, and its new-bundle signatures do not
+# verify under the v2.4.1 that installs before this one carry.
+ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 
