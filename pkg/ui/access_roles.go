@@ -106,6 +106,11 @@ var operatorOnlyRoutes = map[string]bool{
 	"POST /api/hostds/pending/{id}/accept":                          true,
 	"POST /api/hostds/pending/{id}/reject":                          true,
 	"/staging/{name}/{path...}":                                     true,
+	// Repointing grain/config at another remote hands everything the
+	// config repository grants -- host scripts, scope sets, secrets
+	// bindings -- to whoever can push there, on the next sync, with no
+	// Submit (task 3965). settings:write alone is not enough for that.
+	"POST /api/state-repo/remote": true,
 }
 
 // accessRole is what a verified session's matching allowlist entries let

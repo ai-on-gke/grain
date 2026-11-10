@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -220,18 +221,36 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 	}
 	// A paused task's request waits for the resume (TaskPause): RunNow
 	// leaves it out until then, so the note says so rather than promising
-	// the next cycle.
+	// the next cycle. Likewise a usage-limit pause, a durable setup
+	// suspension, and a clean interruption each state what actually holds
+	// the request rather than claiming a retry backoff when BackoffCount is 0.
 	when := "it starts ahead of the queue again once the retry backoff has passed"
+	switch {
+	case outcome.String == PausedOutcome || SuspensionKind(suspended.String) == SuspendUsageLimit:
+		when = "it starts ahead of the queue again once the usage-limit pause ends"
+	case SuspensionKind(suspended.String) == SuspendSetup:
+		when = "it starts ahead of the queue again once its suspension's hold has passed"
+	case outcome.String == InterruptedOutcome ||
+		SuspensionKind(suspended.String) == SuspendRestart ||
+		SuspensionKind(suspended.String) == SuspendOperatorPause ||
+		SuspensionKind(suspended.String) == SuspendCapability ||
+		SuspensionKind(suspended.String) == SuspendModel:
+		when = "it starts ahead of the queue again on the next dispatch cycle"
+	}
 	if p, err := getPause(ctx, tx, taskID); err != nil {
 		return false, err
 	} else if p != nil {
 		when = "it starts ahead of the queue once the task is resumed"
 	}
+	clause := ending
+	if !strings.Contains(ending, "before ") {
+		clause += " before it could do the work"
+	}
 	if _, err := addComment(ctx, tx, Comment{
 		TaskID: taskID,
 		Author: Attribution{Actor: Principal{Kind: PrincipalAutomation, ID: "grain"}},
-		Body: fmt.Sprintf("Run now kept: run %s %s before it could do the work, so the request "+
-			"still stands and %s.", runID, ending, when),
+		Body: fmt.Sprintf("Run now kept: run %s %s, so the request "+
+			"still stands and %s.", runID, clause, when),
 		CreatedAt: finished.Time,
 	}); err != nil {
 		return false, err

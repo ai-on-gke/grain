@@ -125,3 +125,132 @@ test("Back to a report focuses the backlog count or task that was followed", asy
   await followAndComeBack(page, task, path);
   await expect(task).toBeFocused();
 });
+
+test("Back from a standing session row on a tree board restores focus to that row's link", async ({
+  page,
+}) => {
+  const board = await seedBoard(page, {
+    name: `Return focus tree ${Date.now()}`,
+    kind: "tree",
+  });
+  const path = `/boards/${board.id}`;
+  await page.goto(path);
+
+  const sessionLink = page.locator('.task-tree-id[href="/tasks/13"]');
+  await expect(sessionLink).toBeVisible();
+  await followAndComeBack(page, sessionLink, path);
+  await expect(sessionLink).toBeFocused();
+});
+
+test("Moving one of two identical untitled panels from the keyboard keeps focus on the moved panel", async ({
+  page,
+}) => {
+  const board = await seedBoard(page, {
+    name: `Twin panels focus ${Date.now()}`,
+    kind: "panels",
+    panels: [
+      { kind: "list", orderKey: 1 },
+      { kind: "list", orderKey: 2 },
+    ],
+  });
+  await page.goto(`/boards/${board.id}`);
+  const secondHandle = page.getByRole("button", {
+    name: "Move panel 2, “Task list”",
+  });
+  await expect(secondHandle).toBeVisible();
+  await secondHandle.focus();
+  await page.keyboard.press("Enter");
+
+  const patchDone = page.waitForResponse(
+    (r) =>
+      r.url().includes(`/api/boards/${board.id}`) &&
+      r.request().method() === "PATCH",
+  );
+  const refreshDone = page.waitForResponse(
+    (r) => r.url().includes("/api/boards") && r.request().method() === "GET",
+  );
+  const slotAboveFirst = page.getByRole("button", {
+    name: "Move here, above panel 1, “Task list”",
+  });
+  await slotAboveFirst.focus();
+  await page.keyboard.press("Enter");
+  await patchDone;
+  await refreshDone;
+
+  await expect(
+    page.getByRole("button", { name: "Move panel 1, “Task list”" }),
+  ).toBeFocused();
+});
+
+test("Same-named boards across folders keep distinct accessible names and do not overlap Customize sidebar actions on phone", async ({
+  page,
+}) => {
+  const stamp = Date.now();
+  const folderA = `Ops Incident Triage ${stamp}`;
+  const folderB = `Zeta ${stamp}`;
+  const boardA = await seedBoard(page, {
+    name: `Triage ${stamp}`,
+    folder: folderA,
+    kind: "list",
+  });
+  const boardB = await seedBoard(page, {
+    name: `Triage ${stamp}`,
+    folder: folderB,
+    kind: "kanban",
+  });
+  const nameA = `Triage ${stamp}, in ${folderA}`;
+  const nameB = `Triage ${stamp}, in ${folderB}`;
+
+  try {
+    await page.goto("/boards");
+    await expect(page.getByRole("link", { name: nameA })).toHaveAttribute(
+      "href",
+      `/boards/${boardA.id}`,
+    );
+    await expect(page.getByRole("link", { name: nameB })).toHaveAttribute(
+      "href",
+      `/boards/${boardB.id}`,
+    );
+
+    await page.getByRole("button", { name: "Customize sidebar" }).click();
+    const dialog = page.getByRole("dialog", { name: "Customize sidebar" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Type").click();
+    await page.getByRole("option", { name: "Board" }).click();
+    await dialog.getByLabel("Item").click();
+    await page.getByRole("option", { name: nameA }).click();
+    await dialog.getByRole("button", { name: "Pin item" }).click();
+    await dialog.getByLabel("Item").click();
+    await page.getByRole("option", { name: nameB }).click();
+    await dialog.getByRole("button", { name: "Pin item" }).click();
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toHaveCount(0);
+
+    await expect(
+      page.locator("aside").getByRole("button", { name: nameA }),
+    ).toBeVisible();
+    await expect(
+      page.locator("aside").getByRole("button", { name: nameB }),
+    ).toBeVisible();
+
+    // Check phone width (390x844): long disambiguated label + Board chip stay
+    // strictly to the left of the pinned row's action buttons.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page
+      .getByRole("button", { name: /Open navigation|Navigation|Menu/i })
+      .first()
+      .click();
+    await page.getByRole("button", { name: "Customize sidebar" }).click();
+    await expect(dialog).toBeVisible();
+
+    const longRow = dialog.locator("li.MuiListItem-root", { hasText: nameA });
+    const chipBox = await longRow.locator(".MuiChip-root").boundingBox();
+    const actionsBox = await longRow
+      .locator(".customize-pinned-actions")
+      .boundingBox();
+    expect(chipBox.x + chipBox.width).toBeLessThanOrEqual(actionsBox.x);
+    await page.keyboard.press("Escape");
+  } finally {
+    await page.evaluate(() => localStorage.removeItem("grain.pinned"));
+  }
+});
