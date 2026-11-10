@@ -180,8 +180,6 @@ jobs:
       contents: read
       packages: write
       id-token: write
-      # The vulnerability scan's SARIF, for code scanning.
-      security-events: write
     concurrency:
       # An on-demand build is a group of its own, so it neither cancels nor
       # is cancelled by the branch's runs, and a second dispatch of the same
@@ -422,12 +420,10 @@ jobs:
           bash ./scripts/scan-images.sh --state "$RELEASE_IMAGES_STATE" --out image-vulns-report \
             --title "Release image vulnerabilities"
 
-      - name: Upload the scan to code scanning
-        if: ${{ !cancelled() && hashFiles('image-vulns-report/*.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: image-vulns-report
-
+      # No code scanning upload from here: that needs security-events:
+      # write on the job that holds the release's packages: write and
+      # signing identity. nightly.yml's image-vulns job scans and uploads
+      # every RC's published images instead.
       - name: Keep the vulnerability reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
