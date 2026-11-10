@@ -691,8 +691,13 @@ describe("ConsoleSessionPage", () => {
       screen.getByRole("button", { name: /Director capabilities/ }),
     );
 
-    expect(screen.getByText("acme/docs")).toBeInTheDocument();
-    expect(screen.getByText("acme/deploy")).toBeInTheDocument();
+    // Repository grants in the one Grants list (unified-grants slice 5).
+    expect(
+      screen.getByRole("group", { name: "acme/docs · read" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "acme/deploy · prod · write" }),
+    ).toBeInTheDocument();
   });
 
   it("lists the repositories every session reads apart from its own reads", async () => {
@@ -717,7 +722,12 @@ describe("ConsoleSessionPage", () => {
       screen.getByRole("button", { name: /Director capabilities/ }),
     );
 
-    expect(screen.getByText("acme/docs")).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "acme/docs · read" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "acme/widgets · read" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-auto-reads")).toHaveTextContent(
       "Also reads, by default: acme/widgets",
     );

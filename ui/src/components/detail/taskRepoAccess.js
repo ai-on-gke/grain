@@ -14,14 +14,19 @@
 
 import { useEffect, useState } from "react";
 import api from "../../api.js";
-import { knownRepos } from "../../state.js";
-import ReadOnlyReposField from "../ReadOnlyReposField.jsx";
 
-// ReadOnlyRepos is the "Reads" row Declared used to render, turned into
+// The task pane's repository grants (unified-grants slice 5): the repos
+// a task reads and the ones it writes, edited as lines of the Access
+// section's Grants list (CapabilityToggles, GrantsPicker's repos) where
+// the ReadOnlyRepos and WriteRepos fields used to stand. These hooks are
+// what those two fields held and sent, unchanged; what follows is their
+// own account of why.
+//
+// useTaskReads is the "Reads" row Declared used to render, turned into
 // the editor every other thing on this page can be changed through:
 // model.Task.Reads, the repos a run may clone but never push to, picked
 // with the same field NewTaskOverlay files a task through
-// (ReadOnlyReposField, grain/task-241) rather than being fixed forever
+// (grain/task-241) rather than being fixed forever
 // at whatever the task was created with.
 //
 // An edit here reaches a run already in flight, but only partly, and the
@@ -36,7 +41,7 @@ import ReadOnlyReposField from "../ReadOnlyReposField.jsx";
 // edit on a running task, and no pretence that it is free either: the
 // way to tell a live run about it is the comment box, the same as any
 // other change of mind mid-run.
-export default function ReadOnlyRepos({ t, tasks, config, act, showError }) {
+export function useTaskReads(t, act, showError) {
   // reads is held locally as well as sent, because Reads has no
   // per-entry attach/detach endpoint the way capabilities and
   // dependencies do -- ui.UpdateTaskRequest.Reads replaces the whole set,
@@ -78,26 +83,56 @@ export default function ReadOnlyRepos({ t, tasks, config, act, showError }) {
     await act(() => Promise.resolve(), t.id);
   };
 
-  return (
-    // The fieldset is here for the spacing its neighbours below get, but
-    // without their legend: ReadOnlyReposField labels its own box
-    // "Read-only repos", and a legend saying it again would put the same
-    // words on screen twice in a 260px column.
-    <fieldset>
-      <ReadOnlyReposField
-        options={knownRepos(config, tasks)}
-        value={reads}
-        onChange={change}
-        target={t.repo || ""}
-      />
-      {t.state === "running" && (
-        <p className="hint">
-          This run&apos;s sandbox was checked out when it started, so a repo
-          added now is not cloned into it and the agent is not told about it --
-          comment if the run needs to know. Fetching is allowed or refused as
-          this list stands, so a removal takes effect immediately.
-        </p>
-      )}
-    </fieldset>
-  );
+  return [reads, change];
+}
+
+// useTaskWrites is useTaskReads' counterpart for the other list of repos a
+// task carries (grain/task-54): model.Task.Writes, the repos it may have
+// work landed in besides its own target, each with the branch that work
+// goes on there.
+//
+// Same shape as ReadOnlyRepos and for the same reasons -- held locally
+// because ui.UpdateTaskRequest.Writes replaces the whole set rather than
+// attaching one entry, and put back on a rejected PATCH so the rows on
+// screen never outlive the set the task actually has.
+//
+// What an edit here reaches is different, though, which is why its hint
+// is not ReadOnlyRepos'. Nothing about a write target changes a run
+// already in flight in the way a read does: the branch and the repo are
+// read when a proposal is *filed*, at the end of the run
+// (orchestrator.relayProposedTasks), so a repo added now is honoured for
+// a run that is still going -- but the prompt naming these repos was
+// built when the run started, so an agent that was never told will not
+// think to propose anything for it.
+export function useTaskWrites(t, act, showError) {
+  const [writes, setWrites] = useState(() => t.writes || []);
+  // Re-seeded on the value, not the identity, of the task's own list --
+  // useTaskReads' own reason, with JSON standing in for its join since
+  // an entry here is an object rather than a string.
+  const serverWrites = JSON.stringify(t.writes || []);
+  useEffect(() => {
+    setWrites(JSON.parse(serverWrites));
+  }, [serverWrites]);
+
+  // Sent when an edit is finished rather than on every keystroke -- the
+  // branch box is a text input, and RepoGrants' onWritesCommit is what
+  // separates "the row now reads like this" from "this is the set now".
+  // A commit that matches what the server already has sends nothing:
+  // blurring the branch box without touching it is not an edit.
+  const change = async (next) => {
+    if (JSON.stringify(next) === serverWrites) return;
+    try {
+      await api(`/api/tasks/${t.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ writes: next }),
+      });
+    } catch (err) {
+      setWrites(JSON.parse(serverWrites));
+      showError(err);
+      return;
+    }
+    await act(() => Promise.resolve(), t.id);
+  };
+
+  return [writes, setWrites, change];
 }

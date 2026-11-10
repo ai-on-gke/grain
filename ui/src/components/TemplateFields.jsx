@@ -77,7 +77,8 @@ export function TemplateFieldInputs({ fields, values, onChange, onCommit }) {
           // they are still typing -- what a caller that asks the server
           // something per value (a composition preview) listens to
           // instead of onChange. A caller with nothing to send until
-          // submit leaves it out (WriteReposField's own split).
+          // submit leaves it out (RepoGrants' onWritesChange and
+          // onWritesCommit split the same way).
           onCommit={onCommit && ((v) => onCommit(f.name, v))}
         />
       ))}
@@ -218,7 +219,7 @@ export function TemplateFieldsEditor({ fields, onChange }) {
                 label: four rows of "Name" and "Default" on one form,
                 beside the template's own Name, is ambiguous read aloud
                 and ambiguous to anything else that finds a field by its
-                label (WriteReposField's own per-row ariaLabel). */}
+                label (RepoGrants' own per-line "Base branch in" label). */}
             <TextField
               label="Name"
               inputProps={{ "aria-label": `Input ${i + 1} name` }}

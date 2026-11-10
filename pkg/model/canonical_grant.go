@@ -301,6 +301,36 @@ func TaskRepoGrants(t Task) []Grant {
 	return out
 }
 
+// TaskRepoAccessKeys is the Key of each read and write grant
+// TaskRepoGrants projects t's Reads and Writes into, leaving out its
+// target: the grants a person adds and removes in the Grants list,
+// beside the target that is its own field.
+func TaskRepoAccessKeys(t Task) []string {
+	var out []string
+	for _, g := range TaskRepoGrants(t) {
+		if g.Capability != RepoTargetRef {
+			out = append(out, g.Key())
+		}
+	}
+	return out
+}
+
+// GrantChanges is what turning the grant strings before into after
+// attached and detached, each in the order its own list holds them.
+func GrantChanges(before, after []string) (attached, detached []string) {
+	for _, g := range after {
+		if !slices.Contains(before, g) && !slices.Contains(attached, g) {
+			attached = append(attached, g)
+		}
+	}
+	for _, g := range before {
+		if !slices.Contains(after, g) && !slices.Contains(detached, g) {
+			detached = append(detached, g)
+		}
+	}
+	return attached, detached
+}
+
 func repoBaseWith(repo, base string) json.RawMessage {
 	data, err := json.Marshal(map[string]string{"repo": repo, "base": base})
 	if err != nil {

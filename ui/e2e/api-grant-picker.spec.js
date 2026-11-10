@@ -458,7 +458,11 @@ async function grantSelfDebugAndRepoCIWrite(page, grants) {
 
 async function expectSelfDebugAndRepoCIWrite(grants) {
   const held = grants.locator(".grants-held");
-  await expect(held.locator("[data-grant]")).toHaveCount(2);
+  // Not counting the repository lines (the #target and any reads and
+  // writes, unified-grants slice 5).
+  await expect(
+    held.locator('[data-grant]:not([data-grant-kind^="repo"])'),
+  ).toHaveCount(2);
   await expect(
     held.locator(
       '[data-grant="https://grain.dev/capabilities/api#self-debug"]',
