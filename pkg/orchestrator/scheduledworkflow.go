@@ -585,6 +585,12 @@ func startPromotion(ctx context.Context, deps Deps, row model.ScheduledWorkflowR
 	if run.Conclusion == ci.ConclusionCancelled {
 		return
 	}
+	// A schedule's `grain-ci: true` exception on a ci_mode: github
+	// repository is for that schedule's own `schedule` run and nothing
+	// else: never widen it into starting promote.yml as a trusted release.
+	if disabled, _, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, row.Repo); err != nil || disabled {
+		return
+	}
 	started, err := deps.CI.Start(ctx, promotionRequest(row, run))
 	if err != nil {
 		log.Printf("orchestrator: schedule %s: starting %s after release-train run %s: %v",

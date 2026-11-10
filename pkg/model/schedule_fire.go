@@ -428,10 +428,14 @@ func (s *Store) workflowGrainCIOff(ctx context.Context, sched Schedule, target R
 }
 
 // WorkflowRunsUnder reports whether a run of this schedule's workflow
-// may start on grain CI in a repository whose ci_mode is mode: always
-// under grain's own modes, never under CIModeNone, and under
-// CIModeGitHub only when the schedule opts in (GrainCI).
+// may start on grain CI in a repository whose ci_mode is mode: never
+// when the schedule runs no grain CI workflow or under CIModeNone,
+// always under grain's own modes, and under CIModeGitHub only when the
+// schedule opts in (GrainCI).
 func (s Schedule) WorkflowRunsUnder(mode CIMode) bool {
+	if _, ok := workflowReviewSchedule(s); !ok {
+		return false
+	}
 	switch mode {
 	case CIModeNone:
 		return false

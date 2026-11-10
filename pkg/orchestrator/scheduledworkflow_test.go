@@ -1263,3 +1263,121 @@ daily:
 		t.Fatalf("started %d runs once the repository is ci_mode: none, want still 1", got)
 	}
 }
+
+// A `grain-ci: true` schedule exception on a ci_mode: github repository is
+// strictly for that schedule's own `schedule` event: finishing a
+// `release-train` workflow run there must not escalate into starting
+// `.grain/workflows/promote.yml` as a trusted release, and the sweep must
+// still cancel non-schedule events, runs on another repository, or runs
+// naming a non-workflow schedule row with GrainCI set.
+func TestScheduleGrainCIOptInDoesNotWidenBeyondTheSchedulesOwnRun(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: declaringRepo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	otherRepo := model.RepoRef{Owner: "acme", Name: "other"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: otherRepo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+
+	sched := releaseTrainSchedule(t, store, baseTime.Add(-time.Minute))
+	sched.GrainCI = true
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+
+	// A settings-style non-workflow schedule row with GrainCI: true has no
+	// workflow run to exempt.
+	nonWorkflow := model.Schedule{
+		ID:         "sched-task",
+		Title:      "Task schedule",
+		Body:       "body",
+		Target:     declaringRepo,
+		GrainCI:    true,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 60},
+		Enabled:    true,
+		NextRunAt:  baseTime.Add(24 * time.Hour),
+		CreatedAt:  baseTime,
+	}
+	if err := store.PutSchedule(ctx, nonWorkflow); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := newFakeCI()
+	deps := workflowDeps(store, runner)
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle start: %v", err)
+	}
+	if n := runner.started(); n != 1 {
+		t.Fatalf("started %d runs, want 1", n)
+	}
+	runner.mu.Lock()
+	r1 := runner.runs["run1"]
+	r1.Commit = "abc123"
+	runner.runs["run1"] = r1
+	runner.mu.Unlock()
+	runner.finish("run1", ci.ConclusionSuccess, ci.JobRun{JobID: "cut-or-promote", Conclusion: ci.ConclusionSuccess})
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Hour)); err != nil {
+		t.Fatalf("RunCycle collect: %v", err)
+	}
+	if n := runner.started(); n != 1 {
+		t.Fatalf("started %d runs after release-train finished on ci_mode: github, want no promote.yml TrustedRelease run", n)
+	}
+
+	// Seed runs that try to ride the opted-in schedule's RequestedBy across
+	// repositories, across events, or via a non-workflow schedule.
+	crossRepo, err := runner.Start(ctx, ci.Request{
+		Repo:        otherRepo.String(),
+		Ref:         "main",
+		Event:       ci.EventSchedule,
+		RequestedBy: "workflow-schedule:" + sched.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushEvent, err := runner.Start(ctx, ci.Request{
+		Repo:        declaringRepo.String(),
+		Ref:         "main",
+		Event:       ci.EventPush,
+		RequestedBy: "workflow-schedule:" + sched.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonWfRun, err := runner.Start(ctx, ci.Request{
+		Repo:        declaringRepo.String(),
+		Ref:         "main",
+		Event:       ci.EventSchedule,
+		RequestedBy: "workflow-schedule:" + nonWorkflow.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	badRetrySuffix, err := runner.Start(ctx, ci.Request{
+		Repo:        declaringRepo.String(),
+		Ref:         "main",
+		Event:       ci.EventSchedule,
+		RequestedBy: "workflow-schedule:" + sched.ID + "#infra-retry-notanint",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(2*time.Hour)); err != nil {
+		t.Fatalf("RunCycle sweep: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		id   string
+	}{
+		{"cross-repo schedule requester", crossRepo.ID},
+		{"push event with schedule requester", pushEvent.ID},
+		{"non-workflow schedule with GrainCI", nonWfRun.ID},
+		{"malformed infra-retry suffix", badRetrySuffix.ID},
+	} {
+		if _, cancelled := runner.reasons[tc.id]; !cancelled {
+			t.Errorf("%s (%s) was left running on a ci_mode: github repository, want it cancelled", tc.name, tc.id)
+		}
+	}
+}
