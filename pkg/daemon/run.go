@@ -394,7 +394,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// the UI's own open of the secrets (ui_server.go), never to this one,
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
-	go retrySecretsKey(ctx, secretStore)
+	retrySecretsKey(ctx, secretStore)
 	// A dispatch condition's text (DispatchConditions) is served to
 	// every queued task's reason, which an agent reads from its sandbox,
 	// so it is redacted with the same list the journal is read through

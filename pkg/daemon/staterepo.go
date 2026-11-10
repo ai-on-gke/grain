@@ -215,21 +215,27 @@ func OpenSecrets(dataDir string) *secrets.Store {
 // retrySecretsKey keeps the daemon's store trying to unwrap a key Cloud
 // KMS refused or could not be reached for at start, on the store's own
 // backoff, so that the store unlocks when KMS answers rather than on the
-// first request that happens to need a secret afterwards. It returns as
-// soon as the key loads, or the store fails for any other reason.
+// first request that happens to need a secret afterwards. A store that
+// is not waiting on KMS -- every store whose key is a plaintext file --
+// starts nothing; the loop it starts otherwise ends as soon as the key
+// loads, or the store fails for any other reason.
 func retrySecretsKey(ctx context.Context, store *secrets.Store) {
-	for {
-		err := store.Check()
-		if !errors.Is(err, secrets.ErrKMS) {
-			return
-		}
-		wait := max(store.KeyRetryIn(), time.Second)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(wait):
-		}
+	if !store.WaitingOnKMS() {
+		return
 	}
+	go func() {
+		for {
+			wait := max(store.KeyRetryIn(), time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			if err := store.Check(); !errors.Is(err, secrets.ErrKMS) {
+				return
+			}
+		}
+	}()
 }
 
 // moveSecretsOutOfStateRepo lifts an encrypted secrets file an earlier

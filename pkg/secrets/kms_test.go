@@ -116,8 +116,8 @@ func TestAStoreWhoseKeyKMSRefusesStaysOpenSaysWhyAndRetriesWithBackoff(t *testin
 	if fake.Decrypts() != calls {
 		t.Fatal("a resolve inside the backoff window called KMS again")
 	}
-	if s.KeyRetryIn() <= 0 {
-		t.Fatal("KeyRetryIn is 0 while waiting on KMS")
+	if s.KeyRetryIn() <= 0 || !s.WaitingOnKMS() {
+		t.Fatal("the store does not say it is waiting on KMS")
 	}
 
 	fake.Deny(false)
@@ -125,7 +125,7 @@ func TestAStoreWhoseKeyKMSRefusesStaysOpenSaysWhyAndRetriesWithBackoff(t *testin
 	if v, err := s.Resolve(context.Background(), "github/token"); err != nil || v != "ghp_example" {
 		t.Fatalf("Resolve once KMS answers = %q, %v", v, err)
 	}
-	if p := s.KeyProtection(); p.Error != "" || p.LastUnwrap.IsZero() {
+	if p := s.KeyProtection(); p.Error != "" || p.LastUnwrap.IsZero() || s.WaitingOnKMS() {
 		t.Fatalf("KeyProtection after recovery = %+v", p)
 	}
 }

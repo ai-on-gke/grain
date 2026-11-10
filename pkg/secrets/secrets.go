@@ -337,6 +337,14 @@ func (s *Store) KeyRetryIn() time.Duration {
 	return max(s.keyRetryAt.Sub(s.clock()), 0)
 }
 
+// WaitingOnKMS reports whether the store's key is not loaded because
+// KMS last failed to unwrap it.
+func (s *Store) WaitingOnKMS() bool {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	return s.key == nil && s.keyErr != nil
+}
+
 // KeyProtection is how this store's key is protected at rest, for
 // `grain state status` and Settings -> State.
 type KeyProtection struct {
