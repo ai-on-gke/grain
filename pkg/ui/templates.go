@@ -575,6 +575,22 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 		target = parsed
 	}
 	comp := model.ComposeTemplateTask(*tmpl, req.Fields, target, req.Base, req.Approved)
+	if push, err := c.templateDeclaredPush(ctx, id); err != nil {
+		return req, err
+	} else if push != nil {
+		if strings.TrimSpace(req.Description) != "" && req.Description != comp.Body {
+			return req, validationErrorf("template %s carries a declared push set from %s: description cannot be overridden when filing from it",
+				id, push.Path)
+		}
+		if req.rawBody != nil && strings.TrimSpace(*req.rawBody) != "" && *req.rawBody != comp.Body {
+			return req, validationErrorf("template %s carries a declared push set from %s: body cannot be overridden when filing from it",
+				id, push.Path)
+		}
+		if strings.TrimSpace(req.PromptExtension) != "" {
+			return req, validationErrorf("template %s carries a declared push set from %s: promptExtension cannot be set when filing from it",
+				id, push.Path)
+		}
+	}
 
 	if strings.TrimSpace(req.Title) == "" {
 		req.Title = comp.Title
