@@ -27,6 +27,7 @@ import (
 	"unicode"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // ProposalFiler persists an interactive proposal while its run is still live.
@@ -577,7 +578,7 @@ func requestSecretTool(sink *MockSink) Tool {
 					"type": "string",
 					"description": "The name to store it under, as grain resolves " +
 						"one: \"stripe-api-key\" for a secret holding a single " +
-						"value, or \"<secret>/<key>\" (\"github-app/app-id\") to " +
+						"value, or \"<secret>/<key>\" (\"deploy-bot/token\") to " +
 						"name one key of a secret that holds several. Use the " +
 						"name whatever will consume it already looks up, if " +
 						"something does.",
@@ -607,6 +608,17 @@ func requestSecretTool(sink *MockSink) Tool {
 					Text: fmt.Sprintf("%q is not a name grain can store a secret under: "+
 						"give \"<secret>\" or \"<secret>/<key>\", each part non-empty and "+
 						"free of spaces, backslashes and path components like \".\".", secret),
+					IsError: true,
+				}
+			}
+			if secrets.GrainHeld(secret) {
+				return Result{
+					Text: fmt.Sprintf("%q is where grain keeps its own credentials or signing "+
+						"material (a git credential, a CA, a signing key, a model or minter key, "+
+						"a release secret or a repository token), which a run may not ask a "+
+						"human to replace. Each has its own place in Settings (a git credential "+
+						"is added in Settings -> GitHub); if this work needs one, say so with "+
+						"ask_question or comment_on_issue instead.", secret),
 					IsError: true,
 				}
 			}

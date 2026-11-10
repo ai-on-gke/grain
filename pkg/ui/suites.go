@@ -676,7 +676,7 @@ func (s *Server) handleListSuites(w http.ResponseWriter, r *http.Request) {
 	list = filterList(list, func(st Suite) bool {
 		return page.matches(st.ID, st.Name)
 	})
-	writeList(w, list, page)
+	writeListBy(w, list, page, func(st Suite) string { return st.ID })
 }
 
 func (s *Server) handleCreateSuite(w http.ResponseWriter, r *http.Request) {
@@ -732,7 +732,7 @@ func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
 		runs = filterList(runs, func(run SuiteRun) bool { return strings.EqualFold(run.Repo, repo) })
 	}
 	runs = filterList(runs, func(run SuiteRun) bool { return list.matches(run.SuiteName, run.SuiteID) })
-	writeList(w, runs, list)
+	writeListBy(w, runs, list, func(run SuiteRun) string { return strconv.FormatInt(run.ID, 10) })
 }
 
 func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {

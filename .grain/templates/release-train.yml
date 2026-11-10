@@ -10,6 +10,24 @@ base: main
 # relays `nothing_needed`'s full reason into the task conversation and closes
 # the task outright so a finished tick never stalls the 20-minute train.
 nothing-needed: close
+# A tick is one script run and a close, and while one is open the
+# schedule's `overlap: skip` holds every tick after it -- so a tick must
+# never wait behind the backlog. On 2026-11-10 tick #3946 was filed at the
+# default priority 5 and sat queued fourteen hours behind priority-9 work,
+# and no rc was cut that day (grain/task-4086). 9 puts it at the top of
+# the ordinary queue, above Stage 2 qualification
+# (model.PriorityReleaseGate, 8); TestTheReleaseTrainTickIsFiledAtHighPriority
+# (tests/deploy) holds it there. A tick that still never starts is kept,
+# raised to the highest queued priority and reported in the Inbox
+# (pipeline.schedule-starved, model.EscalateStarvedScheduleBlocker) an hour
+# in.
+#
+# Not `admission: bypass`, which would start a tick past a full worker
+# pool: a declaration only a person may grant, so adding it here holds
+# every tick for a person's acceptance in Settings -> Capabilities --
+# and a held tick stalls the train exactly as a starved one does -- until
+# somebody accepts it. Add it together with that acceptance.
+priority: 9
 # Reads main's tests.yml / release.yml / nightly.yml verdicts (GitHub
 # Actions runs) and the rc's grain/release-qualification check run through
 # grain's own forge connection: `grain ci list --format github|github-jobs`

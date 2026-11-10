@@ -1992,14 +1992,7 @@ func TestTheInstallerNeedsNothingOnTheHostButDockerAndSystemd(t *testing.T) {
 	// optional rather than required -- host_git_version answers nothing
 	// on a host with no git, and the conversion then says what to run
 	// instead -- so it adds nothing to what a host must have.
-	//
-	// And installing from release assets (docs/release-assets.md) is a
-	// download from github.com before any image exists to run one in. It
-	// is optional too: with no curl on the host install_release_assets
-	// falls back to pulling the registry image, and manifest_field reads
-	// images.json with awk where there is no jq.
-	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true,
-		"install_release_assets": true, "manifest_field": true}
+	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true}
 	inHostGit := false
 
 	inImage := false
@@ -3432,10 +3425,29 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 	}
 }
 
+// TestGitHubWorkflowCosignDownloadsAreChecksummed: the cosign a release
+// workflow downloads is handed the image-signing key, so every install of
+// it -- the release asset and the image fallback alike -- is checked against
+// a pinned sha256 before it runs, not trusted for coming from a tag.
+func TestGitHubWorkflowCosignDownloadsAreChecksummed(t *testing.T) {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml", "promote-release.yml", "publish-release.yml"} {
+		content := stripComments(read(t, ".github", "workflows", name))
+		downloads := strings.Count(content, "/cosign-linux-amd64")
+		if downloads == 0 {
+			t.Errorf(".github/workflows/%s no longer downloads cosign-linux-amd64; update this test", name)
+		}
+		fallbacks := strings.Count(content, "docker cp \"$cid:/ko-app/cosign\"")
+		checks := strings.Count(content, "  /usr/local/bin/cosign\" | sha256sum -c -")
+		if checks != downloads+fallbacks {
+			t.Errorf(".github/workflows/%s installs cosign %d ways (%d release-asset downloads, %d image fallbacks) but checks a sha256 %d times; pin a checksum for each", name, downloads+fallbacks, downloads, fallbacks, checks)
+		}
+	}
+}
+
 func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
 	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
 		content := stripComments(read(t, ".github", "workflows", name))
-		contains(t, content, "gcr.io/projectsigstore/cosign:v2.4.1@sha256:")
+		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:")
 		for _, line := range strings.Split(content, "\n") {
 			if !strings.Contains(line, "curl ") || strings.Contains(line, "curl -fsSIL") {
 				continue

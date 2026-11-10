@@ -57,6 +57,15 @@ body: |
     (`git log --oneline <latest>..origin/main`), the train is not cutting: check
     the newest `release-train.yml` runs and say what they reported
     (`release_waits=`, `rc_held=`, no LKG commit).
+  - **A starved train tick.** A release-train task (tagged
+    `schedule:<the release-train schedule's id>`) that has been `queued` for
+    more than 1 hour without ever starting holds every tick after it
+    (`overlap: skip`), so the train stops for as long as it waits. Report the
+    task, how long it has waited and its priority. Check that grain raised
+    `pipeline.schedule-starved:<schedule id>` for it and raised its
+    priority (`docs/schedules.md`). If it has not, raise a warning yourself
+    with
+    `grain notify --severity warning --subject release-train-starved --title "Release train tick #<id> queued <duration> without starting"`.
   - **A red rc.** For each `vX.Y.0-rc.N-discarded` in the last 24 hours, report
     the attempt number and whether `pipeline.rc-failed:<rc tag>` triage or
     `[rc-blocker <rc tag>]` tasks exist (`grain task list` / `grain task read`,

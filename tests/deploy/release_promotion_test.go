@@ -274,6 +274,35 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	}
 }
 
+// trainTickPriority is the least priority a release-train tick may be
+// filed at: above model.PriorityReleaseGate's Stage 2 work, at the top
+// of what a busy queue holds. On 2026-11-10 tick #3946 was filed at the
+// default 5 and sat queued fourteen hours behind priority-9 work while
+// overlap: skip held every later tick, and no rc was cut that day
+// (grain/task-4086).
+const trainTickPriority = 9
+
+// A release-train tick is one script run and a close: it must never wait
+// behind the backlog, because a tick that waits holds every tick after it.
+func TestTheReleaseTrainTickIsFiledAtHighPriority(t *testing.T) {
+	decl := declarations(t)
+	for _, tmpl := range decl.Templates {
+		if tmpl.Path != ".grain/templates/release-train.yml" {
+			continue
+		}
+		if tmpl.Template.Priority == nil {
+			t.Fatalf(".grain/templates/release-train.yml sets no priority:, so every tick files at %d and starves "+
+				"behind the backlog; set priority: %d or more", model.DefaultTaskPriority, trainTickPriority)
+		}
+		if *tmpl.Template.Priority < trainTickPriority || *tmpl.Template.Priority <= model.PriorityReleaseGate {
+			t.Errorf(".grain/templates/release-train.yml priority is %d, want at least %d (above the backlog and "+
+				"Stage 2's %d)", *tmpl.Template.Priority, trainTickPriority, model.PriorityReleaseGate)
+		}
+		return
+	}
+	t.Fatal(".grain/templates/release-train.yml is not declared")
+}
+
 // The train's grant reaches the release now (playbook §1): vM.Y.0 created,
 // latest force-moved -- and nothing that would move or delete a release,
 // tag a patch or retract one. The script's own train_ref names the same.

@@ -1481,18 +1481,6 @@ export default function UpgradePanel({
               <dd className={`upgrade-phase upgrade-phase-${status.phase}`}>
                 {status.phase}
               </dd>
-              {status.source && (
-                <>
-                  <dt>Image source</dt>
-                  <dd>{status.source}</dd>
-                </>
-              )}
-              {status.fallbackNote && (
-                <>
-                  <dt>Fallback</dt>
-                  <dd>{status.fallbackNote}</dd>
-                </>
-              )}
               {status.detail && (
                 <>
                   <dt>Detail</dt>

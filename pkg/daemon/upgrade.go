@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -173,7 +173,7 @@ func deploymentMode(cfg Config) upgrade.Mode {
 // store is the same deployment's rows at the level the pause lives at,
 // and it is what an upgrade holds the queue with while it runs
 // (orchestrator.UpgradeHold). Nil takes no hold.
-func newUpgrader(cfg Config, db *sql.DB, store *model.Store, _ ...*gitproxy.CredentialSet) *upgrade.Upgrader {
+func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 	if cfg.DisableSelfUpgrade {
 		return nil
 	}
@@ -271,11 +271,8 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store, _ ...*gitproxy.Cred
 				UnitFlags:          cfg.UnitFlags,
 				FlagNamesArgs:      []string{"daemon", "-flag-names"},
 				Track:              track,
-				Source:             upgrade.ImageSource(strings.TrimSpace(cfg.UpgradeImageSource)),
-				SourceLocked:       cfg.UpgradeImageSourceLocked,
+				Source:             upgrade.ImageSource(strings.TrimSpace(os.Getenv("GRAIN_UPGRADE_IMAGE_SOURCE"))),
 				SourceOverrideFile: filepath.Join(cfg.DataDir, "upgrade-image-source.json"),
-				Fallback:           upgrade.ImageSource(strings.TrimSpace(cfg.UpgradeImageFallback)),
-				FallbackExplicit:   cfg.UpgradeImageFallbackExplicit,
 			},
 			HealthCheckArgs: []string{"schema-version"},
 			// What the pane previews when a target is chosen: the

@@ -15,12 +15,15 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/console"
 )
 
@@ -157,7 +160,7 @@ func (s *Server) handleListConsoles(w http.ResponseWriter, r *http.Request) {
 		matched := filterList(sessions, func(cs ConsoleSession) bool {
 			return list.matches(cs.TaskID, cs.Title, cs.Repo)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(cs ConsoleSession) string { return cs.TaskID })
 		resp.Sessions = page.Items
 		resp.Total = page.Total
 		resp.Truncated = page.Truncated
@@ -186,13 +189,80 @@ func (s *Server) handleConsoleOutput(w http.ResponseWriter, r *http.Request) {
 		}
 		offset = parsed
 	}
-	data, next, dropped := session.Output(offset)
+	// A console is a run's terminal, and sessions:read -- grain/viewer's
+	// -- reads anybody's: what it printed goes through the same redaction
+	// the Logs pane's lines do, so a credential the run cat-ed or echoed
+	// is not handed to a reader who holds no grant of it. Offsets stay the
+	// session's own, so a client asking for what follows is unaffected.
+	//
+	// The offset is the caller's to choose, so the redaction reads from
+	// the start of the line it falls in (consoleRedactContext at most
+	// before it): asked for what follows a point inside a credential, the
+	// route cuts the whole credential rather than serve the rest of it.
+	from := max(offset-consoleRedactContext, 0)
+	window, next, _ := session.Output(from)
+	start := next - int64(len(window))
+	var dropped bool
+	switch {
+	case offset < start:
+		dropped = offset > 0 || start > 0
+		offset = start
+	case offset > next:
+		// What console.Session.Output does too: a client asking about
+		// output that does not exist yet is given all there is.
+		dropped = true
+		window, next, _ = session.Output(0)
+		start = next - int64(len(window))
+		offset = start
+	}
+	data := s.redactConsoleOutput(window, int(offset-start))
 	writeJSON(w, http.StatusOK, ConsoleOutputResponse{
 		Output:  base64.StdEncoding.EncodeToString(data),
 		Offset:  next,
 		Dropped: dropped,
 		Live:    session.Info().Live,
 	})
+}
+
+// consoleRedactContext is how far before a requested offset
+// handleConsoleOutput reads for the start of its line.
+const consoleRedactContext = 64 << 10
+
+// redactConsoleOutput is window[at:] with every credential the log
+// redactor knows, and every credential shape, cut out -- cut with the
+// line at falls in read whole, so one that starts before at is cut too.
+// Without a redactor of the daemon's own it still cuts the shapes; one
+// that cannot be built withholds the output rather than serve it
+// unredacted.
+func (s *Server) redactConsoleOutput(window []byte, at int) []byte {
+	data := window[at:]
+	if len(data) == 0 {
+		return data
+	}
+	redactor := grainlog.NewRedactor(nil)
+	if s.tasks.Config.LogRedactor != nil {
+		var err error
+		redactor, err = s.tasks.Config.LogRedactor()
+		if err != nil || redactor == nil {
+			return []byte("\r\n[grain: this output is withheld: the credentials that would have to be redacted out of it could not be read]\r\n")
+		}
+	}
+	line := bytes.LastIndexByte(window[:at], '\n') + 1
+	before, _ := redactor.Text(string(window[line:at]))
+	out, n := redactor.Text(string(window[line:]))
+	if n == 0 {
+		return data
+	}
+	if strings.HasPrefix(out, before) {
+		return []byte(out[len(before):])
+	}
+	// A credential straddles at: serve from where the two diverge, which
+	// repeats a little of what the client has rather than any of it.
+	common := 0
+	for common < len(before) && common < len(out) && before[common] == out[common] {
+		common++
+	}
+	return []byte(out[common:])
 }
 
 // handleConsoleInput is somebody typing.
