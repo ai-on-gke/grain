@@ -15,6 +15,7 @@
 package model_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,75 @@ func TestInitClearsSpentRunNowStamps(t *testing.T) {
 		}
 		if (got == nil) != (want == nil) || got != nil && !got.Equal(*want) {
 			t.Errorf("%s: RunNowAt = %v after Init, want %v", id, got, want)
+		}
+	}
+}
+
+func TestSettleRunNowNotesAndOperatorPauseKind(t *testing.T) {
+	store, ctx := open(t)
+	for _, id := range []string{"setup", "dursetup", "usagelimit", "oppause", "restart"} {
+		if err := store.PutTask(ctx, model.Task{
+			ID: id, Intent: model.IntentImplement, Title: id,
+			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Binding:  model.BindingDirective,
+			Approval: &model.Attribution{Actor: human},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		asked := now.Add(-time.Minute)
+		if err := store.ObserveField(ctx, id, asked, func(o *model.Observation) { o.RunNowAt = &asked }); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.StartRun(ctx, model.Run{ID: id + "-1", TaskID: id, Attempt: 1, StartedAt: now}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.Pause(ctx, model.TaskPause{TaskID: "oppause", PausedBy: human, PausedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "setup-1", now.Add(time.Second), model.SetupFailedOutcome, "mkdir denied"); err != nil {
+		t.Fatal(err)
+	}
+	resumeAt := now.Add(2 * time.Minute)
+	if err := store.Suspend(ctx, model.Suspension{RunID: "dursetup-1", TaskID: "dursetup", Kind: model.SuspendSetup,
+		Detail: "mkdir denied", ResumeAt: &resumeAt, CreatedAt: now.Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "usagelimit-1", now.Add(time.Second), model.PausedOutcome, "quota exceeded"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "oppause-1", now.Add(time.Second), model.InterruptedOutcome, model.OperatorPausedDetail); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "restart-1", now.Add(time.Second), model.InterruptedOutcome, model.InterruptedDetail); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.Runs(ctx, "oppause")
+	if err != nil || len(runs) != 1 || runs[0].SuspendKind != model.SuspendOperatorPause {
+		t.Fatalf("oppause run = %+v (%v), want SuspendOperatorPause", runs, err)
+	}
+
+	checks := []struct {
+		id, want, forbid string
+	}{
+		{"setup", "once the retry backoff has passed", "before reaching its agent before"},
+		{"dursetup", "once its suspension's hold has passed", "before reaching its agent before"},
+		{"usagelimit", "once the usage-limit pause ends", "retry backoff"},
+		{"oppause", "once the task is resumed", "retry backoff"},
+		{"restart", "on the next dispatch cycle", "retry backoff"},
+	}
+	for _, tc := range checks {
+		comments, err := store.Comments(ctx, tc.id)
+		if err != nil || len(comments) != 1 {
+			t.Fatalf("%s comments = %+v (%v), want 1", tc.id, comments, err)
+		}
+		body := comments[0].Body
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("%s note = %q, want %q", tc.id, body, tc.want)
+		}
+		if strings.Contains(body, tc.forbid) {
+			t.Errorf("%s note = %q, must not contain %q", tc.id, body, tc.forbid)
 		}
 	}
 }

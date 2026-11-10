@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Alert, Snackbar } from "@mui/material";
-import { commentIdFromHash } from "../commentLinks.js";
+import { commentIdFromHash, malformedCommentHash } from "../commentLinks.js";
 
 // HIGHLIGHT_MS is how long a linked comment stays marked once it has
 // been scrolled to (.comment-highlight in style.css fades over the same).
@@ -58,15 +58,18 @@ function revealComment(el) {
 // linkedComment is the comment the address links to on task taskId, as
 // a fresh target, or null. A /tasks/<id> address naming some other task
 // is that task's link, not this one's: following it from here is a
-// navigation to that task, whose own pane looks for the comment.
+// navigation to that task, whose own pane looks for the comment. A
+// #comment= naming no comment is a target with an empty id, which is
+// said rather than ignored.
 function linkedComment(taskId) {
-  const id = commentIdFromHash(window.location.hash);
-  if (!id) return null;
+  const hash = window.location.hash;
+  const id = commentIdFromHash(hash);
+  if (!id && !malformedCommentHash(hash)) return null;
   const m = /^\/tasks\/([^/]+)/.exec(window.location.pathname);
   if (m && taskId != null && decodeURIComponent(m[1]) !== String(taskId)) {
     return null;
   }
-  return { id };
+  return { id, hash: hash.slice(0, 40) };
 }
 
 // useCommentDeepLink follows the #comment=<id> on the address
@@ -105,6 +108,11 @@ function useCommentDeepLink(t) {
   const comments = t?.comments;
   useEffect(() => {
     if (!target || !Array.isArray(comments)) return undefined;
+    if (!target.id) {
+      setNotice(`This link's ${target.hash} does not name a comment.`);
+      setTarget(null);
+      return undefined;
+    }
     if (!comments.some((c) => String(c.id) === target.id)) {
       setNotice(`Comment ${target.id} is not in this task's conversation.`);
       setTarget(null);
@@ -126,9 +134,17 @@ function useCommentDeepLink(t) {
       }
       revealComment(el);
       setTarget(null);
+      // A notice left by an earlier link is about that one, not this.
+      setNotice("");
       // A frame for a <details> just opened to lay its contents out.
       requestAnimationFrame(() => {
         el.scrollIntoView?.({ block: "center" });
+        // Focus goes to the comment too, as it does to a fragment's
+        // target on a page the browser loads itself: a screen reader
+        // reads the comment out, and Tab carries on from it (to its own
+        // Copy link) rather than from wherever focus was.
+        if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+        el.focus?.({ preventScroll: true });
         el.classList.remove("comment-highlight");
         // Restarts the fade on a comment linked to twice in a row.
         void el.offsetWidth;
