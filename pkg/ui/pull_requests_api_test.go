@@ -320,7 +320,7 @@ func TestAdoptPullRequestEnforcesAutoMergeRoleApprovalWithinAndExternalApprovalR
 	seedShepherd := func(prNum int, edit func(*model.Task)) string {
 		t.Helper()
 		seq++
-		id := "8" + strconv.Itoa(1000+seq)[1:]
+		id := "8" + strconv.Itoa(1000 + seq)[1:]
 		ref := "acme/widgets#" + strconv.Itoa(prNum)
 		task := model.Task{
 			ID:     id,
