@@ -303,6 +303,15 @@ func (s *Server) console(w http.ResponseWriter, r *http.Request) (*console.Sessi
 			writeError(w, http.StatusNotFound, console.ErrNoSession)
 			return nil, false
 		}
+		if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
+			allowedRepo := func(need APIScope, targetRepo string) bool {
+				return targetRepo == "" || a.allows(need, targetRepo)
+			}
+			if err := s.tasks.roleTaskWithin(r.Context(), a, *task, "access console of", allowedRepo, s.normalizeCapFn()); err != nil {
+				writeError(w, http.StatusForbidden, err)
+				return nil, false
+			}
+		}
 	}
 	session := s.tasks.Config.Consoles.Get(id)
 	if session == nil {

@@ -3109,7 +3109,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
 		limitedRole = true
 	}
+	if why := model.ConfigRepoProposalHold(model.Task{Target: target, Writes: writes}); why != "" &&
+		proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
+		if needsPersonWhy == "" {
+			needsPersonWhy = why
+		} else {
+			needsPersonWhy += "; " + why
+		}
+	}
 	catalogueHold := false
+	if needsPersonWhy != "" && proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
+		catalogueHold, req.Approved = true, false
+	}
 	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
@@ -4255,6 +4266,11 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		defaults, err := c.grantsFor(ids, model.GrantByDefault)
 		if err != nil {
 			return nil, nil, err
+		}
+		if a := accessRoleFromContext(ctx); a != nil && len(a.deny) > 0 {
+			defaults = slices.DeleteFunc(defaults, func(g model.Grant) bool {
+				return grantDeniedByRole(a, g.Capability)
+			})
 		}
 		grants = defaults
 	}
@@ -6786,7 +6802,8 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 			return err
 		}
 	}
-	if obs == nil || obs.PendingQuestionCommentID == nil {
+	if obs == nil || obs.PendingQuestionCommentID == nil ||
+		inGrainAgentTaskID(by.Actor) != "" || by.Actor.Kind == model.PrincipalAutomation {
 		if (wokeOnMessage || (task.Interactive && isPerson)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}
