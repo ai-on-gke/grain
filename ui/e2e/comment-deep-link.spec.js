@@ -330,3 +330,80 @@ test("Back and Forward retrace a comment link followed in place", async ({
   await expect(entry).toHaveClass(/comment-highlight/);
   expect(await page.evaluate(() => window.__noReload)).toBe(true);
 });
+
+// contrastAtPeak is the contrast of the linked comment's text against
+// the highlight at its strongest (the keyframes' 0%), read off the pixels
+// the page actually paints -- computed colors miss the overlay MUI's
+// dark Paper draws as a background-image. The comment's most common
+// pixel is the highlight; the pixel furthest from it, the text.
+async function contrastAtPeak(page, el) {
+  await el.evaluate((node) => {
+    for (const a of node.getAnimations()) {
+      a.pause();
+      a.currentTime = 0;
+    }
+  });
+  const png = (await el.screenshot({ animations: "allow" })).toString("base64");
+  return page.evaluate(async (data) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${data}`;
+    await img.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const px = ctx.getImageData(0, 0, img.width, img.height).data;
+    const lum = (r, g, b) => {
+      const f = (v) => {
+        const c = v / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    const counts = new Map();
+    // Inset past the 2px ring at the edges.
+    for (let y = 4; y < img.height - 4; y++) {
+      for (let x = 4; x < img.width - 4; x++) {
+        const i = (y * img.width + x) * 4;
+        const k = `${px[i]},${px[i + 1]},${px[i + 2]}`;
+        counts.set(k, (counts.get(k) || 0) + 1);
+      }
+    }
+    const bg = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const lb = lum(...bg.split(",").map(Number));
+    let best = 1;
+    for (const k of counts.keys()) {
+      const lt = lum(...k.split(",").map(Number));
+      const [hi, lo] = lt > lb ? [lt, lb] : [lb, lt];
+      best = Math.max(best, (hi + 0.05) / (lo + 0.05));
+    }
+    return best;
+  }, png);
+}
+
+test("a highlighted comment's text keeps 4.5:1 contrast in light and dark", async ({
+  page,
+  request,
+}) => {
+  const filed = await request.post("/api/tasks", {
+    data: { title: "Deep link contrast", body: "x", approved: false },
+  });
+  const task = await filed.json();
+  await request.post(`/api/tasks/${task.id}/comments`, {
+    data: { body: "Text that has to stay readable while highlighted." },
+  });
+  const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
+  const id = detail.comments[0].id;
+  for (const colorScheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme });
+    await page.goto("about:blank");
+    await page.goto(`/tasks/${task.id}#comment=${id}`);
+    const entry = page.locator(`[data-comment-id="${id}"]`);
+    await expect(entry).toHaveClass(/comment-highlight/);
+    expect(
+      await contrastAtPeak(page, entry),
+      `${colorScheme} body text on the highlight`,
+    ).toBeGreaterThanOrEqual(4.5);
+  }
+});

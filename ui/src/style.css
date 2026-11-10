@@ -5411,7 +5411,10 @@ a.committed-context-sha:hover {
 @keyframes comment-highlight {
   0%,
   40% {
-    background: color-mix(in srgb, var(--accent, #6366f1) 18%, transparent);
+    /* 8%, not more: the comment's own text has to keep 4.5:1 against
+       it in both themes (18% left dark-theme body text at 3.97:1). The
+       ring is what marks the comment. */
+    background: color-mix(in srgb, var(--accent, #6366f1) 8%, transparent);
     box-shadow: 0 0 0 2px var(--accent, #6366f1);
   }
   100% {

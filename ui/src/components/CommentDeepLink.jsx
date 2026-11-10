@@ -134,6 +134,8 @@ function useCommentDeepLink(t) {
       }
       revealComment(el);
       setTarget(null);
+      // A notice left by an earlier link is about that one, not this.
+      setNotice("");
       // A frame for a <details> just opened to lay its contents out.
       requestAnimationFrame(() => {
         el.scrollIntoView?.({ block: "center" });
