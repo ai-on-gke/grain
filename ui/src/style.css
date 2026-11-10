@@ -4384,6 +4384,44 @@ fieldset legend {
   margin-top: 0.15rem;
   word-break: break-word;
 }
+/* A comment a durable task's compaction folded into its handover
+   (DT-15): kept, collapsed behind one muted line. */
+.timeline-summarised > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+/* The current brief's own controls under it: Edit, the original
+   description and the brief's history (DT-15). */
+.brief-header {
+  margin-top: 1rem;
+}
+.brief-header + .description {
+  margin-top: 0.35rem;
+}
+.brief-extras {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: -0.5rem 0 1rem;
+}
+.brief-extras > details {
+  align-self: stretch;
+}
+.brief-extras > details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.brief-history {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+.brief-history .description {
+  margin: 0.25rem 0 0.75rem;
+}
 .comment-form,
 .pending-question-form {
   display: flex;
