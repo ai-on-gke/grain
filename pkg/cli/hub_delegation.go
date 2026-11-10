@@ -80,7 +80,7 @@ func cmdHubDelegatingApps(ctx context.Context, c *ui.HTTPClient, out *printer, a
 	case "enable":
 		return cmdHubDelegatingAppsSetDisabled(ctx, c, out, subArgs, false)
 	default:
-		return fmt.Errorf("unknown registry delegating-apps subcommand %q\n%s", sub, hubDelegatingAppsUsage)
+		return fmt.Errorf("unknown hub delegating-apps subcommand %q\n%s", sub, hubDelegatingAppsUsage)
 	}
 }
 
@@ -98,7 +98,7 @@ func cmdHubGrants(ctx context.Context, c *ui.HTTPClient, out *printer, args []st
 	case "revoke":
 		return cmdHubGrantsRevoke(ctx, c, out, subArgs)
 	default:
-		return fmt.Errorf("unknown registry grants subcommand %q\n%s", sub, hubGrantsUsage)
+		return fmt.Errorf("unknown hub grants subcommand %q\n%s", sub, hubGrantsUsage)
 	}
 }
 

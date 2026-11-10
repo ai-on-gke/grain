@@ -162,9 +162,9 @@ Usage of grain daemon:
   -hostd-token-owner string
     	the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not
   -hub-auth-mode string
-    	credential mode for registry heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+    	credential mode for hub heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
   -hub-connect
-    	supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)
+    	supervise an outbound wss://<hub-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)
   -hub-display-name string
     	human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
   -hub-entry string
