@@ -876,6 +876,13 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 			}
 		}
 	}
+	// A repository's own declaration is written by whoever can merge
+	// there, not by a person granting anything: a firing carrying a grant
+	// only a person may accept lands for one to approve (task 3965).
+	if held := DeclaredFiringHold(sched, tmpl, comp); len(held) > 0 && comp.Approved {
+		comp.Approved = false
+		comp.Body += DeclaredFiringHoldNote(held)
+	}
 	return comp, tmpl, nil
 }
 
