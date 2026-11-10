@@ -121,7 +121,9 @@ func (s *Server) handlePersistentSandboxLogs(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
-	logs, _ = redactor.Line(logs)
+	// Text, not Line: the log is many lines, and a private key's body
+	// is only cut by the pass that sees the lines after its header.
+	logs, _ = redactor.Text(logs)
 	if r.URL.Query().Get("format") == "text" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

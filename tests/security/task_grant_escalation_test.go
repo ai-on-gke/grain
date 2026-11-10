@@ -248,7 +248,9 @@ func newEscalationRig(t *testing.T, customSets ...model.APIScopeSet) *escalation
 				{Name: "gadgets-preview", Repo: "other/gadgets", State: "running"},
 			},
 			logs: map[string]string{
-				"widgets-preview": "ready BOUND_CUSTOM_SECRET_991 token=ghp_1234567890abcdefghijklmnopqrstuvwx\n",
+				"widgets-preview": "ready BOUND_CUSTOM_SECRET_991 token=ghp_1234567890abcdefghijklmnopqrstuvwx\n" +
+					"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7PEMBODY\n-----END PRIVATE KEY-----\n" +
+					"serving on :8080\n",
 				"gadgets-preview": "gadgets ready BOUND_CUSTOM_SECRET_991\n",
 			},
 		},
@@ -719,6 +721,11 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 	}
 	if strings.Contains(logBody, "BOUND_CUSTOM_SECRET_991") || strings.Contains(logBody, "ghp_1234567890") {
 		t.Fatalf("persistent sandbox logs leaked unredacted secret material to non-admin: %s", logBody)
+	}
+	// The log is redacted as a block of lines: a private key's body is cut
+	// up to its END, and the lines around it survive.
+	if strings.Contains(logBody, "PEMBODY") || !strings.Contains(logBody, "serving on :8080") {
+		t.Fatalf("persistent sandbox logs not redacted line by line (key body kept, or later lines lost): %s", logBody)
 	}
 }
 
