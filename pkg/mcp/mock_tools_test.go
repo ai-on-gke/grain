@@ -37,6 +37,8 @@ func escapeHatchText(t *testing.T) map[string]struct{ description, confirmation 
 		"comment_on_issue":   {"comment": "the answer is 4"},
 		"nothing_needed":     {"reason": "the flag is already off on main"},
 		"write_handover":     {"handover": "the merge lane may only ever hold one branch"},
+		"compact_context":    {"handover": "stage 1 is built; stage 2 is the merge lane"},
+		"update_brief":       {"brief": "keep the merge lane green", "reason": "stage 1 is finished"},
 		"propose_task":       {"title": "follow-up", "body": "the rest of it"},
 		"add_review_comment": {"body": "this loop is quadratic"},
 	}
@@ -126,6 +128,10 @@ func TestRelayedEscapeHatchesConfirmWhatGrainDoesWithTheCall(t *testing.T) {
 		// complete the task and is not the run's ending, so a run that
 		// wrote one has to carry on with the work it was dispatched for.
 		{"write_handover", []string{"conversation", "handover", "does not complete the task"}},
+		// A compaction is a handover that also moves the cursor, and says
+		// both halves: what later prompts leave out, and that the run goes on.
+		{"compact_context", []string{"handover", "later prompts", "does not complete the task"}},
+		{"update_brief", []string{"current brief", "original description"}},
 		// A proposal becomes a real task in the queue, and a human's
 		// approval -- not a label -- is what lets it ever be dispatched.
 		{"propose_task", []string{"real task", "unapproved", "approves"}},
