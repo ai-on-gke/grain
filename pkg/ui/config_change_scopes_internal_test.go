@@ -17,6 +17,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -83,5 +85,28 @@ func TestApprovingAConfigChangeNeedsTheScopesItConfers(t *testing.T) {
 func TestRepointingTheConfigRepoNeedsAnUnlimitedRole(t *testing.T) {
 	if sc := roleScopeOf("POST /api/state-repo/remote"); sc != "" {
 		t.Fatalf("POST /api/state-repo/remote answers a role holding %s; want only an unlimited role", sc)
+	}
+}
+
+// A limited role cannot Submit (or turn on auto-merge for) any change,
+// a grain/config pull request adding a host script among them: Submit
+// releases RequiresHuman holds such as trustboundary.StatePrivilege, so it
+// stays an unlimited role's (task 3965, insider profile A).
+func TestALimitedRoleCannotSubmitAConfigChange(t *testing.T) {
+	s := NewServerWithClient(nil)
+	role := roleHolding("settings@example.com", "tasks:read", "tasks:write", "settings:write")
+	for _, tc := range []struct{ pattern, body string }{
+		{"POST /api/tasks/{id}/submit", ``},
+		{"PATCH /api/tasks/{id}", `{"autoMerge":true}`},
+	} {
+		reached := false
+		r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(tc.body))
+		r = r.WithContext(withAccessRole(r.Context(), role))
+		rec := httptest.NewRecorder()
+		s.roleGate(tc.pattern, func(http.ResponseWriter, *http.Request) { reached = true })(rec, r)
+		if reached || !strings.Contains(rec.Body.String(), "unlimited role") {
+			t.Errorf("%s as a settings:write role: reached=%v (%d %s), want refused for want of an unlimited role",
+				tc.pattern, reached, rec.Code, rec.Body)
+		}
 	}
 }
