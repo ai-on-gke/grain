@@ -117,7 +117,7 @@ jobs:
 
       - name: Build the images
         env:
-          REPO: ${{ github.repository }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           # The release's four images, built from this PR the way
@@ -139,7 +139,7 @@ jobs:
             docker tag "$cache" image-vulns/sandbox:pr
           else
             echo "no published guest for inputs $key; building it"
-            IMAGE=granule:vendored GUEST_SOURCE_REPO="https://github.com/${REPO}" ./scripts/granule/build-granule-image.sh
+            IMAGE=granule:vendored GUEST_SOURCE_REPO="https://github.com/${SOURCE_REPOSITORY}" ./scripts/granule/build-granule-image.sh
             go run github.com/gke-labs/granule/cmd/granule granulefile build -kontur-image granule:vendored \
               -f Granulefile.guest-base -t granule-guest-base:vendored
             go run github.com/gke-labs/granule/cmd/granule granulefile build -kontur-image granule:vendored \
