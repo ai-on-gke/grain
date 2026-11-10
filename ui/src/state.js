@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { isApiGrant, storedApiGrant } from "./apiGrants.js";
 import { describeGrant } from "./capabilityArgs.js";
 
 // model.State's own vocabulary, in model.StateOf's precedence order.
@@ -1553,9 +1554,15 @@ export function capabilityUnavailableHint(c) {
 // union from unsaved ticks, to say what Save is about to do) cannot
 // drift into two different answers.
 export function unionCapabilities(base, extra) {
-  const ids = [...(base || [])];
-  for (const id of extra || []) {
-    if (!ids.includes(id)) ids.push(id);
+  const keyOf = (id) => (isApiGrant(id) ? storedApiGrant(id) : id);
+  const ids = [];
+  const seen = new Set();
+  for (const id of [...(base || []), ...(extra || [])]) {
+    const k = keyOf(id);
+    if (!seen.has(k)) {
+      seen.add(k);
+      ids.push(id);
+    }
   }
   return ids;
 }

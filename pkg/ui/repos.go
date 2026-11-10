@@ -1175,7 +1175,7 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 	}
 	var ciCaps []string
 	if req.CICapabilities != nil {
-		if ciCaps, err = c.cleanRepoCICapabilities(*req.CICapabilities); err != nil {
+		if ciCaps, err = c.cleanRepoCICapabilities(ctx, parsed, *req.CICapabilities); err != nil {
 			return RepoDefaults{}, err
 		}
 	}
@@ -1793,7 +1793,7 @@ func (c *Client) SetRepoCICapabilities(ctx context.Context, repo string, ids []s
 	if err != nil {
 		return RepoDefaults{}, validationErrorf("repo: %v", err)
 	}
-	clean, err := c.cleanRepoCICapabilities(ids)
+	clean, err := c.cleanRepoCICapabilities(ctx, parsed, ids)
 	if err != nil {
 		return RepoDefaults{}, err
 	}
@@ -1803,7 +1803,17 @@ func (c *Client) SetRepoCICapabilities(ctx context.Context, repo string, ids []s
 	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.CICapabilities = clean })
 }
 
-func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
+func (c *Client) cleanRepoCICapabilities(ctx context.Context, repo model.RepoRef, ids []string) ([]string, error) {
+	var stored []string
+	if c.Store != nil {
+		rc, err := c.Store.GetRepoConfig(ctx, repo)
+		if err != nil {
+			return nil, err
+		}
+		if rc != nil {
+			stored = rc.CICapabilities
+		}
+	}
 	allowed := c.ciCapabilityIDs()
 	clean := []string{}
 	for _, id := range ids {
@@ -1831,12 +1841,17 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 			if _, ok := c.capabilityByID(normalized); !ok {
 				return nil, validationErrorf("ciCapabilities: %s", capabilityRefusal(normalized))
 			}
-			if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
-				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
+			if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef ||
+				model.IsAPIGrantRef(normalized) || model.CapabilityGrantRef(normalized) == model.APICapabilityServerID {
+				if !slices.Contains(stored, normalized) && !slices.Contains(stored, id) {
+					return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
+				}
 			}
 			canonicalID = normalized
 		} else if !slices.Contains(allowed, id) {
-			return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
+			if !slices.Contains(stored, id) {
+				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
+			}
 		}
 		if !slices.Contains(clean, canonicalID) {
 			clean = append(clean, canonicalID)

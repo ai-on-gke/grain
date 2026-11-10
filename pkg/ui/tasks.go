@@ -2222,11 +2222,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// (*Client).defaultCapabilities filters before granting -- the
 		// form should tick what a task would really be filed with, and
 		// a stored id no row answers to is neither.
-		for _, id := range cfg.DefaultCapabilities {
-			if _, ok := s.tasks.capabilityByID(id); ok {
-				resp.DefaultCapabilities = append(resp.DefaultCapabilities, id)
-			}
-		}
+		resp.DefaultCapabilities = s.tasks.resolveDefaultCapabilities(cfg.DefaultCapabilities)
 	}
 	if actor.ID == "" {
 		resp.SingleTenantRefusal = singleTenantRefusal
@@ -2277,12 +2273,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			resp.RepoDefaultHostings[rc.Repo.String()] = string(rc.DefaultHosting)
 		}
-		var ids []string
-		for _, id := range rc.DefaultCapabilities {
-			if _, ok := s.tasks.capabilityByID(id); ok {
-				ids = append(ids, id)
-			}
-		}
+		ids := s.tasks.resolveDefaultCapabilities(rc.DefaultCapabilities)
 		if len(ids) == 0 {
 			continue
 		}
