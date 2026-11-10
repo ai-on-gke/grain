@@ -150,6 +150,16 @@ func matrixSeed(t *testing.T, f *routeFixture) (map[string]string, error) {
 	if err := f.store.PutConfig(ctx, *cfg); err != nil {
 		return nil, err
 	}
+	// The sets are installed for the test (model.InstallAPIScopeSets), and
+	// stored too: a probe that writes or removes a set reloads every set
+	// from its own fixture's store (Store.LoadAPIScopeSets), and one that
+	// held none of these would take them away from every probe running
+	// beside it.
+	for _, set := range matrixScopeSets() {
+		if err := f.store.PutAPIScopeSet(ctx, set); err != nil {
+			return nil, fmt.Errorf("storing scope set %s: %w", set.Name, err)
+		}
+	}
 	now := time.Now()
 	for _, c := range matrixCallers() {
 		if c.role == "" {

@@ -172,6 +172,18 @@ the planned `security-attacks` job are:
 None of them needs a live sandbox, a metadata server or a real daemon:
 they drive `ui.Server` in process, behind a real ES256 identity proxy.
 
+The matrix makes about 10,600 requests. It takes about 30s on its own,
+and about 4 minutes under `-race`: the PR's `go model` job runs it
+within its 25-minute budget, and nightly `go-long` runs it twice within
+its 80-minute budget.
+
+The registry of scope sets is process-wide. A probe that writes or
+deletes a set reloads the registry from its own fixture's store
+(`Store.LoadAPIScopeSets`), so the matrix stores its custom sets in its
+fixture template as well as installing them. Without that, the custom
+roles vanished part-way through a run and were refused at random. This
+is a test-isolation hazard only: a daemon has one store.
+
 ## 5. Follow-ups
 
 None filed. Both confirmed findings were small and are fixed here.
