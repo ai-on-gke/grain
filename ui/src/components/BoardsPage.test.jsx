@@ -422,7 +422,7 @@ describe("BoardsPage", () => {
     // holding a "Triage" gave two handles named "Move Triage" and two
     // slots named "Move here, above Triage" leading into different
     // folders.
-    it("names same-named boards in different folders apart on handles and slots", async () => {
+    it("names same-named boards in different folders apart on links, handles and slots", async () => {
       const user = userEvent.setup();
       const dupes = [
         {
@@ -458,6 +458,15 @@ describe("BoardsPage", () => {
           onMoveBoard={vi.fn()}
         />,
       );
+      expect(
+        screen.getByRole("link", { name: "Triage, in Ops" }),
+      ).toHaveAttribute("href", "/boards/board-10");
+      expect(
+        screen.getByRole("link", { name: "Triage, in Zeta" }),
+      ).toHaveAttribute("href", "/boards/board-11");
+      expect(
+        screen.getByRole("link", { name: "Overview" }),
+      ).not.toHaveAttribute("aria-label");
       expect(
         screen.getByRole("button", { name: "Move Triage, in Ops" }),
       ).toBeInTheDocument();

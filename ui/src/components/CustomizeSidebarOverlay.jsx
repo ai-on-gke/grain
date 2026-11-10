@@ -55,6 +55,7 @@ import {
   pinTargets,
   samePin,
 } from "../pinnedNav.js";
+import { boardLabels } from "../boards.js";
 import { usePinnedNav } from "../PinnedNavContext.jsx";
 import {
   DEFAULT_HIDDEN_SECTIONS,
@@ -109,7 +110,11 @@ export default function CustomizeSidebarOverlay({
       return sessions.map((s) => ({ id: s.id, label: s.title || s.id }));
     }
     if (addKind === "board") {
-      return boards.map((b) => ({ id: b.id, label: b.name }));
+      const labels = boardLabels(boards);
+      return boards.map((b) => ({
+        id: b.id,
+        label: labels.get(b.id) || b.name,
+      }));
     }
     return [];
   }, [addKind, sessions, boards]);
@@ -330,57 +335,7 @@ export default function CustomizeSidebarOverlay({
               >
                 <ListItem
                   divider={index < draft.length - 1 || isEditing}
-                  secondaryAction={
-                    <Stack direction="row" spacing={0.5} alignItems="center">
-                      <IconButton
-                        size="small"
-                        aria-label={`Customize ${info.label}`}
-                        title="Customize icon & color"
-                        color={isEditing ? "primary" : "default"}
-                        onClick={() =>
-                          setEditingIndex(isEditing ? null : index)
-                        }
-                      >
-                        <PaletteOutlinedIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        ref={(el) => {
-                          upRefs.current[index] = el;
-                        }}
-                        size="small"
-                        aria-label="Move up"
-                        title="Move up"
-                        disabled={index === 0}
-                        onClick={() => moveItem(index, -1)}
-                      >
-                        <ArrowUpwardIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        ref={(el) => {
-                          downRefs.current[index] = el;
-                        }}
-                        size="small"
-                        aria-label="Move down"
-                        title="Move down"
-                        disabled={index === draft.length - 1}
-                        onClick={() => moveItem(index, 1)}
-                      >
-                        <ArrowDownwardIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        ref={(el) => {
-                          removeRefs.current[index] = el;
-                        }}
-                        size="small"
-                        aria-label={`Unpin ${info.label}`}
-                        title="Unpin"
-                        color="error"
-                        onClick={() => removeItem(index)}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
-                    </Stack>
-                  }
+                  sx={{ gap: 1 }}
                 >
                   <Box
                     sx={{
@@ -388,6 +343,7 @@ export default function CustomizeSidebarOverlay({
                       alignItems: "center",
                       gap: 1.2,
                       minWidth: 0,
+                      flex: "1 1 auto",
                     }}
                   >
                     <span className="nav-icon" style={iconStyle}>
@@ -413,6 +369,8 @@ export default function CustomizeSidebarOverlay({
                     </span>
                     <ListItemText
                       primary={info.label}
+                      title={info.label}
+                      sx={{ minWidth: 0, flex: "0 1 auto" }}
                       primaryTypographyProps={{
                         noWrap: true,
                         fontSize: "0.9rem",
@@ -423,7 +381,7 @@ export default function CustomizeSidebarOverlay({
                       label={info.typeLabel}
                       size="small"
                       variant="outlined"
-                      sx={{ height: 20, fontSize: "0.72rem" }}
+                      sx={{ height: 20, fontSize: "0.72rem", flexShrink: 0 }}
                     />
                     {item.color && (
                       <Box
@@ -434,11 +392,65 @@ export default function CustomizeSidebarOverlay({
                           bgcolor: item.color,
                           border: 1,
                           borderColor: "divider",
+                          flexShrink: 0,
                         }}
                         title={`Color: ${item.color}`}
                       />
                     )}
                   </Box>
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    alignItems="center"
+                    className="customize-pinned-actions"
+                    sx={{ ml: "auto", flexShrink: 0 }}
+                  >
+                    <IconButton
+                      size="small"
+                      aria-label={`Customize ${info.label}`}
+                      title="Customize icon & color"
+                      color={isEditing ? "primary" : "default"}
+                      onClick={() => setEditingIndex(isEditing ? null : index)}
+                    >
+                      <PaletteOutlinedIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                      ref={(el) => {
+                        upRefs.current[index] = el;
+                      }}
+                      size="small"
+                      aria-label="Move up"
+                      title="Move up"
+                      disabled={index === 0}
+                      onClick={() => moveItem(index, -1)}
+                    >
+                      <ArrowUpwardIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                      ref={(el) => {
+                        downRefs.current[index] = el;
+                      }}
+                      size="small"
+                      aria-label="Move down"
+                      title="Move down"
+                      disabled={index === draft.length - 1}
+                      onClick={() => moveItem(index, 1)}
+                    >
+                      <ArrowDownwardIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                      ref={(el) => {
+                        removeRefs.current[index] = el;
+                      }}
+                      size="small"
+                      aria-label={`Unpin ${info.label}`}
+                      title="Unpin"
+                      color="error"
+                      onClick={() => removeItem(index)}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Stack>
                 </ListItem>
 
                 <Collapse in={isEditing} timeout="auto" unmountOnExit>
