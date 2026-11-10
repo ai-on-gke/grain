@@ -117,12 +117,15 @@ function runNowIsStale(t) {
 // runNowHint is what the pane says under Run now while t has a request
 // standing: that it was asked for, or -- for a stale one -- what is
 // actually holding the task.
-function runNowHint(t, stale) {
+function runNowHint(t, stale, frameworkPaused) {
   if (isTaskPaused(t)) {
     return "Asked for a run. It starts ahead of the queue once this task is resumed.";
   }
   if (!stale) {
     return "Asked for a run. It starts on the next dispatch cycle, or as soon as there is capacity for it.";
+  }
+  if (frameworkPaused) {
+    return "A run was already started for the last Run now and gave it back. It starts ahead of the queue once the usage-limit pause ends.";
   }
   const holding =
     t.activityBySetup && t.activity
@@ -136,6 +139,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
   const closable = closablePullRequest(t);
   const frameworkPaused = taskPause(t, config);
   const staleRunNow = runNowIsStale(t);
+  const runNowRestamps = staleRunNow && !isTaskPaused(t) && !frameworkPaused;
   const [closePullRequest, setClosePullRequest] = useState(false);
   // The wake date beside the Defer button, local to this overlay for
   // closePullRequest's own reason: it is a choice about this deferral,
@@ -916,7 +920,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
         <AccessGate scope="dispatch:write" repo={t.repo}>
           <Button
             variant="outlined"
-            disabled={Boolean(t.runNowAt) && !staleRunNow}
+            disabled={Boolean(t.runNowAt) && !runNowRestamps}
             title={
               t.pullRequest
                 ? `Put an agent on this task next, ahead of the queue. Work continues on the branch ${t.pullRequest} is open from, and nothing merges it while that run is in flight.`
@@ -939,7 +943,9 @@ export default function Actions({ t, config, act, onOpenTask }) {
           request, cleared the moment its run starts) -- or, for a request
           a run already gave back, what is holding the task now. */}
       {t.runNowAt && t.state !== "running" && (
-        <p className="hint run-now-hint">{runNowHint(t, staleRunNow)}</p>
+        <p className="hint run-now-hint">
+          {runNowHint(t, staleRunNow, frameworkPaused)}
+        </p>
       )}
       {/* Manual mode: under a pause Run now passes, this is the button
           that starts this task, and nothing else will; under an

@@ -664,14 +664,24 @@ func (c *Client) recordedActionsRunByID(ctx context.Context, repo model.RepoRef,
 // output, and the tail is where a failed test's name is
 // (`grain ci test-history`, `grain ci show`).
 func foldRecordedTails(run *ci.Run, recorded ci.Run) {
+	byName := map[string]ci.JobRun{}
 	tails := map[string]ci.StepRun{}
 	for _, job := range recorded.Jobs {
+		byName[job.Name] = job
 		if job.Conclusion == ci.ConclusionFailure && len(job.Steps) > 0 && job.Steps[0].Output != "" {
 			tails[job.Name] = job.Steps[0]
 		}
 	}
 	for i := range run.Jobs {
 		job := &run.Jobs[i]
+		if recJob, ok := byName[job.Name]; ok {
+			if job.StartedAt == nil {
+				job.StartedAt = recJob.StartedAt
+			}
+			if job.FinishedAt == nil {
+				job.FinishedAt = recJob.FinishedAt
+			}
+		}
 		tail, ok := tails[job.Name]
 		if !ok || job.Conclusion != ci.ConclusionFailure {
 			continue
