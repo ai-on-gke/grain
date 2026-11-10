@@ -32,7 +32,7 @@ const BUILTIN_PRESETS = new Set([
   "release-gate-read",
 ]);
 
-export const RETIRED_IN_PROCESS = {
+const RETIRED_IN_PROCESS = {
   "team-broadcast": {
     grant: "api:grain/team-broadcast",
     preset: "team-broadcast",
@@ -123,7 +123,7 @@ export const RETIRED_IN_PROCESS = {
   },
 };
 
-export function describeRestrictions(r) {
+function describeRestrictions(r) {
   if (!r) return [];
   const parts = [];
   if (r.ciOnly) parts.push("CI jobs only");

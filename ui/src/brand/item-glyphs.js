@@ -234,7 +234,7 @@ export const ITEM_GLYPHS = {
 //
 // Saved board entries carry the boards figure [3, 3, 1] ("columns and blocks").
 // Director and interactive console sessions carry their own dedicated figures.
-export const DESTINATION_GLYPHS = {
+const DESTINATION_GLYPHS = {
   inbox: { glyph: [2, 2, 1], zoom: 2.4, figure: "tray" },
   director: { glyph: [3, 4, 1], zoom: 1.4, figure: "portico and podium" },
   cache: { glyph: [1, 6, 1], zoom: 1.4, figure: "crate of stacked layers" },

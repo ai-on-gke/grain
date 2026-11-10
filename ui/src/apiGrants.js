@@ -25,9 +25,6 @@
 export const API_GRANT_PREFIX = "api:";
 export const API_CAPABILITY_SERVER = "https://grain.dev/capabilities/api";
 export const API_REF_PREFIX = `${API_CAPABILITY_SERVER}#`;
-// The names slice 3's writers were introduced under; the same values.
-export const API_CAPABILITY_SERVER_ID = API_CAPABILITY_SERVER;
-export const API_CAPABILITY_REF_PREFIX = API_REF_PREFIX;
 
 // API_ARGS_SCHEMA is the with: schema every method on
 // https://grain.dev/capabilities/api declares (grainserver.buildAPIServer):
@@ -86,13 +83,13 @@ export function isApiCapabilityRef(id) {
   const trimmed = id.trim();
   const eq = trimmed.indexOf("=");
   const ref = eq < 0 ? trimmed : trimmed.slice(0, eq);
-  return ref.startsWith(API_CAPABILITY_REF_PREFIX);
+  return ref.startsWith(API_REF_PREFIX);
 }
 
 // apiRef is the canonical capability reference for shortName ("ci:write" ->
 // "https://grain.dev/capabilities/api#ci:write").
 export function apiRef(shortName) {
-  return `${API_CAPABILITY_REF_PREFIX}${shortName}`;
+  return `${API_REF_PREFIX}${shortName}`;
 }
 
 // withoutApiRows is a capability listing with the api rows taken out,
@@ -168,7 +165,7 @@ export function apiShortName(id) {
 
 // apiArea is a scope's area -- "tasks" for tasks:write -- which is what
 // the picker groups scopes under.
-export function apiArea(row) {
+function apiArea(row) {
   const scope = apiShortName(row.id);
   const colon = scope.indexOf(":");
   return colon < 0 ? scope : scope.slice(0, colon);

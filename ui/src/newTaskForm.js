@@ -104,7 +104,7 @@ function repoLayer(repos, repo) {
 }
 
 // newTaskFormLayers is the layers that apply, lowest precedence first.
-export function newTaskFormLayers(form, { repo, templateId, boardId } = {}) {
+function newTaskFormLayers(form, { repo, templateId, boardId } = {}) {
   if (!form) return [];
   return [
     form.default,
@@ -220,7 +220,8 @@ function grantNames(id) {
 
 // pickerAllows is whether the capability picker may offer id, by the
 // resolved form's capabilities.offered and .hidden. A grant already held
-// is the caller's to keep showing (useHeldIds): this is only the menu.
+// keeps its own row, with its Remove button, outside the menu
+// (GrantsPicker): this filters only the menu.
 export function pickerAllows(formCaps, id) {
   if (!formCaps) return true;
   const names = grantNames(id);

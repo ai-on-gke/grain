@@ -296,6 +296,8 @@ type RepoSettings struct {
 	// conventional-commit types a merge has to carry to be ported that
 	// way (RepoConfig.DeclaredPortTypes).
 	PortTypes map[string][]string
+	// Skills is `skills`: repository-declared skill discovery folders and enabled state.
+	Skills *SkillsConfig
 }
 
 // ApplyTo records what a repository declared about itself on its config
@@ -318,6 +320,7 @@ func (s RepoSettings) ApplyTo(c *RepoConfig) {
 	c.DeclaredSetupCommand = s.SetupCommand
 	c.DeclaredPortBranches = slices.Clone(s.PortBranches)
 	c.DeclaredPortTypes = maps.Clone(s.PortTypes)
+	c.DeclaredSkills = s.Skills.Clone()
 }
 
 // Changes is every column applying s to c would actually alter, in
@@ -364,6 +367,7 @@ func (s RepoSettings) Changes(c RepoConfig) []SettingsChange {
 	add("port-branches", renderText(strings.Join(c.DeclaredPortBranches, ", ")),
 		renderText(strings.Join(want.DeclaredPortBranches, ", ")))
 	add("port-types", renderText(EncodePortTypes(c.DeclaredPortTypes)), renderText(EncodePortTypes(want.DeclaredPortTypes)))
+	add("skills", renderText(EncodeSkillsConfig(c.DeclaredSkills)), renderText(EncodeSkillsConfig(want.DeclaredSkills)))
 	return out
 }
 

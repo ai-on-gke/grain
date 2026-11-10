@@ -136,6 +136,7 @@ tunnel-stress=reverse tunnel multiplexer stress
 ui-e2e-long=ui e2e, repeated
 installer-variants=installer trixie and hostmode
 vulns=govulncheck
+image-vulns=release image vulnerabilities
 cmd-grain-stress=pkg/cli stress under load
 upgrade-test=upgrade from previous versions}"
 # Jobs that carry no verdict of their own: nightly.yml's roll-up of the

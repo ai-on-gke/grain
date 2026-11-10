@@ -90,7 +90,7 @@ export function repoHostOf(text) {
 // "loading", "found", "none" or "error"; failures is the connections
 // that could not be listed -- a lapsed login to the host's front end says
 // what to run -- each a sentence, shown under any of the three.
-export function discoveryStatus(reach) {
+function discoveryStatus(reach) {
   if (!reach || reach.loading) {
     return { kind: "loading", text: "Discovering repositories…", failures: [] };
   }

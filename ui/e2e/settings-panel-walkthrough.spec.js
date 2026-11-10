@@ -410,6 +410,7 @@ test("Repositories lists each repo's settings and links into its tab", async ({
     "Repository",
     "Base branch",
     "Declarations",
+    "Skills",
     "CI mode",
     "Git connection",
   ]);
@@ -417,6 +418,15 @@ test("Repositories lists each repo's settings and links into its tab", async ({
   await expect(ci).toHaveText(/^(GitHub CI|Grain CI|No CI)$/);
   await expect(row.getByTestId("settings-repo-declarations")).toHaveText(
     /^(Read|Not read)$/,
+  );
+  // Skills says which folders a run of this repo searches for SKILL.md
+  // files, and links to the Agents tab, where they are set.
+  const skills = row.getByTestId("settings-repo-skills");
+  await expect(skills).not.toHaveText("…");
+  await expect(skills).not.toHaveText("Unknown");
+  await expect(skills.getByRole("link")).toHaveAttribute(
+    "href",
+    /\/repos\/acme\/widgets\/settings\/agents$/,
   );
   await expect(row.getByTestId("settings-repo-base")).not.toHaveText("…");
   await expect(row.getByTestId("settings-repo-git")).not.toHaveText("…");
