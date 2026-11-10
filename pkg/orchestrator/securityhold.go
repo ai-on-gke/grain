@@ -627,8 +627,12 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 				t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 			}
 			if advancedClearance != "" {
-				if _, newHead, ok := strings.Cut(advancedClearance, "@"); ok && newHead != "" {
-					t.Links = advanceHumanSubmitted(t.Links, oldHead, newHead)
+				// The clearance moves to the review's own fixes; a
+				// person's Submit does not -- it was about the head they
+				// read, and a `human: required` trigger judging the new
+				// one asks for theirs again (applyPathTriggerGate).
+				if _, newHead, ok := strings.Cut(advancedClearance, "@"); ok && newHead != "" && !strings.EqualFold(newHead, oldHead) {
+					t.Links = withoutLinks(t.Links, model.LinkHumanSubmitted)
 				}
 				t.Links = append(withoutLinks(t.Links, model.LinkTrustBoundaryCleared),
 					model.Link{Kind: model.LinkTrustBoundaryCleared, Target: advancedClearance})

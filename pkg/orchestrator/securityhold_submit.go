@@ -174,9 +174,13 @@ func pinHumanSubmit(ctx context.Context, store *model.Store, client github.Clien
 	return *out, true, nil
 }
 
-// carryApprovedAcrossBaseMerge carries a completed security clearance and a
-// human's Submit approval from shown to headSHA when the branch moved without
-// changing any trust-boundary patch (such as the merge queue merging main in).
+// carryApprovedAcrossBaseMerge carries a completed security clearance from
+// shown to headSHA on the strength of a human's Submit of shown, when the
+// branch moved without changing any trust-boundary patch (such as the merge
+// queue merging main in). The Submit itself is consumed, not moved: it was
+// about the head the person read, and a `human: required` trigger judging
+// headSHA (applyPathTriggerGate) asks for theirs again rather than reading
+// an approval of files they never saw as one given at headSHA.
 func carryApprovedAcrossBaseMerge(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, ref model.PullRequestRef, shown, headSHA, marker string, now time.Time) (model.Task, bool, error) {
 
@@ -231,7 +235,7 @@ func carryApprovedAcrossBaseMerge(ctx context.Context, store *model.Store, clien
 	if by != "" {
 		actor = model.Principal{Kind: model.PrincipalHuman, ID: by}
 	}
-	approved := model.Link{Kind: model.LinkHumanApproved, Target: model.HumanSubmittedByTarget(by, at, headSHA)}
+	approved := model.Link{Kind: model.LinkHumanApproved, Target: model.HumanSubmittedByTarget(by, at, shown)}
 	if err := store.UpdateTask(model.WithAutoMergeChange(ctx, actor, "carried approval across base merge"), task.ID, func(t *model.Task) error {
 		if linkTarget(*t, model.LinkHumanSubmitted) != marker {
 			return nil

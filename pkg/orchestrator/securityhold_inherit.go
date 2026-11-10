@@ -494,9 +494,11 @@ func keepClearance(ctx context.Context, store *model.Store, client github.Client
 
 	if carried.source == nil {
 		if err := store.UpdateTask(ctx, current.ID, func(t *model.Task) error {
-			oldHead := classifiedHead(*t)
-			t.Links = advanceHumanSubmitted(t.Links, oldHead, headSHA)
-			t.Links = append(withoutLinks(t.Links, model.LinkTrustBoundaryCleared), cleared)
+			// The clearance carries; a person's Submit does not move with
+			// it. It was about the head they read: an approval of it stays
+			// pinned there, and a `human: required` trigger judging this
+			// head asks for theirs again (applyPathTriggerGate).
+			t.Links = append(withoutLinks(t.Links, model.LinkTrustBoundaryCleared, model.LinkHumanSubmitted), cleared)
 			return nil
 		}); err != nil {
 			return fmt.Errorf("orchestrator: carrying %s's clearance to %s: %w", current.ID, shortSHA(headSHA), err)

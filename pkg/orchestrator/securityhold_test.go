@@ -908,6 +908,54 @@ func TestSecurityHoldCarriesAClearanceToAHeadThatChangedNoTrustBoundaryPatch(t *
 	}
 }
 
+// A clearance carried to a head that changed no trust-boundary patch is
+// the review's to carry, not the person's: their Submit was about the head
+// they read, and the files that changed since -- off the list, but perhaps
+// watched by a `human: required` trigger judged next -- are ones they never
+// saw. The carry leaves no approval behind naming the new head.
+func TestCarriedClearanceDoesNotCarryAPersonsApprovalToTheNewHead(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	task := finishTouching(t, ctx, store, sim, "t1", "pkg/ui/server.go", true)
+	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	reviewID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	_, read, ok := strings.Cut(linkOf(reloaded(t, ctx, store, task.ID), model.LinkTrustBoundaryCleared), "@")
+	if !ok || read == "" {
+		t.Fatalf("no clearance recorded after the clean review: %+v", reloaded(t, ctx, store, task.ID).Links)
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkHumanApproved,
+			Target: model.HumanSubmittedByTarget("alice", baseTime.Add(time.Hour), read)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	branch := model.BranchName(task.ID)
+	pushFile(t, sim.BareRepo, branch, "docs/notes.md", "changed after alice read it\n")
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(2*time.Hour)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	_, carriedTo, _ := strings.Cut(linkOf(got, model.LinkTrustBoundaryCleared), "@")
+	if carriedTo == "" || strings.EqualFold(carriedTo, read) {
+		t.Fatalf("the clearance was not carried to the new head: %+v", got.Links)
+	}
+	for _, kind := range []model.LinkKind{model.LinkHumanApproved, model.LinkHumanSubmitted} {
+		if marker := linkOf(got, kind); marker != "" && strings.EqualFold(model.HumanSubmittedHead(marker), carriedTo) {
+			t.Fatalf("alice's approval of %s was carried to %s, which she never read: %s", read, carriedTo, marker)
+		}
+	}
+}
+
 // A held change whose rerun pushes commits off the list goes on waiting
 // on the review already filed rather than superseding it, and that
 // review's clean finish releases the new head.

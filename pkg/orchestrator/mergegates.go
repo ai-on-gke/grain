@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"slices"
 	"strings"
 	"time"
 
@@ -340,31 +339,6 @@ func clearReviewFindingsOnCleanReview(ctx context.Context, store *model.Store, r
 		}
 		return nil
 	})
-}
-
-// advanceHumanSubmitted carries a LinkHumanSubmitted marker forward from fromHead
-// to toHead when a clean review commit or carried clearance advances the head
-// without introducing unreviewed changes.
-func advanceHumanSubmitted(links []model.Link, fromHead, toHead string) []model.Link {
-	if fromHead == "" || toHead == "" || strings.EqualFold(fromHead, toHead) {
-		return links
-	}
-	out := slices.Clone(links)
-	for i, l := range out {
-		if l.Kind != model.LinkHumanSubmitted && l.Kind != model.LinkHumanApproved {
-			continue
-		}
-		head := model.HumanSubmittedHead(l.Target)
-		if head != "" && strings.EqualFold(head, fromHead) {
-			by := model.HumanSubmittedBy(l.Target)
-			at, ok := model.HumanSubmittedAt(l.Target)
-			if !ok {
-				at = time.Now().UTC()
-			}
-			out[i] = model.Link{Kind: l.Kind, Target: model.HumanSubmittedByTarget(by, at, toHead)}
-		}
-	}
-	return out
 }
 
 // forceOverridesGates reports whether the operator's gate override for the
