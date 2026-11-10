@@ -1265,15 +1265,3 @@ func writeStateRepoToken(dataDir, token string) (string, error) {
 func writeSecretsRepoToken(dataDir, token string) (string, error) {
 	return writeRepoToken(dataDir, "secrets-repo-token", token)
 }
-
-func writeRepoToken(dataDir, name, token string) (string, error) {
-	dir := SecretsDir(dataDir)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("preparing %s: %w", dir, err)
-	}
-	path := dir + "/" + name
-	if err := os.WriteFile(path, []byte(strings.TrimSpace(token)+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("writing %s: %w", path, err)
-	}
-	return path, nil
-}

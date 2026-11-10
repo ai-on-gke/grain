@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -859,6 +860,10 @@ type Config struct {
 	SandboxAccessAddr     string
 	SandboxAccessDial     string
 	SandboxAccessCASecret string
+	// caSecrets is the secrets store the sandbox-access and package-cache
+	// CA bundles are kept in (ca_store.go), set by Run once it has opened
+	// one. Nil keeps them in their <data-dir>/*.pem files.
+	caSecrets *secrets.Store
 	// K8sGranuleAccess is how grain reaches a k8s-granule sandbox's guest
 	// once its pod is Ready: orchestrator.K8sGranuleAccessKubectl (the
 	// default, `granule exec` over `kubectl exec`) or
