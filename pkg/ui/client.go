@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -1626,7 +1627,31 @@ func pullRequestEventsFrom(obs *model.Observation) []PullRequestEvent {
 // attempt finishes, or forever for a framework that never populates one
 // (agent.Result.Transcript's own doc comment) or a deployment with no
 // LiveTranscripts configured at all.
+//
+// Whichever of those it comes from, the text is redacted on the way out
+// with the same list the Logs pane uses (Config.LogRedactor): a
+// transcript stored in the database was redacted when the run finished
+// only of its own sandbox's env and of credential shapes, and a live
+// tail on a deployment with no object store not at all, while tasks:read
+// -- grain/viewer's -- reads every task's (credential exposure audit,
+// docs/security/audits/2026-11-10-credential-exposure.md).
 func (c *Client) AttemptTranscript(ctx context.Context, taskID string, number int) (string, error) {
+	text, err := c.attemptTranscript(ctx, taskID, number)
+	if err != nil || text == "" {
+		return text, err
+	}
+	redactor := grainlog.NewRedactor(nil)
+	if c.Config.LogRedactor != nil {
+		redactor, err = c.Config.LogRedactor()
+		if err != nil || redactor == nil {
+			return "(this transcript is withheld: the credentials that would have to be redacted out of it could not be read)", nil
+		}
+	}
+	text, _ = redactor.Text(text)
+	return text, nil
+}
+
+func (c *Client) attemptTranscript(ctx context.Context, taskID string, number int) (string, error) {
 	runs, err := c.Store.Runs(ctx, taskID)
 	if err != nil {
 		return "", err
@@ -3084,7 +3109,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
 		limitedRole = true
 	}
+	if why := model.ConfigRepoProposalHold(model.Task{Target: target, Writes: writes}); why != "" &&
+		proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
+		if needsPersonWhy == "" {
+			needsPersonWhy = why
+		} else {
+			needsPersonWhy += "; " + why
+		}
+	}
 	catalogueHold := false
+	if needsPersonWhy != "" && proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
+		catalogueHold, req.Approved = true, false
+	}
 	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
@@ -4230,6 +4266,11 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		defaults, err := c.grantsFor(ids, model.GrantByDefault)
 		if err != nil {
 			return nil, nil, err
+		}
+		if a := accessRoleFromContext(ctx); a != nil && len(a.deny) > 0 {
+			defaults = slices.DeleteFunc(defaults, func(g model.Grant) bool {
+				return grantDeniedByRole(a, g.Capability)
+			})
 		}
 		grants = defaults
 	}
@@ -6761,7 +6802,8 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 			return err
 		}
 	}
-	if obs == nil || obs.PendingQuestionCommentID == nil {
+	if obs == nil || obs.PendingQuestionCommentID == nil ||
+		inGrainAgentTaskID(by.Actor) != "" || by.Actor.Kind == model.PrincipalAutomation {
 		if (wokeOnMessage || (task.Interactive && isPerson)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}

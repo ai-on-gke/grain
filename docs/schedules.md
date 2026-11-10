@@ -1561,8 +1561,9 @@ check and posts no status. Pull requests are still judged by GitHub
 Actions and no other `.grain/workflows` run there. `docs/declarations.md`
 ("Running on grain CI in a `ci_mode: github` repository") has the file
 format and the shape of a "script on a cadence" workflow: on repositories
-the deployment offers grain's API to in CI (`ai-on-gke/grain` by default;
-`docs/agent-api.md`), a job holding `api:tasks:read` and
+the deployment offers grain's API to in CI (`ai-on-gke/grain`, plus
+whatever the deployment's `ci_api_repos` setting adds; `docs/agent-api.md`
+§ "CI jobs"), a job holding `api:tasks:read` and
 `api:tasks:from-template` can check whether there is work and file the
 repository's template itself, and exit 0 when there is none.
 

@@ -485,6 +485,20 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	if from != "" {
 		schemaID = from
 	}
+	// A credential typed into env, headers, args or the URL would be
+	// stored in grain_config, exported to the state repository and shown
+	// to everyone who may read settings; it belongs in the secrets store,
+	// referenced as $secret:<name>. One the stored entry already holds is
+	// carried forward rather than refused, so an entry saved before this
+	// rule stays editable (docs/security/audits/2026-11-10-credential-exposure.md).
+	var prev protocol.ServerConfig
+	if stored, err := c.Store.GetConfig(ctx); err == nil && stored != nil {
+		prev = stored.MCPServers[schemaID]
+	}
+	if lits := cfg.NewLiteralCredentials(prev); len(lits) > 0 {
+		return validationErrorf("capability server %s: %s %s a credential typed in; store it as a secret and write $secret:<name> instead "+
+			"(or use Bind a secret), so its value never reaches grain/config", id, strings.Join(lits, ", "), pluralHolds(len(lits)))
+	}
 	if err := c.normalizeServerHostd(ctx, schemaID, &cfg); err != nil {
 		return err
 	}
@@ -1435,7 +1449,7 @@ func (s *Server) respondWithCapabilityServers(w http.ResponseWriter, r *http.Req
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	writeJSON(w, http.StatusOK, withheldForCaller(r.Context(), list))
 }
 
 func (s *Server) handleListCapabilityServers(w http.ResponseWriter, r *http.Request) {
@@ -1449,6 +1463,9 @@ func (s *Server) handleListCapabilityServers(w http.ResponseWriter, r *http.Requ
 		writeClientError(w, err)
 		return
 	}
+	// Withheld before filtering, so a search cannot probe a literal the
+	// caller is not shown.
+	servers = withheldForCaller(r.Context(), servers)
 	servers = filterList(servers, func(srv CapabilityServer) bool {
 		return list.matches(srv.ID, srv.Config.Command, srv.Config.ServerURL)
 	})
@@ -1467,6 +1484,43 @@ func (s *Server) handleListCapabilityServers(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	writeList(w, servers, list)
+}
+
+// pluralHolds is "holds" or "hold" for n things.
+func pluralHolds(n int) string {
+	if n == 1 {
+		return "holds"
+	}
+	return "hold"
+}
+
+// mayReadCapabilityServerLiterals says whether the caller may see a
+// capability server entry's literal env, header, args and URL text: an
+// in-process or access-code caller, a person whose role holds
+// capabilities:admin, or an agent granted it. Everyone else holding
+// capabilities:read -- grain/viewer among them -- is shown the entry with
+// those literals withheld (protocol.ServerConfig.WithheldLiterals).
+func mayReadCapabilityServerLiterals(ctx context.Context) bool {
+	if role := accessRoleFromContext(ctx); role != nil && !role.has("capabilities:admin") {
+		return false
+	}
+	if call, ok := agentCallFromContext(ctx); ok && !call.grants.Has("capabilities:admin") {
+		return false
+	}
+	return true
+}
+
+// withheldForCaller is servers as the caller may see them.
+func withheldForCaller(ctx context.Context, servers []CapabilityServer) []CapabilityServer {
+	if mayReadCapabilityServerLiterals(ctx) {
+		return servers
+	}
+	out := make([]CapabilityServer, len(servers))
+	for i, srv := range servers {
+		srv.Config = srv.Config.WithheldLiterals()
+		out[i] = srv
+	}
+	return out
 }
 
 func (s *Server) handleSetCapabilityServer(w http.ResponseWriter, r *http.Request) {

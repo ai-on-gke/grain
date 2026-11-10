@@ -20,7 +20,17 @@
 # on -- the image's OS packages (the Debian base and everything apt put
 # there) and its language packages (the modules of every Go binary, npm
 # trees, and so on) -- which is the same ground Artifact Registry's
-# Container Analysis covers. cmd/image-vulns then applies the policy:
+# Container Analysis covers.
+#
+# A granule pack -- the sandbox guest -- is the exception: what its guest
+# boots is an ext4 disk, /var/lib/granule/guest/disk.img, which image
+# mode sees only as a file, so it finds granule's own binaries and no OS.
+# Every image labelled dev.granule.granulefile.kind=pack therefore has
+# that disk copied out and scanned too, with `trivy vm`, under the name
+# <image>-rootfs (sandbox-rootfs): the guest's apt packages, the agent
+# CLIs and toolchains, and their npm, Python and Go trees.
+#
+# cmd/image-vulns then applies the policy:
 # a fixable CRITICAL or HIGH finding that no unexpired entry in
 # .grain/baselines/image-vulns-allowlist.yaml covers fails; everything
 # else is reported.
@@ -30,7 +40,8 @@
 #
 # Which images, in order of precedence:
 #   <image>=<ref> ...   exactly these (image is the leaf name an allowlist
-#                       entry names: grain, sandbox, sandbox-k8s, hub)
+#                       entry names: grain, sandbox, sandbox-k8s, hub;
+#                       a pack's guest disk is reported as <image>-rootfs)
 #   --state FILE        the images scripts/release-images.sh build recorded
 #                       in FILE (its $RELEASE_IMAGES_STATE)
 #   --tag TAG           the published images at TAG (docker.io/grainai/<leaf>:TAG,
@@ -46,7 +57,8 @@
 #                       (an rc's images are published beside its qualification)
 #   --title TEXT        the summary's heading
 #
-# Writes, in --out: <image>.trivy.json (Trivy's full report),
+# Writes, in --out, for each image and each pack's <image>-rootfs:
+# <image>.trivy.json (Trivy's full report),
 # <image>.sarif (for code scanning), <image>.txt (Trivy's table),
 # image-vulns.json (the gate's evaluated findings) and summary.md, which
 # is also appended to $GITHUB_STEP_SUMMARY when that is set.
@@ -94,7 +106,7 @@ while [ $# -gt 0 ]; do
     --previous) previous="$2"; shift 2 ;;
     --wait) wait_secs="$2"; shift 2 ;;
     --title) title="$2"; shift 2 ;;
-    -h | --help) sed -n '17,58p' "$0"; exit 0 ;;
+    -h | --help) sed -n '17,71p' "$0"; exit 0 ;;
     *=*) pairs+=("$1"); shift ;;
     *) echo "scan-images.sh: unknown argument $1" >&2; exit 64 ;;
   esac
@@ -180,6 +192,68 @@ allowlist="${IMAGE_VULNS_ALLOWLIST:-$repo_root/.grain/baselines/image-vulns-allo
 "$trivy" image --download-db-only --quiet
 
 reports=()
+
+# report converts $out/<name>.trivy.json into the SARIF and table
+# reports and queues it for the gate.
+report() {
+  local name="$1"
+  # Code scanning gets the CRITICAL and HIGH findings, which are what
+  # the gate is about; the JSON and table reports carry every severity.
+  # Each image's SARIF names its own category, so one upload of the
+  # directory files four images' alerts apart rather than refusing two
+  # runs of the same tool under one category.
+  "$trivy" convert --quiet --format sarif --severity CRITICAL,HIGH --output "$out/$name.sarif.tmp" "$out/$name.trivy.json"
+  jq --arg id "${IMAGE_VULNS_SARIF_CATEGORY:-image-vulns}/$name/" \
+    '.runs |= map(.automationDetails = {id: $id})' "$out/$name.sarif.tmp" > "$out/$name.sarif"
+  rm -f "$out/$name.sarif.tmp"
+  "$trivy" convert --quiet --format table --output "$out/$name.txt" "$out/$name.trivy.json"
+  reports+=("$name=$out/$name.trivy.json")
+}
+
+# scan_guest_disk scans the root filesystem a granule pack boots: the
+# ext4 disk at granule's guest disk path (granule's docs/granulefile.md
+# §9.1), copied out of the image and read by `trivy vm` without mounting
+# it. That is the same tree granule's own `VM UNPACK FROM` would export,
+# without the two further copies of it an unpack's build makes -- the
+# guest is several gigabytes, and a CI runner has room for one copy.
+guest_disk=/var/lib/granule/guest/disk.img
+guest_tmp=""
+pulled=""
+cleanup() {
+  [ -n "$guest_tmp" ] && rm -rf "$guest_tmp"
+  [ -n "$pulled" ] && docker rmi "$pulled" >/dev/null 2>&1
+  return 0
+}
+trap cleanup EXIT
+scan_guest_disk() {
+  local name="$1" ref="$2" ctr
+  echo "scan-images.sh: scanning $name (the guest disk in $ref)"
+  # Image mode reads a published image from its registry; copying a file
+  # out of it takes docker's own copy, which goes again once it is read.
+  if ! docker image inspect "$ref" >/dev/null 2>&1; then
+    docker pull --quiet "$ref" >/dev/null
+    pulled="$ref"
+  fi
+  guest_tmp="$(mktemp -d "${TMPDIR:-/tmp}/scan-images-guest.XXXXXX")"
+  ctr="$(docker create "$ref")"
+  if ! docker cp "$ctr:$guest_disk" "$guest_tmp/disk.img"; then
+    docker rm "$ctr" >/dev/null
+    echo "scan-images.sh: $ref is labelled a granule pack but has no $guest_disk" >&2
+    exit 1
+  fi
+  docker rm "$ctr" >/dev/null
+  # Trivy names the OS target after the path it was given; relative, so
+  # the reports read "disk.img (debian 12)" rather than a temp dir.
+  (cd "$guest_tmp" && "$trivy" vm --quiet --skip-db-update \
+    --scanners vuln --pkg-types os,library \
+    --timeout 30m \
+    --format json --output "$out/$name.trivy.json" disk.img)
+  cleanup
+  guest_tmp=""
+  pulled=""
+  report "$name"
+}
+
 for pair in "${pairs[@]}"; do
   name="${pair%%=*}"
   ref="${pair#*=}"
@@ -201,17 +275,10 @@ for pair in "${pairs[@]}"; do
     --scanners vuln --pkg-types os,library \
     --timeout 30m \
     --format json --output "$out/$name.trivy.json" "$ref"
-  # Code scanning gets the CRITICAL and HIGH findings, which are what
-  # the gate is about; the JSON and table reports carry every severity.
-  # Each image's SARIF names its own category, so one upload of the
-  # directory files four images' alerts apart rather than refusing two
-  # runs of the same tool under one category.
-  "$trivy" convert --quiet --format sarif --severity CRITICAL,HIGH --output "$out/$name.sarif.tmp" "$out/$name.trivy.json"
-  jq --arg id "${IMAGE_VULNS_SARIF_CATEGORY:-image-vulns}/$name/" \
-    '.runs |= map(.automationDetails = {id: $id})' "$out/$name.sarif.tmp" > "$out/$name.sarif"
-  rm -f "$out/$name.sarif.tmp"
-  "$trivy" convert --quiet --format table --output "$out/$name.txt" "$out/$name.trivy.json"
-  reports+=("$name=$out/$name.trivy.json")
+  report "$name"
+  if [ "$(jq -r '.Metadata.ImageConfig.config.Labels["dev.granule.granulefile.kind"] // empty' "$out/$name.trivy.json")" = pack ]; then
+    scan_guest_disk "$name-rootfs" "$ref"
+  fi
 done
 
 gate_args=(-allowlist "$allowlist" -json "$out/image-vulns.json" -markdown "$out/summary.md" -title "$title")
