@@ -180,6 +180,35 @@ func TestRequestSecretRecordsTheNameAndNeverAValue(t *testing.T) {
 	}
 }
 
+// TestRequestSecretRefusesGrainsOwnCredentials pins that a run cannot
+// ask a human to set a secret grain keeps its own key material in: once
+// the git credentials, CA bundles and release-approval key moved into
+// the store, a value pasted for such a request would replace them with
+// whatever the run's question suggested.
+func TestRequestSecretRefusesGrainsOwnCredentials(t *testing.T) {
+	for _, name := range []string{
+		"github-credential-bot/token",
+		"github-credential-ci-app",
+		"release-approval-key/key.pem",
+		"sandbox-access-ca/bundle.pem",
+		"package-cache-ca",
+		"state-repo-token/token",
+		"secrets-repo-token",
+	} {
+		sink := &MockSink{}
+		tool := toolNamed(t, NewMockTools(sink, nil), "request_secret")
+		res := tool.Handler(context.Background(), map[string]any{
+			"secret": name, "reason": "rotate it", "summary": "Set " + name,
+		})
+		if !res.IsError || !strings.Contains(res.Text, "its own credentials") {
+			t.Errorf("request_secret(%q) = %q, want a refusal naming grain's own credentials", name, res.Text)
+		}
+		if got := sink.SecretRequest(); got != nil {
+			t.Errorf("request_secret(%q) recorded %+v, want nothing", name, got)
+		}
+	}
+}
+
 // TestProposeTaskNamesTheReposThisDeploymentWorksIn pins the half of
 // that tool's `repo` argument no static description can carry: which
 // repositories are actually on offer.

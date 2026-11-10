@@ -760,6 +760,14 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 			break
 		}
 	}
+	// A wait a shutdown cut short is credited at once, before anything
+	// else is read: the same shutdown is ending the run, and a report
+	// that lands after the run has stopped taking credit is lost, along
+	// with the run's whole CLI-blocked total (task_run_wait_credit).
+	stopping := p.shuttingDown()
+	if stopping {
+		report(time.Now())
+	}
 	// A wait cut short -- a shutdown, its timeout -- can land up to a
 	// poll after grain superseded run, so look once more before
 	// answering: the run to resume is the one that will give the verdict.
@@ -771,7 +779,11 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		}
 	}
 	now := time.Now()
-	report(now)
+	if !stopping {
+		report(now)
+	} else {
+		now = lastReport
+	}
 	waited := now.Sub(start)
 
 	resp := CLIWaitResponse{

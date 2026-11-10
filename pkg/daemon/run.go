@@ -388,6 +388,10 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	MoveLooseCredentialsIntoStore(cfg, secretStore)
+	if os.Getenv(gitproxy.CredentialsInFilesEnv) != "files" {
+		cfg.caSecrets = secretStore
+	}
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
@@ -1054,7 +1058,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// nil on a deployment configured for neither pipeline, which both
 	// halves already have to handle: the UI hides the pane and the
 	// reconciler applies nothing.
-	upgrader := newUpgrader(cfg, db, store, githubCredentials)
+	upgrader := newUpgrader(cfg, db, store)
 
 	// Which filesystems this deployment's own state sits on, resolved once
 	// for the two halves that read them: the host status pane's disk rows
