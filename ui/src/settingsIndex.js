@@ -82,6 +82,21 @@ export const SETTINGS_INDEX = [
     keywords: ["upgrade", "auto upgrade", "daily", "time"],
   },
   {
+    id: "autoUpgradeMinIntervalHours",
+    section: "general",
+    anchor: "updates",
+    label: "Minimum interval between release upgrades (hours)",
+    keywords: [
+      "upgrade",
+      "auto upgrade",
+      "release",
+      "interval",
+      "cooldown",
+      "hours",
+      "drain",
+    ],
+  },
+  {
     id: "maxAgentTurns",
     section: "agents",
     anchor: "agent-runs",

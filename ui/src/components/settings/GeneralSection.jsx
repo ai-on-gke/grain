@@ -27,7 +27,7 @@ import {
 // GeneralSection is Settings → General (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function GeneralSection({ s, config }) {
-  const { settings, saveChoice, onTextBlur, onEnterKey } = s;
+  const { settings, saveChoice, onTextBlur, onIntBlur, onEnterKey } = s;
   const external = Boolean(
     settings ? settings.externalConfigRepo : config?.externalConfigRepo,
   );
@@ -119,9 +119,11 @@ export default function GeneralSection({ s, config }) {
           />
         ) : (
           <UpgradeCheckSettings
-            key={`${settings.upgradeCheckMode}-${settings.upgradeCheckPausesPipeline}-${settings.autoUpgradeOn}-${settings.autoUpgradeChannel}-${settings.autoUpgradeTime}`}
+            key={`${settings.upgradeCheckMode}-${settings.upgradeCheckPausesPipeline}-${settings.autoUpgradeOn}-${settings.autoUpgradeChannel}-${settings.autoUpgradeTime}-${settings.autoUpgradeMinIntervalHours ?? ""}`}
             settings={settings}
             onSave={saveChoice}
+            onIntBlur={onIntBlur}
+            onEnterKey={onEnterKey}
           />
         )}
       </SettingsCard>

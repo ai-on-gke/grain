@@ -649,6 +649,11 @@ type Settings struct {
 	// vocabulary, in a picker's order.
 	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
 	AutoUpgradeModes []string `json:"autoUpgradeModes"`
+	// AutoUpgradeMinIntervalHours is model.Config.AutoUpgradeMinIntervalHours:
+	// the minimum interval in hours between two completed automatic upgrades
+	// in release mode (0 = off; default AutoUpgradeMinIntervalHoursDefault).
+	AutoUpgradeMinIntervalHours        int `json:"autoUpgradeMinIntervalHours"`
+	AutoUpgradeMinIntervalHoursDefault int `json:"autoUpgradeMinIntervalHoursDefault"`
 	// OwnerTrust is the owner-trust proposal policy
 	// (model.Config.OwnerTrust): the (owner, repo) pairs -- repo "*" for
 	// every repository -- whose external agent credentials' unapproved
@@ -1204,6 +1209,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
 		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
 		AutoUpgradeModes:                   model.AutoUpgradeModes(),
+		AutoUpgradeMinIntervalHours:        cfg.AutoUpgradeMinIntervalHours,
+		AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
 		AutoGrantContextReads:              stringsOrEmpty(cfg.AutoGrantContextReads),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
@@ -1488,6 +1495,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
 			AutoUpgradeOn:                      def.AutoUpgradeMode(),
 			AutoUpgradeModes:                   model.AutoUpgradeModes(),
+			AutoUpgradeMinIntervalHours:        def.AutoUpgradeMinIntervalHours,
+			AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
 			AutoGrantContextReads:              stringsOrEmpty(def.AutoGrantContextReads),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
@@ -1604,6 +1613,9 @@ type UpdateSettingsRequest struct {
 	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
 	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
 	AutoUpgradeOn *string `json:"autoUpgradeOn"`
+	// AutoUpgradeMinIntervalHours is the minimum interval in hours between
+	// completed automatic upgrades in release mode (0 = off).
+	AutoUpgradeMinIntervalHours *int `json:"autoUpgradeMinIntervalHours"`
 	// OwnerTrust replaces the owner-trust proposal policy
 	// (Settings.OwnerTrust); an empty list turns it off.
 	OwnerTrust *[]model.OwnerTrustRule `json:"ownerTrust"`
@@ -2407,6 +2419,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("autoUpgradeOn: %v", err)
 		}
 		cfg.AutoUpgradeOn = on
+	}
+	if req.AutoUpgradeMinIntervalHours != nil {
+		if *req.AutoUpgradeMinIntervalHours < 0 {
+			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at least 0")
+		}
+		cfg.AutoUpgradeMinIntervalHours = *req.AutoUpgradeMinIntervalHours
 	}
 	if req.OwnerTrust != nil {
 		rules, err := model.NormalizeOwnerTrust(*req.OwnerTrust)

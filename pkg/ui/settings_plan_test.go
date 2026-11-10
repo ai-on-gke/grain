@@ -233,6 +233,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		AutoUpgradeChannel:          ptr("main"),
 		AutoUpgradeTime:             ptr("04:30"),
 		AutoUpgradeOn:               ptr("release"),
+		AutoUpgradeMinIntervalHours: ptr(12),
 		OwnerTrust:                  ptr([]model.OwnerTrustRule{{Owner: "jane@example.com", Repo: "acme/widgets"}}),
 		AutoGrantContextReads:       ptr([]string{"acme/specs"}),
 		AgentBackends:               ptr([]model.AgentBackend{{ID: "backend-1", Name: "Primary", Framework: model.AgentFrameworks()[0], Models: []string{"gemini-3.1-pro"}}}),
