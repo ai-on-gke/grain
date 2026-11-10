@@ -495,13 +495,13 @@ outright, and so is every other write and every deployment-wide read
 `sessions:*`, `memory:*`, `deployment:*`). A preset holding any of them
 (`task-admin`, `release-manager`, ...) is refused whole, as is a scope
 set only a person may grant, and a grant limited to another repository
-(`api:ci:read@acme/widgets` on a job of `bwsalmon/grain`).
+(`api:ci:read@acme/widgets` on a job of `ai-on-gke/grain`).
 
 The trust rules are those of `repo-write`. A job is given its api grants
 only on a post-merge `release`, an operator's `workflow_dispatch`, or a
 cron grain fired itself, never on a pull request's or an ordinary push's
 run. They are honoured only for the repositories the deployment offers
-grain's API to in CI, which is grain's own (`bwsalmon/grain`). Like
+grain's API to in CI, which is grain's own (`ai-on-gke/grain`). Like
 repository access, a job is granted them by declaring them: they are
 not taken from the repository's CI capabilities list.
 

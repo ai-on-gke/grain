@@ -1127,10 +1127,11 @@ repository: a trusted schedule run of the workflow on `base:` (or the
 default branch), no task while it runs, and a review task only when the run
 does not pass (or every run, with `review: always`). That makes it the way
 to run a repository script on a cadence with no agent: a job that runs the
-script, holding whatever `api:` grants it needs in its `capabilities:`
-(`api:tasks:read` to look at what is open, `api:tasks:from-template` to file
-one of the repository's own templates when there is work to do --
-`docs/agent-api.md`), exits 0 on a quiet night and costs no agent run.
+script exits 0 on a quiet night and costs no agent run (and, on repositories
+the deployment offers grain's API to in CI -- `ai-on-gke/grain` by default,
+see `docs/agent-api.md` § "CI jobs" -- can hold `api:tasks:read` to look at
+what is open and `api:tasks:from-template` to file one of the repository's
+own templates when there is work to do).
 
 The exception is this schedule's and nothing else's. The run is a schedule
 event, so it is no pull request's check and posts no commit status; pull

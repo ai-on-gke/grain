@@ -17,6 +17,8 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
@@ -178,4 +180,42 @@ func ciCatalogueRefusal(ctx context.Context, config func(context.Context) (*mode
 		return fmt.Errorf("the capability catalogue refuses this CI job: %w", err)
 	}
 	return nil
+}
+
+// ciDeclarationRefusal refuses a CI job whose workflow declares a
+// capability only a person may accept (model.DeclaredCIJobHold: a GCP
+// key, a host script, a GitHub credential, a dangerous api scope) that no
+// person has accepted for it (model.DeclarationAcceptance, task 3971). A
+// workflow file is the repository's to write, by whoever can merge or
+// push a branch there, so declaring such a capability is a request, not
+// a grant. The request is recorded either way, so Settings ->
+// Capabilities shows the job awaiting acceptance; a job widening its
+// capabilities past the accepted set is refused again until a person
+// accepts the new one. grain's own builtin jobs, and a daemon with no
+// store (declarations nil), are not asked.
+func ciDeclarationRefusal(ctx context.Context, declarations func(context.Context, model.RepoRef, string, string, []string, time.Time) (bool, []string, error),
+	repo model.RepoRef, req ci.SandboxRequest, now time.Time, logf func(string, ...any)) error {
+
+	if declarations == nil || req.Builtin != "" {
+		return nil
+	}
+	var declared []string
+	for _, id := range req.Capabilities {
+		if !grainci.IsGrant(id) {
+			declared = append(declared, id)
+		}
+	}
+	accepted, items, err := declarations(ctx, repo, req.Name, req.Commit, declared, now)
+	if err != nil {
+		return fmt.Errorf("checking whether a person accepted this CI job's capabilities: %w", err)
+	}
+	if accepted {
+		return nil
+	}
+	if logf != nil {
+		logf("grain ci: %s: %s job %s held: its declared %s await a person's acceptance", req.Repo, req.Event, req.Name, strings.Join(items, ", "))
+	}
+	return fmt.Errorf("this job declares %s, which only a person may grant, and no person has accepted that for it: "+
+		"a person holding the scope each needs can accept it on Settings -> Capabilities -> Repository declarations (%s)",
+		strings.Join(items, ", "), model.CIJobDeclarationID(repo, req.Name))
 }

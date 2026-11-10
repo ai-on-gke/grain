@@ -403,6 +403,82 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 	}
 }
 
+func TestScheduleGrainCIRoundTripsAsYAMLBooleanInSettingsSchedules(t *testing.T) {
+	ctx := context.Background()
+	store, db := openDB(t)
+	remote := bareRemote(t)
+	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: filepath.Join(t.TempDir(), "state"), Remote: remote})
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+	wfTmpl := model.WorkflowReviewTemplateID("check")
+	for _, sc := range []model.Schedule{
+		{
+			ID: "sched-off", Title: "Default off", Target: target, TemplateID: &wfTmpl,
+			GrainCI:    false,
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 6},
+			Overlap:    model.OverlapSkip, Enabled: true, NextRunAt: now, CreatedAt: now,
+		},
+		{
+			ID: "sched-on", Title: "Opted in", Target: target, TemplateID: &wfTmpl,
+			GrainCI:    true,
+			Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 6},
+			Overlap:    model.OverlapSkip, Enabled: true, NextRunAt: now, CreatedAt: now,
+		},
+	} {
+		if err := store.PutSchedule(ctx, sc); err != nil {
+			t.Fatalf("putting schedule %s: %v", sc.ID, err)
+		}
+	}
+	if err := staterepo.Load(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+
+	work := filepath.Join(t.TempDir(), "clone")
+	git(t, "", "clone", "--quiet", remote, work)
+	raw := read(t, filepath.Join(work, filepath.FromSlash(staterepo.DumpPath("schedule"))))
+	for _, bad := range []string{"grain-ci: 0", "grain-ci: 1"} {
+		if strings.Contains(raw, bad) {
+			t.Errorf("settings/schedules.yml wrote integer %q instead of YAML boolean:\n%s", bad, raw)
+		}
+	}
+	for _, want := range []string{"grain-ci: false", "grain-ci: true"} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("settings/schedules.yml missing %q:\n%s", want, raw)
+		}
+	}
+
+	// Flipping grain-ci in settings/schedules.yml applies cleanly, and legacy
+	// integer 1/0 dumps also remain loadable.
+	editSettings(t, work, "schedule", func(entries []map[string]any) {
+		for _, entry := range entries {
+			switch entry["id"] {
+			case "sched-off":
+				entry["grain-ci"] = true
+			case "sched-on":
+				entry["grain-ci"] = 0
+			}
+		}
+	})
+	if _, err := staterepo.Check(ctx, db, work, model.SchemaVersion); err != nil {
+		t.Fatalf("Check failed on edited schedules.yml: %v", err)
+	}
+	git(t, work, "-c", "user.email=alice@example.com", "-c", "user.name=Alice", "commit", "-am", "Flip grain-ci")
+	git(t, work, "push", "--quiet", "origin", "main")
+	if applied, err := staterepo.Apply(ctx, repo, db, model.SchemaVersion); err != nil || !applied {
+		t.Fatalf("Apply: applied=%v err=%v", applied, err)
+	}
+	off, err := store.GetSchedule(ctx, "sched-off")
+	if err != nil || off == nil || !off.GrainCI {
+		t.Errorf("sched-off after Apply = %+v, %v, want GrainCI=true", off, err)
+	}
+	on, err := store.GetSchedule(ctx, "sched-on")
+	if err != nil || on == nil || on.GrainCI {
+		t.Errorf("sched-on after Apply = %+v, %v, want GrainCI=false", on, err)
+	}
+}
+
 // Companion rows whose parent is gone survive the round trip.
 //
 // Under an older build Store.DeleteTemplate deleted the `template` row

@@ -147,6 +147,8 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/expire":        "internal",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer":        "internal",
 	"GET /api/local-script-approvals":                                      "internal",
+	"GET /api/declarations":                                                "internal",
+	"POST /api/declarations/accept":                                        "internal",
 	"GET /api/memory":                                                      "memory:read",
 	"PUT /api/memory":                                                      "memory:write",
 	"GET /api/memory/documents":                                            "memory:read",
