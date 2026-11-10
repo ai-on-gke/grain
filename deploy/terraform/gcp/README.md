@@ -421,6 +421,62 @@ None of this routes a value through Terraform: keeping them out of
 configuration is what keeps them out of diffs, pull requests, this
 repository and now the state as well.
 
+## Cloud KMS-wrapped secrets key
+
+The secrets private key (`secrets.key` on the data disk) opens every
+credential the deployment stores. With `secrets_key_kms` on (the
+default), `kms.tf` creates a key ring `<name_prefix>-secrets` in `region`
+and a `secrets-key` CryptoKey in it that rotates every 90 days
+(`secrets_key_kms_rotation_period`). The host's service account gets
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key only, and
+`roles/secretmanager.secretVersionAdder` on the `secrets-key` secret
+only.
+
+On the first deploy after the apply, `setup.sh` runs
+`grain state key wrap -kms <key>` once the daemon is up. The daemon wraps
+the key it holds in memory, unwraps the result and compares it, and only
+then replaces the file. The file is now
+`grain-secret-key-kms-v1:<key>:<ciphertext>` with the public key on a
+second line, and it opens nothing without `decrypt` on that KMS key.
+`files/deploy.sh` then adds the wrapped file as a new version of the
+`secrets-key` secret, so the escrow stops holding the plaintext. A host
+rebuilt onto a fresh disk seeds the wrapped file back from that secret
+and unwraps it with its own account. Later deploys see a wrapped key and
+leave it alone.
+
+What changes for an operator:
+
+- **Every restart unwraps once**, which is one Cloud Audit Logs Data
+  Access entry. If KMS is unreachable or refuses (key disabled, grant
+  removed), the daemon still starts and serves the UI. Anything that
+  needs a secret fails with `KMS unreachable for <key>` or
+  `KMS permission denied for <key>`, and the store retries with backoff
+  until KMS answers. Settings → State shows the protection mode, the key
+  and when the daemon last unwrapped it.
+- **Rotation is automatic.** After KMS rotates the key, the next start
+  finds the file under an old version and rewraps it under the primary.
+- **Destroy the plaintext escrow versions yourself.** Versions of
+  `secrets-key` pushed by `push-secrets.sh` before the wrap still hold the
+  plaintext key:
+  `gcloud secrets versions list <name_prefix>-secrets-key`, then
+  `gcloud secrets versions destroy <version> --secret <name_prefix>-secrets-key`
+  for each one older than the wrapped version. `grain state key wrap` also
+  lists any plaintext archives it can see on the host
+  (`secrets.key.replaced-*`).
+- **Unwrap before downgrading.** A build older than the one that wrapped
+  the key cannot read the wrapped form: it starts but cannot read a
+  secret. Run `grain state key unwrap` on the host first. It needs KMS,
+  checks the key against the in-memory copy and reads it back before it
+  is done.
+- **A destroy cannot remove the key ring or key.** Cloud KMS keeps both
+  names forever and only schedules the key's versions for destruction. Run
+  `grain state key unwrap` before `terraform destroy`, and import both
+  resources if you re-create the deployment under the same `name_prefix`.
+
+Set `secrets_key_kms = false` to keep a plaintext key file. Turning it off
+on a deployment that is already wrapped does not unwrap it. Run
+`grain state key unwrap` first.
+
 ## The daemon's own Gemini key
 
 With `enable_gemini_key` on (the default here), the minter account

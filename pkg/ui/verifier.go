@@ -399,6 +399,11 @@ func verifyCallerNow(r *http.Request) callerVerification {
 	if isHubTunnelRequest(r) {
 		return verifyHubTunnelCaller(r)
 	}
+	// The API socket's caller is who its uid maps to, whatever headers
+	// it sends (HostAccountHandler dropped them anyway).
+	if a := hostAccountFromContext(r.Context()); a != nil {
+		return hostAccountVerification(a)
+	}
 	for _, v := range activeVerifiers(r.Context()) {
 		headers := v.Headers()
 		header := firstPresentHeader(r, headers)

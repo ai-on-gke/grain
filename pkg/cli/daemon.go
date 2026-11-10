@@ -323,6 +323,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"Defaults to $GRAIN_REQUIRE_VERIFIER")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	deploymentOwner := fs.String("deployment-owner", "", "human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($"+ui.DeploymentOwnerEnv+" when unset)")
+	hostAccounts := fs.String("host-accounts", "", "comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as "+
+		"(the daemon's own account maps to -deployment-owner unless named here; $"+ui.HostAccountsEnv+" when unset)")
+	apiSocket := fs.String("api-socket", "", "unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names "+
+		"(default <data-dir>/api/grain.sock, served only when some account is mapped; \"none\" turns it off)")
 	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve allowed group: entries against this Cloud Identity API base URL "+
 		"(a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint+"; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT")
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
@@ -1148,6 +1152,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*deploymentOwner = env
 		}
 	}
+	if !passed["host-accounts"] {
+		if env := strings.TrimSpace(os.Getenv(ui.HostAccountsEnv)); env != "" {
+			*hostAccounts = env
+		}
+	}
+	parsedHostAccounts, err := ui.ParseHostAccounts(*hostAccounts)
+	if err != nil {
+		return daemon.Config{}, fs, unknownFlags, err
+	}
 	if !passed["object-store"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
 			*objectStoreURI = env
@@ -1270,6 +1283,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		DeploymentOwner:         strings.TrimSpace(*deploymentOwner),
+		HostAccounts:            parsedHostAccounts,
+		APISocket:               strings.TrimSpace(*apiSocket),
 		UiCloudIdentityEndpoint: strings.TrimSpace(*uiCloudIdentityEndpoint),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,

@@ -47,7 +47,7 @@ func TestImportCarriesABundleFromThePreviousSchema(t *testing.T) {
 	srcDir, _, filed := deploymentMidUpgrade(t, false)
 
 	bundle := filepath.Join(t.TempDir(), "migration.tar.gz")
-	if err := runExport(ctx, []string{"-data-dir", srcDir, "-out", bundle}, &bytes.Buffer{}); err != nil {
+	if err := runExport(ctx, []string{"-data-dir", srcDir, "-out", bundle, "-plaintext"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("exporting the deployment at the previous schema: %v", err)
 	}
 

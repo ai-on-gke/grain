@@ -16,6 +16,7 @@ package githubsim
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -71,7 +72,11 @@ func (s *Sim) dispatchWorkflow(owner, repo, workflow string, body []byte) (githu
 	if sha == "" {
 		return jsonResponse(422, map[string]string{"message": "No ref found for: " + payload.Ref}), nil
 	}
-	name, wfPath := strings.TrimSuffix(workflow, path.Ext(workflow)), ""
+	// GitHub serves every run with its workflow's path, which is what a
+	// per-workflow listing (.../workflows/{workflow}/runs) matches on; a
+	// workflow that has never run before is still the file it was
+	// dispatched as.
+	name, wfPath := strings.TrimSuffix(workflow, path.Ext(workflow)), ".github/workflows/"+workflow
 	for _, wr := range s.WorkflowRuns {
 		if workflowFileMatches(wr.Path, wr.ID, workflow) {
 			if wr.Name != "" {
@@ -112,6 +117,53 @@ func (s *Sim) cancelRun(id int64) (github.ApiResponse, error) {
 		return jsonResponse(202, map[string]any{}), nil
 	}
 	return jsonResponse(404, map[string]string{"message": "Not Found"}), nil
+}
+
+// ErrWorkflowRunNotFound and ErrWorkflowRunCompleted are what
+// CompleteWorkflowRun answers for a run the sim does not have and for one
+// that has already finished.
+var (
+	ErrWorkflowRunNotFound  = errors.New("no such workflow run")
+	ErrWorkflowRunCompleted = errors.New("the workflow run has already completed")
+)
+
+// CompleteWorkflowRun finishes run id -- one a workflow_dispatch queued, or
+// any other still queued or in progress -- with conclusion, as GitHub
+// does when its last job ends: status completed, updated_at now, and jobs
+// as its jobs (each job's empty Conclusion read as conclusion's). It keeps
+// everything else the run was queued with, so it stays the dispatch's run:
+// its ID, workflow, ref, commit and event. With no jobs, the run gets one
+// job named after the workflow concluding conclusion, with no log.
+func (s *Sim) CompleteWorkflowRun(id int64, conclusion string, jobs []WorkflowJob) (WorkflowRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.freezeRunIDs()
+	for i := range s.WorkflowRuns {
+		wr := &s.WorkflowRuns[i]
+		if wr.ID != id {
+			continue
+		}
+		if wr.Status == "" || wr.Status == "completed" {
+			return *wr, ErrWorkflowRunCompleted
+		}
+		if conclusion == "" {
+			conclusion = "success"
+		}
+		if len(jobs) == 0 {
+			jobs = []WorkflowJob{{Name: wr.Name}}
+		}
+		done := make([]WorkflowJob, len(jobs))
+		for j, job := range jobs {
+			if job.Conclusion == "" {
+				job.Conclusion = conclusion
+			}
+			done[j] = job
+		}
+		wr.Status, wr.Conclusion, wr.Jobs = "completed", conclusion, done
+		wr.UpdatedAt = s.now().UTC()
+		return *wr, nil
+	}
+	return WorkflowRun{}, ErrWorkflowRunNotFound
 }
 
 // latestAttemptJobs is wr's jobs from its latest attempt.

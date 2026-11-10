@@ -4013,6 +4013,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             key={openRepo}
                             repo={openRepo}
                             comparison={repoComparison}
+                            tasks={tasks}
+                            onOpenTask={openTask}
                             onBack={() => setRepoComparison(null)}
                             showError={showError}
                           />

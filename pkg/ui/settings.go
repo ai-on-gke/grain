@@ -35,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/hubenv"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -1618,10 +1619,11 @@ type UpdateSettingsRequest struct {
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
 	SettingsLocked        *bool                 `json:"settingsLocked"`
-	// Registry is the Grain Hub connection, sent as "hub" -- or, for a
-	// release, as "registry", its name before the Grain Registry was
-	// renamed the Grain Hub. "hub" wins when a request carries both.
-	Hub *model.HubConfig `json:"registry"`
+	// Hub is the Grain Hub connection, sent as "hub" -- or, for a release,
+	// as "registry", its name before the Grain Registry was renamed the
+	// Grain Hub. "hub" wins when a request carries both, and "registry"
+	// alone logs a one-time deprecation warning.
+	Hub *model.HubConfig `json:"hub"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -1631,14 +1633,15 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = UpdateSettingsRequest(p)
-	var renamed struct {
-		Hub *model.HubConfig `json:"hub"`
+	var legacy struct {
+		Registry *model.HubConfig `json:"registry"`
 	}
-	if err := json.Unmarshal(data, &renamed); err != nil {
+	if err := json.Unmarshal(data, &legacy); err != nil {
 		return err
 	}
-	if renamed.Hub != nil {
-		r.Hub = renamed.Hub
+	if r.Hub == nil && legacy.Registry != nil {
+		r.Hub = legacy.Registry
+		hubenv.Warn(`settings key "registry"`, `"hub"`)
 	}
 	var snake struct {
 		SettingsLocked        *bool     `json:"settings_locked"`

@@ -407,6 +407,64 @@ create cluster-scoped objects, clear the three names in Settings
 instead, and drop `priorityClassName: grain-daemon` from the Deployment. The daemon itself needs no new RBAC: the classes come from the
 manifest, not from grain.
 
+## Wrapping the secrets key with Cloud KMS (Workload Identity)
+
+The secrets private key lives on the `grain-data` volume as
+`secrets/secrets.key`, so a PD snapshot of that volume holds every
+credential the deployment stores. On GKE, wrap it with a Cloud KMS key
+instead. The daemon unwraps it once at start with the Google service
+account the `grain` Kubernetes ServiceAccount (`grain.yaml`) is bound to
+through Workload Identity. That account's token comes from the GKE
+metadata server, the same way a GCE VM gets one, so nothing in
+`grain.yaml` names a credential.
+
+With Workload Identity enabled on the cluster and its node pool:
+
+```bash
+PROJECT=my-project REGION=us-central1 NS=grain
+GSA=grain-daemon@$PROJECT.iam.gserviceaccount.com
+
+# A Google service account for the daemon, which the grain KSA may act as.
+gcloud iam service-accounts create grain-daemon --project "$PROJECT"
+gcloud iam service-accounts add-iam-policy-binding "$GSA" \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:$PROJECT.svc.id.goog[$NS/grain]"
+kubectl -n "$NS" annotate serviceaccount grain \
+  iam.gke.io/gcp-service-account="$GSA"
+
+# A key ring and a key in the cluster's region, rotating every 90 days,
+# and the daemon's account on that key only.
+gcloud kms keyrings create grain-secrets --location "$REGION" --project "$PROJECT"
+gcloud kms keys create secrets-key --keyring grain-secrets --location "$REGION" \
+  --project "$PROJECT" --purpose encryption \
+  --rotation-period 90d --next-rotation-time "$(date -u -d '+90 days' +%Y-%m-%dT%H:%M:%SZ)"
+gcloud kms keys add-iam-policy-binding secrets-key --keyring grain-secrets \
+  --location "$REGION" --project "$PROJECT" \
+  --role roles/cloudkms.cryptoKeyEncrypterDecrypter --member "serviceAccount:$GSA"
+
+# Restart the pod so it picks up the annotation, then wrap, in the daemon.
+kubectl -n "$NS" rollout restart deployment/grain
+kubectl -n "$NS" exec deploy/grain -- grain state key wrap \
+  -kms "projects/$PROJECT/locations/$REGION/keyRings/grain-secrets/cryptoKeys/secrets-key"
+```
+
+`grain state key wrap` checks that the wrapped key unwraps to the same key
+before it replaces the file, and lists any plaintext copies it can still
+see. Delete those, and replace any copy of the plaintext key you escrowed
+elsewhere with the wrapped file's contents. From then on:
+
+- Each start makes one KMS decrypt call. If KMS is unreachable or the
+  binding is removed, the pod still starts and serves the UI. Anything
+  that needs a secret fails with `KMS unreachable for <key>` or
+  `KMS permission denied for <key>`, and the store retries with backoff.
+  Settings → State shows the protection mode, the key and the last
+  unwrap.
+- After KMS rotates the key, the next start rewraps the file under the
+  new primary version.
+- **Run `grain state key unwrap` before rolling back** to an image older
+  than the one that wrapped the key. An older build cannot read the
+  wrapped form.
+
 ## Operating notes
 
 - **One deployment per namespace.** The sweep for sandboxes a dead

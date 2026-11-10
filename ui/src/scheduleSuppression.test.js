@@ -36,6 +36,21 @@ describe("describeSuppression", () => {
       /has not finished/,
     );
   });
+
+  // Held by another schedule in its overlap group: the server's sentence
+  // names that schedule, where "its last firing" would be wrong.
+  it("uses the server's sentence for a firing held by its overlap group", () => {
+    const detail =
+      'the task schedule "Sync" (sync) filed is still open, and both are in overlap group "release-sync"';
+    expect(
+      describeSuppression({
+        reason: "task",
+        taskId: "42",
+        heldByScheduleId: "sync",
+        detail,
+      }),
+    ).toBe(detail);
+  });
 });
 
 describe("isOverdue", () => {

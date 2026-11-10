@@ -1,0 +1,336 @@
+{
+  "pages": [
+    "/",
+    "/tasks",
+    "/inbox",
+    "/ci",
+    "/templates",
+    "/schedules",
+    "/suites",
+    "/boards",
+    "/memory",
+    "/release-notes",
+    "/notifications",
+    "/console",
+    "/settings/general",
+    "/settings/access",
+    "/settings/agents",
+    "/settings/capabilities",
+    "/settings/capability-servers",
+    "/settings/ci",
+    "/settings/config-repo",
+    "/settings/credentials",
+    "/settings/engine",
+    "/settings/executors",
+    "/settings/git",
+    "/settings/hostds",
+    "/settings/hosts",
+    "/settings/memory",
+    "/settings/models",
+    "/settings/preferences",
+    "/settings/sandboxes",
+    "/settings/secrets",
+    "/settings/tasks",
+    "/settings/upgrade"
+  ],
+  "calls": 620,
+  "flagged": [
+    {
+      "page": "/",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/tasks",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/inbox",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/ci",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/ci",
+      "path": "/api/ci/runs?limit=200",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": true,
+      "items": 200
+    },
+    {
+      "page": "/templates",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/schedules",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/suites",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/boards",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/memory",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/release-notes",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/notifications",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/console",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/general",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/access",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/agents",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/capabilities",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/capability-servers",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/ci",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/config-repo",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/credentials",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/engine",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/executors",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/git",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/hostds",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/hosts",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/memory",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/models",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/preferences",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/sandboxes",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/secrets",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/tasks",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    },
+    {
+      "page": "/settings/upgrade",
+      "path": "/api/tasks?state=closed&limit=200&cursor=",
+      "status": 200,
+      "limit": "200",
+      "agentListHeader": false,
+      "truncated": false,
+      "items": 68
+    }
+  ]
+}

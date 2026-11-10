@@ -328,3 +328,155 @@ func TestSyncRepoDeclarationsStoresCanonicalGrantReferences(t *testing.T) {
 		t.Errorf("schedule_grant = %v, want %v", gotSched, wantSched)
 	}
 }
+
+// repoAccessFixture is each fixture task's repository access beside its
+// target, acme/widgets on main: reads, writes on another repo and on the
+// target's own repo on another branch, and the mix of both.
+var repoAccessFixture = map[string]struct {
+	reads  []model.RepoRef
+	writes []model.WriteTarget
+}{
+	"none":     {},
+	"docs":     {reads: []model.RepoRef{{Owner: "acme", Name: "docs"}}},
+	"two":      {reads: []model.RepoRef{{Owner: "acme", Name: "docs"}, {Owner: "acme", Name: "site"}}},
+	"site":     {writes: []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "site"}, Base: "main"}}},
+	"publish":  {writes: []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, Base: "publish"}}},
+	"mixed":    {reads: []model.RepoRef{{Owner: "acme", Name: "docs"}}, writes: []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "site"}, Base: "main"}}},
+	"readSite": {reads: []model.RepoRef{{Owner: "acme", Name: "site"}}},
+}
+
+// repoAccessPredicates is every approval and policy answer that reads a
+// task's repository access, for one (proposer, child) pair: the rules
+// unified-grants §3 says must not move when Reads and Writes are read back
+// from …/repo#read and #write grant rows rather than their own tables.
+func repoAccessPredicates(child, parent model.Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "ungrantedWrites=%v ", model.UngrantedWrites(child, parent))
+	fmt.Fprintf(&b, "ungrantedReads=%v ", model.UngrantedReads(child, parent))
+	fmt.Fprintf(&b, "lands=%v ", model.LandsWhereGranted(child, parent))
+	fmt.Fprintf(&b, "sameBranch=%v ", model.SameBranch(child, parent))
+	// TemplateWithinTask's mayRead and WriteTargetFor, over a template
+	// carrying the child's access.
+	err := model.TemplateWithinTask(parent, model.Template{ID: "tmpl", Reads: child.Reads, Writes: child.Writes})
+	fmt.Fprintf(&b, "tmplWithin=%v ", err == nil)
+	policy := model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{
+		{Capability: model.RepoWriteRef, Deny: true, Repos: []string{"acme/widgets"}},
+		{Capability: model.RepoReadRef, RunKinds: []string{model.CapabilityRunCI}},
+	}}
+	for _, g := range model.TaskRepoGrants(child) {
+		if g.Capability == model.RepoTargetRef {
+			continue
+		}
+		subject := model.CapabilitySubject{Kind: model.CapabilityRunTask, Repo: child.Target}
+		fmt.Fprintf(&b, "[%s policy=%v]", g.Key(), policy.PermitsTaskRepoGrant(g, subject) != nil)
+	}
+	return b.String()
+}
+
+// TestRepoAccessReadBackFromGrantRowsKeepsItsAnswers: a task's, template's
+// and schedule's Reads and Writes, stored instead as the …/repo#read
+// {repo} and …/repo#write {repo, base} rows TaskRepoGrants projects them
+// to and read back through TaskRepoAccessOf, are the access they started
+// as, and every predicate over repository access answers each (proposer,
+// child) pair of the fixture the same on both.
+func TestRepoAccessReadBackFromGrantRowsKeepsItsAnswers(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	asGrants := func(reads []model.RepoRef, writes []model.WriteTarget) []model.Grant {
+		var out []model.Grant
+		for _, g := range model.TaskRepoGrants(model.Task{Reads: reads, Writes: writes}) {
+			// The row's own spelling: its Key, as task_grant holds it.
+			out = append(out, model.Grant{Capability: g.Key(), Via: model.GrantByLabel})
+		}
+		return out
+	}
+	fromRows := func(what, id string, grants []model.Grant) ([]model.RepoRef, []model.WriteTarget) {
+		reads, writes, rest := model.TaskRepoAccessOf(grants)
+		if len(rest) != 0 {
+			t.Errorf("%s %s: grant rows %v left %v that are not repository access", what, id, grants, rest)
+		}
+		return reads, writes
+	}
+	same := func(what, id string, gotR, wantR []model.RepoRef, gotW, wantW []model.WriteTarget) {
+		if !slices.EqualFunc(gotR, wantR, model.RepoRef.Same) || fmt.Sprint(gotW) != fmt.Sprint(wantW) {
+			t.Errorf("%s %s read back from grant rows as reads=%v writes=%v, want %v %v", what, id, gotR, gotW, wantR, wantW)
+		}
+	}
+
+	fromTables, fromGrantRows := map[string]model.Task{}, map[string]model.Task{}
+	for id, access := range repoAccessFixture {
+		tables := task(id, true)
+		tables.Target, tables.Base, tables.Reads, tables.Writes = &widgets, "main", access.reads, access.writes
+		rows := task(id+"-rows", true)
+		rows.Target, rows.Base, rows.Grants = &widgets, "main", asGrants(access.reads, access.writes)
+		for _, tk := range []model.Task{tables, rows} {
+			if err := store.PutTask(ctx, tk); err != nil {
+				t.Fatal(err)
+			}
+		}
+		gotTables, err := store.GetTask(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotRows, err := store.GetTask(ctx, id+"-rows")
+		if err != nil {
+			t.Fatal(err)
+		}
+		reads, writes := fromRows("task", id, gotRows.Grants)
+		same("task", id, reads, gotTables.Reads, writes, gotTables.Writes)
+		gotRows.Reads, gotRows.Writes, gotRows.Grants = reads, writes, nil
+		fromTables[id], fromGrantRows[id] = *gotTables, *gotRows
+
+		if err := store.PutTemplate(ctx, model.Template{ID: "tmpl-" + id, Name: "tmpl-" + id, Title: id, Body: "seed",
+			Target: &widgets, CreatedAt: now, Grants: asGrants(access.reads, access.writes)}); err != nil {
+			t.Fatal(err)
+		}
+		tmpl, err := store.GetTemplate(ctx, "tmpl-"+id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reads, writes = fromRows("template", id, tmpl.Grants)
+		same("template", id, reads, access.reads, writes, access.writes)
+
+		if err := store.PutSchedule(ctx, model.Schedule{ID: "sched-" + id, Title: id, Body: "seed", Target: widgets,
+			Recurrence: model.Recurrence{Kind: model.RecurrenceDaily}, Overlap: model.OverlapSkip, NextRunAt: now,
+			CreatedAt: now, Grants: asGrants(access.reads, access.writes)}); err != nil {
+			t.Fatal(err)
+		}
+		sched, err := store.GetSchedule(ctx, "sched-"+id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reads, writes = fromRows("schedule", id, sched.Grants)
+		same("schedule", id, reads, access.reads, writes, access.writes)
+	}
+
+	// The rows really are grant rows, and a task_grant #read stays a CI
+	// job's grant to Permits: only PermitsTaskRepoGrant reads it as a
+	// task's own access.
+	rows := grantRows(t, ctx, db, "task_grant", "task_id")
+	if want := model.TaskRepoReadGrant(model.RepoRef{Owner: "acme", Name: "docs"}).Key(); !slices.Contains(rows["docs-rows"], want) {
+		t.Errorf("task_grant docs-rows = %v, want it to hold %s", rows["docs-rows"], want)
+	}
+	if err := (model.CapabilityPolicy{}).Permits(rows["docs-rows"][0], model.CapabilitySubject{Kind: model.CapabilityRunTask, Repo: &widgets}); err == nil {
+		t.Errorf("Permits(%s) on a task = nil, want the CI-only refusal", rows["docs-rows"][0])
+	}
+
+	var answers strings.Builder
+	for parent := range repoAccessFixture {
+		for child := range repoAccessFixture {
+			want := repoAccessPredicates(fromTables[child], fromTables[parent])
+			answers.WriteString(want + "\n")
+			if got := repoAccessPredicates(fromGrantRows[child], fromGrantRows[parent]); got != want {
+				t.Errorf("(%s proposes %s) read back from grant rows:\n got %s\nwant %s", parent, child, got, want)
+			}
+		}
+	}
+	for _, answer := range []string{"ungrantedWrites=[]", "ungrantedWrites=[{", "ungrantedReads=[]", "ungrantedReads=[acme/",
+		"lands=true", "lands=false", "tmplWithin=true", "tmplWithin=false", "policy=true", "policy=false"} {
+		if !strings.Contains(answers.String(), answer) {
+			t.Errorf("no pair in the fixture answers %s", answer)
+		}
+	}
+}

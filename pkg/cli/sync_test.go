@@ -472,9 +472,10 @@ func settingsWithEveryFieldChanged() ui.Settings {
 		s.AgentBackends = []model.AgentBackend{{ID: "backend-1", Framework: model.AgentFrameworkClaude}}
 		s.OwnerTrust = []model.OwnerTrustRule{{Owner: "jane@example.com", Repo: "acme/widgets"}}
 	}
-	// Struct-valued settings: the overcommit mode, registry connection and skill folders.
+	// Struct-valued settings: the overcommit mode, hub connection and skill folders.
 	s.SandboxOvercommit = model.OvercommitSettings{Mode: model.OvercommitAuto}
-	s.Registry = model.HubConfig{URL: "https://registry.example.com", Entry: "grain-dev"}
+	s.Hub = model.HubConfig{URL: "https://registry.example.com", Entry: "grain-dev"}
+	s.Registry = s.Hub
 	folders := []string{".claude/skills"}
 	s.Skills = &model.SkillsConfig{Folders: &folders}
 	return s

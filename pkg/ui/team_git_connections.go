@@ -117,9 +117,18 @@ func (c *Client) ListTeamGitConnections(ctx context.Context, id, user string) ([
 func (c *Client) teamGitConnectionViews(settings model.Config) []TeamGitConnectionView {
 	var out []TeamGitConnectionView
 	seenCreds := make(map[string]bool)
+	statusCache := make(map[string]GitCredentialStatus)
+	statusOf := func(cred string) GitCredentialStatus {
+		if st, ok := statusCache[cred]; ok {
+			return st
+		}
+		st := c.gitCredentialStatus(cred)
+		statusCache[cred] = st
+		return st
+	}
 
 	for _, conn := range settings.GitConnections {
-		status := c.gitCredentialStatus(conn.Credential)
+		status := statusOf(conn.Credential)
 		kind := status.Kind
 		if kind == "" {
 			kind = string(model.GitHostGitHub)
@@ -149,7 +158,7 @@ func (c *Client) teamGitConnectionViews(settings model.Config) []TeamGitConnecti
 	// Legacy Config.GitCredential if not already in GitConnections
 	legacy := strings.TrimSpace(settings.GitCredential)
 	if legacy != "" && !seenCreds[legacy] {
-		status := c.gitCredentialStatus(legacy)
+		status := statusOf(legacy)
 		kind := status.Kind
 		if kind == "" {
 			kind = string(model.GitHostGitHub)

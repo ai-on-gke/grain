@@ -88,6 +88,10 @@ type HTTPClient struct {
 	// reason the agent API gate asks an external agent credential for
 	// on a destructive route (`grain approve -reason`).
 	ActingReason string
+	// Socket is the daemon's API socket (HostAPISocket) when HTTP dials
+	// it rather than BaseURL: the daemon then knows the caller by its uid
+	// (hostaccount.go), so no local API token is offered.
+	Socket string
 	// RetryPolicy is how long a call waits out a daemon that is not
 	// answering. nil means DefaultRetryPolicy; &NoRetry is one attempt.
 	RetryPolicy *RetryPolicy
@@ -199,7 +203,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if IsLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) && c.Socket == "" {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
@@ -827,11 +831,38 @@ func (c *HTTPClient) SandboxHealth(ctx context.Context) (SandboxHealthResponse, 
 }
 
 func (c *HTTPClient) ListTasks(ctx context.Context) ([]Task, error) {
-	var tasks []Task
-	if err := c.do(ctx, http.MethodGet, "/api/tasks?fields=full", nil, &tasks); err != nil {
-		return nil, err
+	var all []Task
+	cursor := ""
+	for {
+		path := "/api/tasks?fields=full"
+		if cursor != "" {
+			path += "&limit=200&cursor=" + url.QueryEscape(cursor)
+		}
+		var raw json.RawMessage
+		if err := c.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			var tasks []Task
+			if err := json.Unmarshal(trimmed, &tasks); err != nil {
+				return nil, fmt.Errorf("decoding response from GET %s: %w", path, err)
+			}
+			return tasks, nil
+		}
+		var page taskListPage[Task]
+		if err := json.Unmarshal(trimmed, &page); err != nil {
+			return nil, fmt.Errorf("decoding response from GET %s: %w", path, err)
+		}
+		all = append(all, page.Tasks...)
+		if !page.Truncated || page.NextCursor == "" || page.NextCursor == cursor {
+			if all == nil {
+				all = []Task{}
+			}
+			return all, nil
+		}
+		cursor = page.NextCursor
 	}
-	return tasks, nil
 }
 
 // TaskStatesPage fetches a page of task states from GET /api/tasks/states.
@@ -1006,8 +1037,13 @@ func (c *HTTPClient) RetryMerge(ctx context.Context, id string) error {
 // end -- there is no spelling of this call without one. head is the
 // commit reviewed, "" for the pull request's head as it is now.
 func (c *HTTPClient) ForceMerge(ctx context.Context, id, reason, head string) error {
+	return c.ForceMergeWithGates(ctx, id, reason, head, nil)
+}
+
+// ForceMergeWithGates is Client.ForceMergeWithGates over the wire.
+func (c *HTTPClient) ForceMergeWithGates(ctx context.Context, id, reason, head string, overrideGates []string) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/force-merge",
-		forceMergeRequest{Reason: reason, Head: head}, nil)
+		forceMergeRequest{Reason: reason, Head: head, OverrideGates: overrideGates}, nil)
 }
 
 // RunNow is Client.RunNow over the wire: ask for an agent to be put on
@@ -1457,9 +1493,30 @@ func (c *HTTPClient) GetSettings(ctx context.Context) (Settings, error) {
 	return settings, nil
 }
 
+// settingsWireRequest sends a hub connection under both "hub" and its
+// pre-rename "registry" spelling when req.Hub is set, so a CLI (`grain
+// hub register`, `grain hub unregister`, `grain sync -server`) talking
+// to a pre-rename daemon still updates its connected-entry settings
+// without triggering the "registry"-only deprecation warning on a new
+// daemon.
+type settingsWireRequest struct {
+	UpdateSettingsRequest
+	Registry *model.HubConfig `json:"registry,omitempty"`
+}
+
+func wireSettingsRequest(req UpdateSettingsRequest) any {
+	if req.Hub == nil {
+		return req
+	}
+	return settingsWireRequest{
+		UpdateSettingsRequest: req,
+		Registry:              req.Hub,
+	}
+}
+
 func (c *HTTPClient) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
 	var settings Settings
-	if err := c.do(ctx, http.MethodPut, "/api/settings", req, &settings); err != nil {
+	if err := c.do(ctx, http.MethodPut, "/api/settings", wireSettingsRequest(req), &settings); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil
@@ -1482,7 +1539,7 @@ func (c *HTTPClient) UpdateSettings(ctx context.Context, req UpdateSettingsReque
 // when it gets it.
 func (c *HTTPClient) PlanSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
 	var settings Settings
-	if err := c.do(ctx, http.MethodPost, "/api/settings/plan", req, &settings); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/settings/plan", wireSettingsRequest(req), &settings); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil
@@ -1999,6 +2056,18 @@ func (c *HTTPClient) GetHubInstanceStatus(ctx context.Context) (api.InstanceStat
 		return api.InstanceStatusResponse{}, err
 	}
 	return status, nil
+}
+
+// RedactSecrets has the daemon cut every value in its secret store out
+// of lines -- POST /api/secrets/redact -- so a caller never needs the
+// secrets key, or the values, to redact them.
+func (c *HTTPClient) RedactSecrets(ctx context.Context, lines []string) (SecretsRedactResponse, error) {
+	var out SecretsRedactResponse
+	if lines == nil {
+		lines = []string{}
+	}
+	err := c.do(ctx, http.MethodPost, "/api/secrets/redact", SecretsRedactRequest{Lines: lines}, &out)
+	return out, err
 }
 
 // SetSecret writes one secret key in the daemon's secrets store --

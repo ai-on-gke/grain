@@ -63,6 +63,27 @@ type Settings struct {
 	// harnesses that configure a real daemon through its API; it has no
 	// effect in external mode, which always refuses.
 	DirectConfigWrites bool `json:"directConfigWrites,omitempty"`
+	// RequireVerified is require_verified mode for an external config
+	// repository (verify.go): a commit there is applied only if grain
+	// can vouch for it -- the merge of a pull request approved on the
+	// forge (RequiredApprovals) or merged by one of VerifiedMergers, a
+	// commit signed by a key in AllowedSignersFile, or one an operator
+	// accepted (AcceptedCommits). Anything else is held. It lives here,
+	// on this host, and not in the repository it guards: a writer there
+	// must not be able to turn it off.
+	RequireVerified bool `json:"requireVerified,omitempty"`
+	// RequiredApprovals is how many forge approvals a pull request needs;
+	// one when zero.
+	RequiredApprovals int `json:"requiredApprovals,omitempty"`
+	// VerifiedMergers are the forge accounts grain merges pull requests
+	// as, comma-separated.
+	VerifiedMergers string `json:"verifiedMergers,omitempty"`
+	// AllowedSignersFile is an ssh allowed_signers file of the keys whose
+	// signed commits verify.
+	AllowedSignersFile string `json:"allowedSignersFile,omitempty"`
+	// AcceptedCommits are commits an operator holding an unlimited role
+	// accepted by name, comma-separated.
+	AcceptedCommits string `json:"acceptedCommits,omitempty"`
 	// These fields belonged to external-mirror workflow and warning
 	// behavior. They remain only so older settings files still decode.
 	NoWorkflow            bool `json:"noWorkflow,omitempty"`

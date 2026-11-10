@@ -531,7 +531,7 @@ func (s *Server) handlePutMemory(w http.ResponseWriter, r *http.Request) {
 // handleListMemoryDocuments answers GET /api/memory/documents: every
 // scope's documents without their text.
 func (s *Server) handleListMemoryDocuments(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return

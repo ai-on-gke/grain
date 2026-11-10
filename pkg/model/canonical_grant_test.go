@@ -384,3 +384,63 @@ func TestFidelityRepoGrantsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestTaskRepoAccessOfInvertsTaskRepoGrants: the Reads and Writes a task's
+// projected grants read back to are the ones it holds, in either spelling,
+// and every grant that is not a task's own repository access stays in rest.
+func TestTaskRepoAccessOfInvertsTaskRepoGrants(t *testing.T) {
+	widgets, docs := RepoRef{Owner: "acme", Name: "widgets"}, RepoRef{Owner: "acme", Name: "docs"}
+	task := Task{Target: &widgets, Base: "main", Reads: []RepoRef{docs},
+		Writes: []WriteTarget{{Repo: docs, Base: "publish"}, {Repo: widgets, Base: "release"}}}
+	grants := TaskRepoGrants(task)
+	for i, g := range grants {
+		if i%2 == 1 {
+			grants[i] = Grant{Capability: g.Key()}
+		}
+	}
+	ciWrite := Grant{Capability: RepoWriteGrant(docs)}
+	refs := Grant{Capability: RepoWriteRef, With: json.RawMessage(`{"refs":[{"ref":"refs/tags/*"}],"repo":"acme/docs"}`)}
+	api := Grant{Capability: APIRef("ci:read")}
+	reads, writes, rest := TaskRepoAccessOf(append(grants, ciWrite, refs, api, grants[1]))
+	if !slices.EqualFunc(reads, task.Reads, RepoRef.Same) || !reflect.DeepEqual(writes, task.Writes) {
+		t.Errorf("TaskRepoAccessOf = reads %v writes %v, want %v %v", reads, writes, task.Reads, task.Writes)
+	}
+	if want := []Grant{grants[0], ciWrite, refs, api}; !reflect.DeepEqual(rest, want) {
+		t.Errorf("rest = %v, want the target, the CI write, the refs widening and the api grant: %v", rest, want)
+	}
+}
+
+// TestPermitsTaskRepoGrant: a task's own #read {repo} and #write {repo,
+// base} are judged by deny rules alone, while the same #read in a task's
+// capabilities is still a CI job's grant Permits refuses.
+func TestPermitsTaskRepoGrant(t *testing.T) {
+	widgets, docs := RepoRef{Owner: "acme", Name: "widgets"}, RepoRef{Owner: "acme", Name: "docs"}
+	read, write := TaskRepoReadGrant(docs), TaskRepoWriteGrant(WriteTarget{Repo: docs, Base: "main"})
+	task := CapabilitySubject{Kind: CapabilityRunTask, Repo: &widgets}
+	allowCIOnly := CapabilityPolicy{Rules: []CapabilityPolicyRule{
+		{Capability: RepoReadRef, RunKinds: []string{CapabilityRunCI}},
+		{Capability: RepoWriteRef, RunKinds: []string{CapabilityRunCI}},
+	}}
+	for _, g := range []Grant{read, write} {
+		if err := allowCIOnly.PermitsTaskRepoGrant(g, task); err != nil {
+			t.Errorf("an allow rule for CI jobs refused the task's %s: %v", g.Key(), err)
+		}
+	}
+	if err := allowCIOnly.Permits(read.Key(), task); err == nil || !strings.Contains(err.Error(), "CI capability") {
+		t.Errorf("Permits(%s) on a task = %v, want the CI-only refusal", read.Key(), err)
+	}
+	deny := CapabilityPolicy{Rules: []CapabilityPolicyRule{{Capability: "https://grain.dev/capabilities/repo#*", Deny: true, RunKinds: []string{CapabilityRunTask}}}}
+	for _, g := range []Grant{read, write} {
+		if err := deny.PermitsTaskRepoGrant(g, task); err == nil {
+			t.Errorf("a deny rule for tasks admitted %s", g.Key())
+		}
+		if err := deny.PermitsTaskRepoGrant(g, CapabilitySubject{Kind: CapabilityRunProcess}); err != nil {
+			t.Errorf("a deny rule for tasks refused %s to a process: %v", g.Key(), err)
+		}
+	}
+	for _, g := range []Grant{{Capability: RepoWriteGrant(docs)}, {Capability: APIRef("ci:read")}} {
+		if err := (CapabilityPolicy{}).PermitsTaskRepoGrant(g, task); err == nil {
+			t.Errorf("PermitsTaskRepoGrant(%s) = nil, want it refused as not a task's repository access", g.Key())
+		}
+	}
+}

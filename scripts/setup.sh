@@ -627,6 +627,16 @@ GRAIN_SECRETS_REPO_BRANCH="${GRAIN_SECRETS_REPO_BRANCH:-main}"
 # is the key the secrets file on this host was encrypted to.
 GRAIN_SECRETS_KEY="${GRAIN_SECRETS_KEY:-}"
 
+# A Cloud KMS key (projects/P/locations/L/keyRings/R/cryptoKeys/K) to
+# wrap that private key with once the daemon is up (`grain state key
+# wrap`; design/design/secrets-key-protection.design.md, Phase 2). A
+# wrapped key file is useless without decrypt on that key, so a disk
+# snapshot or a stray copy of it opens nothing. deploy/terraform/gcp sets
+# it to the key it creates. Empty (the default) leaves the key file as it
+# is; set, a key already wrapped is left alone, and a failure to wrap is
+# a warning, not a failed install -- the plaintext key keeps working.
+GRAIN_SECRETS_KMS_KEY="${GRAIN_SECRETS_KMS_KEY:-}"
+
 GRAIN_TARGET_REPO="${GRAIN_TARGET_REPO:-}"
 GRAIN_TARGET_BRANCH="${GRAIN_TARGET_BRANCH:-main}"
 GRAIN_TARGET_REPOS="${GRAIN_TARGET_REPOS:-}"
@@ -1178,6 +1188,11 @@ Recognized variables:
                              itself a key cannot read the secrets file put back
                              beside it. Back the file up when this script reports
                              it (see "Readiness" at the end of a run)
+  GRAIN_SECRETS_KMS_KEY     Cloud KMS key (projects/P/locations/L/keyRings/R/
+                             cryptoKeys/K) to wrap that key with once the daemon
+                             is up (`grain state key wrap`). Needs the host's
+                             account to hold cryptoKeyEncrypterDecrypter on it.
+                             Empty (the default) leaves the key file plaintext
 
   GRAIN_TARGET_REPO         owner/name: the UI's default target for a task with
                              no repo of its own, and the repo this script pushes
@@ -5667,6 +5682,31 @@ json_escape() {
   printf '%s' "$s"
 }
 
+# wrap_secrets_key_with_kms wraps the secrets key with GRAIN_SECRETS_KMS_KEY
+# when it is set and the key file is still plaintext. The daemon does the
+# wrapping (it holds the key, and reaches KMS with the host's own
+# metadata token), and checks the round trip before it replaces the file.
+# A key file already wrapped -- by an earlier run, or seeded wrapped from
+# an escrow -- is left alone, so this is a no-op on every run but the
+# first.
+wrap_secrets_key_with_kms() {
+  [ -n "$GRAIN_SECRETS_KMS_KEY" ] || return 0
+  local key_file="$GRAIN_DATA_DIR/secrets/secrets.key"
+  [ -s "$key_file" ] || return 0
+  if head -c 24 "$key_file" | grep -q '^grain-secret-key-kms-v1:'; then
+    return 0
+  fi
+  step_start "Wrapping the secrets key with Cloud KMS"
+  if grain_cli state -data-dir "$GRAIN_DATA_DIR" key wrap -kms "$GRAIN_SECRETS_KMS_KEY"; then
+    step_done "wrapped by $GRAIN_SECRETS_KMS_KEY"
+  else
+    log "  WARNING: could not wrap $key_file with $GRAIN_SECRETS_KMS_KEY; it stays a plaintext key"
+    log "  file, which keeps working. Check the host account holds"
+    log "  roles/cloudkms.cryptoKeyEncrypterDecrypter on that key, then run:"
+    log "    grain state -data-dir $GRAIN_DATA_DIR key wrap -kms $GRAIN_SECRETS_KMS_KEY"
+  fi
+}
+
 # seed_git_connections records the seeded default GitHub credential as
 # the deployment's default git connection, and each seeded agent key as a
 # model connection, once, through `grain connections import` -- the only
@@ -5716,6 +5756,49 @@ ${models}"
     log "  or run: grain connections import <file>"
   fi
   rm -f "$seed"
+}
+
+# agent_key_file_retired reports whether retire_imported_agent_key_files
+# has already moved secrets/<name> into the secrets store and removed it.
+agent_key_file_retired() {
+  [ -e "$GRAIN_DATA_DIR/secrets/.$1.imported" ]
+}
+
+# retire_imported_agent_key_files removes the plaintext agent key files
+# seed_secret wrote (secrets/gemini-api-key, claude-oauth-token,
+# openai-api-key) once grain holds them in its encrypted store, so they
+# stop sitting beside it in the data directory, in every `grain export`
+# and in every disk snapshot.
+#
+# A file goes only when both copies are in the store: the connection's
+# own agent-backend-<id>, which `grain connections import` wrote
+# (seed_git_connections), and the deployment-wide secret of the file's
+# own name, which this writes from the file when it is missing -- that is
+# the name the daemon resolves before it ever reads -gemini-api-key-file
+# and friends (pkg/daemon.AgentCredential), so nothing that fell back to
+# the file loses its key. A .<name>.imported marker then stops seed_secret
+# and mint_gemini_operating_key from putting the file back.
+retire_imported_agent_key_files() {
+  [ -e "$GRAIN_DATA_DIR/secrets/.connections-seeded" ] || return 0
+  local secrets_list id name file
+  secrets_list="$(grain_cli secrets -data-dir "$GRAIN_DATA_DIR" list 2>/dev/null)" || return 0
+  for id in gemini claude codex; do
+    case "$id" in
+      gemini) name="gemini-api-key" ;;
+      claude) name="claude-oauth-token" ;;
+      codex) name="openai-api-key" ;;
+    esac
+    file="$GRAIN_DATA_DIR/secrets/$name"
+    [ -s "$file" ] || continue
+    grep -q "^agent-backend-${id}:" <<<"$secrets_list" || continue
+    if ! grep -q "^${name}:" <<<"$secrets_list"; then
+      grain_cli secrets -data-dir "$GRAIN_DATA_DIR" set -value-file "$file" "$name" value \
+        || { log "  could not store $name in the secrets store; leaving $file in place"; continue; }
+    fi
+    : | grain_write 0600 "$GRAIN_DATA_DIR/secrets/.$name.imported"
+    as_grain rm -f "$file"
+    log "  moved $name into the secrets store and removed $file"
+  done
 }
 
 # seed_github_app_credential writes ${GRAIN_GITHUB_CREDENTIAL_NAME}.app.json
@@ -5937,9 +6020,15 @@ setup_data_dir() {
 
   # Order matters below: the minter key has to be in the secrets
   # database before mint_gemini_operating_key can authenticate with it.
-  seed_secret "$GRAIN_DATA_DIR/secrets/gemini-api-key" "$GRAIN_GEMINI_API_KEY"
-  seed_secret "$GRAIN_DATA_DIR/secrets/claude-oauth-token" "$GRAIN_CLAUDE_CODE_OAUTH_TOKEN"
-  seed_secret "$GRAIN_DATA_DIR/secrets/openai-api-key" "$GRAIN_OPENAI_API_KEY"
+  # Not again once retire_imported_agent_key_files has moved one into the
+  # secrets store: the env var a deploy keeps passing would otherwise put
+  # the plaintext file straight back on every run.
+  agent_key_file_retired gemini-api-key \
+    || seed_secret "$GRAIN_DATA_DIR/secrets/gemini-api-key" "$GRAIN_GEMINI_API_KEY"
+  agent_key_file_retired claude-oauth-token \
+    || seed_secret "$GRAIN_DATA_DIR/secrets/claude-oauth-token" "$GRAIN_CLAUDE_CODE_OAUTH_TOKEN"
+  agent_key_file_retired openai-api-key \
+    || seed_secret "$GRAIN_DATA_DIR/secrets/openai-api-key" "$GRAIN_OPENAI_API_KEY"
 
   seed_gcp_minter_key
 
@@ -6071,9 +6160,13 @@ minter_secret_key() {
 # re-running this on every convergence pass does not issue a new key each
 # time. To rotate, delete the file (and the old key in GCP -- the
 # capability's own reaper deliberately never touches an operating key)
-# and let the next pass mint a fresh one.
+# and let the next pass mint a fresh one. Once
+# retire_imported_agent_key_files has moved the key into the secrets
+# store there is no file: delete secrets/.gemini-api-key.imported
+# instead, and set the new key in Settings -> Models.
 mint_gemini_operating_key() {
-  if [ -s "$GRAIN_DATA_DIR/secrets/gemini-api-key" ]; then
+  if [ -s "$GRAIN_DATA_DIR/secrets/gemini-api-key" ] \
+     || agent_key_file_retired gemini-api-key; then
     return
   fi
   # Guarded on the project alone, not also on
@@ -8316,6 +8409,9 @@ warn_if_no_agent_credential() {
   if [ ! -s "$GRAIN_DATA_DIR/secrets/gemini-api-key" ] \
      && [ ! -s "$GRAIN_DATA_DIR/secrets/claude-oauth-token" ] \
      && [ ! -s "$GRAIN_DATA_DIR/secrets/openai-api-key" ] \
+     && ! agent_key_file_retired gemini-api-key \
+     && ! agent_key_file_retired claude-oauth-token \
+     && ! agent_key_file_retired openai-api-key \
      && [ ! -s "$GRAIN_CODEX_AUTH_FILE" ]; then
     log "grain-daemon.service is running, but no agent credential is configured -- no task can"
     log "  be dispatched until one is. Set it in the UI (Settings -> Models), or set"
@@ -9207,6 +9303,9 @@ main() {
   # row from its flags, and model connections are recorded on that row
   # (`grain connections import` refuses them until it exists).
   seed_git_connections
+  retire_imported_agent_key_files
+  # After enable_services: the daemon holds the key, and wraps it.
+  wrap_secrets_key_with_kms
   # After enable_services: `tailscale serve` publishes the port the
   # daemon listens on, so pointing it at a service that is already up
   # means a failure here is about tailscale rather than about a UI that
