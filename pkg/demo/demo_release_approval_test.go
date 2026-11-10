@@ -181,3 +181,142 @@ func decodeB64(t *testing.T, s string) string {
 	}
 	return string(raw)
 }
+
+// A promote-release.yml run that fails after Approve, through the sim
+// (docs/test-runs/2026-11-10-release-train.md §5's follow-up): the run the
+// dispatch queued is finished with conclusion failure and
+// verify-release-approval's refusal (POST .../actions/runs/{id}/complete),
+// and the next reconcile within the 5s active poll marks the decision
+// failed and raises release.pending again, critical, with the run, the
+// reason and the GET /api/release-approval-key remedy; a retry then
+// dispatches again at once.
+func TestDemoGitHubSimRaisesAPromoteRunThatFailsAfterApproveAgain(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("the simulated GitHub needs git")
+	}
+	dir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: fmt.Sprintf("gizmos-%d", demoReleaseApprovalSeq.Add(1))}
+	cfg := ui.Config{
+		Actor:              ui.DefaultActor("operator"),
+		DefaultTarget:      &repo,
+		ReleaseApprovalDir: dir,
+		GitHubCalls:        newDemoGitHubCalls(),
+		GitHubPullRequests: demoPullRequests{repo: repo, store: store},
+	}
+	cfg, bare, err := configureGitHubSimDemo(dir, cfg, repo)
+	if err != nil {
+		t.Fatalf("configureGitHubSimDemo: %v", err)
+	}
+	if err := store.PutConfig(ctx, model.Config{TargetRepos: []string{repo.String()}}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	const code = "demo-release-dispatch-failure-code"
+	cfg.LocalAPIToken = code
+	simClient := cfg.GitHubBranches.(github.Client)
+	now := time.Now().UTC()
+	uic := ui.NewClient(cfg, store)
+	uic.Now = func() time.Time { return now }
+	srv := githubSimDemoHandler(ui.NewServerWithClient(uic), simClient)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:4321"
+		req.Header.Set("Authorization", "Bearer "+code)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+	if _, err := demoGit(bare, "-c", "user.name=train", "-c", "user.email=train@example.invalid",
+		"tag", "-a", "v2.7.0-pending", "-m", "v2.7.0 staged", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := demoReconcileCycle(ctx, store, simClient, now); err != nil {
+		t.Fatalf("demoReconcileCycle: %v", err)
+	}
+	subject := model.NotificationSubject(model.FamilyReleasePending, "v2.7.0")
+	if n, err := store.OpenNotification(ctx, subject); err != nil || n == nil {
+		t.Fatalf("no open %s: %+v (err %v)", subject, n, err)
+	}
+
+	approve := "/api/repos/" + repo.String() + "/pending-releases/v2.7.0/approve"
+	if rec := do(http.MethodPost, approve, `{}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("POST %s = %d: %s", approve, rec.Code, rec.Body)
+	}
+	dispatches := func() []githubsim.WorkflowDispatch {
+		t.Helper()
+		rec := do(http.MethodGet, "/api/e2e/github-sim/repos/"+repo.String()+"/actions/workflows/promote-release.yml/dispatches", "")
+		var out []githubsim.WorkflowDispatch
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("reading the sim's dispatches: %v (%d %s)", err, rec.Code, rec.Body)
+		}
+		return out
+	}
+	sent := dispatches()
+	if len(sent) != 1 || sent[0].RunID == 0 {
+		t.Fatalf("dispatches = %+v, want one with its run", sent)
+	}
+	runID := sent[0].RunID
+
+	// Queued, the run raises nothing on the next poll.
+	now = now.Add(6 * time.Second)
+	if err := demoReconcileCycle(ctx, store, simClient, now); err != nil {
+		t.Fatalf("demoReconcileCycle: %v", err)
+	}
+	if n, _ := store.OpenNotification(ctx, subject); n != nil {
+		t.Fatalf("raised again while the run is queued: %+v", n)
+	}
+
+	complete := fmt.Sprintf("/api/e2e/github-sim/repos/%s/actions/runs/%d/complete", repo, runID)
+	refusal := "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set"
+	body := fmt.Sprintf(`{"conclusion":"failure","jobs":[{"name":"approve the pending release","log":"##[error]%s\n"}]}`, refusal)
+	if rec := do(http.MethodPost, complete, body); rec.Code != http.StatusOK {
+		t.Fatalf("POST %s = %d: %s", complete, rec.Code, rec.Body)
+	}
+	if rec := do(http.MethodPost, complete, body); rec.Code != http.StatusConflict {
+		t.Errorf("completing it twice = %d: %s, want 409", rec.Code, rec.Body)
+	}
+	if rec := do(http.MethodPost, fmt.Sprintf("/api/e2e/github-sim/repos/%s/actions/runs/1/complete", repo), body); rec.Code != http.StatusNotFound {
+		t.Errorf("completing no run = %d: %s, want 404", rec.Code, rec.Body)
+	}
+
+	now = now.Add(6 * time.Second)
+	if err := demoReconcileCycle(ctx, store, simClient, now); err != nil {
+		t.Fatalf("demoReconcileCycle: %v", err)
+	}
+	commit, err := demoGit(bare, "rev-parse", "main^{commit}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := store.GetReleaseApprovalDecision(ctx, repo, "v2.7.0", commit)
+	if err != nil || d == nil || !d.Failed() {
+		t.Fatalf("decision after the failed run = %+v (err %v), want it marked failed", d, err)
+	}
+	n, err := store.OpenNotification(ctx, subject)
+	if err != nil || n == nil {
+		t.Fatalf("release.pending not raised again after the failed run: %+v (err %v)", n, err)
+	}
+	runRef := fmt.Sprintf("gha:%s:%s:%d", repo.Owner, repo.Name, runID)
+	if n.Severity != model.NotificationCritical || n.Title != "v2.7.0 is ready to promote (approve dispatch failed)" ||
+		!strings.HasPrefix(n.Body, "DISPATCH FAILED ("+runRef+"): "+refusal) ||
+		!strings.Contains(n.Body, "GET /api/release-approval-key") {
+		t.Fatalf("raised again as %s %q:\n%s", n.Severity, n.Title, n.Body)
+	}
+
+	// The retry dispatches again now, not 24 hours on.
+	if rec := do(http.MethodPost, approve, `{}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("retry POST %s = %d: %s", approve, rec.Code, rec.Body)
+	}
+	if sent := dispatches(); len(sent) != 2 || sent[1].RunID == runID {
+		t.Fatalf("dispatches after the retry = %+v, want a second run", sent)
+	}
+}
