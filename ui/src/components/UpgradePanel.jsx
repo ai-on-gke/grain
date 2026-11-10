@@ -28,6 +28,7 @@ import {
   DialogTitle,
   FormControlLabel,
   LinearProgress,
+  Link,
   MenuItem,
   Stack,
   TextField,
@@ -581,6 +582,50 @@ function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
       </Stack>
     </Alert>
   );
+}
+
+// UpgradeNotices are GET /api/upgrade's notices: what the edition has to
+// tell the operator about how this deployment upgrades
+// (upgrade.RegisterNotice), each a warning with the command that fixes
+// it. Drawn above everything else, whether or not this deployment can
+// upgrade itself, since a notice is often about why it cannot.
+function UpgradeNotices({ notices }) {
+  if (!notices?.length) return null;
+  return notices.map((notice, i) => (
+    <Alert
+      key={`${notice.kind}-${i}`}
+      severity="warning"
+      data-testid="upgrade-notice"
+      sx={{
+        mb: 2,
+        "& .MuiAlert-message": { minWidth: 0, overflowWrap: "anywhere" },
+      }}
+    >
+      {notice.message}
+      {notice.command && (
+        <Box sx={{ mt: 0.5 }}>
+          Run{" "}
+          <Box component="code" data-testid="upgrade-notice-command">
+            {notice.command}
+          </Box>
+          .
+        </Box>
+      )}
+      {notice.docsUrl && (
+        <Box sx={{ mt: 0.5 }}>
+          <Link
+            href={notice.docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            color="inherit"
+            underline="always"
+          >
+            Docs
+          </Link>
+        </Box>
+      )}
+    </Alert>
+  ));
 }
 
 // RetractedReleaseAlert says the promoted release this deployment runs has
@@ -1252,6 +1297,7 @@ export default function UpgradePanel({
 
   return (
     <>
+      <UpgradeNotices notices={status.notices} />
       {selfUpgradeDisabled && (
         <>
           <RunningNow running={fallbackRunning} />

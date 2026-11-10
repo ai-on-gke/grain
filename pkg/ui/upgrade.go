@@ -179,6 +179,12 @@ type upgradeStatusResponse struct {
 	// management (optionally linking to ManagementURL).
 	SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled,omitempty"`
 	ManagementURL       string `json:"managementUrl,omitempty"`
+	// Notices are what the edition has to tell the operator about how
+	// this deployment upgrades (upgrade.RegisterNotice), each a warning
+	// on the pane with the command that fixes it. Reported whether or not
+	// an upgrader is configured: a notice is often about why one is not
+	// configured the way it should be. Absent when none is registered.
+	Notices []upgrade.Notice `json:"notices,omitempty"`
 }
 
 // upgradeScheduledResponse is the pending schedule and how close it is
@@ -617,6 +623,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 			ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
 			Running:             running,
 			Database:            s.databaseStatus(),
+			Notices:             upgrade.Notices(),
 		})
 		return
 	}
@@ -624,6 +631,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, upgradeStatusResponse{
 			Enabled:  false,
 			Database: s.databaseStatus(),
+			Notices:  upgrade.Notices(),
 		})
 		return
 	}
@@ -634,6 +642,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	resp := s.upgradeStatusResponse(r, status)
 	resp.Database = s.databaseStatus()
+	resp.Notices = upgrade.Notices()
 	writeJSON(w, http.StatusOK, resp)
 }
 
