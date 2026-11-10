@@ -141,14 +141,15 @@ func (r REST) Reviews(ctx context.Context, repo string, number int) ([]Review, e
 			User struct {
 				Login string `json:"login"`
 			} `json:"user"`
-			State    string `json:"state"`
-			CommitID string `json:"commit_id"`
+			State             string `json:"state"`
+			CommitID          string `json:"commit_id"`
+			AuthorAssociation string `json:"author_association"`
 		}
 		if err := r.get(ctx, fmt.Sprintf("%s/pulls/%d/reviews?per_page=100&page=%d", rp, number, page), &items); err != nil {
 			return nil, err
 		}
 		for _, it := range items {
-			out = append(out, Review{Login: it.User.Login, State: it.State, CommitID: it.CommitID})
+			out = append(out, Review{Login: it.User.Login, State: it.State, CommitID: it.CommitID, Association: it.AuthorAssociation})
 		}
 		if len(items) < 100 {
 			break

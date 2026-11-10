@@ -210,7 +210,10 @@ one of these holds:
   as, which only grain's credential is;
 - the pull request carries the forge's review record: an approval of
   the merged head by somebody other than its author, with no change
-  request outstanding.
+  request outstanding. Only reviews by the repository's owner, its
+  organization's members and its collaborators count, as with the
+  forge's own required reviews: any account can approve a public
+  repository's pull request.
 
 Every first-parent commit since the last one checked must pass as well.
 Otherwise a reviewed merge on top of a self-merged one would carry the

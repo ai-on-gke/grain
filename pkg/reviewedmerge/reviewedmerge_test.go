@@ -62,7 +62,7 @@ func TestAMergeByGrainIsReviewed(t *testing.T) {
 func TestAForgeApprovalOfTheMergedHeadIsReviewed(t *testing.T) {
 	f := fakeForge{
 		pulls:   map[string][]Pull{"m2": {merged(2, "m2", "release/v3.2.0", "alice", "alice", "h2")}},
-		reviews: map[int][]Review{2: {{Login: "bob", State: "APPROVED", CommitID: "h2"}, {Login: "bob", State: "COMMENTED", CommitID: "h2"}}},
+		reviews: map[int][]Review{2: {{Login: "bob", State: "APPROVED", CommitID: "h2", Association: "MEMBER"}, {Login: "bob", State: "COMMENTED", CommitID: "h2", Association: "MEMBER"}}},
 	}
 	m, err := policy.Check(context.Background(), f, "m2")
 	if err != nil {
@@ -70,6 +70,21 @@ func TestAForgeApprovalOfTheMergedHeadIsReviewed(t *testing.T) {
 	}
 	if m.Via != "review" || m.By != "bob" {
 		t.Fatalf("merge = %+v", m)
+	}
+}
+
+// Nor can an account with no standing hold a release up by requesting
+// changes, any more than it can approve one.
+func TestAChangeRequestByAnOutsiderDoesNotWithdrawAnApproval(t *testing.T) {
+	f := fakeForge{
+		pulls: map[string][]Pull{"m2": {merged(2, "m2", "main", "alice", "alice", "h2")}},
+		reviews: map[int][]Review{2: {
+			{Login: "bob", State: "APPROVED", CommitID: "h2", Association: "COLLABORATOR"},
+			{Login: "zed", State: "CHANGES_REQUESTED", CommitID: "h2", Association: "NONE"},
+		}},
+	}
+	if m, err := policy.Check(context.Background(), f, "m2"); err != nil || m.By != "bob" {
+		t.Fatalf("merge = %+v, err = %v", m, err)
 	}
 }
 
@@ -92,26 +107,31 @@ func TestUnreviewedMergesAreRefused(t *testing.T) {
 		},
 		"self-merged with no review": {
 			pulls: []Pull{merged(3, "x", "main", "mallory", "mallory", "h")},
-			want:  "no approval from anybody but its author",
+			want:  "no approval from an owner, member or collaborator other than its author",
 		},
 		"approved only by its author": {
 			pulls:   []Pull{merged(3, "x", "main", "mallory", "mallory", "h")},
-			reviews: []Review{{Login: "Mallory", State: "APPROVED", CommitID: "h"}},
-			want:    "no approval from anybody but its author",
+			reviews: []Review{{Login: "Mallory", State: "APPROVED", CommitID: "h", Association: "MEMBER"}},
+			want:    "no approval from an owner, member or collaborator other than its author",
 		},
 		"approval of an earlier head": {
 			pulls:   []Pull{merged(3, "x", "main", "mallory", "mallory", "h2")},
-			reviews: []Review{{Login: "bob", State: "APPROVED", CommitID: "h1"}},
+			reviews: []Review{{Login: "bob", State: "APPROVED", CommitID: "h1", Association: "MEMBER"}},
 			want:    "earlier head",
 		},
 		"approval withdrawn by a dismissal": {
 			pulls:   []Pull{merged(3, "x", "main", "mallory", "mallory", "h")},
-			reviews: []Review{{Login: "bob", State: "APPROVED", CommitID: "h"}, {Login: "bob", State: "DISMISSED", CommitID: "h"}},
+			reviews: []Review{{Login: "bob", State: "APPROVED", CommitID: "h", Association: "MEMBER"}, {Login: "bob", State: "DISMISSED", CommitID: "h", Association: "MEMBER"}},
 			want:    "no approval",
+		},
+		"approved only by an account with no standing in the repository": {
+			pulls:   []Pull{merged(3, "x", "main", "mallory", "mallory", "h")},
+			reviews: []Review{{Login: "mallorys-sock", State: "APPROVED", CommitID: "h", Association: "NONE"}, {Login: "eve", State: "APPROVED", CommitID: "h", Association: "CONTRIBUTOR"}, {Login: "trent", State: "APPROVED", CommitID: "h"}},
+			want:    "no approval from an owner, member or collaborator",
 		},
 		"changes requested": {
 			pulls:   []Pull{merged(3, "x", "main", "mallory", "mallory", "h")},
-			reviews: []Review{{Login: "bob", State: "APPROVED", CommitID: "h"}, {Login: "carol", State: "CHANGES_REQUESTED", CommitID: "h"}},
+			reviews: []Review{{Login: "bob", State: "APPROVED", CommitID: "h", Association: "MEMBER"}, {Login: "carol", State: "CHANGES_REQUESTED", CommitID: "h", Association: "MEMBER"}},
 			want:    "carol's request for changes",
 		},
 		"a grain branch merged on the forge by a writer": {
@@ -176,7 +196,7 @@ func TestRESTReadsGitHubsShapes(t *testing.T) {
 		case "/repos/example/grain/pulls/7":
 			fmt.Fprint(w, `{"merged_by":{"login":"alice"}}`)
 		case "/repos/example/grain/pulls/7/reviews":
-			fmt.Fprint(w, `[{"user":{"login":"bob"},"state":"APPROVED","commit_id":"h7"}]`)
+			fmt.Fprint(w, `[{"user":{"login":"zed"},"state":"APPROVED","commit_id":"h7","author_association":"NONE"},{"user":{"login":"bob"},"state":"APPROVED","commit_id":"h7","author_association":"COLLABORATOR"}]`)
 		case "/repos/example/grain/git/commits/abc":
 			fmt.Fprint(w, `{"parents":[{"sha":"p1"},{"sha":"h7"}]}`)
 		default:

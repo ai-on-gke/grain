@@ -1481,10 +1481,10 @@ sign_image() {
 # commit of a pull request merged into main or release/v*, either by grain
 # -- one of $GRAIN_MERGE_LOGINS, the forge logins grain merges as, which
 # only grain's credential is and which merges only once grain's holds have
-# let a change go -- or with the forge's review record, an approval by
-# somebody other than its author of the head that was merged. So is every
-# first-parent commit between $commit and the one this branch's published
-# grain image was built from, since a reviewed merge on top of an
+# let a change go -- or with the forge's review record, an approval by an
+# owner, member or collaborator other than its author of the head that
+# was merged. So is every first-parent commit between $commit and the one
+# this branch's published grain image was built from, since a reviewed merge on top of an
 # unreviewed one carries it into the release too. Where that image is not
 # an ancestor of $commit (an on-demand build of a superseded commit, a
 # branch with nothing published yet) $commit is checked alone: a newer

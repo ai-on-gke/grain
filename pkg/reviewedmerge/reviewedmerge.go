@@ -33,7 +33,10 @@
 //     only happens once grain's own holds have let it go -- or the pull
 //     request carries the forge's review record: an approval by somebody
 //     other than its author, of the head that was merged, with no change
-//     request outstanding.
+//     request outstanding. Only reviews by the repository's owner, its
+//     organization's members and its collaborators count, as the forge's
+//     own required reviews do: any account at all can leave an approving
+//     review on a public repository's pull request.
 //
 // A commit is checked with the first-parent chain that brought it, back to
 // the last commit already checked (Policy.CheckChain): a reviewed merge on
@@ -95,6 +98,21 @@ type Review struct {
 	Login    string
 	State    string // APPROVED, CHANGES_REQUESTED, DISMISSED, COMMENTED
 	CommitID string
+	// Association is the reviewer's relation to the repository, the
+	// forge's author_association: OWNER, MEMBER, COLLABORATOR,
+	// CONTRIBUTOR, NONE and so on.
+	Association string
+}
+
+// countsAsReviewer is whether a review's author is one whose review the
+// forge would count toward a required review: anybody else's approval
+// is any account's, and so is nobody's.
+func countsAsReviewer(association string) bool {
+	switch strings.ToUpper(association) {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
 }
 
 // Forge reads the records the check is made from.
@@ -192,10 +210,14 @@ func (p Policy) approvedBy(ctx context.Context, f Forge, pr Pull) (string, strin
 	}
 	// The latest of each reviewer's deciding reviews, the way the forge
 	// counts them toward a requirement: a comment after an approval does
-	// not withdraw it, and a dismissal does.
+	// not withdraw it, and a dismissal does. A review by somebody with no
+	// standing in the repository counts for nothing either way.
 	latest := map[string]Review{}
 	var order []string
 	for _, r := range reviews {
+		if !countsAsReviewer(r.Association) {
+			continue
+		}
 		switch r.State {
 		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
 			key := strings.ToLower(r.Login)
@@ -224,7 +246,7 @@ func (p Policy) approvedBy(ctx context.Context, f Forge, pr Pull) (string, strin
 	if stale != "" {
 		return "", fmt.Sprintf("and %s's approval was of an earlier head than the %s that was merged", stale, short(pr.HeadSHA)), nil
 	}
-	return "", "with no approval from anybody but its author, and not by grain", nil
+	return "", "with no approval from an owner, member or collaborator other than its author, and not by grain", nil
 }
 
 // CheckChain checks sha and every first-parent ancestor of it back to, and
