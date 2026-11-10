@@ -1056,7 +1056,16 @@ describe("DetailOverlay", () => {
     expect(screen.getAllByText("Security hold").length).toBeGreaterThan(0);
     const notice = screen.getByTestId("security-hold");
     expect(notice).toHaveTextContent("Security hold (trust-boundary/v3)");
-    expect(screen.getByRole("button", { name: "Submit" })).toBeInTheDocument();
+    // Submit is an approval while the review runs, never a bypass of it.
+    expect(notice).not.toHaveTextContent(/without waiting/i);
+    expect(
+      screen.getByRole("button", {
+        name: "Submit (merges when the reviews pass)",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("merge-gate-security-review")).toHaveTextContent(
+      "Security review: running",
+    );
 
     await user.click(
       within(notice).getByRole("link", { name: "Security review: task 91" }),
@@ -1065,8 +1074,11 @@ describe("DetailOverlay", () => {
 
     // grain's own comment names the review in plain words; that is a
     // link now too, and code is left as it was written.
+    // (The merge-gates panel links the same review, so there are two.)
     onOpenTask.mockClear();
-    await user.click(screen.getByRole("link", { name: "task 91" }));
+    const reviewLinks = screen.getAllByRole("link", { name: "task 91" });
+    expect(reviewLinks.length).toBeGreaterThan(1);
+    await user.click(reviewLinks[reviewLinks.length - 1]);
     expect(onOpenTask).toHaveBeenCalledWith("91");
     expect(
       screen.queryByRole("link", { name: "task 5" }),
@@ -1096,12 +1108,19 @@ describe("DetailOverlay", () => {
     );
     const notice = screen.getByTestId("review-questions");
     expect(notice).toHaveTextContent("Review needs your decision");
+    // Open questions are findings on the review gate: no "Ship as is"
+    // that would merge over them. The person may still give their
+    // approval, which counts once the gate clears.
     expect(
-      screen.getByRole("button", { name: "Ship as is" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Ship as is" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Submit" }),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByTestId("merge-gate-review")).toHaveTextContent(
+      "Code review: findings",
+    );
     await user.click(
       within(notice).getByRole("link", { name: "Review: task 92" }),
     );
