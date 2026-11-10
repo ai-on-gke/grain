@@ -36,6 +36,10 @@ import (
 // here. PullExternal moves the working tree only across commits that
 // pass, and holds the first one that does not.
 
+// verifiedHeadRef is the commit PullExternal last chose to check out in
+// require_verified mode.
+const verifiedHeadRef = "refs/grain/verified-head"
+
 // ErrHeld is PullExternal's answer when there is no verified commit to
 // apply at all: the repository was cloned at, or first named at, a commit
 // that does not verify. Nothing is imported; Held names the commit.

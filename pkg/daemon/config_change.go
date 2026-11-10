@@ -122,11 +122,11 @@ func changedColumns(dir, mergeBase, head string, files []string) map[string][]st
 	}
 	show := func(rev string) ([]byte, bool) {
 		spec := rev + ":" + trustboundary.GrainConfigPath
-		if exec.Command("git", "-C", dir, "cat-file", "-e", "--end-of-options", spec).Run() != nil {
+		if _, err := localGit(dir, "cat-file", "-e", "--end-of-options", spec); err != nil {
 			return nil, true // absent on this side: every row added or removed
 		}
-		out, err := exec.Command("git", "-C", dir, "cat-file", "blob", spec).Output()
-		return out, err == nil
+		out, err := localGit(dir, "cat-file", "blob", "--end-of-options", spec)
+		return []byte(out), err == nil
 	}
 	before, okBefore := show(mergeBase)
 	after, okAfter := show(head)

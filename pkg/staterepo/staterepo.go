@@ -786,20 +786,34 @@ func (r *Repo) PullExternal(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("%w: fetching %s: %w", ErrUnreachable, r.branch, err)
 	}
 	before, _ := r.git(ctx, "rev-parse", "HEAD")
-	target := "FETCH_HEAD"
+	verified := false
 	if r.verifier != nil {
 		tip, err := r.git(ctx, "rev-parse", "FETCH_HEAD")
 		if err != nil {
 			return false, err
 		}
-		if target, err = r.verifiedTarget(ctx, strings.TrimSpace(tip)); err != nil {
+		target, err := r.verifiedTarget(ctx, strings.TrimSpace(tip))
+		if err != nil {
 			return false, err
 		}
 		if target == "" {
 			return false, ErrHeld
 		}
+		// Named through a fixed ref, since checkout -B reads anything
+		// after its start point as a path.
+		if _, err := r.git(ctx, "update-ref", "--no-deref", "--end-of-options", verifiedHeadRef, target); err != nil {
+			return false, err
+		}
+		verified = true
 	}
-	if _, err := r.git(ctx, "checkout", "-f", "-B", r.branch, target); err != nil {
+	checkout := func() (string, error) { return r.git(ctx, "checkout", "-f", "-B", r.branch, "FETCH_HEAD") }
+	if verified {
+		// verifiedHeadRef, spelled out for the argv check.
+		checkout = func() (string, error) {
+			return r.git(ctx, "checkout", "-f", "-B", r.branch, "refs/grain/verified-head")
+		}
+	}
+	if _, err := checkout(); err != nil {
 		return false, fmt.Errorf("staterepo: checking out origin/%s: %w", r.branch, err)
 	}
 	if _, err := r.git(ctx, "clean", "-fd"); err != nil {
