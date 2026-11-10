@@ -137,11 +137,28 @@ func TestConfigValidationInvariants(t *testing.T) {
 		}
 	})
 
-	t.Run("host single-label child of instance_domain rejected", func(t *testing.T) {
+	t.Run("host single-label child of instance_domain reserves its label", func(t *testing.T) {
 		c := *cfg
 		c.Host = "hub.instances.example.com"
-		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "single-label child") {
-			t.Fatalf("expected single-label child collision error, got %v", err)
+		if err := c.Validate(); err != nil {
+			t.Fatalf("host directly under instance_domain: %v", err)
+		}
+		if got := c.HubEntryLabel(); got != "hub" {
+			t.Fatalf("HubEntryLabel = %q, want hub", got)
+		}
+		c.Host = "x.instances.example.com"
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "not a valid entry name") {
+			t.Fatalf("expected an invalid-label error for a 1-character hub label, got %v", err)
+		}
+	})
+
+	t.Run("hub entry label empty for sibling or deeper hosts", func(t *testing.T) {
+		for _, host := range []string{"grain.example.com", "a.b.instances.example.com"} {
+			c := *cfg
+			c.Host = host
+			if got := c.HubEntryLabel(); got != "" {
+				t.Fatalf("HubEntryLabel for %s = %q, want empty", host, got)
+			}
 		}
 	})
 

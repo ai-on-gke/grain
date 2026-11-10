@@ -428,6 +428,27 @@ func (c *Config) Validate() error {
 // ValidateWithResolver checks all configuration invariants and normalizes any
 // `group:` entries in `auth.admins`, `auth.creators`, and `quotas.overrides`
 // using resolver if provided (Core follow-up C-1).
+// HubEntryLabel returns the first label of host when host is a direct child of
+// instance_domain (host "hub.example.com" with instance_domain "example.com"
+// gives "hub"), and "" otherwise. That layout puts the hub and its entries side
+// by side under one domain, which is the only shape some DNS setups allow (one
+// record per name and no wildcards, e.g. Cloud Endpoints names
+// <name>.endpoints.<project>.cloud.goog). Host routing already prefers the hub
+// host, so the label only has to be kept from ever naming an entry: the store
+// reserves it (Store.SetReservedEntryNames).
+func (c *Config) HubEntryLabel() string {
+	host := strings.ToLower(strings.TrimSpace(c.Host))
+	instDomain := strings.ToLower(strings.TrimSpace(c.InstanceDomain))
+	if instDomain == "" || !strings.HasSuffix(host, "."+instDomain) {
+		return ""
+	}
+	label := strings.TrimSuffix(host, "."+instDomain)
+	if label == "" || strings.Contains(label, ".") {
+		return ""
+	}
+	return label
+}
+
 func (c *Config) ValidateWithResolver(resolver any) error {
 	c.ApplyDefaults()
 
@@ -448,14 +469,13 @@ func (c *Config) ValidateWithResolver(resolver any) error {
 	if host == instDomain {
 		return fmt.Errorf("config: host (%q) and instance_domain (%q) must not be equal", host, instDomain)
 	}
-	if strings.HasSuffix(host, "."+instDomain) {
-		label := strings.TrimSuffix(host, "."+instDomain)
-		if !strings.Contains(label, ".") {
-			return fmt.Errorf("config: host (%q) is a single-label child of instance_domain (%q) and would collide with wildcard entry routing; use a sibling domain or reserved name", host, instDomain)
-		}
-	}
 	c.Host = host
 	c.InstanceDomain = instDomain
+	if label := c.HubEntryLabel(); label != "" {
+		if err := api.ValidateEntryName(label); err != nil && !api.IsReservedEntryName(label) {
+			return fmt.Errorf("config: host (%q) is a direct child of instance_domain (%q), so its first label %q is reserved as an entry name, but it is not a valid entry name: %v", host, instDomain, label, err)
+		}
+	}
 
 	// Auth validation
 	if len(c.Auth.AllowedDomains) == 0 {
