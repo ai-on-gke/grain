@@ -95,6 +95,16 @@ func TestStage1JobHistoriesFromTheReleaseTrainWalkthrough(t *testing.T) {
 			want:  want{stage2: true},
 		},
 		{
+			// The roll-up failed because a job it needs never ran: that is
+			// no pass, so grain keeps to the run's own conclusion.
+			name:    "the roll-up failing on a job that never ran holds Stage 2",
+			nightly: "failure",
+			jobs: []github.ActionsRunJob{job(rqSHA, "sustained load", 1, "success"), job(rqSHA, "govulncheck", 1, "skipped"),
+				job(rqSHA, "stage 1 qualification verdict", 1, "failure")},
+			later: time.Minute,
+			want:  want{},
+		},
+		{
 			name:    "a job cancelled three attempts in a row stalls on infrastructure",
 			nightly: "cancelled",
 			jobs: []github.ActionsRunJob{job(rqSHA, "sustained load", 1, "cancelled"), job(rqSHA, "sustained load", 2, "cancelled"),

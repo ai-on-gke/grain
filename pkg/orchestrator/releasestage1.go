@@ -103,7 +103,7 @@ type stage1Verdict struct {
 	// infra is every job whose newest concluded attempt is infrastructure.
 	infra []stage1Job
 	// passed is whether every job read has passed (on its flake retry, if
-	// it spent one) -- the verdict scripts/candidate-gate.sh reaches, which
+	// it spent one; a job that never ran has not) -- the verdict scripts/candidate-gate.sh reaches, which
 	// stands even when nightly.yml's run concluded failure on its roll-up
 	// job alone.
 	passed bool
@@ -227,7 +227,11 @@ func judgeStage1(jobs []stage1Job) stage1Verdict {
 				}
 			}
 		}
-		if last := j.attempts[len(j.attempts)-1]; last != "success" && last != "skipped" {
+		// A job that never ran (skipped) has not passed: the roll-up this
+		// verdict stands in for requires success of every job it needs, as
+		// candidate-gate.sh does of every required one, so such a run is
+		// judged on its own conclusion instead.
+		if j.attempts[len(j.attempts)-1] != "success" {
 			v.passed = false
 		}
 		attempts := strings.Join(j.attempts, ",")
