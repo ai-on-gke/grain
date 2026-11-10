@@ -595,21 +595,18 @@ func TestRunNowByAnAgentDoesNotApproveADeclaredPushSet(t *testing.T) {
 
 	code, body := asAgent(t, srv, requester.ID, http.MethodPost, "/api/tasks",
 		`{"templateId":"`+templateID+`","creator":"agent"}`, "")
-	if code >= 300 {
-		t.Fatalf("POST /api/tasks from template as agent: %d %s", code, body)
+	if code != http.StatusForbidden || !strings.Contains(body, ".grain/templates/release.yml") {
+		t.Fatalf("POST /api/tasks from declaredPush template as agent: %d %s, want 403 naming .grain/templates/release.yml", code, body)
 	}
-	tasks, err := store.ListTasks(ctx)
+	inProcFiled, err := c.CreateTask(agentCtx, ui.CreateTaskRequest{
+		TemplateID: templateID,
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("in-process CreateTask from template as agent: %v", err)
 	}
-	var agentFiled *model.Task
-	for i := range tasks {
-		if tasks[i].ID != requester.ID && tasks[i].ID != unapprovedRelease.ID {
-			agentFiled = &tasks[i]
-		}
-	}
-	if agentFiled == nil || agentFiled.TemplateID != "" {
-		t.Fatalf("agent-filed task = %+v, want TemplateID empty so it carries no declared push set", agentFiled)
+	agentFiled, err := store.GetTask(ctx, inProcFiled.ID)
+	if err != nil || agentFiled == nil || agentFiled.TemplateID != "" {
+		t.Fatalf("agent-filed task = %+v (err=%v), want TemplateID empty so it carries no declared push set", agentFiled, err)
 	}
 }
 

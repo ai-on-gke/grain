@@ -425,6 +425,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err := s.agentRails(ctx, acting, pattern, method, scope, call.targetTask, r.PathValue("id")); err != nil {
 		return call, err
 	}
+	if err := s.agentStandingDeclaredPush(ctx, pattern, r.PathValue("id")); err != nil {
+		return call, err
+	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
 		return call, err
 	}
@@ -2027,6 +2030,8 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 					return err
 				}
+			} else if err := s.checkDeclaredPushID(ctx, fullID, key, opts); err != nil {
+				return err
 			}
 		case "templateid":
 			var id string
@@ -2035,15 +2040,15 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			}
 			tmpl := s.gateTemplate(ctx, id)
 			if tmpl == nil {
+				if err := s.checkDeclaredPushID(ctx, id, key, opts); err != nil {
+					return err
+				}
 				continue // the handler says it is not there
 			}
 			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 				return err
 			}
 		case "templateids":
-			if opts.role == nil && opts.external == nil {
-				continue
-			}
 			var ids []string
 			if json.Unmarshal(raw, &ids) != nil {
 				continue
@@ -2053,10 +2058,12 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 						return err
 					}
+				} else if err := s.checkDeclaredPushID(ctx, id, key, opts); err != nil {
+					return err
 				}
 			}
 		case "suiteid":
-			if opts.role == nil || s.tasks == nil || s.tasks.Store == nil {
+			if s.tasks == nil || s.tasks.Store == nil {
 				continue
 			}
 			var id string
@@ -2064,11 +2071,26 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				continue
 			}
 			suite, err := s.tasks.Store.GetSuite(ctx, strings.TrimSpace(id))
-			if err != nil || suite == nil {
+			if err != nil {
+				return err
+			}
+			if suite == nil {
 				continue
 			}
-			if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
-				return err
+			if opts.role != nil {
+				if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, it := range suite.Items {
+				if tmpl := s.gateTemplate(ctx, it.TemplateID); tmpl != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+						return err
+					}
+				} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, opts); err != nil {
+					return err
+				}
 			}
 		case "reviewtemplateid":
 			// The template a task's review is filed from once its work
@@ -2156,8 +2178,101 @@ func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
 	return disabled
 }
 
+var errAgentDeclaredPush = errors.New("an agent cannot file, schedule, or modify a template that carries a declared push set")
+
+func (s *Server) checkDeclaredPushID(ctx context.Context, templateID, key string, opts filingEscalationOpts) error {
+	id := strings.TrimSpace(templateID)
+	push, err := s.templateDeclaredPush(ctx, id)
+	if err != nil {
+		return err
+	}
+	if push == nil {
+		return nil
+	}
+	if opts.role != nil {
+		return fmt.Errorf("%s cannot set %s: template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+			opts.role.label(), key, id, push.Path)
+	}
+	return fmt.Errorf("template %s carries a declared push set (%s): %w", id, push.Path, errAgentDeclaredPush)
+}
+
+func (s *Server) agentStandingDeclaredPush(ctx context.Context, pattern, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" || s.tasks == nil || s.tasks.Store == nil {
+		return nil
+	}
+	switch pattern {
+	case "PATCH /api/templates/{id}":
+		push, err := s.templateDeclaredPush(ctx, id)
+		if err != nil {
+			return err
+		}
+		if push != nil {
+			return fmt.Errorf("template %s carries a declared push set (%s): %w", id, push.Path, errAgentDeclaredPush)
+		}
+	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
+		sched, err := s.tasks.Store.GetSchedule(ctx, id)
+		if err != nil {
+			return fmt.Errorf("reading schedule %s: %w", id, err)
+		}
+		if sched == nil {
+			return nil
+		}
+		if sched.TemplateID != nil && strings.TrimSpace(*sched.TemplateID) != "" {
+			tid := strings.TrimSpace(*sched.TemplateID)
+			push, err := s.templateDeclaredPush(ctx, tid)
+			if err != nil {
+				return err
+			}
+			if push != nil {
+				return fmt.Errorf("schedule %s fires template %s, which carries a declared push set (%s): %w",
+					sched.ID, tid, push.Path, errAgentDeclaredPush)
+			}
+		}
+		if sched.SuiteID != nil && strings.TrimSpace(*sched.SuiteID) != "" {
+			suite, err := s.tasks.Store.GetSuite(ctx, strings.TrimSpace(*sched.SuiteID))
+			if err != nil {
+				return fmt.Errorf("reading suite %s: %w", strings.TrimSpace(*sched.SuiteID), err)
+			}
+			if suite != nil {
+				for _, it := range suite.Items {
+					push, err := s.templateDeclaredPush(ctx, it.TemplateID)
+					if err != nil {
+						return err
+					}
+					if push != nil {
+						return fmt.Errorf("schedule %s runs suite %s containing template %s, which carries a declared push set (%s): %w",
+							sched.ID, suite.ID, it.TemplateID, push.Path, errAgentDeclaredPush)
+					}
+				}
+			}
+		}
+	case "PATCH /api/suites/{id}":
+		suite, err := s.tasks.Store.GetSuite(ctx, id)
+		if err != nil {
+			return fmt.Errorf("reading suite %s: %w", id, err)
+		}
+		if suite != nil {
+			for _, it := range suite.Items {
+				push, err := s.templateDeclaredPush(ctx, it.TemplateID)
+				if err != nil {
+					return err
+				}
+				if push != nil {
+					return fmt.Errorf("suite %s contains template %s, which carries a declared push set (%s): %w",
+						suite.ID, it.TemplateID, push.Path, errAgentDeclaredPush)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, key string, held []string, set APIGrantSet,
 	allowedRepo func(APIScope, string) bool, scope APIScope, repo string, opts filingEscalationOpts) error {
+	if err := s.checkDeclaredPushID(ctx, tmpl.ID, key, opts); err != nil {
+		return err
+	}
 	switch {
 	case opts.role != nil:
 		if err := roleTemplateWithin(opts.role, key, tmpl, allowedRepo, opts.normalize); err != nil {
@@ -2233,6 +2348,8 @@ func (s *Server) checkRoleSuite(ctx context.Context, suite model.Suite, key stri
 			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 				return err
 			}
+		} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, opts); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2828,6 +2945,9 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
 	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, call.reason, body); err != nil {
+		return call, err
+	}
+	if err := s.agentStandingDeclaredPush(ctx, pattern, r.PathValue("id")); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {

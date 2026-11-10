@@ -893,14 +893,23 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		}
 	case "PATCH /api/templates/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			if existing, err := s.tasks.Store.GetTemplate(ctx, r.PathValue("id")); err == nil && existing != nil {
+			id := r.PathValue("id")
+			existing, err := s.tasks.Store.GetTemplate(ctx, id)
+			if err != nil {
+				return fmt.Errorf("reading template %s: %w", id, err)
+			}
+			if existing != nil {
 				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
+			return s.checkDeclaredPushID(ctx, id, "template", opts)
 		}
 	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
 		if s.tasks != nil && s.tasks.Store != nil {
 			sched, err := s.tasks.Store.GetSchedule(ctx, r.PathValue("id"))
-			if err != nil || sched == nil {
+			if err != nil {
+				return fmt.Errorf("reading schedule %s: %w", r.PathValue("id"), err)
+			}
+			if sched == nil {
 				return nil
 			}
 			schedRepo := ""
@@ -950,10 +959,16 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
 						return err
 					}
+				} else if err := s.checkDeclaredPushID(ctx, *sched.TemplateID, "templateId", opts); err != nil {
+					return err
 				}
 			}
 			if sched.SuiteID != nil && *sched.SuiteID != "" {
-				if suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID); err == nil && suite != nil {
+				suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID)
+				if err != nil {
+					return fmt.Errorf("reading suite %s: %w", *sched.SuiteID, err)
+				}
+				if suite != nil {
 					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
 						return err
 					}
@@ -962,7 +977,11 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		}
 	case "PATCH /api/suites/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			if suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id")); err == nil && suite != nil {
+			suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id"))
+			if err != nil {
+				return fmt.Errorf("reading suite %s: %w", r.PathValue("id"), err)
+			}
+			if suite != nil {
 				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
 		}
@@ -1003,6 +1022,12 @@ func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task mod
 	if task.KeepRunning {
 		return fmt.Errorf("%s cannot approve task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
 			a.label(), task.ID)
+	}
+	if push, err := s.templateDeclaredPush(ctx, task.TemplateID); err != nil {
+		return err
+	} else if push != nil {
+		return fmt.Errorf("%s cannot approve task %s (declaredPush): template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+			a.label(), task.ID, strings.TrimSpace(task.TemplateID), push.Path)
 	}
 	if why := model.ConfigRepoProposalHold(task); why != "" {
 		return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)", a.label(), task.ID, why)
