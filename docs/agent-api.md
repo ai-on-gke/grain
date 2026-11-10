@@ -855,6 +855,7 @@ it. `total` is how many items matched across every page;
 | `GET /api/api-scope-sets/usage` | 20 | scope set name | |
 | `GET /api/external-agents/tokens` | 50 | id, name, owner or scope set | |
 | `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
+| `GET /api/access/history` | 20 | actor or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
 | `GET /api/hostds` | 50 | host name or owner | |
 | `GET /api/gcp-keys` | 50 | key name, project id or service account email | |
 | `GET /api/github-tokens` | 50 | credential name, capability or connection scope | `credentials` is the page. |

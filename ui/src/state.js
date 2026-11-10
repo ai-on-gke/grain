@@ -1601,7 +1601,7 @@ export function defaultCapabilitiesFor(config, repo) {
 // filing.
 //
 // Reads are deliberately not here. A read-only repo grants a run no way
-// to change anything in it (WriteReposField, and repoRows' own comment
+// to change anything in it (RepoGrants.jsx, and repoRows' own comment
 // below), so a task that reads acme/schema is not work happening in
 // acme/schema.
 //

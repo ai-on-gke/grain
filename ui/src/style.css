@@ -5395,3 +5395,30 @@ a.committed-context-sha:hover {
 .access-gate > * {
   flex-grow: 1;
 }
+
+/* A comment a /tasks/<id>#comment=<id> link scrolled to
+   (CommentDeepLink.jsx), marked for as long as HIGHLIGHT_MS and fading
+   out over it. */
+.comment-highlight {
+  border-radius: 6px;
+  animation: comment-highlight 2.5s ease-out;
+}
+@keyframes comment-highlight {
+  0%,
+  40% {
+    background: color-mix(in srgb, var(--accent, #6366f1) 18%, transparent);
+    box-shadow: 0 0 0 2px var(--accent, #6366f1);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+.timeline-comment-actions {
+  display: inline-flex;
+  align-items: center;
+}
+.timeline-item[data-comment-id],
+.task-chat-window [data-comment-id] {
+  scroll-margin: 4rem;
+}

@@ -10,7 +10,9 @@ spelling, writers across `pkg/model`, `pkg/ui`, `pkg/cli`,
 (with `{repo}` when repository-limited) and `…/repo#read`/`#write`
 references, `GrantsPicker.jsx` edits `with: {repo}` inline on `…/api`
 grants, and the fidelity fixture is `pkg/model/canonical_grant_test.go`.
-Slices 4–5 have not started, and
+Slice 5 (repository grants in the picker) is implemented in
+[Task #3322](/tasks/3322); see "Slice 5 as built" under Slices. Slice 4
+has not started, and
 slice 6, the per-capability conversions of §4, is mostly done; §4's
 table says which, and the remaining slices and conversions are filed from
 [Task #3274](/tasks/3274). The overview of capabilities as a whole is
@@ -424,8 +426,50 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
 4. **Migrate once,** with the fidelity test, including grain/config export.
 5. **Repo grants in the picker.** `…/repo#read`/`#write` chips and form,
    `ReadOnlyReposField`/`WriteReposField` retired, `push:` shown
-   read-only on template-filed tasks.
+   read-only on template-filed tasks. Implemented in
+   [Task #3322](/tasks/3322); see below.
 6. **Per-capability conversions** from §4, one task each.
+
+### Slice 5 as built
+
+- **Still stored as reads and writes.** `GrantsPicker` takes a `repos`
+  prop (`ui/src/components/RepoGrants.jsx`) with the form's target,
+  base, reads and writes, and hands every edit back as the whole next
+  reads or writes list, the way the retired fields did. Nothing about
+  `POST /api/tasks`, `PATCH /api/tasks/{id}` or the template and
+  schedule bodies changed; `model.TaskRepoGrants` is still how a reader
+  that takes grants sees them.
+- **Lines.** The task's own repo and base is a `…/repo#target` line
+  (`<owner>/<repo> · <base> · target`) with no remove button: the repo
+  and base branch fields stay at the top of the form (Q2). Each read is
+  `<owner>/<repo> · read` with ×; each write is `<owner>/<repo> · write`
+  with ×, its base branch edited in place under it, and named
+  `<owner>/<repo> · <base> · write`. A template-filed task's declared
+  `push:` refs (`declaredPush` on the task) are read-only
+  `<repo> <ref> · push` lines in the task pane.
+- **Add grant….** A "Repository access" group, first in the menu,
+  offers "Read a repository" and "Write a repository". Either opens a
+  repo picker in the list (it does not offer the target, or a repo
+  already read, to read; or a repo already written, to write -- the
+  target on another branch is a write of its own). The listed
+  `…/repo#read` method is a CI job's grant and is left out of the
+  menu where the form edits reads; `…/repo#write` stays listed for
+  `{refs, force}` widenings (Q3).
+- **Where.** The new task overlay (its `reads` and `writes` form fields
+  keep their ids, visibility and defaults in
+  `settings/new-task-form.yml` but draw nothing of their own; a hidden
+  one is left out of the list), the task pane's Access section (the
+  Repos section keeps only the target and base), the template editor,
+  the schedule editor (where the form edits reads and writes at all),
+  and the director's console session page (no target line). Settings'
+  default-capabilities lists already use `GrantsPicker` and carry no
+  repository access, so they take no `repos`.
+- **Audit (Q5).** A `PATCH /api/tasks/{id}` that changes reads or writes
+  records one `grant-attached` or `grant-detached` task event per grant
+  it adds or removes, its detail the grant's canonical string
+  (`Grant.Key`: `https://grain.dev/capabilities/repo#write={"base":"publish","repo":"acme/docs"}`).
+  Capability edits through `POST /api/tasks/{id}/capabilities` record
+  the same two kinds.
 
 ## Open questions for the operator
 
@@ -448,7 +492,8 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
   today's behaviour first.
 - **Q5.** Should repo reads/writes edits produce the same grant
   attach/detach audit events as capabilities once they are grants?
-  Recommended: yes.
+  Recommended: yes. **Done in slice 5 ([Task #3322](/tasks/3322)):**
+  `grant-attached` / `grant-detached` task events, for both.
 - **Q6.** `gemini-key`: model-proxy (`{vendor: gemini}`) or a `gcp`
   server method?
   **Answered (task 1061, operator): a `gcp` server method.** Folding it

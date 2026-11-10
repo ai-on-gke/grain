@@ -20,6 +20,7 @@ import { expect, test } from "@playwright/test";
 import { startGitHubStub } from "./githubstub.js";
 import { signIn, writeAccessCode } from "./accesscode.js";
 import { chooseOption, optionValues } from "./searchSelect.js";
+import { repoGrantBox } from "./repoGrants.js";
 
 // §4 of docs/test-plans/2026-10-05.md: a GitHub credential decides what
 // tasks can reach (grain/task-1995). Since stage 1 of the single-tenant
@@ -343,7 +344,7 @@ test.describe("the deployment's GitHub credential reach (§4)", () => {
       expect(targets).not.toContain(not);
     }
     // The reads picker offers what the credential can read.
-    const readsInput = page.getByLabel("Read-only repos");
+    const readsInput = await repoGrantBox(page, "read");
     await readsInput.click();
     await expect(
       page.getByRole("menuitem", { name: "acme/lib" }),

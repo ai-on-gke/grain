@@ -94,6 +94,8 @@ export function chatEntries(t) {
       // predates it, rather than the body, which is not unique.
       key: `comment-${c.id ?? i}`,
       kind: "message",
+      // What a /tasks/<id>#comment=<id> link names (commentLinks.js).
+      commentId: c.id,
       at: c.createdAt ? new Date(c.createdAt) : null,
       direction: c.authorKind === "human" ? "outgoing" : "incoming",
       // onBehalfOf is set when grain relayed somebody else's words: a

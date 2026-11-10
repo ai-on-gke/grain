@@ -18,6 +18,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMermaid from "../mermaidPair.js";
 import { safeUrl } from "../safeUrl.js";
+import { inAppHref, navigateInApp } from "../commentLinks.js";
 import { MermaidComparison, MermaidDiagram } from "./MermaidDiagram.jsx";
 
 export { safeUrl };
@@ -61,14 +62,37 @@ const REMARK_PLUGINS = [remarkGfm, remarkBreaks, remarkMermaid];
 // in is a transient thing, and navigating it away loses whatever the
 // operator was in the middle of. A fragment is the exception: it goes
 // nowhere outside this page, and the ones grain writes itself name a task
-// the timeline opens in place (taskRefs.js).
+// the timeline opens in place (taskRefs.js). So is a link to one of the
+// UI's own task pages -- [Task #31](/tasks/31), or one comment in it,
+// /tasks/31#comment=13 (commentLinks.js) -- which grain and its agents
+// write root-relative: it is followed in this tab without reloading the
+// page, while a modified click still opens it wherever the browser would.
 const COMPONENTS = {
-  a: ({ node, ...props }) =>
-    String(props.href ?? "").startsWith("#") ? (
-      <a {...props} />
-    ) : (
-      <a {...props} target="_blank" rel="noopener noreferrer" />
-    ),
+  a: ({ node, ...props }) => {
+    const href = String(props.href ?? "");
+    if (href.startsWith("#")) return <a {...props} />;
+    if (inAppHref(href)) {
+      return (
+        <a
+          {...props}
+          onClick={(e) => {
+            if (
+              e.defaultPrevented ||
+              e.button !== 0 ||
+              e.metaKey ||
+              e.ctrlKey ||
+              e.shiftKey ||
+              e.altKey
+            )
+              return;
+            e.preventDefault();
+            navigateInApp(href);
+          }}
+        />
+      );
+    }
+    return <a {...props} target="_blank" rel="noopener noreferrer" />;
+  },
   "mermaid-diagram": ({ node, ...props }) => (
     <MermaidDiagram
       code={props["data-code"] ?? node?.properties?.dataCode ?? ""}

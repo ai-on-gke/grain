@@ -234,6 +234,11 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			if summary == "" {
 				summary = "reply to run it again, or acknowledge to close it"
 			}
+			// A question's item links to the question itself, not just
+			// to the top of the task's conversation.
+			if obs != nil && obs.PendingQuestionCommentID != nil {
+				path = model.CommentPath(t.ID, *obs.PendingQuestionCommentID)
+			}
 			questions = append(questions, InboxItem{Kind: InboxQuestion, Task: t.ID, Title: t.Title, Repo: t.Repo,
 				Summary: summary, Path: path, At: t.EndedAt})
 		case t.State == model.StateProposed:
