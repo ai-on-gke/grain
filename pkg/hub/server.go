@@ -169,10 +169,10 @@ func (a delegationAdapter) AuthorizeOnBehalfOf(ctx context.Context, servicePrinc
 // NewServer constructs a registry HTTP Server from ServerOptions.
 func NewServer(opts ServerOptions) (*Server, error) {
 	if opts.Admitter == nil {
-		return nil, errors.New("registry server: Admitter is required")
+		return nil, errors.New("hub server: Admitter is required")
 	}
 	if opts.Signer == nil {
-		return nil, errors.New("registry server: Signer is required")
+		return nil, errors.New("hub server: Signer is required")
 	}
 	metrics := opts.Metrics
 	if metrics == nil {
@@ -280,9 +280,9 @@ func (s *Server) StartBackground(ctx context.Context) {
 	if s.store != nil && len(s.cfg.Catalog.ScopeOwners) > 0 {
 		go func() {
 			if n, err := s.ReconcilePrimaryScopeOwners(ctx); err != nil {
-				log.Printf("registry: catalog.scope_owners startup sweep: %v (demoted %d entries)", err, n)
+				log.Printf("hub: catalog.scope_owners startup sweep: %v (demoted %d entries)", err, n)
 			} else if n > 0 {
-				log.Printf("registry: catalog.scope_owners startup sweep demoted unauthorized primary scopes on %d entries", n)
+				log.Printf("hub: catalog.scope_owners startup sweep demoted unauthorized primary scopes on %d entries", n)
 			}
 		}()
 	}
