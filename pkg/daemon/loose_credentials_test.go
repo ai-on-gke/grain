@@ -20,7 +20,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
+	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/releaseapproval"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
@@ -125,10 +130,13 @@ func TestRepoTokensAreKeptInTheStoreAndServedToGitFromThere(t *testing.T) {
 	}
 }
 
-// TestGrainHeldCoversEverySecretThisMovesIntoTheStore keeps
+// TestGrainHeldCoversEverySecretGrainKeepsItsOwnKeysIn keeps
 // secrets.GrainHeld, which request_secret refuses, in step with the names
-// the credentials moved into the store are kept under.
-func TestGrainHeldCoversEverySecretThisMovesIntoTheStore(t *testing.T) {
+// grain's own credentials are kept under: those this package moved into
+// the store, and those the agent frameworks, the GCP minter, image
+// signing, github-sandbox and release secrets already kept there.
+func TestGrainHeldCoversEverySecretGrainKeepsItsOwnKeysIn(t *testing.T) {
+	releaseSecret, _ := ci.ReleaseSecretAddress("acme/widgets", "DOCKERHUB_TOKEN")
 	names := append([]string{
 		gitproxy.CredentialSecretName("bot"),
 		SandboxAccessCASecretName,
@@ -136,13 +144,25 @@ func TestGrainHeldCoversEverySecretThisMovesIntoTheStore(t *testing.T) {
 		releaseapproval.KeySecret,
 		secrets.HubRegistrationTokenSecret,
 		"relay",
+		secrets.GeminiAPIKeySecret,
+		secrets.ClaudeOAuthTokenSecret,
+		secrets.OpenAIAPIKeySecret,
+		secrets.AgentBackendCredentialSecret("vertex"),
+		gcpkey.DefaultMinterCredential,
+		model.GCPKeyMinterCredential("research"),
+		model.GCPKey{Name: "research"}.EffectiveMinterCredential(),
+		imagesigning.KeyCredential,
+		imagesigning.PasswordCredential,
+		githubsandbox.DefaultAppIDCredential,
+		githubsandbox.DefaultPrivateKeyCredential,
+		releaseSecret,
 	}, repoTokenNames...)
 	for _, name := range names {
 		if !secrets.GrainHeld(name) {
 			t.Errorf("secrets.GrainHeld(%q) = false, want true", name)
 		}
 	}
-	for _, name := range []string{"stripe-api-key", "github-app", "gemini-api-key"} {
+	for _, name := range []string{"stripe-api-key", "github-app-token", "deploy-bot/token", "gcp-key"} {
 		if secrets.GrainHeld(name) {
 			t.Errorf("secrets.GrainHeld(%q) = true, want false", name)
 		}
