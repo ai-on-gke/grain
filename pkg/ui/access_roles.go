@@ -78,6 +78,11 @@ var humanRouteScopes = map[string]APIScope{
 	"POST /api/notifications/{id}/investigate":                      "tasks:write",
 	"GET /api/local-script-approvals":                               "capabilities:read",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": "capabilities:admin",
+	// Accepting a declaration takes the scopes its set needs, which
+	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal):
+	// a dangerous api grant needs its own scope, not capabilities:admin.
+	"GET /api/declarations":         "capabilities:read",
+	"POST /api/declarations/accept": scopeSignedIn,
 }
 
 // operatorOnlyRoutes are the internal routes no limited role reaches: a
@@ -89,6 +94,7 @@ var operatorOnlyRoutes = map[string]bool{
 	"PUT /api/tasks/{id}/session-title":                             true,
 	"POST /api/tasks/{id}/staged-attachments":                       true,
 	"POST /api/tasks/{id}/db/query":                                 true,
+	"POST /api/secrets/redact":                                      true,
 	"POST /api/tasks/{id}/db/execute":                               true,
 	"POST /api/tasks/{id}/notify":                                   true,
 	"POST /api/tasks/{id}/delivered":                                true,
@@ -106,6 +112,11 @@ var operatorOnlyRoutes = map[string]bool{
 	"POST /api/hostds/pending/{id}/accept":                          true,
 	"POST /api/hostds/pending/{id}/reject":                          true,
 	"/staging/{name}/{path...}":                                     true,
+	// Repointing grain/config at another remote hands everything the
+	// config repository grants -- host scripts, scope sets, secrets
+	// bindings -- to whoever can push there, on the next sync, with no
+	// Submit (task 3965). settings:write alone is not enough for that.
+	"POST /api/state-repo/remote": true,
 }
 
 // accessRole is what a verified session's matching allowlist entries let
@@ -760,10 +771,10 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 		}
 	}
 	if !a.allows(scope, "") {
-		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
-			// A namespace read or event stream naming no repository is narrowed
-			// to the ones the role reaches by fsScope / eventsReadable, as an
-			// agent's is.
+		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && repo == "" {
+			// A namespace read, event stream or reachable-repos listing naming no
+			// repository is narrowed to the ones the role reaches by fsScope /
+			// eventsReadable / reposReadable, as an agent's is.
 			return nil
 		}
 		if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
@@ -893,14 +904,23 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		}
 	case "PATCH /api/templates/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			if existing, err := s.tasks.Store.GetTemplate(ctx, r.PathValue("id")); err == nil && existing != nil {
+			id := r.PathValue("id")
+			existing, err := s.tasks.Store.GetTemplate(ctx, id)
+			if err != nil {
+				return fmt.Errorf("reading template %s: %w", id, err)
+			}
+			if existing != nil {
 				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
+			return s.checkDeclaredPushID(ctx, id, "template", opts)
 		}
 	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
 		if s.tasks != nil && s.tasks.Store != nil {
 			sched, err := s.tasks.Store.GetSchedule(ctx, r.PathValue("id"))
-			if err != nil || sched == nil {
+			if err != nil {
+				return fmt.Errorf("reading schedule %s: %w", r.PathValue("id"), err)
+			}
+			if sched == nil {
 				return nil
 			}
 			schedRepo := ""
@@ -950,10 +970,16 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
 						return err
 					}
+				} else if err := s.checkDeclaredPushID(ctx, *sched.TemplateID, "templateId", opts); err != nil {
+					return err
 				}
 			}
 			if sched.SuiteID != nil && *sched.SuiteID != "" {
-				if suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID); err == nil && suite != nil {
+				suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID)
+				if err != nil {
+					return fmt.Errorf("reading suite %s: %w", *sched.SuiteID, err)
+				}
+				if suite != nil {
 					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
 						return err
 					}
@@ -962,7 +988,11 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 		}
 	case "PATCH /api/suites/{id}":
 		if s.tasks != nil && s.tasks.Store != nil {
-			if suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id")); err == nil && suite != nil {
+			suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id"))
+			if err != nil {
+				return fmt.Errorf("reading suite %s: %w", r.PathValue("id"), err)
+			}
+			if suite != nil {
 				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
 		}
@@ -1008,6 +1038,12 @@ func (c *Client) roleApprovalWithin(ctx context.Context, a *accessRole, task mod
 	if task.KeepRunning {
 		return fmt.Errorf("%s cannot approve task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
 			a.label(), task.ID)
+	}
+	if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {
+		return err
+	} else if push != nil {
+		return fmt.Errorf("%s cannot approve task %s (declaredPush): template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+			a.label(), task.ID, strings.TrimSpace(task.TemplateID), push.Path)
 	}
 	if why := model.ConfigRepoProposalHold(task); why != "" {
 		return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)", a.label(), task.ID, why)

@@ -192,7 +192,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
-	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+	if !grainci.RequiredFor(*task.Target) && c.Store != nil {
 		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
 		if err != nil {
 			return ci.Run{}, err
@@ -203,7 +203,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
 			}
 			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
-			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+			if !rulesRequire && (explicitDisabled || (full && !grainci.GrantedExplicitly(task.Grants))) {
 				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
 			}
 		}
@@ -843,6 +843,13 @@ type CIRunsResponse struct {
 	// no forge connection that reads Actions, a low API budget, or a
 	// forge read that failed (ci_actions.go).
 	ActionsNote string `json:"actionsNote,omitempty"`
+	// RepoProvider is the active CI provider for the single repository the
+	// query narrowed to (?repo=owner/name): ci.ProviderGitHubActions when
+	// its Actions runs are listed (ci_mode: github), or ci.ProviderGrain
+	// otherwise. Carried here under ci:read so `grain ci test-history` can
+	// default to GitHub Actions without needing capabilities:read on
+	// GET /api/repos/{owner}/{name}/capabilities.
+	RepoProvider string `json:"repoProvider,omitempty"`
 	// Truncated says ?limit= (or an agent's default page size) stopped
 	// short of Matched, and NextCursor asks for the next page.
 	Truncated  bool   `json:"truncated,omitempty"`
@@ -1009,6 +1016,9 @@ func (c *Client) ciEnabledFor(ctx context.Context, repo model.RepoRef) (bool, er
 	}
 	if grainci.RepoUsesGrainCI(repoCfg, repo) {
 		return true, nil
+	}
+	if repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone) {
+		return false, nil
 	}
 	wfs, err := c.Store.GetRepoWorkflows(ctx, repo)
 	if err != nil {
@@ -1227,7 +1237,7 @@ func ciRunMatchesQuery(run ci.Run, list listQuery) bool {
 	if list.Q == "" {
 		return true
 	}
-	keys := []string{run.ID, run.Repo, run.Ref, run.Commit, string(run.Event)}
+	keys := []string{run.ID, run.Repo, run.Ref, run.Commit, string(run.Event), run.RequestedBy}
 	if run.Actions != nil {
 		keys = append(keys, run.Actions.Workflow, run.Actions.WorkflowName)
 	}
@@ -1281,7 +1291,7 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	defaultLimit := listPageSmall
 	if compact {
-		defaultLimit = listPageMedium
+		defaultLimit = listPageLarge
 	}
 	list, err := parseListQuery(r, defaultLimit)
 	if err != nil {
@@ -1298,13 +1308,18 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if runner == nil {
+		var repoProvider string
+		if filter, ferr := ciRunFilterFrom(r.URL.Query(), time.Now()); ferr == nil {
+			repoProvider = s.repoCIProvider(r.Context(), filter.Repo)
+		}
 		faults := s.tasks.CISharedFaults(r.Context())
 		if isAgentListCaller(r) && len(faults) > listPageSmall {
 			faults = faults[:listPageSmall]
 		}
 		writeJSON(w, http.StatusOK, CIRunsResponse{
-			Enabled: false,
-			Faults:  faults,
+			Enabled:      false,
+			Faults:       faults,
+			RepoProvider: repoProvider,
 		})
 		return
 	}
@@ -1334,9 +1349,10 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		s.writeCIRuns(w, r, runner.Find(grainFilter, fetchLimit), filter, list, compact, repo)
 		return
 	}
+	repoProvider := s.repoCIProvider(r.Context(), filter.Repo)
 	if filter.Provider != "" && !strings.EqualFold(filter.Provider, ci.ProviderGrain) {
 		// A provider no run of this answer is from.
-		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}})
+		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}, RepoProvider: repoProvider})
 		return
 	}
 	filter.Provider = ""
@@ -1348,6 +1364,9 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		faults = s.tasks.CISharedFaults(r.Context())
 	}
 	page, truncated, nextCursor := pageCIRunResult(rawPage, list)
+	if isAgentListCaller(r) && len(faults) > listPageSmall {
+		faults = faults[:listPageSmall]
+	}
 	if compact {
 		resp := ciCompactRuns(page, faults)
 		resp.Truncated = truncated
@@ -1355,22 +1374,34 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	if isAgentListCaller(r) && len(faults) > listPageSmall {
-		faults = faults[:listPageSmall]
-	}
 	listed := make([]ci.Run, 0, len(page.Runs))
 	for _, run := range page.Runs {
 		listed = append(listed, ciListSummary(run))
 	}
 	writeJSON(w, http.StatusOK, CIRunsResponse{
-		Enabled:    true,
-		Runs:       listed,
-		Matched:    page.Matched,
-		Stored:     page.Stored,
-		Faults:     faults,
-		Truncated:  truncated,
-		NextCursor: nextCursor,
+		Enabled:      true,
+		Runs:         listed,
+		Matched:      page.Matched,
+		Stored:       page.Stored,
+		Faults:       faults,
+		RepoProvider: repoProvider,
+		Truncated:    truncated,
+		NextCursor:   nextCursor,
 	})
+}
+
+func (s *Server) repoCIProvider(ctx context.Context, repoText string) string {
+	if s.tasks == nil || strings.TrimSpace(repoText) == "" {
+		return ""
+	}
+	repo, err := s.tasks.parseRepo(repoText)
+	if err != nil {
+		return ""
+	}
+	if s.tasks.actionsListedFor(ctx, repo) {
+		return ci.ProviderGitHubActions
+	}
+	return ci.ProviderGrain
 }
 
 // writeCIRuns answers GET /api/ci/runs with grain's page merged with
@@ -1401,6 +1432,9 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 	page.Stored += actionsMatched
 	page, truncated, nextCursor := pageCIRunResult(page, list)
 	faults := s.tasks.CISharedFaults(r.Context())
+	if isAgentListCaller(r) && len(faults) > listPageSmall {
+		faults = faults[:listPageSmall]
+	}
 	if compact {
 		resp := ciCompactRuns(page, faults)
 		resp.ActionsNote = note
@@ -1409,22 +1443,20 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	if isAgentListCaller(r) && len(faults) > listPageSmall {
-		faults = faults[:listPageSmall]
-	}
 	listed := make([]ci.Run, 0, len(page.Runs))
 	for _, run := range page.Runs {
 		listed = append(listed, ciListSummary(run))
 	}
 	writeJSON(w, http.StatusOK, CIRunsResponse{
-		Enabled:     true,
-		Runs:        listed,
-		Matched:     page.Matched,
-		Stored:      page.Stored,
-		Faults:      faults,
-		ActionsNote: note,
-		Truncated:   truncated,
-		NextCursor:  nextCursor,
+		Enabled:      true,
+		Runs:         listed,
+		Matched:      page.Matched,
+		Stored:       page.Stored,
+		Faults:       faults,
+		ActionsNote:  note,
+		RepoProvider: ci.ProviderGitHubActions,
+		Truncated:    truncated,
+		NextCursor:   nextCursor,
 	})
 }
 

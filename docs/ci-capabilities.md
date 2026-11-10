@@ -173,6 +173,21 @@ the run's own team connection, as the retired providers did. The bare
 names remain one-release aliases, and as references they reach only a job
 that declares them.
 
+## A person accepts what only a person may grant
+
+A workflow file is the repository's to write, so a job that declares a
+capability only a person may grant is asking for it, not granted it. That
+covers a GCP key, a host script, a GitHub credential or a dangerous
+`api:<scope>` (`model.DeclaredGrantNeedsPerson`). Such a job fails before
+anything is minted, with an error naming what it waits for, until a person
+accepts that set for the job. Accept it on **Settings → Capabilities →
+Repository declarations**. Accepting takes `capabilities:admin` for a
+capability server's grant, and the scope itself for an `api:` grant. Once
+accepted, the job runs as before while it declares nothing beyond the
+accepted set. A job that adds a held capability is refused again, and
+shows as awaiting acceptance, until a person accepts the new set.
+Acceptance is per job: the repository plus the job's name.
+
 ## Which trees are trusted with them
 
 These capabilities are granted to the trees on the repository's own

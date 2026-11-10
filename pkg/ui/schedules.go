@@ -2346,6 +2346,15 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 			"standing work, or this schedule's own item, back on to run it",
 			model.StandingWorkOffReason(*firing.StandingWorkOff))
 	}
+	if firing.WorkflowGrainCIOff != "" {
+		if firing.WorkflowGrainCIOff == model.CIModeGitHub {
+			return ScheduleRun{}, validationErrorf("this schedule cannot be run now: %s; set `grain-ci: true` on the schedule, "+
+				"or set the repository's CI Mode to \"Use Grain CI\"",
+				model.WorkflowGrainCIOffReason(firing.WorkflowGrainCIOff))
+		}
+		return ScheduleRun{}, validationErrorf("this schedule cannot be run now: %s",
+			model.WorkflowGrainCIOffReason(firing.WorkflowGrainCIOff))
+	}
 
 	// What it filed is parked, as the cadence's own firing would be
 	// (orchestrator.parkUnreached), when the schedule's team cannot reach
@@ -2444,7 +2453,8 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// Touch the schedulefilter query keys directly so routeHandlerInputs
 	// sees the full vocabulary GET /api/schedules accepts.
-	_, _, _, _ = q.Get("q"), q.Get("kind"), q.Get("sort"), q["f"]
+	_, _, _, _, _ = q.Get("q"), q.Get("kind"), q.Get("sort"), q["f"], q.Get("fields")
+	full := strings.EqualFold(strings.TrimSpace(q.Get("fields")), "full")
 	filter, err := schedulefilter.ParseQuery(q)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2465,6 +2475,11 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		}
 		loc := model.LoadLocation(model.TimeZoneOrDefault(zone))
 		list = schedulefilter.Apply(filter, list, scheduleFacts, s.tasks.now(), loc)
+	}
+	if page.Paged && !full {
+		for i := range list {
+			list[i].Description = ""
+		}
 	}
 	writeList(w, list, page)
 }

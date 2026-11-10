@@ -120,7 +120,7 @@ const VIEWS = [
 // <tab> of /repos/<o>/<n>/settings/<tab>. Overview is the page's own
 // path, so buildPath never writes /settings/overview, but parsePath
 // reads it.
-export const REPO_TAB_IDS = [
+const REPO_TAB_IDS = [
   "overview",
   "ci",
   "merge-queue",

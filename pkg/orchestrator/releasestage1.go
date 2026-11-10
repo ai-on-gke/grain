@@ -81,7 +81,7 @@ const (
 // job by job again. Both are re-learnt after a restart.
 var (
 	stage1FlakesNoted = map[string]bool{} // store|repo|rc|job
-	stage1Settled     = map[string]bool{} // store|repo|rc|sha
+	stage1Settled     = map[string]bool{} // store|repo|rc|sha -> stage1Verdict.passed
 )
 
 // stage1Job is one Stage 1 job's attempts on a candidate, oldest first:
@@ -102,6 +102,11 @@ type stage1Verdict struct {
 	retried []stage1Job
 	// infra is every job whose newest concluded attempt is infrastructure.
 	infra []stage1Job
+	// passed is whether every job read has passed (on its flake retry, if
+	// it spent one; a job that never ran has not) -- the verdict scripts/candidate-gate.sh reaches, which
+	// stands even when nightly.yml's run concluded failure on its roll-up
+	// job alone.
+	passed bool
 }
 
 // stage1JobName is a job's name without its matrix suffix -- "go,
@@ -210,7 +215,7 @@ func readStage1(forge ReleaseQualificationForge, repo model.RepoRef, sha string,
 // failure is confirmed red, and so is more than stage1MaxFlakes jobs
 // failing once.
 func judgeStage1(jobs []stage1Job) stage1Verdict {
-	v := stage1Verdict{read: true}
+	v := stage1Verdict{read: true, passed: len(jobs) > 0}
 	var failedOnce []string
 	for _, j := range jobs {
 		fails, first := 0, -1
@@ -221,6 +226,13 @@ func judgeStage1(jobs []stage1Job) stage1Verdict {
 					first = i
 				}
 			}
+		}
+		// A job that never ran (skipped) has not passed: the roll-up this
+		// verdict stands in for requires success of every job it needs, as
+		// candidate-gate.sh does of every required one, so such a run is
+		// judged on its own conclusion instead.
+		if j.attempts[len(j.attempts)-1] != "success" {
+			v.passed = false
 		}
 		attempts := strings.Join(j.attempts, ",")
 		if fails > 0 {
@@ -240,6 +252,7 @@ func judgeStage1(jobs []stage1Job) stage1Verdict {
 		v.red = append(v.red, fmt.Sprintf("systemic: %d jobs failed (%s), more than the %d that may use a flake retry",
 			len(failedOnce), strings.Join(failedOnce, ", "), stage1MaxFlakes))
 	}
+	v.passed = v.passed && len(v.red) == 0
 	return v
 }
 
@@ -287,15 +300,20 @@ func (q *rcQualification) watchStage1(ctx context.Context, cfg model.SuiteQualif
 	}
 	settledKey := redRCKey(q.store, q.repo.String(), q.rcTag, q.sha)
 	redRCMu.Lock()
-	settled := stage1Settled[settledKey]
+	jobsPassed, settled := stage1Settled[settledKey]
 	redRCMu.Unlock()
 	if settled {
-		return green, nil
+		return green || jobsPassed, nil
 	}
 	v, err := readStage1(q.forge, q.repo, q.sha, cfg)
 	if err != nil {
 		return false, fmt.Errorf("reading Stage 1's jobs on %s: %w", q.rcTag, err)
 	}
+	// The roll-up job carries no verdict of its own, so a run that failed on
+	// it alone is green when every other job passed, as the train judges
+	// it; read by its conclusion only, the candidate would wait on a
+	// Stage 2 grain never started, with nothing raised.
+	green = green || v.passed
 	var errs []error
 	for _, j := range v.retried {
 		errs = append(errs, q.noteStage1Flake(ctx, cfg.Stage1Name(), j))
@@ -313,7 +331,7 @@ func (q *rcQualification) watchStage1(ctx context.Context, cfg model.SuiteQualif
 	err = errors.Join(errs...)
 	if err == nil && v.read && (green || red) {
 		redRCMu.Lock()
-		stage1Settled[settledKey] = true
+		stage1Settled[settledKey] = v.passed
 		redRCMu.Unlock()
 	}
 	return green, err

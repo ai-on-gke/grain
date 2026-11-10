@@ -316,7 +316,7 @@ var repoCaseTables = []repoCaseTable{
 		// repository are folded together, which is how clone_url,
 		// unfixable_checks and base_branch_ci_jobs came to be missing
 		// from it before grain/task-340 noticed.
-		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck", "issue_import_enabled", "issue_import_repo", "issue_import_label", "issue_import_approved", "issue_import_interval_seconds", "upstream_repo", "default_admission", "default_hosting"},
+		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck", "issue_import_enabled", "issue_import_repo", "issue_import_label", "issue_import_approved", "issue_import_interval_seconds", "upstream_repo", "default_admission", "default_hosting", "skills", "declared_skills"},
 		merge:  mergeRepoConfigRow,
 	},
 	// What grain CI last made of a branch things merge into
@@ -435,6 +435,12 @@ var repoCaseTables = []repoCaseTable{
 	// provenance that spells the repository the way the repo_config row
 	// switching it on now does.
 	{name: "repo_declaration", owner: "owner", repo: "name"},
+	// A person's acceptance of what a declaration asks for
+	// (model.DeclarationAcceptance), keyed by the declaration's id, which
+	// carries the repository lowercased as repo_declaration's does
+	// (RepoDeclaredID, CIJobDeclarationID): the same rewrite, for the same
+	// reason.
+	{name: "declaration_acceptance", owner: "owner", repo: "name"},
 	// Grain's record of polling one repository for those declarations.
 	// Both sides of a fold are re-derived by the next poll, which is why
 	// the merge simply keeps the canonical row's (mergeDeclarationSyncRow).
@@ -986,6 +992,15 @@ func mergeRepoConfigRow(canonical, divergent []string) ([]string, string) {
 		return nil, "both spellings set different default_hosting"
 	}
 	out[35] = defaultHost
+	skillsText, ok := pickText(canonical[36], divergent[36])
+	if !ok {
+		return nil, "both spellings set different skills"
+	}
+	out[36] = skillsText
+	out[37] = canonical[37]
+	if out[37] == "" {
+		out[37] = divergent[37]
+	}
 	return out, ""
 }
 

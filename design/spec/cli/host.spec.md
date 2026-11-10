@@ -1292,18 +1292,18 @@ _No flags._
 ### 4.17 `grain hub <subcommand>` {#CLI-109}
 
 Self-registers a grain deployment in a grain hub (`design/design/hub.design.md`), queries the organization directory and path router, and manages hosted (`instance`) and self-registered (`connected`) entries.
-- `status` (also bare `grain hub`) calls `GET /api/registry` and prints connection state, registry URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
+- `status` (also bare `grain hub`) calls `GET /api/registry` and prints connection state, hub URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
 - `list` calls `GET /api/entries` for the caller's entries (or `-all` for admins), with optional `-owner`, `-owner-group`, `-kind`, `-status`, `-listed`, `-conflict`, and `-include-deleted` filters, appending `detail=<status_detail>` when an entry carries a lifecycle or health detail.
 - `directory` calls `GET /api/directory` across listed catalog entries with optional `-q`, `-repo`, `-tag`, `-status`, `-kind`, `-host-kind`, `-owner`, and `-limit` filters.
 - `route` calls `GET /api/route` to resolve the primary and ranked candidate entries covering `-repo` and `-path` (with optional `-include-offline`).
 - `show` calls `GET /api/entries/{name}` and prints full metadata, lifecycle step and `status_detail`/`health_detail` (`Step:`, `Detail:`, `Health:`), boot disk size (`Disk:`), tunnel status, scopes, conflicts, and credential metadata.
 - `create` calls `POST /api/entries` (`kind = "instance"`) to provision a hosted VM entry (generating a random name when `<name>` is omitted).
-- `register` creates or updates a `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous registry URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon and prints the `-hub-connect` configuration snippet.
-- `unregister` deletes the entry on the registry (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
+- `register` creates or updates a `connected` entry on the hub (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous hub URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the hub without contacting a local daemon and prints the `-hub-connect` configuration snippet.
+- `unregister` deletes the entry on the hub (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
 - `update`, `scopes`, `rotate-credential`, `upgrade`, `resize`, `delete`, `restore`, `transfer`, and `accept-transfer` manage entry catalog fields, declared scopes, `grc_...` credentials, VM lifecycle replacements, soft-deletion/restoration, and two-step ownership transfers.
-- `stop` and `start` call `POST /api/entries/{name}/stop` and `POST /api/entries/{name}/start` on a hosted `instance` entry the caller manages: `stop` moves it to `stopping` → `stopped` (no VM, externalised state kept) and `start` boots it again (a visit to a stopped entry also wakes it). Both are human-only on the registry (a delegating app is refused), take the same target flags as `upgrade`, and print the entry's new lifecycle `state`; a `connected` entry is refused with `invalid_entry_kind`.
+- `stop` and `start` call `POST /api/entries/{name}/stop` and `POST /api/entries/{name}/start` on a hosted `instance` entry the caller manages: `stop` moves it to `stopping` → `stopped` (no VM, externalised state kept) and `start` boots it again (a visit to a stopped entry also wakes it). Both are human-only on the hub (a delegating app is refused), take the same target flags as `upgrade`, and print the entry's new lifecycle `state`; a `connected` entry is refused with `invalid_entry_kind`.
 
-**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` on the local daemon (unless `-standalone` is set); remote registry control-plane subcommands authenticate directly to `-hub-url` with OIDC or `-hub-token`.
+**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` on the local daemon (unless `-standalone` is set); remote hub control-plane subcommands authenticate directly to `-hub-url` with OIDC or `-hub-token`.
 
 <!-- BEGIN GENERATED FLAGS: grain hub -->
 _No flags._
@@ -1400,7 +1400,7 @@ _No flags._
 | `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
 | `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
 | `-scope` | value |  |  | declared repository scope <owner/repo>[:<path_prefix>[:<primary\|secondary>]] (repeatable) |
-| `-shape` | string |  |  | VM shape name (defaults to registry default shape) |
+| `-shape` | string |  |  | VM shape name (defaults to hub default shape) |
 | `-ship-logs` | bool |  |  | enable fleet log shipping |
 | `-tags` | string |  |  | comma-separated catalog tags |
 | `-zone` | string |  |  | optional GCE zone override |
@@ -1512,7 +1512,7 @@ _No flags._
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
 | `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
-| `-version` | string |  |  | target grain release version (defaults to registry's current pinned release) |
+| `-version` | string |  |  | target grain release version (defaults to hub's current pinned release) |
 <!-- END GENERATED FLAGS -->
 
 #### `grain hub resize`
@@ -1805,8 +1805,8 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-hostd-token-file` | string |  | $GRAIN_HOSTD_TOKEN | deprecated, for one release: file holding a shared token a host on another machine dials in to /api/hostd/connect with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, which gives it a token of its own |
 | `-hostd-token-name` | string | `"remote"` |  | the host name a host dialing in with -hostd-token-file's shared token is known by |
 | `-hostd-token-owner` | string |  |  | the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not |
-| `-hub-auth-mode` | string |  | $GRAIN_HUB_TOKEN | credential mode for registry heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
-| `-hub-connect` | bool |  | $GRAIN_HUB_CONNECT | supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url) |
+| `-hub-auth-mode` | string |  | $GRAIN_HUB_TOKEN | credential mode for hub heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
+| `-hub-connect` | bool |  | $GRAIN_HUB_CONNECT | supervise an outbound wss://<hub-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url) |
 | `-hub-display-name` | string |  |  | human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
 | `-hub-entry` | string |  | $GRAIN_HUB_ENTRY | entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_HUB_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
 | `-hub-host-kind` | string |  |  | connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) |
@@ -2272,7 +2272,9 @@ This covers where the installation's state repository lives and what it holds. T
 | `prepare-upgrade` | export a store this build cannot open, for the next start to migrate. Prints `prepared FROM TO DIR`, `current N` or `none` |
 | `check [-migrate] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive |
 | `key show` / `key path` | print the secrets public key / where the private key is read from |
-| `key import [-key-file F]` | install a private key from `-key-file` or stdin |
+| `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
+| `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |
+| `key retired delete (-all \| NAME...)` | delete replaced keys by exact name. Refuses the live key, anything that is not an archive beside it, and the archive the secrets file is still encrypted to when the live key does not open it |
 
 <!-- BEGIN GENERATED FLAGS: grain state -->
 _No flags._
@@ -2318,13 +2320,23 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain state key retired -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain state key retired delete -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-all` | bool |  |  | delete every retired key |
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain state key import -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-key-file` | string |  |  | file holding the private key; defaults to reading stdin |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
+**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_retired_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
 
 ### 6.5 `grain backup`, `grain export`, `grain import` {#CLI-54}
 
@@ -2351,6 +2363,7 @@ The export and import usage is hand-written. Their flags:
 | `-passphrase-file` | both | passphrase file, or `-` for stdin |
 | `-key-file` | both | 64-hex-character key file, or `-` for stdin |
 | `-passphrase`, `-password`, `-key` | both | deprecated literal forms |
+| `-plaintext` | export | allow an unencrypted bundle that carries `secrets/secrets.key`; without a passphrase or key, export refuses one unless this is set |
 
 <!-- BEGIN GENERATED FLAGS: grain backup -->
 _No flags._

@@ -27,7 +27,7 @@ import { Alert, Box, Chip } from "@mui/material";
 // declaredLocation is "acme/widgets, .grain/templates/nightly.yml" -- the
 // whole of where a declared row came from, in one string a tooltip or an
 // accessible name can carry.
-export function declaredLocation(declaredIn) {
+function declaredLocation(declaredIn) {
   return `${declaredIn.repo}, ${declaredIn.path}`;
 }
 

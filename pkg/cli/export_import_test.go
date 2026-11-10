@@ -37,6 +37,28 @@ import (
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
+// An unencrypted bundle carries the secrets key beside the ciphertext it
+// opens, so export refuses one unless -plaintext says it is meant.
+func TestExportRefusesAnUnencryptedBundleCarryingTheSecretsKey(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := refusePlaintextKeyExport(dataDir, false, false); err != nil {
+		t.Fatalf("no key to carry: %v", err)
+	}
+	k, _ := secrets.GenerateKey()
+	if err := secrets.WriteKeyFile(daemon.SecretsConfig(dataDir).KeyFile, k); err != nil {
+		t.Fatal(err)
+	}
+	if err := refusePlaintextKeyExport(dataDir, false, false); err == nil || !strings.Contains(err.Error(), "-plaintext") {
+		t.Fatalf("unencrypted with the key = %v, want a refusal naming -plaintext", err)
+	}
+	if err := refusePlaintextKeyExport(dataDir, true, false); err != nil {
+		t.Fatalf("encrypted: %v", err)
+	}
+	if err := refusePlaintextKeyExport(dataDir, false, true); err != nil {
+		t.Fatalf("-plaintext: %v", err)
+	}
+}
+
 func TestExportImportRoundtripUnencrypted(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -127,7 +149,7 @@ func TestExportImportRoundtripUnencrypted(t *testing.T) {
 	// 2. Export
 	bundleFile := filepath.Join(t.TempDir(), "migration.tar.gz")
 	var exportOut bytes.Buffer
-	if err := runExport(ctx, []string{"-data-dir", srcDir, "-out", bundleFile}, &exportOut); err != nil {
+	if err := runExport(ctx, []string{"-data-dir", srcDir, "-out", bundleFile, "-plaintext"}, &exportOut); err != nil {
 		t.Fatalf("runExport failed: %v", err)
 	}
 
@@ -576,7 +598,7 @@ func TestImportSkipsRelaySettingsFromBundle(t *testing.T) {
 	}
 
 	bundleFile := filepath.Join(t.TempDir(), "migration.tar.gz")
-	if err := runExport(ctx, []string{"-data-dir", srcDir, "-out", bundleFile}, io.Discard); err != nil {
+	if err := runExport(ctx, []string{"-data-dir", srcDir, "-out", bundleFile, "-plaintext"}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 

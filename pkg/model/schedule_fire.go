@@ -118,6 +118,13 @@ type ScheduleFiring struct {
 	// schedule at its next occurrence instead of releasing a backlog of
 	// catch-up firings (suppressStandingWorkOff).
 	StandingWorkOff *RepoRef
+	// WorkflowGrainCIOff is the repository's CI mode when a workflow
+	// schedule's firing was dropped because that mode does not run this
+	// schedule's workflow on grain CI (suppressWorkflowGrainCIOff:
+	// CIModeNone, or CIModeGitHub without Schedule.GrainCI). Kept apart
+	// from StandingWorkOff so RunScheduleNow and reconcileSchedule say why
+	// the workflow did not run rather than blaming the standing-work switch.
+	WorkflowGrainCIOff CIMode
 	// TaskID is the task a task-backed schedule filed -- empty for a
 	// suite-backed schedule, and for a firing either field above
 	// suppressed.
@@ -459,6 +466,9 @@ func (s *Store) suppressStandingWorkOff(ctx context.Context, sched Schedule, tar
 // `.grain/workflows/*.yml` run does not run on Grain CI -- unless sched opts
 // in to grain CI on a ci_mode: github repository (Schedule.GrainCI).
 func (s *Store) workflowGrainCIOff(ctx context.Context, sched Schedule, target RepoRef) (bool, CIMode, error) {
+	if _, ok := workflowReviewSchedule(sched); !ok {
+		return false, "", nil
+	}
 	if target == (RepoRef{}) || IsConfigRepo(target) {
 		return false, "", nil
 	}
@@ -491,6 +501,16 @@ func (s Schedule) WorkflowRunsUnder(mode CIMode) bool {
 	}
 }
 
+// WorkflowGrainCIOffReason is the sentence a skipped firing, SuppressedFiring,
+// RunScheduleNow and the reconciler log share when a workflow schedule's
+// repository CI mode does not run it on grain CI.
+func WorkflowGrainCIOffReason(mode CIMode) string {
+	if mode == CIModeNone {
+		return "this repository has CI disabled (ci_mode: none)"
+	}
+	return fmt.Sprintf("this repository uses %s CI mode", mode)
+}
+
 func (s *Store) suppressWorkflowGrainCIOff(ctx context.Context, sched Schedule, target RepoRef,
 	mode CIMode, now time.Time, loc *time.Location, advance bool) (ScheduleFiring, error) {
 
@@ -503,11 +523,8 @@ func (s *Store) suppressWorkflowGrainCIOff(ctx context.Context, sched Schedule, 
 			return ScheduleFiring{}, fmt.Errorf("advancing past a workflow firing into a repo with CI mode %s: %w", mode, err)
 		}
 	}
-	reason := fmt.Sprintf("this repository uses %s CI mode", mode)
-	if mode == CIModeNone {
-		reason = "this repository has CI disabled (ci_mode: none)"
-	}
-	return ScheduleFiring{StandingWorkOff: &target, Skip: droppedSkip(sched, now, SuppressedByStandingWork, reason)}, nil
+	reason := WorkflowGrainCIOffReason(mode)
+	return ScheduleFiring{WorkflowGrainCIOff: mode, Skip: droppedSkip(sched, now, SuppressedByStandingWork, reason)}, nil
 }
 
 // fireTaskSchedule files sched's next task, unless its previous firing
@@ -659,6 +676,12 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 		return *held, nil
 	}
 
+	// What a repository's declaration asked for, recorded as of this
+	// firing, is what Settings -> Capabilities offers a person to
+	// accept (DeclarationAcceptance).
+	if err := noteDeclarationHold(ctx, s.db, comp.DeclarationHold, now); err != nil {
+		return ScheduleFiring{}, err
+	}
 	id, err := s.putScheduleTask(ctx, comp, scheduleFiringTags(sched, groupRepo), now)
 	if err != nil {
 		return ScheduleFiring{}, err

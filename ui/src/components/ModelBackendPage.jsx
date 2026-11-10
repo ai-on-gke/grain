@@ -55,7 +55,7 @@ export function isRemovedFramework(framework) {
   return Object.hasOwn(removedFrameworkLabels, framework || "");
 }
 
-export function modelBackendLabel(backend) {
+function modelBackendLabel(backend) {
   return (
     backend.name ||
     frameworkLabels[backend.framework] ||
@@ -71,7 +71,7 @@ export function modelBackendLabel(backend) {
 // writes the field again. `effort` is left as it was stored: it is not
 // shown or edited here any more (the deployment sets effort per model), and
 // dropping it would lose a value written after the migration ran.
-export function foldLegacyModel(backend) {
+function foldLegacyModel(backend) {
   if (!backend || !backend.model) return backend;
   const { model, ...rest } = backend;
   const models = [model, ...(backend.models || []).filter((m) => m !== model)];
@@ -83,7 +83,7 @@ export function foldLegacyModel(backend) {
 // runs on (authMode "ambient", directly or through the connection it
 // reuses), "stored" for a key, token or auth.json grain holds, and ""
 // for a new connection that has chosen nothing yet.
-export function credentialsOf(backend, backends = []) {
+function credentialsOf(backend, backends = []) {
   const mode = backend.credentialBackendId
     ? backends.find((b) => b.id === backend.credentialBackendId)?.authMode
     : backend.authMode;
@@ -114,7 +114,7 @@ function authenticationValue(backend) {
 
 // cliBinaryFor is the CLI a connection of framework runs, the one its
 // CLI path overrides.
-export function cliBinaryFor(framework) {
+function cliBinaryFor(framework) {
   return (
     { claude: "claude", codex: "codex", antigravity: "agy" }[framework] || ""
   );

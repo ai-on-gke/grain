@@ -220,7 +220,7 @@ func normalizeConnectURL(raw string, allowInsecure bool) (*url.URL, bool, error)
 	}
 	u, err := url.Parse(trimmed)
 	if err != nil {
-		return nil, false, fmt.Errorf("invalid registry URL %q: %w", raw, err)
+		return nil, false, fmt.Errorf("invalid hub URL %q: %w", raw, err)
 	}
 	if u.User != nil {
 		return nil, false, fmt.Errorf("connect URL must not include userinfo credentials")

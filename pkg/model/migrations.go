@@ -945,7 +945,18 @@ var Migrations = []Migration{
 		Up: migrateCanonicalGrants,
 	},
 	{
-		Version: 133,
+		Version:     133,
+		Description: "add repository skill discovery configuration columns (skills on grain_config, repo_config, task and template, and declared_skills on repo_config)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `declared_skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `template` ADD COLUMN `skills` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 134,
 		Description: "add schedule.overlap_group and scheduled_firing_skip.held_by_schedule_id, " +
 			"an overlap group shared by one repository's schedules (grain/task-3895)",
 		Statements: []string{

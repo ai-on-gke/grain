@@ -46,7 +46,7 @@ const (
 
 // ErrOutOfScope is returned when a compute, IAM, SQL, storage, or secret operation
 // targets a resource outside the registry's configured project, zone, prefix, or label scope.
-var ErrOutOfScope = errors.New("gcp provider: resource is outside configured registry scope")
+var ErrOutOfScope = errors.New("gcp provider: resource is outside configured hub scope")
 
 // ComputeOption configures a GCECompute provider.
 type ComputeOption func(*GCECompute)
@@ -599,7 +599,7 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec hub.InstanceSpec) 
 			// a minute or so. Retry like an unpropagated account, but say what is missing
 			// in case it never arrives.
 			return nil, &serviceAccountNotReadyError{err: fmt.Errorf(
-				"gcp compute: inserting instance %s in %s: %w (the registry needs iam.serviceAccounts.actAs on %s: with compute.grant_self_act_as on it grants itself %s there, and a new binding can take a minute to apply)",
+				"gcp compute: inserting instance %s in %s: %w (the hub needs iam.serviceAccounts.actAs on %s: with compute.grant_self_act_as on it grants itself %s there, and a new binding can take a minute to apply)",
 				vmName, zone, err, spec.ServiceAccount, "roles/iam.serviceAccountUser")}
 		}
 		return nil, fmt.Errorf("gcp compute: inserting instance %s in %s: %w", vmName, zone, err)

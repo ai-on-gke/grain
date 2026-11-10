@@ -43,17 +43,31 @@ function keyBetween(lower, upper) {
   return null;
 }
 
-export function childMove(children, key, beforeKey, row) {
+export function childDestinationIndex(children, key, beforeKey) {
   const at = children.findIndex((child) => child.key === key);
-  if (at < 0) return null;
+  if (at < 0) return -1;
   const before = beforeKey ?? null;
-  if (sameChildPlace(children, key, before)) return null;
+  if (sameChildPlace(children, key, before)) return -1;
   const rest = children.filter((child) => child.key !== key);
-  let to =
-    before === null
-      ? rest.length
-      : rest.findIndex((child) => child.key === before);
-  if (to < 0) to = rest.length;
+  if (before === null) return rest.length;
+  const to = rest.findIndex((child) => child.key === before);
+  return to < 0 ? rest.length : to;
+}
+
+export function childOrderSignature(children) {
+  return (children || [])
+    .map(
+      (child) =>
+        `${child.orderKey ?? 0}:${child.stored ? JSON.stringify(child.stored) : child.key}`,
+    )
+    .join("\u0000");
+}
+
+export function childMove(children, key, beforeKey, row) {
+  const to = childDestinationIndex(children, key, beforeKey);
+  if (to < 0) return null;
+  const at = children.findIndex((child) => child.key === key);
+  const rest = children.filter((child) => child.key !== key);
   const next = [...rest.slice(0, to), children[at], ...rest.slice(to)];
   const landing = keyBetween(
     to > 0 ? rest[to - 1].orderKey : null,

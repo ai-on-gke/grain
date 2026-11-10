@@ -114,7 +114,7 @@ func TestExactlyTwoSettingsAreDeclarable(t *testing.T) {
 			declarable = append(declarable, key)
 		}
 	}
-	want := []string{"prompt-extension", "setup-command", "port-branches", "port-types"}
+	want := []string{"prompt-extension", "setup-command", "port-branches", "port-types", "skills"}
 	if !reflect.DeepEqual(declarable, want) {
 		t.Errorf("a repository may declare %v, want %v -- if that is deliberate, the rule in "+
 			"declschema's doc comment is what has to justify it", declarable, want)

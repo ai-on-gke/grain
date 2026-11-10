@@ -179,6 +179,9 @@ const (
 	shapeValues
 	// shapeItems is suite_item: the templates a suite runs, in order.
 	shapeItems
+	// shapeSkills is a JSON-encoded model.SkillsConfig column, written as
+	// a mapping {enabled, folders} when canonical and verbatim otherwise.
+	shapeSkills
 )
 
 // declFieldShape is one field of a document.
@@ -201,6 +204,7 @@ var booleanKeys = map[string]bool{
 	"require-approval":       true,
 	"interactive":            true,
 	"keep-running":           true,
+	"grain-ci":               true,
 }
 
 // declKinds is the three of them, built from pkg/declschema so the keys,
@@ -269,6 +273,9 @@ func shapeOf(f declschema.Field, key string) (shape, error) {
 	case len(f.Columns) == 1:
 		if booleanKeys[key] {
 			return shapeBool, nil
+		}
+		if key == "skills" {
+			return shapeSkills, nil
 		}
 		return shapeScalar, nil
 	case len(f.Columns) == 2 && f.Columns[0] == "target_owner":
@@ -802,7 +809,7 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 // column. Only a one-column field can be missing that way: the cadence,
 // target and change target are older than any schema this build migrates.
 func hasColumn(f declFieldShape, row map[string]any) bool {
-	if f.shape != shapeBool && f.shape != shapeScalar {
+	if f.shape != shapeBool && f.shape != shapeScalar && f.shape != shapeSkills {
 		return true
 	}
 	_, ok := row[f.columns[0]]
@@ -864,9 +871,35 @@ func columnNode(f declFieldShape, row map[string]any) (string, *yaml.Node, error
 			return f.key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: boolWord(n == 1)}, nil
 		}
 		return f.key, valueNode(v), nil
+	case shapeSkills:
+		v := row[f.columns[0]]
+		text, ok := textOf(v)
+		if !ok || text == "" {
+			return f.key, valueNode(v), nil
+		}
+		sc := model.DecodeSkillsConfig(text)
+		if sc != nil && model.EncodeSkillsConfig(sc) == text {
+			out := &yaml.Node{Kind: yaml.MappingNode}
+			if sc.Enabled != nil {
+				out.Content = append(out.Content, key("enabled"), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: boolWord(*sc.Enabled)})
+			}
+			if sc.Folders != nil {
+				seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+				for _, folder := range *sc.Folders {
+					seq.Content = append(seq.Content, str(folder))
+				}
+				out.Content = append(out.Content, key("folders"), seq)
+			}
+			return f.key, out, nil
+		}
+		return f.key, valueNode(v), nil
 	default:
 		return f.key, valueNode(row[f.columns[0]]), nil
 	}
+}
+
+func isBase64Mapping(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.MappingNode && len(node.Content) == 2 && node.Content[0].Value == "base64"
 }
 
 func boolWord(b bool) string {
@@ -1271,6 +1304,25 @@ func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[s
 			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
 		}
 		row[f.columns[0]] = fromBool(v)
+		return nil
+	case shapeSkills:
+		if node.Kind == yaml.MappingNode && !isBase64Mapping(node) {
+			var sc model.SkillsConfig
+			if err := node.Decode(&sc); err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+			}
+			norm, err := model.NormalizeSkillsConfig(&sc)
+			if err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+			}
+			row[f.columns[0]] = model.EncodeSkillsConfig(norm)
+			return nil
+		}
+		v, err := nodeValue(node)
+		if err != nil {
+			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+		}
+		row[f.columns[0]] = v
 		return nil
 	default:
 		if f.key == "overlap" && node.Kind == yaml.MappingNode {

@@ -313,7 +313,7 @@ func WriteProvisioningState(w http.ResponseWriter, r *http.Request, hubHost stri
 		}
 		body.WriteString(`</dl>`)
 		if detailURL != "" {
-			fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in registry</a></div>`, html.EscapeString(detailURL))
+			fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in hub</a></div>`, html.EscapeString(detailURL))
 		}
 		writeHTMLStatePage(w, http.StatusServiceUnavailable, "503 "+strings.ToUpper(state), fmt.Sprintf("%s is %s", entry.Name, state), body.String())
 		return
@@ -349,7 +349,7 @@ func WriteStoppingState(w http.ResponseWriter, r *http.Request, hubHost string, 
 		}
 		body.WriteString(`</dl>`)
 		if detailURL != "" {
-			fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in registry</a></div>`, html.EscapeString(detailURL))
+			fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in hub</a></div>`, html.EscapeString(detailURL))
 		}
 		writeHTMLStatePage(w, http.StatusServiceUnavailable, "503 STOPPING", fmt.Sprintf("%s is stopping", entry.Name), body.String())
 		return
@@ -386,7 +386,7 @@ func WriteStoppedOrWakingState(w http.ResponseWriter, r *http.Request, hubHost s
 			}
 			body.WriteString(`</dl>`)
 			if detailURL != "" {
-				fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in registry</a></div>`, html.EscapeString(detailURL))
+				fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in hub</a></div>`, html.EscapeString(detailURL))
 			}
 			writeHTMLStatePage(w, http.StatusServiceUnavailable, "503 WAKING", fmt.Sprintf("%s is waking up", entry.Name), body.String())
 			return
@@ -415,7 +415,7 @@ func WriteStoppedOrWakingState(w http.ResponseWriter, r *http.Request, hubHost s
 		}
 		body.WriteString(`</dl>`)
 		if detailURL != "" {
-			fmt.Fprintf(&body, `<div class="actions"><a class="btn" href="%s">Start in registry</a></div>`, html.EscapeString(detailURL))
+			fmt.Fprintf(&body, `<div class="actions"><a class="btn" href="%s">Start in hub</a></div>`, html.EscapeString(detailURL))
 		}
 		writeHTMLStatePage(w, http.StatusServiceUnavailable, "503 STOPPED", fmt.Sprintf("%s is stopped", entry.Name), body.String())
 		return

@@ -135,13 +135,17 @@
   --border: #292b31;
   --border-strong: #3a3d44;
 
-  --text: #e9e7e1;
+  --text: #f1efe9;
   /* The same rule as the light palette's: tertiary holds 4.5:1 on every
-     ground, the lightest here being --surface-active (5.0:1 there, 5.8:1
-     on --surface), and secondary rose with it to keep the step between
-     the two: text ~1.7x secondary ~1.5x tertiary. */
-  --text-secondary: #b8b5ad;
-  --text-tertiary: #959189;
+     ground. The lightest here is not one of these tokens but the task
+     pane (Overlay.jsx's Dialog): MUI paints a dark Paper's elevation as a
+     white background-image over --surface, which at a Dialog's 24 comes
+     out #3a3c3f. Tertiary is 4.7:1 there (7.3:1 on --surface), and
+     secondary and body text rose with it to keep the steps between the
+     three: text ~1.5x secondary ~1.3x tertiary. ui/e2e/dark-contrast.spec.js
+     reads the rendered pixels to hold it. */
+  --text-secondary: #c6c2ba;
+  --text-tertiary: #aca8a0;
   --text-placeholder: #57544e;
 
   /* The grain colour, on the two grounds the mark was drawn against. */
@@ -5399,6 +5403,11 @@ a.committed-context-sha:hover {
 /* A comment a /tasks/<id>#comment=<id> link scrolled to
    (CommentDeepLink.jsx), marked for as long as HIGHLIGHT_MS and fading
    out over it. */
+/* The linked comment is focused as well (tabindex -1, so only a script
+   focuses it), and the highlight is what marks it: no outline on top. */
+[data-comment-id][tabindex="-1"]:focus {
+  outline: none;
+}
 .comment-highlight {
   border-radius: 6px;
   animation: comment-highlight 2.5s ease-out;
@@ -5406,7 +5415,10 @@ a.committed-context-sha:hover {
 @keyframes comment-highlight {
   0%,
   40% {
-    background: color-mix(in srgb, var(--accent, #6366f1) 18%, transparent);
+    /* 8%, not more: the comment's own text has to keep 4.5:1 against
+       it in both themes (18% left dark-theme body text at 3.97:1). The
+       ring is what marks the comment. */
+    background: color-mix(in srgb, var(--accent, #6366f1) 8%, transparent);
     box-shadow: 0 0 0 2px var(--accent, #6366f1);
   }
   100% {

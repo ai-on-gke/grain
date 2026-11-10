@@ -39,6 +39,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -949,14 +950,38 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	// behind a seeded run to ask. A guest's own home is what that
 	// question answers with on a real deployment, so the demo's prompt
 	// pane shows the paragraph a real run gets rather than dropping it.
-	if err := store.SetRunPrompt(ctx, "demo-run-"+running.ID,
-		orchestrator.BuildPrompt(*seeded, orchestrator.CheckoutDir, "/home/grain", true,
-			orchestrator.DefaultMaxRunRuntime,
-			// A first attempt: this seeded run has no earlier one to
-			// carry an outcome, and nothing has been said on the task,
-			// so orchestrator.History{} is what a real dispatch of it
-			// would have assembled too.
-			orchestrator.History{Attempt: 1}, nil)); err != nil {
+	seededPrompt := orchestrator.BuildPrompt(*seeded, orchestrator.CheckoutDir, "/home/grain", true,
+		orchestrator.DefaultMaxRunRuntime,
+		// A first attempt: this seeded run has no earlier one to
+		// carry an outcome, and nothing has been said on the task,
+		// so orchestrator.History{} is what a real dispatch of it
+		// would have assembled too.
+		orchestrator.History{Attempt: 1}, nil)
+	var seededRepo string
+	if seeded.Target != nil {
+		seededRepo = seeded.Target.String()
+	}
+	skillsSection, _ := intree.FormatSkillsIndex(
+		[]intree.SkillIndexEntry{{
+			Name:        "bootstrap",
+			Path:        "/home/debian/.skills/bootstrap/SKILL.md",
+			Source:      "capability",
+			Description: "Built-in setup and migration playbooks",
+		}},
+		[]intree.SkillIndexEntry{{
+			Name:        "lint-and-test",
+			Path:        "/home/grain/work/.claude/skills/lint-and-test/SKILL.md",
+			Source:      "repo: .claude/skills/lint-and-test",
+			RepoRelDir:  ".claude/skills/lint-and-test",
+			Description: "Run package lints and targeted unit tests before pushing",
+		}},
+		seededRepo,
+		intree.MaxSkillsIndexBytes,
+	)
+	if skillsSection != "" {
+		seededPrompt += "\n\n" + skillsSection
+	}
+	if err := store.SetRunPrompt(ctx, "demo-run-"+running.ID, seededPrompt); err != nil {
 		return fmt.Errorf("seeding a running task's prompt: %w", err)
 	}
 	// ... and the transcript that run has written so far, which is what
@@ -1680,6 +1705,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	if err := seedDemoTokenUsage(ctx, store, now); err != nil {
+		return err
+	}
+	if err := seedDemoDeclarations(ctx, store, now); err != nil {
 		return err
 	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {

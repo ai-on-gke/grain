@@ -1,0 +1,48 @@
+# fake agy's own report (seq task mode input output thinking cache_read; seq 1-2 predate the task= column; sq and pg shared this log until pg restarted with WALK_DIR=pgw)
+1 67243 ok 11000 210 50 4000
+2 67251 ok 12000 220 50 4000
+3 task=3 ok 13000 230 50 4000
+4 task=3 ok 14000 240 50 4000
+5 task=2 ok 15000 250 50 4000
+6 task=2 ok 16000 260 50 4000
+8 task=3 ok 18000 280 50 4000
+9 task=3 ok 19000 290 50 4000
+10 task=5 slow:15 20000 300 50 4000
+12 task=5 slow:15 22000 320 50 4000
+13 task=5 slow:15 23000 330 50 4000
+14 task=5 slow:15 24000 340 50 4000
+17 task=6 refuse 0 0 0 0
+# SQLite task_run left join task_run_usage
+2-1|setup-failed|||||
+2-2|setup-failed|||||
+2-3|failed|15000|530|8000|2|64
+3-1|failed|19000|570|8000|2|41
+4-1|failed|||||
+4-2|failed|||||
+5-1|failed|35000|730|8000|2|30038
+# PostgreSQL
+2-1|failed|23000|610|8000|2|101
+3-1|failed|29000|670|8000|2|101
+4-1|failed|||||
+4-2|failed|||||
+4-3|failed|||||
+4-4|failed|||||
+4-5|failed|||||
+5-1|failed|38000|760|8000|2|30093
+# GET /api/tasks/{id} usage (SQLite)
+{"id":"2","usage":{"runs":2,"inputTokens":15222,"outputTokens":532,"cacheReadTokens":8000,"cacheWriteTokens":0,"billable":15754},"attempts":[{"number":1,"outcome":"setup-failed","usage":null},{"number":2,"outcome":"setup-failed","usage":null},{"number":3,"outcome":"failed","usage":{"inputTokens":15000,"outputTokens":530,"cacheReadTokens":8000,"turns":2}}]}
+{"id":"3","usage":{"runs":1,"inputTokens":19000,"outputTokens":570,"cacheReadTokens":8000,"cacheWriteTokens":0,"billable":19570},"attempts":[{"number":1,"outcome":"failed","usage":{"inputTokens":19000,"outputTokens":570,"cacheReadTokens":8000,"turns":2}}]}
+{"id":"4","usage":null,"attempts":[{"number":1,"outcome":"failed","usage":null},{"number":2,"outcome":"failed","usage":null}]}
+{"id":"5","usage":{"runs":1,"inputTokens":35000,"outputTokens":730,"cacheReadTokens":8000,"cacheWriteTokens":0,"billable":35730},"attempts":[{"number":1,"outcome":"failed","usage":{"inputTokens":35000,"outputTokens":730,"cacheReadTokens":8000,"turns":2}}]}
+# grain usage (SQLite)
+mode: advisory   max_workers: 4   effective worker cap: 4   sustainable: ≈0
+deployment: 3 runs, 71k billable (69k in, 1.8k out, 24k cache read, 0 cache write), 71k/h now, since 2026-11-10T07:24:59Z
+
+CONNECTION               MODEL                       USED     LIMIT      LEFT RESET               BURN/H SUSTAINS
+Walk agy                 (all models)                 71k      5.0M      4.9M 11-10 12:24 UTC        71k 0.1
+Walk agy                 fake-model                   71k      71k~    paused 11-10 08:28 UTC        71k 0
+
+(~ marks a limit learned from the usage a window had consumed when its provider refused it)
+advisory: at this rate Walk agy budget runs out in ~3d; sustainable ≈ 0.1 workers
+advisory: the remaining budget sustains ≈ 0 workers until the next reset (max_workers is 4)
+warning: default model fake-model on Walk agy is paused until 08:28 UTC; work falls back to nothing -- it is the last model on the default list

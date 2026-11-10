@@ -17,6 +17,7 @@ package usage
 import (
 	"context"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -129,7 +130,8 @@ func LearnFromPause(ctx context.Context, store *model.Store, pause model.UsageLi
 }
 
 // Cap is the automatic worker cap a dispatch cycle applies: the
-// Report's EffectiveWorkers, recomputed at most every refresh, and
+// Report's EffectiveWorkers, recomputed at most every refresh -- or at
+// once when the operator's usage settings changed since -- and
 // maxWorkers unchanged whenever the mode is not auto or anything fails
 // -- an estimate never blocks dispatch it cannot compute. It also prunes
 // usage rows past their retention, at most hourly.
@@ -140,6 +142,7 @@ type Cap struct {
 	mu         sync.Mutex
 	computedAt time.Time
 	forMax     int
+	forSetting model.UsageSettings
 	effective  int
 	prunedAt   time.Time
 }
@@ -156,17 +159,25 @@ func (c *Cap) Workers(ctx context.Context, now time.Time, maxWorkers int) int {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Read every cycle (one row): a mode, floor or budget the operator
+	// just set binds the next dispatch, not the one after the cached
+	// estimate expires -- a cap computed under "advisory" or under no
+	// budget kept dispatching at max_workers for up to refresh after
+	// `grain usage -mode auto -budget ...`.
+	settings, err := c.Store.UsageSettings(ctx)
+	if err != nil {
+		log.Printf("usage: reading usage settings: %v -- dispatching under max_workers", err)
+		return maxWorkers
+	}
 	if now.Sub(c.prunedAt) >= time.Hour {
 		c.prunedAt = now
-		if settings, err := c.Store.UsageSettings(ctx); err == nil {
-			if n, err := c.Store.PruneRunUsage(ctx, now.Add(-settings.Retention())); err != nil {
-				log.Printf("usage: pruning run usage: %v", err)
-			} else if n > 0 {
-				log.Printf("usage: pruned %d run usage row(s) past retention", n)
-			}
+		if n, err := c.Store.PruneRunUsage(ctx, now.Add(-settings.Retention())); err != nil {
+			log.Printf("usage: pruning run usage: %v", err)
+		} else if n > 0 {
+			log.Printf("usage: pruned %d run usage row(s) past retention", n)
 		}
 	}
-	if c.forMax == maxWorkers && !c.computedAt.IsZero() && now.Sub(c.computedAt) < refresh && now.After(c.computedAt) {
+	if c.forMax == maxWorkers && reflect.DeepEqual(c.forSetting, settings) && !c.computedAt.IsZero() && now.Sub(c.computedAt) < refresh && now.After(c.computedAt) {
 		return min(c.effective, maxWorkers)
 	}
 	rep, err := Load(ctx, c.Store, now, maxWorkers)
@@ -174,10 +185,14 @@ func (c *Cap) Workers(ctx context.Context, now time.Time, maxWorkers int) int {
 		log.Printf("usage: computing the automatic worker cap: %v -- dispatching under max_workers", err)
 		return maxWorkers
 	}
-	if rep.EffectiveWorkers != c.effective && rep.Mode == model.UsageModeAuto {
-		log.Printf("usage: automatic worker cap %d of max_workers %d (sustainable %v)", rep.EffectiveWorkers, maxWorkers, sustainableText(rep))
+	if rep.EffectiveWorkers != c.effective {
+		if rep.Mode == model.UsageModeAuto {
+			log.Printf("usage: automatic worker cap %d of max_workers %d (sustainable %v)", rep.EffectiveWorkers, maxWorkers, sustainableText(rep))
+		} else if !c.computedAt.IsZero() && c.effective < c.forMax {
+			log.Printf("usage: mode %s: the automatic worker cap is lifted, dispatching under max_workers %d", rep.Mode, maxWorkers)
+		}
 	}
-	c.computedAt, c.forMax, c.effective = now, maxWorkers, rep.EffectiveWorkers
+	c.computedAt, c.forMax, c.forSetting, c.effective = now, maxWorkers, settings, rep.EffectiveWorkers
 	return min(rep.EffectiveWorkers, maxWorkers)
 }
 

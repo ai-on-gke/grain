@@ -14,11 +14,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Alert, Snackbar } from "@mui/material";
-import { commentIdFromHash } from "../commentLinks.js";
+import { commentIdFromHash, malformedCommentHash } from "../commentLinks.js";
 
 // HIGHLIGHT_MS is how long a linked comment stays marked once it has
 // been scrolled to (.comment-highlight in style.css fades over the same).
-export const HIGHLIGHT_MS = 2500;
+const HIGHLIGHT_MS = 2500;
 
 // How long to keep looking for a comment the detail says exists but the
 // page has not drawn yet: the chat window and the timeline mount after
@@ -38,14 +38,14 @@ function shown(el) {
 // interactive task draws each comment twice: in its chat and in the
 // history folded up beneath it.
 // id is digits only (commentIdFromHash), so it needs no escaping.
-export function findCommentElement(root, id) {
+function findCommentElement(root, id) {
   const all = Array.from(root.querySelectorAll(`[data-comment-id="${id}"]`));
   return all.find(shown) || all[0] || null;
 }
 
 // revealComment opens every closed <details> el is folded inside, so a
 // comment in a collapsed group can be scrolled to.
-export function revealComment(el) {
+function revealComment(el) {
   for (
     let d = el.closest("details:not([open])");
     d;
@@ -58,15 +58,18 @@ export function revealComment(el) {
 // linkedComment is the comment the address links to on task taskId, as
 // a fresh target, or null. A /tasks/<id> address naming some other task
 // is that task's link, not this one's: following it from here is a
-// navigation to that task, whose own pane looks for the comment.
-export function linkedComment(taskId) {
-  const id = commentIdFromHash(window.location.hash);
-  if (!id) return null;
+// navigation to that task, whose own pane looks for the comment. A
+// #comment= naming no comment is a target with an empty id, which is
+// said rather than ignored.
+function linkedComment(taskId) {
+  const hash = window.location.hash;
+  const id = commentIdFromHash(hash);
+  if (!id && !malformedCommentHash(hash)) return null;
   const m = /^\/tasks\/([^/]+)/.exec(window.location.pathname);
   if (m && taskId != null && decodeURIComponent(m[1]) !== String(taskId)) {
     return null;
   }
-  return { id };
+  return { id, hash: hash.slice(0, 40) };
 }
 
 // useCommentDeepLink follows the #comment=<id> on the address
@@ -81,7 +84,7 @@ export function linkedComment(taskId) {
 // comments), so whether a comment belongs to the task is answered off it
 // rather than off the DOM: a comment far back in a long conversation is
 // in the detail however the page draws it.
-export function useCommentDeepLink(t) {
+function useCommentDeepLink(t) {
   const taskId = useRef(t?.id);
   taskId.current = t?.id;
   // An object rather than the bare id, so the same link followed twice
@@ -105,6 +108,11 @@ export function useCommentDeepLink(t) {
   const comments = t?.comments;
   useEffect(() => {
     if (!target || !Array.isArray(comments)) return undefined;
+    if (!target.id) {
+      setNotice(`This link's ${target.hash} does not name a comment.`);
+      setTarget(null);
+      return undefined;
+    }
     if (!comments.some((c) => String(c.id) === target.id)) {
       setNotice(`Comment ${target.id} is not in this task's conversation.`);
       setTarget(null);
@@ -126,9 +134,17 @@ export function useCommentDeepLink(t) {
       }
       revealComment(el);
       setTarget(null);
+      // A notice left by an earlier link is about that one, not this.
+      setNotice("");
       // A frame for a <details> just opened to lay its contents out.
       requestAnimationFrame(() => {
         el.scrollIntoView?.({ block: "center" });
+        // Focus goes to the comment too, as it does to a fragment's
+        // target on a page the browser loads itself: a screen reader
+        // reads the comment out, and Tab carries on from it (to its own
+        // Copy link) rather than from wherever focus was.
+        if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+        el.focus?.({ preventScroll: true });
         el.classList.remove("comment-highlight");
         // Restarts the fade on a comment linked to twice in a row.
         void el.offsetWidth;

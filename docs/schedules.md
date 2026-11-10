@@ -1491,7 +1491,7 @@ same template, such as experimental/grain's release sync and its
 `sync-oss-release-safety-net`, could run concurrently, and that
 repository had to add a template step to notice.
 
-`Schedule.OverlapGroup` (`schedule.overlap_group`, schema version 133),
+`Schedule.OverlapGroup` (`schedule.overlap_group`, schema version 134),
 written `overlap: {skip: true, group: <name>}` or `overlap-group: <name>`
 in a schedule file (the plain `overlap: skip|allow` still parses) and
 `overlap-group:` on a settings row, widens the question to every schedule
@@ -1560,10 +1560,11 @@ runs grain writes are a pull request's and the release train's gates
 check and posts no status. Pull requests are still judged by GitHub
 Actions and no other `.grain/workflows` run there. `docs/declarations.md`
 ("Running on grain CI in a `ci_mode: github` repository") has the file
-format and the shape of a "script on a cadence" workflow: a job holding
-`api:tasks:read` and `api:tasks:from-template` can check whether there is
-work and file the repository's template itself, and exit 0 when there is
-none.
+format and the shape of a "script on a cadence" workflow: on repositories
+the deployment offers grain's API to in CI (`ai-on-gke/grain` by default;
+`docs/agent-api.md`), a job holding `api:tasks:read` and
+`api:tasks:from-template` can check whether there is work and file the
+repository's template itself, and exit 0 when there is none.
 
 ## Update: a suppressed firing says so on the schedules page (grain/task-544)
 

@@ -1,0 +1,22 @@
+=== no GitHub Release and no release assets (PROMOTE_VERSION=)
+    log: curl: (22) The requested URL returned error: 404
+    log: curl: (22) The requested URL returned error: 404
+    log: promote: GitHub Release v9.9.0 does not exist and sha-bc570d4e8978 has no release assets to create it; skipping grain CLI build
+    output: version=v9.9.0
+    output: build=false
+=== release assets only (sha-<commit> images.json, no GitHub Release yet) (PROMOTE_VERSION=)
+    log: curl: (22) The requested URL returned error: 404
+    output: version=v9.9.0
+    output: build=true
+=== a full GitHub Release without its CLI (PROMOTE_VERSION=)
+    log: curl: (22) The requested URL returned error: 404
+    output: version=v9.9.0
+    output: build=true
+=== a release already carrying checksums.txt (PROMOTE_VERSION=)
+    log: promote: v9.9.0 already carries the grain CLI
+    output: version=v9.9.0
+    output: build=false
+=== asked for by name with nothing published (PROMOTE_VERSION=v9.9.0)
+    log: curl: (22) The requested URL returned error: 404
+    output: version=v9.9.0
+    output: build=true

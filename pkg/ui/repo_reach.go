@@ -365,3 +365,50 @@ func (c *Client) ReachableRepos(ctx context.Context, team string) (ReachableRepo
 	out.Available = true
 	return out, nil
 }
+
+// reposReadable reports which repositories r's caller holds repos:read on, and
+// whether that grant is unrestricted across every repository.
+func (s *Server) reposReadable(r *http.Request) (func(string) bool, bool) {
+	ctx := r.Context()
+	call, isAgent := agentCallFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	if role != nil && role.Full {
+		role = nil
+	}
+	if !isAgent && role == nil {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			return func(string) bool { return false }, false
+		}
+		return func(string) bool { return true }, true
+	}
+	if isAgent {
+		if call.grants.Allows("repos:read", "") {
+			return func(string) bool { return true }, true
+		}
+		return func(repo string) bool { return call.grants.Allows("repos:read", repo) }, false
+	}
+	if role.allows("repos:read", "") {
+		return func(string) bool { return true }, true
+	}
+	return func(repo string) bool { return role.allows("repos:read", repo) }, false
+}
+
+func (s *Server) reachableReposForRequest(r *http.Request, filter ReachableReposFilter) (ReachableReposResult, error) {
+	res, err := s.tasks.ReachableRepos(r.Context(), model.DefaultTeamID)
+	if err != nil {
+		return res, err
+	}
+	if readable, unrestricted := s.reposReadable(r); !unrestricted {
+		res.Repos = filterList(res.Repos, func(rr gitproxy.ReachableRepo) bool {
+			return readable(rr.Repo)
+		})
+		res.Connections = []ReachConnection{}
+		res.Errors = []ConnectionReachError{}
+	}
+	defaultHost := model.DefaultGitHost
+	if s.tasks.Config.GitReach != nil && s.tasks.Config.GitReach.Host != "" {
+		defaultHost = s.tasks.Config.GitReach.Host
+	}
+	filter.narrow(&res, defaultHost)
+	return res, nil
+}

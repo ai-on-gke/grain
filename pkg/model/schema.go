@@ -630,12 +630,15 @@ import "strconv"
 // `repo-write:` to its canonical `https://grain.dev/capabilities/api#…` /
 // `…/repo#read|#write` reference, slice 4 of
 // design/design/unified-grants.design.md (canonical_grant_migration.go).
-// 133 adds `schedule`.`overlap_group` (model.Schedule.OverlapGroup) and
+// 133 adds repository skill discovery configuration (`skills` on
+// `grain_config`, `repo_config`, `task` and `template`, and `declared_skills`
+// on `repo_config`).
+// 134 adds `schedule`.`overlap_group` (model.Schedule.OverlapGroup) and
 // `scheduled_firing_skip`.`held_by_schedule_id`
 // (model.ScheduleSkip.HeldByScheduleID): an overlap group shared by the
 // schedules of one repository, and the schedule that held a skipped
 // firing when it was another one in that group (grain/task-3895).
-const SchemaVersion = 133
+const SchemaVersion = 134
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -1066,6 +1069,7 @@ var Tables = []string{
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
   ` + "`admission`" + `             TEXT     NOT NULL DEFAULT 'standard',
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT 'unattended',
+  ` + "`skills`" + `                TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -2188,6 +2192,7 @@ var Tables = []string{
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
   ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`skills`" + `             TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2676,6 +2681,7 @@ var Tables = []string{
   ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
   ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
+  ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3432,6 +3438,8 @@ var Tables = []string{
   ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   ` + "`default_admission`" + `        TEXT NOT NULL DEFAULT '',
   ` + "`default_hosting`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`skills`" + `                   TEXT NOT NULL DEFAULT '',
+  ` + "`declared_skills`" + `          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3508,6 +3516,35 @@ var Tables = []string{
   ` + "`path`" + `      TEXT NOT NULL,
   ` + "`commit`" + `    TEXT NOT NULL DEFAULT '',
   ` + "`synced_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
+	// A person's acceptance of what a repository's own declaration asks
+	// for that only a person may grant (model.DeclarationAcceptance, task
+	// 3971): one row per declared schedule, template, suite or CI job that
+	// has asked for any, with what it last asked for and what a person
+	// last accepted, who, holding which scopes, at which commit. Lists are
+	// JSON because nothing queries inside them.
+	//
+	// Grain's own record rather than settings (staterepo.SettingsTables):
+	// it is a person's grant, made through grain by somebody holding the
+	// scope, and importing one live from a branch of the state repository
+	// would let whoever can write there accept on a person's behalf. A
+	// restore brings it back with the rest of grain's record. Needs no
+	// SchemaVersion bump, for repo_workflow's own reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`declaration_acceptance`" + ` (
+  ` + "`id`" + `               TEXT     NOT NULL,
+  ` + "`kind`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`name`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`requested`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_commit`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_at`" + `     DATETIME NOT NULL,
+  ` + "`accepted`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_by`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_scopes`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_commit`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_at`" + `      DATETIME NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

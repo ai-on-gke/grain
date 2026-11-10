@@ -72,7 +72,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  grain-hub [serve] -config <path>")
-	fmt.Fprintln(w, "  grain-hub validate -config <path>")
+	fmt.Fprintln(w, "  grain-hub validate [-config <path>]")
 	fmt.Fprintln(w, "  grain-hub version [--json]")
 }
 
@@ -127,7 +127,7 @@ func runVersion(args []string, stdout, stderr io.Writer) error {
 func runValidate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grain-hub validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", "", "path to the hub YAML config file")
+	cfgPath := fs.String("config", "", "path to the hub YAML config file (or $GRAIN_HUB_CONFIG)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -136,7 +136,10 @@ func runValidate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		path = strings.TrimSpace(fs.Arg(0))
 	}
 	if path == "" {
-		return errors.New("validate requires -config <path>")
+		path = strings.TrimSpace(hubenv.Get("GRAIN_HUB_CONFIG"))
+	}
+	if path == "" {
+		return errors.New("-config <path> (or GRAIN_HUB_CONFIG) is required")
 	}
 	rawBytes, err := os.ReadFile(path)
 	if err != nil {

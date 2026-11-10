@@ -28,7 +28,7 @@ import { formatDateTime } from "../time.js";
 // has it configured now -- the saved configuration, not an unsaved form
 // -- and says the message it created, or why Chat refused it. Spaces and
 // apps themselves are added through Configure.
-export const GCHAT_TEST_TOOL = "test_post";
+const GCHAT_TEST_TOOL = "test_post";
 
 // isGChatServer is the built-in gchat server, or any server whose attach
 // status advertises gchat's test_post control-plane tool -- an

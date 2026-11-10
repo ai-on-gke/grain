@@ -65,7 +65,7 @@ custom-fields:                     # optional; this deployment's declared fields
 
 ### `.grain/settings.yml`
 
-A repository can declare four of its own settings, in `.grain/settings.yml`
+A repository can declare five of its own settings, in `.grain/settings.yml`
 (or `.grain/config.yml`):
 
 ```yaml
@@ -74,6 +74,9 @@ setup-command: "make init"         # setup shell, run after the operator's
 port-branches: [main, candidate]   # paired branches; unioned with the operator's
 port-types:                        # per direction, the commit types that are ported
   main->candidate: [fix, revert]
+skills:                            # repo skill folders scanned on base branch at run start
+  folders: [".claude/skills", ".gemini/skills"]
+  enabled: true
 ```
 
 `port-branches` names the branches that are kept in step: when the merge
@@ -95,8 +98,18 @@ for a pair the repository declared itself in `port-branches`. On a pair
 the operator configured, a declared list only adds types to an
 operator's own `port_types`.
 
-Four, out of the eighteen fields of a repository's settings row, and which
-four is a decision with a rule behind it (grain/task-340). The rule is
+`skills` selects which folders relative to the repository root Grain scans one
+level deep for `*/SKILL.md` on the base branch at run start (defaulting to
+`.claude/skills`, `.agents/skills`, `.codex/skills`, `.gemini/skills`, and
+`skills`; `folders: []` or `enabled: false` disables discovery). Each discovered
+skill's name, description and sandbox path are merged into the run's prompt
+index inside `<repo-skills>` without copying files or inlining `SKILL.md`
+bodies; a template in `.grain/templates/*.yml` may also set `skills:` to
+override the folder list for tasks filed from that template
+([capabilities.md](capabilities.md#repository-skill-discovery-skillmd-folders)).
+
+Five, out of the settings row's fields, and which
+five is a decision with a rule behind it (grain/task-340). The rule is
 **authority, not behaviour**:
 
 > A setting is declarable when it changes what a repository's own work
@@ -1167,10 +1180,11 @@ repository: a trusted schedule run of the workflow on `base:` (or the
 default branch), no task while it runs, and a review task only when the run
 does not pass (or every run, with `review: always`). That makes it the way
 to run a repository script on a cadence with no agent: a job that runs the
-script, holding whatever `api:` grants it needs in its `capabilities:`
-(`api:tasks:read` to look at what is open, `api:tasks:from-template` to file
-one of the repository's own templates when there is work to do --
-`docs/agent-api.md`), exits 0 on a quiet night and costs no agent run.
+script exits 0 on a quiet night and costs no agent run (and, on repositories
+the deployment offers grain's API to in CI -- `ai-on-gke/grain` by default,
+see `docs/agent-api.md` § "CI jobs" -- can hold `api:tasks:read` to look at
+what is open and `api:tasks:from-template` to file one of the repository's
+own templates when there is work to do).
 
 The exception is this schedule's and nothing else's. The run is a schedule
 event, so it is no pull request's check and posts no commit status; pull

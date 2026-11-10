@@ -1601,4 +1601,37 @@ func TestStartTaskCIRunOptRefusesFullSuiteWhenRepoUsesGitHubCIMode(t *testing.T)
 	if len(runner.started) != 0 {
 		t.Fatalf("started %d Grain CI runs on CIModeGitHub repo, want 0", len(runner.started))
 	}
+
+	// Narrowed (run-job) and recheck (retrigger) calls must also be refused up
+	// front on CIModeGitHub/CIModeNone, even when the task holds an explicit
+	// grain#ci grant or stale repo_workflow rows exist.
+	if err := store.PutTask(ctx, model.Task{
+		ID:     "22",
+		Branch: "grain/task-22",
+		Intent: model.IntentImplement,
+		Title:  "task with explicit grain-ci grant",
+		Target: &repo,
+		Base:   "main",
+		Grants: []model.Grant{{Capability: model.GrainCIRef, Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoWorkflows(ctx, repo, []model.RepoWorkflow{{
+		Repo: repo, Path: ".grain/workflows/check.yml", Text: "name: check\n",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{"taskId":"22","workflow":".grain/workflows/check.yml","jobs":["check"]}`,
+		`{"taskId":"22","recheck":true}`,
+		`{"repo":"acme/widgets","branch":"main","workflow":".grain/workflows/check.yml"}`,
+	} {
+		rec = do(t, srv, http.MethodPost, "/api/ci/runs", body)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("POST /api/ci/runs %s on CIModeGitHub repo: status = %d, want 403: %s", body, rec.Code, rec.Body)
+		}
+	}
+	if len(runner.started) != 0 {
+		t.Fatalf("started %d Grain CI runs on CIModeGitHub repo across run-job/recheck/repo start, want 0", len(runner.started))
+	}
 }
