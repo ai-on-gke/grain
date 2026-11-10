@@ -218,3 +218,17 @@ func TestRESTReadsGitHubsShapes(t *testing.T) {
 		t.Fatalf("no token: err = %v", err)
 	}
 }
+
+// TestRESTRefusesAReviewListTooLongToRead: a change request on a page
+// past the last one read would go unseen, so the list is refused rather
+// than read in part.
+func TestRESTRefusesAReviewListTooLongToRead(t *testing.T) {
+	page := "[" + strings.TrimSuffix(strings.Repeat(`{"user":{"login":"bob"},"state":"COMMENTED","author_association":"MEMBER"},`, 100), ",") + "]"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, page)
+	}))
+	defer srv.Close()
+	if _, err := (REST{BaseURL: srv.URL}).Reviews(context.Background(), "example/grain", 7); err == nil || !strings.Contains(err.Error(), "more than 1000 reviews") {
+		t.Fatalf("err = %v, want the list refused", err)
+	}
+}
