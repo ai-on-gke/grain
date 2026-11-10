@@ -109,6 +109,16 @@ const stateHelp = {
     "No status reported yet: the daemon behind this page has not tried to connect to it.",
 };
 
+// waitingFor is what a needs-config server's configure said it is
+// waiting on outside grain (servers.Status.Waiting) -- a host credential
+// to be renewed -- or "" for one that is not waiting. grain retries such
+// a server every minute, so it needs nobody's edit.
+const waitingFor = (server) =>
+  (server.status?.state === "needs-config" && server.status?.waiting) || "";
+
+const waitingHelp =
+  "The server is waiting on something outside grain, such as a credential on the host that has to be renewed. grain tries it again every minute, and it attaches by itself once that is done; nothing here needs changing.";
+
 // needsHostd is whether state is a placed server's wait for its hostd
 // (daemon.NeedsHostd): "needs-hostd:<selector>".
 const needsHostd = (state) => String(state).startsWith("needs-hostd:");
@@ -1079,7 +1089,11 @@ function StatusDot({ server }) {
   return (
     <Box
       component="span"
-      title={stateLabel[state] || state}
+      title={
+        waitingFor(server)
+          ? `waiting for ${waitingFor(server)}`
+          : stateLabel[state] || state
+      }
       data-testid="capability-server-row-status"
       data-status={status}
       data-state={state}
@@ -1135,8 +1149,16 @@ function ServerChips({ server, holders }) {
         data-testid="capability-server-usage-count"
       />
       <HelpChip
-        help={stateHelp[state] || (needsHostd(state) ? needsHostdHelp : "")}
-        label={stateLabel[state] || needsHostLabel(state) || state}
+        help={
+          waitingFor(server)
+            ? waitingHelp
+            : stateHelp[state] || (needsHostd(state) ? needsHostdHelp : "")
+        }
+        label={
+          waitingFor(server)
+            ? `waiting for ${waitingFor(server)}`
+            : stateLabel[state] || needsHostLabel(state) || state
+        }
         color={stateColor[state] || (needsHostd(state) ? "warning" : "default")}
         data-testid="capability-server-state"
       />
@@ -1583,7 +1605,18 @@ export default function CapabilityServersPanel({
             {server.config.notice}
           </Alert>
         )}
-        {server.status?.reason && (
+        {server.status?.reason && waitingFor(server) && (
+          <Alert
+            severity="info"
+            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            data-testid="capability-server-waiting"
+          >
+            Waiting for {waitingFor(server)}. grain tries it again every minute,
+            and it attaches by itself once that is done. What it said:{" "}
+            {server.status.reason}
+          </Alert>
+        )}
+        {server.status?.reason && !waitingFor(server) && (
           <Alert
             severity="info"
             sx={{ mt: 1, overflowWrap: "anywhere" }}

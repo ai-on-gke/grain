@@ -1154,28 +1154,31 @@ type CapabilityServerDown struct {
 	State servers.State `json:"state"`
 	// ConfigRefused is the server refusing its saved config
 	// (servers.Status.ConfigRefused).
-	ConfigRefused bool   `json:"configRefused,omitempty"`
-	Reason        string `json:"reason"`
+	ConfigRefused bool `json:"configRefused,omitempty"`
+	// Waiting is what the server is waiting on outside grain
+	// (servers.Status.Waiting); it attaches by itself once that is done.
+	Waiting string `json:"waiting,omitempty"`
+	Reason  string `json:"reason"`
 }
 
 // capabilityServersDown is every capability server that failed, or
-// whose configure refused its saved config: what `grain health` lists
-// beside the alert the daemon raises for it. A built-in nobody has
-// configured yet is not among them.
+// whose configure refused its saved config or is waiting on something
+// outside grain: what `grain health` lists beside the alert the daemon
+// raises for it. A built-in nobody has configured yet is not among them.
 func (c *Client) capabilityServersDown() []CapabilityServerDown {
 	if c.Config.CapabilityServers == nil {
 		return nil
 	}
 	var out []CapabilityServerDown
 	for _, st := range c.Config.CapabilityServers.Statuses() {
-		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && st.ConfigRefused) {
+		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && (st.ConfigRefused || st.Waiting != "")) {
 			continue
 		}
 		reason := st.Error
 		if reason == "" {
 			reason = st.Reason
 		}
-		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Reason: reason})
+		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Waiting: st.Waiting, Reason: reason})
 	}
 	return out
 }

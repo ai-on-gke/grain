@@ -64,3 +64,29 @@ func TestCapabilityServerDropRaisesAndClearsAnAlert(t *testing.T) {
 		t.Errorf("ws-a's own alert remained open after ws-a attached: %+v (%v)", n, err)
 	}
 }
+
+// A server waiting on something outside grain -- a host credential to be
+// renewed -- is raised as waiting for it, without sending anybody to
+// Settings, and clears when it attaches.
+func TestAWaitingCapabilityServerIsRaisedAsWaiting(t *testing.T) {
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	defer closeStore()
+	const id = "https://grain.dev/capabilities/corp-thing"
+	onDrop, onAttach := capabilityServerAlerts(ctx, store)
+	subject := model.NotificationSubject(model.FamilyCapabilityServerDown, id)
+
+	onDrop(servers.Status{ID: id, State: servers.NeedsConfig, Waiting: "a renewed host credential",
+		Reason: "capability server corp-thing: configure: the host credential expired"})
+	n, err := store.OpenNotification(ctx, subject)
+	if err != nil || n == nil {
+		t.Fatalf("no open notification for %s (err %v)", subject, err)
+	}
+	if !strings.Contains(n.Title, "waiting for a renewed host credential") || !strings.Contains(n.Body, "every minute") || strings.Contains(n.Body, "Fix it in Settings") {
+		t.Errorf("notification = %q / %q, want it to say what it waits for and that it is retried", n.Title, n.Body)
+	}
+	onAttach(id)
+	if n, err := store.OpenNotification(ctx, subject); err != nil || n != nil {
+		t.Errorf("after attaching, open notification = %+v (err %v), want none", n, err)
+	}
+}
