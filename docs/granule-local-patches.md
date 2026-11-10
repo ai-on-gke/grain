@@ -27,16 +27,39 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `1463ed6` (`1463ed6097335b986e3bbdb37f25c16c28fa1e74`,
-"Merge pull request #244 from gke-labs/grain/098073e4/task-3349-scrub-the-contributor-gcp",
-2026-11-06).
+`gke-labs/granule` `main` at `1e60085` (`1e60085` is the merge of
+"gke-labs/granule#254 from gke-labs/grain/098073e4/task-3941-rebuild-granule-guest-binaries",
+2026-11-10).
 
-The tree was replaced wholesale from a `git archive` of `1463ed6` with no
+The tree was replaced wholesale from a `git archive` of `1e60085` with no
 local patches on top -- `third_party/granule` is byte-identical to upstream
-(grain task 3350). The previous sync was `b2fda8b` (`b2fda8bb`, grain task
-3024).
+(grain task 3892). The previous sync was `1463ed6` (grain task 3350).
 
-This sync carries PR #244 (`9de041c`) on top of `b2fda8b`, which drops the
+This sync carries PRs #245–#254 on top of `1463ed6`:
+- granule's guest binaries (`granule-shim`, `granule-agent`,
+  `granule-container`, `granule-mem-agent`) are built with a supported Go:
+  the `Dockerfile`'s builder is `golang:1.26-bookworm` (pinned by digest,
+  with a check that the image is the `GO_VERSION` asked for), and `go.mod`
+  moves from `go 1.22` to `go 1.25.13` with `toolchain go1.26.10`
+  (gke-labs/granule#253, #254). They were built with go1.22.12, which is
+  what `.grain/baselines/image-vulns-allowlist.yaml` waived its `image:
+  sandbox` `stdlib` entries for; this sync is what retires them. grain's
+  own `go.mod` (`go 1.26.6`, `toolchain go1.26.10`) already satisfies the
+  new floor.
+- `debian:bookworm-slim` digest bump in the `Dockerfile` and
+  `pkg/guestpack.DefaultPackerImage` (gke-labs/granule#252), to the same
+  digest grain's own `Dockerfile` already pins.
+- The pre-rename Konturfile spec (`docs/konturfile.md`) is deleted, plus
+  doc, prompt, benchmark and test-script fixes and new tests in `pkg/cli`
+  and `pkg/telemetry` (gke-labs/granule#245–#251). None of these change
+  `pkg/guestimage`'s contract, `go.sum` or `vendor/`, so
+  `scripts/granule/build-granule-image.sh` and
+  `scripts/granule/guest-inputs.sh` need no change.
+
+### What the `1463ed6` sync carried
+
+The `1463ed6` sync (grain task 3350) carried PR #244 (`9de041c`) on top of
+`b2fda8b`, which drops the
 contributor GCP project default from `.github/workflows/e2e-ipv6-gke.yml`,
 `docs/github-actions-ci.md`, `docs/ipv6-dual-stack-design.md` and
 `test/e2e-ipv6.sh` (resolving `$GKE_PROJECT` from `GKE_PROJECT` or gcloud's

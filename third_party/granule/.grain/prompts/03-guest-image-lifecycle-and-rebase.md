@@ -10,7 +10,7 @@ Granule images package hypervisor binaries, Linux guest kernels, initramfs, in-g
 3. **Guest Packing (`granule guest pack`)**: Converting raw rootfs directories or container images into bootable granule VM images.
 4. **Guest Rebase (`granule guest rebase`)**: Upgrading the hypervisor/supervisor runtime layer under an existing guest image without modifying or corrupting guest rootfs layers.
 5. **Guest Verification (`granule guest verify`)**: Testing dry-run and validation logic for guest images.
-6. **Publishing Workflow Rehearsal**: Verifying that `deploy/publish-images.sh` correctly maps tag references (`:latest`, `:alpine`, `:debian12`, `:github-ubuntu-slim`).
+6. **Publishing Workflow Rehearsal**: Verifying that `deploy/publish-images.sh` publishes each variant to its own repository under `ghcr.io/gke-labs/granule/`: the packed guest image at `ghcr.io/gke-labs/granule/<variant>:latest` and the guest rootfs it was packed from at `ghcr.io/gke-labs/granule/<variant>.rootfs:latest`.
 
 ## Execution Steps
 
@@ -29,7 +29,7 @@ Inspect and validate the guest packaging shell scripts and overlay files:
 find deploy/guest-image -type f -name "*.sh" -exec bash -n {} +
 
 # Verify presence of essential overlay files
-test -f deploy/guest-image/overlay-common/etc/granule-guest-version
+test -f deploy/guest-image/overlay-common/etc/granule/guest-contract
 test -f deploy/guest-image/overlay-debian/etc/acpi/powerbtn.sh
 test -f deploy/guest-image/overlay-alpine/etc/acpi/powerbtn.sh
 ```
@@ -39,8 +39,8 @@ Run the publish script dry-run to verify tag generation and registry destination
 ```bash
 deploy/publish-images.sh --dry-run --no-login all
 ```
-- Verify output contains expected target tags for `ghcr.io/gke-labs/granule` (`:latest`, `:alpine`, `:debian12`, `:github-ubuntu-slim`).
-- Verify output contains expected target tags for `ghcr.io/gke-labs/granule-guest-rootfs` (`:latest`, `:alpine`, `:debian12`).
+- Verify output pushes the guest and runner images `ghcr.io/gke-labs/granule/debian:latest`, `ghcr.io/gke-labs/granule/alpine:latest`, `ghcr.io/gke-labs/granule/debian12:latest` and `ghcr.io/gke-labs/granule/github-ubuntu-slim:latest`.
+- Verify output pushes the guest rootfs images `ghcr.io/gke-labs/granule/debian.rootfs:latest`, `ghcr.io/gke-labs/granule/alpine.rootfs:latest` and `ghcr.io/gke-labs/granule/debian12.rootfs:latest`.
 
 ### 4. Test Guest CLI Commands
 Build and test guest CLI operations:
