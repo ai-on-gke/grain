@@ -28,8 +28,9 @@
 #   -image    the image repository (default docker.io/grainai/grain)
 #
 # It pulls the image, pins it to the digest the registry served, verifies
-# that digest, copies /usr/local/bin/grain out of it, and prints the
-# digest and the binary's sha256 to record beside the install.
+# that digest's signature when -key is given, copies /usr/local/bin/grain
+# out of it, and prints the digest and the binary's sha256 to record
+# beside the install.
 set -euo pipefail
 
 version=""
@@ -43,7 +44,7 @@ while [ $# -gt 0 ]; do
     -key) key="${2:?-key needs a value}"; shift 2 ;;
     -dest) dest="${2:?-dest needs a value}"; shift 2 ;;
     -image) image="${2:?-image needs a value}"; shift 2 ;;
-    -h|--help) sed -n '16,32p' "$0"; exit 0 ;;
+    -h|--help) sed -n '16,33p' "$0"; exit 0 ;;
     *) echo "install-grain.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
