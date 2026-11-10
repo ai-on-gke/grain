@@ -1992,14 +1992,7 @@ func TestTheInstallerNeedsNothingOnTheHostButDockerAndSystemd(t *testing.T) {
 	// optional rather than required -- host_git_version answers nothing
 	// on a host with no git, and the conversion then says what to run
 	// instead -- so it adds nothing to what a host must have.
-	//
-	// And installing from release assets (docs/release-assets.md) is a
-	// download from github.com before any image exists to run one in. It
-	// is optional too: with no curl on the host install_release_assets
-	// falls back to pulling the registry image, and manifest_field reads
-	// images.json with awk where there is no jq.
-	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true,
-		"install_release_assets": true, "manifest_field": true}
+	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true}
 	inHostGit := false
 
 	inImage := false

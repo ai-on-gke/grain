@@ -1974,7 +1974,7 @@ describe("AutoUpgradeSettings", () => {
 });
 
 describe("Registry image mode on UpgradePanel", () => {
-  it("renders registry pull description without release-asset source selector", async () => {
+  it("renders registry pull description without an image source selector", async () => {
     const baseStatus = {
       enabled: true,
       mode: "image",
@@ -1982,16 +1982,10 @@ describe("Registry image mode on UpgradePanel", () => {
       running: { image: "docker.io/grainai/grain:main" },
       phase: "done",
       branch: "main",
-      source: "registry",
       detail: "pulled docker.io/grainai/grain:main",
       imageRepo: "docker.io/grainai/grain",
       defaultImageRepo: "docker.io/grainai/grain",
       imageRepos: ["docker.io/grainai/grain"],
-      imageSource: {
-        source: "registry",
-        sourceDefault: true,
-        locked: false,
-      },
     };
 
     api.mockImplementation((url) => {
@@ -2015,7 +2009,9 @@ describe("Registry image mode on UpgradePanel", () => {
       screen.queryByTestId("upgrade-image-source"),
     ).not.toBeInTheDocument();
   });
+});
 
+describe("Host-less image repository on UpgradePanel", () => {
   it("warns before an upgrade when the configured image repository names no registry host", async () => {
     const warning =
       "Upgrades will be refused: the image repository edition-local/grain (set by the -upgrade-image flag in this deployment's unit) names no registry host.";
@@ -2050,7 +2046,9 @@ describe("Registry image mode on UpgradePanel", () => {
       "docker.io/grainai/grain",
     );
   });
+});
 
+describe("External management notice on UpgradePanel", () => {
   it("replaces in-VM upgrade and SQLite migration controls with an external management notice when selfUpgradeDisabled is set", async () => {
     api.mockResolvedValue({
       enabled: false,

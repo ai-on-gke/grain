@@ -154,14 +154,21 @@ type Signer struct {
 var loadMu sync.Mutex
 
 // LoadSigner reads the deployment's key under dataDir, making one the
-// first time.
+// first time: from the secrets store beside it when there is one
+// (keystore.go), else from <dataDir>/release-approval-key.pem.
 func LoadSigner(dataDir string) (*Signer, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, fmt.Errorf("release approval: this deployment has no data directory to keep its signing key in")
 	}
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	key, err := attest.LoadOrCreateFileSigner(filepath.Join(dataDir, KeyFile))
+	var key *attest.FileSigner
+	var err error
+	if store := keyStore(dataDir); store != nil {
+		key, err = loadStoredSigner(store, dataDir)
+	} else {
+		key, err = attest.LoadOrCreateFileSigner(filepath.Join(dataDir, KeyFile))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("release approval: signing key: %w", err)
 	}

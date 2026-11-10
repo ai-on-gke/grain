@@ -26,7 +26,7 @@ CLI, and MCP (`/mcp` and `/api/mcp`).
 | 1e | Per-task `sandboxCpus`, `sandboxMemoryMb`, and `sandboxDiskGb` have no upper bound or role/agent ceiling | `pkg/ui/client.go`, `pkg/ui/agent_api_gate.go` | Open; follow-up task filed (`knownGapSandboxShapeCeiling`) | Medium |
 | 2a | `PATCH /api/tasks/{id}` adding capabilities, `autoMerge`, elevated `priority`, widened `networkAccess`, or out-of-scope `reads`/`writes`; `approve` and unapproved `run-now` on wider proposals (#3735) | `pkg/ui/access_roles.go`, `pkg/ui/agent_api_gate.go` | Verified closed (#3735, #3759, #3923, #3925); regression tests added | -- |
 | 2b | Overwriting `description` (prompt) via `PATCH /api/tasks/{id}`, or calling approved `run-now`, `retry`, `reopen`, `undefer`, `resume`, `comments`, or `reply` on an operator-filed task carrying wider grants | `pkg/ui/access_roles.go`, `pkg/ui/agent_api_gate.go` | **Fixed here** | Critical |
-| 2c | Ownerless `gma_` external token holding `tasks:admin` approving a proposal past the token's own grant ceiling | `pkg/ui/agent_api_gate.go` (`externalApprovalRail`) | Tracked by #3905 Finding 2.2 (`knownGapExternalTokenApprovalCeiling`) | Medium |
+| 2c | Ownerless `gma_` external token holding `tasks:admin` approving a proposal past the token's own grant ceiling | `pkg/ui/agent_api_gate.go` (`externalApprovalRail`) | Closed by #3924 (`externalApprovalWithin`); regression test flipped | -- |
 | 3a | Non-admin without `capabilities:admin` (or any agent / delegated caller) granting a `request_access` card | `pkg/ui/access_roles.go`, `pkg/ui/task_access_request.go` | Closed; regression tests added | -- |
 | 3b | Limited role holding `capabilities:admin` (e.g. repo-scoped) granting `gcp#gcp-key`, `host-script`, dangerous `api:*`, `network: open`, or out-of-scope repos through `POST /api/tasks/{id}/access-request/grant` | `pkg/ui/task_access_request.go` | **Fixed here** | Critical |
 | 4a | Agent `propose_task` auto-approval ceilings, self-mutation blocks, and in-sandbox `grain api` channel (`GitProxy.ServeAPIHTTP` + `SandboxAPIGrantsOf`) | `pkg/ui/client.go`, `pkg/ui/agent_api_gate.go`, `pkg/gitproxy/namespace.go` | Closed; regression tests added | -- |
@@ -131,8 +131,8 @@ and #3925:
 - Note on external `gma_` tokens: as documented in #3905 Finding 2.2 (which already filed the
   remediation task), `externalApprovalRail` checks the token owner's human role when an
   identity verifier is active, while ownerless local tokens do not yet run `roleTaskWithin`
-  against the token's own scope/repo ceiling. Pinned here without duplicating #3905's task via
-  `TestPath2KnownGapExternalTokenApprovalCeiling`.
+  against the token's own scope/repo ceiling. #3924 closed it (`externalApprovalWithin`), and
+  `TestPath2ExternalTokenApprovalCeiling` now asserts the refusal.
 
 ### Reproductions and fixes landed here
 
@@ -332,7 +332,7 @@ is ready to be wired into the consolidated nightly `security-attacks` job alongs
 - `TestPath1NonAdminTaskFilingAndTemplateGrantCeilings`
 - `TestPath1KnownGapPerTaskSandboxShapeUncapped` (`knownGapSandboxShapeCeiling`)
 - `TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings`
-- `TestPath2KnownGapExternalTokenApprovalCeiling` (`knownGapExternalTokenApprovalCeiling`, #3905)
+- `TestPath2ExternalTokenApprovalCeiling` (was `knownGapExternalTokenApprovalCeiling`, #3905; closed by #3924)
 - `TestPath3NonAdminAccessRequestGrantCeilings`
 - `TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries` (includes live `gitproxy.BuildProxy` + `sandboxcli.Main` `grain api` execution)
 - `TestPath4KnownGapAgentCrossTaskPromptSteering` (`knownGapAgentCrossTaskPromptSteering`)
