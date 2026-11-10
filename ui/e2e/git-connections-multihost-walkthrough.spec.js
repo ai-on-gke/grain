@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { repoGrantBox } from "./repoGrants.js";
 
 // Walkthrough: the deployment's Git connections and multi-host repos
 // (docs/test-plans/2026-10-09.md §1)
@@ -210,8 +211,8 @@ test.describe("Git Connections and Multi-Host Repos Walkthrough (§1)", () => {
       page.getByRole("heading", { name: "New task", exact: true }),
     ).toBeVisible();
 
-    // Find the Read-only repos input (ReadOnlyReposField / RepoPicker)
-    const readsInput = page.getByLabel("Read-only repos");
+    // Add a repo#read grant from the Grants list (RepoGrants / RepoPicker)
+    const readsInput = await repoGrantBox(page, "read");
     await expect(readsInput).toBeVisible();
 
     // Type multi-host reference
@@ -227,11 +228,10 @@ test.describe("Git Connections and Multi-Host Repos Walkthrough (§1)", () => {
     // Pick it
     await customOption.click();
 
-    // Verify chip rendered with multi-host repo
-    const pickedChip = page.locator(
-      `.MuiChip-root:has-text("${multiHostRepo}")`,
-    );
-    await expect(pickedChip).toBeVisible();
+    // Verify the repo#read line rendered with the multi-host repo
+    await expect(
+      page.getByRole("group", { name: `${multiHostRepo} · read` }),
+    ).toBeVisible();
 
     // Close New Task modal
     await page.keyboard.press("Escape");

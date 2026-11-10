@@ -702,6 +702,7 @@ var (
 		"auto_approve_proposals",
 		"interactive",
 		"keep_running",
+		"grain_ci",
 		"immediate",
 		"no_port",
 		"resume_on_deadline",

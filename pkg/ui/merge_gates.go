@@ -282,6 +282,9 @@ func (c *Client) findTaskByPullRequest(ctx context.Context, ref model.PullReques
 // it requires merge:force on the target repository plus repo-admin permission
 // and delegates to ForceMergeWithGates.
 func (c *Client) SubmitPullRequest(ctx context.Context, req SubmitPullRequestRequest) (SubmitPullRequestResult, error) {
+	if who := c.requestActor(ctx); who.Actor.Kind != model.PrincipalHuman {
+		return SubmitPullRequestResult{}, forbiddenErrorf("only a human may submit a pull request or override merge gates")
+	}
 	ref, err := c.pullRequestRef(req.PR)
 	if err != nil {
 		return SubmitPullRequestResult{}, err

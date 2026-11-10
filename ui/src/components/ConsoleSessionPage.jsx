@@ -39,11 +39,9 @@ import {
   taskBadgeModifier,
   taskBadgeState,
 } from "../state.js";
-import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
 import CommentDeepLink from "./CommentDeepLink.jsx";
-import WriteReposField from "./WriteReposField.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import ModelPicker from "./ModelPicker.jsx";
 import WorkTree from "./detail/WorkTree.jsx";
@@ -541,61 +539,44 @@ export default function ConsoleSessionPage({
           onRemove={methodGrants.onRemove}
           disabled={saving === "api" || saving === "methods"}
           idPrefix={`session-${session.id}`}
+          // The repositories it may read and write are grants in the
+          // same list (unified-grants slice 5), each saved as its whole
+          // reads or writes set as it is changed. A session has no
+          // target of its own, so there is no #target line.
+          repos={{
+            reads: (session.reads || []).filter(
+              (r) => !(session.autoReads || []).includes(r),
+            ),
+            writes,
+            readOptions: knownRepos(config, tasks),
+            writeOptions: targetableRepos(config, tasks),
+            onReadsChange: (next) => save({ reads: next }, "reads"),
+            onWritesChange: setWrites,
+            onWritesCommit: (next) => save({ writes: next }, "writes"),
+          }}
         />
-      </Box>
-
-      <Box sx={{ mt: 2 }}>
-        <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>
-          Repositories it may read
-        </Typography>
         <Typography
           variant="caption"
           color="text.secondary"
           component="p"
-          sx={{ mb: 1 }}
+          sx={{ mt: 1, overflowWrap: "anywhere" }}
+          data-testid="session-reads-all"
         >
           {session.readsAll === false
-            ? "Repositories this session may clone or fetch. It does not read the rest of this deployment's repositories (readsAll is off)."
-            : "Repositories this session may clone or fetch, besides every repository this deployment works in, which every session reads by default."}
+            ? "It does not read the rest of this deployment's repositories (readsAll is off)."
+            : "Besides the repositories it is granted, every session reads every repository this deployment works in."}
         </Typography>
-        <ReadOnlyReposField
-          options={knownRepos(config, tasks)}
-          value={(session.reads || []).filter(
-            (r) => !(session.autoReads || []).includes(r),
-          )}
-          onChange={(next) => save({ reads: next }, "reads")}
-        />
         {(session.autoReads || []).length > 0 && (
           <Typography
             variant="caption"
             color="text.secondary"
             component="p"
-            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            sx={{ mt: 0.5, overflowWrap: "anywhere" }}
             data-testid="session-auto-reads"
           >
             Also reads, by default: {session.autoReads.join(", ")}
           </Typography>
         )}
-      </Box>
-
-      <Box sx={{ mt: 2 }}>
-        <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>
-          Repositories it may write
-        </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          component="p"
-          sx={{ mb: 1 }}
-        >
-          Repositories this session may push commits to.
-        </Typography>
-        <WriteReposField
-          options={targetableRepos(config, tasks)}
-          value={writes}
-          onChange={setWrites}
-          onCommit={(next) => save({ writes: next }, "writes")}
-        />
       </Box>
 
       {/* The other half of "what it may reach", and the half that was

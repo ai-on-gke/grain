@@ -1137,7 +1137,7 @@ func securityHoldComment(ref model.PullRequestRef, matches []trustboundary.Match
 			"this change merges automatically once CI passes; if it leaves findings, it waits for fixes and "+
 			"a clean re-review. Pressing Submit records your approval only and never skips the review.", reviewID)
 	default:
-		fmt.Fprintf(&b, "Filed task %s to review it, and changes to %s also require a person's Submit: "+
+		fmt.Fprintf(&b, "Filed task %s to review it. Changes to %s never merge automatically: "+
 			"both the security review and your Submit must pass before this change merges. Press Submit now "+
 			"or after reading the review; it merges once all gates pass.", reviewID, humanOnlyList(matches))
 	}

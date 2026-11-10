@@ -291,15 +291,6 @@ func ParseURI(raw string) (scheme, relPath string, err error) {
 	}
 }
 
-// RESTURL returns the sandbox proxy URL for a scheme and path.
-func RESTURL(scheme, relPath string) string {
-	relPath = strings.TrimPrefix(relPath, "/")
-	if relPath == "" {
-		return fmt.Sprintf("http://127.0.0.1:9728/fs/%s/", scheme)
-	}
-	return fmt.Sprintf("http://127.0.0.1:9728/fs/%s/%s", scheme, relPath)
-}
-
 // Resolve resolves a scheme and relative path under scope.
 func (s *Server) Resolve(ctx context.Context, scope Scope, scheme, relPath string) (*ResolvedNode, error) {
 	switch scheme {

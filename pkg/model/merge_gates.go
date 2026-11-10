@@ -455,12 +455,23 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	}
 	q, hasQuestions := ReviewQuestionsOf(t)
 	hasCodeQuestions := hasQuestions && (secTask == "" || q.ReviewTaskID != secTask)
-	triggerPending := pathTriggerHold != "" && len(triggerTasks) > 0
+	triggerPending := false
 	var firstTriggerTask string
 	for _, raw := range triggerTasks {
-		if _, tid, ok := strings.Cut(raw, "="); ok && tid != "" {
+		_, tid, ok := strings.Cut(raw, "=")
+		if !ok || tid == "" {
+			continue
+		}
+		if firstTriggerTask == "" {
 			firstTriggerTask = tid
-			break
+		}
+		if pathTriggerHold == "" {
+			continue
+		}
+		if targetStates == nil {
+			triggerPending = true
+		} else if st, exists := targetStates[tid]; !exists || (st != StateClosed && st != StateCompleted) {
+			triggerPending = true
 		}
 	}
 	codeReviewTask := firstGateText(reviewTask, firstTriggerTask)

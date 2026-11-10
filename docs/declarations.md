@@ -498,6 +498,7 @@ overlap: skip                      # optional; "skip" (default) or "allow"; "ski
                                    # "skip" holds a firing that overlaps the last one and fires it once
                                    # when that closes; every skip is recorded (see "Skipped firings")
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
+grain-ci: true                     # optional, workflow: only; run on grain CI even when ci_mode is github
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
 admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
 hosting: console                   # optional; raises the template's own to console; refused with suite:
@@ -1086,6 +1087,39 @@ with `overlap: allow`, because grain keeps one record of a workflow firing
 per schedule and reviews one run at a time. A `base:` that does not carry
 the workflow file is a run with nothing in it, reported as such by the
 review. `auto-approve-proposals` defaults to true, as a cron's does.
+
+#### Running on grain CI in a `ci_mode: github` repository: `grain-ci:`
+
+grain/task-3878. A repository whose `ci_mode` is `github` has said GitHub
+Actions is its CI, so grain drops a `workflow:` firing there rather than
+start a grain CI run. A schedule file can make an exception for itself:
+
+```yaml
+# .grain/schedules/release-lag.yml
+workflow: release-lag      # .grain/workflows/release-lag.yml, with an `on: schedule` of its own
+grain-ci: true
+every:
+  hours: 6
+```
+
+The firing then runs exactly as it would on a `ci_mode: grain`
+repository: a trusted schedule run of the workflow on `base:` (or the
+default branch), no task while it runs, and a review task only when the run
+does not pass (or every run, with `review: always`). That makes it the way
+to run a repository script on a cadence with no agent: a job that runs the
+script, holding whatever `api:` grants it needs in its `capabilities:`
+(`api:tasks:read` to look at what is open, `api:tasks:from-template` to file
+one of the repository's own templates when there is work to do --
+`docs/agent-api.md`), exits 0 on a quiet night and costs no agent run.
+
+The exception is this schedule's and nothing else's. The run is a schedule
+event, so it is no pull request's check and posts no commit status; pull
+requests are still judged by GitHub Actions, and the repository's other
+`.grain/workflows` still run on none of its pushes. `ci_mode: none` still
+drops the firing, since that mode says no CI runs here at all. The key is
+refused on a schedule that runs a template or a suite, and a workflow's own
+`on: schedule` cron cannot say it -- a schedule file that names the workflow
+can. A settings-owned schedule row may carry the same `grain-ci:` key.
 
 A schedule carries no title or body of its own: a schedule is a cadence
 and a template is the work, so a file that tries to be both is refused.

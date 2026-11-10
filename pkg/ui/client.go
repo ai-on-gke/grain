@@ -5300,7 +5300,15 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			return Task{}, validationErrorf("%v", err)
 		}
 	}
+	// repoBefore and repoAfter are the task's repository read and write
+	// grants either side of a Reads or Writes edit, for the grant
+	// attach/detach events it notes once it lands (unified-grants Q5).
+	var repoBefore, repoAfter []string
 	if err := c.mutate(model.WithOwnerChange(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), c.requestActor(ctx)), id, func(task *model.Task) error {
+		if req.Reads != nil || req.Writes != nil {
+			repoBefore = model.TaskRepoAccessKeys(*task)
+			defer func() { repoAfter = model.TaskRepoAccessKeys(*task) }()
+		}
 		submitted = false
 		if req.Owner != nil {
 			task.Owner = normalizedOwner
@@ -5723,6 +5731,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	}); err != nil {
 		return Task{}, err
 	}
+	c.noteGrantChanges(ctx, id, repoBefore, repoAfter)
 	if titleChanged || descriptionChanged {
 		if err := c.noteEdit(ctx, id, titleChanged, req.Title, descriptionChanged, req.Description); err != nil {
 			return Task{}, err
@@ -6001,7 +6010,9 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	// Rebuilding the grant set inside the closure is what lets two people
 	// attach two different capabilities without one losing: a retry runs
 	// again against the set the winner already wrote.
-	return c.mutate(ctx, id, func(task *model.Task) error {
+	var before, after []string
+	if err := c.mutate(ctx, id, func(task *model.Task) error {
+		before = grantStrings(task.Grants)
 		matchesTarget := func(capID string) bool {
 			if slices.Contains(targetIDs, capID) {
 				return true
@@ -6026,8 +6037,22 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 			}
 		}
 		task.Grants = kept
+		after = grantStrings(kept)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	c.noteGrantChanges(ctx, id, before, after)
+	return nil
+}
+
+// grantStrings is each grant's capability string, in order.
+func grantStrings(grants []model.Grant) []string {
+	out := make([]string, 0, len(grants))
+	for _, g := range grants {
+		out = append(out, g.Capability)
+	}
+	return out
 }
 
 // SetDependency attaches or detaches one depends-on link -- the picker's
@@ -6426,12 +6451,20 @@ func (c *Client) submit(ctx context.Context, id string) error {
 		return c.submitWithApprovals(ctx, *task, pending)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
+	openTriggerReview := c.hasUnfinishedTriggerReview(ctx, *task)
 	who := c.requestActor(ctx)
 	if err := c.mutate(model.WithAutoMergeChange(ctx, who.Actor, "submitted"), id, func(task *model.Task) error {
 		// Only a Submit over an unapproved or held change records a human
 		// approval. One over a change already merging itself (pressed to
 		// retry its CI) has looked at no new head.
 		if !task.AutoMerge {
+			// A gating trigger whose reviews have all finished cleanly has
+			// passed its review gate; only the person's approval was left.
+			if !openTriggerReview && len(model.ReviewFindings(*task)) == 0 {
+				task.Links = slices.DeleteFunc(task.Links, func(l model.Link) bool {
+					return l.Kind == model.LinkPathTriggerHold
+				})
+			}
 			humanSubmitted(task, who.Actor.ID, now, head)
 		}
 		model.AllowAutoMerge(task)
@@ -6457,7 +6490,7 @@ func humanSubmitted(t *model.Task, by string, now time.Time, head string) {
 	})
 	t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
 		switch l.Kind {
-		case model.LinkHumanOnlyHold, model.LinkBrokenRulesHold, model.LinkMergePolicyWithdrawn,
+		case model.LinkHumanOnlyHold, model.LinkBrokenRulesHold,
 			model.LinkHumanSubmitted, model.LinkHumanApproved:
 			return true
 		case model.LinkPathTriggerHold:
@@ -7777,6 +7810,20 @@ func (c *Client) noteTaskAction(ctx context.Context, id string, kind model.TaskE
 	}
 	c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: kind, At: c.now(),
 		By: who.Actor, OnBehalfOf: who.OnBehalfOf, Reason: reason, Detail: detail})
+}
+
+// noteGrantChanges records a grant-attached event for each grant string
+// in after but not before, and a grant-detached one for each the other
+// way round (unified-grants Q5), with the grant's canonical string as
+// its detail.
+func (c *Client) noteGrantChanges(ctx context.Context, id string, before, after []string) {
+	attached, detached := model.GrantChanges(before, after)
+	for _, g := range detached {
+		c.noteTaskAction(ctx, id, model.TaskEventGrantDetached, g)
+	}
+	for _, g := range attached {
+		c.noteTaskAction(ctx, id, model.TaskEventGrantAttached, g)
+	}
 }
 
 // closeCancelled says what a close cancelled, "" for nothing: the live

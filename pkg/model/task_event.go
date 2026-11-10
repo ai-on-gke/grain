@@ -77,6 +77,13 @@ const (
 	// named merge gates, with Reason = the operator's typed reason and
 	// Detail = the overridden gates and commit SHA.
 	TaskEventGateOverridden TaskEventKind = "gate-overridden"
+	// TaskEventGrantAttached and TaskEventGrantDetached record one grant
+	// given to or taken from a task after it was filed: a capability, or
+	// a repository read or write (unified-grants Q5). Detail is the
+	// grant's canonical string, Grant.Key -- its reference, then "=" and
+	// its normalized with: -- so a repo#write names its repo and base.
+	TaskEventGrantAttached TaskEventKind = "grant-attached"
+	TaskEventGrantDetached TaskEventKind = "grant-detached"
 )
 
 // TransitionReopened is the timeline's name for a reopen. It is not one

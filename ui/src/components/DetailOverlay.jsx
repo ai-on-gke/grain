@@ -76,7 +76,6 @@ import PendingSecret from "./detail/PendingSecret.jsx";
 import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import PendingAccess from "./detail/PendingAccess.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
-import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
 import GoalSection from "./detail/GoalSection.jsx";
 import Target from "./detail/Target.jsx";
@@ -84,7 +83,6 @@ import MergePolicy from "./detail/MergePolicy.jsx";
 import TaskLink from "./detail/TaskLink.jsx";
 import Timeline from "./detail/Timeline.jsx";
 import WorkTree from "./detail/WorkTree.jsx";
-import WriteRepos from "./detail/WriteRepos.jsx";
 import AccessGate from "./AccessGate.jsx";
 
 // useBranchPushed reports whether branch is really on repo's remote --
@@ -901,26 +899,11 @@ export default function DetailOverlay({
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
           <GoalSection t={t} act={act} config={config} tasks={tasks} />
-          {/* The repos this task may change, in one section
-              (grain/task-202): the one it is filed against, then the
-              others under it, rather than a "Target" pane and a second
-              pane elsewhere in the column for the rest. */}
+          {/* The repo this task is filed against and its base branch.
+              The other repos it reads and writes are grants, in Access
+              below (unified-grants slice 5), where its target shows
+              too as the one line that cannot be removed. */}
           <Target
-            t={t}
-            tasks={tasks}
-            config={config}
-            act={act}
-            showError={showError}
-          >
-            <WriteRepos
-              t={t}
-              tasks={tasks}
-              config={config}
-              act={act}
-              showError={showError}
-            />
-          </Target>
-          <ReadOnlyRepos
             t={t}
             tasks={tasks}
             config={config}
@@ -985,7 +968,13 @@ export default function DetailOverlay({
             onNewTaskFrom={onNewTaskFrom}
             unsavedRef={customFieldsUnsavedRef}
           />
-          <CapabilityToggles t={t} config={config} act={act} />
+          <CapabilityToggles
+            t={t}
+            config={config}
+            act={act}
+            tasks={tasks}
+            showError={showError}
+          />
           <SuspendedSession t={t} />
           <Dependencies t={t} tasks={tasks} act={act} onOpenTask={onOpenTask} />
         </div>

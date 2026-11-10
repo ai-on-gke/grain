@@ -61,8 +61,9 @@ function parseRepoList(text) {
 }
 
 // RepoPicker is the box the repo fields are built out of (grain/task-241
-// wrote it inside ReadOnlyReposField; grain/task-54 lifted it out when a
-// second field needed the same box): type to search, arrow keys and
+// wrote it inside the read-only repos field; grain/task-54 lifted it out
+// when a second field needed the same box, and the Grants list's
+// repository grants use it now, RepoGrants.jsx): type to search, arrow keys and
 // Enter or a click to pick, every repo already picked kept out of the
 // results, and free text that parses as owner/name offered as its own
 // "add this" row at the end.
@@ -86,10 +87,9 @@ function parseRepoList(text) {
 export default function RepoPicker({
   label,
   // ariaLabel names the box for a caller that renders it without a
-  // visible caption of its own -- the "add another repo" box the repos
-  // field puts under the repo a task is filed against
-  // (WriteReposField), where a second caption would be announcing a
-  // second field when the whole point is that there is only one. The
+  // visible caption of its own -- the repo box a repository grant in
+  // the Grants list draws (RepoGrants.jsx), whose line already says
+  // what the repo is for, so a caption would say it twice. The
   // name itself stays: a box with none is one a screen reader can only
   // read as "edit text".
   ariaLabel,

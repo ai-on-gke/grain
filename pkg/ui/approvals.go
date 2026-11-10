@@ -91,21 +91,7 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 	}
 	var remaining []model.ApprovalRequirement
 	now, head := c.now(), c.submittedHead(ctx, task)
-	openTriggerReview := false
-	for _, l := range task.Links {
-		if l.Kind != model.LinkPathTriggerTask {
-			continue
-		}
-		_, id, ok := strings.Cut(l.Target, "=")
-		if !ok || id == "" {
-			continue
-		}
-		rt, rObs, err := c.Store.GetTask(ctx, id)
-		if err == nil && model.StateOf(rt, rObs) != model.StateClosed {
-			openTriggerReview = true
-			break
-		}
-	}
+	openTriggerReview := c.hasUnfinishedTriggerReview(ctx, task)
 	released := model.WithAutoMergeChange(ctx, actor, "approved by "+user)
 	var heldFor []model.HumanReviewReason
 	if err := c.Store.UpdateTask(released, task.ID, func(t *model.Task) error {
@@ -123,7 +109,7 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 					heldFor = append(heldFor, r)
 				}
 			}
-			if !openTriggerReview && len(model.ReviewFindingsOf(*t)) == 0 {
+			if !openTriggerReview && len(model.ReviewFindings(*t)) == 0 {
 				var kept []model.Link
 				for _, l := range t.Links {
 					if l.Kind != model.LinkPathTriggerHold {
@@ -165,4 +151,34 @@ func describePending(reqs []model.ApprovalRequirement) string {
 		fmt.Fprintf(&b, "- `%s`: %s\n", r.Rule, model.DescribeApprovers(r.Approvers))
 	}
 	return b.String()
+}
+
+// hasUnfinishedTriggerReview reports whether any gating path-trigger review
+// on task (model.LinkPathTriggerTask) has not finished: still queued or
+// running, or with a pull request of its own that has not merged.
+func (c *Client) hasUnfinishedTriggerReview(ctx context.Context, task model.Task) bool {
+	for _, l := range task.Links {
+		if l.Kind != model.LinkPathTriggerTask {
+			continue
+		}
+		_, id, ok := strings.Cut(l.Target, "=")
+		if !ok || id == "" {
+			continue
+		}
+		rt, err := c.Store.GetTask(ctx, id)
+		if err != nil || rt == nil {
+			continue
+		}
+		obs, _ := c.Store.GetObservation(ctx, id)
+		if model.TaskPullRequest(*rt) != nil {
+			if obs == nil || obs.PrMergedAt == nil {
+				return true
+			}
+			continue
+		}
+		if obs == nil || obs.CompletedAt == nil {
+			return true
+		}
+	}
+	return false
 }
