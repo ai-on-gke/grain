@@ -9071,11 +9071,16 @@ report_readiness() {
   # either: seed_github_app_credential above writes the .app.json one, so
   # asking only about .token reported a perfectly working App-backed
   # deployment as having no GitHub credential at all.
-  if github_credential_present "$GRAIN_GITHUB_CREDENTIAL_NAME"; then
+  # One listing serves every presence check below (names only, never values).
+  local secrets_list
+  secrets_list="$(grain_cli secrets -data-dir "$GRAIN_DATA_DIR" list 2>/dev/null || true)"
+  if [ -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.token" ] \
+     || [ -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.app.json" ] \
+     || grep -q "^github-credential-${GRAIN_GITHUB_CREDENTIAL_NAME}:" <<<"$secrets_list"; then
     github="present as '${GRAIN_GITHUB_CREDENTIAL_NAME}'"
   elif { ls "$GRAIN_DATA_DIR"/secrets/github/*.token >/dev/null 2>&1 \
             || ls "$GRAIN_DATA_DIR"/secrets/github/*.app.json >/dev/null 2>&1 \
-            || grain_cli secrets -data-dir "$GRAIN_DATA_DIR" list 2>/dev/null | grep -q '^github-credential-'; }; then
+            || grep -q '^github-credential-' <<<"$secrets_list"; }; then
     # And a credential added from the UI is named by whoever added it,
     # which has nothing to do with this script's own default name -- so
     # a deployment finished in the UI reports what it has rather than
@@ -9093,8 +9098,6 @@ report_readiness() {
   # deployment configured entirely from the UI reports every credential
   # missing while running perfectly well. Asked once so container mode
   # starts one container rather than four.
-  local secrets_list
-  secrets_list="$(grain_cli secrets -data-dir "$GRAIN_DATA_DIR" list 2>/dev/null || true)"
   if grep -q '^gemini-api-key:' <<<"$secrets_list"; then
     gemini="present"
   fi
