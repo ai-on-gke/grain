@@ -2093,8 +2093,16 @@ export const STALE_BASE_STATES = ["failed", "closed"];
 // Missing is treated as human: a task from a store or a caller that
 // never recorded one is unknown provenance, not known-automated, and
 // dropping it would quietly discard history rather than protect it.
+//
+// A stacked task (a review or a repair, filed onto another task's own
+// branch) is never evidence either, whoever its author is: its base is
+// that task's grain/task-N branch. grain files them as automation, but a
+// store that recorded them otherwise (the demo seeds its review as a
+// person's) made a template's New task prefill another task's branch
+// (2026-11-10 intake walkthrough).
 export function suggestsBase(task) {
   if (STALE_BASE_STATES.includes(task.state)) return false;
+  if (task.stacked) return false;
   return !task.authorKind || task.authorKind === "human";
 }
 
