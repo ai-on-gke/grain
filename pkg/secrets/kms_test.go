@@ -236,3 +236,22 @@ func TestParseWrappedKeyRefusesMalformedFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateKMSKeyNameRefusesWhatWouldBendTheRequestURL(t *testing.T) {
+	if err := ValidateKMSKeyName("projects/my-proj/locations/us-central1/keyRings/grain_secrets/cryptoKeys/secrets-key"); err != nil {
+		t.Fatalf("a well-formed key name was refused: %v", err)
+	}
+	for _, name := range []string{
+		"projects/p/locations/l/keyRings/r/cryptoKeys/k?alt=x",
+		"projects/p/locations/l/keyRings/r/cryptoKeys/k#frag",
+		"projects/../locations/l/keyRings/r/cryptoKeys/k",
+		"projects/p%2F/locations/l/keyRings/r/cryptoKeys/k",
+		"projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+		"projects/p/locations/l/keyRings/r/cryptoKeys/k:encrypt",
+		"projects/p/locations/l/keyRings/r/cryptoKeys/",
+	} {
+		if err := ValidateKMSKeyName(name); err == nil {
+			t.Errorf("ValidateKMSKeyName(%q) accepted it", name)
+		}
+	}
+}

@@ -5899,12 +5899,6 @@ json_escape() {
   printf '%s' "$s"
 }
 
-# seed_git_connections records the seeded default GitHub credential as
-# the deployment's default git connection, and each seeded agent key as a
-# model connection, once, through `grain connections import` -- the only
-# way an install gives grain its connections. The seed file is written, imported and deleted here;
-# grain never reads it. The marker keeps a connection an operator later
-# removes in Settings removed.
 # wrap_secrets_key_with_kms wraps the secrets key with GRAIN_SECRETS_KMS_KEY
 # when it is set and the key file is still plaintext. The daemon does the
 # wrapping (it holds the key, and reaches KMS with the host's own
@@ -5930,6 +5924,12 @@ wrap_secrets_key_with_kms() {
   fi
 }
 
+# seed_git_connections records the seeded default GitHub credential as
+# the deployment's default git connection, and each seeded agent key as a
+# model connection, once, through `grain connections import` -- the only
+# way an install gives grain its connections. The seed file is written, imported and deleted here;
+# grain never reads it. The marker keeps a connection an operator later
+# removes in Settings removed.
 seed_git_connections() {
   local marker="$GRAIN_DATA_DIR/secrets/.connections-seeded"
   [ -e "$marker" ] && return 0

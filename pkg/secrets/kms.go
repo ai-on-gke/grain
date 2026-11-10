@@ -72,8 +72,11 @@ const (
 
 // kmsKeyName is the shape of a Cloud KMS CryptoKey resource name. A
 // version is not accepted: decrypt picks the version from the
-// ciphertext, and encrypt always uses the primary.
-var kmsKeyName = regexp.MustCompile(`^projects/[^/\s:]+/locations/[^/\s:]+/keyRings/[^/\s:]+/cryptoKeys/[^/\s:]+$`)
+// ciphertext, and encrypt always uses the primary. Each segment is held
+// to the characters Cloud KMS and project IDs use, since the name is
+// spliced into the URL the daemon sends its Bearer token to: a "?", "#",
+// "%" or ".." in one would change what that request asks for.
+var kmsKeyName = regexp.MustCompile(`^projects/[A-Za-z0-9_-]+/locations/[A-Za-z0-9_-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+$`)
 
 // ValidateKMSKeyName reports whether name is a CryptoKey resource name.
 func ValidateKMSKeyName(name string) error {

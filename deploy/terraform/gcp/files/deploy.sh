@@ -524,7 +524,7 @@ env \
 # as a new version whenever what is there differs. The plaintext
 # versions an operator pushed before are left for them to destroy -- the
 # daemon's `grain state key wrap` output says so, and the README's
-# "Cloud KMS-wrapped secrets key" names the command. secrets.tf grants
+# "Cloud KMS-wrapped secrets key" names the command. kms.tf grants
 # the host account secretVersionAdder on this one secret for it.
 escrow_wrapped_secrets_key() {
   [ -n "$SECRETS_KMS_KEY" ] || return 0
