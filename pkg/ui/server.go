@@ -861,6 +861,7 @@ func (s *Server) routes() {
 	s.route("PATCH /api/access/principals/{entry}", s.handleSetPrincipalRole)
 	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
 	s.route("GET /api/access/history", s.handleAccessHistory)
+	s.route("GET /api/access/access-code", s.handleAccessCodeMode)
 
 	// Controller MCP server (mcp_endpoint.go) shared by external BYO
 	// harnesses and built-in sessions/tasks holding api:* grants.

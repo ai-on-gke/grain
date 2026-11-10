@@ -735,8 +735,9 @@ func (s *Server) handleListAccessPrincipals(w http.ResponseWriter, r *http.Reque
 const accessHistoryLimit = 100
 
 // handleAccessHistory is GET /api/access/history: the config_audit rows of
-// surface "access", so Settings -> Access shows who changed which role,
-// when and why to a caller holding access:read without settings:read.
+// surface "access" and "access-code", so Settings -> Access shows who
+// changed which role, when and why, and what the access code was used to
+// change, to a caller holding access:read without settings:read.
 func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
@@ -754,7 +755,7 @@ func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 	title := s.tasks.sessionTitles(r.Context())
 	out := []ConfigAuditView{}
 	for _, e := range entries {
-		if e.Surface != "access" {
+		if e.Surface != "access" && e.Surface != "access-code" {
 			continue
 		}
 		view := ConfigAuditView{

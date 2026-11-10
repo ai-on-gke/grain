@@ -396,3 +396,48 @@ func AccessCodeClientName() string {
 func couldBeAccessCodeShape(tok string) bool {
 	return tok != "" && !strings.ContainsAny(tok, "._")
 }
+
+// AccessCodeModeView is GET /api/access/access-code: the access code's
+// mode as Settings -> Access shows it. It is read-only -- only
+// `grain access-code mode` on the daemon's host changes the mode -- so
+// it names the command that does, as the account that owns the code.
+type AccessCodeModeView struct {
+	// Mode is on, recovery or off.
+	Mode AccessCodeMode `json:"mode"`
+	// VerifiedAdminCanSignIn is whether a person with a full role on
+	// the allowlist can sign in through a configured verifier.
+	VerifiedAdminCanSignIn bool `json:"verifiedAdminCanSignIn"`
+	// RecoveryInForce is whether the code is held to recovery routes
+	// now: the mode is recovery and VerifiedAdminCanSignIn.
+	RecoveryInForce bool `json:"recoveryInForce"`
+	// ViewerVerified is whether the caller signed in with a verified
+	// identity rather than the access code.
+	ViewerVerified bool `json:"viewerVerified"`
+	// Account owns the code's file; the mode command runs as it.
+	Account string `json:"account"`
+	// Command switches the mode to recovery; OnCommand back to on.
+	Command   string `json:"command"`
+	OnCommand string `json:"onCommand"`
+}
+
+// handleAccessCodeMode is GET /api/access/access-code.
+func (s *Server) handleAccessCodeMode(w http.ResponseWriter, r *http.Request) {
+	cfg, _ := IAPConfigFromContext(r.Context())
+	view := AccessCodeModeView{Mode: s.accessCodeModeNow(), Account: "grain"}
+	view.VerifiedAdminCanSignIn = s.verifiedAdminCanSignIn(r.Context(), cfg)
+	view.RecoveryInForce = view.Mode == AccessCodeRecovery && view.VerifiedAdminCanSignIn
+	if p, ok := PrincipalFromContext(r.Context()); ok {
+		view.ViewerVerified = p.Verified()
+	}
+	cmd := "grain access-code"
+	if s.tasks != nil {
+		if tok := s.tasks.Config.LocalAPITokenFile; tok != "" {
+			view.Account = FileOwner(tok)
+			cmd += " -data-dir " + filepath.Dir(tok)
+		}
+	}
+	prefix := "sudo -u " + view.Account + " " + cmd + " mode "
+	view.Command = prefix + string(AccessCodeRecovery)
+	view.OnCommand = prefix + string(AccessCodeOn)
+	writeJSON(w, http.StatusOK, view)
+}

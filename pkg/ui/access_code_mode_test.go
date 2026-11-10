@@ -16,6 +16,7 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -243,5 +244,56 @@ func TestRecoveryModeRefusesEveryOtherRoute(t *testing.T) {
 	}
 	if checked < 100 {
 		t.Fatalf("checked only %d routes", checked)
+	}
+}
+
+// GET /api/access/access-code shows the mode, whether recovery is in
+// force, and the host command that changes it; the access history lists
+// the code's uses beside role changes.
+func TestAccessCodeModeRouteShowsTheModeAndItsCommand(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	code := map[string]string{"Authorization": "Bearer " + testAccessCode, ui.AccessNameHeader: "alice@example.com"}
+	read := func() ui.AccessCodeModeView {
+		t.Helper()
+		rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/access/access-code", "", code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/access/access-code: %d %s", rec.Code, rec.Body)
+		}
+		var v ui.AccessCodeModeView
+		if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	v := read()
+	if v.Mode != ui.AccessCodeOn || v.RecoveryInForce || v.ViewerVerified {
+		t.Errorf("default view = %+v, want on, not in force, viewer unverified", v)
+	}
+	if !strings.HasPrefix(v.Command, "sudo -u "+v.Account+" grain access-code") || !strings.HasSuffix(v.Command, " mode recovery") {
+		t.Errorf("command = %q, want sudo -u %s grain access-code ... mode recovery", v.Command, v.Account)
+	}
+
+	ui.SetAccessCodeModeForTest(srv, ui.AccessCodeRecovery)
+	if v := read(); v.Mode != ui.AccessCodeRecovery || v.RecoveryInForce {
+		t.Errorf("recovery with no verifier = %+v, want recovery not yet in force", v)
+	}
+	ui.SetIAPAudience(tunnelAudience)
+	if v := read(); !v.RecoveryInForce || !v.VerifiedAdminCanSignIn {
+		t.Errorf("recovery with a verifier and a full-role person = %+v, want in force", v)
+	}
+
+	ui.SetAccessCodeModeForTest(srv, ui.AccessCodeOn)
+	if rec := serveFrom(srv, networkAddr, http.MethodDelete, "/api/pipeline-pause", "", code); rec.Code/100 != 2 {
+		t.Fatalf("DELETE /api/pipeline-pause with the code: %d %s", rec.Code, rec.Body)
+	}
+	rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/access/history", "", code)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"surface":"access-code"`) ||
+		!strings.Contains(rec.Body.String(), "DELETE /api/pipeline-pause") {
+		t.Errorf("GET /api/access/history: %d %s, want the access-code use listed", rec.Code, rec.Body)
 	}
 }
