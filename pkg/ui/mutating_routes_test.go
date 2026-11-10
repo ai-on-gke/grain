@@ -940,6 +940,8 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/state-repo/remote":                                          true,
 	"POST /api/state-repo/reset-notice":                                    true,
 	"POST /api/state-repo/secrets-key":                                     true,
+	"POST /api/state-repo/secrets-key/unwrap":                              true,
+	"POST /api/state-repo/secrets-key/wrap":                                true,
 	"POST /api/state-repo/secrets-repo":                                    true,
 	"POST /api/state-repo/sync":                                            true,
 	"POST /api/suite-runs":                                                 true,

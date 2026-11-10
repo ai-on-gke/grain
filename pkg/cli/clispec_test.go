@@ -85,7 +85,7 @@ var hostSpecSubcommands = map[string][]string{
 	"setup":         {"gcp"},
 	"skill":         {"install", "status"},
 	"state": {"status", "repo", "sync", "resets clear", "reformat", "restore-snapshot", "prepare-upgrade",
-		"check", "key show", "key path", "key import", "key retired", "key retired delete"},
+		"check", "key show", "key path", "key import", "key retired", "key retired delete", "key wrap", "key unwrap"},
 }
 
 // hostSpecNoHelp are commands -h cannot be asked of: hooks that read a

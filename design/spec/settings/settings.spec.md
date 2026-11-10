@@ -232,7 +232,7 @@ Component: `EngineSection.jsx`.
 
 ### 3.9 System / Operations → Config repo (`/settings/config-repo#config-repo`)
 
-Component: `ConfigRepoSection.jsx` → `StateRepoPanel`. Shows and changes the binding in `<data-dir>/state-repo.json` (§9): `POST /api/state-repo/remote` (an external remote, or `none: true` for internal), `POST /api/state-repo/secrets-repo`, `POST /api/state-repo/secrets-key` / `import-key`, `POST /api/state-repo/sync`, `POST /api/state-repo/reset-notice`, and `POST /api/state-repo/pull-requests` (open a held config PR carrying a refused write's `change`). `GET /api/config` reports `configRepoOnly`, `settingsLocked` and `externalConfigRepo`. The lock itself, `settings_locked`, is in General (§3.10).
+Component: `ConfigRepoSection.jsx` → `StateRepoPanel`. Shows and changes the binding in `<data-dir>/state-repo.json` (§9): `POST /api/state-repo/remote` (an external remote, or `none: true` for internal), `POST /api/state-repo/secrets-repo`, `POST /api/state-repo/secrets-key` / `import-key`, `POST /api/state-repo/secrets-key/wrap` / `unwrap` (the Cloud KMS wrap; the pane shows `secretsKeyProtection`, `secretsKmsKey` and `secretsKeyLastUnwrap` and offers the host command rather than a button), `POST /api/state-repo/sync`, `POST /api/state-repo/reset-notice`, and `POST /api/state-repo/pull-requests` (open a held config PR carrying a refused write's `change`). `GET /api/config` reports `configRepoOnly`, `settingsLocked` and `externalConfigRepo`. The lock itself, `settings_locked`, is in General (§3.10).
 
 ### 3.10 Managed in config repo → General (`/settings/general`)
 
