@@ -410,6 +410,11 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:tasks:write", "api:repos:read"},
 		recorded:    adoptedFor,
 	},
+	"POST /api/pull-requests/submit": {
+		setup:    taskWithPullRequest,
+		body:     `{"pr":"acme/widgets#42"}`,
+		recorded: noted(model.TaskEventSubmitted),
+	},
 	"POST /api/tasks": {
 		body:        `{"title":"filed","noRepo":true}`,
 		agentGrants: []string{"api:tasks:write"},
@@ -940,6 +945,8 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/state-repo/remote":                                          true,
 	"POST /api/state-repo/reset-notice":                                    true,
 	"POST /api/state-repo/secrets-key":                                     true,
+	"POST /api/state-repo/secrets-key/unwrap":                              true,
+	"POST /api/state-repo/secrets-key/wrap":                                true,
 	"POST /api/state-repo/secrets-repo":                                    true,
 	"POST /api/state-repo/sync":                                            true,
 	"POST /api/suite-runs":                                                 true,

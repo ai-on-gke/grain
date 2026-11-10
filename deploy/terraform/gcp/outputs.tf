@@ -97,3 +97,8 @@ output "ssh_command" {
   value       = "gcloud compute ssh ${google_compute_instance.host.name} --zone ${var.zone} --project ${var.project_id} --tunnel-through-iap"
   description = "How to get a shell on the host despite it having no external IP and no open SSH port."
 }
+
+output "secrets_kms_key" {
+  description = "The Cloud KMS key that wraps the host's secrets private key (kms.tf), or empty when secrets_key_kms is off."
+  value       = var.secrets_key_kms ? google_kms_crypto_key.secrets_key[0].id : ""
+}

@@ -734,12 +734,14 @@ approvers: [team:payments, alice] # optional; default: the deployment's owner
   the change: a person has to press Submit. Whoever holds the access code
   is the deployment's owner ([access-code.md](access-code.md)), and a
   single-tenant grain has no accounts or team members, so a person's
-  Submit approves every outstanding trigger, whoever its `approvers`
-  name; `approvers` records who the repository meant. Auto-merge comes
-  back once none is left. A Submit, or an edit turning auto-merge on,
-  from an agent -- a run's token, a sandbox -- is refused with a 403.
-  Approvals are tied to the head they were given at: a push that moves
-  the head re-judges the change and clears them.
+  Submit records human approval for every outstanding trigger, whoever its
+  `approvers` name; `approvers` records who the repository meant. Submit
+  satisfies the human approval gate only and never skips or cancels a
+  gating trigger's review: auto-merge comes back once both the person's
+  approval and every gating review have passed cleanly. A Submit, or an
+  edit turning auto-merge on, from an agent -- a run's token, a sandbox --
+  is refused with a 403. Approvals are tied to the head they were given at:
+  a push that moves the head re-judges the change and clears them.
 - **Checked at sync.** Every `team:` approver has to be a team this
   deployment has (the default one, by id or name), and every template
   has to exist. Otherwise the sync is refused like any other bad
