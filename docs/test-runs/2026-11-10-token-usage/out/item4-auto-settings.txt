@@ -1,0 +1,2 @@
+mode: auto   max_workers: 4   effective worker cap: 2   sustainable: ≈1
+Walk agy                 (all models)                220k     18.0M     17.8M 11-10 12:27 UTC       220k 1

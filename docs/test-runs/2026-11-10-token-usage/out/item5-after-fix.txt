@@ -1,0 +1,18 @@
+== grain usage -budget agy-walk=abc/5h
+grain: -budget "agy-walk=abc/5h": tokens "abc" is not a whole number
+exit=2
+== grain usage -budget nosuch=1000/5h
+grain: budget 1: no connection "nosuch" on this deployment (Settings -> Models lists their ids)
+exit=2
+== PUT nosuch
+{"error":"budget 1: no connection \"nosuch\" on this deployment (Settings -\u003e Models lists their ids)"}
+
+HTTP 400
+== config audit (usage surface)
+jq: error (at <stdin>:1): Cannot index string with string "surface"
+== GET /api/deployment/config-audit (plan names /api/config-audit, which is 404)
+{"at":"2026-11-10T07:42:23.529079265Z","summary":"usage settings: mode advisory, min workers 2, retention 7 days, 1 budget(s)"}
+{"at":"2026-11-10T07:42:23.488869694Z","summary":"usage settings: mode advisory, min workers 0, retention 0 days, 1 budget(s)"}
+{"at":"2026-11-10T07:42:23.260745745Z","summary":"usage settings: mode advisory, min workers 3, retention 7 days, 1 budget(s)"}
+{"at":"2026-11-10T07:42:23.207060396Z","summary":"usage settings: mode advisory, min workers 0, retention 0 days, 1 budget(s)"}
+{"at":"2026-11-10T07:42:23.041419533Z","summary":"usage settings: mode advisory, min workers 0, retention 0 days, 1 budget(s)"}

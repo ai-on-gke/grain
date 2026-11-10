@@ -1,0 +1,17 @@
+2026-11-10T07:24:59Z exec seq=1 mode=ok 
+2026-11-10T07:24:59Z exec seq=2 mode=ok 
+2026-11-10T07:27:27Z exec seq=3 task=3 mode=ok 
+2026-11-10T07:27:27Z exec seq=4 task=3 mode=ok 
+2026-11-10T07:27:27Z exec seq=5 task=2 mode=ok 
+2026-11-10T07:27:28Z exec seq=6 task=2 mode=ok 
+2026-11-10T07:27:29Z exec seq=7 task=4 mode=fail 
+2026-11-10T07:27:30Z exec seq=8 task=3 mode=ok 
+2026-11-10T07:27:30Z exec seq=9 task=3 mode=ok 
+2026-11-10T07:27:31Z exec seq=10 task=5 mode=slow:15 
+2026-11-10T07:27:32Z exec seq=11 task=4 mode=fail 
+2026-11-10T07:27:34Z exec seq=12 task=5 mode=slow:15 
+2026-11-10T07:27:46Z exec seq=13 task=5 mode=slow:15 
+2026-11-10T07:27:49Z exec seq=14 task=5 mode=slow:15 
+2026-11-10T07:28:00Z exec seq=15 task=4 mode=fail 
+2026-11-10T07:28:03Z exec seq=16 task=4 mode=fail 
+2026-11-10T07:28:26Z exec seq=17 task=6 mode=refuse 
