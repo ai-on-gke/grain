@@ -30,7 +30,7 @@ import { formatDateTime } from "../time.js";
 // Submit of anybody's in between (docs/external-config-repo.md).
 export function ExternalRepoWritersWarning() {
   return (
-    <Alert severity="warning" sx={{ mt: 2 }}>
+    <Alert id="external-repo-writers" severity="warning" sx={{ mt: 2 }}>
       Anybody who can push to an external config repository&apos;s branch is an
       administrator of this deployment. grain applies what lands there &mdash;
       host scripts, capability servers, scope sets, secret bindings &mdash; on
@@ -63,7 +63,7 @@ export default function StateRepoVerification({ status, busy, act }) {
   const base = { remote: status.remote, branch: status.branch || "" };
   const held = v.requireVerified ? v.held : null;
   return (
-    <Box sx={{ mt: 2 }}>
+    <Box id="state-repo-verification" sx={{ mt: 2 }}>
       <Typography variant="subtitle2">Require verified commits</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
         Apply a commit only if grain can vouch for it: the merge of a pull
