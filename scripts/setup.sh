@@ -5894,8 +5894,7 @@ seed_git_connections() {
   local marker="$GRAIN_DATA_DIR/secrets/.connections-seeded"
   [ -e "$marker" ] && return 0
   local body="" models="" default_model
-  if [ -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.token" ] \
-     || [ -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.app.json" ]; then
+  if github_credential_present "$GRAIN_GITHUB_CREDENTIAL_NAME"; then
     body="git:
   - credential: \"${GRAIN_GITHUB_CREDENTIAL_NAME}\"
 "
@@ -5989,8 +5988,7 @@ retire_imported_agent_key_files() {
 # pkg/cli/daemon.go's credentialTokenSource) read through that same
 # ladder, so no separate wiring is needed for either to pick it up.
 seed_github_app_credential() {
-  local path="$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.app.json"
-  if [ -s "$path" ]; then
+  if github_credential_present "$GRAIN_GITHUB_CREDENTIAL_NAME"; then
     return
   fi
   if [ -z "$GRAIN_GITHUB_APP_ID" ] && [ -z "$GRAIN_GITHUB_APP_INSTALLATION_ID" ] && [ -z "$GRAIN_GITHUB_APP_PRIVATE_KEY" ]; then
@@ -6000,10 +5998,52 @@ seed_github_app_credential() {
     log "  GRAIN_GITHUB_APP_ID/INSTALLATION_ID/PRIVATE_KEY: only some are set -- need all three to seed an App credential; ignoring"
     return
   fi
-  printf '{"app_id":"%s","installation_id":"%s","private_key":"%s"}\n' \
+  seed_github_credential "$GRAIN_GITHUB_CREDENTIAL_NAME" app.json "$(printf '{"app_id":"%s","installation_id":"%s","private_key":"%s"}' \
     "$(json_escape "$GRAIN_GITHUB_APP_ID")" \
     "$(json_escape "$GRAIN_GITHUB_APP_INSTALLATION_ID")" \
-    "$(json_escape "$GRAIN_GITHUB_APP_PRIVATE_KEY")" | grain_write 0600 "$path"
+    "$(json_escape "$GRAIN_GITHUB_APP_PRIVATE_KEY")")"
+}
+
+# github_credential_stored reports whether the secrets store holds
+# credential $1 (secret github-credential-$1, pkg/gitproxy/credstore.go).
+# Presence only: `grain secrets list` names keys, never values.
+github_credential_stored() {
+  grain_cli secrets -data-dir "$GRAIN_DATA_DIR" list 2>/dev/null | grep -q "^github-credential-$1:"
+}
+
+# github_credential_present reports whether credential $1 exists in either
+# place the git proxy reads it from: the secrets store, or a token / App
+# file not yet moved into it (an older run's, which the daemon imports on
+# its next start).
+github_credential_present() {
+  [ -s "$GRAIN_DATA_DIR/secrets/github/$1.token" ] \
+    || [ -s "$GRAIN_DATA_DIR/secrets/github/$1.app.json" ] \
+    || github_credential_stored "$1"
+}
+
+# seed_github_credential writes value $3 as key $2 (token, app.json) of
+# credential $1 into the secrets store through `grain secrets set`, rather
+# than as a plaintext file under secrets/github
+# (design/design/secrets-key-protection.design.md section 5). The same
+# never-overwrite contract seed_secret gives: a credential already there,
+# in the store or as a file, is left alone, and no value means nothing is
+# written. Staged as $GRAIN_USER for one command and removed, for the
+# same reasons seed_gcp_minter_key gives. If the store cannot be written
+# the file is seeded instead, which the daemon imports on its next start.
+seed_github_credential() {
+  local name="$1" key="$2" value="$3"
+  [ -n "$value" ] || return 0
+  github_credential_present "$name" && return 0
+  local staged="$GRAIN_DATA_DIR/secrets/.github-credential-${name}.${key}.staged"
+  printf '%s\n' "$value" | grain_write 0600 "$staged"
+  if grain_cli secrets -data-dir "$GRAIN_DATA_DIR" set \
+       -value-file "$staged" "github-credential-${name}" "$key"; then
+    as_grain rm -f "$staged"
+    return 0
+  fi
+  as_grain rm -f "$staged"
+  log "  could not store GitHub credential '$name' in the secrets store; writing secrets/github/${name}.${key} for the daemon to import"
+  seed_secret "$GRAIN_DATA_DIR/secrets/github/${name}.${key}" "$value"
 }
 
 # archive_state_repo moves the config repository's working tree aside
@@ -6163,7 +6203,11 @@ setup_data_dir() {
   # first time the daemon starts.
 
   # GitHub credential material (pkg/gitproxy/credentials.go): one
-  # <name>.token or <name>.app.json per credential. Which repositories use
+  # github-credential-<name> secret in the encrypted store per credential
+  # (seed_github_credential, below; a token or app.json key). The
+  # secrets/github directory still holds the host records, and any
+  # <name>.token / <name>.app.json an older run left, which the daemon
+  # imports on its next start and keeps as <file>.migrated. Which repositories use
   # it is the deployment's git connections, which grain keeps in its store
   # and which this script seeds once, through `grain connections import`
   # (seed_git_connections, once the daemon has started): the default
@@ -6172,8 +6216,8 @@ setup_data_dir() {
   # Settings -> GitHub in the UI adds a token and, for the first one,
   # its connection, so a host that reaches the end of this with no
   # GitHub credential at all is finishable from the UI.
-  seed_secret "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.token" "$GRAIN_GITHUB_TOKEN"
-  seed_github_app_credential
+  # The credential itself is seeded into the secrets store, below, once
+  # the key that opens it is in place.
 
   # Before anything below runs `grain secrets`: opening a store with no
   # key mints one. A rebuilt host must install the key that opens its
@@ -6195,6 +6239,9 @@ setup_data_dir() {
   # the file that comes back.
   configure_secrets_repo
 
+  seed_github_credential "$GRAIN_GITHUB_CREDENTIAL_NAME" token "$GRAIN_GITHUB_TOKEN"
+  seed_github_app_credential
+
   # Order matters below: the minter key has to be in the secrets
   # database before mint_gemini_operating_key can authenticate with it.
   # Not again once retire_imported_agent_key_files has moved one into the
@@ -6211,8 +6258,7 @@ setup_data_dir() {
 
   mint_gemini_operating_key
 
-  if [ ! -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.token" ] \
-     && [ ! -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.app.json" ]; then
+  if ! github_credential_present "$GRAIN_GITHUB_CREDENTIAL_NAME"; then
     log "  no GitHub credential configured yet -- open Settings -> GitHub in the UI and paste a"
     log "  token: the first one added becomes this deployment's default, no restart needed."
     log "  Unattended: set GRAIN_GITHUB_TOKEN, or all three of"
@@ -9025,11 +9071,11 @@ report_readiness() {
   # either: seed_github_app_credential above writes the .app.json one, so
   # asking only about .token reported a perfectly working App-backed
   # deployment as having no GitHub credential at all.
-  if { [ -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.token" ] \
-          || [ -s "$GRAIN_DATA_DIR/secrets/github/${GRAIN_GITHUB_CREDENTIAL_NAME}.app.json" ]; }; then
+  if github_credential_present "$GRAIN_GITHUB_CREDENTIAL_NAME"; then
     github="present as '${GRAIN_GITHUB_CREDENTIAL_NAME}'"
   elif { ls "$GRAIN_DATA_DIR"/secrets/github/*.token >/dev/null 2>&1 \
-            || ls "$GRAIN_DATA_DIR"/secrets/github/*.app.json >/dev/null 2>&1; }; then
+            || ls "$GRAIN_DATA_DIR"/secrets/github/*.app.json >/dev/null 2>&1 \
+            || grain_cli secrets -data-dir "$GRAIN_DATA_DIR" list 2>/dev/null | grep -q '^github-credential-'; }; then
     # And a credential added from the UI is named by whoever added it,
     # which has nothing to do with this script's own default name -- so
     # a deployment finished in the UI reports what it has rather than
