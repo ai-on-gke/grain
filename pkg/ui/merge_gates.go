@@ -52,6 +52,9 @@ type SubmitPullRequestResult struct {
 // unsatisfied, overrideGates must explicitly name each skipped gate; no default
 // or shorthand skips a review gate.
 func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head string, overrideGates []string) error {
+	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+		return forbiddenErrorf("%s cannot force-merge task %s: forcing a merge requires an unlimited role (grain/operator)", a.label(), id)
+	}
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return err
