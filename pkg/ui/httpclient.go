@@ -88,6 +88,10 @@ type HTTPClient struct {
 	// reason the agent API gate asks an external agent credential for
 	// on a destructive route (`grain approve -reason`).
 	ActingReason string
+	// Socket is the daemon's API socket (HostAPISocket) when HTTP dials
+	// it rather than BaseURL: the daemon then knows the caller by its uid
+	// (hostaccount.go), so no local API token is offered.
+	Socket string
 	// RetryPolicy is how long a call waits out a daemon that is not
 	// answering. nil means DefaultRetryPolicy; &NoRetry is one attempt.
 	RetryPolicy *RetryPolicy
@@ -199,7 +203,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if IsLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) && c.Socket == "" {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
