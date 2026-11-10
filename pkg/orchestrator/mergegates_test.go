@@ -269,3 +269,67 @@ func TestNonTrustBoundaryAutoMergePRUnchanged(t *testing.T) {
 		t.Fatal("non-trust-boundary PR with auto-merge did not merge automatically on green CI")
 	}
 }
+
+// A force requested for a head that had not been classified yet could see no
+// security-review gate to name. The cycle that merges it classifies that head
+// first, and a trust-boundary push held there stays held unless the override
+// for that commit names the security review too.
+func TestForcedMergeDoesNotSkipAReviewGateItsOverrideDidNotName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		gates []string
+		merge bool
+	}{
+		{gates: []string{model.GateCI}, merge: false},
+		{gates: []string{model.GateCI, model.GateSecurityReview}, merge: true},
+	} {
+		t.Run(strings.Join(tc.gates, "+"), func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			sim, client := newSim(t, "acme", "widgets", "main")
+			task := finishTouching(t, ctx, store, sim, "t1", "pkg/thing/thing.go", true)
+			result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+			if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+				t.Fatalf("ProcessResult: %v", err)
+			}
+			got := reloaded(t, ctx, store, task.ID)
+			if !got.AutoMerge || linkOf(got, model.LinkTrustBoundaryCleared) == "" {
+				t.Fatalf("the change was not cleared: automerge=%v links=%+v", got.AutoMerge, got.Links)
+			}
+			branch := model.BranchName(task.ID)
+			setMergeable(sim, true)
+
+			// A trust-boundary commit lands, and the operator forces that head
+			// before any cycle has classified it.
+			pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "unreviewed\n")
+			sim.CheckRuns[branch] = greenCheck
+			head := prHeadOf(t, client, got)
+			forceAt := baseTime.Add(5 * time.Minute)
+			if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+				tk.Links = append(tk.Links, model.GateOverrideRecord{
+					Gates: tc.gates, Reason: "outage", By: "alice@example.com", HeadSHA: head, At: forceAt,
+				}.Link())
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ObserveField(ctx, task.ID, forceAt, func(o *model.Observation) {
+				o.ForceMergeAt = &forceAt
+				o.ForceMergeReason, o.ForceMergeBy, o.ForceMergeHeadSHA = "outage", "alice@example.com", head
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(6*time.Minute)); err != nil {
+				t.Fatalf("SyncPullRequests: %v", err)
+			}
+			if merged := mergedBranch(sim, branch); merged != tc.merge {
+				t.Fatalf("override of %v: merged = %v, want %v; links=%+v",
+					tc.gates, merged, tc.merge, reloaded(t, ctx, store, task.ID).Links)
+			}
+			if !tc.merge && linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask) == "" {
+				t.Fatal("the unclassified trust-boundary head was not held for a security review")
+			}
+		})
+	}
+}

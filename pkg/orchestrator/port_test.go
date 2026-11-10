@@ -831,6 +831,17 @@ func TestPortOfAnUnreviewedChangeIsHeld(t *testing.T) {
 	}
 	sourceHead := headOf(t, sim.BareRepo, branch)
 	forceAt := baseTime.Add(30 * time.Minute)
+	// What ui.Client.ForceMergeWithGates records beside the stamp: the
+	// override names the security review it skips, for this commit.
+	if err := store.UpdateTask(ctx, source.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.GateOverrideRecord{
+			Gates: []string{model.GateSecurityReview}, Reason: "override security review for hotfix",
+			By: "alice", HeadSHA: sourceHead, At: forceAt,
+		}.Link())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.ObserveField(ctx, source.ID, forceAt, func(o *model.Observation) {
 		o.ForceMergeAt = &forceAt
 		o.ForceMergeReason = "override security review for hotfix"

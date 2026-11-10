@@ -366,3 +366,39 @@ func advanceHumanSubmitted(links []model.Link, fromHead, toHead string) []model.
 	}
 	return out
 }
+
+// forceOverridesGates reports whether the operator's gate override for the
+// forced commit (model.LinkGateOverride, pinned to forcedHead) covers every
+// merge gate other than CI that still stands on taskID as the store has it
+// now. A force request is checked against the gates it could see when it was
+// made (ui.Client.ForceMergeWithGates); a head classified only afterwards --
+// a trust-boundary push the request never saw held, an approver still owed,
+// `auto_merge: never` -- can raise a gate it did not name, and it is that gate,
+// not the request's say-so, that decides whether the forced merge proceeds.
+func forceOverridesGates(ctx context.Context, store *model.Store, taskID, forcedHead string) (bool, error) {
+	if forcedHead == "" {
+		return false, nil
+	}
+	t, err := store.GetTask(ctx, taskID)
+	if err != nil || t == nil {
+		return false, err
+	}
+	ov, ok := model.LatestGateOverride(*t)
+	if !ok || !strings.EqualFold(ov.HeadSHA, forcedHead) {
+		return false, nil
+	}
+	obs, err := store.GetObservation(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	states, err := store.States(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, g := range model.ComputeMergeGates(*t, obs, states) {
+		if g.ID != model.GateCI && !g.State.Satisfied() {
+			return false, nil
+		}
+	}
+	return true, nil
+}
