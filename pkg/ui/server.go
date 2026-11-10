@@ -123,17 +123,17 @@ func NewServerWithClient(client *Client) *Server {
 
 const maxTunnelRequestBodyBytes = 64 << 20 // 64 MiB cap on non-upgraded tunnel request bodies
 
-// RegistryTunnelHandler returns an http.Handler for serving accepted mux
+// HubTunnelHandler returns an http.Handler for serving accepted mux
 // streams on an outbound registry tunnel (-hub-connect). Every tunneled
 // request is gated unconditionally behind the "registry" IdentityVerifier
 // (X-Grain-Registry-Assertion, Source == "registry")—including open routes like
 // /api/config, /api/auth/*, and /api/hostd/connect—and loopback or access-code
 // shortcuts (grain_access cookies, X-Grain-Access-Code headers, and bearer
 // access codes) are unconditionally rejected.
-func (s *Server) RegistryTunnelHandler() http.Handler {
+func (s *Server) HubTunnelHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w.Header())
-		r = r.Clone(withRegistryTunnelRequest(r.Context()))
+		r = r.Clone(withHubTunnelRequest(r.Context()))
 		if strings.TrimSpace(r.RemoteAddr) == "" || isLoopbackRequest(r) {
 			r.RemoteAddr = "tunnel-stream-remote"
 		}
@@ -145,17 +145,17 @@ func (s *Server) RegistryTunnelHandler() http.Handler {
 				Audience:              s.tasks.Config.IAPAudience,
 				Issuer:                s.tasks.Config.IAPIssuer,
 				KeysURL:               s.tasks.Config.IAPKeysURL,
-				RegistryIssuer:        s.tasks.Config.RegistryIssuer,
-				RegistryAudience:      s.tasks.Config.RegistryAudience,
-				RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
-				RequireVerifier:       string(AuthMethodRegistry),
+				HubIssuer:             s.tasks.Config.HubIssuer,
+				HubAudience:           s.tasks.Config.HubAudience,
+				HubKeysURL:            s.tasks.Config.HubKeysURL,
+				RequireVerifier:       string(AuthMethodHub),
 				RequireIAP:            false,
 				LocalAPIToken:         "",
 				AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 			}))
 		} else {
 			cfg, _ := IAPConfigFromContext(r.Context())
-			cfg.RequireVerifier = string(AuthMethodRegistry)
+			cfg.RequireVerifier = string(AuthMethodHub)
 			cfg.RequireIAP = false
 			cfg.LocalAPIToken = ""
 			r = r.WithContext(WithIAPConfig(r.Context(), cfg))
@@ -176,12 +176,12 @@ func (s *Server) RegistryTunnelHandler() http.Handler {
 			writeError(w, http.StatusUnauthorized, errors.New("bearer access codes are not accepted over the hub tunnel"))
 			return
 		}
-		cv := verifyRegistryTunnelCaller(r)
+		cv := verifyHubTunnelCaller(r)
 		r = r.WithContext(withCallerVerification(r.Context(), &cv))
 		if !cv.present || cv.err != nil {
 			err := cv.err
 			if err == nil {
-				err = errors.New(errVerifierRequired(string(AuthMethodRegistry)))
+				err = errors.New(errVerifierRequired(string(AuthMethodHub)))
 			}
 			writeAssertionRefused(w, r, err)
 			return
@@ -201,22 +201,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	tunnelReq := isRegistryTunnelRequest(r)
+	tunnelReq := isHubTunnelRequest(r)
 	if s.tasks != nil {
 		iapCfg := IAPConfig{
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
-			RegistryIssuer:        s.tasks.Config.RegistryIssuer,
-			RegistryAudience:      s.tasks.Config.RegistryAudience,
-			RegistryKeysURL:       s.tasks.Config.RegistryKeysURL,
+			HubIssuer:             s.tasks.Config.HubIssuer,
+			HubAudience:           s.tasks.Config.HubAudience,
+			HubKeysURL:            s.tasks.Config.HubKeysURL,
 			RequireVerifier:       s.tasks.Config.RequireVerifier,
 			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 		}
 		if tunnelReq {
-			iapCfg.RequireVerifier = string(AuthMethodRegistry)
+			iapCfg.RequireVerifier = string(AuthMethodHub)
 			iapCfg.RequireIAP = false
 			iapCfg.LocalAPIToken = ""
 		}
@@ -383,9 +383,9 @@ func (s *Server) routes() {
 	s.route("POST /api/settings/plan", s.handlePlanSettings)
 	s.route("GET /api/settings/cli-run", s.handleGetCLIRunSettings)
 	s.route("PUT /api/settings/cli-run", s.handleUpdateCLIRunSettings)
-	s.route("GET /api/registry", s.handleGetRegistry)
-	s.route("POST /api/registry/heartbeat", s.handleTriggerRegistryHeartbeat)
-	s.route("GET /api/registry/status", s.handleGetRegistryInstanceStatus)
+	s.route("GET /api/registry", s.handleGetHub)
+	s.route("POST /api/registry/heartbeat", s.handleTriggerHubHeartbeat)
+	s.route("GET /api/registry/status", s.handleGetHubInstanceStatus)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)

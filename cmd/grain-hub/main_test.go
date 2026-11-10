@@ -23,7 +23,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hub"
 )
 
-func TestGrainRegistryDefaultProvidersRegistered(t *testing.T) {
+func TestGrainHubDefaultProvidersRegistered(t *testing.T) {
 	signers := hub.RegisteredSignerProviders()
 	for _, want := range []string{"kms", "local"} {
 		if !slices.Contains(signers, want) {

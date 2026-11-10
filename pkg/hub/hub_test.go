@@ -295,7 +295,7 @@ type countingSigner struct {
 	calls atomic.Int64
 }
 
-func (c *countingSigner) SignAssertion(ctx context.Context, claims RegistryClaims) (string, error) {
+func (c *countingSigner) SignAssertion(ctx context.Context, claims HubClaims) (string, error) {
 	c.calls.Add(1)
 	return c.inner.SignAssertion(ctx, claims)
 }
@@ -317,7 +317,7 @@ func TestLocalSignerAndCachingSigner30s(t *testing.T) {
 	cached := NewCachingSigner(cs, 30*time.Second)
 	cached.nowFn = func() time.Time { return now }
 
-	claimsIn := RegistryClaims{
+	claimsIn := HubClaims{
 		Audience: "grain-instance:alice-dev",
 		Subject:  "sub-alice",
 		Email:    "alice@example.com",
@@ -351,9 +351,9 @@ func TestLocalSignerAndCachingSigner30s(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JWKS: %v", err)
 	}
-	verified, err := VerifyRegistryAssertion(tok3, jwksDoc, "grain-instance:alice-dev", now)
+	verified, err := VerifyHubAssertion(tok3, jwksDoc, "grain-instance:alice-dev", now)
 	if err != nil {
-		t.Fatalf("VerifyRegistryAssertion: %v", err)
+		t.Fatalf("VerifyHubAssertion: %v", err)
 	}
 	if verified.Email != "alice@example.com" {
 		t.Fatalf("unexpected verified email %q", verified.Email)
@@ -391,7 +391,7 @@ func TestRunVersionAndValidateCLI(t *testing.T) {
 	}
 }
 
-func TestServerEndToEndInRegistryPackage(t *testing.T) {
+func TestServerEndToEndInHubPackage(t *testing.T) {
 	signer, err := NewEphemeralLocalSigner("reg-test-1")
 	if err != nil {
 		t.Fatalf("NewEphemeralLocalSigner: %v", err)
@@ -552,7 +552,7 @@ func TestCachingSignerClampsShortJWTTTLAndBypassesRequestID(t *testing.T) {
 	}
 
 	// Explicit per-request RequestID must never be aliased across calls.
-	t1, err := signer.SignAssertion(ctx, RegistryClaims{
+	t1, err := signer.SignAssertion(ctx, HubClaims{
 		Audience:  "grain-instance:dev",
 		Subject:   "sub-alice",
 		Email:     "alice@example.com",
@@ -562,7 +562,7 @@ func TestCachingSignerClampsShortJWTTTLAndBypassesRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignAssertion req-1: %v", err)
 	}
-	t2, err := signer.SignAssertion(ctx, RegistryClaims{
+	t2, err := signer.SignAssertion(ctx, HubClaims{
 		Audience:  "grain-instance:dev",
 		Subject:   "sub-alice",
 		Email:     "alice@example.com",
@@ -578,7 +578,7 @@ func TestCachingSignerClampsShortJWTTTLAndBypassesRequestID(t *testing.T) {
 
 	// A cached assertion is only reused for exactly the same claims: an
 	// empty delegation actor is not the same token as no actor at all.
-	base := RegistryClaims{
+	base := HubClaims{
 		Audience: "grain-instance:dev",
 		Subject:  "sub-alice",
 		Email:    "alice@example.com",
@@ -696,7 +696,7 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 }
 
 func TestServerCatalogUnlistedAndEntryManagerIsolationPostgres(t *testing.T) {
-	pgURL := startEphemeralPostgresForRegistryTest(t)
+	pgURL := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
 	if err != nil {
@@ -990,7 +990,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 	}
 	caching := NewCachingSigner(local, 30*time.Second)
 
-	plainTok, err := caching.SignAssertion(ctx, RegistryClaims{
+	plainTok, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1000,7 +1000,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 		t.Fatalf("SignAssertion plain: %v", err)
 	}
 
-	delTok1, err := caching.SignAssertion(ctx, RegistryClaims{
+	delTok1, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1021,7 +1021,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 	}
 
 	// Repeat with same grant -> cache hit.
-	delTok1Hit, err := caching.SignAssertion(ctx, RegistryClaims{
+	delTok1Hit, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1039,7 +1039,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 	}
 
 	// Different grant -> different token.
-	delTok2, err := caching.SignAssertion(ctx, RegistryClaims{
+	delTok2, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1058,7 +1058,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 
 	// InvalidateGrant("dlg_1") evicts dlg_1 while preserving dlg_2.
 	caching.InvalidateGrant("dlg_1")
-	delTok1After, err := caching.SignAssertion(ctx, RegistryClaims{
+	delTok1After, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1074,7 +1074,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 	if err != nil || delTok1After == delTok1 {
 		t.Fatalf("expected fresh token after InvalidateGrant(dlg_1)")
 	}
-	delTok2Hit, err := caching.SignAssertion(ctx, RegistryClaims{
+	delTok2Hit, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1093,7 +1093,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 
 	// Cache a token for a second app ("triage-app"), then InvalidateApp("planning-app"):
 	// both planning-app grants (dlg_1 and dlg_2) are evicted while triage-app and plainTok remain cached.
-	otherAppClaims := RegistryClaims{
+	otherAppClaims := HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1111,7 +1111,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 		t.Fatalf("SignAssertion otherAppTok: %v", err)
 	}
 	caching.InvalidateApp("planning-app")
-	delTok1AfterApp, err := caching.SignAssertion(ctx, RegistryClaims{
+	delTok1AfterApp, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1127,7 +1127,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 	if err != nil || delTok1AfterApp == delTok1After {
 		t.Fatalf("expected fresh token for dlg_1 after InvalidateApp(planning-app)")
 	}
-	delTok2AfterApp, err := caching.SignAssertion(ctx, RegistryClaims{
+	delTok2AfterApp, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1146,7 +1146,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 	if otherHit, err := caching.SignAssertion(ctx, otherAppClaims); err != nil || otherHit != otherAppTok {
 		t.Fatalf("expected triage-app assertion to remain cached after InvalidateApp(planning-app)")
 	}
-	if plainHit, err := caching.SignAssertion(ctx, RegistryClaims{
+	if plainHit, err := caching.SignAssertion(ctx, HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  "alice@example.com",
 		Email:    "alice@example.com",
@@ -1157,7 +1157,7 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 }
 
 func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testing.T) {
-	pgURL := startEphemeralPostgresForRegistryTest(t)
+	pgURL := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	now := time.Date(2026, 11, 6, 14, 0, 0, 0, time.UTC)
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
@@ -1623,7 +1623,7 @@ func TestStep17StopStartAutoUpgradeAndMaintenanceWindowEndToEnd(t *testing.T) {
 	}
 
 	// 2. End-to-end HTTP test for POST /api/entries/{name}/stop, POST /api/entries/{name}/start, and auto_upgrade/auto_wake fields.
-	pgURL := startEphemeralPostgresForRegistryTest(t)
+	pgURL := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
 	if err != nil {
@@ -1779,7 +1779,7 @@ func (f *fakeOrphanProviderForStep16) DeleteOrphan(ctx context.Context, zone, in
 }
 
 func TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd(t *testing.T) {
-	pgURL := startEphemeralPostgresForRegistryTest(t)
+	pgURL := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	now := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
@@ -2145,7 +2145,7 @@ func TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd(t *testin
 	}
 }
 
-func TestStep18DocsRegistryAndAccessCode(t *testing.T) {
+func TestStep18DocsHubAndAccessCode(t *testing.T) {
 	regDocBytes, err := os.ReadFile(filepath.Join("..", "..", "docs", "hub.md"))
 	if err != nil {
 		t.Fatalf("reading docs/hub.md: %v", err)
@@ -2226,7 +2226,7 @@ func TestStep18DocsRegistryAndAccessCode(t *testing.T) {
 	}
 }
 
-func startEphemeralPostgresForRegistryTest(t *testing.T) string {
+func startEphemeralPostgresForHubTest(t *testing.T) string {
 	t.Helper()
 	if envURL := strings.TrimSpace(os.Getenv("GRAIN_TEST_POSTGRES_URL")); envURL != "" {
 		return envURL

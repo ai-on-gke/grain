@@ -727,19 +727,19 @@ type Config struct {
 	// TriggerIAPSync requests an immediate IAP IAM synchronization cycle when team
 	// memberships or admin access lists are modified.
 	TriggerIAPSync func()
-	// RegistryStatus, when set, returns the live RegistrySnapshot from the
-	// daemon's RegistryManager; nil falls back to reading stored settings and
+	// HubStatus, when set, returns the live HubSnapshot from the
+	// daemon's HubManager; nil falls back to reading stored settings and
 	// repo configurations directly.
-	RegistryStatus func(ctx context.Context) (model.RegistrySnapshot, error)
-	// TriggerRegistryHeartbeat, when set, runs an immediate registry
+	HubStatus func(ctx context.Context) (model.HubSnapshot, error)
+	// TriggerHubHeartbeat, when set, runs an immediate registry
 	// registration/heartbeat step and returns the updated snapshot.
-	TriggerRegistryHeartbeat func(ctx context.Context) (model.RegistrySnapshot, error)
-	// TriggerRegistrySync wakes the daemon's RegistryManager after settings,
+	TriggerHubHeartbeat func(ctx context.Context) (model.HubSnapshot, error)
+	// TriggerHubSync wakes the daemon's HubManager after settings,
 	// secrets, or repository configurations change.
-	TriggerRegistrySync func()
-	// RegistryAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
+	TriggerHubSync func()
+	// HubAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
 	// in test setups.
-	RegistryAllowInsecureHTTP bool
+	HubAllowInsecureHTTP bool
 	// SandboxBackends names the backend methods this daemon has enough
 	// startup configuration to build. SandboxBackendOptions lists every backend
 	// in model.SandboxBackends() with Available and Reason so Settings never
@@ -1088,19 +1088,19 @@ type Config struct {
 	// IAPKeysURL is where the assertion's signing keys are published (a
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
-	// RegistryIssuer is the expected iss claim for verifying grain-registry
+	// HubIssuer is the expected iss claim for verifying grain-registry
 	// JWT assertions (X-Grain-Registry-Assertion) (-ui-hub-issuer /
-	// $GRAIN_HUB_ISSUER). All three of RegistryIssuer,
-	// RegistryAudience, and RegistryKeysURL must be set to enable the
+	// $GRAIN_HUB_ISSUER). All three of HubIssuer,
+	// HubAudience, and HubKeysURL must be set to enable the
 	// built-in "registry" IdentityVerifier.
-	RegistryIssuer string
-	// RegistryAudience is the single expected aud URL for verifying
+	HubIssuer string
+	// HubAudience is the single expected aud URL for verifying
 	// grain-registry JWT assertions (-ui-hub-audience /
 	// $GRAIN_HUB_AUDIENCE).
-	RegistryAudience string
-	// RegistryKeysURL is the JWKS endpoint URL publishing grain-registry's
+	HubAudience string
+	// HubKeysURL is the JWKS endpoint URL publishing grain-registry's
 	// ES256 public keys (-ui-hub-keys-url / $GRAIN_HUB_KEYS_URL).
-	RegistryKeysURL string
+	HubKeysURL string
 	// AllowedPrincipals, when non-empty, is the allowlist of user:,
 	// serviceAccount:, group:, and domain: entries admitted when a request
 	// authenticates through IAP or another registered IdentityVerifier

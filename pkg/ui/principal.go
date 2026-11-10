@@ -63,18 +63,18 @@ var PlaintextIdentityHeaders = []string{
 	"Grain-User",
 }
 
-// RegistryConfig holds request-level or server-level registry JWT verification
+// HubConfig holds request-level or server-level registry JWT verification
 // configuration (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url).
-type RegistryConfig = webauth.RegistryConfig
+type HubConfig = webauth.HubConfig
 
-// WithRegistryConfig attaches a RegistryConfig to ctx.
-func WithRegistryConfig(ctx context.Context, cfg RegistryConfig) context.Context {
-	return webauth.WithRegistryConfig(ctx, cfg)
+// WithHubConfig attaches a HubConfig to ctx.
+func WithHubConfig(ctx context.Context, cfg HubConfig) context.Context {
+	return webauth.WithHubConfig(ctx, cfg)
 }
 
-// RegistryConfigFromContext extracts RegistryConfig from ctx if present.
-func RegistryConfigFromContext(ctx context.Context) (RegistryConfig, bool) {
-	return webauth.RegistryConfigFromContext(ctx)
+// HubConfigFromContext extracts HubConfig from ctx if present.
+func HubConfigFromContext(ctx context.Context) (HubConfig, bool) {
+	return webauth.HubConfigFromContext(ctx)
 }
 
 // IAPConfig holds request-level or server-level IAP configuration options.
@@ -90,15 +90,15 @@ type IAPConfig struct {
 	// IAP's PEM map or a JWK set. Empty means $GRAIN_IAP_KEYS_URL, and
 	// then GoogleIAPCertURL.
 	KeysURL string
-	// RegistryIssuer is Config.RegistryIssuer (-ui-hub-issuer): the
+	// HubIssuer is Config.HubIssuer (-ui-hub-issuer): the
 	// exact iss claim a signed X-Grain-Registry-Assertion must carry.
-	RegistryIssuer string
-	// RegistryAudience is Config.RegistryAudience (-ui-hub-audience):
+	HubIssuer string
+	// HubAudience is Config.HubAudience (-ui-hub-audience):
 	// the single aud URL a signed X-Grain-Registry-Assertion must carry.
-	RegistryAudience string
-	// RegistryKeysURL is Config.RegistryKeysURL (-ui-hub-keys-url):
+	HubAudience string
+	// HubKeysURL is Config.HubKeysURL (-ui-hub-keys-url):
 	// the JWKS URL publishing the registry's ES256 public keys.
-	RegistryKeysURL string
+	HubKeysURL string
 	// RequireVerifier is Config.RequireVerifier (-ui-require-verifier):
 	// when non-empty, names the IdentityVerifier network callers must sign
 	// in through, so the access code counts only where accessCodeAccepted
@@ -122,18 +122,18 @@ func WithIAPConfig(ctx context.Context, cfg IAPConfig) context.Context {
 		Issuer:   cfg.Issuer,
 		KeysURL:  cfg.KeysURL,
 	})
-	if cfg.RegistryIssuer != "" || cfg.RegistryAudience != "" || cfg.RegistryKeysURL != "" {
-		rc, _ := webauth.RegistryConfigFromContext(ctx)
-		if cfg.RegistryIssuer != "" {
-			rc.Issuer = cfg.RegistryIssuer
+	if cfg.HubIssuer != "" || cfg.HubAudience != "" || cfg.HubKeysURL != "" {
+		rc, _ := webauth.HubConfigFromContext(ctx)
+		if cfg.HubIssuer != "" {
+			rc.Issuer = cfg.HubIssuer
 		}
-		if cfg.RegistryAudience != "" {
-			rc.Audience = cfg.RegistryAudience
+		if cfg.HubAudience != "" {
+			rc.Audience = cfg.HubAudience
 		}
-		if cfg.RegistryKeysURL != "" {
-			rc.KeysURL = cfg.RegistryKeysURL
+		if cfg.HubKeysURL != "" {
+			rc.KeysURL = cfg.HubKeysURL
 		}
-		ctx = webauth.WithRegistryConfig(ctx, rc)
+		ctx = webauth.WithHubConfig(ctx, rc)
 	}
 	return context.WithValue(ctx, iapConfigContextKey{}, cfg)
 }
@@ -241,86 +241,86 @@ func VerifyIAPToken(ctx context.Context, tokenStr string) (string, error) {
 	return id.Email, nil
 }
 
-// RegistryClaims represents the JWT claims contained in a grain-registry JWT assertion.
-type RegistryClaims = webauth.RegistryClaims
+// HubClaims represents the JWT claims contained in a grain-registry JWT assertion.
+type HubClaims = webauth.HubClaims
 
-// RegistryValidator validates a grain-registry JWT assertion token string for a target audience.
-type RegistryValidator = webauth.RegistryValidator
+// HubValidator validates a grain-registry JWT assertion token string for a target audience.
+type HubValidator = webauth.HubValidator
 
-// SetRegistryAudience sets the expected audience for grain-registry JWT verification.
-func SetRegistryAudience(aud string) {
-	webauth.SetRegistryAudience(aud)
+// SetHubAudience sets the expected audience for grain-registry JWT verification.
+func SetHubAudience(aud string) {
+	webauth.SetHubAudience(aud)
 }
 
-// GetRegistryAudience returns the configured audience for grain-registry JWT verification.
-func GetRegistryAudience() string {
-	return webauth.GetRegistryAudience()
+// GetHubAudience returns the configured audience for grain-registry JWT verification.
+func GetHubAudience() string {
+	return webauth.GetHubAudience()
 }
 
-// SetRegistryIssuer sets the expected issuer for grain-registry JWT verification.
-func SetRegistryIssuer(issuer string) {
-	webauth.SetRegistryIssuer(issuer)
+// SetHubIssuer sets the expected issuer for grain-registry JWT verification.
+func SetHubIssuer(issuer string) {
+	webauth.SetHubIssuer(issuer)
 }
 
-// GetRegistryIssuer returns the configured issuer for grain-registry JWT verification.
-func GetRegistryIssuer() string {
-	return webauth.GetRegistryIssuer()
+// GetHubIssuer returns the configured issuer for grain-registry JWT verification.
+func GetHubIssuer() string {
+	return webauth.GetHubIssuer()
 }
 
-// SetRegistryKeysURL sets the JWKS endpoint URL for grain-registry JWT verification.
-func SetRegistryKeysURL(u string) {
-	webauth.SetRegistryKeysURL(u)
+// SetHubKeysURL sets the JWKS endpoint URL for grain-registry JWT verification.
+func SetHubKeysURL(u string) {
+	webauth.SetHubKeysURL(u)
 }
 
-// GetRegistryKeysURL returns the configured JWKS endpoint URL for grain-registry JWT verification.
-func GetRegistryKeysURL() string {
-	return webauth.GetRegistryKeysURL()
+// GetHubKeysURL returns the configured JWKS endpoint URL for grain-registry JWT verification.
+func GetHubKeysURL() string {
+	return webauth.GetHubKeysURL()
 }
 
-// SetRegistryHTTPClient sets a custom http.Client for fetching grain-registry JWKS keys.
-func SetRegistryHTTPClient(client *http.Client) {
-	webauth.SetRegistryHTTPClient(client)
+// SetHubHTTPClient sets a custom http.Client for fetching grain-registry JWKS keys.
+func SetHubHTTPClient(client *http.Client) {
+	webauth.SetHubHTTPClient(client)
 }
 
-// SetRegistryRefetchFloor overrides the minimum interval between registry JWKS
+// SetHubRefetchFloor overrides the minimum interval between registry JWKS
 // refetches triggered by an unknown key ID.
-func SetRegistryRefetchFloor(d time.Duration) {
-	webauth.SetRegistryRefetchFloor(d)
+func SetHubRefetchFloor(d time.Duration) {
+	webauth.SetHubRefetchFloor(d)
 }
 
-// ResetRegistryConfig resets all registry package-level configurations to defaults.
-func ResetRegistryConfig() {
-	webauth.ResetRegistryConfig()
+// ResetHubConfig resets all registry package-level configurations to defaults.
+func ResetHubConfig() {
+	webauth.ResetHubConfig()
 	refusedVerifiersMu.Lock()
 	clear(refusedVerifiersLogged)
 	refusedVerifiersMu.Unlock()
 }
 
-// VerifyRegistryToken validates a grain-registry JWT assertion and returns the
+// VerifyHubToken validates a grain-registry JWT assertion and returns the
 // authenticated user email/identity.
-func VerifyRegistryToken(ctx context.Context, tokenStr string) (string, error) {
+func VerifyHubToken(ctx context.Context, tokenStr string) (string, error) {
 	tokenStr = strings.TrimSpace(tokenStr)
 	if tokenStr == "" {
 		return "", errors.New("empty registry assertion token")
 	}
 
-	var claims *RegistryClaims
+	var claims *HubClaims
 	var err error
 	handled := false
 	for _, v := range registeredVerifiersSnapshot() {
-		if rv, ok := v.(*registryVerifier); ok {
+		if rv, ok := v.(*hubVerifier); ok {
 			claims, _, err = rv.inner.VerifyToken(ctx, tokenStr)
 			handled = true
 			break
 		}
 	}
 	if !handled {
-		claims, err = webauth.ValidateRegistryToken(ctx, tokenStr, webauth.RegistryAudienceFor(ctx))
+		claims, err = webauth.ValidateHubToken(ctx, tokenStr, webauth.HubAudienceFor(ctx))
 	}
 	if err != nil {
 		return "", err
 	}
-	id, err := webauth.IdentityFromRegistryClaims(claims)
+	id, err := webauth.IdentityFromHubClaims(claims)
 	if err != nil {
 		return "", err
 	}
@@ -401,8 +401,8 @@ const (
 	// AuthMethodIAP is a verified IAP (or other signing proxy's)
 	// assertion.
 	AuthMethodIAP AuthMethod = "iap"
-	// AuthMethodRegistry is a verified grain-registry assertion.
-	AuthMethodRegistry AuthMethod = "registry"
+	// AuthMethodHub is a verified grain-registry assertion.
+	AuthMethodHub AuthMethod = "registry"
 	// AuthMethodTrusted is nobody signed in, from a source this daemon
 	// trusts as itself: the access code, or an in-process request.
 	AuthMethodTrusted AuthMethod = "trusted"
@@ -490,7 +490,7 @@ func unverifiedIdentity(r *http.Request, proxyOnly bool) string {
 				return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
 					"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", h)
 			}
-			if v.Name() == string(AuthMethodRegistry) {
+			if v.Name() == string(AuthMethodHub) {
 				return fmt.Sprintf("its %s did not verify against this deployment's registry audience, issuer and keys "+
 					"(-ui-hub-audience, -ui-hub-issuer, -ui-hub-keys-url)", h)
 			}

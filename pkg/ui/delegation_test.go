@@ -46,7 +46,7 @@ func newDelegationHarness(t *testing.T) *delegationHarness {
 	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
 	logs := ui.LogBufferForTest(t)
 
-	ecKey, _, _, jwksSrv := newRegistryJWKSServer(t)
+	ecKey, _, _, jwksSrv := newHubJWKSServer(t)
 	const (
 		issuer     = "https://grain.example.com"
 		audience   = "https://my-grain.grain.example.com"
@@ -55,9 +55,9 @@ func newDelegationHarness(t *testing.T) *delegationHarness {
 
 	srv, client := testServer(t)
 	client.Config.Actor = ui.DefaultActor("owner@example.com")
-	client.Config.RegistryIssuer = issuer
-	client.Config.RegistryAudience = audience
-	client.Config.RegistryKeysURL = jwksSrv.URL
+	client.Config.HubIssuer = issuer
+	client.Config.HubAudience = audience
+	client.Config.HubKeysURL = jwksSrv.URL
 	ui.SetAccessCodeForTest(srv, accessCode)
 
 	return &delegationHarness{
@@ -91,7 +91,7 @@ func (h *delegationHarness) mintDelegated(t *testing.T, personEmail, appSA, appN
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims := ui.RegistryClaims{
+	claims := ui.HubClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    h.issuer,
 			Subject:   personEmail,
@@ -105,13 +105,13 @@ func (h *delegationHarness) mintDelegated(t *testing.T, personEmail, appSA, appN
 		RequestID: "rid-deleg-1",
 		Act:       actBytes,
 	}
-	return signRegistryES256(t, h.ecKey, "reg-key-1", claims)
+	return signHubES256(t, h.ecKey, "reg-key-1", claims)
 }
 
 func (h *delegationHarness) mintDirect(t *testing.T, sub string, kind model.PrincipalKind) string {
 	t.Helper()
 	now := time.Now().Truncate(time.Second)
-	claims := ui.RegistryClaims{
+	claims := ui.HubClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    h.issuer,
 			Subject:   sub,
@@ -124,7 +124,7 @@ func (h *delegationHarness) mintDirect(t *testing.T, sub string, kind model.Prin
 		Kind:      webauth.PrincipalKind(kind),
 		RequestID: "rid-direct-1",
 	}
-	return signRegistryES256(t, h.ecKey, "reg-key-1", claims)
+	return signHubES256(t, h.ecKey, "reg-key-1", claims)
 }
 
 func (h *delegationHarness) do(method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -599,7 +599,7 @@ func TestDelegationLeavesCSRFAndBreakGlassUnchanged(t *testing.T) {
 	}
 }
 
-func TestPlainRegistryServicePrincipalNeedsServiceAccountEntry(t *testing.T) {
+func TestPlainHubServicePrincipalNeedsServiceAccountEntry(t *testing.T) {
 	h := newDelegationHarness(t)
 	ctx := r503Ctx(t)
 	const (

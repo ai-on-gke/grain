@@ -97,7 +97,7 @@ type DelegationChecker interface {
 
 // RouterOptions configures a registry subdomain/tunnel/peer Router.
 type RouterOptions struct {
-	RegistryHost     string
+	HubHost          string
 	InstanceDomain   string
 	IAPAudience      string
 	ReplicaID        string
@@ -468,13 +468,13 @@ func (rt *Router) onDelegationNotification(payload string) {
 // requests to controlPlane, and rejecting multi-label or unknown Host headers with 404.
 func (rt *Router) WrapMainHandler(controlPlane http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		match := ClassifyHost(r.Host, rt.opts.RegistryHost, rt.opts.InstanceDomain)
+		match := ClassifyHost(r.Host, rt.opts.HubHost, rt.opts.InstanceDomain)
 		switch match.Kind {
 		case HostRouteInstance:
 			rt.ServeInstanceHost(w, r, match.EntryName, match.Host)
 		case HostRouteInvalidInstance, HostRouteUnknown:
-			WriteMissingEntryState(w, r, rt.opts.RegistryHost, match.EntryName, nil, false)
-		case HostRouteRegistry:
+			WriteMissingEntryState(w, r, rt.opts.HubHost, match.EntryName, nil, false)
+		case HostRouteHub:
 			if strings.TrimSpace(r.Header.Get(HeaderOnBehalfOf)) != "" {
 				writeJSONError(w, http.StatusBadRequest, "delegation_not_supported", "X-Grain-On-Behalf-Of is only supported on entry hosts")
 				return
@@ -511,8 +511,8 @@ func (rt *Router) PublicHandler(jwksHandler, healthzHandler http.HandlerFunc) ht
 	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		match := ClassifyHost(r.Host, rt.opts.RegistryHost, rt.opts.InstanceDomain)
-		if match.Kind != HostRouteRegistry {
+		match := ClassifyHost(r.Host, rt.opts.HubHost, rt.opts.InstanceDomain)
+		if match.Kind != HostRouteHub {
 			writeJSONError(w, http.StatusNotFound, "not_found", "public endpoint only serves registry host")
 			return
 		}
@@ -552,7 +552,7 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 	}
 
 	var entry *store.EntryRow
-	rawToken := ExtractRegistryToken(r)
+	rawToken := ExtractHubToken(r)
 	wantsTokenOnly := publicOnly || strings.EqualFold(strings.TrimSpace(r.Header.Get(api.HeaderAuth)), api.AuthModeToken)
 	if wantsTokenOnly {
 		if rawToken == "" {
@@ -810,7 +810,7 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 		} else if effectiveCaller != nil && effectiveCaller.IsAdmin {
 			isManager = true
 		}
-		WriteMissingEntryState(w, r, rt.opts.RegistryHost, name, cached.DeletedRow, isManager)
+		WriteMissingEntryState(w, r, rt.opts.HubHost, name, cached.DeletedRow, isManager)
 		return
 	}
 
@@ -847,10 +847,10 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 	// 7. Handle non-running lifecycle states with self-contained HTML / JSON state pages.
 	switch strings.ToLower(strings.TrimSpace(string(entry.LifecycleState))) {
 	case "creating", "replacing", "provisioning":
-		WriteProvisioningState(w, r, rt.opts.RegistryHost, entry)
+		WriteProvisioningState(w, r, rt.opts.HubHost, entry)
 		return
 	case "stopping":
-		WriteStoppingState(w, r, rt.opts.RegistryHost, entry)
+		WriteStoppingState(w, r, rt.opts.HubHost, entry)
 		return
 	case "stopped":
 		waking := false
@@ -861,16 +861,16 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 				waking = entry.LifecycleState == api.StateCreating
 			}
 		}
-		WriteStoppedOrWakingState(w, r, rt.opts.RegistryHost, entry, waking)
+		WriteStoppedOrWakingState(w, r, rt.opts.HubHost, entry, waking)
 		return
 	case "deleting", "deprovisioning":
 		WriteDeletingState(w, r, entry)
 		return
 	case "failed":
-		WriteFailedState(w, r, rt.opts.RegistryHost, entry, isManager)
+		WriteFailedState(w, r, rt.opts.HubHost, entry, isManager)
 		return
 	case "deleted":
-		WriteMissingEntryState(w, r, rt.opts.RegistryHost, name, entry, isManager)
+		WriteMissingEntryState(w, r, rt.opts.HubHost, name, entry, isManager)
 		return
 	}
 
@@ -905,7 +905,7 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 	// 11. Sign (or reuse cached 30s) ES256 X-Grain-Registry-Assertion (`aud = "https://<name>.<instance-domain>"`)
 	// and sanitize headers/cookies while preserving Host.
 	// Use the canonical normalized email for both `sub` and `email` so
-	// downstream `webauth.IdentityFromRegistryClaims` accepts assertions when
+	// downstream `webauth.IdentityFromHubClaims` accepts assertions when
 	// front-door IAP supplies a numeric Gaia ID (`accounts.google.com:<id>`) in
 	// `Caller.Subject`.
 	email := webauth.NormalizeIdentityEmail(effectiveCaller.Email)
@@ -943,7 +943,7 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 			})
 		}
 	}
-	SanitizeProxyRequest(r, entryHost, rt.opts.RegistryHost, rt.opts.IAPAudience, assertionJWT, reqID)
+	SanitizeProxyRequest(r, entryHost, rt.opts.HubHost, rt.opts.IAPAudience, assertionJWT, reqID)
 
 	// 12. Dispatch per entry kind.
 	switch entry.Kind {
@@ -959,12 +959,12 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 func (rt *Router) routeInstanceEntry(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, entryHost string) {
 	rawURL := strings.TrimSpace(entry.BackendURL)
 	if rawURL == "" {
-		WriteProvisioningState(w, r, rt.opts.RegistryHost, entry)
+		WriteProvisioningState(w, r, rt.opts.HubHost, entry)
 		return
 	}
 	targetURL, err := url.Parse(rawURL)
 	if err != nil || targetURL.Scheme == "" || targetURL.Host == "" {
-		WriteProvisioningState(w, r, rt.opts.RegistryHost, entry)
+		WriteProvisioningState(w, r, rt.opts.HubHost, entry)
 		return
 	}
 	proxy := NewInstanceReverseProxy(targetURL, entryHost, rt.instanceHTTPTransport)

@@ -36,7 +36,7 @@ type HostRouteKind int
 
 const (
 	HostRouteUnknown HostRouteKind = iota
-	HostRouteRegistry
+	HostRouteHub
 	HostRouteInstance
 	HostRouteInvalidInstance
 )
@@ -71,17 +71,17 @@ func NormalizeHost(raw string) string {
 // Multi-label prefixes under instanceDomain (e.g. "a.b.<instance-domain>"), bare
 // "<instance-domain>", or syntactically invalid entry names return HostRouteInvalidInstance (404).
 // Unrecognized hosts return HostRouteUnknown (404), except loopback addresses used by
-// local health probes and httptest servers which map to HostRouteRegistry.
-func ClassifyHost(hostHeader, registryHost, instanceDomain string) HostMatch {
+// local health probes and httptest servers which map to HostRouteHub.
+func ClassifyHost(hostHeader, hubHost, instanceDomain string) HostMatch {
 	h := NormalizeHost(hostHeader)
-	reg := NormalizeHost(registryHost)
+	reg := NormalizeHost(hubHost)
 	instDom := NormalizeHost(instanceDomain)
 
 	if h == "" {
 		return HostMatch{Kind: HostRouteUnknown}
 	}
 	if reg != "" && h == reg {
-		return HostMatch{Kind: HostRouteRegistry, Host: h}
+		return HostMatch{Kind: HostRouteHub, Host: h}
 	}
 	if instDom != "" {
 		if h == instDom {
@@ -101,7 +101,7 @@ func ClassifyHost(hostHeader, registryHost, instanceDomain string) HostMatch {
 		}
 	}
 	if h == "127.0.0.1" || h == "localhost" || h == "::1" {
-		return HostMatch{Kind: HostRouteRegistry, Host: h}
+		return HostMatch{Kind: HostRouteHub, Host: h}
 	}
 	return HostMatch{Kind: HostRouteUnknown, Host: h}
 }

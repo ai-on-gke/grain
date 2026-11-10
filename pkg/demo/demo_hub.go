@@ -25,11 +25,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
-func configureRegistryDemo(storedCfg *model.Config, store *model.Store, cfg *ui.Config) {
-	storedCfg.Registry = model.RegistryConfig{
+func configureHubDemo(storedCfg *model.Config, store *model.Store, cfg *ui.Config) {
+	storedCfg.Hub = model.HubConfig{
 		URL:         "https://registry.grain.example.com",
 		Entry:       "acme-widgets",
-		AuthMode:    model.RegistryAuthToken,
+		AuthMode:    model.HubAuthToken,
 		DisplayName: "Acme Widgets Grain",
 		Purpose:     "Primary grain controller for acme/widgets engineering tasks and CI",
 		HostKind:    api.HostKindWorkstation,
@@ -39,33 +39,33 @@ func configureRegistryDemo(storedCfg *model.Config, store *model.Store, cfg *ui.
 	var mu sync.Mutex
 	lastHeartbeat := time.Now().UTC().Add(-4 * time.Second)
 
-	snapshot := func(ctx context.Context) (model.RegistrySnapshot, error) {
+	snapshot := func(ctx context.Context) (model.HubSnapshot, error) {
 		mc, err := store.GetConfig(ctx)
-		if err != nil || mc == nil || !mc.Registry.Enabled() {
-			return model.RegistrySnapshot{State: model.RegistryStateDisabled}, err
+		if err != nil || mc == nil || !mc.Hub.Enabled() {
+			return model.HubSnapshot{State: model.HubStateDisabled}, err
 		}
 		repoCfgs, _ := store.ListRepoConfigs(ctx)
-		scopes := model.DeriveRegistryScopes(mc.TargetRepos, nil, model.RepoRef{}, repoCfgs, mc.Registry.Scopes)
-		active, awaiting, _ := store.RegistryTaskCounts(ctx)
+		scopes := model.DeriveHubScopes(mc.TargetRepos, nil, model.RepoRef{}, repoCfgs, mc.Hub.Scopes)
+		active, awaiting, _ := store.HubTaskCounts(ctx)
 		v := version.Get()
 
 		mu.Lock()
 		hb := lastHeartbeat
 		mu.Unlock()
 		next := hb.Add(15 * time.Second)
-		hk := mc.Registry.HostKind
+		hk := mc.Hub.HostKind
 		if hk == "" {
 			hk = api.HostKindWorkstation
 		}
 
-		return model.RegistrySnapshot{
+		return model.HubSnapshot{
 			Enabled:                  true,
-			State:                    model.RegistryStateConnected,
-			Config:                   mc.Registry,
+			State:                    model.HubStateConnected,
+			Config:                   mc.Hub,
 			EffectiveHostKind:        hk,
 			TokenConfigured:          true,
 			CredentialSource:         "secret",
-			RegistryStatus:           api.StatusOnline,
+			HubStatus:                api.StatusOnline,
 			Registered:               true,
 			LastHeartbeatAt:          &hb,
 			LastAttemptAt:            &hb,
@@ -80,8 +80,8 @@ func configureRegistryDemo(storedCfg *model.Config, store *model.Store, cfg *ui.
 		}, nil
 	}
 
-	cfg.RegistryStatus = snapshot
-	cfg.TriggerRegistryHeartbeat = func(ctx context.Context) (model.RegistrySnapshot, error) {
+	cfg.HubStatus = snapshot
+	cfg.TriggerHubHeartbeat = func(ctx context.Context) (model.HubSnapshot, error) {
 		mu.Lock()
 		lastHeartbeat = time.Now().UTC()
 		mu.Unlock()

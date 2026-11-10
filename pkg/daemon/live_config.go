@@ -158,7 +158,7 @@ type LiveConfig struct {
 	hostdCapabilityServers *hostdCapabilityServers
 	// registry is the background grain hub manager (registry.go);
 	// Refresh notifies it whenever grain_config.registry or target_repos changes.
-	registry *RegistryManager
+	hub *HubManager
 
 	Mu      sync.Mutex
 	Applied Config
@@ -209,19 +209,19 @@ func (l *LiveConfig) WithCapabilityServers(r *servers.Registry) *LiveConfig {
 	return l
 }
 
-// WithRegistry hands Refresh the background registry manager to wake whenever
+// WithHub hands Refresh the background registry manager to wake whenever
 // grain_config.registry or target_repos changes.
-func (l *LiveConfig) WithRegistry(r *RegistryManager) *LiveConfig {
-	l.registry = r
+func (l *LiveConfig) WithHub(r *HubManager) *LiveConfig {
+	l.hub = r
 	return l
 }
 
 // Registry returns the background registry manager attached to l, or nil.
-func (l *LiveConfig) Registry() *RegistryManager {
+func (l *LiveConfig) Hub() *HubManager {
 	if l == nil {
 		return nil
 	}
-	return l.registry
+	return l.hub
 }
 
 // withHostdCapabilityServers hands Refresh the hostds' registries of run:
@@ -448,8 +448,8 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 		l.capabilityServers.Update(deploymentCapabilityServers(configured))
 		l.hostdCapabilityServers.update(configured)
 	}
-	if l.registry != nil {
-		l.registry.NotifyStoreConfig(stored.Registry, stored.TargetRepos)
+	if l.hub != nil {
+		l.hub.NotifyStoreConfig(stored.Hub, stored.TargetRepos)
 	}
 
 	wasCPUOvercommit, wasMemOvercommit := was.overcommitRatios()
