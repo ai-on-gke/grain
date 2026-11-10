@@ -281,7 +281,9 @@ exit 0
 	if !strings.Contains(argv, "pull "+wantRef) {
 		t.Errorf("docker was never asked to pull %s; it was asked:\n%s", wantRef, argv)
 	}
-	if !strings.Contains(argv, "run --rm "+pinned+" schema-version") {
+	// --pull=never: the image was just pulled and pinned, so a run that
+	// cannot find it locally must fail rather than fetch it implicitly.
+	if !strings.Contains(argv, "run --rm --pull=never "+pinned+" schema-version") {
 		t.Errorf("the pulled image was never health-checked; docker was asked:\n%s", argv)
 	}
 	waitForPath(t, restartMarker, "the restart that brings the new image up")
