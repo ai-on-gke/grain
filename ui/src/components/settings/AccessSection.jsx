@@ -32,6 +32,7 @@ import api from "../../api.js";
 import { accessRoleLabel, canAccess } from "../../access.js";
 import AppIcon from "../AppIcon.jsx";
 import SettingsCard from "./SettingsCard.jsx";
+import AccessCodeModeCard from "./AccessCodeModeCard.jsx";
 import { formatDateTime } from "../../time.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 
@@ -201,6 +202,7 @@ export default function AccessSection({
   const [pendingReason, setPendingReason] = useState("");
   const [postRemoveWarning, setPostRemoveWarning] = useState("");
   const [history, setHistory] = useState(null);
+  const [codeMode, setCodeMode] = useState(null);
 
   const loadPrincipals = useCallback(async () => {
     try {
@@ -227,10 +229,21 @@ export default function AccessSection({
     }
   }, []);
 
+  // loadCodeMode reads the access code's mode. A daemon too old to have
+  // the route, or a caller it refuses, leaves the card out.
+  const loadCodeMode = useCallback(async () => {
+    try {
+      setCodeMode(await api("/api/access/access-code"));
+    } catch {
+      setCodeMode(null);
+    }
+  }, []);
+
   useEffect(() => {
     loadPrincipals();
     loadHistory();
-  }, [loadPrincipals, loadHistory]);
+    loadCodeMode();
+  }, [loadPrincipals, loadHistory, loadCodeMode]);
 
   const reload = async () => {
     await loadPrincipals();
@@ -432,6 +445,8 @@ export default function AccessSection({
           </Box>
         )}
       </SettingsCard>
+
+      <AccessCodeModeCard view={codeMode} />
 
       <SettingsCard
         title="Allowed users and groups"
@@ -711,7 +726,8 @@ export default function AccessSection({
         <SettingsCard title="Access history" anchor="access-history">
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             Every change to this list, newest first: who made it, when, the old
-            and new role, and the reason given.
+            and new role, and the reason given. Changes made with the access
+            code are listed here too, marked Access code.
           </Typography>
           <AccessHistory rows={history} />
         </SettingsCard>
@@ -720,7 +736,8 @@ export default function AccessSection({
   );
 }
 
-// AccessHistory is the config_audit rows of surface "access".
+// AccessHistory is the config_audit rows of surface "access" and
+// "access-code": role changes and what the access code changed.
 function AccessHistory({ rows }) {
   const zone = useTimeZone();
   if (rows.length === 0) {
@@ -757,6 +774,16 @@ function AccessHistory({ rows }) {
               <TableCell
                 sx={{ fontFamily: "monospace", wordBreak: "break-word" }}
               >
+                {r.surface === "access-code" ? (
+                  <Chip
+                    size="small"
+                    label="Access code"
+                    color="warning"
+                    variant="outlined"
+                    data-testid="access-history-code-use"
+                    sx={{ mr: 1, fontFamily: "inherit" }}
+                  />
+                ) : null}
                 {r.summary}
               </TableCell>
             </TableRow>
