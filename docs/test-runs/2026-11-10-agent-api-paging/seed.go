@@ -32,7 +32,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -45,7 +44,7 @@ func main() {
 	dataDir := flag.String("data-dir", "", "grain daemon -data-dir")
 	driver := flag.String("db-driver", "sqlite", "sqlite or postgres")
 	dsn := flag.String("db-dsn", "", "postgres URL or sqlite dir")
-	gchatURL := flag.String("gchat-url", "http://127.0.0.1:4283/mcp/gchat", "stub gchat MCP URL")
+	phase := flag.String("phase", "store", "store: every collection, before the daemon's first boot; live: merge batches, once it is up")
 	tokensOut := flag.String("tokens-out", "", "path outside repo to write raw test tokens JSON")
 	count := flag.Int("count", 260, "rows per collection (>=255)")
 	flag.Parse()
@@ -80,6 +79,10 @@ func main() {
 	}
 
 	n := *count
+	if *phase == "live" {
+		seedLive(ctx, store, n)
+		return
+	}
 	baseTime := time.Date(2026, 11, 10, 4, 0, 0, 0, time.UTC)
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	other := model.RepoRef{Owner: "other", Name: "thing"}
@@ -145,34 +148,21 @@ func main() {
 		})
 	}
 
-	capServers := map[string]protocol.ServerConfig{
-		"gchat-main": {
-			Builtin:   "gchat",
-			ServerURL: *gchatURL,
-		},
-	}
-	for i := 0; i < n; i++ {
-		id := fmt.Sprintf("cap-srv-%03d", i)
-		if i%2 == 0 {
-			capServers[id] = protocol.ServerConfig{
-				Command:  fmt.Sprintf("/usr/local/bin/mcp-tool-%03d", i),
-				Disabled: true,
-			}
-		} else {
-			capServers[id] = protocol.ServerConfig{
-				ServerURL: fmt.Sprintf("https://mcp-%03d.example.com/rpc", i),
-				Disabled:  true,
-			}
-		}
-	}
-
+	// Only connections and console sessions are written here. This row
+	// has no poll interval, worker count, GitHub host or deployment id,
+	// so the daemon's first boot reads it as `grain connections import`'s
+	// row (model.Config.ConnectionsOnly) and replaces it with a row seeded
+	// from its flags, carrying over only what WithConnectionsOf names: git
+	// connections and credential, agent backends, model settings and
+	// console sessions (daemon.LoadConfig). Capability servers,
+	// externalAgentApi and target repos written here were dropped by
+	// design. Capability servers are added through PUT
+	// /api/capability-servers once the daemon is up (seed_api.py), and
+	// externalAgentApi through PUT /api/settings (env.sh).
 	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
 		cfg.GitCredential = "bot"
 		cfg.GitConnections = gitConns
 		cfg.ConsoleSessions = consoleSessions
-		cfg.MCPServers = capServers
-		cfg.ExternalAgentAPI = true
-		cfg.TargetRepos = []string{"acme/widgets", "other/thing"}
 		return nil
 	}); err != nil {
 		log.Fatalf("UpdateConfig: %v", err)
@@ -424,7 +414,43 @@ func main() {
 		_ = store.PutCIStepOutput(ctx, run.ID, 0, 1, fmt.Sprintf("--- FAIL: TestSharedFault_%03d (0.01s)\n    pkg/foo/bar_%03d_test.go:42: assertion failed\nFAIL\tgithub.com/acme/widgets/pkg/foo\n", faultIdxB, faultIdxB))
 	}
 
-	// 9. Seed n merge batches & n watched base-branch gates.
+	// The grain CI runs above are dated off baseTime, outside the 6 h
+	// fault window (ci.DefaultFaultWindow), and GET /api/ci/faults reads at
+	// most 60 of them (ciFaultRunLimit) anyway. Shared GitHub Actions
+	// failures are read from the store with no such bound: n faults, each
+	// failing job JobName gh-shared-NNN on two branches, completed an hour
+	// before the seed ran.
+	ghAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for i := 0; i < n; i++ {
+		for b, side := range []string{"a", "b"} {
+			at := ghAt.Add(time.Duration(i) * time.Second)
+			if err := store.PutGitHubCIJob(ctx, model.GitHubCIJob{
+				Repo:        "acme/widgets",
+				CheckRunID:  int64(700000 + 2*i + b),
+				Source:      model.GitHubCISource,
+				App:         "github-actions",
+				Ref:         fmt.Sprintf("grain/gh-%s-%03d", side, i),
+				Commit:      fmt.Sprintf("%040x", 0x7000+2*i+b),
+				Workflow:    "Tests",
+				RunID:       int64(800000 + 2*i + b),
+				RunAttempt:  1,
+				JobName:     fmt.Sprintf("gh-shared-%03d", i),
+				Conclusion:  "failure",
+				StartedAt:   &at,
+				CompletedAt: &at,
+				FailingStep: "go test",
+				FailureTail: fmt.Sprintf("--- FAIL: TestGitHubShared_%03d (0.01s)\n    pkg/gh/shared_%03d_test.go:17: want ok\nFAIL\tgithub.com/acme/widgets/pkg/gh\n", i, i),
+				TailSource:  "log",
+				RecordedAt:  at,
+				UpdatedAt:   at,
+			}); err != nil {
+				log.Fatalf("PutGitHubCIJob %d%s: %v", i, side, err)
+			}
+		}
+	}
+
+	// 9. Seed n watched base-branch gates. Merge batches are seeded
+	// after boot (-phase live).
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:               widgets,
 		CIMode:             model.CIModeGrain,
@@ -433,24 +459,15 @@ func main() {
 		log.Fatalf("PutRepoConfig widgets: %v", err)
 	}
 	for i := 0; i < n; i++ {
-		mbRepo := widgets
-		if i >= n-10 {
-			mbRepo = other
-		}
-		if err := store.PutMergeBatch(ctx, model.MergeBatch{
-			Repo:   mbRepo,
-			Branch: "trunk",
-			TaskID: fmt.Sprintf("%d", 100+i),
-			Ref:    fmt.Sprintf("grain/merge-recheck/%d", 100+i),
-			RunID:  fmt.Sprintf("ci-run-%03d", i),
-		}); err != nil {
-			log.Fatalf("PutMergeBatch %d: %v", i, err)
-		}
-
+		// A watched repository that is on grain CI and not enrolled yet
+		// is not a finding: the seeder enrols one branch per cycle
+		// (ui.baseBranchGateOf). A watched repository whose CI mode is
+		// github has no base-branch check at all, which is the "not
+		// enabled" gate, and the orchestrator does not enrol it.
 		gateRepo := model.RepoRef{Owner: "acme", Name: fmt.Sprintf("watched-repo-%03d", i)}
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:               gateRepo,
-			CIMode:             model.CIModeGrain,
+			CIMode:             model.CIModeGitHub,
 			WatchDefaultBranch: true,
 		}); err != nil {
 			log.Fatalf("PutRepoConfig gate %d: %v", i, err)
@@ -511,11 +528,14 @@ func main() {
 		}
 		tmplID := fmt.Sprintf("tmpl-%03d", i)
 		if err := store.PutTemplate(ctx, model.Template{
-			ID:        tmplID,
-			Name:      fmt.Sprintf("template-slug-%03d", i),
-			Title:     fmt.Sprintf("Template Title %03d", i),
-			Body:      fmt.Sprintf("Template instructions %03d.\n%s", i, prose),
-			Target:    tmplTarget,
+			ID:     tmplID,
+			Name:   fmt.Sprintf("template-slug-%03d", i),
+			Title:  fmt.Sprintf("Template Title %03d", i),
+			Body:   fmt.Sprintf("Template instructions %03d.\n%s", i, prose),
+			Target: tmplTarget,
+			// One holder per capability server seed_api.py configures,
+			// for GET /api/capability-servers/usage.
+			Grants:    []model.Grant{{Capability: capServerID(i) + "#run"}},
 			CreatedAt: baseTime.Add(time.Duration(i) * time.Second),
 		}); err != nil {
 			log.Fatalf("PutTemplate %d: %v", i, err)
@@ -745,4 +765,73 @@ func main() {
 	}
 
 	log.Printf("seeded %d+ rows per collection into %s (%s)", n, *dataDir, *driver)
+}
+
+// capServerID is the i'th capability server seed_api.py configures and
+// the i'th template grants. A configured id must be an https:// URL
+// (PUT /api/capability-servers refuses "cap-srv-000").
+func capServerID(i int) string {
+	return fmt.Sprintf("https://tools.example.com/capabilities/cap-%03d", i)
+}
+
+// seedLive writes n merge batches into a running daemon's store.
+//
+// A merge batch is only ever in the store while the merge queue is
+// re-checking it, and the reconciler's first cycle after boot
+// (orchestrator.advanceMergeRechecks) deletes every row that is not a
+// running re-check: no members, a finished conclusion, older than
+// model.MaxMergeBatchAge, or a CI run the runner does not know or
+// recorded as interrupted. Boot also records every unfinished CI run as
+// interrupted (daemon.AdoptCIRuns). So each batch here is written after
+// boot, started now, with one member and an unfinished CI run of its own,
+// which is what a re-check in flight looks like to the next cycle.
+func seedLive(ctx context.Context, store *model.Store, n int) {
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	other := model.RepoRef{Owner: "other", Name: "thing"}
+	now := time.Now().UTC().Truncate(time.Second)
+	for i := 0; i < n; i++ {
+		repo := widgets
+		if i >= n-10 {
+			repo = other
+		}
+		taskID := fmt.Sprintf("%d", 100+i)
+		runID := fmt.Sprintf("mb-run-%03d", i)
+		ref := fmt.Sprintf("grain/merge-recheck/%s", taskID)
+		at := now.Add(time.Duration(i) * time.Millisecond)
+		if err := store.PutCIRun(ctx, model.CIRun{
+			ID:          runID,
+			Key:         "mb-key-" + taskID,
+			Repo:        repo.String(),
+			Ref:         ref,
+			Commit:      fmt.Sprintf("%040x", 0x9000+i),
+			Event:       "push",
+			RequestedBy: taskID,
+			StartedAt:   at,
+			Jobs: []model.CIJob{{
+				Workflow: "Merge recheck", WorkflowPath: ".grain/workflows/unit.yml",
+				JobID: "unit", Name: "unit", StartedAt: at,
+			}},
+		}); err != nil {
+			log.Fatalf("PutCIRun %s: %v", runID, err)
+		}
+		if err := store.PutMergeBatch(ctx, model.MergeBatch{
+			Repo:       repo,
+			Branch:     "trunk",
+			TaskID:     taskID,
+			Ref:        ref,
+			BaseCommit: fmt.Sprintf("%040x", 0xb000+i),
+			Commit:     fmt.Sprintf("%040x", 0x9000+i),
+			RunID:      runID,
+			StartedAt:  at,
+			Members: []model.MergeBatchMember{{
+				TaskID:  taskID,
+				Number:  1000 + i,
+				HeadRef: fmt.Sprintf("grain/feat-branch-%03d", i),
+				HeadSHA: fmt.Sprintf("%040x", 0xc000+i),
+			}},
+		}); err != nil {
+			log.Fatalf("PutMergeBatch %d: %v", i, err)
+		}
+	}
+	log.Printf("seeded %d running merge batches", n)
 }
