@@ -519,6 +519,12 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// QuestionCommentID is the id of the comment an awaiting_reply task is
+	// parked on (Observation.PendingQuestionCommentID) -- a question, a
+	// credential or access request, or a stopped turn -- so a row can link
+	// straight to it (model.CommentPath), as GET /api/inbox's path does.
+	// 0 when the task is not parked.
+	QuestionCommentID int64 `json:"questionCommentId,omitempty"`
 	// AwaitingAccess is an awaiting_reply task parked on an access
 	// request (request_access) rather than a question: what it wants is
 	// a grant, which its card offers, not a reply.

@@ -1591,28 +1591,37 @@ func (s *Store) TurnStopped(ctx context.Context, taskID string) (bool, error) {
 	return true, nil
 }
 
-// PendingQuestionSummaries is the one-line summary of the question every
-// open task is parked on (Comment.Summary), keyed by task -- one query for
-// a whole list, as TurnsStopped is, so a row can say what it was asked
-// without the conversation. A question stored without a summary gets one
-// derived from its body; a stopped turn has none.
-func (s *Store) PendingQuestionSummaries(ctx context.Context) (map[string]string, error) {
-	out := map[string]string{}
+// PendingQuestion is the comment an open task is parked on, as a list
+// needs it: its id, which a row links to (CommentPath), and the one line
+// it is shown by.
+type PendingQuestion struct {
+	CommentID int64
+	// Summary is the question's Comment.Summary, or one derived from its
+	// body for a question stored without one; "" for a stopped turn.
+	Summary string
+}
+
+// PendingQuestions is the comment every open task is parked on, keyed by
+// task -- one query for a whole list, as TurnsStopped is, so a row can
+// say what it was asked, and link to where, without the conversation.
+func (s *Store) PendingQuestions(ctx context.Context) (map[string]PendingQuestion, error) {
+	out := map[string]PendingQuestion{}
 	err := each(ctx, s.db,
-		"SELECT `o`.`task_id`, `c`.`summary`, `c`.`body` FROM `task_observation` `o` JOIN `task_comment` `c` "+
+		"SELECT `o`.`task_id`, `c`.`id`, `c`.`summary`, `c`.`body` FROM `task_observation` `o` JOIN `task_comment` `c` "+
 			"ON `c`.`id` = `o`.`pending_question_comment_id` "+
-			"WHERE `o`.`closed_at` IS NULL AND `c`.`body` <> ?", TurnStoppedComment,
+			"WHERE `o`.`closed_at` IS NULL", nil,
 		func(rows *sql.Rows) error {
 			var id, summary, body string
-			if err := rows.Scan(&id, &summary, &body); err != nil {
+			var commentID int64
+			if err := rows.Scan(&id, &commentID, &summary, &body); err != nil {
 				return err
 			}
-			if summary == "" {
+			if body == TurnStoppedComment {
+				summary = ""
+			} else if summary == "" {
 				summary = DeriveQuestionSummary(body)
 			}
-			if summary != "" {
-				out[id] = summary
-			}
+			out[id] = PendingQuestion{CommentID: commentID, Summary: summary}
 			return nil
 		})
 	return out, err
