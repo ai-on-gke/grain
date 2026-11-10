@@ -446,14 +446,6 @@ type Config struct {
 	// runs grain from a container (bwsalmon/agents#645).
 	UpgradeImage        string
 	UpgradeImageRefFile string
-	// UpgradeImageSource selects where ModeImage pulls candidate images from
-	// ("registry"; empty uses the track or default registry source).
-	// UpgradeImageSourceLocked records that the setting came from a daemon
-	// flag or environment variable.
-	UpgradeImageSource           string
-	UpgradeImageSourceLocked     bool
-	UpgradeImageFallback         string
-	UpgradeImageFallbackExplicit bool
 	// upgradeVerifyCmd checks an image's signature before either image
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
