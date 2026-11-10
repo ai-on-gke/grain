@@ -277,19 +277,6 @@ var hiddenCommandAliases = map[string]string{
 	"registry": "hub",
 }
 
-// canonicalizeCommandWord rewrites args[0] to the command word it is
-// spelled as now, saying on stderr when the word typed is a deprecated
-// spelling: main rewrites it before anything dispatches on it, so this is
-// the one place that still sees what was typed.
-func canonicalizeCommandWord(args []string, stderr io.Writer) {
-	if len(args) == 0 {
-		return
-	}
-	raw := args[0]
-	args[0] = canonicalCommand(raw)
-	warnDeprecatedCommand(stderr, raw, args[0])
-}
-
 // canonicalCommand is the command word cmd is spelled as now.
 func canonicalCommand(cmd string) string {
 	if c, ok := hiddenCommandAliases[cmd]; ok {

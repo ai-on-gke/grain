@@ -149,3 +149,16 @@ func warnDeprecatedCommand(stderr io.Writer, raw, cmd string) {
 		fmt.Fprintf(stderr, "warning: 'grain %s' is deprecated and will be removed in a future release; use 'grain %s' (the Grain Registry is now the Grain Hub)\n", raw, cmd)
 	}
 }
+
+// canonicalizeCommandWord rewrites args[0] to the command word it is
+// spelled as now, saying on stderr when the word typed is a deprecated
+// spelling: main rewrites it before anything dispatches on it, so this is
+// the one place that still sees what was typed.
+func canonicalizeCommandWord(args []string, stderr io.Writer) {
+	if len(args) == 0 {
+		return
+	}
+	raw := args[0]
+	args[0] = canonicalCommand(raw)
+	warnDeprecatedCommand(stderr, raw, args[0])
+}
