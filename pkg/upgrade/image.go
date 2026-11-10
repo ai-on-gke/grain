@@ -434,6 +434,15 @@ func (u *Upgrader) imageRefIn(repository, branch string) (string, error) {
 // holding a usable one. No token, or a login that fails, is only logged
 // -- the pull is what says whether it mattered.
 func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string) error {
+	// A ref naming no registry host is never pulled: docker would resolve
+	// it to Docker Hub, where anybody may have published that name.
+	// Images from Docker Hub are named with an explicit docker.io/ host.
+	if registryauth.HostOf(ref) == "" {
+		if repo := repositoryOf(ref); repo == u.EffectiveRepository() {
+			return fmt.Errorf("refusing to pull %s: %s", ref, u.hostlessRepositoryProblem(repo))
+		}
+		return fmt.Errorf("refusing to pull %s: it names no registry host, so docker would fetch it from Docker Hub, where anybody may publish that name; only a registry-qualified image is pulled", ref)
+	}
 	argv := u.cfg.Image.PullCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "pull"}
@@ -447,6 +456,48 @@ func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string)
 	}
 	argv = append(append([]string{}, argv...), ref)
 	return runLogged(ctx, p, step, "", argv)
+}
+
+// repositoryOrigin says where the repository effectiveRepository settles
+// on came from, in the words an operator would go looking for it by.
+func (u *Upgrader) repositoryOrigin() string {
+	switch {
+	case strings.TrimSpace(u.cfg.Image.TargetRepository) != "":
+		return "chosen on the Upgrade pane"
+	case strings.TrimSpace(u.cfg.Image.Repository) != "":
+		return "set by the -upgrade-image flag in this deployment's unit"
+	default:
+		return "this build's default"
+	}
+}
+
+// hostlessRepositoryProblem is what is wrong with repo, a repository
+// naming no registry host that this deployment is configured to upgrade
+// from, and how to fix it. Such a name is usually one an older installer
+// wrote as -upgrade-image when releases shipped images as release assets
+// (grain-<edition>/grain), which only ever named a local tag; it is now
+// just a name Docker Hub would be asked for.
+func (u *Upgrader) hostlessRepositoryProblem(repo string) string {
+	msg := fmt.Sprintf("the image repository %s (%s) names no registry host, so docker would fetch it from Docker Hub, where anybody may publish that name. "+
+		"Set -upgrade-image to a registry-qualified repository (registry host, then path)", repo, u.repositoryOrigin())
+	if def := installtrack.DefaultRepository(u.cfg.Image.Track); def != repo && registryauth.HostOf(def) != "" {
+		msg += fmt.Sprintf(", or remove that setting so this build's default, %s, applies", def)
+	}
+	return msg + ": re-run the installer (scripts/setup.sh, leaving GRAIN_IMAGE unset for the default) and it rewrites the unit"
+}
+
+// RepositoryWarning is what the Upgrade pane warns of before anybody
+// presses Upgrade: the configured repository names no registry host, so
+// pullImage would refuse it. Empty when there is nothing to warn of.
+func (u *Upgrader) RepositoryWarning() string {
+	if u.Mode() != ModeImage {
+		return ""
+	}
+	repo := u.EffectiveRepository()
+	if repo == "" || registryauth.HostOf(repo) != "" {
+		return ""
+	}
+	return "Upgrades will be refused: " + u.hostlessRepositoryProblem(repo) + "."
 }
 
 func (u *Upgrader) tagImage(ctx context.Context, p *progress, step, src, dst string) error {

@@ -73,6 +73,7 @@ type upgradeResponse struct {
 	DefaultImageRepo string               `json:"defaultImageRepo"`
 	DefaultImageRef  string               `json:"defaultImageRef"`
 	ImageRepos       []string             `json:"imageRepos"`
+	ImageRepoWarning string               `json:"imageRepoWarning"`
 	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc"`
 }
 
@@ -698,6 +699,54 @@ func TestClickingUpgradeDoesNotUpgradeWhenVersionHasNotChanged(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "restarted")); !os.IsNotExist(err) {
 		t.Errorf("restarted marker exists (err=%v), want no restart when version has not changed", err)
+	}
+}
+
+// A unit still naming a host-less -upgrade-image (a release-asset-era
+// <edition>/grain) is warned of on the pane before anybody presses
+// Upgrade, beside the build's registry-qualified default, and pressing it
+// anyway is refused with the same fix rather than pulled from Docker Hub
+// (grain/task-4084).
+func TestUpgradeWarnsOfAHostlessImageRepoBeforeItIsPulled(t *testing.T) {
+	const hostless = "edition-local/grain"
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	pulled := filepath.Join(dir, "pulled")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+hostless+":main@"+testImageDigest+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
+		Repository: hostless,
+		Track:      installtracktest.Track,
+		RefFile:    refFile,
+		PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulled, "sh"},
+		RunCmd:     []string{"sh", "-c", "echo 7"},
+	}, dir)
+
+	got := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
+	if got.ImageRepo != hostless || got.DefaultImageRepo != installtracktest.Repository {
+		t.Errorf("GET /api/upgrade image = %q, default %q; want %q, %q", got.ImageRepo, got.DefaultImageRepo, hostless, installtracktest.Repository)
+	}
+	for _, want := range []string{hostless, "no registry host", "-upgrade-image", installtracktest.Repository, "re-run the installer"} {
+		if !strings.Contains(got.ImageRepoWarning, want) {
+			t.Errorf("imageRepoWarning = %q, want it to say %q", got.ImageRepoWarning, want)
+		}
+	}
+
+	if code, _ := clickUpgrade(t, srv, "main"); code != http.StatusAccepted {
+		t.Fatalf("POST /api/upgrade = %d, want 202", code)
+	}
+	done := pollUpgrade(t, srv)
+	if done.Phase != string(upgrade.PhaseFailed) {
+		t.Fatalf("done = %+v, want a failed upgrade", done)
+	}
+	for _, want := range []string{"refusing to pull " + hostless + ":main", "-upgrade-image", installtracktest.Repository} {
+		if !strings.Contains(done.Detail, want) {
+			t.Errorf("detail = %q, want it to say %q", done.Detail, want)
+		}
+	}
+	if _, err := os.Stat(pulled); !os.IsNotExist(err) {
+		t.Errorf("PullCmd ran for a host-less repository (err=%v)", err)
 	}
 }
 

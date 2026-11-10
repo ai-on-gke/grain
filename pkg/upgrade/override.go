@@ -105,6 +105,9 @@ type ImageTarget struct {
 	SourceDefault     bool
 	SourceLocked      bool
 	Fallback          ImageSource
+	// RepositoryWarning is RepositoryWarning(): set when Repository names
+	// no registry host, so an upgrade would refuse to pull it.
+	RepositoryWarning string
 }
 
 // ImageTarget reports where an image upgrade would pull from, and false
@@ -119,6 +122,8 @@ func (u *Upgrader) ImageTarget() (ImageTarget, bool) {
 		SourceDefault: !u.IsImageSourceExplicit(),
 		SourceLocked:  u.cfg.Image.SourceLocked,
 		Fallback:      u.EffectiveImageFallback(),
+
+		RepositoryWarning: u.RepositoryWarning(),
 	}
 	if u.cfg.Image.Track != "" {
 		t.DefaultRepository = installtrack.DefaultRepository(u.cfg.Image.Track)
