@@ -645,6 +645,10 @@ func runCLI(args []string) error {
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
+	if sock := hostSocket(c.BaseURL, target.tokenSource); sock != "" {
+		c.HTTP, c.Socket = cliSocketHTTPClient(sock, *connectTimeout, *callTimeout), sock
+		target.tokenSource = "the API socket " + sock
+	}
 	err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
 	if err == nil {
 		warnIfCommandSkillStale(rest[0], sel)
