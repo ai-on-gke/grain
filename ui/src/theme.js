@@ -193,7 +193,7 @@ const darkPalette = {
     warning: { main: "#e29a4e" },
     info: { main: "#7fa8c7" },
     background: { default: "#0f1013", paper: "#14161a" },
-    text: { primary: "#e9e7e1", secondary: "#b8b5ad" },
+    text: { primary: "#f1efe9", secondary: "#c6c2ba" },
     divider: "#292b31",
   },
 };
