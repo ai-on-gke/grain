@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -59,8 +60,13 @@ func TestGrainInboxMatchesActionableCategoriesWithinRepoGrants(t *testing.T) {
 	for _, it := range resp.Items {
 		got[it.Kind] = it.Path
 	}
+	// A question's item links to the comment it is parked on.
+	obs, oerr := client.Store.GetObservation(context.Background(), asked)
+	if oerr != nil || obs == nil || obs.PendingQuestionCommentID == nil {
+		t.Fatalf("observation of %s = %+v, %v", asked, obs, oerr)
+	}
 	want := map[string]string{
-		ui.InboxQuestion: "/tasks/" + asked, ui.InboxSecret: "/tasks/" + secret,
+		ui.InboxQuestion: model.CommentPath(asked, *obs.PendingQuestionCommentID), ui.InboxSecret: "/tasks/" + secret,
 		ui.InboxProposal: "/tasks/" + proposal, ui.InboxNotification: "/inbox",
 	}
 	for kind, path := range want {
