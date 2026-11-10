@@ -205,7 +205,10 @@ A role change or removal that involves a dangerous or deny role
 (`AccessRoleChoice.person`, `.denies`) opens a panel with a required
 reason field; a `confirm_self` answer turns it into a confirmation, and
 any other refusal is shown on it with the server's explanation. The
-**Access history** card lists `GET /api/access/history`.
+**Access history** card lists `GET /api/access/history`, which also
+carries the access code's state-changing uses (surface `access-code`),
+and the **Access code** card shows `GET /api/access/access-code`: the
+code's mode, read-only, and the host command that changes it.
 The server stays the enforcement point. Hiding a button is a courtesy,
 not a check.
 

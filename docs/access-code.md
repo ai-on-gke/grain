@@ -541,6 +541,16 @@ verified sign-in still has the host.
 A mode file holding anything else is read as **off**, so a typo never
 opens the code wider than intended.
 
+Settings → Access shows the mode read-only in its **Access code** card
+(`GET /api/access/access-code`, `access:read`): the mode, whether
+recovery is in force, and the command that changes it, run as the
+account that owns the code (`sudo -u <account> grain access-code
+-data-dir <data-dir> mode recovery`). Once you are signed in with a
+verified identity and the mode is still **on**, the card recommends
+recovery. The **Access history** card lists every request the code
+changed state with (`config_audit` surface `access-code`) beside role
+changes.
+
 ## Rotating
 
 `grain access-code rotate` writes a new code into the file and prints it.

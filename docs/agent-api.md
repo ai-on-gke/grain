@@ -855,7 +855,7 @@ it. `total` is how many items matched across every page;
 | `GET /api/api-scope-sets/usage` | 20 | scope set name | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
 | `GET /api/external-agents/tokens` | 20 | id, name, owner or scope set | Per-row `resolvedScopes` (scopes times repositories) is left out of paged calls: `resolvedScopeCount` says how many there are, `resolvedScopesTruncated` is set, and `scopeSet`, `scopes` and `repos` are complete. |
 | `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
-| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
+| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`) and the requests the access code changed state with (surface `access-code`), newest first. |
 | `GET /api/hostds` | 50 | host name or owner | |
 | `GET /api/gcp-keys` | 20 | key name, project id or service account email | |
 | `GET /api/github-tokens` | 20 | credential name, capability or connection scope | `tokens` is the page; per-row `connections` is capped on paged calls (`connectionCount` and `connectionsTruncated`). |

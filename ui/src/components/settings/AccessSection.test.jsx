@@ -80,6 +80,79 @@ describe("AccessSection", () => {
     expect(onLogout).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the access-code mode and recommends recovery to a verified viewer", async () => {
+    const view = {
+      mode: "on",
+      viewerVerified: true,
+      verifiedAdminCanSignIn: true,
+      recoveryInForce: false,
+      account: "grain",
+      command:
+        "sudo -u grain grain access-code -data-dir /var/lib/grain/data mode recovery",
+      onCommand:
+        "sudo -u grain grain access-code -data-dir /var/lib/grain/data mode on",
+    };
+    api.mockImplementation(async (path) => {
+      if (path === "/api/access/access-code") return view;
+      if (path === "/api/access/history") {
+        return [
+          {
+            id: 9,
+            at: "2026-11-10T10:00:00Z",
+            actor: "access-code:alice@example.com",
+            actorLabel: "alice@example.com (access code)",
+            surface: "access-code",
+            summary:
+              "access code: DELETE /api/pipeline-pause by alice@example.com from 203.0.113.7",
+          },
+        ];
+      }
+      return { entries: [] };
+    });
+    const { unmount } = render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:ops@example.com",
+          authMethod: "iap",
+        },
+      }),
+    );
+    expect(await screen.findByTestId("access-code-mode")).toHaveTextContent(
+      "On",
+    );
+    expect(
+      screen.getByTestId("access-code-recommend-recovery"),
+    ).toHaveTextContent(/recovery/);
+    expect(screen.getByTestId("access-code-mode-command")).toHaveTextContent(
+      view.command,
+    );
+    expect(
+      await screen.findByTestId("access-history-code-use"),
+    ).toBeInTheDocument();
+    unmount();
+
+    // Signed in with the code itself: no recommendation, still the command.
+    view.viewerVerified = false;
+    const second = render(section({ config: { authenticated: true } }));
+    await screen.findByTestId("access-code-mode");
+    expect(screen.queryByTestId("access-code-recommend-recovery")).toBeNull();
+    expect(screen.getByTestId("access-code-mode-command")).toHaveTextContent(
+      "mode recovery",
+    );
+    second.unmount();
+
+    // In recovery, the card says whether it is in force and how to undo it.
+    Object.assign(view, { mode: "recovery", recoveryInForce: true });
+    render(section({ config: { authenticated: true } }));
+    expect(
+      await screen.findByTestId("access-code-recovery-state"),
+    ).toHaveTextContent("in force");
+    expect(screen.getByTestId("access-code-mode-command")).toHaveTextContent(
+      view.onCommand,
+    );
+  });
+
   it("has no Username box, whatever this browser once stored", () => {
     localStorage.setItem("grain.username", "alice");
     for (const config of [
@@ -178,6 +251,7 @@ describe("AccessSection", () => {
           },
         ];
       }
+      if (path === "/api/access/access-code") return null;
       calls.push({ path, ...opts });
       if (opts?.method === "PATCH" && path.includes("ops%40") && !refusedSelf) {
         refusedSelf = true;

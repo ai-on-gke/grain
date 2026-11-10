@@ -1128,6 +1128,7 @@ func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
 // offset, or buckets) in routeQueries so no new api_* list tool can ship
 // unbounded.
 var agentAPISingleReadRoutes = map[string]bool{
+	"GET /api/access/access-code":                                    true,
 	"GET /api/actions-cache":                                         true,
 	"GET /api/agent-backends/{id}/codex-auth":                        true,
 	"GET /api/agent-keys":                                            true,

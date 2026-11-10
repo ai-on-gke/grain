@@ -352,6 +352,7 @@ var routeAuthorization = map[string]authLevel{
 	"PATCH /api/access/principals/{entry}":            trusted,
 	"DELETE /api/access/principals/{entry}":           trusted,
 	"GET /api/access/history":                         trusted,
+	"GET /api/access/access-code":                     trusted,
 	"POST /api/external-agents/tokens/{id}/rotate":    trusted,
 	"POST /api/external-agents/tokens/{id}/revoke":    trusted,
 	"DELETE /api/external-agents/tokens/{id}":         trusted,

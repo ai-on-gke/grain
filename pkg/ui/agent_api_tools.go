@@ -339,7 +339,8 @@ var routeDocs = map[string]string{
 	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
 	"PATCH /api/access/principals/{entry}":                                 "Give an entry on the allowed users and groups list another role (a scope set).",
 	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
-	"GET /api/access/history":                                              "List recent changes to the allowed users and groups list, newest first: who made each, when, the old and new role and the reason.",
+	"GET /api/access/history":                                              "List recent changes to the allowed users and groups list, newest first: who made each, when, the old and new role and the reason, and the requests the access code changed state with.",
+	"GET /api/access/access-code":                                          "Show the access code's mode (on, recovery or off), whether recovery is in force, and the command on the daemon's host that changes it.",
 }
 
 // routeBodies is the request type a route reads its body into, which
