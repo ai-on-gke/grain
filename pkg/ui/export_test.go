@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
@@ -90,3 +91,11 @@ func SetAccessCodeModeForTest(s *Server, mode AccessCodeMode) {
 
 // AccessCodeRecoveryRouteForTest is accessCodeRecoveryRoute.
 func AccessCodeRecoveryRouteForTest(r *http.Request) bool { return accessCodeRecoveryRoute(r) }
+
+// WithExternalTokenForTest is ctx carrying tok as the external agent
+// credential of the request, as Server.ServeHTTP records one that
+// authenticated: what Client.Approve and Client.RunNow read an external
+// caller's grants from.
+func WithExternalTokenForTest(ctx context.Context, tok *model.ExternalAgentToken) context.Context {
+	return withExternalToken(ctx, tok)
+}

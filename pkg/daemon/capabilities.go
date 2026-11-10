@@ -39,13 +39,56 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-func newCapabilityRegistryWithStore(_ *model.Store, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+func newCapabilityRegistryWithStore(store *model.Store, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
 	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
-	// agent may call (pkg/capability/ciapi).
-	reg.RegisterCIDynamic(ciapi.DynamicProvider(CIAPI, ciapi.Config{}))
+	// agent may call (pkg/capability/ciapi), offered to the repositories
+	// grain_config.ci_api_repos lists. Read here, from the store, because
+	// grain CI builds a registry for every job it admits (ciProviders in
+	// run.go): a changed setting reaches the next job without a restart.
+	reg.RegisterCIDynamic(ciapi.DynamicProvider(CIAPI, ciapi.Config{Repos: ciAPIRepos(store)}))
 	return reg
+}
+
+// ciAPIRepos is the repositories whose trusted CI jobs may hold api
+// grants: grain's own (model.GrainSourceRepo), always, and whatever
+// grain_config.ci_api_repos adds to it. Always rather than only when
+// the list is empty, so that an operator offering the API to one more
+// repository does not take it away from grain's own release train
+// (release-gate-read) by not repeating it. nil -- grain's own only
+// (ciapi.Config.Repos) -- when there is no store, no config row, or
+// nothing listed. An entry that is not a repository is logged and left
+// out rather than failing every job's resolution: leaving it out only
+// ever offers less.
+func ciAPIRepos(store *model.Store) []model.RepoRef {
+	if store == nil {
+		return nil
+	}
+	cfg, err := store.GetConfig(context.Background())
+	if err != nil {
+		log.Printf("grain daemon: reading grain_config.ci_api_repos: %v; offering grain's API to %s's CI jobs only", err, model.GrainSourceRepo())
+		return nil
+	}
+	if cfg == nil {
+		return nil
+	}
+	var repos []model.RepoRef
+	for _, entry := range cfg.CIAPIRepos {
+		if strings.TrimSpace(entry) == "" {
+			continue
+		}
+		repo, err := model.ParseRepo(entry)
+		if err != nil {
+			log.Printf("grain daemon: grain_config.ci_api_repos: ignoring %q: %v", entry, err)
+			continue
+		}
+		repos = append(repos, repo)
+	}
+	if len(repos) == 0 {
+		return nil
+	}
+	return append([]model.RepoRef{model.GrainSourceRepo()}, repos...)
 }
 
 // capabilityProviders builds every capability provider this deployment
