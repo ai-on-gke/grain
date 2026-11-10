@@ -222,7 +222,23 @@ type Config struct {
 	// one (in which case grain cannot start; there is no half state where
 	// it runs without being able to read its own secrets).
 	KeyFile string
+	// KeySource is where the key is loaded from. Nil means
+	// FileKeySource{Path: KeyFile}, which is every install so far.
+	// KeyFile is still where Open mints a fresh install's key and where
+	// ImportKey writes one.
+	KeySource KeySource
 }
+
+// keySource is cfg's KeySource, defaulted to the key file.
+func (cfg Config) keySource() KeySource {
+	if cfg.KeySource != nil {
+		return cfg.KeySource
+	}
+	return FileKeySource{Path: cfg.KeyFile}
+}
+
+// KeySource is where this store loads its key from.
+func (s *Store) KeySource() KeySource { return s.cfg.keySource() }
 
 // Store resolves a name to secret material held in an encrypted file or in
 // Google Cloud Secret Manager. The zero value is not useful; build one with
@@ -244,6 +260,37 @@ type Store struct {
 	// ensureMu makes Ensure's check-then-set one step, so two attaches
 	// of the same server never generate two values.
 	ensureMu sync.Mutex
+	// keyMu guards key, the private key as cfg's KeySource last gave
+	// it. It is loaded once and kept for the life of the Store rather
+	// than re-read on every load and save: a source may be a KMS unwrap,
+	// and even a file is one more open of the key per Resolve.
+	// ImportKey drops it, and so does a load that finds the file sealed
+	// to some other key (another process -- `grain state key import`
+	// with the daemon running -- may have installed one).
+	keyMu sync.Mutex
+	key   *Key
+}
+
+// currentKey is the cached key, loading it on first use.
+func (s *Store) currentKey() (Key, error) {
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	if s.key != nil {
+		return *s.key, nil
+	}
+	k, err := s.cfg.keySource().Load(context.Background())
+	if err != nil {
+		return Key{}, err
+	}
+	s.key = &k
+	return k, nil
+}
+
+// forgetKey drops the cached key, so the next use loads it again.
+func (s *Store) forgetKey() {
+	s.keyMu.Lock()
+	s.key = nil
+	s.keyMu.Unlock()
 }
 
 // Backend reports which storage backend this Store uses (BackendFile or
@@ -281,7 +328,7 @@ func Open(cfg Config) *Store {
 		s.openErr = errors.New("secrets: both a file and a key file are required")
 		return s
 	}
-	_, err := ReadKeyFile(cfg.KeyFile)
+	_, err := s.currentKey()
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrNoKey):
@@ -301,6 +348,7 @@ func Open(cfg Config) *Store {
 			s.openErr = writeErr
 			return s
 		}
+		s.key = &key
 		s.created = true
 	default:
 		s.openErr = err
@@ -340,7 +388,7 @@ func (s *Store) PublicKey() (string, error) {
 	if s.backend == BackendSecretManager {
 		return "", nil
 	}
-	key, err := ReadKeyFile(s.cfg.KeyFile)
+	key, err := s.currentKey()
 	if err != nil {
 		return "", err
 	}
@@ -395,8 +443,10 @@ func (s *Store) ImportKey(k Key) error {
 		}
 	}
 	if err := WriteKeyFile(s.cfg.KeyFile, k); err != nil {
+		s.forgetKey()
 		return err
 	}
+	s.forgetKey()
 	// Whatever Open could not do -- and the one thing it refuses to do is
 	// mint a key over an encrypted file it cannot read -- it can do now.
 	s.openErr, s.created = nil, false
@@ -487,11 +537,21 @@ func (s *Store) load() (*contents, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return &contents{Version: 1, Secrets: map[string]map[string]string{}}, nil
 	}
-	key, err := ReadKeyFile(s.cfg.KeyFile)
+	key, err := s.currentKey()
 	if err != nil {
 		return nil, err
 	}
 	plain, err := Decrypt(key, data)
+	if errors.Is(err, ErrWrongKey) {
+		// The key this Store cached is not the one the file is sealed
+		// to. Something else may have installed the right one since;
+		// look once more before calling the store unreadable.
+		s.forgetKey()
+		if key, err = s.currentKey(); err != nil {
+			return nil, err
+		}
+		plain, err = Decrypt(key, data)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +570,7 @@ func (s *Store) load() (*contents, error) {
 // commit racing the daemon's own sync -- never sees a half-written
 // ciphertext, which would decrypt to nothing at all.
 func (s *Store) save(c *contents) error {
-	key, err := ReadKeyFile(s.cfg.KeyFile)
+	key, err := s.currentKey()
 	if err != nil {
 		return err
 	}
