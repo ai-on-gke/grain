@@ -427,9 +427,20 @@ func listOrNone(xs []string) string {
 // what the forge's half of the listing was short of.
 func ProviderTestHistory(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, limit int, test string) (ci.TestHistoryReport, error) {
 	defaulted := false
+	leftOut := -1
 	if f.Provider == "" && f.Repo != "" {
-		if defaults, err := c.RepoDefaults(ctx, f.Repo); err == nil && defaults.CIMode == string(model.CIModeGitHub) {
-			f.Provider, defaulted = ci.ProviderGitHubActions, true
+		if defaults, err := c.RepoDefaults(ctx, f.Repo); err == nil {
+			if defaults.CIMode == string(model.CIModeGitHub) {
+				f.Provider, defaulted = ci.ProviderGitHubActions, true
+			}
+		} else {
+			grain := f
+			grain.Provider = ci.ProviderGrain
+			if probe, perr := c.FindCIRuns(ctx, grain, 1); perr != nil {
+				return ci.TestHistoryReport{}, perr
+			} else if probe.RepoProvider == ci.ProviderGitHubActions {
+				f.Provider, defaulted, leftOut = ci.ProviderGitHubActions, true, probe.Matched
+			}
 		}
 	}
 	page, err := c.FindCIRuns(ctx, f, limit)
@@ -441,11 +452,16 @@ func ProviderTestHistory(ctx context.Context, c *ui.HTTPClient, f ci.RunFilter, 
 		report.Notes = append(report.Notes, "GitHub Actions: "+page.ActionsNote)
 	}
 	if defaulted {
-		grain := f
-		grain.Provider = ci.ProviderGrain
-		if left, err := c.FindCIRuns(ctx, grain, 1); err == nil && left.Matched > 0 {
+		if leftOut < 0 {
+			grain := f
+			grain.Provider = ci.ProviderGrain
+			if left, err := c.FindCIRuns(ctx, grain, 1); err == nil {
+				leftOut = left.Matched
+			}
+		}
+		if leftOut > 0 {
 			report.Notes = append(report.Notes, fmt.Sprintf(
-				"%s's CI is GitHub Actions: its %d Grain CI run(s), from before, are left out (-provider grain reads them)", f.Repo, left.Matched))
+				"%s's CI is GitHub Actions: its %d Grain CI run(s), from before, are left out (-provider grain reads them)", f.Repo, leftOut))
 		}
 	}
 	return report, nil

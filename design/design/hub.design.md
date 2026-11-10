@@ -1,4 +1,4 @@
-# Grain registry: catalog, work routing, and self-service grain instances
+# Grain Hub: catalog, work routing, and self-service grain instances
 
 **Owner:** @bwsalmon
 
