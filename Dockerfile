@@ -141,7 +141,14 @@ ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca
 # Debian's own `docker.io` package pulls in the whole daemon --
 # containerd, runc, iptables, a systemd unit -- to get one client binary
 # that only ever talks to a socket mounted from the host.
-ARG DOCKER_CLI_IMAGE=docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349fd857dd85035f98c2c9acbdd4d
+#
+# 29 rather than 28: 28 gets no rebuilds on a newer Go, so its stdlib
+# CVEs never clear. What 29 raised is the *daemon's* minimum API (an
+# Engine 29 refuses clients older than 1.44); the 29 client still
+# negotiates down to whatever the host engine speaks, and was checked
+# against Engine 20.10 (API 1.41, Debian 12's docker.io), 24 and 26
+# (Debian 13's docker.io) for every subcommand grain runs.
+ARG DOCKER_CLI_IMAGE=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a
 # distroless base with nothing else in it), and this pin is the whole of
