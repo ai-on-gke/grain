@@ -136,7 +136,11 @@ func (r REST) Reviews(ctx context.Context, repo string, number int) ([]Review, e
 		return nil, err
 	}
 	var out []Review
-	for page := 1; page <= 10; page++ {
+	for page := 1; ; page++ {
+		if page > 10 {
+			// A change request on a later page would go unseen.
+			return nil, fmt.Errorf("pull request #%d has more than 1000 reviews, too many to read", number)
+		}
 		var items []struct {
 			User struct {
 				Login string `json:"login"`
