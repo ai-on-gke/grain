@@ -18,17 +18,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
+import { repoGrantBox } from "../../repoGrantsTesting.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 vi.mock("../../attachments.js", () => ({ default: vi.fn() }));
 
-describe("DetailOverlay read-only repos", () => {
+// The task pane's repository grants (unified-grants slice 5): the repos
+// it reads and writes are lines of the Access section's Grants list,
+// each edit still saved as the task's whole reads or writes set.
+describe("DetailOverlay repository grants", () => {
   afterEach(resetDetailMocks);
 
-  // grain/task-294: the task's read-only repos are the picker's own
-  // picked set, not a static "Reads" row -- so the same chips that say
-  // which repos they are are also how one is taken off.
-  it("seeds the read-only repos picker from the task's own reads", () => {
+  // grain/task-294: the task's read-only repos are lines of the list,
+  // not a static "Reads" row -- so the same lines that say which repos
+  // they are are also how one is taken off.
+  it("lists the task's own reads as repo#read grants", () => {
     render(
       <DetailOverlay
         task={{ ...baseTask, reads: ["acme/shared", "acme/schema"] }}
@@ -40,9 +44,15 @@ describe("DetailOverlay read-only repos", () => {
       />,
     );
 
-    expect(screen.getByText("acme/shared")).toBeInTheDocument();
-    expect(screen.getByText("acme/schema")).toBeInTheDocument();
-    expect(screen.getByTitle("Remove acme/shared")).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "acme/shared · read" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "acme/schema · read" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove acme/shared · read" }),
+    ).toBeInTheDocument();
   });
 
   // Reads has no attach/detach endpoint the way capabilities and
@@ -62,7 +72,7 @@ describe("DetailOverlay read-only repos", () => {
       />,
     );
 
-    await user.click(screen.getByLabelText(/Read-only repos/));
+    await user.click(await repoGrantBox(user, "read"));
     await user.click(await screen.findByText("acme/schema"));
 
     expect(api).toHaveBeenCalledWith("/api/tasks/12", {
@@ -89,7 +99,7 @@ describe("DetailOverlay read-only repos", () => {
       />,
     );
 
-    await user.click(screen.getByLabelText(/Read-only repos/));
+    await user.click(await repoGrantBox(user, "read"));
 
     expect(await screen.findByText("acme/schema")).toBeInTheDocument();
     expect(
@@ -111,7 +121,9 @@ describe("DetailOverlay read-only repos", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Remove acme/shared"));
+    await user.click(
+      screen.getByRole("button", { name: "Remove acme/shared · read" }),
+    );
 
     expect(api).toHaveBeenCalledWith("/api/tasks/12", {
       method: "PATCH",
@@ -137,9 +149,8 @@ describe("DetailOverlay read-only repos", () => {
       />,
     );
 
-    const box = screen.getByLabelText(/Read-only repos/);
-    await user.type(box, "acme/shared{Enter}");
-    await user.type(box, "acme/schema{Enter}");
+    await user.type(await repoGrantBox(user, "read"), "acme/shared{Enter}");
+    await user.type(await repoGrantBox(user, "read"), "acme/schema{Enter}");
 
     expect(api).toHaveBeenLastCalledWith("/api/tasks/12", {
       method: "PATCH",
@@ -147,7 +158,7 @@ describe("DetailOverlay read-only repos", () => {
     });
   });
 
-  // The chips are already showing the new set by the time the server
+  // The lines are already showing the new set by the time the server
   // answers, so a refused set (ui.parseReads rejects anything that is not
   // owner/name) has to put them back rather than leave the picker
   // claiming repos the task does not have.
@@ -167,10 +178,14 @@ describe("DetailOverlay read-only repos", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Remove acme/shared"));
+    await user.click(
+      screen.getByRole("button", { name: "Remove acme/shared · read" }),
+    );
 
     expect(showError).toHaveBeenCalled();
-    expect(await screen.findByTitle("Remove acme/shared")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Remove acme/shared · read" }),
+    ).toBeInTheDocument();
   });
 
   // The checkout and the prompt both happen once, when the run starts,
@@ -207,5 +222,74 @@ describe("DetailOverlay read-only repos", () => {
     );
 
     expect(screen.queryByText(/not cloned into it/)).not.toBeInTheDocument();
+  });
+
+  // The task's own repo and base are a #target line that cannot be
+  // removed (Q2): they are changed in the Repos section above.
+  it("shows the task's own repo and base as a non-removable target line", () => {
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, repo: "acme/widgets", base: "main" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+        showError={() => {}}
+      />,
+    );
+
+    const line = screen.getByRole("group", {
+      name: "acme/widgets · main · target",
+    });
+    expect(line).toHaveAttribute(
+      "data-grant",
+      "https://grain.dev/capabilities/repo#target",
+    );
+    expect(
+      screen.queryByRole("button", { name: /Remove acme\/widgets/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  // A declared template's push: refs are what its tasks' runs may push
+  // beyond their own branch; the declaration grants them, so they are
+  // shown and not editable here.
+  it("shows a declared template's push refs read-only", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          repo: "acme/widgets",
+          declaredPush: {
+            repo: "acme/widgets",
+            path: ".grain/templates/release.yml",
+            refs: [
+              { ref: "refs/tags/v*" },
+              { ref: "refs/heads/latest", force: true },
+            ],
+          },
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+        showError={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByRole("group", {
+        name: "acme/widgets refs/tags/v* · push (declared by the template)",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", {
+        name: "acme/widgets refs/heads/latest (force) · push (declared by the template)",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Remove acme\/widgets refs/ }),
+    ).not.toBeInTheDocument();
   });
 });

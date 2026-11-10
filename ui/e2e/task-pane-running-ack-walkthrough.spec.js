@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { repoGrantBox } from "./repoGrants.js";
 
 // docs/test-plans/2026-10-06.md §6 steps 2, 3 and 5 in a real browser on
 // the real `grain demo` server
@@ -53,11 +54,13 @@ test("a running task's repo and base are plain rows, and PATCH refuses moving th
     /^Base branch\s*the repo's default$/,
   ]);
   // No repo picker and no branch box. The other repos the task may change
-  // stay editable on purpose: they reach a proposal the run files.
+  // stay editable on purpose -- they reach a proposal the run files --
+  // as repo#write grants in Access (unified-grants slice 5).
   await expect(repos.getByLabel(/^(Repo|Base branch)$/)).toHaveCount(0);
-  await expect(
-    repos.getByRole("textbox", { name: "Another repo this task may change" }),
-  ).toBeVisible();
+  const access = page.locator("fieldset", {
+    has: page.locator("legend", { hasText: /^Access$/ }),
+  });
+  await expect(await repoGrantBox(access, "write")).toBeVisible();
 
   let res = await page.request.patch(`/api/tasks/${running.id}`, {
     data: { base: "release-1" },

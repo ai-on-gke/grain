@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
+import { repoGrantBox } from "../../repoGrantsTesting.js";
 import { resetDetailMocks, baseTask, config, patches } from "./testFixtures.js";
 import { chooseOption } from "../../searchSelectTesting.js";
 
@@ -138,12 +139,10 @@ describe("DetailOverlay target", () => {
     ]);
   });
 
-  // grain/task-202: the repos a task may change are one section of the
-  // pane, not a "Target" section and a second one further down the
-  // column. The repo it is filed against is the first thing in it and
-  // the others are added under it, so reading or changing "which repos
-  // does this task touch" is one place to look rather than two.
-  it("keeps the other repos this task may change in the same section as its own", async () => {
+  // The other repos a task writes are repo#write grants in the Access
+  // section's list (unified-grants slice 5), each with its branch edited
+  // in place, and one added there is PATCHed as the whole writes set.
+  it("edits the other repos this task writes as grants", async () => {
     const user = userEvent.setup();
     render(
       <DetailOverlay
@@ -161,13 +160,14 @@ describe("DetailOverlay target", () => {
       />,
     );
 
-    const repos = screen.getByLabelText("Repo").closest("fieldset");
-    expect(within(repos).getByText("acme/docs")).toBeInTheDocument();
-    expect(
-      within(repos).getByLabelText("Base branch in acme/docs"),
-    ).toHaveValue("publish");
+    const line = screen.getByRole("group", {
+      name: "acme/docs · publish · write",
+    });
+    expect(within(line).getByLabelText("Base branch in acme/docs")).toHaveValue(
+      "publish",
+    );
 
-    await user.click(within(repos).getByLabelText(/Another repo/));
+    await user.click(await repoGrantBox(user, "write"));
     await user.click(
       await screen.findByRole("menuitem", { name: "acme/gadgets" }),
     );
