@@ -1266,7 +1266,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	summary := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("fields")), "summary")
 	defaultLimit := listPageTiny
 	if summary {
-		defaultLimit = listPageMedium
+		defaultLimit = listPageLarge
 	}
 	list, err := parseListQuery(r, defaultLimit)
 	if err != nil {

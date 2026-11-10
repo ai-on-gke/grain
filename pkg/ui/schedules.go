@@ -2369,7 +2369,8 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// Touch the schedulefilter query keys directly so routeHandlerInputs
 	// sees the full vocabulary GET /api/schedules accepts.
-	_, _, _, _ = q.Get("q"), q.Get("kind"), q.Get("sort"), q["f"]
+	_, _, _, _, _ = q.Get("q"), q.Get("kind"), q.Get("sort"), q["f"], q.Get("fields")
+	full := strings.EqualFold(strings.TrimSpace(q.Get("fields")), "full")
 	filter, err := schedulefilter.ParseQuery(q)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2390,6 +2391,11 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		}
 		loc := model.LoadLocation(model.TimeZoneOrDefault(zone))
 		list = schedulefilter.Apply(filter, list, scheduleFacts, s.tasks.now(), loc)
+	}
+	if page.Paged && !full {
+		for i := range list {
+			list[i].Description = ""
+		}
 	}
 	writeList(w, list, page)
 }

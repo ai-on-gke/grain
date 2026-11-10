@@ -815,55 +815,55 @@ it. `total` is how many items matched across every page;
 
 | Route | Page by default | `q` matches | Other filters |
 |---|---|---|---|
-| `GET /api/deployment/reachable-repos` | 100 | the full name (`owner/name`, or `host/owner/name` on another git host) | `push=true` for only repositories the connection can push to -- those a task can be filed against -- or `push=false` for only those it cannot; `owner=`; `host=` (the deployment's default host, `github.com` unless configured, for the names that spell none). `repos` is the page; `connections` and `errors`, one entry per git connection, are whole. |
+| `GET /api/deployment/reachable-repos` | 100 | the full name (`owner/name`, or `host/owner/name` on another git host) | `push=true` for only repositories the connection can push to -- those a task can be filed against -- or `push=false` for only those it cannot; `owner=`; `host=` (the deployment's default host, `github.com` unless configured, for the names that spell none). `repos` is the page; `connections` and `errors`, one entry per git connection, are whole (and omitted for repository-limited callers). |
 | `GET /api/deployment/git-connections` | 50 | credential, host, kind or scope | `host=` |
 | `GET /api/deployment/secret-audit` | 50 | secret name, key, principal or task id | |
 | `GET /api/deployment/audit-logs` | 20 | kind, resource, credential, principal or task id | |
-| `GET /api/deployment/config-audit` | 20 | actor, surface or summary | |
+| `GET /api/deployment/config-audit` | 20 | actor, actorLabel, surface or summary | |
 | `GET /api/repos/{owner}/{name}/branches` | 50 | the branch's name | |
 | `GET /api/repos/{owner}/{name}/github-branches` | 50 | the branch's name | |
 | `GET /api/repos/{owner}/{name}/workflows` | 5 | workflow path or name | `workflows` is the page. |
 | `GET /api/repos/{owner}/{name}/releases` | 20 | name, latest or prod branch | |
 | `GET /api/repos/{owner}/{name}/releases/{release}/candidates` | 20 | branch, status or release | |
-| `GET /api/tasks` | 20 (`fields=` unset) / 50 (`fields=summary` or `full`) | title, description, labels, branch or id | `repo`, `state`, `owner`, `externalRef`, `filed_via`, `derived_from`, `fields=summary` (recommended for agents; `grain_list_tasks` calls this). |
-| `GET /api/tasks/states`, `GET /api/states` | 250 | | Lightweight `{id, state, repo}` rows; `truncated` and `nextCursor` accompany `hasMore` and `cursor`. |
-| `GET /api/tasks/{id}/messages` | 10 | author, summary or body | `after`, `agents`, `timeout` |
+| `GET /api/tasks` | 10 (`fields=` unset or `list`) / 50 (`fields=summary`) / 5 (`fields=full`) | title, description, branch, externalRef or id | `repo`, `state`, `owner`, `externalRef`, `filed_via`, `derived_from`, `closedSince`, `closedBefore`, `fields=summary` (recommended for agents; `grain_list_tasks` calls this). `tasks` is the page. |
+| `GET /api/tasks/states`, `GET /api/states` | 250 | | Lightweight `{"states": {"<id>": "<state>"}}` map; `truncated` and `nextCursor` accompany `hasMore` and `cursor`. |
+| `GET /api/tasks/{id}/messages` | 10 | author, summary or body | `after`, `agents`, `wait_ms` |
 | `GET /api/inbox` | 20 | task, title, repo, summary, subject or pull request | `repo`, `kind`. `items` is the page. |
-| `GET /api/notifications` | 20 | subject or title | `open`, `family`, `after`, as before |
-| `GET /api/ci/runs` | 10 (`view=full`) / 50 (`view=compact`) | repository, branch, sha, trigger, task id or workflow | `view=compact` (recommended), `repo`, `branch`, `sha`, `status`, `conclusion`, `trigger`, `workflow`, `task_id`, `exclude_trigger`, `created_after`. `runs` is the page. |
-| `GET /api/ci/workflows` | 20 | workflow path, name or job name | `repo`, `ref`. `workflows` is the page. |
+| `GET /api/notifications` | 20 | subject or title | `open`, `family`, `after`, `fields=list` |
+| `GET /api/ci/runs` | 10 (`view=full`) / 20 (`view=compact`) | id, repository, ref, commit, event, task id (`requestedBy`), job or workflow | `view=compact` (recommended), `repo`, `ref`, `conclusion`, `job`, `workflow`, `since`, `until`, `sort`, `order`, `provider`. `runs` is the page; `matched` (with `stored`) is the count. |
+| `GET /api/ci/workflows` | 20 | workflow path or name | `repo`, `ref`. `workflows` is the page. |
 | `GET /api/ci/runs/{id}/artifacts` | 50 | job or artifact name | `artifacts` is the page. |
 | `GET /api/ci/faults` | 20 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. |
 | `GET /api/merge-batches` | 20 | repository, branch, ref or run id | `repo=owner/name`. `batches` is the page. |
 | `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. |
 | `GET /api/memory` | 5 | repository, author or text | `repo=owner/name` for one repository's standing memory; `repo=` (empty) for the deployment's own. |
-| `GET /api/memory/documents` | 50 | name, repo or summary | `repo=owner/name` for one repository's documents; `repo=` (empty) for the deployment's own. |
-| `GET /api/templates` | 5 (`fields=summary`: 50) | id, name, title or repository | `repo=owner/name`; `fields=summary` omits each template's prompt description. |
-| `GET /api/schedules` | 10 | name, repository, cron or target | `kind`, `sort`, `f` |
+| `GET /api/memory/documents` | 20 | name, repo or summary | `repo=owner/name` for one repository's documents; `repo=` (empty) for the deployment's own. |
+| `GET /api/templates` | 5 (`fields=summary`: 20) | id, name, title or repository | `repo=owner/name`; `fields=summary` omits each template's prompt description. |
+| `GET /api/schedules` | 10 | name, id, repository, template, suite, source or declared path | `kind` (`schedule`, `workflow`), `sort`, `f`, `fields=full` (inline prompt descriptions are omitted on paged calls unless `fields=full`). |
 | `GET /api/suites` | 20 | id or name | |
 | `GET /api/suite-runs` | 20 | suite name or id | `repo=owner/name` |
 | `GET /api/boards` | 20 | id, name or folder | |
-| `GET /api/release-notes` | 50 | week period, title or author | |
+| `GET /api/release-notes` | 20 | week period, title or author | |
 | `GET /api/release-notes/versions` | 50 | version string | `versions` is the page. |
-| `GET /api/state-repo/files` | 100 | file path | `files` is the page. |
+| `GET /api/state-repo/files` | 100 | file path | `entries` is the page. |
 | `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo` |
-| `GET /api/capability-servers` | 10 | capability_id, command or URL | |
-| `GET /api/capability-servers/usage` | 20 | capability_id | |
+| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls (use `GET /api/capability-methods`). |
+| `GET /api/capability-servers/usage` | 20 | capability_id | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
 | `GET /api/capability-servers/gchat-usage` | 50 | space or transport | `id` |
 | `GET /api/capability-servers/host-entries` | 50 | allowlist entry name | `entries` is the page. |
-| `GET /api/api-scope-sets` | 10 | scope set name or source | `scopeSets` is the page. |
-| `GET /api/api-scope-sets/usage` | 20 | scope set name | |
-| `GET /api/external-agents/tokens` | 50 | id, name, owner or scope set | |
+| `GET /api/api-scope-sets` | 10 | scope set name or source | `sets` is the page. |
+| `GET /api/api-scope-sets/usage` | 20 | scope set name | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
+| `GET /api/external-agents/tokens` | 20 | id, name, owner or scope set | |
 | `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
-| `GET /api/access/history` | 20 | actor or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
+| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
 | `GET /api/hostds` | 50 | host name or owner | |
-| `GET /api/gcp-keys` | 50 | key name, project id or service account email | |
-| `GET /api/github-tokens` | 50 | credential name, capability or connection scope | `credentials` is the page. |
+| `GET /api/gcp-keys` | 20 | key name, project id or service account email | |
+| `GET /api/github-tokens` | 20 | credential name, capability or connection scope | `tokens` is the page; per-row `connections` is capped on paged calls (`connectionCount` and `connectionsTruncated`). |
 | `GET /api/secrets` | 50 | secret name or key | `secrets` is the page. |
 | `GET /api/agent-models` | 50 | model id, label or family | `framework`, `backend`. `models` is the page. |
 | `GET /api/persistent-sandboxes` | 50 | sandbox name, repository or state | |
-| `GET /api/console` | 20 | task id, title or repository | `consoles` is the page. |
-| `GET /api/console-sessions` | 5 | session id, title, task id or team | `sessions` is the page; `capabilities` is omitted on paged calls. |
+| `GET /api/console` | 20 | task id, title or repository | `sessions` is the page. |
+| `GET /api/console-sessions` | 5 | session id, title, task id or team | `sessions` is the page; `capabilities` and `missingShippedDefaults` are omitted on paged calls. |
 | `GET /api/upgrade/targets` | 50 | target name or kind | `targets` is the page. |
 
 `GET /api/events` (`limit` default 20 for agents / 100 otherwise, `since`,

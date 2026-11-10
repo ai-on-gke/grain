@@ -77,7 +77,7 @@ func (s *Server) handleDeploymentReachableRepos(w http.ResponseWriter, r *http.R
 		writeClientError(w, err)
 		return
 	}
-	res, err := s.tasks.ReachableReposFiltered(r.Context(), model.DefaultTeamID, filter)
+	res, err := s.reachableReposForRequest(r, filter)
 	writeDeploymentResult(w, res, err)
 }
 

@@ -656,7 +656,7 @@ func tokenWriter(r *http.Request) string {
 }
 
 func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return

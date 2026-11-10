@@ -1439,8 +1439,18 @@ func (s *Server) handleListCapabilityServers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	servers = filterList(servers, func(srv CapabilityServer) bool {
-		return list.matches(srv.ID, srv.Config.Command)
+		return list.matches(srv.ID, srv.Config.Command, srv.Config.ServerURL)
 	})
+	if list.Paged {
+		for i := range servers {
+			if servers[i].Status != nil {
+				st := *servers[i].Status
+				st.MethodDetails = nil
+				st.ConfigSchema = nil
+				servers[i].Status = &st
+			}
+		}
+	}
 	writeList(w, servers, list)
 }
 
