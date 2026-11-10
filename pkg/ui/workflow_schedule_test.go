@@ -183,3 +183,81 @@ func TestAWorkflowScheduleShowsItsLastFiringsRun(t *testing.T) {
 	}
 	t.Fatalf("schedule %s is not in the list at all", sched.ID)
 }
+
+func TestRunScheduleNowReportsCIModeRefusalRatherThanStandingWorkOff(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	sched := declaredWorkflowSchedule(t, store)
+	repo := sched.Target
+
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatalf("setting ci_mode=github: %v", err)
+	}
+
+	if _, err := c.RunScheduleNow(ctx, sched.ID); err == nil {
+		t.Fatal("RunScheduleNow succeeded on a ci_mode=github workflow schedule without grain-ci: true")
+	} else {
+		if !strings.Contains(err.Error(), "this repository uses github CI mode") || !strings.Contains(err.Error(), "grain-ci: true") {
+			t.Errorf("refusal = %q, want github CI mode and grain-ci: true guidance", err.Error())
+		}
+		if strings.Contains(err.Error(), "standing work") {
+			t.Errorf("refusal = %q, must not blame standing work when standing work is enabled", err.Error())
+		}
+	}
+
+	listed, err := c.ListSchedules(ctx)
+	if err != nil {
+		t.Fatalf("ListSchedules: %v", err)
+	}
+	for _, got := range listed {
+		if got.ID == sched.ID {
+			if got.Suppressed == nil || !strings.Contains(got.Suppressed.Detail, "this repository uses github CI mode") ||
+				strings.Contains(got.Suppressed.Detail, "standing work") {
+				t.Errorf("Suppressed = %+v, want CI-mode suppression detail without blaming standing work", got.Suppressed)
+			}
+		}
+	}
+
+	// Under ci_mode: none, even grain-ci: true stays off and does not offer grain-ci: true as a way out.
+	sched.GrainCI = true
+	if _, err := store.SyncRepoDeclarations(ctx, repo, "def456",
+		model.RepoDeclarations{Schedules: []model.DeclaredScheduleFile{{
+			Path: ".grain/schedules/nightly.yml", Schedule: sched,
+		}}}, baseTime, time.UTC); err != nil {
+		t.Fatalf("declaring grain-ci: true schedule: %v", err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeNone,
+	}); err != nil {
+		t.Fatalf("setting ci_mode=none: %v", err)
+	}
+	if _, err := c.RunScheduleNow(ctx, sched.ID); err == nil {
+		t.Fatal("RunScheduleNow succeeded on ci_mode=none")
+	} else {
+		if !strings.Contains(err.Error(), "this repository has CI disabled (ci_mode: none)") {
+			t.Errorf("refusal = %q, want ci_mode: none refusal", err.Error())
+		}
+		if strings.Contains(err.Error(), "grain-ci: true") || strings.Contains(err.Error(), "standing work") {
+			t.Errorf("refusal = %q, must neither offer grain-ci: true on ci_mode=none nor blame standing work", err.Error())
+		}
+	}
+
+	// Switching back to ci_mode: github lets the grain-ci: true workflow schedule fire.
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:   repo,
+		CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatalf("restoring ci_mode=github: %v", err)
+	}
+	run, err := c.RunScheduleNow(ctx, sched.ID)
+	if err != nil {
+		t.Fatalf("RunScheduleNow with grain-ci: true on ci_mode=github: %v", err)
+	}
+	if !run.WorkflowRun {
+		t.Errorf("run = %+v, want WorkflowRun=true", run)
+	}
+}
