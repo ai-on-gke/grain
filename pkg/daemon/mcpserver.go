@@ -2262,6 +2262,16 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		return errors.New("grain mcpserver: -server is required with -task")
 	case *server != "":
 		client = ui.NewHTTPClient(*server)
+		// The run's own credential, which the daemon handed this process
+		// in its environment, in place of the access code: it is what
+		// says which task and run this server speaks for, and it works
+		// only while that run is live (ui.MintRunCredential). It is taken
+		// out of the environment so nothing this process starts inherits
+		// it.
+		if cred := strings.TrimSpace(os.Getenv(ui.RunCredentialEnv)); cred != "" {
+			client.Token = cred
+			os.Unsetenv(ui.RunCredentialEnv)
+		}
 		var err error
 		taskDetail, err = client.GetTask(context.Background(), *taskID)
 		if err != nil {

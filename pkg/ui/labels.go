@@ -147,6 +147,12 @@ type Config struct {
 	// which is all a single daemon needs: the runs that post to it and
 	// the people who answer reach the same server.
 	LocalScriptApprovals *LocalScriptApprovals
+	// RunCredentialKey signs the run credentials (run_credential.go) this
+	// daemon hands each run's `grain mcpserver`. Set, an acting-task
+	// request (ActingTaskHeader) has to carry its run's credential: the
+	// access code alone no longer says which task a request acts for.
+	// nil issues none and leaves that as it was.
+	RunCredentialKey []byte
 	// Actor is the principal the CLI or UI acts as. A task filed here
 	// records it as both origin and approval, the same way a human who
 	// could apply the trigger label used to land a task queued rather

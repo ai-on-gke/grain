@@ -185,6 +185,9 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 	taskID := strings.TrimSpace(outerReq.Header.Get(ActingTaskHeader))
 	channel := strings.TrimSpace(outerReq.Header.Get(ChannelHeader))
 	if taskID != "" {
+		if err := s.actingTaskCredentialError(outerReq); err != nil {
+			return mcpCallerAccess{role: role, actingTaskID: taskID, channel: channel}, err
+		}
 		if s.tasks == nil || s.tasks.Store == nil {
 			return mcpCallerAccess{role: role, actingTaskID: taskID, channel: channel}, errNoAgentAPI
 		}

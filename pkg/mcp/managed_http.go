@@ -24,6 +24,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -56,9 +57,16 @@ func (s *ManagedHTTP) Close() {
 // The endpoint is on loopback, named by the address it bound to, and
 // reachable only from this machine: the CLI it serves is a child of this
 // same process.
+//
+// The server is started with this process's environment plus whatever
+// WithServerEnv put on ctx: a run's credential (RunCredentialEnv), which
+// is kept off the server's argv.
 func StartCommandHTTP(ctx context.Context, binary string, args []string) (*ManagedHTTP, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(runCtx, binary, args...)
+	if extra := serverEnvFrom(ctx); len(extra) > 0 {
+		cmd.Env = append(os.Environ(), extra...)
+	}
 	procgroup.Prepare(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

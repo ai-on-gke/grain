@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // Asserted here rather than at the one call site that type-asserts for
@@ -110,6 +111,9 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 	if err != nil {
 		return nil, err
 	}
+	// The run's credential reaches the mcpserver in its environment
+	// (mcp.WithServerEnv), and a detached one's through its spec.
+	ctx = mcp.WithServerEnv(ctx, agent.RunCredentialEnv(cfg)...)
 	// Deliberately no task id, so an interactive session gets the temp
 	// CODEX_HOME it has always had rather than the task's own store.
 	// Two reasons, and either would do on its own: a session is driven

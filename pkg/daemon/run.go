@@ -1682,6 +1682,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// registered for the proxy's /cap/ (grain cap).
 			CapabilitySandboxServers: SandboxCapabilities,
 			ControllerMCP:            controllerMCPProxy(cfg),
+			MintRunCredential:        runCredentialMinter(cfg.DataDir),
 			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir), secretStore),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the

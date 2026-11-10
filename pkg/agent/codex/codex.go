@@ -863,8 +863,9 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 			return "", false, nil, err
 		}
 		specData, err := json.Marshal(detachedMCPSpec{
-			Args:       mcpArgs,
-			BaseConfig: string(config),
+			Args:          mcpArgs,
+			BaseConfig:    string(config),
+			RunCredential: mcp.ServerEnvMap(ctx)[mcp.RunCredentialEnv],
 		})
 		if err != nil {
 			removeHome()
@@ -1123,6 +1124,9 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	if err != nil {
 		return nil, err
 	}
+	// The run's credential reaches the mcpserver in its environment
+	// (mcp.WithServerEnv), and a detached one's through its spec.
+	ctx = mcp.WithServerEnv(ctx, agent.RunCredentialEnv(cfg)...)
 	if f.grainBinaryPath == "" {
 		return nil, fmt.Errorf("codex: grainBinaryPath is required")
 	}

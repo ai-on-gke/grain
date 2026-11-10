@@ -1209,7 +1209,7 @@ func writeAgyHomeFor(ctx context.Context, host agent.Host, store *sessionstore.S
 		runHookArgs = hookArgs(cfg[0], home)
 		servers = cfg[0].CapabilityMCPServers
 	}
-	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
+	files, err := agyHomeFilesForEnv(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, mcp.ServerEnvMap(ctx), provider, isUnconfined(host), servers, runHookArgs...)
 	if err != nil {
 		cleanup()
 		return "", false, nil, err
@@ -1248,7 +1248,17 @@ func agyHomeFilesWith(grainBinaryPath string, mcpArgs []string, provider string,
 // agyHomeFilesFor is agyHomeFilesWith with grain-sandbox at mcpURL when
 // it is set (mcpConfigJSONFor). grainBinaryPath is then only the hooks'.
 func agyHomeFilesFor(grainBinaryPath, mcpURL string, mcpArgs []string, provider string, isUnc bool, servers []agent.CapabilityMCPServer, hookArgs ...string) (map[string][]byte, error) {
+	return agyHomeFilesForEnv(grainBinaryPath, mcpURL, mcpArgs, nil, provider, isUnc, servers, hookArgs...)
+}
+
+// agyHomeFilesForEnv is agyHomeFilesFor with env set on a forked
+// grain-sandbox (mcp.ServerEnvMap): the run's credential, kept off its
+// argv.
+func agyHomeFilesForEnv(grainBinaryPath, mcpURL string, mcpArgs []string, env map[string]string, provider string, isUnc bool, servers []agent.CapabilityMCPServer, hookArgs ...string) (map[string][]byte, error) {
 	mcpConfig, err := mcpConfigJSONFor(grainBinaryPath, mcpURL, mcpArgs, servers...)
+	if err == nil && mcpURL == "" && len(env) > 0 {
+		mcpConfig, err = withForkedServerEnv(mcpConfig, env)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("antigravity: building agy's mcp config: %w", err)
 	}
@@ -1304,7 +1314,7 @@ func refreshAgyHomeFor(ctx context.Context, host agent.Host, home, grainBinaryPa
 		runHookArgs = hookArgs(cfg[0], home)
 		servers = cfg[0].CapabilityMCPServers
 	}
-	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
+	files, err := agyHomeFilesForEnv(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, mcp.ServerEnvMap(ctx), provider, isUnconfined(host), servers, runHookArgs...)
 	if err != nil {
 		return err
 	}
@@ -1796,6 +1806,9 @@ func (f *Framework) agyArgs(ctx context.Context, cfg agent.RunConfig, conversati
 // so a native tool reached for by mistake writes somewhere harmless.
 func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
 	mcpArgs, err := f.mcpServerArgs(ctx, cfg)
+	// The run's credential reaches the mcpserver in its environment,
+	// whichever way it is started (mcp.WithServerEnv).
+	ctx = mcp.WithServerEnv(ctx, agent.RunCredentialEnv(cfg)...)
 	if err != nil {
 		return nil, err
 	}
@@ -2373,4 +2386,17 @@ func (f *Framework) startCarriedMCP(ctx context.Context, mcpArgs []string) (mcpU
 		// anything that reads the record.
 		os.RemoveAll(dir)
 	}, nil
+}
+
+// withForkedServerEnv sets env on grain-sandbox's entry in config, an
+// mcpConfigJSONFor document for a forked server.
+func withForkedServerEnv(config []byte, env map[string]string) ([]byte, error) {
+	var doc map[string]map[string]map[string]any
+	if err := json.Unmarshal(config, &doc); err != nil {
+		return nil, err
+	}
+	if entry := doc["mcpServers"][mcpServerName]; entry != nil {
+		entry["env"] = env
+	}
+	return json.Marshal(doc)
 }

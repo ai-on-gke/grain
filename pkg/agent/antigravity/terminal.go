@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 // Asserted here rather than at the one call site that type-asserts for
@@ -100,6 +101,7 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 		return nil, fmt.Errorf("antigravity: grainBinaryPath is required")
 	}
 	mcpArgs, err := f.mcpServerArgs(ctx, cfg)
+	ctx = mcp.WithServerEnv(ctx, agent.RunCredentialEnv(cfg)...)
 	if err != nil {
 		return nil, err
 	}

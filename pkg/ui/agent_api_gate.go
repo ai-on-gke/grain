@@ -40,10 +40,13 @@ import (
 // tool makes (agent_api_tools.go). A request carrying it is held to that
 // task's api grants by agentAPIGate below and attributed to it.
 //
-// The header can only narrow what a request may do, never widen it: a
-// request without it is whatever the access gate already let in, so a
-// caller able to send this header at all could have left it off. Which
-// is why it is believed as it stands rather than signed.
+// The header names who the request is, not only what it may do, so it
+// is believed only from a request that says which run it is: one carrying
+// that run's own credential (run_credential.go), which pins the header to
+// the task the credential was minted for, or one handed to the server
+// in-process (the sandbox proxy, which authenticated the sandbox itself).
+// On a server issuing run credentials, a request the access code alone
+// admitted is refused for naming a task (actingTaskCredentialError).
 const ActingTaskHeader = "X-Grain-Acting-Task"
 
 // ActingReasonHeader carries the reason an agent gave for a call. A call
@@ -260,6 +263,11 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		taskID := strings.TrimSpace(r.Header.Get(ActingTaskHeader))
 		if taskID == "" {
 			next(w, r)
+			return
+		}
+		if err := s.actingTaskCredentialError(r); err != nil {
+			log.Printf("grain api: refused {agent, %s} %s: %v", taskID, pattern, err)
+			writeError(w, http.StatusUnauthorized, err)
 			return
 		}
 		call, err := s.authorizeAgentCall(r, pattern, scope, taskID)
