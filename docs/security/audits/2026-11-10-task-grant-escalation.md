@@ -235,7 +235,7 @@ user's own agent.
   `retry`/`reopen`, or `comments`/`agent-messages` against another task in that repository
   carrying wider grants (`gcp#gcp-key`, `host-script`, `autoMerge: true`).
 - **Fix:** `agentRails` now calls `agentCrossTaskRail` (`pkg/ui/agent_cross_task.go`) for every
-  steering route (`PATCH /api/tasks/{id}`, `retry`, `reopen`, `undefer`, `resume`, `run-now`,
+  steering route (`PATCH /api/tasks/{id}`, `retry`, `reopen`, `undefer`, `resume`,
   `comments`, `reply`, `PUT goal`, `agent-messages`, `notes`). It refuses the call with `403`
   unless the target task is within the calling task's envelope (`agentTaskWithin`, the agent
   counterpart of `roleTaskWithin`): every grant the target carries (capabilities, `api:*`
@@ -245,7 +245,9 @@ user's own agent.
   or reads, its network access must not be wider than the caller's, and it must not carry
   `autoMerge` the caller lacks. Exceptions: the caller's own task (still held by the
   self-mutation rails) and tasks in its own proposal chain, which filing and approval already
-  held to the existing ceilings.
+  held to the existing ceilings. Approved `run-now` stays outside the rail: it changes only
+  when a task runs (`api:dispatch-control`), adds nothing to its prompt, and an unapproved
+  target is already held by `agentApprovalRail`.
 - **Comments to wider tasks:** plain comments, replies and `agent-messages` to an unrelated
   wider task are refused, since a comment is delivered to the live run like a person's. Messages
   between parent and child (`agent-messages`, `notes`) stay allowed so a director's children can

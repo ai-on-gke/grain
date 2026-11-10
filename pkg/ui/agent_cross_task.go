@@ -32,6 +32,11 @@ import (
 // less-privileged run could have a more-privileged one act on its behalf
 // (audit 2026-11-10-task-grant-escalation, finding 4c). The value is the
 // verb a refusal names.
+//
+// POST /api/tasks/{id}/run-now is not among them: on an approved task it
+// changes only when that task runs, which is api:dispatch-control's whole
+// job (a steward hand-picking queued work), and on an unapproved one
+// agentApprovalRail already holds it to a person's approval.
 var agentSteeringRoutes = map[string]string{
 	"PATCH /api/tasks/{id}":         "modify",
 	"POST /api/tasks/{id}/retry":    "retry",

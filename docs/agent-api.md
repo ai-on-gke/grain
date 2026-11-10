@@ -1049,7 +1049,7 @@ It is refused on the caller's own task.
 
 An agent may edit, re-queue or speak in another task only when that
 task is within its own task's envelope. `PATCH /api/tasks/{id}`,
-`retry`, `reopen`, `undefer`, `resume`, `run-now`, `comments`, `reply`,
+`retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
 `PUT /api/tasks/{id}/goal`, `agent-messages` and `notes` are refused
 with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
@@ -1058,6 +1058,9 @@ calling task cannot, has wider network access, or has `autoMerge` the
 calling task lacks. Holding `api:tasks:write` on the repository is not
 enough: otherwise a less-privileged run could have a more-privileged
 one act on its behalf. Ask a person to act on that task instead.
+`run-now` is not refused this way: on an approved task it only moves
+when the task runs (`api:dispatch-control`'s job), and on an unapproved
+one the approval rail already applies.
 
 Two kinds of target are exempt: the calling task's own proposals
 (directly or down its proposal chain), which were held to its ceilings
