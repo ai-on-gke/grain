@@ -263,6 +263,19 @@ func LoadConfig(path string) (*Config, error) {
 	return ParseConfig(data)
 }
 
+// applyHubID settles compute.hub_id and its pre-rename spelling
+// compute.registry_id into RegistryID, the one the gce provider and the
+// reconciler read: hub_id wins when both are set, and registry_id alone
+// warns that it is deprecated. It runs in ApplyDefaults because serve and
+// validate decode the YAML themselves rather than through ParseConfig.
+func (c *ComputeConfig) applyHubID() {
+	if id := strings.TrimSpace(c.HubID); id != "" {
+		c.RegistryID = id
+	} else if strings.TrimSpace(c.RegistryID) != "" {
+		hubenv.Warn("compute.registry_id", "compute.hub_id")
+	}
+}
+
 // ParseConfig unmarshals YAML bytes into a Config, applies defaults, and validates it.
 func ParseConfig(data []byte) (*Config, error) {
 	expanded := os.ExpandEnv(string(data))
@@ -270,11 +283,6 @@ func ParseConfig(data []byte) (*Config, error) {
 	dec := yamlStrictDecoder(expanded)
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parsing hub config YAML: %w", err)
-	}
-	if id := strings.TrimSpace(cfg.Compute.HubID); id != "" {
-		cfg.Compute.RegistryID = id
-	} else if strings.TrimSpace(cfg.Compute.RegistryID) != "" {
-		hubenv.Warn("compute.registry_id", "compute.hub_id")
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.Validate(); err != nil {
@@ -291,6 +299,7 @@ func yamlStrictDecoder(s string) *yaml.Decoder {
 
 // ApplyDefaults populates default values for omitted configuration fields.
 func (c *Config) ApplyDefaults() {
+	c.Compute.applyHubID()
 	if strings.TrimSpace(c.Listen) == "" {
 		c.Listen = DefaultListenAddr
 	}

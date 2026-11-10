@@ -1049,8 +1049,8 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
           Deleting <strong>{deleteTarget?.name}</strong> stops routing traffic
           and removes it from your entries. Its name stays reserved for you for
           30 days, and a hosted instance can still be restored (
-          <code>grain hub restore</code> or a registry admin) until its retained
-          data is purged.
+          <code>grain hub restore</code> or a hub administrator) until its
+          retained data is purged.
         </p>
         <div className="reg-field">
           <label className="reg-label" htmlFor="confirm-delete-input">
