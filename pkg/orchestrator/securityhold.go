@@ -232,6 +232,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	var needsHumanSubmit bool
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		wasHeld := hasSecurityHold(*t) || hasBrokenRulesHold(*t)
+		personMerges := waitsForPersonToMerge(*t)
 		subMarker := humanApprovalMarker(*t)
 		submittedThisHead = subMarker != "" && headSHA != "" &&
 			(model.HumanSubmittedHead(subMarker) == "" || strings.EqualFold(model.HumanSubmittedHead(subMarker), headSHA))
@@ -263,6 +264,13 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 			}
 			t.Links = append(t.Links, cleared, model.Link{Kind: model.LinkBaseRepairBypass, Target: headSHA})
 			return nil
+		}
+		// A change that was never going to merge itself is reviewed now
+		// too, but its review passing is not the person's Submit it is
+		// still waiting for: recorded as the "no" it is, no hold's
+		// release hands it an auto-merge it never had.
+		if personMerges && !submittedThisHead {
+			model.DeclineAutoMerge(t, "")
 		}
 		t.AutoMerge = false
 		for _, m := range matches {
@@ -1075,6 +1083,28 @@ func hasSecurityHold(task model.Task) bool {
 func heldForHuman(task model.Task) bool {
 	return linkTarget(task, model.LinkHumanOnlyHold) != "" || model.AutoMergeDeclined(task) ||
 		model.AutoMergeAwaitsPerson(task)
+}
+
+// waitsForPersonToMerge reports whether task, as it stands before a head's
+// gates are recorded on it, was never going to merge itself: auto-merge off
+// with none of grain's holds to account for it and no person's Submit
+// behind it -- filed that way, or turned off by someone. Such a change used
+// to be left unclassified until its Submit; it is reviewed now as well, and
+// the gates recording that must not turn its review passing into the
+// auto-merge only a person's Submit gives it (model.DeclineAutoMerge, which
+// that Submit lifts).
+func waitsForPersonToMerge(task model.Task) bool {
+	if task.AutoMerge || heldForHuman(task) || humanApprovalMarker(task) != "" {
+		return false
+	}
+	for _, kind := range []model.LinkKind{model.LinkSecurityHold, model.LinkBrokenRulesHold,
+		model.LinkPathTriggerHold, model.LinkHumanReviewHold, model.LinkReviewFindings,
+		model.LinkReviewQuestions} {
+		if linkTarget(task, kind) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // linkTarget is the target of task's last link of kind, or "".

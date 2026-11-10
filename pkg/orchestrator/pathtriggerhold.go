@@ -335,13 +335,12 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 // applyPathTriggerGate records that task's head was judged, and holds or
 // unholds it according to gates -- the gating tasks this head filed.
 //
-// Like the security hold, only a change that would otherwise merge
-// itself is held: one with auto-merge on, or one already held (by this
-// gate or by the security hold, whose release must not be the only
-// thing between the change and a merge). A change
-// with auto-merge off is already waiting for a human, who still gets the
-// tasks and the note. selfMerging is whether the change had auto-merge on
-// before this head's trust-boundary classification, which may have just
+// Every gating trigger records its gate, whether auto-merge is on or off:
+// its review is a separate gate from a person's Submit. A change with
+// auto-merge off that none of grain's holds account for -- one never going
+// to merge itself -- still waits for that Submit after the review passes
+// (waitsForPersonToMerge). selfMerging is whether the change had auto-merge
+// on before this head's trust-boundary classification, which may have just
 // withdrawn it.
 func applyPathTriggerGate(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, selfMerging bool, ref model.PullRequestRef, headSHA string, gates []gateFiring, now time.Time) error {
@@ -357,6 +356,7 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 		t.Links = append(withoutLinks(t.Links, model.LinkPathTriggersRead),
 			model.Link{Kind: model.LinkPathTriggersRead, Target: headSHA})
 		wasHeld := hasPathTriggerHold(*t)
+		personMerges := !selfMerging && waitsForPersonToMerge(*t)
 		// Who may release this head is decided afresh with it: an
 		// approval given on an earlier head is not one of this.
 		t.Links = model.WithoutApprovalRules(t.Links, model.ApprovalRuleTrigger)
@@ -399,6 +399,13 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 			(model.HumanSubmittedHead(subMarker) == "" || strings.EqualFold(model.HumanSubmittedHead(subMarker), headSHA))
 		if human == model.TriggerHumanRequired && !submittedThisHead && linkTarget(*t, model.LinkHumanOnlyHold) == "" {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkHumanOnlyHold, Target: "path-trigger"})
+		}
+		// A change that was never going to merge itself still waits for
+		// a person's Submit once its gating tasks finish: their settling
+		// (settlePathTriggerHold) must not hand it an auto-merge it never
+		// had (waitsForPersonToMerge).
+		if personMerges && !submittedThisHead {
+			model.DeclineAutoMerge(t, "")
 		}
 		return nil
 	}); err != nil {

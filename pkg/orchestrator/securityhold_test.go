@@ -184,6 +184,45 @@ func TestSecurityHoldIgnoresAChangeThatWasNeverGoingToMergeItself(t *testing.T) 
 	}
 }
 
+// A task filed without auto-merge -- no explicit decline, just never asked
+// to merge itself -- waits for a person's Submit as it always has. Its
+// trust-boundary change is now reviewed before that Submit, but the
+// review passing is the security-review gate passing, not the person's:
+// it must not hand the change an auto-merge it never had.
+func TestSecurityHoldOnAChangeFiledWithoutAutoMergeStillWaitsForSubmit(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	task := finishTouching(t, ctx, store, sim, "t1", "pkg/gitproxy/proxy.go", false)
+
+	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	reviewID := linkOf(got, model.LinkSecurityReviewTask)
+	if reviewID == "" || linkOf(got, model.LinkSecurityHold) == "" {
+		t.Fatalf("a trust-boundary change with auto-merge off still requires a security review gate: %+v", got.Links)
+	}
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got = reloaded(t, ctx, store, task.ID)
+	if got.AutoMerge {
+		t.Fatalf("a clean security review turned on auto-merge for a change filed without it: links=%+v", got.Links)
+	}
+	var approval *model.MergeGate
+	for _, g := range model.ComputeMergeGates(got, nil, nil) {
+		if g.ID == model.GateApproval {
+			approval = &g
+		}
+	}
+	if approval == nil || approval.State.Satisfied() {
+		t.Fatalf("the person's approval gate is not standing after the review passed: %+v", approval)
+	}
+}
+
 // Baselines and suppressions can never auto-merge: the review is filed as its
 // own gate, and when it finishes clean the human-only gate still holds.
 func TestSecurityHoldOnSuppressionsIsNeverReleasedByAReview(t *testing.T) {
