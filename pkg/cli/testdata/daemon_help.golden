@@ -447,6 +447,12 @@ Usage of grain daemon:
     	where a successful upgrade's binary is installed to (required with -upgrade-src-dir)
   -upgrade-restart-cmd value
     	one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below.
+  -upgrade-reviewed-merge-logins string
+    	comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed
+  -upgrade-reviewed-merge-repo string
+    	owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked
+  -upgrade-reviewed-merge-token-file string
+    	file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously)
   -upgrade-src-dir string
     	git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature
   -upgrade-verify-cmd value

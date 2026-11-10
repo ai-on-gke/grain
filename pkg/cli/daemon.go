@@ -510,6 +510,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"(docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the "+
 			"command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead "+
 			"unverified and say so.")
+	reviewedMerge := registerReviewedMergeFlags(fs)
 	disableSelfUpgrade := fs.Bool("disable-self-upgrade", false,
 		"disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) "+
 			"and hide in-VM upgrade controls in the UI in favour of external lifecycle management "+
@@ -1314,6 +1315,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		IapBackendService: *iapBackendService,
 		IapResource:       *iapResource,
 		UpgradeSrcDir:     *upgradeSrcDir, UpgradeInstallPath: *upgradeInstallPath, UpgradeRestartCmd: upgradeRestartCmd, UpgradeVerifyCmd: upgradeVerifyCmd,
+		UpgradeReviewedMergeRepo: reviewedMerge.repo(), UpgradeReviewedMergeLogins: reviewedMerge.logins(), UpgradeReviewedMergeTokenFile: reviewedMerge.tokenFile(),
 		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
