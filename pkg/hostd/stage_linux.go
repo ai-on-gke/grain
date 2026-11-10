@@ -78,7 +78,7 @@ func (s *Server) stageRoot() string {
 
 // describeRemote fills in what a daemon on another machine needs to know
 // about this one (Hello.Remote).
-func (s *Server) describeRemote(h *Hello) {
+func (s *Server) describeRemote(h *Hello, allow *Allowlist) {
 	h.Remote = true
 	h.StageRoot = s.stageRoot()
 	h.Grain = s.CurrentLink
@@ -87,24 +87,9 @@ func (s *Server) describeRemote(h *Hello) {
 			h.Grain = exe
 		}
 	}
-	h.CodexAuth = codexLogin()
-}
-
-// codexLogin is codex's own login on this machine, where codex keeps it.
-func codexLogin() string {
-	dir := os.Getenv("CODEX_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".codex")
-	}
-	path := filepath.Join(dir, "auth.json")
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-		return ""
-	}
-	return path
+	targets := allow.loginTargets()
+	h.LoginTargets = targets
+	h.CodexAuth = targets[LoginCodex]
 }
 
 // withCLIRoot is a with root added to every CLI entry's paths_under and
@@ -127,6 +112,18 @@ func (a *Allowlist) withCLIRoot(root string) *Allowlist {
 // stage runs one OpStage operation. Every path it touches, but a
 // symlink's target, is under stageRoot, reached through no symlink.
 func (s *Server) stage(op *StageOp) StageReply {
+	var allow *Allowlist
+	if s.Allowlist != "" {
+		a, _, err := s.loadAllowlist()
+		if err != nil {
+			return StageReply{Error: err.Error()}
+		}
+		allow = a
+	}
+	return s.stageWithAllowlist(op, allow)
+}
+
+func (s *Server) stageWithAllowlist(op *StageOp, allow *Allowlist) StageReply {
 	if op == nil {
 		return StageReply{Error: "stage: no operation"}
 	}
@@ -210,12 +207,12 @@ func (s *Server) stage(op *StageOp) StageReply {
 		if err != nil {
 			return fail(err)
 		}
-		// The one link a run stages is to this machine's codex login;
-		// any other target would be a path outside the staging root
-		// that the CLI it is handed to reads as staged configuration.
-		target := filepath.Clean(expandHome(op.Target))
-		if login := codexLogin(); op.Target == "" || login == "" || target != filepath.Clean(login) {
-			return StageReply{Error: "stage: a symlink may only name this machine's codex login"}
+		// Links outside the staging root may only target regular files
+		// named in the allowlist's logins: map (or the built-in table
+		// when absent), resolved on this machine.
+		target, ok := allow.resolveSymlinkTarget(op.Target)
+		if !ok {
+			return StageReply{Error: "stage: a symlink may only target a configured login file"}
 		}
 		if err := os.Symlink(target, link); err != nil {
 			return fail(err)

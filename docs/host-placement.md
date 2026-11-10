@@ -117,17 +117,20 @@ ambient one is.)
 ## Which logins a host has
 
 A host reports the agent CLI logins on its machine, as the user it runs
-as, in its hello (`hostd.Hello.Logins`): `codex` for
-`$CODEX_HOME/auth.json` (else `~/.codex/auth.json`), `claude` for
+as, in its hello (`hostd.Hello.Logins`), configured by an optional top-level
+`logins:` map (`name -> path`, `~/` allowed) in its allowlist. When `logins:`
+is omitted, the built-in table applies: `codex` for `$CODEX_HOME/auth.json`
+(else `~/.codex/auth.json`), `claude` for
 `$CLAUDE_CONFIG_DIR/.credentials.json` (else
 `~/.claude/.credentials.json`), and `antigravity` for
 `~/.gemini/oauth_creds.json` or agy's own `~/.gemini/antigravity-cli`. The
 daemon asks a dialing-in host once it connects, and the co-located one
-when the list is read; `GET /api/hostds` carries them as `logins` (with
-`loginsKnown`), and the **Run on host** picker shows them beside each host
-("logins: codex, claude", "no CLI logins", or nothing for a host that is
-offline or too old to say). A file being there says the CLI signed in on
-that machine, not that the login is still good.
+when the list is read (`Has(FeatureLogins)` distinguishes an empty list,
+meaning none, from a host too old to report them); `GET /api/hostds` carries
+them as `logins` (with `loginsKnown`), and the **Run on host** picker shows
+them beside each host ("logins: codex, claude", "no CLI logins", or nothing
+for a host that is offline or too old to say). A file being there says the
+CLI signed in on that machine, not that the login is still good.
 
 ## Host work nothing places
 

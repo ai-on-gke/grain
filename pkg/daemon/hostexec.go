@@ -572,7 +572,12 @@ func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 	h.Remote = remote
 	h.Grain = hello.Grain
 	h.StageRoot = hello.StageRoot
-	h.CodexAuth = hello.CodexAuth
+	if hello.Has(hostd.FeatureLoginsMap) {
+		h.HasLoginsMap = true
+		h.LoginTargets = hello.LoginTargets
+	} else {
+		h.CodexAuth = hello.CodexAuth
+	}
 	return nil
 }
 

@@ -74,6 +74,11 @@ const (
 	// FeatureFeatures: Hello.Features itself. Listed so that a peer's
 	// silence about every other feature is a statement, not an omission.
 	FeatureFeatures Feature = "features"
+	// FeatureLoginsMap: Allowlist.Logins configures CLI login paths,
+	// Hello.LoginTargets reports the resolved regular-file targets for
+	// StageSymlink, and StageSymlink accepts any target the map names.
+	// Replaces Hello.CodexAuth.
+	FeatureLoginsMap Feature = "logins_map"
 )
 
 // Features is every feature this build implements, in the order they
@@ -89,6 +94,7 @@ var Features = []Feature{
 	FeatureLogins,
 	FeatureAgentsOnly,
 	FeatureFeatures,
+	FeatureLoginsMap,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited

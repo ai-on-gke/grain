@@ -546,3 +546,47 @@ func TestParseAllowlistReadsCapacityAndLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAllowlistLoginsMap(t *testing.T) {
+	absent, err := ParseAllowlist([]byte("clis: {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent.Logins != nil {
+		t.Fatalf("absent logins: = %#v, want nil so built-in defaults apply", absent.Logins)
+	}
+
+	empty, err := ParseAllowlist([]byte("logins: {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Logins == nil || len(empty.Logins) != 0 {
+		t.Fatalf("empty logins: = %#v, want non-nil empty map", empty.Logins)
+	}
+
+	a, err := ParseAllowlist([]byte("logins:\n  codex: ~/.codex/auth.json\n  custom-cli: /opt/creds/login.json\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Logins["codex"] != "~/.codex/auth.json" || a.Logins["custom-cli"] != "/opt/creds/login.json" {
+		t.Fatalf("logins = %#v", a.Logins)
+	}
+
+	for _, bad := range []string{
+		"logins:\n  \"bad name\": ~/.codex/auth.json\n",
+		"logins:\n  \"\": ~/.codex/auth.json\n",
+		"logins:\n  codex: \"\"\n",
+		"logins:\n  codex: /\n",
+		"logins:\n  codex: ~\n",
+		"logins:\n  codex: ~/\n",
+		"logins:\n  codex: ~/../etc/passwd\n",
+		"logins:\n  codex: ~other/.codex/auth.json\n",
+		"logins:\n  codex: relative/auth.json\n",
+		"logins:\n  codex: /home/me/../etc/passwd\n",
+		"loginz:\n  codex: ~/.codex/auth.json\n",
+	} {
+		if _, err := ParseAllowlist([]byte(bad)); err == nil {
+			t.Errorf("ParseAllowlist(%q) succeeded, want refused", bad)
+		}
+	}
+}
