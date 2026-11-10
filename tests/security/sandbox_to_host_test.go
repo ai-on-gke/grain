@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -841,12 +842,12 @@ func (m staticRegistryCreds) PackageToken(owner, repo string) (string, bool) {
 	return tok, ok
 }
 
-// knownGapGHCRTokenIgnoresSandboxScope is true while pkgcache's /v2/ghcr/token
-// endpoint attaches RegistryCredentials.PackageToken(owner, repo) without
-// authenticating the calling sandbox or checking its repository read scope,
-// returning a minted GHCR pull bearer token for any private image under a
-// connected GitHub owner. Filed as a follow-up task from task 3984.
-const knownGapGHCRTokenIgnoresSandboxScope = true
+// knownGapGHCRTokenIgnoresSandboxScope was true while pkgcache's GHCR /token
+// route attached RegistryCredentials.PackageToken(owner, repo) without
+// resolving the calling sandbox or checking its repository read scope. The
+// credential is now only spent for a repository Config.RepoScope grants the
+// caller (pkg/pkgcache/scope.go), and never with no RepoScope at all.
+const knownGapGHCRTokenIgnoresSandboxScope = false
 
 func TestPackageCacheGHCRTokenChecksSandboxRepoScope(t *testing.T) {
 	var sawBasicAuth string
@@ -900,5 +901,80 @@ func TestPackageCacheGHCRTokenChecksSandboxRepoScope(t *testing.T) {
 		t.Skip("known gap: /v2/ghcr/token mints GHCR pull tokens using deployment credentials without checking sandbox repo scope; see knownGapGHCRTokenIgnoresSandboxScope")
 	case mintedUnscoped:
 		t.Fatalf("unauthenticated sandbox minted GHCR pull token for out-of-scope private repo: %s", rec.Body.String())
+	}
+}
+
+// TestPackageCacheGHCRTokenHonoursSandboxRepoScope is the positive and
+// negative halves of the check above with a RepoScope wired the way the
+// daemon wires one: client address -> sandbox -> repository grants.
+func TestPackageCacheGHCRTokenHonoursSandboxRepoScope(t *testing.T) {
+	var mu sync.Mutex
+	var sawBasicAuth string
+	fakeGHCR := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			mu.Lock()
+			sawBasicAuth = r.Header.Get("Authorization")
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if r.Header.Get("Authorization") == "" {
+				_, _ = w.Write([]byte(`{"token":"anonymous"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"token":"gho_minted_private_pull_jwt"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(fakeGHCR.Close)
+
+	cache, err := pkgcache.NewCache(t.TempDir(), 64<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients := &pkgcache.ClientNames{}
+	clients.RegisterClient(net.ParseIP("10.30.0.2"), "run-private")
+	clients.RegisterClient(net.ParseIP("10.30.0.3"), "run-public-only")
+	grants := map[string]string{"run-private": "acme/private-service", "run-public-only": "acme/public"}
+	srv := pkgcache.NewServer(pkgcache.Config{
+		Cache: cache,
+		Client: &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", fakeGHCR.Listener.Addr().String())
+			},
+		}},
+		GHCRRegistry: "http://ghcr.io",
+		Credentials:  staticRegistryCreds{"acme/private-service": "ghp_deployment_pat"},
+		RepoScope: pkgcache.RepoScopeFunc(func(r *http.Request, owner, repo string) bool {
+			name, ok := clients.NameFor(r)
+			return ok && grants[name] == owner+"/"+repo
+		}),
+	})
+	expectedBasic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:ghp_deployment_pat"))
+
+	for _, tc := range []struct {
+		from       string
+		wantMinted bool
+	}{
+		{"10.30.0.2", true},  // granted acme/private-service
+		{"10.30.0.3", false}, // granted only acme/public
+		{"10.30.0.4", false}, // no registered sandbox at all (a no_repo task, or unknown)
+	} {
+		mu.Lock()
+		sawBasicAuth = ""
+		mu.Unlock()
+		req := httptest.NewRequest(http.MethodGet, "/token?service=ghcr.io&scope=repository:acme/private-service:pull", nil)
+		req.Host = "ghcr.io"
+		req.RemoteAddr = tc.from + ":51000"
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		mu.Lock()
+		minted := rec.Code == http.StatusOK && sawBasicAuth == expectedBasic &&
+			strings.Contains(rec.Body.String(), "gho_minted_private_pull_jwt")
+		mu.Unlock()
+		if minted != tc.wantMinted {
+			t.Errorf("sandbox at %s: minted a private pull token with the deployment credential = %v, want %v (body %q)",
+				tc.from, minted, tc.wantMinted, rec.Body.String())
+		}
 	}
 }
