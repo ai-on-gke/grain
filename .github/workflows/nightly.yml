@@ -999,14 +999,16 @@ jobs:
           fi
 
   # The release images' vulnerability gate (docs/image-vulnerability-scanning.md)
-  # against the images this RC published: Trivy over every image's OS and
-  # language packages, failing on a fixable CRITICAL or HIGH finding that
+  # against the images this RC's commit published: Trivy over every image's OS
+  # and language packages, failing on a fixable CRITICAL or HIGH finding that
   # .grain/baselines/image-vulns-allowlist.yaml does not waive. govulncheck
   # above reads Go source; this reads what ships -- the Debian packages,
   # the bundled docker, kubectl and cosign binaries, the agent CLIs.
-  # On an RC tag it scans that tag's images, which the train publishes
-  # right after pushing the tag, so it waits for them; on the schedule,
-  # the current candidate's.
+  # The release train pushes git refs only (RELEASE_IMAGES=off), while
+  # release.yml publishes each commit's immutable images as :sha-<7> (and
+  # moves :main or :candidate); on an RC tag this scans that commit's :sha-<7>
+  # images, and on the schedule or a branch dispatch :main (:candidate on
+  # candidate).
   image-vulns:
     name: release image vulnerabilities
     if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',image-vulns,')
@@ -1070,13 +1072,18 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          tag=candidate
+          tag=main
+          title="Release image vulnerabilities (:main)"
           if [ "$REF_TYPE" = tag ]; then
-            tag="$REF_NAME"
+            tag="sha-${GITHUB_SHA:0:7}"
+            title="RC image vulnerabilities (${REF_NAME}, :${tag})"
+          elif [ "$REF_NAME" = candidate ]; then
+            tag=candidate
+            title="RC image vulnerabilities (:candidate)"
           fi
           echo "scanning the images published as :$tag"
           bash ./scripts/scan-images.sh --tag "$tag" --wait 3600 --out image-vulns-report \
-            --title "RC image vulnerabilities (:$tag)"
+            --title "$title"
 
       - name: Upload the scan to code scanning
         if: ${{ !cancelled() && hashFiles('image-vulns-report/*.sarif') != '' }}

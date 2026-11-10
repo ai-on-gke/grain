@@ -1091,6 +1091,11 @@ storage backstop, not something prompts or page loads depend on.
 - UI: the Compact button, the brief editor with its edit history,
   summarised comments collapsed under the handover, and the
   stale-handover badge, all under the deployment's screenshot rule.
+  Done in grain/task-4193: a durable task's page shows the current brief
+  in place of the description (the original and the edit history folded
+  under it), a Context panel with the handover's version, age, stale
+  badge, Compact and Write handover…, and summarised comments collapsed
+  in place in the timeline (`ui/src/components/detail/TaskContext.jsx`).
 - Rollover as designed above.
 
 ## Store and schema changes (summary)
