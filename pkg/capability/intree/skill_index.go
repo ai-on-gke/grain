@@ -235,6 +235,13 @@ func escapeRepoSkillsTag(s string) string {
 // content rather than instructions from grain. It returns the formatted section
 // and how many repo skills were omitted to stay under maxBytes.
 func FormatSkillsIndex(capSkills, repoSkills []SkillIndexEntry, repoLabel string, maxBytes int) (string, int) {
+	return FormatSkillsIndexReserving(capSkills, nil, repoSkills, repoLabel, maxBytes)
+}
+
+// FormatSkillsIndexReserving is FormatSkillsIndex with reserved, the names of
+// capability skills listed elsewhere in the prompt (in their own capability
+// server's block), which win name clashes without being listed here.
+func FormatSkillsIndexReserving(capSkills []SkillIndexEntry, reserved []string, repoSkills []SkillIndexEntry, repoLabel string, maxBytes int) (string, int) {
 	if len(capSkills) == 0 && len(repoSkills) == 0 {
 		return "", 0
 	}
@@ -243,6 +250,11 @@ func FormatSkillsIndex(capSkills, repoSkills []SkillIndexEntry, repoLabel string
 	}
 
 	usedNames := make(map[string]bool, len(capSkills)+len(repoSkills))
+	for _, name := range reserved {
+		if name = cleanInlineText(name); name != "" {
+			usedNames[name] = true
+		}
+	}
 	var b strings.Builder
 	b.WriteString(SkillsIndexHeader)
 	b.WriteByte('\n')

@@ -252,12 +252,17 @@ GCP credentials placed at /home/debian/.config/gcloud.
 	if len(keptInProc) != 0 {
 		t.Errorf("keptInProc = %v, want empty", keptInProc)
 	}
-	if strings.Contains(keptPass, "skill#skill") || !strings.Contains(keptPass, "gcp#gcp-key") {
-		t.Errorf("keptPass should strip skill#skill and preserve gcp#gcp-key:\n%s", keptPass)
+	// A capability server's skills stay in its own attributed block rather
+	// than being restated, unattributed, in grain's index.
+	if keptPass != passSections {
+		t.Errorf("keptPass should keep every capability block as supplied:\n%s", keptPass)
+	}
+	for _, unwanted := range []string{"Capability version of shared", "cap-only"} {
+		if strings.Contains(unified, unwanted) {
+			t.Errorf("unified skills index restates capability-server text %q outside its block:\n%s", unwanted, unified)
+		}
 	}
 	for _, want := range []string{
-		"- shared: /home/debian/.skills/shared/SKILL.md (capability) -- Capability version of shared",
-		"- cap-only: /home/debian/.skills/cap-only/SKILL.md (capability) -- Capability exclusive skill",
 		`<repo-skills repo="acme/widgets">`,
 		"- .claude/skills/shared: /home/debian/work/.claude/skills/shared/SKILL.md (repo: .claude/skills/shared) -- Repo version of shared",
 		"- repo-only: /home/debian/work/.claude/skills/repo-only/SKILL.md (repo: .claude/skills/repo-only) -- Repo exclusive skill",
@@ -426,5 +431,17 @@ func TestRepoSkillsEndToEndPromptIndexAndSandboxReadFile(t *testing.T) {
 	prompt4, _, _ := runTask(task4, "run-e2e-4")
 	if strings.Contains(prompt4, "<repo-skills") || strings.Contains(prompt4, intree.SkillsIndexHeader) {
 		t.Errorf("prompt4 should omit skills index when disabled:\n%s", prompt4)
+	}
+}
+
+// TestRepoSkillsNeverFallBackToAnotherRemoteBranch pins that, with no
+// origin/<base>, origin/HEAD, main or master, discovery reads no branch at
+// all rather than the first remote branch it finds, which may be another
+// run's working branch.
+func TestRepoSkillsNeverFallBackToAnotherRemoteBranch(t *testing.T) {
+	t.Parallel()
+	script := buildSkillTreeListScript("/home/debian/work", "", model.DefaultSkillFolders)
+	if strings.Contains(script, "for-each-ref") {
+		t.Errorf("skill listing script walks every remote branch for a base:\n%s", script)
 	}
 }

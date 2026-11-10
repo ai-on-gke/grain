@@ -102,10 +102,6 @@ func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout
 		return nil
 	}
 
-	branch := task.BranchName()
-	if !gitSafe.MatchString(branch) {
-		return nil
-	}
 	explicitBase := ""
 	if task.Base != "" {
 		if !gitSafe.MatchString(task.Base) {
@@ -114,7 +110,7 @@ func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout
 		explicitBase = task.Base
 	}
 
-	listScript := buildSkillTreeListScript(prepared.Dir, explicitBase, branch, cleanFolders)
+	listScript := buildSkillTreeListScript(prepared.Dir, explicitBase, cleanFolders)
 	res := run(ctx, map[string]any{"command": listScript})
 	if res.IsError {
 		return nil
@@ -199,7 +195,7 @@ func isSafeRepoSkillFilePath(relPath string) bool {
 	return true
 }
 
-func buildSkillTreeListScript(checkoutDir, explicitBase, taskBranch string, folders []string) string {
+func buildSkillTreeListScript(checkoutDir, explicitBase string, folders []string) string {
 	var b strings.Builder
 	b.WriteString("set -e\n")
 	fmt.Fprintf(&b, "if [ ! -d %s ]; then exit 0; fi\n", shellQuote(checkoutDir+"/.git"))
@@ -214,8 +210,9 @@ func buildSkillTreeListScript(checkoutDir, explicitBase, taskBranch string, fold
 		b.WriteString("  if git rev-parse --verify --quiet \"$cand\" >/dev/null 2>&1; then\n")
 		b.WriteString("    base=$(git rev-parse --verify \"$cand\")\n    break\n  fi\n")
 		b.WriteString("done\n")
-		fmt.Fprintf(&b, "if [ -z \"$base\" ]; then\n  for r in $(git for-each-ref --format='%%(refname)' refs/remotes/origin); do\n    if [ \"$r\" = 'refs/remotes/origin/HEAD' ] || [ \"$r\" = %s ]; then continue; fi\n    base=$(git rev-parse --verify \"$r\")\n    break\n  done\nfi\n",
-			shellQuote("refs/remotes/origin/"+taskBranch))
+		// No other remote branch is a stand-in for the default: any of
+		// them may be another run's working branch, whose SKILL.md files
+		// that run's agent wrote.
 	}
 	b.WriteString("if [ -z \"$base\" ]; then exit 0; fi\n")
 	fmt.Fprintf(&b, "echo '%s'\"$base\"\n", skillBaseMarker)
@@ -304,10 +301,12 @@ func readSkillBlobsAtBase(ctx context.Context, run func(context.Context, map[str
 	return out
 }
 
-// mergePromptSkills merges capability-placed skills (from pass prompt sections,
-// in-process capability sections, or placements under SkillsDir) and
-// repo-discovered skills into one prompt index section. When repoSkills is
-// empty, capability sections are returned unchanged.
+// mergePromptSkills merges in-process capability skill sections and
+// repo-discovered skills into one prompt index section. Skills supplied by a
+// capability server (pass prompt sections or placements under SkillsDir) are
+// left in their attributed blocks and only reserve their names; pass prompt
+// sections are returned unchanged. When repoSkills is empty, capability
+// sections are returned unchanged too.
 func mergePromptSkills(
 	inProcessSections []string,
 	passPromptSections string,
@@ -344,11 +343,17 @@ func mergePromptSkills(
 		keptInProcess = append(keptInProcess, sec)
 	}
 
-	keptPassSections, passCapSkills := stripCapabilitySkillBlocks(passPromptSections)
-	addCap(passCapSkills...)
-
-	// Catch any skill files materialized directly under SkillsDir/<name>/SKILL.md
-	// whose provider emitted no capability skill prompt section.
+	// Skills a capability server supplied -- its mint_skill prompt section
+	// and any SKILL.md it placed under SkillsDir -- stay in that server's
+	// own attributed <capability> block (capabilities.spec.md §5.4.2):
+	// lifting their names and descriptions into the index would present a
+	// server's text as grain's. They only reserve their names, so a repo
+	// skill of the same name is listed under its repository path.
+	var reserved []string
+	_, passCapSkills := stripCapabilitySkillBlocks(passPromptSections)
+	for _, e := range passCapSkills {
+		reserved = append(reserved, e.Name)
+	}
 	for _, m := range materialized {
 		for _, pl := range m.Materialization.Placements {
 			clean := path.Clean(pl.Path)
@@ -356,37 +361,27 @@ func mergePromptSkills(
 			if !strings.HasPrefix(clean, prefix) || path.Base(clean) != "SKILL.md" {
 				continue
 			}
-			rel := strings.TrimPrefix(clean, prefix)
-			dir := path.Dir(rel)
+			dir := path.Dir(strings.TrimPrefix(clean, prefix))
 			if dir == "." || strings.Contains(dir, "/") {
 				continue
 			}
-			var desc string
-			if pl.Content != "" {
-				if meta, err := intree.ParseSkillMD([]byte(pl.Content), dir, 160); err == nil {
-					desc = meta.Description
-				}
-			}
-			addCap(intree.SkillIndexEntry{
-				Name:        dir,
-				Path:        clean,
-				Source:      "capability",
-				Description: desc,
-			})
+			reserved = append(reserved, dir)
 		}
 	}
 
-	merged, omitted := intree.FormatSkillsIndex(capSkills, repoSkills, repoLabel, intree.MaxSkillsIndexBytes)
+	merged, omitted := intree.FormatSkillsIndexReserving(capSkills, reserved, repoSkills, repoLabel, intree.MaxSkillsIndexBytes)
 	if omitted > 0 {
 		logf("orchestrator: run %s: omitted %d repo skill(s) to stay within the %d-byte skills index limit",
 			runID, omitted, intree.MaxSkillsIndexBytes)
 	}
-	return keptInProcess, merged, keptPassSections
+	return keptInProcess, merged, passPromptSections
 }
 
-// stripCapabilitySkillBlocks extracts any <capability ...> blocks in
-// passPromptSections whose body is a mint_skill prompt section, leaving all
-// other capability blocks and <capability-cli> untouched.
+// stripCapabilitySkillBlocks finds any <capability ...> blocks in
+// passPromptSections whose body is a mint_skill prompt section, returning the
+// other blocks and the skills those name. mergePromptSkills uses only the
+// skill names: the blocks themselves stay in the prompt with their
+// attribution.
 func stripCapabilitySkillBlocks(passPromptSections string) (string, []intree.SkillIndexEntry) {
 	if strings.TrimSpace(passPromptSections) == "" {
 		return passPromptSections, nil
