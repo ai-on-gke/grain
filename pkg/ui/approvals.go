@@ -167,7 +167,9 @@ func (c *Client) hasUnfinishedTriggerReview(ctx context.Context, task model.Task
 		}
 		rt, err := c.Store.GetTask(ctx, id)
 		if err != nil || rt == nil {
-			continue
+			// Unread is not finished: a Submit taking this for a passed
+			// review would drop the trigger's hold on nobody's say.
+			return true
 		}
 		obs, _ := c.Store.GetObservation(ctx, id)
 		if model.TaskPullRequest(*rt) != nil {
