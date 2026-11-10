@@ -50,7 +50,7 @@ func TestAccessCodeSignInReturnsToTheDeepLink(t *testing.T) {
 	form := map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
 	post := func(next string) *http.Response {
 		t.Helper()
-		body := url.Values{"code": {testAccessCode}, "next": {next}}.Encode()
+		body := url.Values{"code": {testAccessCode}, "name": {"owner@example.com"}, "next": {next}}.Encode()
 		return serveFrom(srv, networkAddr, http.MethodPost, "/api/auth/access-code", body, form).Result()
 	}
 	for _, tc := range []struct{ next, want string }{

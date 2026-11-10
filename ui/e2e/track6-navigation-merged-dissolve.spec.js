@@ -58,7 +58,7 @@ test.describe("Track 6: UI Navigation Redesign, Bottom User Profile & Merged Tas
     await expect(aside).toBeVisible();
     await expect(aside.getByTestId("user-tile")).toHaveAttribute(
       "title",
-      /^operator \((access code|local)\)$/,
+      /^(operator|alice@example\.com) \((access code|local)\)$/,
     );
 
     const stamp = aside.getByTestId("build-stamp");
@@ -84,7 +84,7 @@ test.describe("Track 6: UI Navigation Redesign, Bottom User Profile & Merged Tas
     await expect(mobileDrawer).toBeVisible();
     await expect(mobileDrawer.getByTestId("user-tile")).toHaveAttribute(
       "title",
-      /^operator \((access code|local)\)$/,
+      /^(operator|alice@example\.com) \((access code|local)\)$/,
     );
 
     const mobileStamp = mobileDrawer.getByTestId("build-stamp");

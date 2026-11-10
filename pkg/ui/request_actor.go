@@ -128,7 +128,28 @@ func RequestActor(ctx context.Context) model.Attribution {
 			op.Source = src
 		}
 	}
+	if op.Source == model.SourceAccessCode {
+		// Whoever presented the code, as they named themselves to it
+		// (access_code_mode.go): still the code's power, and still an
+		// unverified source, but no longer nobody.
+		if name := accessCodeNameFromContext(ctx); name != "" && op.Kind == model.PrincipalHuman {
+			op = model.Principal{Kind: model.PrincipalHuman, ID: AccessCodeActorPrefix + name, Source: model.SourceAccessCode}
+		}
+	}
 	return model.Attribution{Actor: op}
+}
+
+// deploymentActorOf is actor, RequestActor's for some request, as the
+// deployment's own actor where it is a named access-code session's: what
+// /api/config reports as the actor a CLI configures itself with, which is
+// the deployment's, not whoever signed in with the code.
+func deploymentActorOf(ctx context.Context, actor model.Principal) model.Principal {
+	if actor.Source != model.SourceAccessCode || !strings.HasPrefix(actor.ID, AccessCodeActorPrefix) {
+		return actor
+	}
+	op := operatorActor(ctx)
+	op.Source = actor.Source
+	return op
 }
 
 // requestActor is RequestActor for a Client method, which may be called
