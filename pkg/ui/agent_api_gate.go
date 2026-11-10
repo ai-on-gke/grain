@@ -1810,7 +1810,7 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 	allowedRepo func(APIScope, string) bool, pattern string, scope APIScope, repo string,
 	body []byte, opts filingEscalationOpts) error {
 	if opts.role == nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return errAgentAutoMerge
 		}
 		if personOnlyChangeReview[pattern] {
@@ -2174,7 +2174,7 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		}
 	}
 	if opts.role != nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return fmt.Errorf("%s cannot submit work (autoMerge): letting a change merge unreviewed requires an unlimited role (grain/operator)", opts.role.label())
 		}
 		if pattern == "POST /api/suites" && !bodyExplicitlyDisablesAutoMerge(fields) {
@@ -2182,6 +2182,15 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		}
 	}
 	return nil
+}
+
+// submitRoutes are the two spellings of a person's Submit: a task's, and
+// `grain pr submit`'s by its pull request. Each records the approval a
+// change waits on (and, with overrideGates, forces its merge), so neither
+// is an agent's or a limited role's to call, whichever one is used.
+var submitRoutes = map[string]bool{
+	"POST /api/tasks/{id}/submit":    true,
+	"POST /api/pull-requests/submit": true,
 }
 
 func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
