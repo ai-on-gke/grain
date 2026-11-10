@@ -826,3 +826,406 @@ func TestTaskListRowCapsReadsForAgents(t *testing.T) {
 		t.Errorf("fields=full row should carry every read: %d", code)
 	}
 }
+
+// docs/test-runs/2026-11-10-agent-api-paging.md, F1: one base-branch run
+// over a few hundred declared workflows carried every job on its row, so
+// an agent's default GET /api/ci/runs page was 220-240 KB, and its
+// compact row's queued-job lines alone were 9 KB. A paged row carries
+// the first few jobs, the failed ones first, and says how many there are.
+func TestCIRunAgentPagesCapJobsOnWideRuns(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	seedAPITask(t, client, "ci-reader", "acme/widgets", "api:ci:read")
+	now := time.Now().UTC()
+	wide := ci.Run{ID: "wide-run", Repo: "acme/widgets", Ref: "trunk", Commit: fmt.Sprintf("%040x", 7), StartedAt: &now}
+	// A run with nothing to run lists every declared workflow in its error.
+	var declared strings.Builder
+	declared.WriteString("ci: no workflow of acme/widgets answers release of branch trunk. The workflows this commit declares:\n")
+	for i := range 400 {
+		fmt.Fprintf(&declared, "  .grain/workflows/declared-%03d.yml: push on any branch\n", i)
+	}
+	nothing := now.Add(-30 * time.Second)
+	idle := ci.Run{ID: "idle-run", Repo: "acme/widgets", Ref: "trunk", Commit: fmt.Sprintf("%040x", 8), StartedAt: &nothing,
+		Conclusion: ci.ConclusionErrored, Error: declared.String()}
+	for i := range 400 {
+		job := ci.JobRun{
+			Workflow:     fmt.Sprintf("Declared Workflow %03d", i),
+			WorkflowPath: fmt.Sprintf(".grain/workflows/declared-%03d.yml", i),
+			JobID:        "check",
+			Name:         fmt.Sprintf("check-%03d", i),
+			Key:          ci.Key(fmt.Sprintf("job:%064x", i)),
+		}
+		if i == 390 {
+			job.Conclusion, job.Error = ci.ConclusionFailure, "step check exited 1"
+		}
+		wide.Jobs = append(wide.Jobs, job)
+	}
+	runs := []ci.Run{wide, idle}
+	for i := range 25 {
+		st := now.Add(-time.Duration(i+1) * time.Minute)
+		runs = append(runs, ci.Run{
+			ID: fmt.Sprintf("small-run-%03d", i), Repo: "acme/widgets", Ref: fmt.Sprintf("grain/pr-branch-%03d", i),
+			Commit: fmt.Sprintf("%040x", i+100), StartedAt: &st, Conclusion: ci.ConclusionSuccess,
+			Jobs: []ci.JobRun{{JobID: "unit", Name: "unit", Conclusion: ci.ConclusionSuccess}},
+		})
+	}
+	client.Config.CI = &fakeCIRunner{runs: runs}
+	enableCI(t, client.Store, widgets)
+
+	code, body := asAgent(t, srv, "ci-reader", http.MethodGet, "/api/ci/runs", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET /api/ci/runs: %d %s", code, body)
+	}
+	if len(body) > mcpToolResultCap {
+		t.Errorf("agent default ci/runs page is %d bytes, want <= %d", len(body), mcpToolResultCap)
+	}
+	var full struct {
+		Runs []ci.Run `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(body), &full); err != nil || len(full.Runs) == 0 || full.Runs[0].ID != "wide-run" {
+		t.Fatalf("ci/runs page = %v %.300s", err, body)
+	}
+	row := full.Runs[0]
+	if len(row.Jobs) != 5 || row.JobCount != 400 || !row.JobsTruncated {
+		t.Errorf("paged wide row jobs = %d (count %d, truncated %v), want 5 of 400 truncated", len(row.Jobs), row.JobCount, row.JobsTruncated)
+	}
+	if len(row.Jobs) == 0 || row.Jobs[0].Name != "check-390" {
+		t.Errorf("paged wide row should keep the failed job first, got %+v", row.Jobs)
+	}
+	if got := full.Runs[1]; got.ID != "idle-run" || !got.ErrorTruncated || len(got.Error) > 600 || !strings.HasPrefix(got.Error, "ci: no workflow") {
+		t.Errorf("paged idle row error = %d bytes (truncated %v), want its first 500", len(got.Error), got.ErrorTruncated)
+	}
+	if small := full.Runs[2]; small.JobsTruncated || small.JobCount != 0 || len(small.Jobs) != 1 {
+		t.Errorf("a one-job row should be left whole: %+v", small)
+	}
+
+	code, body = asAgent(t, srv, "ci-reader", http.MethodGet, "/api/ci/runs?view=compact", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET /api/ci/runs?view=compact: %d %s", code, body)
+	}
+	if len(body) > mcpToolResultCap {
+		t.Errorf("agent default compact ci/runs page is %d bytes, want <= %d", len(body), mcpToolResultCap)
+	}
+	var compact ui.CICompactRunsResponse
+	if err := json.Unmarshal([]byte(body), &compact); err != nil || len(compact.Runs) == 0 {
+		t.Fatalf("compact page = %v %.300s", err, body)
+	}
+	crow := compact.Runs[0]
+	if len(crow.Jobs) != 10 || crow.JobCount != 400 || !crow.JobsTruncated || crow.Jobs[0].Name != "check-390" {
+		t.Errorf("paged compact wide row = %d lines (count %d, truncated %v, first %+v), want 10 of 400 with the failure first",
+			len(crow.Jobs), crow.JobCount, crow.JobsTruncated, crow.Jobs)
+	}
+
+	human := do(t, srv, http.MethodGet, "/api/ci/runs", "")
+	var all struct {
+		Runs []ci.Run `json:"runs"`
+	}
+	if err := json.Unmarshal(human.Body.Bytes(), &all); err != nil || len(all.Runs) == 0 {
+		t.Fatalf("human ci/runs = %v", err)
+	}
+	if got := all.Runs[0]; len(got.Jobs) != 400 || got.JobsTruncated {
+		t.Errorf("person's unpaged wide row = %d jobs (truncated %v), want all 400", len(got.Jobs), got.JobsTruncated)
+	}
+	if got := all.Runs[1]; got.Error != declared.String() || got.ErrorTruncated {
+		t.Errorf("person's unpaged idle row lost its error (%d bytes)", len(got.Error))
+	}
+}
+
+// docs/test-runs/2026-11-10-agent-api-paging.md, F2, F3 and F6: a
+// default agent page of GET /api/ci/faults was 11 KB (each row naming
+// every run and branch), of GET /api/base-branch-gates 15.5 KB (each
+// row's ~650 B detail), and of GET /api/suite-runs just over 10 KB.
+func TestFaultGateAndSuiteRunAgentPagesFitToolResultCap(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	seedAPITask(t, client, "derived-reader", "acme/widgets", "api:ci:read", "api:suites:read")
+
+	// 30 shared GitHub Actions faults, each failing on 8 branches and
+	// naming 8 files, inside the fault window of the test client's clock.
+	at := baseTime.Add(-time.Hour)
+	for i := range 30 {
+		var tail strings.Builder
+		fmt.Fprintf(&tail, "--- FAIL: TestShared_%03d (0.01s)\n", i)
+		for f := range 8 {
+			fmt.Fprintf(&tail, "    pkg/gh/shared_%03d_%d_test.go:17: want ok\n", i, f)
+		}
+		tail.WriteString("FAIL\tgithub.com/acme/widgets/pkg/gh\n")
+		for b := range 8 {
+			jobAt := at.Add(time.Duration(i*8+b) * time.Second)
+			if err := client.Store.PutGitHubCIJob(ctx, model.GitHubCIJob{
+				Repo: "acme/widgets", CheckRunID: int64(700000 + i*8 + b), Source: model.GitHubCISource,
+				App: "github-actions", Ref: fmt.Sprintf("grain/gh-%d-%03d", b, i),
+				Commit: fmt.Sprintf("%040x", 0x7000+i*8+b), Workflow: "Tests", RunID: int64(800000 + i*8 + b),
+				RunAttempt: 1, JobName: fmt.Sprintf("gh-shared-%03d", i), Conclusion: "failure",
+				StartedAt: &jobAt, CompletedAt: &jobAt, FailingStep: "go test", FailureTail: tail.String(),
+				TailSource: "log", RecordedAt: jobAt, UpdatedAt: jobAt,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// 30 watched repositories on GitHub CI: the "not enabled" gate.
+	for i := range 30 {
+		if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
+			Repo:   model.RepoRef{Owner: "acme", Name: fmt.Sprintf("watched-repo-%03d", i)},
+			CIMode: model.CIModeGitHub, WatchDefaultBranch: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 30 suite runs, each of a suite of 6 templates.
+	var items []model.SuiteItem
+	for i := range 6 {
+		id := fmt.Sprintf("tmpl-%02d", i)
+		if err := client.Store.PutTemplate(ctx, model.Template{
+			ID: id, Name: fmt.Sprintf("template-slug-%02d", i), Title: fmt.Sprintf("Template Title %02d", i), Body: "Check it.",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, model.SuiteItem{TemplateID: id})
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	for i := range 30 {
+		suite := model.Suite{ID: fmt.Sprintf("suite-%03d", i), Name: fmt.Sprintf("Qualification Suite %03d", i),
+			Items: items, Mode: model.SuiteCount, Count: 1}
+		if err := client.Store.PutSuite(ctx, suite); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Store.CreateSuiteRun(ctx, suite, widgets, "trunk", at.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, path := range []string{"/api/ci/faults", "/api/base-branch-gates", "/api/suite-runs"} {
+		code, body := asAgent(t, srv, "derived-reader", http.MethodGet, path, "", "")
+		if code != http.StatusOK {
+			t.Fatalf("agent GET %s: %d %s", path, code, body)
+		}
+		if len(body) > mcpToolResultCap {
+			t.Errorf("agent default page of GET %s is %d bytes, want <= %d: %.600s", path, len(body), mcpToolResultCap, body)
+		}
+	}
+
+	code, body := asAgent(t, srv, "derived-reader", http.MethodGet, "/api/ci/faults", "", "")
+	var faults ui.CIFaultsResponse
+	if err := json.Unmarshal([]byte(body), &faults); code != http.StatusOK || err != nil || len(faults.Faults) != 10 || faults.Total != 30 {
+		t.Fatalf("faults page = %d %v (%d rows of %d), want 10 of 30", code, err, len(faults.Faults), faults.Total)
+	}
+	if f := faults.Faults[0]; len(f.Runs) != 3 || f.RunCount != 8 || len(f.Refs) != 5 || f.RefCount != 8 ||
+		len(f.Paths) != 5 || f.PathCount != 8 || !f.Trimmed {
+		t.Errorf("paged fault = %d runs (of %d), %d refs (of %d), %d paths (of %d), trimmed %v; want 3/8, 5/8, 5/8",
+			len(f.Runs), f.RunCount, len(f.Refs), f.RefCount, len(f.Paths), f.PathCount, f.Trimmed)
+	}
+	code, body = asAgent(t, srv, "derived-reader", http.MethodGet, "/api/ci/faults?limit=1&fields=full", "", "")
+	faults = ui.CIFaultsResponse{}
+	if err := json.Unmarshal([]byte(body), &faults); code != http.StatusOK || err != nil || len(faults.Faults) != 1 ||
+		len(faults.Faults[0].Runs) != 8 || faults.Faults[0].Trimmed {
+		t.Errorf("fields=full fault should name every run: %d %v %.300s", code, err, body)
+	}
+
+	code, body = asAgent(t, srv, "derived-reader", http.MethodGet, "/api/base-branch-gates", "", "")
+	var gates ui.BaseBranchGates
+	if err := json.Unmarshal([]byte(body), &gates); code != http.StatusOK || err != nil || len(gates.Gates) != 20 {
+		t.Fatalf("gates page = %d %v (%d rows)", code, err, len(gates.Gates))
+	}
+	if gates.Gates[0].Detail != "" {
+		t.Errorf("paged gate row carries detail %q", gates.Gates[0].Detail)
+	}
+	code, body = asAgent(t, srv, "derived-reader", http.MethodGet, "/api/base-branch-gates?limit=1&fields=full", "", "")
+	gates = ui.BaseBranchGates{}
+	if err := json.Unmarshal([]byte(body), &gates); code != http.StatusOK || err != nil || len(gates.Gates) != 1 || gates.Gates[0].Detail == "" {
+		t.Errorf("fields=full gate should carry detail: %d %v %.300s", code, err, body)
+	}
+	human := do(t, srv, http.MethodGet, "/api/base-branch-gates", "")
+	var all ui.BaseBranchGates
+	if err := json.Unmarshal(human.Body.Bytes(), &all); err != nil || len(all.Gates) != 30 || all.Gates[0].Detail == "" {
+		t.Errorf("person's unpaged gates lost detail: %v (%d rows)", err, len(all.Gates))
+	}
+
+	code, body = asAgent(t, srv, "derived-reader", http.MethodGet, "/api/suite-runs", "", "")
+	var runs struct {
+		Items []ui.SuiteRun `json:"items"`
+		Total int           `json:"total"`
+	}
+	if err := json.Unmarshal([]byte(body), &runs); code != http.StatusOK || err != nil || len(runs.Items) != 10 || runs.Total != 30 {
+		t.Fatalf("suite-runs page = %d %v (%d rows of %d), want 10 of 30", code, err, len(runs.Items), runs.Total)
+	}
+	if r := runs.Items[0]; len(r.Tasks) != 3 || r.TaskCount != 6 || !r.TasksTruncated {
+		t.Errorf("paged suite run = %d tasks (count %d, truncated %v), want 3 of 6", len(r.Tasks), r.TaskCount, r.TasksTruncated)
+	}
+	got, err := client.GetSuiteRun(ctx, runs.Items[0].ID)
+	if err != nil || len(got.Tasks) != 6 {
+		t.Errorf("the suite run itself should keep all 6 tasks: %v (%d)", err, len(got.Tasks))
+	}
+}
+
+// docs/test-runs/2026-11-10-agent-api-paging.md, F4 and F5: the built-in
+// gchat entry's config listed 260 spaces (19.7 KB), so an agent's default
+// GET /api/capability-servers page was 24 KB, and gchat#post's
+// description and args enumerate the same spaces, so its page of GET
+// /api/capability-methods was 30 KB.
+func TestCapabilityServerConfigAndMethodRowsAreCappedForAgents(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	id := "https://chat-rooms.example.com/cap"
+	var spaces []any
+	var names []any
+	var desc strings.Builder
+	desc.WriteString("Post a message to one of the configured spaces. The spaces are:")
+	for i := range 260 {
+		name := fmt.Sprintf("room-%03d", i)
+		spaces = append(spaces, map[string]any{"name": name, "transport": "webhook", "allowed": map[string]any{"per_hour": 30}})
+		names = append(names, name)
+		fmt.Fprintf(&desc, " %s (webhook, 30 posts an hour, for the team channel number %03d);", name, i)
+	}
+	args := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"space": map[string]any{"type": "string", "enum": names},
+		},
+	}
+	client.Config.CapabilityServers = stubCapServerStatuses{statuses: []servers.Status{{
+		ID: id, State: servers.Attached, Transport: "http", Methods: []string{"post"},
+		MethodDetails: []servers.MethodDetail{{Name: "post", Description: desc.String(), Args: args}},
+	}}}
+	if err := client.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.MCPServers = map[string]protocol.ServerConfig{id: {
+			ServerURL: "https://chat-rooms.example.com/rpc",
+			Config:    map[string]any{"grain_url": "https://grain.example.com", "spaces": spaces},
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "cap-reader", "acme/widgets", "api:capabilities:read")
+
+	code, body := asAgent(t, srv, "cap-reader", http.MethodGet, "/api/capability-servers", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET capability-servers: %d %s", code, body)
+	}
+	if len(body) > mcpToolResultCap {
+		t.Errorf("agent default capability-servers page is %d bytes, want <= %d", len(body), mcpToolResultCap)
+	}
+	code, body = asAgent(t, srv, "cap-reader", http.MethodGet, "/api/capability-servers?q=chat-rooms", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET capability-servers?q=chat-rooms: %d %s", code, body)
+	}
+	var page struct {
+		Items []ui.CapabilityServer `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); err != nil {
+		t.Fatal(err)
+	}
+	var row *ui.CapabilityServer
+	for i := range page.Items {
+		if page.Items[i].ID == id {
+			row = &page.Items[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("capability-servers page has no %s: %.400s", id, body)
+	}
+	if got, _ := row.Config.Config["spaces"].([]any); len(got) != 10 || !row.ConfigTruncated || row.ConfigItemCounts["spaces"] != 260 {
+		t.Errorf("paged config = %d spaces (truncated %v, counts %v), want 10 of 260", len(got), row.ConfigTruncated, row.ConfigItemCounts)
+	}
+	if row.Config.Config["grain_url"] != "https://grain.example.com" {
+		t.Errorf("paged config lost its scalar fields: %v", row.Config.Config)
+	}
+	cfg, err := client.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := cfg.MCPServers[id].Config["spaces"].([]any); len(got) != 260 {
+		t.Errorf("paging cut the stored config: %d spaces", len(got))
+	}
+	code, body = asAgent(t, srv, "cap-reader", http.MethodGet, "/api/capability-servers?q=chat-rooms&fields=full", "", "")
+	page.Items = nil
+	if err := json.Unmarshal([]byte(body), &page); code != http.StatusOK || err != nil || len(page.Items) != 1 {
+		t.Fatalf("fields=full capability-servers = %d %v %.300s", code, err, body)
+	}
+	if got, _ := page.Items[0].Config.Config["spaces"].([]any); len(got) != 260 || page.Items[0].ConfigTruncated {
+		t.Errorf("fields=full capability server should carry every space: %d (truncated %v)", len(got), page.Items[0].ConfigTruncated)
+	}
+
+	code, body = asAgent(t, srv, "cap-reader", http.MethodGet, "/api/capability-methods?q=chat-rooms", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("agent GET capability-methods: %d %s", code, body)
+	}
+	if len(body) > mcpToolResultCap {
+		t.Errorf("agent capability-methods page is %d bytes, want <= %d", len(body), mcpToolResultCap)
+	}
+	var methods struct {
+		Items []ui.CapabilityMethod `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &methods); err != nil || len(methods.Items) != 1 {
+		t.Fatalf("capability-methods page = %v %.400s", err, body)
+	}
+	m := methods.Items[0]
+	if !m.DescriptionTruncated || len(m.Description) > 600 || !strings.HasPrefix(m.Description, "Post a message") {
+		t.Errorf("paged method description = %d bytes (truncated %v)", len(m.Description), m.DescriptionTruncated)
+	}
+	if !m.ArgsTruncated || m.ArgItemCounts["properties.space.enum"] != 260 {
+		t.Errorf("paged method args truncated %v counts %v, want properties.space.enum of 260", m.ArgsTruncated, m.ArgItemCounts)
+	}
+	code, body = asAgent(t, srv, "cap-reader", http.MethodGet, "/api/capability-methods?q=chat-rooms&fields=full", "", "")
+	if code != http.StatusOK || strings.Contains(body, "argsTruncated") || strings.Count(body, "room-259") != 2 {
+		t.Errorf("fields=full method should carry its whole description and schema: %d", code)
+	}
+}
+
+// docs/test-runs/2026-11-10-agent-api-paging.md, F7: GET
+// /api/access/history read the newest maxConfigAudit config changes of
+// every surface and only then kept the access ones, so once that many
+// capability-server edits were newer than the last access change it
+// answered nothing -- to people and agents alike.
+func TestAccessHistorySurvivesNewerChangesToOtherSurfaces(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "owner@example.com"})
+	for i := range 7 {
+		if _, err := client.AllowPrincipal(humanCtx, ui.AllowPrincipalRequest{
+			Entry: fmt.Sprintf("user:audit-%02d@example.com", i), Role: "grain/viewer", Reason: "access history check",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	later := time.Now().Add(time.Minute)
+	for i := range 600 {
+		if _, err := client.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+			At:      later.Add(time.Duration(i) * time.Millisecond),
+			By:      model.Principal{Kind: model.PrincipalHuman, ID: "owner@example.com"},
+			Surface: "capability-servers", Summary: fmt.Sprintf("PUT https://tools.example.com/capabilities/cap-%03d", i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedAPITask(t, client, "access-reader", "acme/widgets", "api:access:read")
+
+	rec := do(t, srv, http.MethodGet, "/api/access/history", "")
+	var rows []ui.ConfigAuditView
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); rec.Code != http.StatusOK || err != nil || len(rows) != 7 {
+		t.Errorf("person's GET /api/access/history = %d rows (%d, %v), want all 7 access changes", len(rows), rec.Code, err)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/access/history?limit=5", "")
+	rows = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil || len(rows) != 5 {
+		t.Errorf("person's GET /api/access/history?limit=5 = %d rows (%v), want 5", len(rows), err)
+	}
+	for _, row := range rows {
+		if row.Surface != "access" {
+			t.Errorf("access history carries a %s change", row.Surface)
+		}
+	}
+	code, body := asAgent(t, srv, "access-reader", http.MethodGet, "/api/access/history", "", "")
+	var page struct {
+		Items []ui.ConfigAuditView `json:"items"`
+		Total int                  `json:"total"`
+	}
+	if err := json.Unmarshal([]byte(body), &page); code != http.StatusOK || err != nil || len(page.Items) != 7 || page.Total != 7 {
+		t.Errorf("agent GET /api/access/history = %d rows of %d (%d, %v), want 7", len(page.Items), page.Total, code, err)
+	}
+}
