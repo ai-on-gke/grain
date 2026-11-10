@@ -89,9 +89,12 @@ EDITION ?=
 # Dockerfile as MAIN_GRAIN.
 MAIN_grain ?= ./cmd/grain
 # The Grain Hub's main; MAIN_grain-registry is its name from before the
-# Grain Registry was renamed, still honoured for a release.
+# Grain Registry was renamed, still honoured for a release. It has no
+# default of its own: one would win the $(or ...) below, and bin/grain-hub
+# and the hub image would be built from the cmd/grain-registry shim, which
+# warns that it is deprecated every time it starts. `make grain-registry`
+# falls back to ./cmd/grain-registry by the rule's own $(or ...).
 MAIN_grain-hub ?= $(or $(MAIN_grain-registry),./cmd/grain-hub)
-MAIN_grain-registry ?= ./cmd/grain-registry
 # The same for bin/grain-agentd: a build that registers a transport or
 # host-tool grants of its own (pkg/agentd) names its own main here.
 MAIN_grain-agentd ?= ./cmd/grain-agentd
