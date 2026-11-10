@@ -52,6 +52,9 @@ def main():
     ap.add_argument("--url", required=True)
     ap.add_argument("--code-file", required=True, help="the daemon's local-api-token file")
     ap.add_argument("--count", type=int, default=260)
+    ap.add_argument("--gchat-listen", default="",
+                    help="the gchat data plane's address, when two daemons on one host would both take its default")
+    ap.add_argument("--gchat-only", action="store_true", help="configure gchat and nothing else")
     args = ap.parse_args()
     code = open(args.code_file).read().strip()
 
@@ -61,11 +64,21 @@ def main():
     with urllib.request.urlopen(req, timeout=60) as r:
         current = {s["id"]: s for s in json.load(r)}
     gchat = dict(current[GCHAT]["config"])
+    if args.gchat_listen:
+        argv = list(gchat.get("args", []))
+        if "-listen" in argv:
+            argv[argv.index("-listen") + 1] = args.gchat_listen
+        else:
+            argv += ["-listen", args.gchat_listen]
+        gchat["args"] = argv
     spaces = [{"name": f"room-{i:03d}", "transport": "webhook", "allowed": {"per_hour": 30}} for i in range(args.count)]
     hooks = {s["name"]: f"https://chat.googleapis.com/v1/spaces/SEED{i:03d}/messages?key=k{i}&token=t{i}"
              for i, s in enumerate(spaces)}
     gchat["config"] = {"grain_url": "https://grain.example.com", "spaces": spaces}
     put(args.url, code, {"id": GCHAT, "config": gchat, "configSecrets": {"webhook_urls": json.dumps(hooks)}})
+    if args.gchat_only:
+        print(f"configured gchat with {len(spaces)} spaces")
+        return
 
     for i in range(args.count):
         cfg = {"disabled": True}

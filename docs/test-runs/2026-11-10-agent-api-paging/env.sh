@@ -115,9 +115,11 @@ EOF
 start_paging_env() {
 	local driver=${1:-sqlite}
 	local work=${2:-/var/tmp/grain-paging-$driver}
-	local port="4281"
+	# Each environment's gchat data plane gets its own port: two daemons
+	# on one host would otherwise both take gchat's default 4251.
+	local port="4281" gchat_listen="127.0.0.1:4251"
 	if [[ "$driver" == "postgres" ]]; then
-		port="4282"
+		port="4282" gchat_listen="127.0.0.1:4252"
 	fi
 	local daemon_url="http://127.0.0.1:$port"
 
@@ -206,7 +208,8 @@ start_paging_env() {
 	# servers through PUT /api/capability-servers.
 	sleep 10
 	"$work/bin/seed" -data-dir "$work/data" "${seed_db_flags[@]}" -phase live -count 260 >>"$work/seed.log" 2>&1
-	python3 "$HERE/seed_api.py" --url "$daemon_url" --code-file "$work/data/local-api-token" --count 260 >>"$work/seed.log" 2>&1
+	python3 "$HERE/seed_api.py" --url "$daemon_url" --code-file "$work/data/local-api-token" --count 260 \
+		--gchat-listen "$gchat_listen" >>"$work/seed.log" 2>&1
 
 	export PAGING_WORK="$work"
 	export PAGING_DAEMON="$daemon_url"
