@@ -1192,8 +1192,8 @@ func TestAccessCodeSignInBehindIAPSaysTheVerifiedRoleApplies(t *testing.T) {
 	h := newRoleHarness(t)
 	h.allow(t, "user:vic@example.com", "grain/viewer")
 	for _, c := range []struct{ name, contentType, body string }{
-		{"json", "application/json", `{"code":"` + testAccessCode + `"}`},
-		{"form", "application/x-www-form-urlencoded", url.Values{"code": {testAccessCode}}.Encode()},
+		{"json", "application/json", `{"code":"` + testAccessCode + `","name":"vic@example.com"}`},
+		{"form", "application/x-www-form-urlencoded", url.Values{"code": {testAccessCode}, "name": {"vic@example.com"}}.Encode()},
 	} {
 		hdrs := h.as("vic@example.com")
 		hdrs["Content-Type"] = c.contentType
@@ -1209,7 +1209,7 @@ func TestAccessCodeSignInBehindIAPSaysTheVerifiedRoleApplies(t *testing.T) {
 		}
 	}
 	// Without an assertion the code still signs in.
-	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`"}`,
+	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`","name":"vic@example.com"}`,
 		map[string]string{"Content-Type": "application/json"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("sign-in by code without an assertion = %d %s, want 200", rec.Code, rec.Body)
@@ -1263,6 +1263,16 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 	next := func() string { n++; return "9" + strconv.Itoa(1000 + n)[1:] }
 
 	defaultReviewID := model.DefaultReviewTemplateID(widgets)
+	releasePushID := model.RepoDeclaredID(model.DeclaredTemplate, widgets, "release-push")
+	if _, err := h.client.Store.SyncRepoDeclarations(ctx, widgets, "abc123", model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{{
+			Path:     model.TemplateDeclarationDir + "/release-push.yml",
+			Template: model.Template{ID: releasePushID, Name: "release-push", Title: "Cut a release", Body: "Run release.", Target: &widgets},
+			Push:     model.RefPushSet{{Pattern: "refs/tags/v*"}, {Pattern: "refs/tags/latest", Force: true}},
+		}},
+	}, time.Now().UTC(), time.UTC); err != nil {
+		t.Fatal(err)
+	}
 	for _, tmpl := range []model.Template{
 		{
 			ID:     "heavy-review",
@@ -1364,6 +1374,7 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 		{"reviewTemplateId", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "heavy-review" }},
 		{"reviewTemplateWrites", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "gadgets-write-review" }},
 		{"reviewTemplateReads", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "gadgets-read-review" }},
+		{"declaredPush", "declaredPush", func(t *model.Task) { t.TemplateID = releasePushID }},
 	}
 	for _, c := range ceilings {
 		for _, a := range actions {
@@ -1417,6 +1428,325 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 		}
 		if task, err := h.client.Store.GetTask(ctx, id); err != nil || task == nil || task.Approval != nil {
 			t.Errorf("POST /mcp %s: task %s was approved: %+v %v", a.tool, id, task, err)
+		}
+	}
+}
+
+// A template carrying a repository-declared push set (declaredPushOf) grants
+// direct git-proxy push rights to refs beyond the task's own branch, so a
+// limited role -- even one holding tasks:admin, schedules:write,
+// templates:write and suites:write on the repository -- cannot file, schedule,
+// modify, fire or approve work carrying it over REST, POST /api/mcp or POST /mcp.
+func TestLimitedRolesCannotFileScheduleModifyOrApproveDeclaredPushTemplates(t *testing.T) {
+	ctx := context.Background()
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name: "widgets-maintainer",
+			Scopes: []string{
+				"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
+				"dispatch:read", "dispatch:write",
+				"schedules:read", "schedules:write",
+				"templates:read", "templates:write",
+				"suites:read", "suites:write",
+			},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+		model.APIScopeSet{
+			Name: "standing-maintainer",
+			Scopes: []string{
+				"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
+				"dispatch:read", "dispatch:write",
+				"schedules:read", "schedules:write",
+				"templates:read", "templates:write",
+				"suites:read", "suites:write",
+			},
+			Version: 1,
+		},
+	)
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:wade@example.com", "widgets-maintainer")
+	h.allow(t, "user:stan@example.com", "standing-maintainer")
+	h.allow(t, "user:operator@example.com", "grain/operator")
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if _, err := h.client.AddTargetRepo(ctx, widgets.String()); err != nil {
+		t.Fatal(err)
+	}
+	releaseID := model.RepoDeclaredID(model.DeclaredTemplate, widgets, "release-train")
+	plainID := model.RepoDeclaredID(model.DeclaredTemplate, widgets, "plain-check")
+	if _, err := h.client.Store.SyncRepoDeclarations(ctx, widgets, "abc123", model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{
+			{
+				Path:     model.TemplateDeclarationDir + "/release-train.yml",
+				Template: model.Template{ID: releaseID, Name: "release-train", Title: "Cut release", Body: "Run the release script.", Target: &widgets},
+				Push:     model.RefPushSet{{Pattern: "refs/tags/v*"}, {Pattern: "refs/tags/latest", Force: true}},
+			},
+			{
+				Path:     model.TemplateDeclarationDir + "/plain-check.yml",
+				Template: model.Template{ID: plainID, Name: "plain-check", Title: "Plain check", Body: "Run plain check.", Target: &widgets},
+			},
+		},
+	}, time.Now().UTC(), time.UTC); err != nil {
+		t.Fatal(err)
+	}
+
+	toolOf := func(pattern string) string {
+		t.Helper()
+		for _, rt := range ui.AgentAPIRoutes() {
+			if rt.Pattern == pattern {
+				return rt.Tool
+			}
+		}
+		t.Fatalf("no MCP tool registered for %s", pattern)
+		return ""
+	}
+
+	// Operator-owned gma_ token presented inside wade's limited verified session
+	// so POST /mcp exercises the outer role ceiling alongside REST and /api/mcp.
+	opCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := h.client.CreateExternalAgentToken(opCtx, ui.CreateExternalAgentTokenRequest{
+		Name: "operator-wide",
+		Scopes: []string{
+			"tasks:read", "tasks:write", "tasks:admin", "tasks:from-template",
+			"dispatch:read", "dispatch:write",
+			"schedules:read", "schedules:write",
+			"templates:read", "templates:write",
+			"suites:read", "suites:write",
+		},
+		Owner: "operator@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpHeadersFor := func(email string) map[string]string {
+		hdrs := h.as(email)
+		hdrs["Authorization"] = "Bearer " + issued.Token
+		hdrs[ui.ActingReasonHeader] = "testing declaredPush role ceiling"
+		return hdrs
+	}
+	callSessionMCPAs := func(email, tool string, args map[string]any) (string, bool) {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params":  map[string]any{"name": tool, "arguments": args},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp", string(payload), mcpHeadersFor(email))
+		if rec.Code != http.StatusOK {
+			return rec.Body.String(), true
+		}
+		raw := rec.Body.String()
+		return raw, strings.Contains(raw, `"isError":true`)
+	}
+	callSessionMCP := func(tool string, args map[string]any) (string, bool) {
+		return callSessionMCPAs("wade@example.com", tool, args)
+	}
+
+	// Control: the limited role CAN file and approve the plain declared template.
+	if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks",
+		`{"templateId":"`+plainID+`","approved":true}`); code != http.StatusCreated {
+		t.Fatalf("widgets-maintainer filing plain template: %d %s, want 201", code, body)
+	}
+
+	// 1. Filing from release-train (with or without custom description/approval) is
+	// refused across REST, POST /api/mcp (grain_submit_task + grain_invoke), and POST /mcp.
+	for _, body := range []string{
+		`{"templateId":"` + releaseID + `"}`,
+		`{"templateId":"` + releaseID + `","approved":true}`,
+		`{"templateId":"` + releaseID + `","approved":true,"description":"git push origin HEAD:refs/tags/v9.9.9"}`,
+	} {
+		code, resp := h.call("wade@example.com", http.MethodPost, "/api/tasks", body)
+		if code != http.StatusForbidden || !strings.Contains(resp, "declared push set") || !strings.Contains(resp, "widgets-maintainer") {
+			t.Errorf("REST POST /api/tasks %s: %d %s, want 403 naming declared push set and role", body, code, resp)
+		}
+	}
+	if code, resp := h.call("wade@example.com", http.MethodPost, "/api/tasks/from-template",
+		`{"repo":"acme/widgets","template":"release-train","approved":true}`); code != http.StatusForbidden ||
+		!strings.Contains(resp, "declared push set") || !strings.Contains(resp, "widgets-maintainer") {
+		t.Errorf("REST POST /api/tasks/from-template: %d %s, want 403 naming declared push set and role", code, resp)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("wade@example.com"), ui.ToolGrainSubmitTask, map[string]any{
+		"template_id": releaseID, "approve": true, "description": "git push origin HEAD:refs/tags/v9.9.9",
+	}); !isErr || !strings.Contains(out, "declared push set") || !strings.Contains(out, "widgets-maintainer") {
+		t.Errorf("POST /api/mcp grain_submit_task: isErr=%v %s, want refusal naming declared push set and role", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("wade@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool":      toolOf("POST /api/tasks"),
+		"arguments": map[string]any{"body": map[string]any{"templateId": releaseID, "approved": true}},
+		"reason":    "testing role ceiling",
+	}); !isErr || !strings.Contains(out, "declared push set") || !strings.Contains(out, "widgets-maintainer") {
+		t.Errorf("POST /api/mcp grain_invoke create_task: isErr=%v %s, want refusal naming declared push set and role", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("wade@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool":      toolOf("POST /api/tasks/from-template"),
+		"arguments": map[string]any{"body": map[string]any{"repo": "acme/widgets", "template": "release-train"}},
+	}); !isErr || !strings.Contains(out, "declared push set") || !strings.Contains(out, "widgets-maintainer") {
+		t.Errorf("POST /api/mcp grain_invoke from_template: isErr=%v %s, want refusal naming declared push set and role", isErr, out)
+	}
+	if out, isErr := callSessionMCP(toolOf("POST /api/tasks"), map[string]any{
+		"body": map[string]any{"templateId": releaseID, "approved": true}, "reason": "testing role ceiling",
+	}); !isErr || !strings.Contains(out, "declared push set") {
+		t.Errorf("POST /mcp create_task in limited session: isErr=%v %s, want refusal naming declared push set", isErr, out)
+	}
+	if out, isErr := callSessionMCP(toolOf("POST /api/tasks/from-template"), map[string]any{
+		"body": map[string]any{"repo": "acme/widgets", "template": "release-train"},
+	}); !isErr || !strings.Contains(out, "declared push set") {
+		t.Errorf("POST /mcp from_template in limited session: isErr=%v %s, want refusal naming declared push set", isErr, out)
+	}
+
+	// 2. Approving or run-now on an unapproved task carrying releaseID is refused
+	// across REST, POST /api/mcp (with and without expect preflight), and POST /mcp.
+	seedSeq := 9500
+	seedUnapprovedRelease := func() string {
+		t.Helper()
+		seedSeq++
+		id := strconv.Itoa(seedSeq)
+		if err := h.client.Store.PutTask(ctx, model.Task{
+			ID: id, Intent: model.IntentImplement, Title: "Cut release",
+			Body: "Run the release script.", Target: &widgets, TemplateID: releaseID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	for _, act := range []struct{ route, pattern string }{
+		{"approve", "POST /api/tasks/{id}/approve"},
+		{"run-now", "POST /api/tasks/{id}/run-now"},
+	} {
+		tool := toolOf(act.pattern)
+		id := seedUnapprovedRelease()
+		code, resp := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+id+"/"+act.route, `{}`)
+		if code != http.StatusForbidden || !strings.Contains(resp, "declaredPush") || !strings.Contains(resp, "widgets-maintainer") {
+			t.Errorf("REST %s on declaredPush task: %d %s, want 403 naming declaredPush and role", act.route, code, resp)
+		}
+		id = seedUnapprovedRelease()
+		out, isErr := callControllerTool(t, h.srv, h.as("wade@example.com"), ui.ToolGrainInvoke, map[string]any{
+			"tool":      tool,
+			"arguments": map[string]any{"id": id, "expect": map[string]any{"state": "proposed"}},
+			"reason":    "testing role ceiling",
+		})
+		if !isErr || !strings.Contains(out, "declaredPush") || !strings.Contains(out, "widgets-maintainer") {
+			t.Errorf("POST /api/mcp %s on declaredPush task: isErr=%v %s, want refusal naming declaredPush and role", act.route, isErr, out)
+		}
+		id = seedUnapprovedRelease()
+		out, isErr = callSessionMCP(tool, map[string]any{
+			"id": id, "expect": map[string]any{"state": "proposed"}, "reason": "testing role ceiling",
+		})
+		if !isErr || !strings.Contains(out, "declaredPush") {
+			t.Errorf("POST /mcp %s on declaredPush task: isErr=%v %s, want refusal naming declaredPush", act.route, isErr, out)
+		}
+		if stored, err := h.client.Store.GetTask(ctx, id); err != nil || stored == nil || stored.Approval != nil {
+			t.Errorf("task %s approval after refused %s = %+v (err=%v), want nil", id, act.route, stored, err)
+		}
+	}
+
+	// Operator CAN file and approve releaseID.
+	opCode, opResp := h.call("operator@example.com", http.MethodPost, "/api/tasks", `{"templateId":"`+releaseID+`"}`)
+	if opCode != http.StatusCreated {
+		t.Fatalf("operator filing release template: %d %s, want 201", opCode, opResp)
+	}
+	var opTask ui.Task
+	if err := json.Unmarshal([]byte(opResp), &opTask); err != nil {
+		t.Fatal(err)
+	}
+	if code, resp := h.call("operator@example.com", http.MethodPost, "/api/tasks/"+opTask.ID+"/approve", `{}`); code != http.StatusOK {
+		t.Fatalf("operator approving release task: %d %s, want 200", code, resp)
+	}
+
+	// 3. Standing schedule, template, and suite escalations: creating, modifying,
+	// or running schedules/templates/suites referencing releaseID is refused across
+	// REST, POST /api/mcp, and POST /mcp.
+	sched, err := h.client.CreateSchedule(opCtx, ui.CreateScheduleRequest{
+		Repo: "acme/widgets", Base: "main", TemplateID: releaseID,
+		Recurrence: everyDay,
+	})
+	if err != nil {
+		t.Fatalf("operator creating release schedule: %v", err)
+	}
+	suite, err := h.client.CreateSuite(opCtx, ui.CreateSuiteRequest{
+		Name: "release-suite", TemplateIDs: []string{releaseID},
+		Mode: "count", Count: 1, AutoMerge: new(false), RequireApproval: true,
+	})
+	if err != nil {
+		t.Fatalf("operator creating release suite: %v", err)
+	}
+	suiteSched, err := h.client.CreateSchedule(opCtx, ui.CreateScheduleRequest{
+		Repo: "acme/widgets", Base: "main", SuiteID: suite.ID,
+		Recurrence: everyDay,
+	})
+	if err != nil {
+		t.Fatalf("operator creating release suite schedule: %v", err)
+	}
+
+	standingCalls := []struct {
+		name, method, path, pattern, body string
+		mcpArgs                           map[string]any
+	}{
+		{
+			name: "POST /api/schedules with templateId", method: http.MethodPost, path: "/api/schedules", pattern: "POST /api/schedules",
+			body:    `{"repo":"acme/widgets","base":"main","templateId":"` + releaseID + `","recurrence":{"kind":"interval","every":"24h"}}`,
+			mcpArgs: map[string]any{"body": map[string]any{"repo": "acme/widgets", "base": "main", "templateId": releaseID, "recurrence": map[string]any{"kind": "interval", "every": "24h"}}},
+		},
+		{
+			name: "PATCH /api/schedules/{id}", method: http.MethodPatch, path: "/api/schedules/" + sched.ID, pattern: "PATCH /api/schedules/{id}",
+			body:    `{"paused":true}`,
+			mcpArgs: map[string]any{"id": sched.ID, "body": map[string]any{"paused": true}},
+		},
+		{
+			name: "POST /api/schedules/{id}/run", method: http.MethodPost, path: "/api/schedules/" + sched.ID + "/run", pattern: "POST /api/schedules/{id}/run",
+			body:    `{}`,
+			mcpArgs: map[string]any{"id": sched.ID},
+		},
+		{
+			name: "POST /api/schedules/{id}/run (suite)", method: http.MethodPost, path: "/api/schedules/" + suiteSched.ID + "/run", pattern: "POST /api/schedules/{id}/run",
+			body:    `{}`,
+			mcpArgs: map[string]any{"id": suiteSched.ID},
+		},
+		{
+			name: "PATCH /api/templates/{id}", method: http.MethodPatch, path: "/api/templates/" + releaseID, pattern: "PATCH /api/templates/{id}",
+			body:    `{"title":"Renamed"}`,
+			mcpArgs: map[string]any{"id": releaseID, "body": map[string]any{"title": "Renamed"}},
+		},
+		{
+			name: "POST /api/suites", method: http.MethodPost, path: "/api/suites", pattern: "POST /api/suites",
+			body:    `{"name":"s2","templateIds":["` + releaseID + `"],"mode":"count","count":1,"autoMerge":false,"requireApproval":true}`,
+			mcpArgs: map[string]any{"body": map[string]any{"name": "s2", "templateIds": []string{releaseID}, "mode": "count", "count": 1, "autoMerge": false, "requireApproval": true}},
+		},
+		{
+			name: "PATCH /api/suites/{id}", method: http.MethodPatch, path: "/api/suites/" + suite.ID, pattern: "PATCH /api/suites/{id}",
+			body:    `{"name":"renamed-suite"}`,
+			mcpArgs: map[string]any{"id": suite.ID, "body": map[string]any{"name": "renamed-suite"}},
+		},
+		{
+			name: "POST /api/suite-runs", method: http.MethodPost, path: "/api/suite-runs", pattern: "POST /api/suite-runs",
+			body:    `{"suiteId":"` + suite.ID + `","repo":"acme/widgets","base":"main"}`,
+			mcpArgs: map[string]any{"body": map[string]any{"suiteId": suite.ID, "repo": "acme/widgets", "base": "main"}},
+		},
+	}
+	for _, sc := range standingCalls {
+		code, resp := h.call("stan@example.com", sc.method, sc.path, sc.body)
+		if code != http.StatusForbidden || !strings.Contains(resp, "declared push set") || !strings.Contains(resp, "standing-maintainer") {
+			t.Errorf("REST %s: %d %s, want 403 naming declared push set and role", sc.name, code, resp)
+		}
+		tool := toolOf(sc.pattern)
+		if out, isErr := callControllerTool(t, h.srv, h.as("stan@example.com"), ui.ToolGrainInvoke, map[string]any{
+			"tool": tool, "arguments": sc.mcpArgs, "reason": "testing standing role ceiling",
+		}); !isErr || !strings.Contains(out, "declared push set") || !strings.Contains(out, "standing-maintainer") {
+			t.Errorf("POST /api/mcp %s: isErr=%v %s, want refusal naming declared push set and role", sc.name, isErr, out)
+		}
+		argsWithReason := make(map[string]any, len(sc.mcpArgs)+1)
+		for k, v := range sc.mcpArgs {
+			argsWithReason[k] = v
+		}
+		argsWithReason["reason"] = "testing standing role ceiling"
+		if out, isErr := callSessionMCPAs("stan@example.com", tool, argsWithReason); !isErr || !strings.Contains(out, "declared push set") {
+			t.Errorf("POST /mcp %s: isErr=%v %s, want refusal naming declared push set", sc.name, isErr, out)
 		}
 	}
 }

@@ -102,7 +102,7 @@ test("a browser's old per-user pins and name become deployment-wide", async ({
     // browser's old typed-in name.
     await expect(aside.getByTestId("user-tile")).toHaveAttribute(
       "title",
-      /^operator \((access code|local)\)$/,
+      /^(operator|alice@example\.com) \((access code|local)\)$/,
     );
     await expect(aside.getByText("alice", { exact: true })).toHaveCount(0);
     const buildStamp = aside.getByTestId("build-stamp");
@@ -123,7 +123,7 @@ test("a browser's old per-user pins and name become deployment-wide", async ({
     );
     await expect(drawer.getByTestId("user-tile")).toHaveAttribute(
       "title",
-      /^operator \((access code|local)\)$/,
+      /^(operator|alice@example\.com) \((access code|local)\)$/,
     );
     await shot(page, "sidebar-footer-phone");
   } finally {
@@ -191,6 +191,11 @@ test("a task and a comment filed from the UI are the server's actor's", async ({
     (c) => c.body === "filed with no name",
   );
   expect(comment, JSON.stringify(stored.comments)).toBeTruthy();
-  expect(comment.author).toBe(config.actor);
+  // Signed in with the code as alice (accesscode.js), the comment is hers
+  // through the code; the deployment's actor only for a session that
+  // names nobody.
+  expect([config.actor, "access-code:alice@example.com"]).toContain(
+    comment.author,
+  );
   expect(stored.creator).not.toBe("alice");
 });

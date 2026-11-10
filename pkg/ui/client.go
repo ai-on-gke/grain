@@ -342,6 +342,7 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias CreateTaskRequest
 	var aux struct {
 		Alias
+		RawBody     *string         `json:"body,omitempty"`
 		RawPriority json.RawMessage `json:"priority,omitempty"`
 		RawGrants   json.RawMessage `json:"grants,omitempty"`
 		// capabilities: is read as propose_task reads it
@@ -354,6 +355,7 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = CreateTaskRequest(aux.Alias)
+	r.rawBody = aux.RawBody
 	if present(aux.RawCapabilities) {
 		var entries any
 		if err := json.Unmarshal(aux.RawCapabilities, &entries); err != nil {
@@ -2218,6 +2220,10 @@ type CreateTaskRequest struct {
 	// forkPR.Base settles (model.ReadsBesides, model.WritesBesides).
 	readsFromTemplate  bool
 	writesFromTemplate bool
+
+	// rawBody captures a caller-supplied "body" JSON key so fromTemplate can
+	// refuse overriding the prompt of a template that carries a declared push set.
+	rawBody *string
 }
 
 func proposalTags(key string, held, holdRequested bool) []string {
@@ -2852,6 +2858,19 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		filedFrom = strings.TrimSpace(req.TemplateID)
 	}
+	var declaredPush *DeclaredPush
+	if filedFrom != "" {
+		declaredPush, err = c.templateDeclaredPush(ctx, filedFrom)
+		if err != nil {
+			return Task{}, err
+		}
+		if declaredPush != nil {
+			if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+				return Task{}, forbiddenErrorf("%s cannot set templateId: template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+					a.label(), filedFrom, declaredPush.Path)
+			}
+		}
+	}
 	// The capability catalogue (settings/capabilities.yml) refuses what
 	// it does not admit here, and names what only a person may grant:
 	// a proposal or an agent's own filing holding one is left for a
@@ -3075,6 +3094,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			if (model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability)) && !slices.Contains(delegatedPersonOnly, g.Capability) {
 				delegatedPersonOnly = append(delegatedPersonOnly, g.Capability)
 			}
+		}
+		if declaredPush != nil {
+			delegatedPersonOnly = append(delegatedPersonOnly, "declared push set from "+declaredPush.Path)
 		}
 		if len(delegatedPersonOnly) > 0 {
 			why := fmt.Sprintf("holds %s, which only a person acting directly may grant", strings.Join(delegatedPersonOnly, ", "))
@@ -3350,7 +3372,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
-	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "", keepRunning, priority, taskAdmission)
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, reads, writes, catalogueHold || needsPersonWhy != "" || declaredPush != nil, keepRunning, priority, taskAdmission)
 	if err != nil {
 		return Task{}, err
 	}
@@ -5318,6 +5340,18 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if req.Title != nil {
 			titleChanged = *req.Title != task.Title
 			task.Title = *req.Title
+		}
+		if req.Description != nil || req.PromptExtension != nil {
+			if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {
+				return err
+			} else if push != nil {
+				if req.Description != nil && *req.Description != task.Body {
+					return validationErrorf("task %s carries a declared push set from %s: description cannot be overridden", task.ID, push.Path)
+				}
+				if req.PromptExtension != nil && strings.TrimSpace(*req.PromptExtension) != task.PromptExtension {
+					return validationErrorf("task %s carries a declared push set from %s: promptExtension cannot be set", task.ID, push.Path)
+				}
+			}
 		}
 		if req.Description != nil {
 			descriptionChanged = *req.Description != task.Body

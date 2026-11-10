@@ -39,7 +39,7 @@ func requireIAPServer(t *testing.T, requireIAP bool) (srv *ui.Server, assertion,
 	ui.SetAccessCodeForTest(srv, testAccessCode)
 	assertion = signIAPToken(t, priv, tunnelKid, tunnelAudience, "iap@example.com", "x", ui.GoogleIAPIssuer, time.Now().Add(5*time.Minute))
 
-	rec := serveFrom(srv, "127.0.0.1:5555", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`"}`,
+	rec := serveFrom(srv, "127.0.0.1:5555", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`","name":"iap@example.com"}`,
 		map[string]string{"Content-Type": "application/json"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("loopback login: code %d: %s", rec.Code, rec.Body)
@@ -100,7 +100,7 @@ func TestRequireIAPRefusesTheAccessCodeOverTheNetwork(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "IAP") {
 		t.Errorf("GET / over the network should point at IAP: %s", rec.Body)
 	}
-	rec = serveFrom(srv, networkAddr, http.MethodPost, "/api/auth/access-code", "code="+testAccessCode,
+	rec = serveFrom(srv, networkAddr, http.MethodPost, "/api/auth/access-code", "code="+testAccessCode+"&name=iap%40example.com",
 		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "Enter access code") {
 		t.Errorf("POST login form over the network: code %d, want 403 without the form: %s", rec.Code, rec.Body)
@@ -210,7 +210,7 @@ func requireVerifierServer(t *testing.T, requireVerifier string) (srv *ui.Server
 	client.Config.RequireVerifier = requireVerifier
 	ui.SetAccessCodeForTest(srv, testAccessCode)
 
-	rec := serveFrom(srv, "127.0.0.1:5555", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`"}`,
+	rec := serveFrom(srv, "127.0.0.1:5555", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`","name":"alice@example.com"}`,
 		map[string]string{"Content-Type": "application/json"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("loopback login: code %d: %s", rec.Code, rec.Body)
@@ -291,7 +291,7 @@ func TestRequireVerifierRefusesAccessCodeOverNetworkAndKeepsLoopbackBreakGlass(t
 	}
 
 	// POST /api/auth/access-code over network gets 403 naming -ui-require-verifier=registry and sets no cookie.
-	rec = serveFrom(srv, networkAddr, http.MethodPost, "/api/auth/access-code", "code="+testAccessCode,
+	rec = serveFrom(srv, networkAddr, http.MethodPost, "/api/auth/access-code", "code="+testAccessCode+"&name=alice%40example.com",
 		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "-ui-require-verifier=registry") {
 		t.Errorf("POST /api/auth/access-code over network: code %d, want 403 naming -ui-require-verifier=registry: %s", rec.Code, rec.Body)

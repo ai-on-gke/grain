@@ -181,7 +181,15 @@ export default function NewTaskOverlay({
   // blank from the template (ui.Client.fromTemplate) after applying the
   // layer's hidden defaults -- so a field this form states, a hidden
   // default included, beats the template's own value for it.
-  const [fromTemplate, setFromTemplate] = useState(templateId);
+  // A restored draft keeps the template it was being filled from: the
+  // page that opened the form on it is gone after a reload, and without
+  // it the draft filed as a plain task at priority 5 instead of the
+  // template's own (2026-11-10 intake walkthrough).
+  const [fromTemplate, setFromTemplate] = useState(
+    () =>
+      templateId ||
+      (typeof draft?.templateId === "string" ? draft.templateId : ""),
+  );
   // The templates the picker offers: those with no input fields of
   // their own, which this form has nowhere to fill in ("Use…" on the
   // Templates page does), plus whichever one is picked now.
@@ -203,6 +211,7 @@ export default function NewTaskOverlay({
   const templatePickerShown =
     formTemplates.length > 0 &&
     (templateId !== "" ||
+      fromTemplate !== "" ||
       Object.keys(config?.newTaskForm?.templates || {}).length > 0);
   const liveDraft = draftDiscarded ? null : draft;
 
@@ -797,6 +806,7 @@ export default function NewTaskOverlay({
         atFront,
         priority,
         customFields,
+        templateId: fromTemplate,
         edited: [...formEdited.current],
       });
     } else {
@@ -833,6 +843,7 @@ export default function NewTaskOverlay({
     atFront,
     priority,
     customFields,
+    fromTemplate,
   ]);
 
   // Switching repo or template re-applies the defaults

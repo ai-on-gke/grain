@@ -986,6 +986,26 @@ describe("lastBaseForRepo", () => {
     expect(lastBaseForRepo(tasks, "acme/widgets")).toBe("");
   });
 
+  it("looks past a stacked review or repair whatever its author", () => {
+    const tasks = [
+      {
+        repo: "acme/widgets",
+        base: "release/1",
+        createdAt: "2026-08-01T00:00:00Z",
+        authorKind: "human",
+      },
+      {
+        repo: "acme/widgets",
+        base: "grain/task-30",
+        createdAt: "2026-08-02T00:00:00Z",
+        authorKind: "human",
+        stacked: true,
+        review: true,
+      },
+    ];
+    expect(lastBaseForRepo(tasks, "acme/widgets")).toBe("release/1");
+  });
+
   it("still suggests a task carrying no authorKind at all", () => {
     const tasks = [
       {
