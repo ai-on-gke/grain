@@ -85,7 +85,7 @@ import (
 // its packing in this image, so whoever could move the tag would choose
 // the userland that packs every guest. deploy/base-images.sh update
 // bumps both.
-const DefaultPackerImage = "debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
+const DefaultPackerImage = "debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc"
 
 // partsIn is where guestimage.PartsDir is copied to inside the packing
 // stage. A path of its own rather than the absolute one it has in the

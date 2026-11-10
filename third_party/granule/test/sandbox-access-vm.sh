@@ -132,19 +132,51 @@ fi
   exit
 }
 
-mirror_ref="127.0.0.1:9729/ghcr/${GRANULE_IMAGE#ghcr.io/}"
-# An image already in the local store (a locally built tag, say) is used as
-# is: pulling it would ask a registry that has never heard of it.
-if docker image inspect "$GRANULE_IMAGE" >/dev/null 2>&1; then
-  :
-elif ! docker pull -q "$GRANULE_IMAGE" >/dev/null 2>&1; then
-  if [[ $GRANULE_IMAGE == ghcr.io/* ]] && docker pull -q "$mirror_ref" >/dev/null 2>&1; then
-    docker tag "$mirror_ref" "$GRANULE_IMAGE"
-  else
-    fail "pull $GRANULE_IMAGE"
-    summary
-    exit
+# The GHCR package cache mirror sits wherever
+# /etc/docker/certs.d/ghcr.io/hosts.toml says it does (192.168.9.1:9729 on a
+# grain VM sandbox, where nothing listens on 127.0.0.1:9729); 127.0.0.1:9729
+# is only the fallback when no mirror is configured.
+ghcr_mirror_host() {
+  local host
+  host=$(sed -n 's|^[[:space:]]*\[host\."https\{0,1\}://\([^/"]*\)/v2/ghcr"\].*|\1|p' \
+    /etc/docker/certs.d/ghcr.io/hosts.toml 2>/dev/null | head -n 1)
+  echo "${host:-127.0.0.1:9729}"
+}
+
+pull_granule_image() {
+  # An image already in the local store (a locally built tag, say) is used as
+  # is: pulling it would ask a registry that has never heard of it.
+  if docker image inspect "$GRANULE_IMAGE" >/dev/null 2>&1; then
+    return 0
   fi
+  local mirror_host configured=
+  mirror_host=$(ghcr_mirror_host)
+  if grep -q "$mirror_host/v2/ghcr" /etc/docker/certs.d/ghcr.io/hosts.toml 2>/dev/null; then
+    configured=1
+  fi
+  local mirror_ref="$mirror_host/ghcr/${GRANULE_IMAGE#ghcr.io/}"
+  # A configured mirror is tried first: a sandbox without internet egress
+  # can reach it when it cannot reach ghcr.io.
+  if [[ $GRANULE_IMAGE == ghcr.io/* && -n $configured ]]; then
+    if docker pull -q "$mirror_ref" >/dev/null 2>&1 && docker tag "$mirror_ref" "$GRANULE_IMAGE"; then
+      return 0
+    fi
+  fi
+  if docker pull -q "$GRANULE_IMAGE" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ $GRANULE_IMAGE == ghcr.io/* ]]; then
+    if docker pull -q "$mirror_ref" >/dev/null 2>&1 && docker tag "$mirror_ref" "$GRANULE_IMAGE"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+if ! pull_granule_image; then
+  fail "pull $GRANULE_IMAGE"
+  summary
+  exit
 fi
 mkdir -p "$W/img"
 cid=$(docker create "$GRANULE_IMAGE") && docker export "$cid" | tar -C "$W/img" -xf - 2>/dev/null

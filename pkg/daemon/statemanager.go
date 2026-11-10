@@ -226,6 +226,7 @@ func (m *StateManager) reconcileRepo(ctx context.Context) (staterepo.Settings, b
 	if err := m.repo.ConfigureMirror(ctx, settings.Remote, settings.Branch, RepoToken(m.dataDir, settings.Remote, settings.TokenFile)); err != nil {
 		return settings, false, err
 	}
+	m.repo.SetVerifier(stateRepoVerifier(m.dataDir, settings))
 	m.lastSettings = settings
 	return settings, true, nil
 }
@@ -879,6 +880,7 @@ func (m *StateManager) status(ctx context.Context) ui.StateRepoStatus {
 	mirror := false
 	if state, err := staterepo.LoadSettings(m.dataDir); err == nil {
 		mirror = state.IsMirror()
+		out.Verification = verificationStatus(state, m.repo)
 		if state != m.lastSettings {
 			out.Remote = state.Remote
 			if state.Branch != "" {
@@ -922,6 +924,13 @@ func (m *StateManager) status(ctx context.Context) ui.StateRepoStatus {
 		// would only make the pane say it twice.
 		if err := m.secrets.Check(); err != nil {
 			out.SecretsError = err.Error()
+		}
+		if m.secrets.Backend() == secrets.BackendFile {
+			p := m.secrets.KeyProtection()
+			out.SecretsKeyProtection, out.SecretsKMSKey = p.Mode, p.KMSKey
+			if !p.LastUnwrap.IsZero() {
+				out.SecretsKeyLastUnwrap = p.LastUnwrap.UTC().Format(time.RFC3339)
+			}
 		}
 	}
 	// And whether that file exists anywhere but this disk, read off the
@@ -1048,6 +1057,53 @@ func (m *StateManager) ImportSecretsKey(ctx context.Context, key string) (ui.Sta
 	return m.status(ctx), nil
 }
 
+// WrapSecretsKey wraps this daemon's secrets key with a Cloud KMS key
+// (`grain state key wrap -kms`): the key in memory is the one wrapped,
+// and it is verified by a round trip before the file is replaced, so
+// nothing restarts and nothing is lost if KMS refuses.
+func (m *StateManager) WrapSecretsKey(ctx context.Context, kmsKey string) (ui.SecretsKeyWrapResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.secrets == nil {
+		return ui.SecretsKeyWrapResult{}, errors.New("this deployment has no secret store whose key could be wrapped")
+	}
+	rep, err := m.secrets.WrapKeyWithKMS(ctx, kmsKey, nil)
+	if err != nil {
+		return ui.SecretsKeyWrapResult{}, err
+	}
+	log.Printf("grain: wrapped the secrets key %s with Cloud KMS key %s", rep.KeyFile, kmsKey)
+	return secretsKeyWrapResult(rep, m.status(ctx)), nil
+}
+
+// UnwrapSecretsKey puts the secrets key back in plaintext form
+// (`grain state key unwrap`), which a downgrade to a build that cannot
+// read the wrapped form needs first.
+func (m *StateManager) UnwrapSecretsKey(ctx context.Context) (ui.SecretsKeyWrapResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.secrets == nil {
+		return ui.SecretsKeyWrapResult{}, errors.New("this deployment has no secret store whose key could be unwrapped")
+	}
+	rep, err := m.secrets.UnwrapKeyFromKMS(ctx, nil)
+	if err != nil {
+		return ui.SecretsKeyWrapResult{}, err
+	}
+	log.Printf("grain: unwrapped the secrets key %s back to a plaintext key file", rep.KeyFile)
+	return secretsKeyWrapResult(rep, m.status(ctx)), nil
+}
+
+func secretsKeyWrapResult(rep secrets.KeyWrapReport, status ui.StateRepoStatus) ui.SecretsKeyWrapResult {
+	return ui.SecretsKeyWrapResult{
+		Status:          status,
+		KeyFile:         rep.KeyFile,
+		PublicKey:       rep.Public,
+		Protection:      rep.Protection.Mode,
+		KMSKey:          rep.Protection.KMSKey,
+		PlaintextCopies: rep.PlaintextCopies,
+		Notes:           rep.Notes,
+	}
+}
+
 // SetSecretsRepo names the repository this deployment's encrypted
 // secrets file is backed up to, or stops backing it up -- `grain secrets
 // repo` reached from the State pane instead of from a terminal.
@@ -1089,6 +1145,9 @@ func (m *StateManager) SetRemote(ctx context.Context, req ui.StateRepoRemoteRequ
 		}
 		settings.Branch = branch
 	}
+	if err := applyVerification(m.dataDir, &settings, req, !sameRemote(remote, was)); err != nil {
+		return ui.StateRepoStatus{}, err
+	}
 	switch {
 	case req.Token != "":
 		path, err := writeStateRepoToken(m.dataDir, req.Token)
@@ -1106,6 +1165,7 @@ func (m *StateManager) SetRemote(ctx context.Context, req ui.StateRepoRemoteRequ
 		if err := m.repo.ConfigureMirror(ctx, settings.Remote, settings.Branch, RepoToken(m.dataDir, settings.Remote, settings.TokenFile)); err != nil {
 			return ui.StateRepoStatus{}, err
 		}
+		m.repo.SetVerifier(stateRepoVerifier(m.dataDir, settings))
 		m.lastSettings = settings
 		if settings.Remote != "" && m.db != nil {
 			if _, err := staterepo.SyncExternal(ctx, m.repo, m.db, true); err == nil {

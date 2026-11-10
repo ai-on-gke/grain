@@ -1338,7 +1338,7 @@ jobs:
           watcher=$!
           failed=""
           go test ./pkg/orchestrator/ \
-            -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest|TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM|TestHostScriptGrantInARealGranuleVM' \
+            -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest|TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM|TestGranuleSandboxOpenNetworkFenceBlocksMetadataHostAndPeers|TestHostScriptGrantInARealGranuleVM' \
             -count=1 -v -timeout 40m 2>&1 | tee /tmp/granule-vm.log || failed="the suite"
           kill "$watcher" 2>/dev/null || true
 
@@ -1346,6 +1346,7 @@ jobs:
                    TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently \
                    TestTheModelProxiesAreReachableFromInsideARealGuest \
                    TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM \
+                   TestGranuleSandboxOpenNetworkFenceBlocksMetadataHostAndPeers \
                    TestHostScriptGrantInARealGranuleVM; do
             if ! grep -q -- "--- PASS: $t" /tmp/granule-vm.log; then
               echo "$t did not run and pass; this job only means something when all of them do" >&2
