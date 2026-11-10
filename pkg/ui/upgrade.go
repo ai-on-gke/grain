@@ -59,6 +59,18 @@ func sanitizeManagementURL(raw string) string {
 	return u.String()
 }
 
+// upgradeNotices is upgrade.Notices with each DocsURL put through
+// sanitizeManagementURL, since the pane renders it as a link: a notice
+// whose docs link is not an http(s) URL keeps its message and loses the
+// link, rather than handing the browser a javascript: href.
+func upgradeNotices() []upgrade.Notice {
+	notices := upgrade.Notices()
+	for i := range notices {
+		notices[i].DocsURL = sanitizeManagementURL(notices[i].DocsURL)
+	}
+	return notices
+}
+
 func (s *Server) isSelfUpgradeDisabled() bool {
 	return s.tasks.Config.DisableSelfUpgrade
 }
@@ -623,7 +635,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 			ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
 			Running:             running,
 			Database:            s.databaseStatus(),
-			Notices:             upgrade.Notices(),
+			Notices:             upgradeNotices(),
 		})
 		return
 	}
@@ -631,7 +643,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, upgradeStatusResponse{
 			Enabled:  false,
 			Database: s.databaseStatus(),
-			Notices:  upgrade.Notices(),
+			Notices:  upgradeNotices(),
 		})
 		return
 	}
@@ -642,7 +654,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	resp := s.upgradeStatusResponse(r, status)
 	resp.Database = s.databaseStatus()
-	resp.Notices = upgrade.Notices()
+	resp.Notices = upgradeNotices()
 	writeJSON(w, http.StatusOK, resp)
 }
 

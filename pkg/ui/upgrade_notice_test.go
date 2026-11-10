@@ -53,6 +53,11 @@ func TestUpgradeStatusReportsRegisteredNotices(t *testing.T) {
 				DocsURL: "https://example.com/docs/upgrade",
 			},
 			{Kind: "empty"}, // no message: dropped
+			{
+				Kind:    "script-link",
+				Message: "a docs link that is not http(s)",
+				DocsURL: "javascript:alert(1)",
+			},
 		}
 	})
 	t.Cleanup(unregister)
@@ -60,8 +65,8 @@ func TestUpgradeStatusReportsRegisteredNotices(t *testing.T) {
 	for name, srv := range servers {
 		got := decode[map[string]any](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
 		notices, _ := got["notices"].([]any)
-		if len(notices) != 1 {
-			t.Fatalf("%s: notices = %v, want the one with a message", name, got["notices"])
+		if len(notices) != 2 {
+			t.Fatalf("%s: notices = %v, want the two with a message", name, got["notices"])
 		}
 		n, _ := notices[0].(map[string]any)
 		if n["kind"] != "stale-flag" ||
@@ -69,6 +74,15 @@ func TestUpgradeStatusReportsRegisteredNotices(t *testing.T) {
 			n["command"] != "sudo systemctl edit grain" ||
 			n["docsUrl"] != "https://example.com/docs/upgrade" {
 			t.Errorf("%s: notice = %v", name, n)
+		}
+		// The pane renders docsUrl as an href: anything but http(s) is
+		// dropped, the message kept.
+		bad, _ := notices[1].(map[string]any)
+		if bad["message"] != "a docs link that is not http(s)" {
+			t.Errorf("%s: notice = %v, want its message kept", name, bad)
+		}
+		if u, ok := bad["docsUrl"]; ok {
+			t.Errorf("%s: docsUrl = %v, want a javascript: link dropped", name, u)
 		}
 	}
 
