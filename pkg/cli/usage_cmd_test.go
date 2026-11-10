@@ -99,3 +99,50 @@ func TestGrainUsageShowsAndSets(t *testing.T) {
 		t.Fatal("grain usage accepted an unknown mode")
 	}
 }
+
+// Under -mode off the report carries no estimate at all, so the header
+// must not explain the missing figure as "a connection in use has no
+// known budget" -- the 2026-11-10 walkthrough's deployment had one.
+func TestGrainUsageOffSaysNotEstimated(t *testing.T) {
+	resp := ui.UsageResponse{
+		Report:   grainusage.Report{Mode: model.UsageModeOff, MaxWorkers: 4, EffectiveWorkers: 4},
+		Settings: model.UsageSettings{Mode: model.UsageModeOff, Budgets: []model.TokenBudget{{Connection: "c1", Tokens: 1000, Window: "5h"}}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+	out := captureStdout(t, func() {
+		if err := runCLI([]string{"-server", srv.URL, "usage"}); err != nil {
+			t.Errorf("grain usage: %v", err)
+		}
+	})
+	if !strings.Contains(out, "sustainable: not estimated (mode off)") || strings.Contains(out, "no known budget") {
+		t.Fatalf("off-mode header:\n%s", out)
+	}
+}
+
+// A malformed -budget, a bad window and an unknown mode are the command
+// being wrong: exit 2, as the daemon's 400 for the same settings is.
+func TestGrainUsageMalformedSettingsExitTwo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("%s %s reached the daemon", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ui.UsageResponse{})
+	}))
+	t.Cleanup(srv.Close)
+	for _, args := range [][]string{
+		{"-budget", "claude-1=abc/5h"},
+		{"-budget", "claude-1=1000/-5h"},
+		{"-budget", "claude-1=-10/5h"},
+		{"-mode", "sometimes"},
+	} {
+		err := runCLI(append([]string{"-server", srv.URL, "usage"}, args...))
+		if code, _, _ := classifyError(err); code != exitUsage {
+			t.Errorf("grain usage %v: exit %d (%v), want %d", args, code, err, exitUsage)
+		}
+	}
+}

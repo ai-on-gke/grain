@@ -116,7 +116,7 @@ const (
 
 // ErrTooManyReconnectWaiters is returned when more than 32 requests are already
 // waiting on reconnect_grace for the same entry.
-var ErrTooManyReconnectWaiters = errors.New("registry server: too many concurrent reconnect_grace waiters")
+var ErrTooManyReconnectWaiters = errors.New("hub server: too many concurrent reconnect_grace waiters")
 
 // HostCacheEntry caches routing metadata for `<name>.<instance-domain>`.
 type HostCacheEntry struct {
