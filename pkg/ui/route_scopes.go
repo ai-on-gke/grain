@@ -297,6 +297,7 @@ var routeScopes = map[string]APIScope{
 	"PUT /api/github-tokens/{name}":                                        "secrets:write",
 	"DELETE /api/github-tokens/{name}":                                     "secrets:write",
 	"GET /api/secrets":                                                     "secrets:read",
+	"POST /api/secrets/redact":                                             "internal",
 	"PUT /api/secrets/{secret}/{key}":                                      "secrets:write",
 	"DELETE /api/secrets/{secret}/{key}":                                   "secrets:write",
 	"DELETE /api/secrets/{secret}":                                         "secrets:write",

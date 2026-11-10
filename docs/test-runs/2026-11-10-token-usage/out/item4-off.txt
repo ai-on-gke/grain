@@ -1,0 +1,3 @@
+mode: off   max_workers: 4   effective worker cap: 4   sustainable: unbounded (a connection in use has no known budget)
+deployment: 18 runs, 820k billable (805k in, 15k out, 144k cache read, 0 cache write), 820k/h now, since 2026-11-10T07:27:28Z
+{"mode":null,"sustainableWorkers":null,"effectiveWorkers":null,"nscopes":0,"advisories":null}

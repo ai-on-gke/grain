@@ -37,7 +37,7 @@ func cmdHubCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []st
 	fs := flag.NewFlagSet("grain hub create", flag.ContinueOnError)
 	tf := bindHubTargetFlags(fs)
 	nameFlag := fs.String("name", "", "entry name (defaults to a random generated name when omitted)")
-	shape := fs.String("shape", "", "VM shape name (defaults to registry default shape)")
+	shape := fs.String("shape", "", "VM shape name (defaults to hub default shape)")
 	diskGB := fs.Int("disk-gb", 0, "boot disk size in GB (20..4000; defaults to shape default)")
 	zone := fs.String("zone", "", "optional GCE zone override")
 	displayName := fs.String("display-name", "", "human-readable display name in the hub directory")
@@ -335,7 +335,7 @@ func cmdHubRotateCredential(ctx context.Context, c *ui.HTTPClient, out *printer,
 func cmdHubUpgrade(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub upgrade", flag.ContinueOnError)
 	tf := bindHubTargetFlags(fs)
-	ver := fs.String("version", "", "target grain release version (defaults to registry's current pinned release)")
+	ver := fs.String("version", "", "target grain release version (defaults to hub's current pinned release)")
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {

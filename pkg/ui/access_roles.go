@@ -89,6 +89,7 @@ var operatorOnlyRoutes = map[string]bool{
 	"PUT /api/tasks/{id}/session-title":                             true,
 	"POST /api/tasks/{id}/staged-attachments":                       true,
 	"POST /api/tasks/{id}/db/query":                                 true,
+	"POST /api/secrets/redact":                                      true,
 	"POST /api/tasks/{id}/db/execute":                               true,
 	"POST /api/tasks/{id}/notify":                                   true,
 	"POST /api/tasks/{id}/delivered":                                true,

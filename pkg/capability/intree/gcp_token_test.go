@@ -250,38 +250,77 @@ func TestGCPExistingAccountSetsArePersonGranted(t *testing.T) {
 	}
 }
 
-// assertSetupKeepsStderr fails if any gcloud command in an activate.sh
-// discards its stderr: that is the only account of why setup failed that
-// the task's conversation gets (CapabilitySetupError's output tail).
+// assertSetupKeepsStderr fails if any gcloud step of an activate.sh
+// discards its stderr or any line silences everything but `command -v`:
+// what gcloud says is the only account of why setup failed that the task's
+// conversation gets (CapabilitySetupError's output tail).
 func assertSetupKeepsStderr(t *testing.T, script string) {
 	t.Helper()
+	steps := 0
 	for _, line := range strings.Split(script, "\n") {
-		if !strings.HasPrefix(line, "gcloud ") {
+		if strings.Contains(line, ">/dev/null 2>&1") && !strings.HasPrefix(line, "command -v gcloud ") {
+			t.Errorf("setup line discards all output: %q", line)
+		}
+		if !strings.HasPrefix(line, "step ") && !strings.HasPrefix(line, "step_quiet ") {
 			continue
 		}
-		if strings.Contains(line, "2>") || strings.Contains(line, "&>") {
-			t.Errorf("setup line discards stderr: %q", line)
+		steps++
+		if strings.Contains(line, ">") {
+			t.Errorf("setup step redirects its output: %q", line)
 		}
-		if !strings.Contains(line, "--quiet") {
-			t.Errorf("setup line is not --quiet: %q", line)
+		if !strings.Contains(line, " gcloud ") || !strings.Contains(line, "--quiet") {
+			t.Errorf("setup step is not a --quiet gcloud command: %q", line)
 		}
+	}
+	if steps == 0 {
+		t.Errorf("setup script runs no steps:\n%s", script)
 	}
 }
 
-// runActivate runs an activate.sh under sh with a stand-in gcloud first on
-// PATH that logs its arguments and, when failArg names one of them, fails
-// the way gcloud does: a message on stderr and status 1.
-func runActivate(t *testing.T, script, failArg string) (log, output string, err error) {
+// fakeSubjectToken is the per-attempt secret runActivate places, and its
+// stand-in gcloud echoes in its error, as a careless one might.
+const fakeSubjectToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// runActivate runs an activate.sh the way setup does (env -i, stdin
+// closed) with a stand-in gcloud first on PATH that logs its arguments,
+// prints to stdout, and -- when failArg names one of its arguments --
+// fails the way gcloud does: a message on stderr, which here quotes the
+// subject token, an access token and a private key, and status 1. secretFile, when the
+// script reads one, is placed holding fakeSubjectToken. It returns
+// gcloud's log, what the script printed, and activate.log.
+func runActivate(t *testing.T, script, secretFile, failArg, failMessage string) (log, output, activateLog string, err error) {
+	return runActivateWithSecret(t, script, secretFile, fakeSubjectToken, true, failArg, failMessage)
+}
+
+func runActivateWithSecret(t *testing.T, script, secretFile, secretValue string, writeSecret bool, failArg, failMessage string) (log, output, activateLog string, err error) {
 	t.Helper()
 	if _, lookErr := exec.LookPath("sh"); lookErr != nil {
 		t.Skip("no sh")
 	}
 	dir := t.TempDir()
+	if secretFile != "" {
+		local := filepath.Join(dir, "subject.token")
+		if writeSecret {
+			// Match production placement: no trailing newline.
+			if err := os.WriteFile(local, []byte(secretValue), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		script = strings.ReplaceAll(script, secretFile, local)
+	}
 	logPath := filepath.Join(dir, "gcloud.log")
 	fake := "#!/bin/sh\n" +
-		"echo \"$*\" >> " + shellQuote(logPath) + "\n" +
+		"if [ \"$1\" = --version ]; then echo 'Google Cloud SDK 499.0.0'; echo 'core 2024.11.08'; exit 0; fi\n" +
+		"printf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\n" +
 		"echo 'Updated property.'\n" +
-		"case \"$*\" in *" + failArg + "*) echo 'ERROR: (gcloud) fake failure for " + failArg + "' >&2; exit 1;; esac\n"
+		"case \"$*\" in *print-access-token*) echo 'ya29.c.fake-access-token';; esac\n" +
+		"case \"$*\" in *'" + failArg + "'*) printf '%s\\n' " + shellQuote(failMessage) + " >&2; " +
+		"printf 'sent subject_token=%s, got Bearer ya29.c.fake-access-token+/= and jwt=eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzYSJ9.fakeSig\\n' " + shellQuote(secretValue) + " >&2; " +
+		"printf '{\"access_token\": \"tok-1-secret\", \"private_key_id\": \"keep-key-id\"}\\n' >&2; " +
+		"printf '  \"private_key\": \"-----BEGIN PRIVATE KEY-----\\\\nMIIsingleLineKey\\\\n\",\\n' >&2; " +
+		"printf 'after-single-line-key\\n' >&2; " +
+		"printf '  \\047private_key\\047: \\047MIIpyDictKey\\047\\n' >&2; " +
+		"printf '  \"private_key\": \"-----BEGIN PRIVATE KEY-----\\nMIIfakeKey\\n\",\\n' >&2; exit 1;; esac\n"
 	if err := os.WriteFile(filepath.Join(dir, "gcloud"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -289,47 +328,137 @@ func runActivate(t *testing.T, script, failArg string) (log, output string, err 
 	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", scriptPath)
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command("env", "-i", "HOME="+dir, "PATH="+dir+":/usr/local/bin:/usr/bin:/bin", scriptPath)
 	out, err := cmd.CombinedOutput()
 	logged, _ := os.ReadFile(logPath)
-	return string(logged), string(out), err
+	act, _ := os.ReadFile(filepath.Join(dir, "activate.log"))
+	return string(logged), string(out), string(act), err
 }
 
 func TestGCPActivateScriptsRunAndReportFailures(t *testing.T) {
+	subject := gcpTokenDir("e1-1-0") + "/org.token"
 	for _, tc := range []struct {
-		name, script, want string
+		name, script, secret, want string
+		steps                      []string // step name, the gcloud argument that makes it fail
 	}{
-		{"token", gcpTokenActivateScript(GCPKeyPath, "grain-test-proj"),
-			"config set auth/credential_file_override " + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\n"},
-		{"key", gcpKeyActivateScript(GCPKeyPath, "grain-test-proj"),
-			"auth activate-service-account --key-file=" + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\n"},
+		{"token", gcpTokenActivateScript(GCPKeyPath, "grain-test-proj", subject), subject,
+			"config set auth/credential_file_override " + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\nauth print-access-token --quiet\n",
+			[]string{"login", "credential_file_override", "project", "set project", "token exchange", "print-access-token"}},
+		{"key", gcpKeyActivateScript(GCPKeyPath, "grain-test-proj"), "",
+			"auth activate-service-account --key-file=" + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\n",
+			[]string{"login", "activate-service-account", "project", "set project"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assertSetupKeepsStderr(t, tc.script)
-			log, out, err := runActivate(t, tc.script, "no-such-arg")
+			if strings.Contains(tc.script, fakeSubjectToken) {
+				t.Fatal("the script carries the secret")
+			}
+			// Success prints nothing at all; gcloud's chatter is in
+			// activate.log.
+			log, out, act, err := runActivate(t, tc.script, tc.secret, "no-such-arg", "")
 			if err != nil {
 				t.Fatalf("activate.sh failed: %v\n%s", err, out)
 			}
 			if log != tc.want {
 				t.Errorf("gcloud ran\n%s\nwant\n%s", log, tc.want)
 			}
-			if strings.Contains(out, "Updated property") {
-				t.Errorf("stdout was not discarded: %q", out)
+			if out != "" {
+				t.Errorf("a successful setup printed %q", out)
 			}
-			// A failing gcloud stops the script, and what it said on stderr
-			// is what setup's output carries.
-			log, out, err = runActivate(t, tc.script, "project")
-			if err == nil {
-				t.Fatalf("activate.sh succeeded although gcloud config set project failed")
+			if !strings.Contains(act, "Google Cloud SDK 499.0.0") || !strings.Contains(act, "Updated property") {
+				t.Errorf("activate.log = %q", act)
 			}
-			if !strings.Contains(out, "fake failure for project") {
-				t.Errorf("gcloud's stderr was not kept: output = %q", out)
+			if strings.Contains(act, "ya29.") {
+				t.Errorf("activate.log holds the access token: %q", act)
 			}
-			if strings.Count(log, "\n") != 2 {
-				t.Errorf("gcloud ran\n%s", log)
+			// A failing step stops the script, and its output -- what the
+			// setup-failure comment quotes -- names the step, gives gcloud's
+			// version and what gcloud said, and nothing secret.
+			for i := 0; i < len(tc.steps); i += 2 {
+				step, arg := tc.steps[i], tc.steps[i+1]
+				log, out, act, err := runActivate(t, tc.script, tc.secret, arg, "ERROR: (gcloud) fake failure in "+step)
+				if err == nil {
+					t.Fatalf("activate.sh succeeded although step %s failed", step)
+				}
+				if got := strings.Count(log, "\n"); got != i/2+1 {
+					t.Errorf("step %s failed after %d gcloud commands, want %d:\n%s", step, got, i/2+1, log)
+				}
+				for _, want := range []string{
+					`failed at step "` + step + `"`,
+					"Google Cloud SDK 499.0.0",
+					"ERROR: (gcloud) fake failure in " + step,
+					"sent subject_token=",
+					"keep-key-id",
+					"after-single-line-key",
+				} {
+					if !strings.Contains(out, want) {
+						t.Errorf("step %s: setup output lacks %q:\n%s", step, want, out)
+					}
+				}
+				secrets := []string{"ya29.c.fake", "eyJhbGciOiJSUzI1NiJ9", "tok-1-secret", "MIIsingleLineKey", "MIIpyDictKey", "MIIfakeKey"}
+				if tc.secret != "" {
+					secrets = append(secrets, fakeSubjectToken)
+				}
+				for _, secret := range secrets {
+					if strings.Contains(out, secret) || strings.Contains(act, secret) {
+						t.Errorf("step %s: %q was printed or logged:\n%s\n%s", step, secret, out, act)
+					}
+				}
+				if strings.Contains(out, "too old") {
+					t.Errorf("step %s: a plain failure was blamed on an old gcloud:\n%s", step, out)
+				}
 			}
 		})
+	}
+}
+
+func TestGCPTokenActivateScriptFailsClosedOnMissingOrShortSecretFile(t *testing.T) {
+	subject := gcpTokenDir("e1-1-0") + "/org.token"
+	script := gcpTokenActivateScript(GCPKeyPath, "grain-test-proj", subject)
+
+	// Missing subject token file stops setup before gcloud runs.
+	log, out, _, err := runActivateWithSecret(t, script, subject, "", false, "print-access-token", "boom")
+	if err == nil {
+		t.Fatal("activate.sh succeeded without its subject token file")
+	}
+	if log != "" || !strings.Contains(out, "subject token file") {
+		t.Errorf("missing secret file: log=%q out=%q", log, out)
+	}
+
+	// A corrupted (< 8 byte) secret file makes redact fail closed rather
+	// than emitting unredacted gcloud output.
+	_, out, act, err := runActivateWithSecret(t, script, subject, "short", true, "print-access-token", "unredacted-detail")
+	if err == nil {
+		t.Fatal("activate.sh succeeded on failing step")
+	}
+	if strings.Contains(out, "short") || strings.Contains(out, "unredacted-detail") || strings.Contains(act, "unredacted-detail") {
+		t.Errorf("short secret file failed open:\nout=%s\nact=%s", out, act)
+	}
+	if !strings.Contains(out, "[output omitted: redaction failed]") {
+		t.Errorf("expected redaction-failed marker, got:\n%s", out)
+	}
+
+	// A secret equal to "redacted" (8 bytes, substring of "[redacted]")
+	// terminates in a single pass instead of looping forever.
+	_, out, act, err = runActivateWithSecret(t, script, subject, "redacted", true, "print-access-token", "ERROR: (gcloud) token rejected")
+	if err == nil {
+		t.Fatal("activate.sh succeeded on failing step")
+	}
+	if !strings.Contains(out, "sent subject_token=[redacted]") || strings.Contains(act, "subject_token=redacted") {
+		t.Errorf("self-matching secret was not redacted cleanly:\nout=%s\nact=%s", out, act)
+	}
+}
+
+func TestGCPTokenActivateScriptSaysWhenGcloudIsTooOld(t *testing.T) {
+	subject := gcpTokenDir("e1-1-0") + "/org.token"
+	script := gcpTokenActivateScript(GCPKeyPath, "grain-test-proj", subject)
+	_, out, _, err := runActivate(t, script, subject, "print-access-token",
+		"ERROR: (gcloud.auth.print-access-token) The file at "+GCPKeyPath+" does not contain a valid credential: Unsupported credential type: external_account")
+	if err == nil {
+		t.Fatal("activate.sh succeeded")
+	}
+	if !strings.Contains(out, `failed at step "token exchange"`) || !strings.Contains(out, "too old") || !strings.Contains(out, "Google Cloud SDK 499.0.0") {
+		t.Errorf("setup output does not blame the old gcloud:\n%s", out)
 	}
 }
 
@@ -393,6 +522,7 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 			t.Fatal(err)
 		}
 		act := strings.ReplaceAll(placement(t, resp, resp.Setup).Content, GCPKeyPath, credLocal)
+		act = strings.ReplaceAll(act, cfg.CredentialSource["file"], subjLocal)
 		if err := os.WriteFile(actLocal, []byte(act), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -408,6 +538,13 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 		setupCmd.Env = env
 		if out, err := setupCmd.CombinedOutput(); err != nil {
 			t.Fatalf("activate.sh failed: %v\n%s", err, out)
+		}
+		actLog, err := os.ReadFile(filepath.Join(dir, "activate.log"))
+		if err != nil {
+			t.Fatalf("reading activate.log: %v", err)
+		}
+		if strings.Contains(string(actLog), subject) || strings.Contains(string(actLog), testOrgSA) {
+			t.Fatalf("activate.log leaked token material:\n%s", actLog)
 		}
 		printCmd := exec.Command(gcloudPath, "auth", "print-access-token")
 		printCmd.Env = env

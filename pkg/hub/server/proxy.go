@@ -43,7 +43,7 @@ const (
 )
 
 // ErrTooManyStreams is returned when a connected entry already has 256 concurrent open streams.
-var ErrTooManyStreams = errors.New("registry server: max concurrent tunnel streams exceeded")
+var ErrTooManyStreams = errors.New("hub server: max concurrent tunnel streams exceeded")
 
 // VerifyPreStripCSRF runs `webauth.VerifySameOriginForProxyAuth` BEFORE stripping IAP cookies
 // on unsafe methods that arrived with `Cookie`, `Origin`, or `Sec-Fetch-Site` headers.

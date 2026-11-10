@@ -89,10 +89,10 @@ func (r *GCPInstanceResources) ensureSelfActAs(ctx context.Context, saEmail stri
 	}
 	principal, err := r.resolveSelfPrincipal(ctx)
 	if err != nil {
-		return fmt.Errorf("gcp iam: compute.grant_self_act_as is on, but the registry could not work out its own IAM principal to grant %s on %s: %v; "+
-			"set compute.self_principal (for example \"serviceAccount:<registry-gsa>@<project>.iam.gserviceaccount.com\", or for GKE Workload Identity without a Google service account "+
+		return fmt.Errorf("gcp iam: compute.grant_self_act_as is on, but the hub could not work out its own IAM principal to grant %s on %s: %v; "+
+			"set compute.self_principal (for example \"serviceAccount:<hub-gsa>@<project>.iam.gserviceaccount.com\", or for GKE Workload Identity without a Google service account "+
 			"\"principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<project>.svc.id.goog/subject/ns/<namespace>/sa/<ksa>\"), "+
-			"or grant the registry iam.serviceAccounts.actAs on the instance accounts yourself and set compute.grant_self_act_as: false",
+			"or grant the hub iam.serviceAccounts.actAs on the instance accounts yourself and set compute.grant_self_act_as: false",
 			roleServiceAccountUser, saEmail, err)
 	}
 
@@ -146,8 +146,8 @@ func (r *GCPInstanceResources) ensureSelfActAs(ctx context.Context, saEmail stri
 }
 
 func (r *GCPInstanceResources) selfActAsRefused(permission, principal, saEmail string, err error) error {
-	return fmt.Errorf("gcp iam: the registry (%s) is missing %s on service account %s, so it cannot grant itself %s there and GCE would refuse to attach the account to the VM: "+
-		"grant the registry iam.serviceAccounts.getIamPolicy and iam.serviceAccounts.setIamPolicy on the instance service accounts (%s*) -- see docs/hub.md, \"IAM the registry needs\" -- "+
+	return fmt.Errorf("gcp iam: the hub (%s) is missing %s on service account %s, so it cannot grant itself %s there and GCE would refuse to attach the account to the VM: "+
+		"grant the hub iam.serviceAccounts.getIamPolicy and iam.serviceAccounts.setIamPolicy on the instance service accounts (%s*) -- see docs/hub.md, \"IAM the hub needs\" -- "+
 		"or grant it iam.serviceAccounts.actAs on them yourself and set compute.grant_self_act_as: false: %w",
 		principal, permission, saEmail, roleServiceAccountUser, r.saPrefix, err)
 }
@@ -397,7 +397,7 @@ func (d *adcPrincipalDetector) fromTokenInfo(ctx context.Context, ts oauth2.Toke
 		return "", fmt.Errorf("tokeninfo: HTTP %d", resp.StatusCode)
 	}
 	if err := json.Unmarshal(b, &info); err != nil || strings.TrimSpace(info.Email) == "" {
-		return "", errors.New("tokeninfo reported no email for the registry's credentials")
+		return "", errors.New("tokeninfo reported no email for the hub's credentials")
 	}
 	email := strings.TrimSpace(info.Email)
 	if strings.HasSuffix(strings.ToLower(email), ".gserviceaccount.com") {
