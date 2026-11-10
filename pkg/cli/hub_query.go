@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ai-on-gke/grain/pkg/hubenv"
-
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -69,11 +67,11 @@ func bindHubTargetFlags(fs *flag.FlagSet) hubTargetFlags {
 }
 
 func (tf hubTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*api.Client, string, error) {
-	regURL := firstNonEmptyTrimmed(*tf.url, hubenv.Get(daemon.HubURLEnv))
+	regURL, urlSource := resolveHubURL(*tf.url, "")
 	aud := strings.TrimSpace(*tf.oidcAudience)
 	if regURL == "" && c != nil {
 		if settings, err := c.GetSettings(ctx); err == nil {
-			regURL = strings.TrimSpace(settings.Registry.URL)
+			regURL, urlSource = resolveHubURL("", settings.Registry.URL)
 			if aud == "" {
 				aud = strings.TrimSpace(settings.Registry.OIDCAudience)
 			}
@@ -94,10 +92,11 @@ func (tf hubTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*api.Cli
 	if err != nil {
 		return nil, "", err
 	}
-	cli, err := newHubAPIClient(regURL, bearer)
+	cli, err := newHubAPIClient(c, regURL, bearer)
 	if err != nil {
 		return nil, "", err
 	}
+	recordHubTarget(ctx, hubTarget{url: regURL, source: urlSource})
 	return cli, regURL, nil
 }
 

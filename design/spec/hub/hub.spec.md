@@ -1,4 +1,4 @@
-# Grain Registry Specification
+# Grain Hub Specification
 
 **Specifies:** [`hub.design.md`](../../design/hub.design.md)
 
