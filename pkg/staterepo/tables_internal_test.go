@@ -398,6 +398,11 @@ var notSettings = []string{
 	// list until each repository has been polled once.
 	"repo_declaration",
 	"repo_declaration_sync",
+	// A person's acceptance of a declaration's grants
+	// (model.DeclarationAcceptance, task 3971): a grant made through
+	// grain by somebody holding the scope, which a branch of this
+	// repository must not be able to make on a person's behalf.
+	"declaration_acceptance",
 	// A declared template's `push:` list (grain/task-2536), the same kind
 	// of row again: re-read from the repository's default branch by every
 	// sync, and never a setting anybody proposes.

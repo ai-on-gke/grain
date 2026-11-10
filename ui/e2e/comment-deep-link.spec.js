@@ -129,6 +129,53 @@ test("a comment link in a comment opens in place without reloading the page", as
   expect(await page.evaluate(() => window.__noReload)).toBe(true);
 });
 
+test("an Inbox row parked on a question opens on the question, in view and focused", async ({
+  page,
+  request,
+}) => {
+  const task = await longConversation(request, "Deep link parked question");
+  const asked = await request.post(`/api/tasks/${task.id}/messages`, {
+    data: {
+      summary: "Ship the long conversation as it is?",
+      body: "A question asked after a long conversation.",
+    },
+  });
+  expect(
+    asked.ok(),
+    `POST /api/tasks/${task.id}/messages: ${asked.status()}`,
+  ).toBe(true);
+  const question = await asked.json();
+  // Oldest first, the question the task is parked on is the last of a
+  // hundred-odd entries: the top of the pane does not show it.
+  await page.addInitScript(() => {
+    localStorage.setItem("grain.timelineOrder", "oldest");
+  });
+
+  await page.goto("/inbox");
+  const row = page.locator(".inbox-item", {
+    hasText: "Deep link parked question",
+  });
+  const title = row.getByRole("link", { name: "Deep link parked question" });
+  await expect(title).toHaveAttribute(
+    "href",
+    `/tasks/${task.id}#comment=${question.id}`,
+  );
+  await title.click();
+  await expect(page).toHaveURL(
+    new RegExp(`/tasks/${task.id}#comment=${question.id}$`),
+  );
+  const entry = page.locator(`[data-comment-id="${question.id}"]`);
+  await expect(entry).toContainText(
+    "A question asked after a long conversation.",
+  );
+  await expect(entry).toBeInViewport();
+  await expect(entry).toBeFocused();
+  await expect(entry).toHaveClass(/comment-highlight/);
+  await expect(
+    page.locator(`[data-comment-id="${task.comments[0].id}"]`),
+  ).not.toBeInViewport();
+});
+
 test("a deep link into an interactive task's chat scrolls the chat to the message", async ({
   page,
   request,
