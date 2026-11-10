@@ -108,6 +108,10 @@ const (
 	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
 	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
 	SourceInternal      AuthSource = "internal"       // grain itself
+	// SourceHostAccount is a caller on the daemon's unix socket whose
+	// account the kernel named (SO_PEERCRED) and the daemon's
+	// -host-accounts map (or -deployment-owner) named a person for.
+	SourceHostAccount AuthSource = "host-account"
 )
 
 // unverifiedSources are the sources that establish nobody in particular:
