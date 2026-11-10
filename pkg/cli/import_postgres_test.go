@@ -85,7 +85,7 @@ func TestImportOfAPostgresBundleChecksThePostgresDatabase(t *testing.T) {
 
 	bundle := filepath.Join(t.TempDir(), "migration.tar.gz")
 	var exported bytes.Buffer
-	if err := runExport(context.Background(), []string{"-data-dir", srcDir, "-out", bundle}, &exported); err != nil {
+	if err := runExport(context.Background(), []string{"-data-dir", srcDir, "-out", bundle, "-plaintext"}, &exported); err != nil {
 		t.Fatalf("exporting the Postgres deployment: %v", err)
 	}
 	if !strings.Contains(exported.String(), "database: postgres") {

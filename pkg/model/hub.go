@@ -49,7 +49,7 @@ func NormalizeHubAuthMode(mode HubAuthMode) (HubAuthMode, error) {
 	case HubAuthOIDC:
 		return HubAuthOIDC, nil
 	default:
-		return "", fmt.Errorf("unknown registry authMode %q (must be %q or %q)", mode, HubAuthToken, HubAuthOIDC)
+		return "", fmt.Errorf("unknown hub authMode %q (must be %q or %q)", mode, HubAuthToken, HubAuthOIDC)
 	}
 }
 
@@ -138,20 +138,20 @@ func NormalizeHubConfig(cfg HubConfig, allowInsecureHTTP bool) (HubConfig, error
 	if rawURL := strings.TrimSpace(cfg.URL); rawURL != "" {
 		u, err := api.ValidateHubURL(rawURL, allowInsecureHTTP)
 		if err != nil {
-			return HubConfig{}, fmt.Errorf("registry url: %w", err)
+			return HubConfig{}, fmt.Errorf("hub url: %w", err)
 		}
 		out.URL = u
 	}
 
 	if entry := strings.ToLower(strings.TrimSpace(cfg.Entry)); entry != "" {
 		if err := api.ValidateEntryName(entry); err != nil {
-			return HubConfig{}, fmt.Errorf("registry entry: %w", err)
+			return HubConfig{}, fmt.Errorf("hub entry: %w", err)
 		}
 		out.Entry = entry
 	}
 
 	if out.URL != "" && out.Entry == "" {
-		return HubConfig{}, fmt.Errorf("registry entry name is required when registry url is set")
+		return HubConfig{}, fmt.Errorf("hub entry name is required when hub url is set")
 	}
 
 	authMode, err := NormalizeHubAuthMode(cfg.AuthMode)
@@ -164,27 +164,27 @@ func NormalizeHubConfig(cfg HubConfig, allowInsecureHTTP bool) (HubConfig, error
 
 	if aud := strings.TrimSpace(cfg.OIDCAudience); aud != "" {
 		if containsSpaceOrControl(aud) || len(aud) > 512 {
-			return HubConfig{}, fmt.Errorf("registry oidcAudience must be at most 512 non-whitespace characters")
+			return HubConfig{}, fmt.Errorf("hub oidcAudience must be at most 512 non-whitespace characters")
 		}
 		out.OIDCAudience = aud
 	}
 
 	if dn := strings.TrimSpace(cfg.DisplayName); dn != "" {
 		if utf8.RuneCountInString(dn) > api.MaxDisplayNameRunes {
-			return HubConfig{}, fmt.Errorf("registry displayName must be at most %d characters", api.MaxDisplayNameRunes)
+			return HubConfig{}, fmt.Errorf("hub displayName must be at most %d characters", api.MaxDisplayNameRunes)
 		}
 		if hasControlChars(dn, false) {
-			return HubConfig{}, fmt.Errorf("registry displayName must not contain control characters")
+			return HubConfig{}, fmt.Errorf("hub displayName must not contain control characters")
 		}
 		out.DisplayName = dn
 	}
 
 	if purpose := strings.TrimSpace(cfg.Purpose); purpose != "" {
 		if utf8.RuneCountInString(purpose) > api.MaxPurposeRunes {
-			return HubConfig{}, fmt.Errorf("registry purpose must be at most %d characters", api.MaxPurposeRunes)
+			return HubConfig{}, fmt.Errorf("hub purpose must be at most %d characters", api.MaxPurposeRunes)
 		}
 		if hasControlChars(purpose, true) {
-			return HubConfig{}, fmt.Errorf("registry purpose must not contain control characters")
+			return HubConfig{}, fmt.Errorf("hub purpose must not contain control characters")
 		}
 		out.Purpose = purpose
 	}
@@ -195,7 +195,7 @@ func NormalizeHubConfig(cfg HubConfig, allowInsecureHTTP bool) (HubConfig, error
 		case api.HostKindWorkstation, api.HostKindKubernetes, api.HostKindOther:
 			out.HostKind = normHK
 		default:
-			return HubConfig{}, fmt.Errorf("registry hostKind %q must be workstation, kubernetes, or other", cfg.HostKind)
+			return HubConfig{}, fmt.Errorf("hub hostKind %q must be workstation, kubernetes, or other", cfg.HostKind)
 		}
 	}
 
@@ -203,7 +203,7 @@ func NormalizeHubConfig(cfg HubConfig, allowInsecureHTTP bool) (HubConfig, error
 
 	if og := strings.TrimSpace(cfg.OwnerGroup); og != "" {
 		if containsSpaceOrControl(og) || len(og) > 256 {
-			return HubConfig{}, fmt.Errorf("registry ownerGroup must be at most 256 non-whitespace characters")
+			return HubConfig{}, fmt.Errorf("hub ownerGroup must be at most 256 non-whitespace characters")
 		}
 		out.OwnerGroup = og
 	}
@@ -221,7 +221,7 @@ func NormalizeHubConfig(cfg HubConfig, allowInsecureHTTP bool) (HubConfig, error
 		}
 	}
 	if err := api.ValidateCatalogMetadata(out.DisplayName, out.Purpose, tags); err != nil {
-		return HubConfig{}, fmt.Errorf("registry metadata: %w", err)
+		return HubConfig{}, fmt.Errorf("hub metadata: %w", err)
 	}
 	out.Tags = tags
 
@@ -245,25 +245,25 @@ func NormalizeHubScopeRules(rules []HubScopeRule) ([]HubScopeRule, error) {
 	for i, r := range rules {
 		repo, err := api.NormalizeRepo(r.Repo)
 		if err != nil {
-			return nil, fmt.Errorf("registry scopes[%d]: %w", i, err)
+			return nil, fmt.Errorf("hub scopes[%d]: %w", i, err)
 		}
 		if ref, err := ParseRepo(repo); err == nil && IsConfigRepo(ref) {
-			return nil, fmt.Errorf("registry scopes[%d]: config repository %s cannot be advertised", i, repo)
+			return nil, fmt.Errorf("hub scopes[%d]: config repository %s cannot be advertised", i, repo)
 		}
 		prefix, err := api.NormalizePathPrefix(r.PathPrefix)
 		if err != nil {
-			return nil, fmt.Errorf("registry scopes[%d]: %w", i, err)
+			return nil, fmt.Errorf("hub scopes[%d]: %w", i, err)
 		}
 		role := api.ScopeRole(strings.ToLower(strings.TrimSpace(string(r.Role))))
 		if role != "" && !role.Valid() {
-			return nil, fmt.Errorf("registry scopes[%d]: invalid role %q (must be primary or secondary)", i, r.Role)
+			return nil, fmt.Errorf("hub scopes[%d]: invalid role %q (must be primary or secondary)", i, r.Role)
 		}
 		if r.Exclude {
 			role = ""
 		}
 		k := key{repo: repo, prefix: prefix}
 		if seen[k] {
-			return nil, fmt.Errorf("registry scopes[%d]: duplicate rule for %s (pathPrefix %q)", i, repo, prefix)
+			return nil, fmt.Errorf("hub scopes[%d]: duplicate rule for %s (pathPrefix %q)", i, repo, prefix)
 		}
 		seen[k] = true
 		out = append(out, HubScopeRule{
@@ -296,7 +296,7 @@ func EncodeHubConfig(cfg HubConfig) (string, error) {
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
-		return "", fmt.Errorf("encoding registry config: %w", err)
+		return "", fmt.Errorf("encoding hub config: %w", err)
 	}
 	return string(b), nil
 }
@@ -309,7 +309,7 @@ func DecodeHubConfig(raw string) (HubConfig, error) {
 	}
 	var cfg HubConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return HubConfig{}, fmt.Errorf("decoding registry config: %w", err)
+		return HubConfig{}, fmt.Errorf("decoding hub config: %w", err)
 	}
 	return cfg, nil
 }

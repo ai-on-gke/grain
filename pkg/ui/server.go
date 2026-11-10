@@ -512,6 +512,8 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/local-script-approvals/{approval}/expire", s.handleExpireLocalScriptApproval)
 	s.route("POST /api/tasks/{id}/local-script-approvals/{approval}/answer", s.handleAnswerLocalScriptApproval)
 	s.route("GET /api/local-script-approvals", s.handleListLocalScriptApprovals)
+	s.route("GET /api/declarations", s.handleListDeclarationAcceptances)
+	s.route("POST /api/declarations/accept", s.handleAcceptDeclaration)
 	// What grain has learned about working here (model.Memory): read by
 	// anyone, written only by a run whose task holds the memory
 	// capability -- the nightly memory agent through update_memory -- or
@@ -709,6 +711,7 @@ func (s *Server) routes() {
 	s.route("DELETE /api/github-tokens/{name}", s.handleDeleteGitHubToken)
 
 	s.route("GET /api/secrets", s.handleListSecrets)
+	s.route("POST /api/secrets/redact", s.handleRedactSecrets)
 	s.route("PUT /api/secrets/{secret}/{key}", s.handleSetSecret)
 	s.route("DELETE /api/secrets/{secret}/{key}", s.handleDeleteSecretKey)
 	s.route("DELETE /api/secrets/{secret}", s.handleDeleteSecret)

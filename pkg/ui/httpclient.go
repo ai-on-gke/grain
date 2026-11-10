@@ -827,11 +827,38 @@ func (c *HTTPClient) SandboxHealth(ctx context.Context) (SandboxHealthResponse, 
 }
 
 func (c *HTTPClient) ListTasks(ctx context.Context) ([]Task, error) {
-	var tasks []Task
-	if err := c.do(ctx, http.MethodGet, "/api/tasks?fields=full", nil, &tasks); err != nil {
-		return nil, err
+	var all []Task
+	cursor := ""
+	for {
+		path := "/api/tasks?fields=full"
+		if cursor != "" {
+			path += "&limit=200&cursor=" + url.QueryEscape(cursor)
+		}
+		var raw json.RawMessage
+		if err := c.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			var tasks []Task
+			if err := json.Unmarshal(trimmed, &tasks); err != nil {
+				return nil, fmt.Errorf("decoding response from GET %s: %w", path, err)
+			}
+			return tasks, nil
+		}
+		var page taskListPage[Task]
+		if err := json.Unmarshal(trimmed, &page); err != nil {
+			return nil, fmt.Errorf("decoding response from GET %s: %w", path, err)
+		}
+		all = append(all, page.Tasks...)
+		if !page.Truncated || page.NextCursor == "" || page.NextCursor == cursor {
+			if all == nil {
+				all = []Task{}
+			}
+			return all, nil
+		}
+		cursor = page.NextCursor
 	}
-	return tasks, nil
 }
 
 // TaskStatesPage fetches a page of task states from GET /api/tasks/states.
@@ -1999,6 +2026,18 @@ func (c *HTTPClient) GetHubInstanceStatus(ctx context.Context) (api.InstanceStat
 		return api.InstanceStatusResponse{}, err
 	}
 	return status, nil
+}
+
+// RedactSecrets has the daemon cut every value in its secret store out
+// of lines -- POST /api/secrets/redact -- so a caller never needs the
+// secrets key, or the values, to redact them.
+func (c *HTTPClient) RedactSecrets(ctx context.Context, lines []string) (SecretsRedactResponse, error) {
+	var out SecretsRedactResponse
+	if lines == nil {
+		lines = []string{}
+	}
+	err := c.do(ctx, http.MethodPost, "/api/secrets/redact", SecretsRedactRequest{Lines: lines}, &out)
+	return out, err
 }
 
 // SetSecret writes one secret key in the daemon's secrets store --

@@ -230,7 +230,7 @@ type DelegationPolicy interface {
 }
 
 // ErrDelegationDenied is returned when an on-behalf-of request is refused by policy.
-var ErrDelegationDenied = errors.New("registry: on-behalf-of delegation denied by policy")
+var ErrDelegationDenied = errors.New("hub: on-behalf-of delegation denied by policy")
 
 // DelegationRefusedError wraps ErrDelegationDenied with a machine-readable
 // refusal reason (such as "app_not_registered", "app_disabled",
@@ -763,7 +763,7 @@ func BuildFrontIdentity(ctx context.Context, cfg AuthConfig) (FrontIdentity, err
 	fn, ok := frontIdentityFactories[provider]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown auth.provider %q (registered: %s)", provider, strings.Join(RegisteredFrontIdentities(), ", "))
+		return nil, fmt.Errorf("hub: unknown auth.provider %q (registered: %s)", provider, strings.Join(RegisteredFrontIdentities(), ", "))
 	}
 	return fn(ctx, cfg)
 }
@@ -777,7 +777,7 @@ func BuildGroupResolver(ctx context.Context, cfg GroupsConfig) (GroupResolver, e
 	fn, ok := groupResolverFactories[provider]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown groups.provider %q (registered: %s)", provider, strings.Join(RegisteredGroupResolvers(), ", "))
+		return nil, fmt.Errorf("hub: unknown groups.provider %q (registered: %s)", provider, strings.Join(RegisteredGroupResolvers(), ", "))
 	}
 	return fn(ctx, cfg)
 }
@@ -791,7 +791,7 @@ func BuildDelegationPolicy(ctx context.Context, cfg AuthConfig) (DelegationPolic
 	fn, ok := delegationFactories[policyName]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown delegation policy %q (registered: %s)", policyName, strings.Join(RegisteredDelegationPolicies(), ", "))
+		return nil, fmt.Errorf("hub: unknown delegation policy %q (registered: %s)", policyName, strings.Join(RegisteredDelegationPolicies(), ", "))
 	}
 	return fn(ctx, cfg)
 }
@@ -805,7 +805,7 @@ func BuildConnectTransport(cfg TunnelConfig) (ConnectTransport, error) {
 	fn, ok := connectTransports[name]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown tunnel.transport %q (registered: %s)", name, strings.Join(RegisteredConnectTransports(), ", "))
+		return nil, fmt.Errorf("hub: unknown tunnel.transport %q (registered: %s)", name, strings.Join(RegisteredConnectTransports(), ", "))
 	}
 	return fn(cfg)
 }
@@ -819,7 +819,7 @@ func BuildSigner(ctx context.Context, cfg SigningConfig) (Signer, error) {
 	fn, ok := signerFactories[provider]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown signing.provider %q (registered: %s)", provider, strings.Join(RegisteredSignerProviders(), ", "))
+		return nil, fmt.Errorf("hub: unknown signing.provider %q (registered: %s)", provider, strings.Join(RegisteredSignerProviders(), ", "))
 	}
 	return fn(ctx, cfg)
 }
@@ -833,7 +833,7 @@ func BuildCompute(ctx context.Context, cfg ComputeConfig) (Compute, error) {
 	fn, ok := computeFactories[provider]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown compute.provider %q (registered: %s)", provider, strings.Join(RegisteredComputeProviders(), ", "))
+		return nil, fmt.Errorf("hub: unknown compute.provider %q (registered: %s)", provider, strings.Join(RegisteredComputeProviders(), ", "))
 	}
 	return fn(ctx, cfg)
 }
@@ -847,7 +847,7 @@ func BuildInstanceResources(ctx context.Context, cfg Config) (InstanceResources,
 	fn, ok := instanceResFactories[provider]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown instance resources provider %q (registered: %s)", provider, strings.Join(RegisteredInstanceResourcesProviders(), ", "))
+		return nil, fmt.Errorf("hub: unknown instance resources provider %q (registered: %s)", provider, strings.Join(RegisteredInstanceResourcesProviders(), ", "))
 	}
 	return fn(ctx, cfg)
 }
@@ -861,7 +861,7 @@ func BuildConfigRepos(ctx context.Context, cfg ConfigReposConfig) (ConfigRepos, 
 	fn, ok := configReposFactories[provider]
 	regMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("registry: unknown config_repos.provider %q (registered: %s)", provider, strings.Join(RegisteredConfigReposProviders(), ", "))
+		return nil, fmt.Errorf("hub: unknown config_repos.provider %q (registered: %s)", provider, strings.Join(RegisteredConfigReposProviders(), ", "))
 	}
 	return fn(ctx, cfg)
 }
@@ -944,19 +944,19 @@ func (a webauthGroupResolverAdapter) NormalizeGroup(raw string) (string, error) 
 type noopComputeProvider struct{}
 
 func (noopComputeProvider) CreateInstance(context.Context, InstanceSpec) (*InstanceHandle, error) {
-	return nil, errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+	return nil, errors.New("hub: compute provider is disabled (compute.provider = \"none\")")
 }
 
 func (noopComputeProvider) StopInstance(context.Context, string, string) error {
-	return errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+	return errors.New("hub: compute provider is disabled (compute.provider = \"none\")")
 }
 
 func (noopComputeProvider) DeleteInstance(context.Context, string, string) error {
-	return errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+	return errors.New("hub: compute provider is disabled (compute.provider = \"none\")")
 }
 
 func (noopComputeProvider) GetInstanceStatus(context.Context, string, string) (*InstanceStatus, error) {
-	return nil, errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+	return nil, errors.New("hub: compute provider is disabled (compute.provider = \"none\")")
 }
 
 func (noopComputeProvider) ListInstances(context.Context) ([]InstanceStatus, error) {
@@ -966,7 +966,7 @@ func (noopComputeProvider) ListInstances(context.Context) ([]InstanceStatus, err
 type noopInstanceResources struct{}
 
 func (noopInstanceResources) Provision(context.Context, InstanceResourceSpec) (*InstanceResourceBundle, error) {
-	return nil, errors.New("registry: instance resources provider is disabled")
+	return nil, errors.New("hub: instance resources provider is disabled")
 }
 
 func (noopInstanceResources) Teardown(context.Context, InstanceResourceSpec, InstanceResourceBundle, bool) error {
@@ -974,17 +974,17 @@ func (noopInstanceResources) Teardown(context.Context, InstanceResourceSpec, Ins
 }
 
 func (noopInstanceResources) GrantSSH(context.Context, string, string, string) error {
-	return errors.New("registry: instance resources provider is disabled")
+	return errors.New("hub: instance resources provider is disabled")
 }
 
 func (noopInstanceResources) RevokeSSH(context.Context, string, string, string) error {
-	return errors.New("registry: instance resources provider is disabled")
+	return errors.New("hub: instance resources provider is disabled")
 }
 
 type noopConfigRepos struct{}
 
 func (noopConfigRepos) EnsureRepo(context.Context, string, string) (*ConfigRepoBundle, error) {
-	return nil, errors.New("registry: config_repos provider is disabled")
+	return nil, errors.New("hub: config_repos provider is disabled")
 }
 
 func (noopConfigRepos) ArchiveRepo(context.Context, string) error {

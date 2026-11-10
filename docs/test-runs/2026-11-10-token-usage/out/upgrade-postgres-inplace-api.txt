@@ -1,0 +1,9 @@
+# the pre-upgrade task: task total and per-attempt usage (null = none recorded)
+{"usage":null,"attempts":[{"number":1,"outcome":"failed","usage":null}]}
+# a post-upgrade task
+{"usage":{"runs":1,"inputTokens":19000,"outputTokens":570,"cacheReadTokens":8000,"cacheWriteTokens":0,"billable":19570},"attempts":[{"number":1,"outcome":"failed","usage":{"inputTokens":19000,"outputTokens":570,"cacheReadTokens":8000,"turns":2}}]}
+# the CLI's emitted report
+1 task=2 ok 11000 210 50 4000
+2 task=2 ok 12000 220 50 4000
+3 task=3 ok 13000 230 50 4000
+4 task=3 ok 14000 240 50 4000

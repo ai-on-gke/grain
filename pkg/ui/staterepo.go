@@ -41,6 +41,15 @@ import (
 // on each call -- the same nil-means-unavailable contract Secrets,
 // Reboot and Upgrader already give their own panes.
 
+// RetiredSecretsKey is one key an import replaced: its file name, its
+// public half (empty when the file is not a readable key) and when it was
+// moved aside.
+type RetiredSecretsKey struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"publicKey,omitempty"`
+	Retired   string `json:"retired,omitempty"`
+}
+
 // StateRepoStatus is what the bootstrap pane renders: where state lives,
 // what is in the repository, and which key its secrets are encrypted to.
 // No secret value and no private key is ever in here -- the public key is
@@ -70,6 +79,11 @@ type StateRepoStatus struct {
 	// operator has to back up.
 	SecretsPublicKey string `json:"secretsPublicKey,omitempty"`
 	SecretsKeyFile   string `json:"secretsKeyFile,omitempty"`
+	// RetiredSecretsKeys are the keys an import replaced and left beside
+	// SecretsKeyFile (secrets.key.replaced-*). Each is still a whole
+	// private key, so the pane lists them for the operator to keep or
+	// delete (`grain state key retired delete`). Only public halves.
+	RetiredSecretsKeys []RetiredSecretsKey `json:"retiredSecretsKeys,omitempty"`
 	// SecretsFileRecipient is the public key this host's secrets file is
 	// actually sealed to, which is not always the key above: a file
 	// restored from another installation is encrypted to that
