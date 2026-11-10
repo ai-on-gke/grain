@@ -146,6 +146,9 @@ func (c *Client) RequestHumanReview(ctx context.Context, reviewID string, req Hu
 // ReleaseHumanReviewHold ends task id's human-review hold on a person's
 // say-so, recording who released it. An agent is refused.
 func (c *Client) ReleaseHumanReviewHold(ctx context.Context, id string) (HumanReviewResult, error) {
+	if a := accessRoleFromContext(ctx); a != nil && !a.Full {
+		return HumanReviewResult{}, forbiddenErrorf("%s cannot release human-review hold on task %s: releasing a human-review hold requires an unlimited role (grain/operator)", a.label(), id)
+	}
 	actor := c.requestActor(ctx).Actor
 	if !mayReleaseHumanReview(actor) {
 		return HumanReviewResult{}, forbiddenErrorf("%v", model.ErrAgentCannotReleaseHumanReview)
