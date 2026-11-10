@@ -16,6 +16,7 @@ package deploy
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -163,5 +164,39 @@ func TestHubSandboxCloudBuildFallbackMatchesDockerfileHub(t *testing.T) {
 	contains(t, up, `sub(/^COPY --from=build \/out\/grain-hub /, "COPY grain-hub ")`)
 	if strings.Contains(up, "/out/grain-registry") {
 		t.Fatalf("up.sh still looks for /out/grain-registry in Dockerfile.hub")
+	}
+}
+
+// bin/grain-hub, `make image-hub` and so the hub image are built from
+// cmd/grain-hub, not the deprecated cmd/grain-registry shim -- a default
+// for MAIN_grain-registry once won MAIN_grain-hub's $(or ...), so every
+// locally built hub said it was deprecated whenever it started -- while
+// MAIN_grain-registry, given, still picks the hub's main for a release.
+func TestMakeBuildsTheHubFromCmdGrainHub(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skipf("make not on PATH: %v", err)
+	}
+	root := repoRoot(t)
+	dryRun := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("make", append([]string{"-n", "--no-print-directory", "-C", root}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("make -n %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"grain-hub"}, "-o bin/grain-hub ./cmd/grain-hub"},
+		{[]string{"grain-registry"}, "-o bin/grain-registry ./cmd/grain-registry"},
+		{[]string{"grain-hub", "MAIN_grain-registry=./cmd/other-hub"}, "-o bin/grain-hub ./cmd/other-hub"},
+		{[]string{"image-hub"}, "--build-arg MAIN_GRAIN_HUB=./cmd/grain-hub "},
+		{[]string{"image-hub", "MAIN_grain-hub=./cmd/other-hub"}, "--build-arg MAIN_GRAIN_HUB=./cmd/other-hub "},
+	} {
+		if out := dryRun(tc.args...); !strings.Contains(out, tc.want) {
+			t.Errorf("make -n %v does not say %q:\n%s", tc.args, tc.want, out)
+		}
 	}
 }

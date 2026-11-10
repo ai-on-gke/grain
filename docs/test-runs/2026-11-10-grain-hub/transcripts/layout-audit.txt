@@ -1,0 +1,29 @@
+PASS desktop/light 4281/ scrollWidth=1440 clientWidth=1440 body=rgb(255, 255, 255)
+PASS desktop/light 4281/new scrollWidth=1440 clientWidth=1440 body=rgb(255, 255, 255)
+PASS desktop/light 4281/new?kind=connected scrollWidth=1440 clientWidth=1440 body=rgb(255, 255, 255)
+PASS desktop/light 4281/entries/walk-creating scrollWidth=1440 clientWidth=1440 body=rgb(255, 255, 255)
+PASS desktop/light 4284/admin scrollWidth=1440 clientWidth=1440 body=rgb(255, 255, 255)
+PASS desktop/light 4235/new scrollWidth=1440 clientWidth=1440 body=rgb(255, 255, 255)
+PASS desktop/light delete dialog box=480,309 480x283 paragraph scroll=438x82 client=438x82
+PASS desktop/dark 4281/ scrollWidth=1440 clientWidth=1440 body=rgb(11, 15, 25)
+PASS desktop/dark 4281/new scrollWidth=1440 clientWidth=1440 body=rgb(11, 15, 25)
+PASS desktop/dark 4281/new?kind=connected scrollWidth=1440 clientWidth=1440 body=rgb(11, 15, 25)
+PASS desktop/dark 4281/entries/walk-creating scrollWidth=1440 clientWidth=1440 body=rgb(11, 15, 25)
+PASS desktop/dark 4284/admin scrollWidth=1440 clientWidth=1440 body=rgb(11, 15, 25)
+PASS desktop/dark 4235/new scrollWidth=1440 clientWidth=1440 body=rgb(11, 15, 25)
+PASS desktop/dark delete dialog box=480,309 480x283 paragraph scroll=438x82 client=438x82
+PASS phone/light 4281/ scrollWidth=390 clientWidth=390 body=rgb(255, 255, 255)
+PASS phone/light 4281/new scrollWidth=390 clientWidth=390 body=rgb(255, 255, 255)
+PASS phone/light 4281/new?kind=connected scrollWidth=390 clientWidth=390 body=rgb(255, 255, 255)
+PASS phone/light 4281/entries/walk-creating scrollWidth=390 clientWidth=390 body=rgb(255, 255, 255)
+PASS phone/light 4284/admin scrollWidth=390 clientWidth=390 body=rgb(255, 255, 255)
+PASS phone/light 4235/new scrollWidth=390 clientWidth=390 body=rgb(255, 255, 255)
+PASS phone/light delete dialog box=16,271 358x303 paragraph scroll=316x102 client=316x102
+PASS phone/dark 4281/ scrollWidth=390 clientWidth=390 body=rgb(11, 15, 25)
+PASS phone/dark 4281/new scrollWidth=390 clientWidth=390 body=rgb(11, 15, 25)
+PASS phone/dark 4281/new?kind=connected scrollWidth=390 clientWidth=390 body=rgb(11, 15, 25)
+PASS phone/dark 4281/entries/walk-creating scrollWidth=390 clientWidth=390 body=rgb(11, 15, 25)
+PASS phone/dark 4284/admin scrollWidth=390 clientWidth=390 body=rgb(11, 15, 25)
+PASS phone/dark 4235/new scrollWidth=390 clientWidth=390 body=rgb(11, 15, 25)
+PASS phone/dark delete dialog box=16,271 358x303 paragraph scroll=316x102 client=316x102
+all layout checks passed
