@@ -374,6 +374,19 @@ type Task struct {
 	// ChangeTargetKind is the kind of non-git change this task's work is
 	// ("changelist"), or "" for a git task (model.ChangeTarget).
 	ChangeTargetKind string `json:"changeTargetKind,omitempty"`
+	// MergeGates lists each required merge gate on this task's pull request
+	// (CI, security review, configured/trigger code review, and human
+	// approval) and its current state.
+	MergeGates []model.MergeGate `json:"mergeGates,omitempty"`
+	// ReviewFindings lists any unresolved review-findings gate blocks on
+	// this task's pull request.
+	ReviewFindings []model.ReviewFindingsRecord `json:"reviewFindings,omitempty"`
+	// GateOverride is the most recent explicit merge:force gate override on
+	// this task, if any.
+	GateOverride *model.GateOverrideRecord `json:"gateOverride,omitempty"`
+	// HumanApprovedBy is who recorded a Submit approval for the current
+	// pull request head, if any.
+	HumanApprovedBy string `json:"humanApprovedBy,omitempty"`
 	// Reviewers is the person-set list of reviewer usernames for this task
 	// (model.Task.Reviewers, docs/design/changelists.md §5).
 	Reviewers []string `json:"reviewers,omitempty"`
@@ -1337,7 +1350,24 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		if l.Kind.Blocks() && targetStates[l.Target] != model.StateClosed && !slices.Contains(out.BlockedBy, l.Target) {
 			out.BlockedBy = append(out.BlockedBy, l.Target)
 		}
+		if l.Kind == model.LinkHumanSubmitted {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		} else if l.Kind == model.LinkHumanApproved && out.HumanApprovedBy == "" {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		}
 	}
+	out.ReviewFindings = model.ReviewFindings(t)
+	if ov, ok := model.LatestGateOverride(t); ok {
+		out.GateOverride = &ov
+	}
+	synthObs := &model.Observation{
+		MergeQueueBlockedAt: mergeQueueBlockedAt,
+		MergeQueueState:     mergeQueue.State,
+		MergeQueueNote:      mergeQueue.Note,
+		PrMergedAt:          span.PrMergedAt,
+		PrClosedAt:          span.PrClosedAt,
+	}
+	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
 	return out
@@ -3099,23 +3129,27 @@ type forceMergeRequest struct {
 	// request's head as it is when the request arrives. Either way it is
 	// for that one commit (bwsalmon/grain#2399).
 	Head string `json:"head,omitempty"`
+	// OverrideGates names each unsatisfied gate to skip under merge:force
+	// (e.g. ["security-review"]). Required whenever any review gate is
+	// unsatisfied; no default or shorthand skips a review gate.
+	OverrideGates []string `json:"overrideGates,omitempty"`
 }
 
-// handleForceMerge is the UI's own "Force merge" button, and `grain
-// force-merge`: an operator telling grain to land a change the merge
-// queue is not going to land on its own, with a reason recorded against
-// the task and the pull request. See Client.ForceMerge.
+// handleForceMerge is the UI's own "Force merge" / gate-override action, and
+// `grain force-merge`: an operator telling grain to land a change the merge
+// queue is not going to land on its own, with a reason recorded against the
+// task and the pull request. See Client.ForceMergeWithGates.
 //
 // It records the request and returns; the merge is grain's next
 // merge-queue cycle's to perform, which is what keeps grain's own state
-// consistent with what happened on GitHub. Nothing here talks to GitHub.
+// consistent with what happened on GitHub.
 func (s *Server) handleForceMerge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req forceMergeRequest
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	if err := s.tasks.ForceMerge(r.Context(), id, req.Reason, req.Head); err != nil {
+	if err := s.tasks.ForceMergeWithGates(r.Context(), id, req.Reason, req.Head, req.OverrideGates); err != nil {
 		writeClientError(w, err)
 		return
 	}

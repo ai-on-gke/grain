@@ -76,7 +76,7 @@ func (c *Client) pullRequestAdopter() (PullRequestAdopter, error) {
 func pullRequestCallRepo(r *http.Request, pattern string, body []byte) (string, bool, error) {
 	var raw string
 	switch pattern {
-	case "POST /api/pull-requests/adopt", "POST /api/pull-requests/review":
+	case "POST /api/pull-requests/adopt", "POST /api/pull-requests/review", "POST /api/pull-requests/submit":
 		var req struct {
 			PR string `json:"pr"`
 		}
@@ -283,6 +283,19 @@ func (s *Server) handlePullRequestStatus(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleSubmitPullRequest(w http.ResponseWriter, r *http.Request) {
+	var req SubmitPullRequestRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	out, err := s.tasks.SubmitPullRequest(r.Context(), req)
+	if err != nil {
+		writePullRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // AdoptPullRequest is POST /api/pull-requests/adopt over the wire.
 func (c *HTTPClient) AdoptPullRequest(ctx context.Context, req AdoptPullRequestRequest) (model.PullRequestAdoption, error) {
 	var out model.PullRequestAdoption
@@ -305,5 +318,12 @@ func (c *HTTPClient) PullRequestStatus(ctx context.Context, pr string, threads b
 	}
 	var out model.PullRequestReport
 	err := c.do(ctx, http.MethodGet, "/api/pull-requests/status?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// SubmitPullRequest is POST /api/pull-requests/submit over the wire.
+func (c *HTTPClient) SubmitPullRequest(ctx context.Context, req SubmitPullRequestRequest) (SubmitPullRequestResult, error) {
+	var out SubmitPullRequestResult
+	err := c.do(ctx, http.MethodPost, "/api/pull-requests/submit", req, &out)
 	return out, err
 }

@@ -410,6 +410,11 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:tasks:write", "api:repos:read"},
 		recorded:    adoptedFor,
 	},
+	"POST /api/pull-requests/submit": {
+		setup:    taskWithPullRequest,
+		body:     `{"pr":"acme/widgets#42"}`,
+		recorded: noted(model.TaskEventSubmitted),
+	},
 	"POST /api/tasks": {
 		body:        `{"title":"filed","noRepo":true}`,
 		agentGrants: []string{"api:tasks:write"},

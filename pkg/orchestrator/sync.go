@@ -1387,14 +1387,19 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// before the run pushed its fixes on top). A forced merge is the one
 	// thing that does merge a running task's branch, so it is still
 	// classified first.
-	midRun := e.running && forcedMergeOf(e.obs) == nil
+	earlyForced := forcedMergeOf(e.obs)
+	hasValidForce := earlyForced != nil && detail.HeadSHA != "" && !earlyForced.movedSince(detail.HeadSHA)
+	midRun := e.running && earlyForced == nil
 	if detail.State == "open" && !detail.Merged && !midRun {
 		// A human's Submit is pinned to the head it shipped first, so the
 		// base-branch merges below carry it rather than re-hold it
 		// (securityhold_submit.go).
 		pinned, ok, err := pinHumanSubmit(ctx, store, client, task, ref, detail.HeadSHA, now)
-		if err != nil || !ok {
+		if err != nil {
 			return err
+		}
+		if !ok && !hasValidForce {
+			return nil
 		}
 		task = pinned
 		e.task = pinned
@@ -1402,7 +1407,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err != nil {
 			return err
 		}
-		if !cleared {
+		if !cleared && !hasValidForce {
 			return nil
 		}
 		// And the repository's own pull-request triggers, judged by the
@@ -1412,18 +1417,18 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err != nil {
 			return err
 		}
-		if !current {
+		if !current && !hasValidForce {
 			return nil
 		}
 		// And whoever a sensitive path or grain's own guard named: a
 		// change still owed an approver's Submit does not merge, however
 		// its auto-merge came to be on (model's sensitive_path.go).
-		if held, err := withdrawForPendingApprovals(ctx, store, client, task, ref, now); err != nil || held {
+		if held, err := withdrawForPendingApprovals(ctx, store, client, task, ref, now); err != nil || (held && !hasValidForce) {
 			return err
 		}
 		// And the repository's merge rules, where they say a person has
 		// to press Submit (`auto_merge: never`, mergerules.go).
-		if held, err := withdrawForMergePolicy(ctx, store, client, e.task, ref, e.policy, now); err != nil || held {
+		if held, err := withdrawForMergePolicy(ctx, store, client, e.task, ref, e.policy, now); err != nil || (held && !hasValidForce) {
 			return err
 		}
 	}
@@ -1538,7 +1543,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		e.reds, e.unfixable = splitReds(e, find)
 	}
 	var review reviewState
-	if !stacked && !blocked && !settled {
+	if !stacked && !settled {
 		review, err = reviewStateOf(ctx, store, task, e.obs, now)
 		if err != nil {
 			return err
@@ -1660,11 +1665,10 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	}
 	forcing := forced != nil && !settled && health != model.PrConflicted
 	switch {
-	case !forcing && review.overdue:
-		// The review is not arriving. Say so, give up the wait, and leave
-		// the merge itself to the next cycle -- which reads a task the
-		// store now says is blocked, and merges it the moment it reads
-		// clean the way it does any other blocked task.
+	case !forcing && !blocked && review.overdue:
+		// The review has been stuck past its deadline: step around this change
+		// so later tasks in the repo can move, while keeping the required
+		// review gate enforced (review.pending stays true below).
 		if err := escalateUnfinishedReview(ctx, store, task, ref, review.taskID, now); err != nil {
 			return err
 		}
@@ -2017,6 +2021,11 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// triage's to catch rather than a reason to leave this task open.
 		if err := filePorts(ctx, store, client, gate.Porter, task, ref, detail, now); err != nil {
 			log.Printf("orchestrator: %v", err)
+		}
+	}
+	if isReviewTask(task) && health == model.PrMerged {
+		if err := clearReviewFindingsOnCleanReview(ctx, store, task); err != nil {
+			log.Printf("orchestrator: clearing review findings after %s merged: %v", task.ID, err)
 		}
 	}
 	if err := closeSecurityReviewOnSettle(ctx, store, client, task, ref, detail, health, now); err != nil {

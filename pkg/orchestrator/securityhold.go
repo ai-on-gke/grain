@@ -131,11 +131,10 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s before classifying its diff: %w", task.ID, err)
 	}
-	// A change on a hold only a human may release is classified again
-	// too: a head that no longer touches what held it is let go
-	// (model.restoreAfterHolds), and one that still does stays held.
-	if current == nil || (!current.AutoMerge && !hasSecurityHold(*current) && !hasBrokenRulesHold(*current) &&
-		(linkTarget(*current, model.LinkHumanOnlyHold) == "" || model.AutoMergeDeclined(*current))) {
+	// Every judged pull request is classified, whether auto-merge is on or
+	// off: security review is a separate merge gate from a person's Submit,
+	// and both gates must pass before a trust-boundary change merges.
+	if current == nil {
 		return nil
 	}
 	if !holdIsAbout(*current, ref) {
@@ -176,8 +175,25 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	cleared := model.Link{Kind: model.LinkTrustBoundaryCleared, Target: clearedTarget(headSHA, rules)}
 	if known && len(matches) == 0 {
 		if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
-			t.Links = append(withoutLinks(t.Links, model.LinkTrustBoundaryCleared, model.LinkBrokenRulesHold,
-				model.LinkHumanSubmitted, model.LinkHumanOnlyHold), cleared)
+			subMarker := humanApprovalMarker(*t)
+			keepSubmit := subMarker != "" && headSHA != "" &&
+				(model.HumanSubmittedHead(subMarker) == "" || strings.EqualFold(model.HumanSubmittedHead(subMarker), headSHA))
+			hadPendingSubmit := linkTarget(*t, model.LinkHumanSubmitted) != ""
+			t.Links = append(withoutLinks(t.Links, model.LinkSecurityHold, model.LinkTrustBoundaryCleared,
+				model.LinkBrokenRulesHold, model.LinkHumanSubmitted, model.LinkHumanApproved, model.LinkHumanOnlyHold), cleared)
+			if keepSubmit {
+				by := model.HumanSubmittedBy(subMarker)
+				at, ok := model.HumanSubmittedAt(subMarker)
+				if !ok {
+					at = now
+				}
+				kind := model.LinkHumanApproved
+				if hadPendingSubmit {
+					kind = model.LinkHumanSubmitted
+				}
+				t.Links = append(t.Links, model.Link{Kind: kind, Target: model.HumanSubmittedByTarget(by, at, headSHA)})
+			}
+			model.ClearReviewFindingsForGate(t, model.GateSecurityReview)
 			t.Links = model.WithoutApprovalRules(t.Links, model.ApprovalRuleBuiltin)
 			return nil
 		}); err != nil {
@@ -193,10 +209,9 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 			return keepClearance(ctx, store, client, *current, ref, headSHA, cleared, carried, matches, now)
 		}
 	}
-	// A clean review may release this hold unless the change touches a
-	// path only a human may let through -- and a change whose file list
-	// could not be read in full is held as if it touched every path,
-	// those included: the unread part is exactly where one could be.
+	// A clean review may release the security-review gate, while a change
+	// touching a path only a human may let through (or an unreadable file
+	// list) also requires the separate human Submit gate.
 	releasable := known && !trustboundary.RequiresHuman(matches)
 	approvers := ownerApprovers(ctx, store, *task.Target)
 	// The review an earlier hold filed, which the one filed below replaces
@@ -213,15 +228,34 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		return nil
 	}
 
+	var submittedThisHead bool
+	var needsHumanSubmit bool
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		wasHeld := hasSecurityHold(*t) || hasBrokenRulesHold(*t)
+		subMarker := humanApprovalMarker(*t)
+		submittedThisHead = subMarker != "" && headSHA != "" &&
+			(model.HumanSubmittedHead(subMarker) == "" || strings.EqualFold(model.HumanSubmittedHead(subMarker), headSHA))
+		hadPendingSubmit := linkTarget(*t, model.LinkHumanSubmitted) != ""
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold, model.LinkSecurityReviewTask,
 			model.LinkTrustBoundaryCleared, model.LinkRepoRules, model.LinkBrokenRulesHold,
-			model.LinkBaseRepairBypass, model.LinkHumanSubmitted, model.LinkHumanOnlyHold)
+			model.LinkBaseRepairBypass, model.LinkHumanSubmitted, model.LinkHumanApproved, model.LinkHumanOnlyHold)
+		model.ClearReviewFindingsForGate(t, model.GateSecurityReview)
 		// Who may release this head is decided afresh with it.
 		t.Links = model.WithoutApprovalRules(t.Links, model.ApprovalRuleBuiltin)
 		if !rules.Empty() {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkRepoRules, Target: rules.String()})
+		}
+		if submittedThisHead {
+			by := model.HumanSubmittedBy(subMarker)
+			at, ok := model.HumanSubmittedAt(subMarker)
+			if !ok {
+				at = now
+			}
+			kind := model.LinkHumanApproved
+			if hadPendingSubmit {
+				kind = model.LinkHumanSubmitted
+			}
+			t.Links = append(t.Links, model.Link{Kind: kind, Target: model.HumanSubmittedByTarget(by, at, headSHA)})
 		}
 		if bypass {
 			if wasHeld && !hasPathTriggerHold(*t) {
@@ -236,14 +270,11 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 				t.Links = append(t.Links, model.ApprovalRequiredLink(model.ApprovalRuleBuiltin+m.Category.ID, approvers))
 			}
 		}
-		if releasable {
-			t.Links = append(t.Links,
-				model.Link{Kind: model.LinkSecurityHold, Target: trustboundary.Version})
-		} else {
-			// Marked, not merely left without a hold link: an absent hold
-			// link reads as "nothing of grain's own holds this change" to
-			// every other hold that may hand auto-merge back
-			// (heldForHuman).
+		// Security review is always its own gate while the review has not
+		// passed, even when a human's Submit is also required.
+		t.Links = append(t.Links,
+			model.Link{Kind: model.LinkSecurityHold, Target: trustboundary.Version})
+		if !releasable && !submittedThisHead {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkHumanOnlyHold, Target: trustboundary.Version})
 		}
 		if known {
@@ -252,11 +283,12 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		if heldOnlyForBrokenRules(matches, known, headSHA) {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkBrokenRulesHold, Target: headSHA})
 		}
+		needsHumanSubmit = !releasable || model.AutoMergeDeclined(*t) || len(model.PendingApprovals(*t)) > 0
 		return nil
 	}); err != nil {
 		return fmt.Errorf("orchestrator: withdrawing %s's auto-merge for a security review: %w", task.ID, err)
 	}
-	if !bypass && !releasable {
+	if !bypass && !releasable && !submittedThisHead {
 		// The same hold, record and release as every other change handed
 		// to a person (model.LinkHumanReviewHold): the inbox, the banner,
 		// the timeline and the owner's notification all say why.
@@ -273,7 +305,19 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		})
 	}
 	if fileErr != nil {
-		log.Printf("orchestrator: filing the security review of %s: %v -- it waits for a human", task.ID, fileErr)
+		log.Printf("orchestrator: filing the security review of %s: %v -- blocking security-review gate", task.ID, fileErr)
+		if !bypass {
+			_ = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+				t.Links = withoutLinks(t.Links, model.LinkSecurityHold)
+				model.AddReviewFindings(t, model.ReviewFindingsRecord{
+					Gate:    model.GateSecurityReview,
+					Summary: "filing security review failed: " + fileErr.Error(),
+					HeadSHA: headSHA,
+					At:      now,
+				})
+				return nil
+			})
+		}
 	} else if err := supersedeSecurityReview(ctx, store, prevReview, review, now); err != nil {
 		// The new review is filed and the hold names it, so the old one can
 		// no longer release anything; at worst it runs for nothing.
@@ -293,8 +337,8 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	log.Printf("orchestrator: %s touches the trust boundary (%s); auto-merge withdrawn pending security review",
 		ref, matchSummary(matches, known))
 	return securityHoldNote(ctx, store, client, task.ID, &ref,
-		securityHoldComment(ref, matches, known, releasable, review.ID, fileErr)+releaseNote(matches, approvers, rules),
-		securityHoldComment(ref, matches, known, releasable, review.ID, prFileErr)+releaseNote(matches, approvers, rules), now)
+		securityHoldComment(ref, matches, known, releasable, needsHumanSubmit, review.ID, fileErr)+releaseNote(matches, approvers, rules),
+		securityHoldComment(ref, matches, known, releasable, needsHumanSubmit, review.ID, prFileErr)+releaseNote(matches, approvers, rules), now)
 }
 
 // errSecurityReviewNotFiled stands in for the reason a security review
@@ -346,18 +390,26 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	if reviewedID == "" {
 		return nil
 	}
-	if reviewed, err := store.GetTask(ctx, reviewedID); err == nil && reviewed != nil && hasBaseRepairBypass(*reviewed) {
+	if reviewed, err := store.GetTask(ctx, reviewedID); err == nil && reviewed != nil &&
+		isPostMergeReview(ctx, store, review, *reviewed) {
 		return nil
 	}
 	dropped := false
 	if err := store.UpdateTask(ctx, reviewedID, func(t *model.Task) error {
 		dropped = false
-		if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) {
+		isSecReview := linkTarget(*t, model.LinkSecurityReviewTask) == review.ID
+		if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) && !isSecReview {
 			return nil
 		}
-		// For a person to decide, not for the hold's clearing to hand
-		// auto-merge back (model.AwaitPersonForAutoMerge).
 		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
+		if isSecReview || hasSecurityHold(*t) {
+			model.AddReviewFindings(t, model.ReviewFindingsRecord{
+				Gate:       model.GateSecurityReview,
+				ReviewTask: review.ID,
+				Summary:    summary,
+				At:         now,
+			})
+		}
 		dropped = true
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold, model.LinkTrustBoundaryCleared,
 			model.LinkBrokenRulesHold)
@@ -368,13 +420,12 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	if !dropped {
 		return nil
 	}
-	// Handed to a person the way request_human_review hands a change to
-	// one: one hold, released only by Submit or an audited release.
 	raiseFindingsReview(ctx, store, review, reviewedID, summary, now)
 	body := fmt.Sprintf(
-		"Review task %s left findings on this change, so its security hold will not be released "+
-			"automatically: it waits for you. Press Submit once you have decided what the findings "+
-			"are worth.", review.ID)
+		"Review task %s left findings on this change, so its security-review gate did not pass. "+
+			"Address the findings so a re-review passes, or override the gate under merge:force with "+
+			"a reason; pressing Submit records your approval only and will not merge over open findings.",
+		review.ID)
 	_, ref, ok, err := reviewedPullRequest(ctx, store, review)
 	if err != nil || !ok {
 		if err != nil {
@@ -560,23 +611,34 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 			return nil
 		}
 		settled = true
+		oldHead := classifiedHead(*t)
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold)
 		if clean {
+			model.ClearReviewFindingsForGate(t, model.GateSecurityReview)
+			if q, ok := model.ReviewQuestionsOf(*t); ok && q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) {
+				t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
+			}
 			if advancedClearance != "" {
+				if _, newHead, ok := strings.Cut(advancedClearance, "@"); ok && newHead != "" {
+					t.Links = advanceHumanSubmitted(t.Links, oldHead, newHead)
+				}
 				t.Links = append(withoutLinks(t.Links, model.LinkTrustBoundaryCleared),
 					model.Link{Kind: model.LinkTrustBoundaryCleared, Target: advancedClearance})
 			}
-			// A gating path trigger still holding the change keeps it
-			// held; its own settle hands auto-merge back
-			// (pathtriggerhold.go).
-			if !hasPathTriggerHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
+			// A gating path trigger, another review's findings, or an unsatisfied
+			// human approval gate keeps auto-merge off until that gate passes too.
+			if !hasPathTriggerHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
 				t.AutoMerge, released = true, true
 			}
 		} else {
-			// The decision is a human's now, and their Submit is about
-			// the head they read, review commits included.
 			t.Links = withoutLinks(t.Links, model.LinkTrustBoundaryCleared)
 			model.AwaitPersonForAutoMerge(t, "security review "+reviewID+"'s fixes were closed without merging")
+			model.AddReviewFindings(t, model.ReviewFindingsRecord{
+				Gate:       model.GateSecurityReview,
+				ReviewTask: reviewID,
+				Summary:    "security review fixes were closed without merging",
+				At:         now,
+			})
 		}
 		return nil
 	}); err != nil {
@@ -602,10 +664,14 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 	case released:
 		body = fmt.Sprintf("The security review of this change (task %s) finished without findings, "+
 			"so it merges automatically again once it reads clean.", reviewID)
+	case clean:
+		body = fmt.Sprintf("The security review of this change (task %s) finished without findings, "+
+			"clearing the security-review gate. This change still waits for its remaining gates "+
+			"(such as a person's Submit or other required reviews) before merging.", reviewID)
 	case !clean:
 		body = fmt.Sprintf("The security review of this change (task %s) pushed fixes that were "+
-			"closed without merging into this branch, so this change is not merging "+
-			"automatically: press Submit once you have read it.", reviewID)
+			"closed without merging into this branch, so the security-review gate has not passed: "+
+			"push fixes for a clean re-review, or override the gate under merge:force with a reason.", reviewID)
 	default:
 		return nil
 	}
@@ -700,6 +766,31 @@ func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client
 	if health != model.PrMerged && health != model.PrClosed {
 		return nil
 	}
+	if health == model.PrMerged && mergedThroughOverrideOrBypass(ctx, store, task) {
+		// Never close a review unfinished when merged under an explicit
+		// merge:force gate override or base_repair_bypasses_human_gates: keep
+		// every open review running against the merged commit on the base
+		// branch so its findings are filed as follow-up fix tasks.
+		reviewIDs := []string{linkTarget(task, model.LinkSecurityReviewTask)}
+		if rID, ok := reviewTaskLink(task); ok && rID != "" {
+			reviewIDs = append(reviewIDs, rID)
+		}
+		for gID := range gatingTaskIDs(task) {
+			reviewIDs = append(reviewIDs, gID)
+		}
+		seen := map[string]bool{}
+		for _, id := range reviewIDs {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			if _, err := continueReviewAfterMerge(ctx, store, client, task, id, &ref, detail.HeadSHA, detail.BaseRef, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	reviewID := linkTarget(task, model.LinkSecurityReviewTask)
 	if reviewID == "" {
 		return nil
@@ -718,29 +809,12 @@ func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client
 	if state == "" || state.Settled() {
 		return nil
 	}
-	if health == model.PrMerged && hasBaseRepairBypass(task) {
-		if state == model.StateQueued || state == model.StateProposed {
-			baseBranch := resolveTaskBaseBranch(task, detail.BaseRef)
-			_ = store.UpdateTask(ctx, reviewID, func(t *model.Task) error {
-				// A review is never classified on its own account
-				// (holdForTrustBoundary skips it, since it merges into the
-				// branch it reviews). Moved onto the base branch, its pull
-				// request would land there unclassified and unattended, so
-				// it waits for a person to Submit it instead.
-				t.Base = baseBranch
-				t.AutoMerge = false
-				detachFromReviewedBranch(t)
-				return nil
-			})
-		}
-		return nil
-	}
 	if err := closeTask(ctx, store, reviewID, now, fmt.Sprintf("the change it reviews, %s, is %s", ref, health), func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: closing security review %s: %w", reviewID, err)
 	}
-	log.Printf("orchestrator: %s is %s; closing its unfinished security review %s", ref, health, reviewID)
+	log.Printf("orchestrator: %s is %s; closing its security review %s", ref, health, reviewID)
 
 	if health == model.PrClosed {
 		return reviewComment(ctx, store, reviewID, fmt.Sprintf(
@@ -752,16 +826,14 @@ func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client
 		merged = fmt.Sprintf(" at `%s`", shortSHA(detail.HeadSHA))
 	}
 	if err := reviewComment(ctx, store, reviewID, fmt.Sprintf(
-		"Closing this review unfinished: the change it reviewed (task %s, %s) merged%s before this "+
-			"review finished, on a human's say-so rather than this review's. Its branch is gone, so there "+
-			"is nothing left here to read. If what merged still wants a security read, file one "+
-			"against the base branch.", task.ID, ref, merged), now); err != nil {
+		"Closing this review: the change it reviewed (task %s, %s) was merged directly on GitHub%s "+
+			"outside grain before this review finished, and its branch is gone.", task.ID, ref, merged), now); err != nil {
 		return err
 	}
 	body := fmt.Sprintf(
-		"This change merged%s before its security review (task %s) finished, so that review has been "+
-			"closed unfinished: nobody has reviewed this change's security. If it still wants a "+
-			"security read, file one against what merged.", merged, reviewID)
+		"This change was merged directly on GitHub%s outside grain before its security review (task %s) "+
+			"finished: nobody has reviewed this change's security. File a security review against the base "+
+			"branch if it still wants one.", merged, reviewID)
 	return securityHoldNote(ctx, store, client, task.ID, &ref, body, body, now)
 }
 
@@ -869,8 +941,14 @@ func clearedForHead(ctx context.Context, store *model.Store, client github.Clien
 			return !revoked, err
 		}
 	}
+	if !task.AutoMerge {
+		return true, nil
+	}
+	if hasSecurityHold(task) || model.HasPendingReviewHold(task) {
+		return false, nil
+	}
 	recorded := linkTarget(task, model.LinkTrustBoundaryCleared)
-	if !task.AutoMerge || recorded == "" {
+	if recorded == "" {
 		return true, nil
 	}
 	rules := repoRulesFor(ctx, store, *task.Target)
@@ -891,7 +969,8 @@ func clearedForHead(ctx context.Context, store *model.Store, client github.Clien
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s after classifying its new head: %w", task.ID, err)
 	}
-	return current != nil && current.AutoMerge &&
+	rules = repoRulesFor(ctx, store, *task.Target)
+	return current != nil && current.AutoMerge && !hasSecurityHold(*current) && !model.HasPendingReviewHold(*current) &&
 		linkTarget(*current, model.LinkTrustBoundaryCleared) == clearedTarget(headSHA, rules), nil
 }
 
@@ -1034,27 +1113,33 @@ func securityBypassComment(ref model.PullRequestRef, branch string, matches []tr
 	return b.String()
 }
 
-func securityHoldComment(ref model.PullRequestRef, matches []trustboundary.Match, known, releasable bool,
+func securityHoldComment(ref model.PullRequestRef, matches []trustboundary.Match, known, releasable, needsHumanSubmit bool,
 	reviewID string, fileErr error) string {
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s touches grain's trust boundary, so it is no longer merging automatically.\n\n", ref)
+	fmt.Fprintf(&b, "%s touches grain's trust boundary, so it is no longer merging automatically and requires a passing security review.\n\n", ref)
 	b.WriteString(matchList(matches, known))
 	b.WriteString("\n")
 	switch {
 	case fileErr != nil:
-		fmt.Fprintf(&b, "Filing the security review failed (%v), so this change waits for you: "+
-			"press Submit once you have reviewed it yourself.", fileErr)
+		fmt.Fprintf(&b, "Filing the security review failed (%v), so the security-review gate has not passed: "+
+			"retry filing the review, or override the gate under merge:force with a reason.", fileErr)
 	case !known:
-		fmt.Fprintf(&b, "Filed task %s to review it, but grain could not read every file this change "+
-			"touches, so it will not merge automatically: press Submit once you have read the review.", reviewID)
+		fmt.Fprintf(&b, "Filed task %s to review it, and grain could not read every file this change "+
+			"touches, so both the security review and a person's Submit are required: press Submit to record "+
+			"your approval (merges once the security review and CI pass).", reviewID)
+	case releasable && needsHumanSubmit:
+		fmt.Fprintf(&b, "Filed task %s to review it. Both that security review and a person's Submit are "+
+			"required before this change merges: press Submit to record your approval (it merges automatically "+
+			"once the review finishes without findings and CI passes).", reviewID)
 	case releasable:
 		fmt.Fprintf(&b, "Filed task %s to review it. If that review finishes without findings, "+
-			"this change merges automatically again; if it leaves findings, it waits for you. "+
-			"Press Submit to merge it without waiting.", reviewID)
+			"this change merges automatically once CI passes; if it leaves findings, it waits for fixes and "+
+			"a clean re-review. Pressing Submit records your approval only and never skips the review.", reviewID)
 	default:
-		fmt.Fprintf(&b, "Filed task %s to review it, but changes to %s never merge automatically: "+
-			"press Submit once you have read the review.", reviewID, humanOnlyList(matches))
+		fmt.Fprintf(&b, "Filed task %s to review it, and changes to %s also require a person's Submit: "+
+			"both the security review and your Submit must pass before this change merges. Press Submit now "+
+			"or after reading the review; it merges once all gates pass.", reviewID, humanOnlyList(matches))
 	}
 	return b.String()
 }

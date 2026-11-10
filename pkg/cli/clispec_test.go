@@ -70,7 +70,7 @@ var hostSpecSubcommands = map[string][]string{
 	"host": {"list", "pending", "accept", "reject", "codes", "invite", "rotate-code", "revoke-code",
 		"rename", "update", "revoke", "delete", "delete-revoked", "rekey", "register", "install", "set-owner"},
 	"init": {"workstation"},
-	"pr":   {"adopt", "review", "status"},
+	"pr":   {"adopt", "review", "status", "submit"},
 	"hub": {"status", "list", "directory", "route", "show", "create", "register", "unregister",
 		"update", "scopes", "rotate-credential", "upgrade", "resize", "delete", "restore", "stop", "start", "transfer", "accept-transfer",
 		"delegating-apps list", "delegating-apps create", "delegating-apps disable", "delegating-apps enable",

@@ -441,6 +441,7 @@ func (s *Server) routes() {
 	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
 	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
 	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
+	s.route("POST /api/pull-requests/submit", s.handleSubmitPullRequest)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)

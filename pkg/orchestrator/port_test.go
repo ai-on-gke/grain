@@ -829,6 +829,16 @@ func TestPortOfAnUnreviewedChangeIsHeld(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	sourceHead := headOf(t, sim.BareRepo, branch)
+	forceAt := baseTime.Add(30 * time.Minute)
+	if err := store.ObserveField(ctx, source.ID, forceAt, func(o *model.Observation) {
+		o.ForceMergeAt = &forceAt
+		o.ForceMergeReason = "override security review for hotfix"
+		o.ForceMergeBy = "alice"
+		o.ForceMergeHeadSHA = sourceHead
+	}); err != nil {
+		t.Fatal(err)
+	}
 	mergeQueued(t, ctx, store, sim, client, source, branch)
 
 	port := agentPort(t, ctx, store, sim, client, source, "pkg/ui/server.go", "reviewed\n")

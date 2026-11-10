@@ -23,18 +23,27 @@ import (
 // human submitted, and the pull request head they were shown when they
 // did (head; "" where nothing said which it was).
 //
-// The head is the one the human's decision is about, and the only one
-// orchestrator's pinHumanSubmit will pin it to: a push landing between
-// the Submit and the cycle that reads the branch is a commit nobody
-// reviewed, and is classified like any other moved head rather than
-// cleared on the strength of a decision about its parent.
+// The head is the one the human's approval is about: a push landing after
+// the Submit (other than a reviewer's own clean fix commit) is code nobody
+// reviewed, so the approval does not carry to it.
 func HumanSubmittedTarget(at time.Time, head string) string {
+	return HumanSubmittedByTarget("", at, head)
+}
+
+// HumanSubmittedByTarget encodes who approved via Submit alongside when and
+// which pull request head they saw (`[by|]RFC3339[@head]`).
+func HumanSubmittedByTarget(by string, at time.Time, head string) string {
+	by = strings.ReplaceAll(strings.TrimSpace(by), "|", "")
 	when := at.UTC().Format(time.RFC3339)
 	head = strings.ToLower(strings.TrimSpace(head))
-	if head == "" {
-		return when
+	base := when
+	if by != "" {
+		base = by + "|" + when
 	}
-	return when + "@" + head
+	if head == "" {
+		return base
+	}
+	return base + "@" + head
 }
 
 // HumanSubmittedHead is the head a LinkHumanSubmitted target says the
@@ -45,4 +54,34 @@ func HumanSubmittedHead(target string) string {
 		return target[i+1:]
 	}
 	return ""
+}
+
+// HumanSubmittedBy returns who recorded the LinkHumanSubmitted approval, or ""
+// when the target was written without an actor.
+func HumanSubmittedBy(target string) string {
+	body := target
+	if i := strings.LastIndexByte(body, '@'); i >= 0 {
+		body = body[:i]
+	}
+	if by, _, ok := strings.Cut(body, "|"); ok {
+		return strings.TrimSpace(by)
+	}
+	return ""
+}
+
+// HumanSubmittedAt parses the timestamp recorded in a LinkHumanSubmitted
+// target.
+func HumanSubmittedAt(target string) (time.Time, bool) {
+	body := target
+	if i := strings.LastIndexByte(body, '@'); i >= 0 {
+		body = body[:i]
+	}
+	if _, rest, ok := strings.Cut(body, "|"); ok {
+		body = rest
+	}
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(body))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return at, true
 }

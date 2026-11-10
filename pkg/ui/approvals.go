@@ -103,9 +103,13 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 		remaining = model.PendingApprovals(*t)
 		if len(remaining) == 0 {
 			model.AllowAutoMerge(t)
-			t.AutoMerge = true
-			heldFor = model.HumanReviewReasons(*t)
-			humanSubmitted(t, now, head)
+			for _, r := range model.HumanReviewReasons(*t) {
+				if r.Source != model.HumanReviewSecurityFindings {
+					heldFor = append(heldFor, r)
+				}
+			}
+			humanSubmitted(t, user, now, head)
+			t.AutoMerge = !model.HasPendingReviewHold(*t)
 		}
 		return nil
 	}); err != nil {

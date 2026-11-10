@@ -159,19 +159,33 @@ func TestSecurityHoldIgnoresAChangeThatWasNeverGoingToMergeItself(t *testing.T) 
 	store, ctx := openStore(t)
 	sim, client := newSim(t, "acme", "widgets", "main")
 	task := finishTouching(t, ctx, store, sim, "t1", "pkg/gitproxy/proxy.go", false)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		model.DeclineAutoMerge(tk, "author")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
 	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
 		t.Fatalf("ProcessResult: %v", err)
 	}
 	got := reloaded(t, ctx, store, task.ID)
-	if linkOf(got, model.LinkSecurityReviewTask) != "" {
-		t.Fatalf("a change already waiting for a human got a review filed: %+v", got.Links)
+	reviewID := linkOf(got, model.LinkSecurityReviewTask)
+	if reviewID == "" || linkOf(got, model.LinkSecurityHold) == "" {
+		t.Fatalf("a trust-boundary change with auto-merge off still requires a security review gate: %+v", got.Links)
+	}
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded(t, ctx, store, task.ID).AutoMerge {
+		t.Fatal("a clean security review must not bypass auto_merge: false")
 	}
 }
 
-// Baselines and suppressions can never auto-merge: the review is filed,
-// but nothing it does gives auto-merge back.
+// Baselines and suppressions can never auto-merge: the review is filed as its
+// own gate, and when it finishes clean the human-only gate still holds.
 func TestSecurityHoldOnSuppressionsIsNeverReleasedByAReview(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
@@ -184,7 +198,7 @@ func TestSecurityHoldOnSuppressionsIsNeverReleasedByAReview(t *testing.T) {
 	}
 	got := reloaded(t, ctx, store, task.ID)
 	reviewID := linkOf(got, model.LinkSecurityReviewTask)
-	if got.AutoMerge || linkOf(got, model.LinkSecurityHold) != "" || reviewID == "" {
+	if got.AutoMerge || linkOf(got, model.LinkSecurityHold) == "" || linkOf(got, model.LinkHumanOnlyHold) == "" || reviewID == "" {
 		t.Fatalf("automerge=%v links=%+v", got.AutoMerge, got.Links)
 	}
 
@@ -397,8 +411,8 @@ func TestSecurityHoldOnAnUnreadableFileListIsNeverReleasedByAReview(t *testing.T
 	if got.AutoMerge || reviewID == "" {
 		t.Fatalf("an unclassifiable change was not held: automerge=%v links=%+v", got.AutoMerge, got.Links)
 	}
-	if linkOf(got, model.LinkSecurityHold) != "" {
-		t.Errorf("the hold on an unclassifiable change is marked releasable: links=%+v", got.Links)
+	if linkOf(got, model.LinkSecurityHold) == "" || linkOf(got, model.LinkHumanOnlyHold) == "" {
+		t.Errorf("expected both security-review and human-only gates on an unclassifiable change: links=%+v", got.Links)
 	}
 
 	completeReview(t, ctx, store, reviewID)
@@ -578,11 +592,11 @@ func TestSecurityReviewIsClosedWhenTheChangeItReviewsMerges(t *testing.T) {
 	// Its silence must not read as a pass: the merged change says the
 	// review never finished, in grain and on the pull request.
 	got := reloaded(t, ctx, store, task.ID)
-	if notes := strings.Join(commentBodies(t, ctx, store, task.ID), "\n"); !strings.Contains(notes, "closed unfinished") ||
+	if notes := strings.Join(commentBodies(t, ctx, store, task.ID), "\n"); !strings.Contains(notes, "nobody has reviewed this change's security") ||
 		!strings.Contains(notes, reviewID) {
 		t.Errorf("the merged change does not say its review was cut short: %s", notes)
 	}
-	if pr := strings.Join(prCommentBodies(t, client, got), "\n"); !strings.Contains(pr, "closed unfinished") {
+	if pr := strings.Join(prCommentBodies(t, client, got), "\n"); !strings.Contains(pr, "nobody has reviewed this change's security") {
 		t.Errorf("the pull request does not say its review was cut short: %s", pr)
 	}
 }
