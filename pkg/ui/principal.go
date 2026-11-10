@@ -406,6 +406,9 @@ const (
 	// AuthMethodTrusted is nobody signed in, from a source this daemon
 	// trusts as itself: the access code, or an in-process request.
 	AuthMethodTrusted AuthMethod = "trusted"
+	// AuthMethodHostAccount is a caller on the daemon's API socket whose
+	// uid -host-accounts maps to a person (hostaccount.go).
+	AuthMethodHostAccount AuthMethod = AuthMethod(model.SourceHostAccount)
 )
 
 // ExtractPrincipal returns who r is authenticated as through a registered
