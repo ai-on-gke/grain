@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,15 +277,17 @@ func TestHTTPClientSchedulesAnUpgradeAsTheTaskThatAskedForIt(t *testing.T) {
 		t.Fatalf("stored = (%+v, %v), want the task that asked for it", scheduled, err)
 	}
 
-	// A caller with nobody to name -- `grain mcpserver` started without
-	// -task, and the pane's own button -- is still the deployment's actor.
+	// A caller with no task to name -- `grain mcpserver` started without
+	// -task, and the pane's own button -- runs on the access code, as the
+	// deployment's actor or, where the CLI names who it is
+	// (AccessNameHeader), as access-code:<name>.
 	if _, err := remote.StartUpgrade(ctx, "main", true, model.Principal{}); err != nil {
 		t.Fatalf("StartUpgrade naming nobody: %v", err)
 	}
 	scheduled, err = store.GetScheduledUpgrade(ctx)
-	if err != nil || scheduled == nil || !scheduled.By.Same(ui.DefaultActor("alice")) ||
-		scheduled.By.Source != model.SourceAccessCode {
-		t.Fatalf("stored = (%+v, %v), want this deployment's own actor", scheduled, err)
+	if err != nil || scheduled == nil || scheduled.By.Source != model.SourceAccessCode ||
+		!(scheduled.By.Same(ui.DefaultActor("alice")) || strings.HasPrefix(scheduled.By.ID, ui.AccessCodeActorPrefix)) {
+		t.Fatalf("stored = (%+v, %v), want this deployment's own actor or the code's named holder", scheduled, err)
 	}
 }
 

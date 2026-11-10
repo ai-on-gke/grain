@@ -625,10 +625,15 @@ import "strconv"
 // 131 adds `schedule`.`grain_ci` (model.Schedule.GrainCI): a schedule's
 // `workflow:` firing runs on grain CI even on a ci_mode: github
 // repository (grain/task-3878).
-// 132 adds repository skill discovery configuration (`skills` on
+// 132 changes no table: it rewrites every grant still stored as
+// `api:<what>[@repo]` (or a non-canonical api reference), `repo-read:` or
+// `repo-write:` to its canonical `https://grain.dev/capabilities/api#…` /
+// `…/repo#read|#write` reference, slice 4 of
+// design/design/unified-grants.design.md (canonical_grant_migration.go).
+// 133 adds repository skill discovery configuration (`skills` on
 // `grain_config`, `repo_config`, `task` and `template`, and `declared_skills`
 // on `repo_config`).
-const SchemaVersion = 132
+const SchemaVersion = 133
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

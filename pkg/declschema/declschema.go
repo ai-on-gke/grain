@@ -636,7 +636,13 @@ func templateSchema() Schema {
 			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
-			{Model: "Grants", Keys: []Key{settingsOnly("grants", Reach)}, Table: "template_grant"},
+			// `grants:` is the unified spelling of a grant list
+			// (design/design/unified-grants.design.md §3). In grain's
+			// settings it is the template_grant rows; in a repository it
+			// is a synonym for `capabilities:` below, held to exactly the
+			// same rule (repository access only, pkg/repodecl's
+			// parseCapabilities), and accepted beside it indefinitely.
+			{Model: "Grants", Keys: []Key{{Name: "grants", In: Everywhere}}, Table: "template_grant"},
 			// The one exception to the refusals above (grain/task-1780),
 			// and the same rule a `.grain/workflows` job's `capabilities:`
 			// already follows (grain/task-1654): a template may declare
@@ -857,7 +863,9 @@ func scheduleSchema() Schema {
 			// its template or suite declares.
 			{
 				Model: "Grants",
-				Keys:  []Key{settingsOnly("grants", Reach), {Name: "capabilities", In: Repo}},
+				// `grants:` in a repository is a synonym for `capabilities:`
+				// (unified-grants §3), accepted beside it indefinitely.
+				Keys:  []Key{{Name: "grants", In: Everywhere}, {Name: "capabilities", In: Repo}},
 				Table: "schedule_grant",
 			},
 

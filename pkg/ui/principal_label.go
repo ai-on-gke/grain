@@ -65,6 +65,9 @@ func principalLabelOf(p model.Principal) string {
 	}
 	switch p.Source {
 	case model.SourceAccessCode:
+		if name, ok := strings.CutPrefix(id, AccessCodeActorPrefix); ok && name != "" {
+			return name + " (access code)"
+		}
 		return "operator (access code)"
 	case model.SourceLoopback, model.SourceInProcess:
 		return "operator (local)"

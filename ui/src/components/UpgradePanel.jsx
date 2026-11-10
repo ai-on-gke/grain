@@ -128,27 +128,8 @@ const MARK_SIZE = 96;
 // absent mode -- an older daemon serving this UI, or the shape a test
 // stubs -- gets the one sentence that is true of both rather than a
 // confident description of the wrong one.
-function ModeDescription({ mode, imageSource }) {
+function ModeDescription({ mode }) {
   if (mode === "image") {
-    if (imageSource?.source === "release-assets") {
-      const repoLabel =
-        imageSource.releaseRepository || "this deployment's release repository";
-      return (
-        <>
-          Loads the release-asset image tarball published on{" "}
-          <code>{repoLabel}</code> releases for the branch below
-          {imageSource.sourceDefault && imageSource.fallback === "registry"
-            ? " (falling back to pulling from the container registry if that release has no image assets)"
-            : imageSource.fallback === "registry"
-              ? " (with fallback to the container registry configured)"
-              : ""}
-          , verifies its SHA-256 checksum, runs it once to prove it works, and
-          then points this deployment at it and restarts. An image that fails
-          verification or the health check changes nothing, leaving this
-          deployment on the image it is already running.
-        </>
-      );
-    }
     return (
       <>
         Pulls the image CI published for the branch below, runs it once to prove
@@ -925,177 +906,8 @@ function ImageChooser({
           className="upgrade-image-ref"
           sx={{ mt: 1, overflowWrap: "anywhere" }}
         >
-          {status.imageSource?.source === "release-assets" &&
-          !image.trim() &&
-          status.imageSource.releaseRepository ? (
-            <>
-              Will load release assets from{" "}
-              <code>{status.imageSource.releaseRepository}</code> as{" "}
-              <code className="upgrade-will-ref">{will}</code>
-              {status.imageSource.sourceDefault &&
-              status.imageSource.fallback === "registry"
-                ? " (or pull from the container registry if the release has no image assets)"
-                : ""}
-            </>
-          ) : (
-            <>
-              Will pull <code className="upgrade-will-ref">{will}</code>
-            </>
-          )}
+          Will pull <code className="upgrade-will-ref">{will}</code>
         </Typography>
-      )}
-    </Box>
-  );
-}
-
-const IMAGE_SOURCE_MODE_OPTIONS = [
-  [
-    "default",
-    "Release assets (fall back to registry when release has no image assets)",
-  ],
-  ["release-assets", "Release assets only"],
-  ["registry", "Container registry only (docker pull)"],
-];
-
-function currentImageSourceMode(imageSource) {
-  if (!imageSource) return "default";
-  if (imageSource.sourceDefault) return "default";
-  if (imageSource.source === "registry") return "registry";
-  return "release-assets";
-}
-
-export function ImageSourceSettings({
-  status,
-  disabled,
-  onUpdated,
-  showError,
-}) {
-  const imageSource = status?.imageSource;
-  const [saving, setSaving] = useState(false);
-  const [repoDraft, setRepoDraft] = useState(
-    imageSource?.releaseRepository || "",
-  );
-
-  useEffect(() => {
-    setRepoDraft(imageSource?.releaseRepository || "");
-  }, [imageSource?.releaseRepository]);
-
-  if (status?.mode !== "image" || !imageSource) return null;
-
-  const modeValue = currentImageSourceMode(imageSource);
-  const locked = !!imageSource.locked;
-  const manifestSummary = imageSource.releaseAsset
-    ? `${imageSource.releaseAsset} (${imageSource.checksumAsset || `${imageSource.releaseAsset}${imageSource.checksumSuffix || ".sha256"}`})`
-    : `${imageSource.manifestAsset || "images.json"} (${imageSource.checksumSuffix || ".sha256"} checksums)`;
-
-  const saveSource = async (payload) => {
-    if (locked) return;
-    setSaving(true);
-    try {
-      const next = await api("/api/upgrade/source", {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      });
-      if (onUpdated) onUpdated(next);
-    } catch (err) {
-      if (showError) showError(err);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Box
-      className="upgrade-image-source"
-      data-testid="upgrade-image-source"
-      sx={{
-        mb: 2,
-        p: 1.5,
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 1,
-      }}
-    >
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        spacing={1}
-        sx={{ mb: 1 }}
-      >
-        <Typography variant="subtitle2">Image source</Typography>
-        {locked && (
-          <Chip
-            size="small"
-            variant="outlined"
-            label="Read-only (set by flag/env)"
-          />
-        )}
-      </Stack>
-      {status.fallbackNote && status.phase !== "running" && (
-        <Alert
-          severity="info"
-          className="upgrade-fallback-note"
-          sx={{ mb: 1.5 }}
-        >
-          Last upgrade: {status.fallbackNote}
-        </Alert>
-      )}
-      <TextField
-        select
-        name="upgradeImageSourceMode"
-        label="Source"
-        value={modeValue}
-        disabled={disabled || locked || saving}
-        onChange={(e) => {
-          const nextMode = e.target.value;
-          saveSource({
-            mode: nextMode,
-            releaseRepository: nextMode === "registry" ? "" : repoDraft.trim(),
-          });
-        }}
-        fullWidth
-        size="small"
-        margin="dense"
-        helperText={
-          locked
-            ? "Configured via -upgrade-image-source or GRAIN_UPGRADE_IMAGE_SOURCE; edit the daemon flags or environment to change it."
-            : modeValue === "default"
-              ? "Loads tarballs from repository releases when images.json is attached, and falls back to pulling from the container registry otherwise."
-              : modeValue === "release-assets"
-                ? `Loads release-asset tarballs verified against ${manifestSummary}${imageSource.fallback === "registry" ? " (with registry fallback enabled)" : ""}.`
-                : `Pulls ${status.imageRepo || "container images"} directly with docker pull.`
-        }
-      >
-        {IMAGE_SOURCE_MODE_OPTIONS.map(([val, label]) => (
-          <MenuItem key={val} value={val}>
-            {label}
-          </MenuItem>
-        ))}
-      </TextField>
-      {imageSource.source === "release-assets" && (
-        <TextField
-          name="upgradeReleaseRepository"
-          label="Release repository"
-          value={repoDraft}
-          disabled={disabled || locked || saving}
-          onChange={(e) => setRepoDraft(e.target.value)}
-          onBlur={() => {
-            const trimmed = repoDraft.trim();
-            if (!locked && trimmed !== (imageSource.releaseRepository || "")) {
-              saveSource({
-                mode: modeValue,
-                releaseRepository: trimmed,
-              });
-            }
-          }}
-          placeholder="github.com/ai-on-gke/grain"
-          inputProps={{ ...identifierField, autoComplete: "off" }}
-          fullWidth
-          size="small"
-          margin="dense"
-          helperText={`Manifest / checksums: ${manifestSummary}`}
-        />
       )}
     </Box>
   );
@@ -1465,20 +1277,17 @@ export default function UpgradePanel({
             color="text.secondary"
             sx={{ mt: -1, mb: 2 }}
           >
-            <ModeDescription
-              mode={status.mode}
-              imageSource={status.imageSource}
-            />{" "}
-            One upgrade at a time; each step below reports itself as it goes. A
-            release that changes the database schema is carried across rather
-            than refused: this deployment&rsquo;s rows are written out, the
-            arriving build is asked to import them before anything cuts over,
-            and it rebuilds the store from them at its first start &mdash;
-            keeping the old one, moved aside, for whatever the new schema has
-            nowhere to put. The queue is held for the duration &mdash; the
-            banner will say this deployment is paused, and the restart, or the
-            upgrade failing, lifts it &mdash; since a run started now would only
-            be discarded by the restart this ends in.
+            <ModeDescription mode={status.mode} /> One upgrade at a time; each
+            step below reports itself as it goes. A release that changes the
+            database schema is carried across rather than refused: this
+            deployment&rsquo;s rows are written out, the arriving build is asked
+            to import them before anything cuts over, and it rebuilds the store
+            from them at its first start &mdash; keeping the old one, moved
+            aside, for whatever the new schema has nowhere to put. The queue is
+            held for the duration &mdash; the banner will say this deployment is
+            paused, and the restart, or the upgrade failing, lifts it &mdash;
+            since a run started now would only be discarded by the restart this
+            ends in.
           </Typography>
           {/* The same fallback the externally managed branch above
               draws: a daemon that cannot read its image ref file (or an
@@ -1517,12 +1326,6 @@ export default function UpgradePanel({
             <InFlightRuns count={status.inFlightRuns} atRisk={status.atRisk} />
           )}
           <UpgradeInterrupts notes={status.upgradeInterrupts} />
-          <ImageSourceSettings
-            status={status}
-            disabled={running}
-            onUpdated={setStatus}
-            showError={reportError}
-          />
           <Dialog
             open={confirmOpen}
             onClose={() => setConfirmOpen(false)}

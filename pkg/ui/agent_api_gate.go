@@ -1698,9 +1698,17 @@ func grantNamesIn(raw json.RawMessage) []string {
 // none, and may not ask for "open" -- nor, on a deployment whose default is
 // open, for "". A config that cannot be read is taken as none.
 func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
+	if s.tasks == nil {
+		return (limit == "" || limit == model.NetworkNone) &&
+			strings.TrimSpace(access) != "" && model.NormalizeNetworkAccess(model.NetworkAccess(access)) != model.NetworkNone
+	}
+	return s.tasks.networkAccessWidens(ctx, limit, access)
+}
+
+func (c *Client) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
 	deployment := model.NetworkNone
-	if s.tasks != nil && s.tasks.Store != nil {
-		if cfg, err := s.tasks.Store.GetConfig(ctx); err == nil && cfg != nil {
+	if c != nil && c.Store != nil {
+		if cfg, err := c.Store.GetConfig(ctx); err == nil && cfg != nil {
 			deployment = model.NormalizeNetworkAccess(cfg.NetworkAccess)
 		}
 	}
@@ -1726,6 +1734,20 @@ type filingEscalationOpts struct {
 }
 
 func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
+	if s.tasks != nil {
+		return s.tasks.gateTemplate(ctx, id)
+	}
+	id = strings.TrimSpace(id)
+	if model.IsSystemTemplateID(id) {
+		if tmpl := model.FileableSystemTemplate(id); tmpl != nil {
+			return tmpl
+		}
+		return model.SystemTemplate(id, model.RepoRef{})
+	}
+	return nil
+}
+
+func (c *Client) gateTemplate(ctx context.Context, id string) *model.Template {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil
@@ -1736,10 +1758,10 @@ func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
 		}
 		return model.SystemTemplate(id, model.RepoRef{})
 	}
-	if s.tasks == nil || s.tasks.Store == nil {
+	if c == nil || c.Store == nil {
 		return nil
 	}
-	tmpl, err := s.tasks.Store.GetTemplate(ctx, id)
+	tmpl, err := c.Store.GetTemplate(ctx, id)
 	if err != nil {
 		return nil
 	}
