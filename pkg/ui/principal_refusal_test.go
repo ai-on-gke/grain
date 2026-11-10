@@ -86,7 +86,7 @@ func TestRefusedPrincipalGetsAPageNamingThemWithTheAccessCodeForm(t *testing.T) 
 	for k, v := range assertion {
 		hdrs[k] = v
 	}
-	rec = serveFrom(srv, "198.51.100.8:1234", http.MethodPost, "/api/auth/access-code", url.Values{"code": {testAccessCode}}.Encode(), hdrs)
+	rec = serveFrom(srv, "198.51.100.8:1234", http.MethodPost, "/api/auth/access-code", url.Values{"code": {testAccessCode}, "name": {"owner@example.com"}}.Encode(), hdrs)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("form post: got %d, want 303: %s", rec.Code, rec.Body)
 	}

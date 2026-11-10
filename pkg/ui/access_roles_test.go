@@ -1044,8 +1044,8 @@ func TestAccessCodeSignInBehindIAPSaysTheVerifiedRoleApplies(t *testing.T) {
 	h := newRoleHarness(t)
 	h.allow(t, "user:vic@example.com", "grain/viewer")
 	for _, c := range []struct{ name, contentType, body string }{
-		{"json", "application/json", `{"code":"` + testAccessCode + `"}`},
-		{"form", "application/x-www-form-urlencoded", url.Values{"code": {testAccessCode}}.Encode()},
+		{"json", "application/json", `{"code":"` + testAccessCode + `","name":"vic@example.com"}`},
+		{"form", "application/x-www-form-urlencoded", url.Values{"code": {testAccessCode}, "name": {"vic@example.com"}}.Encode()},
 	} {
 		hdrs := h.as("vic@example.com")
 		hdrs["Content-Type"] = c.contentType
@@ -1061,7 +1061,7 @@ func TestAccessCodeSignInBehindIAPSaysTheVerifiedRoleApplies(t *testing.T) {
 		}
 	}
 	// Without an assertion the code still signs in.
-	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`"}`,
+	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`","name":"vic@example.com"}`,
 		map[string]string{"Content-Type": "application/json"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("sign-in by code without an assertion = %d %s, want 200", rec.Code, rec.Body)

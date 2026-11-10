@@ -367,7 +367,7 @@ func (fn groupCheckerFunc) IsMember(ctx context.Context, groupEmail, memberEmail
 
 func mintAccessCookieForTest(t *testing.T, srv *ui.Server, code string) string {
 	t.Helper()
-	form := url.Values{"code": {code}}
+	form := url.Values{"code": {code}, "name": {"alice@example.com"}}
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/access-code", strings.NewReader(form.Encode()))
 	req.RemoteAddr = "127.0.0.1:4242"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

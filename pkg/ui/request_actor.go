@@ -128,6 +128,14 @@ func RequestActor(ctx context.Context) model.Attribution {
 			op.Source = src
 		}
 	}
+	if op.Source == model.SourceAccessCode {
+		// Whoever presented the code, as they named themselves to it
+		// (access_code_mode.go): still the code's power, and still an
+		// unverified source, but no longer nobody.
+		if name := accessCodeNameFromContext(ctx); name != "" {
+			op = model.Principal{Kind: model.PrincipalHuman, ID: AccessCodeActorPrefix + name, Source: model.SourceAccessCode}
+		}
+	}
 	return model.Attribution{Actor: op}
 }
 
