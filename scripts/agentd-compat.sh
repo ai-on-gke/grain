@@ -59,7 +59,16 @@ else
 fi
 
 out="$(mktemp -d "${TMPDIR:-/tmp}/agentd-compat.XXXXXX")"
-trap 'for w in "$out"/wt-*; do [ -d "$w" ] && git worktree remove --force "$w" >/dev/null 2>&1; done; rm -rf "$out"' EXIT
+cleanup() {
+	local w
+	for w in "$out"/wt-*; do
+		if [ -d "$w" ]; then
+			git worktree remove --force "$w" >/dev/null 2>&1 || true
+		fi
+	done
+	rm -rf "$out"
+}
+trap cleanup EXIT
 
 ldflags() { echo "-X github.com/ai-on-gke/grain/pkg/version.Release=$1"; }
 
