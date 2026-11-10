@@ -221,6 +221,25 @@ func TestSetPendingSecretRefusesATaskThatIsNotWaitingOnOne(t *testing.T) {
 	}
 }
 
+// A request naming one of grain's own credentials (secrets.GrainHeld)
+// is refused at the point of writing too, so the deployment's signing
+// key or a git credential is never replaced from a task's secret box.
+func TestSetPendingSecretRefusesGrainsOwnCredentials(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	secretStore := withSecrets(t, c)
+	task := parkedOnASecret(t, c, store, ctx, "release-approval-key/key.pem")
+
+	err := c.SetPendingSecret(ctx, task.ID, "-----BEGIN EC PRIVATE KEY-----")
+	var ve *ui.ValidationError
+	if err == nil || !errors.As(err, &ve) {
+		t.Fatalf("SetPendingSecret for release-approval-key = %v, want a validation error", err)
+	}
+	if has, _ := secretStore.Has("release-approval-key", "key.pem"); has {
+		t.Fatal("the refused value was written to the store")
+	}
+}
+
 func TestSetPendingSecretNeedsAValue(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)

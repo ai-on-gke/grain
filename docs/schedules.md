@@ -1561,8 +1561,9 @@ check and posts no status. Pull requests are still judged by GitHub
 Actions and no other `.grain/workflows` run there. `docs/declarations.md`
 ("Running on grain CI in a `ci_mode: github` repository") has the file
 format and the shape of a "script on a cadence" workflow: on repositories
-the deployment offers grain's API to in CI (`ai-on-gke/grain` by default;
-`docs/agent-api.md`), a job holding `api:tasks:read` and
+the deployment offers grain's API to in CI (`ai-on-gke/grain`, plus
+whatever the deployment's `ci_api_repos` setting adds; `docs/agent-api.md`
+§ "CI jobs"), a job holding `api:tasks:read` and
 `api:tasks:from-template` can check whether there is work and file the
 repository's template itself, and exit 0 when there is none.
 
@@ -1739,3 +1740,47 @@ system release manager wakes every 30 minutes.
 - **System schedules.** `model.SystemScheduleRecurrence` may return an
   `everyNMinutes` cadence; the seeder writes it like any other, with the
   first firing N minutes after the cycle that seeds it.
+
+## Update: a firing held by a task that never started is raised (grain/task-4086)
+
+`overlap: skip` holds a schedule's next occurrence while the task its
+previous firing filed is open. That is right for a task that is running
+or waiting on a person. It is wrong for one that has never been
+dispatched. On 2026-11-10 release-train tick #3946 was filed at the
+default priority 5 and sat `queued` for about fourteen hours behind
+about sixty tasks, many at priority 9. Every 20-minute tick behind it was
+skipped, so no release candidate was cut that day, and nothing said why.
+
+- **Kept and raised, not superseded.** Of the two fixes on offer, grain
+  keeps the starved task and raises it. Superseding it (closing it and
+  filing a new firing) would put the new task at the back of the same
+  queue, behind everything the old one had already waited out, and would
+  close a task a person might be looking at.
+- **When.** A held occurrence counts as starved once
+  `model.ScheduleStarvedAfter` (1h) has passed since it came due, or once
+  `model.ScheduleStarvedOccurrences` (3) occurrences are held behind the
+  same task, whichever comes first. Three is the hour of a 20-minute
+  train. The blocker must be the skip's open task, still `queued`, and
+  have no run at all (`Store.Runs`). A task that started and is queued
+  again (a retry or a resume) is waiting on its own backoff, which a
+  priority does not fix. A running task, or one waiting on a person,
+  holds the schedule exactly as before. The person-wait case already
+  gets `NoteHeldScheduleOnBlocker`'s note.
+- **What.** Every cycle that skips an occurrence passes its skip to
+  `Store.EscalateStarvedScheduleBlocker`. Once the occurrence is starved:
+  - The task's priority is raised to the highest priority of any other
+    queued task, and never lowered. The starved task is older than any
+    task it ties with, so the queue's FIFO order dispatches it first at
+    that priority. Dependency links still never raise a blocker
+    (task-priorities spec, TP-13). This rule applies only to a schedule's
+    own firing.
+  - A comment from the schedule tells the task why. It is written only
+    when the priority rises.
+  - A warning notification `pipeline.schedule-starved:<schedule id>`
+    (`model.FamilyScheduleStarved`) names the schedule, the task and how
+    long it has been held. It is raised once while open, and cleared when
+    the task closes.
+- **Not done: admission.** A raised priority still waits for a free
+  worker. `admission: bypass` would also start the task past a full
+  worker pool. It is not applied automatically, because only a person may
+  grant an admission above `standard`.

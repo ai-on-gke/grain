@@ -25,7 +25,7 @@ sudo \
   ./scripts/setup.sh
 ```
 
-By default `setup.sh` loads checksum-verified release assets ([docs/release-assets.md](docs/release-assets.md)), provisions local PostgreSQL ([docs/database.md](docs/database.md)), and serves the UI on `http://<grain-host>:4242/`. See [docs/host-setup.md](docs/host-setup.md) for release channels, `/var/lib/grain` layout, backups, remote hosts, and uninstalling (`sudo ./scripts/setup.sh --uninstall`), or [docs/grain-init.md](docs/grain-init.md) to build everything from source (`grain init`).
+By default `setup.sh` pulls container images from Docker Hub (`docker.io/grainai/grain`), provisions local PostgreSQL ([docs/database.md](docs/database.md)), and serves the UI on `http://<grain-host>:4242/`. See [docs/host-setup.md](docs/host-setup.md) for release channels, `/var/lib/grain` layout, backups, remote hosts, and uninstalling (`sudo ./scripts/setup.sh --uninstall`), or [docs/grain-init.md](docs/grain-init.md) to build everything from source (`grain init`).
 
 ### 2. Docker Hub (`docker.io/grainai/grain`)
 
@@ -120,6 +120,6 @@ To use the `grain` CLI from your workstation against a remote deployment, run `g
 - **[Agent API](docs/agent-api.md)** — permission scopes (`api:*`), controller MCP routes, and [agent ergonomics](docs/agent-ergonomics.md).
 - **[Security](docs/access-code.md)** — access code & IAP, [local policy](docs/local-policy.md), [image signing](docs/image-signing.md), and [security audits](docs/security/audits).
 - **[Linux host operations](docs/host-setup.md)** & **[Database](docs/database.md)** — channels, `/var/lib/grain` layout, PostgreSQL/SQLite, backups, remote hosts, and uninstalling.
-- **[Releases](docs/releases/README.md)** — release notes and continuous release train ([release assets](docs/release-assets.md)).
+- **[Releases](docs/releases/README.md)** — release notes, continuous release train, and [standalone CLI archives](docs/release-assets.md).
 - **Contributing** — build and test from source with `make build && make test` (Go per [`go.mod`](go.mod) + Node.js/npm), following [Google's Open Source Community Guidelines](https://opensource.google.com/conduct/).
 - **License** — [Apache 2.0](LICENSE). *Not an officially supported Google product; not eligible for the Google Open Source Software Vulnerability Rewards Program.*
