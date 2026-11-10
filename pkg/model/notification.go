@@ -243,6 +243,13 @@ const (
 	// "<schedule id>" (EscalateStarvedScheduleBlocker). It clears when
 	// that task closes.
 	FamilyScheduleStarved = "pipeline.schedule-starved"
+	// FamilyNightlyRedUnattended is a red Stage 1 (nightly.yml on the
+	// default branch or a release candidate) whose repair task nobody is
+	// working on -- queued and never started past an hour, or deferred,
+	// paused or awaiting a reply past a few hours -- "<repo>"
+	// (orchestrator's stage1repair.go). It clears when the repair runs or
+	// Stage 1 is green again.
+	FamilyNightlyRedUnattended = "pipeline.nightly-red-unattended"
 	// FamilyStateRepoUnapplied is a configuration-repository commit the
 	// daemon could not apply across a schema migration and had to rewrite
 	// over, "<prior-head>".
