@@ -70,9 +70,6 @@ func System() Probe {
 // Detect reports where this process runs.
 func Detect() Detection { return System().Detect() }
 
-// OnHost is Detect().Host.
-func OnHost() bool { return Detect().Host }
-
 // cgroupMarkers are the names container runtimes leave in a process's
 // cgroup path under cgroup v1, or under v2 without a private cgroup
 // namespace. Matched as path components so that a host whose own slice

@@ -802,6 +802,12 @@ func scheduleSchema() Schema {
 			// or "on-failure". A cadence setting rather than content, so
 			// a declared schedule may say it.
 			{Model: "WorkflowReview", Keys: carried("review"), Columns: []string{"workflow_review"}},
+			// Whether that run is on grain CI even on a ci_mode: github
+			// repository (model.Schedule.GrainCI, grain/task-3878). Not
+			// authority: it starts the repository's own workflow, which a
+			// ci_mode: grain repository's schedule already may, and the run
+			// judges no pull request.
+			{Model: "GrainCI", Keys: carried("grain-ci"), Columns: []string{"grain_ci"}},
 			// Carried for the reason a suite's is (suiteSchema has it);
 			// and the team checked and kept nowhere, as on a template.
 			{Model: "AutoApproveProposals", Keys: carried("auto-approve-proposals"), Columns: []string{"auto_approve_proposals"}},

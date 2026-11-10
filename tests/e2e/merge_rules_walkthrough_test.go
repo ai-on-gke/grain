@@ -411,15 +411,6 @@ const queueOptionRules = declarationsExample + `  - id: risky
     port: false
 `
 
-func (w *rulesWorld) scriptEdits(edits map[string]string) {
-	w.setScript(func(tk model.Task) []antigravity.Step {
-		if f, ok := edits[tk.ID]; ok {
-			return w.changeScript(tk, "mkdir -p $(dirname "+f+") && echo '"+tk.ID+"' >> "+f)
-		}
-		return []antigravity.Step{finalText("no findings")}
-	})
-}
-
 func (w *rulesWorld) allTasks() []model.Task {
 	w.t.Helper()
 	all, err := w.store.ListTasks(w.ctx)
@@ -676,11 +667,4 @@ func TestMergeRulesWalkthroughQueryMergeQueue(t *testing.T) {
 			t.Errorf("query_merge_queue does not say %q", want)
 		}
 	}
-}
-
-// isMainBatchRef reports whether ref is a merge batch built for main,
-// whichever deployment id (model.MergeBatchRef) the walkthrough's store
-// drew.
-func isMainBatchRef(ref string) bool {
-	return strings.HasPrefix(ref, "grain-merge-queue/") && strings.HasSuffix(ref, "/main")
 }

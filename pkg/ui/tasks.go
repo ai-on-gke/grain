@@ -976,10 +976,6 @@ type Transition struct {
 	Detail              string `json:"detail,omitempty"`
 }
 
-func transitionFrom(t model.Transition) Transition {
-	return transitionFromWithAttempt(t, 0)
-}
-
 func transitionFromWithAttempt(t model.Transition, proposingAttempt int) Transition {
 	out := Transition{
 		State:               t.State,
