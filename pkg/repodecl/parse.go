@@ -756,6 +756,7 @@ type rawSchedule struct {
 	Trigger              *rawScheduleTrigger  `yaml:"trigger"`
 	Overlap              string               `yaml:"overlap"`
 	Review               string               `yaml:"review"`
+	GrainCI              *bool                `yaml:"grain-ci"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
@@ -943,6 +944,17 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	if sched.WorkflowReview != "" && workflow == "" && sched.Recurrence.Kind != model.RecurrenceGitHubWorkflowRun {
 		return model.Schedule{}, fmt.Errorf("%s: `review:` says when the run of a scheduled workflow is "+
 			"reviewed, and this schedule runs no `workflow:`", f.path)
+	}
+	// Whether the run is on grain CI even when this repository's
+	// ci_mode is github (model.Schedule.GrainCI): a setting of a schedule
+	// that runs one of its own `.grain/workflows`, and of nothing else --
+	// a GitHub Actions run is GitHub's to start.
+	if raw.GrainCI != nil {
+		if workflow == "" {
+			return model.Schedule{}, fmt.Errorf("%s: `grain-ci:` says the run of a scheduled workflow is on "+
+				"grain CI even on a ci_mode: github repository, and this schedule runs no `workflow:`", f.path)
+		}
+		sched.GrainCI = *raw.GrainCI
 	}
 	if raw.AutoApproveProposals != nil {
 		sched.AutoApproveProposals = *raw.AutoApproveProposals

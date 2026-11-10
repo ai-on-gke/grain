@@ -81,7 +81,7 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	}
 }
 
-// canonical is name as migration 131 stores it (model.CanonicalStoredGrant):
+// canonical is name as migration 132 stores it (model.CanonicalStoredGrant):
 // every migration test here runs the store up to model.SchemaVersion, so an
 // api:<what> a retirement wrote is read back as its reference.
 func canonical(name string) string {
@@ -595,7 +595,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 	}
 	// Migration 90 rewrites release-notes and memory to api:release-notes and
 	// api:memory; migration 128 then drops disabled api:memory from defaults,
-	// and migration 131 stores api:release-notes as its canonical reference.
+	// and migration 132 stores api:release-notes as its canonical reference.
 	if want := []string{canonical("api:release-notes")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 		t.Errorf("catalogue.defaults.repos[acme/widgets].task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 	}

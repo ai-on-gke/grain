@@ -103,6 +103,48 @@ for (const [name, viewport] of [
       expect(roleBox.x).toBeGreaterThan(inputBox.x + inputBox.width - 1);
       expect(reasonBox.x).toBeGreaterThan(roleBox.x + roleBox.width - 1);
     }
+
+    // The access history sits in its own card below the list.
+    const history = await page.locator("#access-history").boundingBox();
+    expect(history.y).toBeGreaterThan(card.y + card.height - 1);
+    expect(history.x + history.width).toBeLessThanOrEqual(viewport.width + 1);
+
+    // Removing an operator entry opens the reason panel inside the card,
+    // its reason field and buttons within it, without sideways scroll;
+    // Cancel closes it and removes nothing.
+    await page
+      .getByRole("button", { name: "Remove user:alice@example.com" })
+      .click();
+    const panel = page.getByTestId("access-change-panel");
+    await expect(panel).toBeVisible();
+    const panelBox = await panel.boundingBox();
+    expect(panelBox.x).toBeGreaterThanOrEqual(card.x - 1);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(
+      card.x + card.width + 1,
+    );
+    for (const el of [
+      page.getByTestId("access-change-reason"),
+      page.getByTestId("access-change-apply"),
+    ]) {
+      const box = await el.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(panelBox.x - 1);
+      expect(box.x + box.width).toBeLessThanOrEqual(
+        panelBox.x + panelBox.width + 1,
+      );
+    }
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth + 1,
+      ),
+      "the page scrolls sideways with the reason panel open",
+    ).toBe(false);
+    await panel.getByRole("button", { name: "Cancel" }).click();
+    await expect(panel).toHaveCount(0);
+    await expect(
+      page.getByTestId("principal-row-user:alice@example.com"),
+    ).toBeVisible();
   });
 }
 
@@ -151,29 +193,55 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
     await expect(
       page.getByTestId("principal-row-user:new-member@example.com"),
     ).toContainText("grain/operator");
+    // ... and the reason is kept in the access history.
+    await expect(page.getByTestId("access-history")).toContainText(
+      "allowed user:new-member@example.com as grain/operator (new teammate)",
+    );
 
-    // Remove until one entry remains, then verify removing the last entry warns first.
-    for (const sa of [
-      "serviceAccount:ci@demo-project.iam.gserviceaccount.com",
-      "serviceAccount:release-bot@demo-project.iam.gserviceaccount.com",
-    ]) {
-      await page.getByRole("button", { name: `Remove ${sa}` }).click();
-      await expect(page.getByTestId(`principal-row-${sa}`)).toHaveCount(0);
-    }
-
+    // Removing an entry whose role holds dangerous scopes asks for a
+    // reason first, and refuses to go on without one.
     await page
       .getByRole("button", { name: "Remove user:new-member@example.com" })
       .click();
+    await expect(page.getByTestId("access-change-panel")).toContainText(
+      "give a reason",
+    );
+    await page.getByTestId("access-change-apply").click();
+    await expect(page.getByTestId("access-change-error")).toContainText(
+      "Give a reason",
+    );
+    await page.getByTestId("access-change-reason").fill("left the team");
+    await page.getByTestId("access-change-apply").click();
     await expect(
       page.getByTestId("principal-row-user:new-member@example.com"),
     ).toHaveCount(0);
+    await expect(page.getByTestId("access-history")).toContainText(
+      "removed user:new-member@example.com (was grain/operator) (left the team)",
+    );
 
-    await page
-      .getByRole("button", { name: "Remove group:eng-oncall@example.com" })
-      .click();
-    await expect(
-      page.getByTestId("principal-row-group:eng-oncall@example.com"),
-    ).toHaveCount(0);
+    // Remove until one entry remains, then verify removing the last entry
+    // warns first. Each removal gives a reason when the panel asks.
+    const remove = async (entry) => {
+      const row = page.getByTestId(`principal-row-${entry}`);
+      const panel = page.getByTestId("access-change-panel");
+      await page.getByRole("button", { name: `Remove ${entry}` }).click();
+      await Promise.race([
+        row.waitFor({ state: "detached" }),
+        panel.waitFor({ state: "visible" }),
+      ]);
+      if (await panel.isVisible()) {
+        await page.getByTestId("access-change-reason").fill("cleanup");
+        await page.getByTestId("access-change-apply").click();
+      }
+      await expect(row).toHaveCount(0);
+    };
+    for (const entry of [
+      "serviceAccount:ci@demo-project.iam.gserviceaccount.com",
+      "serviceAccount:release-bot@demo-project.iam.gserviceaccount.com",
+      "group:eng-oncall@example.com",
+    ]) {
+      await remove(entry);
+    }
 
     // Last entry -> shows warning before removing.
     await page
@@ -182,6 +250,7 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
     await expect(page.getByTestId("access-remove-warning")).toContainText(
       "removing the last allowed entry",
     );
+    await page.getByTestId("access-change-reason").fill("last one");
     await page.getByRole("button", { name: "Remove anyway" }).click();
     await expect(page.getByTestId("allowed-principals-empty")).toBeVisible();
     await expect(page.getByTestId("access-removed-notice")).toContainText(

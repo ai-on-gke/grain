@@ -214,13 +214,6 @@ func RegisterTrack(def Definition) {
 	tracks = append(tracks, def)
 }
 
-// UnregisterTrack removes the track named t; it is for tests.
-func UnregisterTrack(t Track) {
-	tracksMu.Lock()
-	defer tracksMu.Unlock()
-	tracks = slices.DeleteFunc(tracks, func(d Definition) bool { return d.Track == t })
-}
-
 func registered() []Definition {
 	tracksMu.RLock()
 	defer tracksMu.RUnlock()

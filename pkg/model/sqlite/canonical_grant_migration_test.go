@@ -25,7 +25,7 @@ import (
 )
 
 // slice4Fixture is the fidelity fixture of design/design/unified-grants.design.md
-// §3, slice 4: each task's grants in every spelling a store at schema 130
+// §3, slice 4: each task's grants in every spelling a store at schema 131
 // can hold, legacy api:, non-canonical api references, repo-read: and
 // repo-write: included, beside grants the migration must leave alone.
 var slice4Fixture = map[string][]string{
@@ -98,12 +98,12 @@ func slice4Predicates(child, parent []string) string {
 	return b.String()
 }
 
-// Migration 131 is slice 4's "migrate once": every stored grant becomes
+// Migration 132 is slice 4's "migrate once": every stored grant becomes
 // its canonical reference, reading each one back gives the string the
 // store held before byte for byte (old -> CanonicalGrant -> old), every
 // approval predicate answers each (proposer, child) pair of the fixture
 // the same before and after, and running it again changes nothing.
-func TestMigration131StoresCanonicalReferencesWithFidelity(t *testing.T) {
+func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -152,11 +152,11 @@ func TestMigration131StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	}
 	before := grantRows(t, ctx, db, "task_grant", "task_id")
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 130 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 131 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-130 store: %v", err)
+		t.Fatalf("migrating a version-131 store: %v", err)
 	}
 
 	for table, owner := range owners {
@@ -201,7 +201,7 @@ func TestMigration131StoresCanonicalReferencesWithFidelity(t *testing.T) {
 			want := slice4Predicates(before[child], before[parent])
 			answers.WriteString(want + "\n")
 			if got := slice4Predicates(after[child], after[parent]); got != want {
-				t.Errorf("(%s proposes %s) after migration 131:\n got %s\nwant %s", parent, child, got, want)
+				t.Errorf("(%s proposes %s) after migration 132:\n got %s\nwant %s", parent, child, got, want)
 			}
 		}
 	}
@@ -263,7 +263,7 @@ func TestMigration131StoresCanonicalReferencesWithFidelity(t *testing.T) {
 
 	// Running it again is a no-op.
 	state := storedGrantState(t, ctx, db)
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 130 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 131 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {

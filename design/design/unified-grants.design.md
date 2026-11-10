@@ -11,7 +11,7 @@ spelling, writers across `pkg/model`, `pkg/ui`, `pkg/cli`,
 references, `GrantsPicker.jsx` edits `with: {repo}` inline on `…/api`
 grants, and the fidelity fixture is `pkg/model/canonical_grant_test.go`.
 Slice 4 (migrate once) is implemented in [Task #3321](/tasks/3321):
-schema migration 131, grain/config's `grants:` read as one key with
+schema migration 132, grain/config's `grants:` read as one key with
 `reads:`/`writes:`, `grants:` in `.grain/` templates and schedules, and
 the `release-gate-read` provider retired (§3's "As built" notes say what
 it does and what it left for later). Slice 5 (repository grants in the
@@ -196,7 +196,7 @@ once with a fidelity test.**
   old again must be byte-identical, and the approval predicates above
   must return the same answer on both forms for every (proposer, child)
   pair in the fixture.
-  *As built ([Task #3321](/tasks/3321)):* schema migration 131
+  *As built ([Task #3321](/tasks/3321)):* schema migration 132
   (`model.MigrateCanonicalGrants`, `canonical_grant_migration.go`) reads
   every grant string off the store, as migration 88 did, and rewrites
   each one `CanonicalStoredGrant` changes -- `api:<what>[@repo]`, an api
@@ -218,7 +218,7 @@ once with a fidelity test.**
   person-only, the capability policy, the api scope set) answer every
   (proposer, child) pair alike before and after, and a second run is a
   no-op; the earlier migration tests read their expectations through
-  `CanonicalStoredGrant` since every store now ends at 131. Not done here:
+  `CanonicalStoredGrant` since every store now ends at 132. Not done here:
   `task_read`/`task_write` (and the template and schedule tables) are
   **not** projected into grant rows. A `…/repo#read` grant row outside
   CI is refused by the capability policy (`CIOnlyRefusal`), and the

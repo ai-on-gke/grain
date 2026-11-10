@@ -75,7 +75,7 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	}
 }
 
-// canonical is name as migration 131 stores it (model.CanonicalStoredGrant):
+// canonical is name as migration 132 stores it (model.CanonicalStoredGrant):
 // every migration test here runs the store up to model.SchemaVersion, so an
 // api:<what> a retirement wrote is read back as its reference.
 func canonical(name string) string {

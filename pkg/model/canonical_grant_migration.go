@@ -75,7 +75,7 @@ func CanonicalStoredGrants(names []string) (out []string, changed bool) {
 	return out, changed
 }
 
-// migrateCanonicalGrants is schema migration 131's Up, slice 4 of
+// migrateCanonicalGrants is schema migration 132's Up, slice 4 of
 // unified-grants §3 ("migrate once"): every grant a store holds in a legacy
 // spelling -- api:<what>[@repo], an api reference not in its canonical form,
 // and any repo-read:/repo-write: migration 88 could not have seen (a
@@ -95,7 +95,7 @@ func migrateCanonicalGrants(ctx context.Context, tx *sql.Tx) error {
 	return MigrateCanonicalGrants(ctx, tx)
 }
 
-// MigrateCanonicalGrants is migration 131's rewrite, exported for a
+// MigrateCanonicalGrants is migration 132's rewrite, exported for a
 // state-repository import at the current schema: a grain/config shared with
 // a binary from before slice 3, or edited by hand, can still carry api: and
 // repo-read:/repo-write: spellings, which the import rewrites as one key

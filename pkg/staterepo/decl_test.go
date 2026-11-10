@@ -281,7 +281,7 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 		t.Errorf("the title did not land: %q", tmpl.Title)
 	}
 	// self-debug lands as what it became (model.SelfDebugGrants).
-	// api:memory lands as its reference too: an import is migration 131's
+	// api:memory lands as its reference too: an import is migration 132's
 	// rewrite as well (model.MigrateCanonicalGrants).
 	if len(tmpl.Grants) != 3 || tmpl.Grants[0].Capability != model.APIRef("memory") || tmpl.Grants[1].Capability != model.APIRef("self-debug") ||
 		tmpl.Grants[2].Capability != model.GrainSourceGrant {

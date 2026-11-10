@@ -94,7 +94,7 @@ func TestADumpAt64ImportsWithEveryMigrationsRewrite(t *testing.T) {
 	// standing console sessions are rewritten just as an in-place
 	// migration rewrites them.
 	assertNoRetiredGrant(t, "grain_config.default_capabilities", cfg.DefaultCapabilities)
-	// 131: and the api: spellings those wrote are stored as references.
+	// 132: and the api: spellings those wrote are stored as references.
 	for _, want := range []string{model.APIRef("memory"), model.APIRef("dispatch-control"), model.APIRef("deployment:read"), model.GrainHealthGrant, model.GrainSQLReadGrant} {
 		if !slices.Contains(cfg.DefaultCapabilities, want) {
 			t.Errorf("grain_config.default_capabilities = %v, want %s in it", cfg.DefaultCapabilities, want)
