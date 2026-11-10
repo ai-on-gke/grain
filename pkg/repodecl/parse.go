@@ -724,13 +724,116 @@ type rawSchedule struct {
 	Weekly               *rawWeekly           `yaml:"weekly"`
 	Monthly              *rawDayAt            `yaml:"monthly"`
 	Trigger              *rawScheduleTrigger  `yaml:"trigger"`
-	Overlap              string               `yaml:"overlap"`
+	Overlap              rawOverlap           `yaml:"overlap"`
+	OverlapGroup         string               `yaml:"overlap-group"`
 	Review               string               `yaml:"review"`
 	GrainCI              *bool                `yaml:"grain-ci"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
 	Hosting              string               `yaml:"hosting"`
+}
+
+// rawOverlap is a schedule file's `overlap:`, in either of its forms: the
+// plain string (`skip` or `allow`), or the mapping
+// `{skip: true, group: <name>}` that also names an overlap group shared
+// with the repository's other schedules (model.Schedule.OverlapGroup,
+// grain/task-3895).
+type rawOverlap struct {
+	Scalar   string
+	Mapping  bool
+	Skip     *bool
+	HasGroup bool
+	Group    string
+}
+
+func (o *rawOverlap) UnmarshalYAML(value *yaml.Node) error {
+	const shape = "overlap is \"skip\", \"allow\", or {skip: true, group: <name>}"
+	switch value.Kind {
+	case yaml.ScalarNode:
+		if value.Tag == "!!null" {
+			*o = rawOverlap{}
+			return nil
+		}
+		if value.Tag != "!!str" {
+			return fmt.Errorf("%s", shape)
+		}
+		*o = rawOverlap{Scalar: value.Value}
+		return nil
+	case yaml.MappingNode:
+		out := rawOverlap{Mapping: true}
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			k, v := value.Content[i].Value, value.Content[i+1]
+			switch k {
+			case "skip":
+				if v.Kind != yaml.ScalarNode || v.Tag != "!!bool" {
+					return fmt.Errorf("overlap.skip is true or false")
+				}
+				var b bool
+				if err := v.Decode(&b); err != nil {
+					return err
+				}
+				out.Skip = &b
+			case "group":
+				if v.Kind != yaml.ScalarNode || v.Tag != "!!str" {
+					return fmt.Errorf("overlap.group is a name")
+				}
+				out.HasGroup, out.Group = true, v.Value
+			default:
+				return fmt.Errorf("overlap: unknown key %q -- the mapping form takes `skip` and `group`", k)
+			}
+		}
+		*o = out
+		return nil
+	default:
+		return fmt.Errorf("%s", shape)
+	}
+}
+
+// scheduleOverlap resolves a schedule file's `overlap:` and
+// `overlap-group:` into the policy and group they say. A group holds
+// firings while another schedule in it runs, so it is a skip by
+// definition: `overlap: allow` (or `skip: false`) beside one is refused
+// rather than one of the two being ignored.
+func scheduleOverlap(f file, raw rawOverlap, topGroup string) (model.OverlapPolicy, string, error) {
+	var policy model.OverlapPolicy
+	var group string
+	if raw.Mapping {
+		policy = model.OverlapSkip
+		if raw.Skip != nil && !*raw.Skip {
+			policy = model.OverlapAllow
+		}
+		if raw.HasGroup {
+			if group = strings.TrimSpace(raw.Group); group == "" {
+				return "", "", fmt.Errorf("%s: `overlap.group` is empty", f.path)
+			}
+		}
+	} else {
+		switch p := model.OverlapPolicy(strings.TrimSpace(raw.Scalar)); p {
+		case "", model.OverlapSkip, model.OverlapAllow:
+			policy = p
+		default:
+			return "", "", fmt.Errorf("%s: overlap is \"skip\" or \"allow\", got %q", f.path, string(p))
+		}
+	}
+	if tg := strings.TrimSpace(topGroup); tg != "" {
+		if group != "" {
+			return "", "", fmt.Errorf("%s: the overlap group is named twice -- write `overlap.group` or "+
+				"`overlap-group`, not both", f.path)
+		}
+		group = tg
+	}
+	if group == "" {
+		return policy, "", nil
+	}
+	if policy == model.OverlapAllow {
+		return "", "", fmt.Errorf("%s: an overlap group holds a firing while another schedule in it is "+
+			"running, so it cannot be combined with `overlap: allow` (or `skip: false`)", f.path)
+	}
+	if err := model.ValidateOverlapGroup(group); err != nil {
+		return "", "", fmt.Errorf("%s: %w", f.path, err)
+	}
+	return model.OverlapSkip, group, nil
 }
 
 type rawScheduleTrigger struct {
@@ -885,12 +988,11 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		return model.Schedule{}, err
 	}
 	sched.Recurrence = recurrence
-	switch overlap := model.OverlapPolicy(strings.TrimSpace(raw.Overlap)); overlap {
-	case "", model.OverlapSkip, model.OverlapAllow:
-		sched.Overlap = overlap
-	default:
-		return model.Schedule{}, fmt.Errorf("%s: overlap is \"skip\" or \"allow\", got %q", f.path, string(overlap))
+	overlap, overlapGroup, err := scheduleOverlap(f, raw.Overlap, raw.OverlapGroup)
+	if err != nil {
+		return model.Schedule{}, err
 	}
+	sched.Overlap, sched.OverlapGroup = overlap, overlapGroup
 	if workflow != "" || (sched.Recurrence.Kind == model.RecurrenceGitHubWorkflowRun && template == "" && suite == "") {
 		// A workflow firing is unfinished until its run has ended and its
 		// review has been filed, and grain keeps one record of that per

@@ -155,6 +155,21 @@ func overlapOr(p, fallback model.OverlapPolicy) model.OverlapPolicy {
 	return p
 }
 
+// parseOverlapGroup checks a wire overlap group (model.ValidateOverlapGroup)
+// against the policy it comes with: a group is a skip by definition, so
+// one beside "allow" is refused rather than one of the two ignored.
+func parseOverlapGroup(text string, policy model.OverlapPolicy) (string, error) {
+	group := strings.TrimSpace(text)
+	if err := model.ValidateOverlapGroup(group); err != nil {
+		return "", validationErrorf("overlapGroup: %v", err)
+	}
+	if group != "" && policy.Allows() {
+		return "", validationErrorf("overlapGroup: a schedule in an overlap group skips a firing while " +
+			"another in the group is running, so it cannot also be set to allow overlap")
+	}
+	return group, nil
+}
+
 // parseOverlap turns the wire value into a model.OverlapPolicy,
 // rejecting anything Validate would -- caught here, before the store is
 // touched, the same as parseRecurrence does for a cadence. An empty
@@ -264,6 +279,11 @@ type Schedule struct {
 	// UI can render the setting without knowing which of the two the
 	// blank used to mean.
 	Overlap string `json:"overlap"`
+	// OverlapGroup is the overlap group this schedule shares with the
+	// other schedules firing into its repository (model.Schedule.OverlapGroup,
+	// grain/task-3895): a firing is held while any of them has one
+	// unfinished. Empty for a schedule that checks only its own.
+	OverlapGroup string `json:"overlapGroup,omitempty"`
 	// DeclaredIn is where this schedule came from when a repository
 	// declares it rather than somebody here creating it --
 	// ui.Template.DeclaredIn's own doc comment.
@@ -342,6 +362,9 @@ type ScheduleSkip struct {
 	FiredTaskID string     `json:"firedTaskId,omitempty"`
 	// Folded is how many later occurrences the late firing absorbed.
 	Folded int `json:"folded,omitempty"`
+	// HeldByScheduleID is the other schedule in this one's overlap group
+	// that held the occurrence (grain/task-3895).
+	HeldByScheduleID string `json:"heldByScheduleId,omitempty"`
 }
 
 func scheduleSkipsFrom(skips []model.ScheduleSkip) []ScheduleSkip {
@@ -351,6 +374,7 @@ func scheduleSkipsFrom(skips []model.ScheduleSkip) []ScheduleSkip {
 			Occurrence: k.Occurrence, At: k.At, Reason: string(k.Reason), Summary: k.Summary(),
 			TaskID: k.TaskID, TaskState: string(k.TaskState), Outcome: string(k.Outcome),
 			ResolvedAt: k.ResolvedAt, FiredTaskID: k.FiredTaskID, Folded: k.Folded,
+			HeldByScheduleID: k.HeldByScheduleID,
 		})
 	}
 	return out
@@ -405,6 +429,10 @@ type ScheduleSuppression struct {
 	// -- "standingWork"'s "skipped: this deployment doesn't run <repo>'s
 	// standing work" (grain/task-3332).
 	Detail string `json:"detail,omitempty"`
+	// HeldByScheduleID is the other schedule in this one's overlap group
+	// whose unfinished firing is holding it (grain/task-3895); Detail
+	// then says so in words.
+	HeldByScheduleID string `json:"heldByScheduleId,omitempty"`
 }
 
 // suppressionFrom renders a derived suppression, or nil for a schedule
@@ -413,7 +441,8 @@ func suppressionFrom(s *model.ScheduleSuppression) *ScheduleSuppression {
 	if s == nil {
 		return nil
 	}
-	out := &ScheduleSuppression{Reason: string(s.Reason), TaskID: s.TaskID, Detail: s.Detail}
+	out := &ScheduleSuppression{Reason: string(s.Reason), TaskID: s.TaskID, Detail: s.Detail,
+		HeldByScheduleID: s.HeldByScheduleID}
 	if !s.Until.IsZero() {
 		until := s.Until
 		out.Until = &until
@@ -456,6 +485,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		Recurrence:           recurrenceFrom(s.Recurrence),
 		TimeZone:             s.TimeZone,
 		Overlap:              string(overlapOr(s.Overlap, model.OverlapSkip)),
+		OverlapGroup:         s.OverlapGroup,
 		Enabled:              s.Enabled,
 		NextRunAt:            s.NextRunAt,
 		LastRunAt:            s.LastRunAt,
@@ -739,6 +769,11 @@ type CreateScheduleRequest struct {
 	// pile a second firing on top of one still running, which is what
 	// every schedule did before this was a choice at all.
 	Overlap string `json:"overlap"`
+	// OverlapGroup is the overlap group this schedule shares with the
+	// other schedules firing into its repository (model.Schedule.OverlapGroup,
+	// grain/task-3895): a firing is held while any of them has one
+	// unfinished. Empty for a schedule that checks only its own.
+	OverlapGroup string `json:"overlapGroup,omitempty"`
 	// Enabled, omitted, defaults to true -- a schedule somebody just
 	// created is normally meant to run, not to sit paused until a second
 	// click.
@@ -789,6 +824,10 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 		return Schedule{}, err
 	}
 	overlap, err := parseOverlap(req.Overlap)
+	if err != nil {
+		return Schedule{}, err
+	}
+	overlapGroup, err := parseOverlapGroup(req.OverlapGroup, overlap)
 	if err != nil {
 		return Schedule{}, err
 	}
@@ -885,6 +924,7 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 	recurrence.TimeZone = tz
 	sched.Recurrence = recurrence
 	sched.Overlap = overlap
+	sched.OverlapGroup = overlapGroup
 	sched.Enabled = enabled
 	sched.NextRunAt = recurrence.Next(now, sched.Location())
 	sched.CreatedAt = now
@@ -1621,7 +1661,10 @@ type UpdateScheduleRequest struct {
 	// caller that meant the default can say "skip" and one that sent a
 	// blank by accident should hear about it.
 	Overlap *string `json:"overlap,omitempty"`
-	Enabled *bool   `json:"enabled,omitempty"`
+	// OverlapGroup, nil-means-leave-alone too: a group name, or "" to
+	// leave the schedule's group (model.Schedule.OverlapGroup).
+	OverlapGroup *string `json:"overlapGroup,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
 	// Revision, given, is the schedule's Revision as the caller last read
 	// it, and the edit is refused (staleEditError) if the schedule has been
 	// saved since. Absent applies the edit regardless.
@@ -1953,6 +1996,14 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		}
 		overlap = &p
 	}
+	var overlapGroup *string
+	if req.OverlapGroup != nil {
+		g := strings.TrimSpace(*req.OverlapGroup)
+		if err := model.ValidateOverlapGroup(g); err != nil {
+			return Schedule{}, validationErrorf("overlapGroup: %v", err)
+		}
+		overlapGroup = &g
+	}
 	var chosenModel *string
 	if req.Model != nil {
 		m, err := c.declaredModelChoice(ctx, *req.Model)
@@ -2110,6 +2161,13 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		}
 		if overlap != nil {
 			s.Overlap = *overlap
+		}
+		if overlapGroup != nil {
+			s.OverlapGroup = *overlapGroup
+		}
+		if s.OverlapGroup != "" && s.Overlap.Allows() {
+			return validationErrorf("overlapGroup: a schedule in an overlap group skips a firing while " +
+				"another in the group is running, so it cannot also be set to allow overlap")
 		}
 		if req.Enabled != nil {
 			s.Enabled = *req.Enabled
