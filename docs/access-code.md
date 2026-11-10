@@ -483,6 +483,15 @@ environment (`GRAIN_RUN_CREDENTIAL`, taken out again at start, never on
 its argv). The mcpserver sends it as `Authorization: Bearer <credential>`
 on every request.
 
+On a host-directory sandbox (`-host-sandboxes`) the environment route
+would leak it: `run_command` runs as the daemon's own account with all of
+`/` bound in except the hidden paths, so the MCP config, agy home or
+codex spec the credential would be written into is readable from inside
+the sandbox. For those runs the daemon writes the credential to a 0600
+file in a fresh 0700 directory, adds that directory to the paths
+`run_command` hides, and passes the mcpserver only the file's path
+(`-run-credential-file`). The directory is removed when the run ends.
+
 - It is an HMAC of the two ids under a per-deployment key kept in
   `-data-dir/run-credential-key` (mode 0600, written on first start).
   Nothing is stored per run, so a run the daemon adopts after a restart
@@ -506,7 +515,13 @@ on every request.
 - The run's other daemon calls (reading its task, posting status and
   comments, staging attachments) name no acting task. They are admitted
   as grain's own on the strength of the credential, as they were on the
-  code's, but only while the run is live.
+  code's, but only while the run is live, and never to the deployment's
+  controls: a run credential naming no task is refused `403` on routes
+  under `access:*`, `secrets:*`, `connections:*`, `capabilities:admin`,
+  `settings:write`, `deployment:{reboot,restart,upgrade,src}`,
+  `merge:force` and `caches:write`. On `POST /api/mcp` and `/mcp` it
+  always acts for its own task. This caps what a leaked credential is
+  worth.
 
 ## Who the code is recorded as
 

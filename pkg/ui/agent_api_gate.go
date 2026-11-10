@@ -262,6 +262,11 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		}
 		taskID := strings.TrimSpace(r.Header.Get(ActingTaskHeader))
 		if taskID == "" {
+			if err := runCredentialScopeError(r, pattern, scope); err != nil {
+				log.Printf("grain api: refused run credential %s: %v", pattern, err)
+				writeError(w, http.StatusForbidden, err)
+				return
+			}
 			next(w, r)
 			return
 		}

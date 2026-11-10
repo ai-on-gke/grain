@@ -228,6 +228,12 @@ func (s *Server) authenticateRunCredential(w http.ResponseWriter, r *http.Reques
 	}
 	r.Header.Del("Authorization")
 	r.Header.Del("X-Grain-Tunnel-Token")
+	if r.URL.Path == "/api/mcp" || r.URL.Path == "/mcp" {
+		// The MCP endpoints dispatch any route a caller's access reaches,
+		// and a caller naming no task reaches every one: a run credential
+		// there is always its own task's agent.
+		r.Header.Set(ActingTaskHeader, cred.TaskID)
+	}
 	if strings.TrimSpace(r.Header.Get(ActingTaskHeader)) != "" {
 		r.Header.Set(ActingRunHeader, cred.RunID)
 	}
@@ -256,4 +262,42 @@ func (s *Server) actingTaskCredentialError(r *http.Request) error {
 		return errActingTaskNeedsRunCredential
 	}
 	return nil
+}
+
+// runCredentialOperatorScopes are the scopes a run credential never
+// reaches without naming its task: the deployment's own controls, which
+// no call a run's `grain mcpserver` makes for itself needs. A request
+// naming its task is held to that task's grants by agentAPIGate instead.
+// It caps what a leaked credential is worth (task 4048's review): it can
+// do what the run's own plumbing does, not read secrets, change who has
+// access, rewrite settings or capabilities, or restart the deployment.
+var runCredentialOperatorScopes = map[APIScope]bool{
+	"access:read":        true,
+	"access:write":       true,
+	"secrets:read":       true,
+	"secrets:write":      true,
+	"connections:read":   true,
+	"connections:write":  true,
+	"capabilities:admin": true,
+	"settings:write":     true,
+	"deployment:reboot":  true,
+	"deployment:restart": true,
+	"deployment:upgrade": true,
+	"deployment:src":     true,
+	"merge:force":        true,
+	"caches:write":       true,
+}
+
+// runCredentialScopeError refuses a request a run credential admitted,
+// naming no acting task, on a route under one of
+// runCredentialOperatorScopes; nil for any other request.
+func runCredentialScopeError(r *http.Request, pattern string, scope APIScope) error {
+	if _, ok := runCredentialFromContext(r.Context()); !ok {
+		return nil
+	}
+	if strings.TrimSpace(r.Header.Get(ActingTaskHeader)) != "" || !runCredentialOperatorScopes[scope] {
+		return nil
+	}
+	return fmt.Errorf("a run credential cannot call %s (scope %s) as the deployment: "+
+		"name your task in %s to be held to its grants (docs/access-code.md)", pattern, scope, ActingTaskHeader)
 }

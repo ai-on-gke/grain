@@ -176,3 +176,33 @@ func TestEnsureRunCredentialKeyWritesOnceAndKeepsIt(t *testing.T) {
 		t.Fatalf("key file mode: %v %v, want 0600", fi.Mode(), err)
 	}
 }
+
+// Without naming its task a run credential reaches what the run's own
+// plumbing needs, and not the deployment's controls: a leaked one cannot
+// read secrets, change access or rewrite settings as the operator
+// (task 4048's review).
+func TestARunCredentialNamingNoTaskIsRefusedTheDeploymentsControls(t *testing.T) {
+	srv, _ := runCredentialServer(t)
+	auth := "Bearer " + mintRunCredential(t, "2", "r-2")
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/secrets", ""},
+		{http.MethodPut, "/api/settings", `{}`},
+		{http.MethodGet, "/api/access/principals", ""},
+	} {
+		rec := serveFrom(srv, networkAddr, c.method, c.path, c.body, map[string]string{"Authorization": auth, "Content-Type": "application/json"})
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "run credential") {
+			t.Errorf("%s %s with a run credential and no acting task: %d %s, want 403", c.method, c.path, rec.Code, rec.Body)
+		}
+	}
+	// What the run's plumbing does still works.
+	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/tasks/2", "", map[string]string{"Authorization": auth}); rec.Code != http.StatusOK {
+		t.Errorf("GET /api/tasks/2 with the run credential: %d %s", rec.Code, rec.Body)
+	}
+	// And POST /api/mcp is always its own task's agent: task 2 holds
+	// api:tasks:read, so it lists tasks but cannot read settings.
+	init := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + ui.ToolGrainInvoke + `","arguments":{"tool":"api_get_settings","arguments":{}}}}`
+	rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/mcp", init, map[string]string{"Authorization": auth, "Content-Type": "application/json"})
+	if !strings.Contains(rec.Body.String(), "settings:read") {
+		t.Errorf("POST /api/mcp reading settings with a run credential: %d %s, want a refusal naming settings:read", rec.Code, rec.Body)
+	}
+}
