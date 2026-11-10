@@ -152,3 +152,35 @@ func TestGrainRegistryIsADeprecatedAliasForGrainHub(t *testing.T) {
 		t.Fatalf("parseArgs: url=%q token=%q rest=%v", *url, *token, rest)
 	}
 }
+
+// main rewrites a deprecated command word to its new spelling before
+// anything dispatches on it, so the rewrite is where `grain registry ...`
+// has to say it is deprecated: warning later, in dispatchCLI, saw "hub"
+// and never fired.
+func TestCanonicalizeCommandWordWarnsOnceForGrainRegistry(t *testing.T) {
+	for _, tc := range []struct {
+		typed, want string
+		warn        bool
+	}{
+		{"registry", "hub", true},
+		{"hub", "hub", false},
+		{"hostd", "host", false},
+		{"list", "list", false},
+	} {
+		var stderr bytes.Buffer
+		args := []string{tc.typed, "list"}
+		canonicalizeCommandWord(args, &stderr)
+		if args[0] != tc.want {
+			t.Errorf("grain %s: args[0] = %q, want %q", tc.typed, args[0], tc.want)
+		}
+		got := strings.Count(stderr.String(), "is deprecated")
+		if tc.warn && (got != 1 || !strings.Contains(stderr.String(), "'grain registry' is deprecated") ||
+			!strings.Contains(stderr.String(), "use 'grain hub'")) {
+			t.Errorf("grain %s: want one warning naming 'grain hub', got %d:\n%s", tc.typed, got, stderr.String())
+		}
+		if !tc.warn && got != 0 {
+			t.Errorf("grain %s: want no warning, got:\n%s", tc.typed, stderr.String())
+		}
+	}
+	canonicalizeCommandWord(nil, io.Discard)
+}
