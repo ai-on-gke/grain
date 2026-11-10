@@ -327,6 +327,7 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 				map[string]any{"capability": model.RepoReadRef, "with": map[string]any{"repo": "acme/tools"}},
 				model.RepoWriteRef + `={"base":"main","repo":"acme/site"}`,
 				map[string]any{"capability": model.APIRef("tasks:read"), "with": map[string]any{}},
+				"api:tasks:read",
 				model.APIRef("tasks:read"),
 			}
 		}
@@ -380,7 +381,14 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 
 	for _, bad := range []any{
 		map[string]any{"capability": model.APIRef("tasks:read"), "with": "not-a-map"},
+		map[string]any{"capability": model.APIRef("tasks:read"), "with": nil},
 		map[string]any{"capability": model.APIRef("ci:read") + `={"repo":"acme/widgets"}`, "with": map[string]any{"repo": "acme/other"}},
+		map[string]any{"capability": model.APIRef("ci:write"), "repo": "acme/widgets"},
+		map[string]any{"capability": model.APIRef("ci:write"), "wtih": map[string]any{"repo": "acme/widgets"}},
+		map[string]any{"capability": "api:ci:read", "with": map[string]any{"repo": "acme/widgets"}},
+		map[string]any{"capability": "gcp-key", "with": map[string]any{"permission_set": "ci"}},
+		map[string]any{"capability": "https://not-a-method", "with": map[string]any{"a": 1}},
+		map[string]any{"capability": nil, "with": map[string]any{"repo": "acme/widgets"}},
 	} {
 		editSettings(t, work, "template", func(entries []map[string]any) {
 			for _, entry := range entries {

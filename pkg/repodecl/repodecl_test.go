@@ -281,8 +281,8 @@ func TestGrantsIsCapabilitiesUnifiedSpelling(t *testing.T) {
 			"grants:\n" +
 			"  - capability: https://grain.dev/capabilities/repo#read\n    with: {repo: acme/docs}\n" +
 			"  - capability: https://grain.dev/capabilities/repo#write\n    with: {repo: acme/site}\n",
-		".grain/schedules/it.yml": "template: nightly\ncapabilities: [\"package-publish\"]\n" +
-			"grants: [\"package-publish\", \"gcp-key:deploy\"]\nevery:\n  hours: 6\n",
+		".grain/schedules/it.yml": "template: nightly\ncapabilities: [\"package-publish\", \"grain-ci\", \"api:tasks:read\", \"https://grain.dev/capabilities/api#tasks:read\"]\n" +
+			"grants: [\"package-publish\", \"api:ci-read@" + repo.String() + "\", \"gcp-key:deploy\"]\nevery:\n  hours: 6\n",
 	})
 	tmpl := declared.Templates[0].Template
 	if want := []model.RepoRef{{Owner: "acme", Name: "docs"}}; !slices.EqualFunc(tmpl.Reads, want, model.RepoRef.Same) {
@@ -296,7 +296,7 @@ func TestGrantsIsCapabilitiesUnifiedSpelling(t *testing.T) {
 	for _, g := range sched.Grants {
 		got = append(got, g.Capability)
 	}
-	if want := []string{"package-publish", "gcp-key:deploy"}; !slices.Equal(got, want) {
+	if want := []string{"package-publish", model.APIGrantString("ci-read", repo.String()), "api:tasks:read", "gcp-key:deploy"}; !slices.Equal(got, want) {
 		t.Errorf("schedule Grants = %v, want %v", got, want)
 	}
 

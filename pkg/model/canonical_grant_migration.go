@@ -215,16 +215,16 @@ func canonicalGrantRenames(ctx context.Context, tx *sql.Tx) (map[string][]string
 // declinedDefaults, the default grants it opted out of, so a default
 // rewritten beside it stays declined.
 func rewriteConsoleSessionDeclinedDefaults(ctx context.Context, tx *sql.Tx, renames map[string][]string) error {
-	var stored string
+	var stored sql.NullString
 	err := tx.QueryRowContext(ctx, "SELECT `console_sessions` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
-	if err == sql.ErrNoRows || (err == nil && stored == "") {
+	if err == sql.ErrNoRows || (err == nil && stored.String == "") {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("grain_config.console_sessions: reading: %w", err)
 	}
 	var sessions []map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(stored), &sessions); err != nil {
+	if err := json.Unmarshal([]byte(stored.String), &sessions); err != nil {
 		return nil
 	}
 	changed := false
@@ -264,15 +264,15 @@ func rewriteConsoleSessionDeclinedDefaults(ctx context.Context, tx *sql.Tx, rena
 // defaults (task, CI, and per-repository task and CI lists) without touching
 // policy rules, which already hold capability reference patterns.
 func rewriteCatalogueDefaults(ctx context.Context, tx *sql.Tx, renames map[string][]string) error {
-	var stored string
+	var stored sql.NullString
 	err := tx.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
-	if err == sql.ErrNoRows || (err == nil && strings.TrimSpace(stored) == "") {
+	if err == sql.ErrNoRows || (err == nil && strings.TrimSpace(stored.String) == "") {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("grain_config.capability_policy: reading: %w", err)
 	}
-	policy, err := DecodeCapabilityPolicy(stored)
+	policy, err := DecodeCapabilityPolicy(stored.String)
 	if err != nil || policy.Catalogue == nil {
 		return nil
 	}

@@ -522,15 +522,16 @@ func appendUniqueRows(out, rows []map[string]any) []map[string]any {
 	return out
 }
 
-// appendUniqueGrants is out with each of rows whose (parent, capability) is
-// not already in it appended: a grant table's primary key is (parent,
-// capability), and two entries in `grants:` that fold to the same string
-// (such as `{capability: …/api#tasks:read, with: {}}` beside
+// appendUniqueGrants is out with each of rows whose (parent, canonical grant
+// key) is not already in it appended: a grant table's primary key is (parent,
+// capability), and two entries in `grants:` that spell the same grant (such as
+// `{capability: …/api#tasks:read, with: {}}`, `api:tasks:read` and
 // `…/api#tasks:read`) are one row.
 func appendUniqueGrants(out, rows []map[string]any, parent string) []map[string]any {
 	for _, r := range rows {
+		rk := model.CanonicalGrantKey(fmt.Sprint(r["capability"]))
 		if !slices.ContainsFunc(out, func(o map[string]any) bool {
-			return o[parent] == r[parent] && o["capability"] == r["capability"]
+			return o[parent] == r[parent] && model.CanonicalGrantKey(fmt.Sprint(o["capability"])) == rk
 		}) {
 			out = append(out, r)
 		}
@@ -1521,10 +1522,20 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			if err != nil {
 				return nil, fail(err.Error())
 			}
-			named, _ := v.(map[string]any)
+			named, isMap := v.(map[string]any)
+			if !isMap {
+				return nil, fail("a grant is a capability, or {capability, with, via, folder}")
+			}
+			for k := range named {
+				switch k {
+				case "capability", "with", "via", "folder":
+				default:
+					return nil, fail(fmt.Sprintf("unknown key %q in grant (want capability, with, via, folder)", k))
+				}
+			}
 			capability, ok := named["capability"]
 			if !ok {
-				return nil, fail("a grant is a capability, or {capability, via, folder}")
+				return nil, fail("a grant is a capability, or {capability, with, via, folder}")
 			}
 			if via, ok := named["via"]; ok {
 				row["via"] = via
@@ -1536,18 +1547,26 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 				// {capability, with} is the unified grant's own shape
 				// (unified-grants §1): the with: arguments fold into the
 				// stored <reference>=<json> string.
-				if with, ok := named["with"]; ok && with != nil {
+				if with, hasWith := named["with"]; hasWith {
 					if _, isObj := with.(map[string]any); !isObj {
 						return nil, fail(fmt.Sprintf("%s: with: must be a mapping", name))
 					}
-					if strings.Contains(strings.TrimSpace(name), "=") {
+					trimmed := strings.TrimSpace(name)
+					if strings.Contains(trimmed, "=") {
 						return nil, fail(fmt.Sprintf("%s: capability already carries =<json> arguments beside with:", name))
+					}
+					if !model.IsCapabilityRef(trimmed) {
+						return nil, fail(fmt.Sprintf("%s: only a capability reference (https://...) takes with: arguments", name))
 					}
 					data, err := json.Marshal(with)
 					if err != nil {
 						return nil, fail(fmt.Sprintf("%s: with: %v", name, err))
 					}
-					name = model.CanonicalGrant(strings.TrimSpace(name) + "=" + string(data)).Key()
+					encoded := trimmed + "=" + string(data)
+					if err := model.CheckCapabilityGrantSyntax(encoded); err != nil {
+						return nil, fail(err.Error())
+					}
+					name = model.CanonicalGrant(encoded).Key()
 				}
 				for _, capID := range model.CanonicalLegacyGrants(name) {
 					out = append(out, map[string]any{
@@ -1558,6 +1577,9 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 					})
 				}
 				continue
+			}
+			if _, hasWith := named["with"]; hasWith {
+				return nil, fail("capability must be a string when with: is set")
 			}
 			row["capability"] = capability
 			out = append(out, row)

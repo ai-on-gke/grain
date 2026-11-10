@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -271,5 +272,59 @@ func TestMigration132StoresCanonicalReferencesWithFidelity(t *testing.T) {
 	}
 	if again := storedGrantState(t, ctx, db); fmt.Sprint(again) != fmt.Sprint(state) {
 		t.Errorf("a second run changed the store:\n got %v\nwant %v", again, state)
+	}
+}
+
+func TestSyncRepoDeclarationsStoresCanonicalGrantReferences(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	declaring := model.RepoRef{Owner: "acme", Name: "widgets"}
+	tmplID := model.RepoDeclaredID(model.DeclaredTemplate, declaring, "nightly")
+	schedID := model.RepoDeclaredID(model.DeclaredSchedule, declaring, "nightly")
+
+	declared := model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{{
+			Path: ".grain/templates/nightly.yml",
+			Template: model.Template{
+				ID:     tmplID,
+				Name:   "nightly",
+				Title:  "Nightly check",
+				Target: &declaring,
+				Grants: []model.Grant{
+					{Capability: "api:ci-read@acme/widgets", Via: ".grain/templates/nightly.yml"},
+					{Capability: "self-debug", Via: ".grain/templates/nightly.yml"},
+					{Capability: "api:self-debug", Via: ".grain/templates/nightly.yml"},
+				},
+			},
+		}},
+		Schedules: []model.DeclaredScheduleFile{{
+			Path: ".grain/schedules/nightly.yml",
+			Schedule: model.Schedule{
+				ID:         schedID,
+				TemplateID: &tmplID,
+				Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 3 * 60},
+				Enabled:    true,
+				Grants: []model.Grant{
+					{Capability: "api:tasks:read", Via: ".grain/schedules/nightly.yml"},
+					{Capability: model.APIRef("tasks:read") + "={}", Via: ".grain/schedules/nightly.yml"},
+				},
+			},
+		}},
+	}
+	if _, err := store.SyncRepoDeclarations(ctx, declaring, "abc123", declared, now, time.UTC); err != nil {
+		t.Fatalf("SyncRepoDeclarations: %v", err)
+	}
+
+	gotTmpl := grantRows(t, ctx, db, "template_grant", "template_id")[tmplID]
+	wantTmpl := []string{model.APIGrantString("ci-read", "acme/widgets"), model.APIRef("self-debug"), model.GrainSourceGrant}
+	sort.Strings(wantTmpl)
+	if !slices.Equal(gotTmpl, wantTmpl) {
+		t.Errorf("template_grant = %v, want %v", gotTmpl, wantTmpl)
+	}
+
+	gotSched := grantRows(t, ctx, db, "schedule_grant", "schedule_id")[schedID]
+	wantSched := []string{model.APIRef("tasks:read")}
+	if !slices.Equal(gotSched, wantSched) {
+		t.Errorf("schedule_grant = %v, want %v", gotSched, wantSched)
 	}
 }

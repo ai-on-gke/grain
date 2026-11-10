@@ -515,8 +515,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				}
 			}
 			ciRead := model.APIGrantString("ci-read", repo.String())
-			if !seenGrants[ciRead] {
-				seenGrants[ciRead] = true
+			ciReadKey := model.CanonicalGrantKey(ciRead)
+			if !seenGrants[ciReadKey] {
+				seenGrants[ciReadKey] = true
 				grants = append(grants, model.Grant{Capability: ciRead, Via: model.GrantSource(f.path)})
 			}
 			continue
@@ -551,8 +552,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 					"pass repo: <owner>/<repo> (or refs/force for branch push)", f.path, c))
 				continue
 			}
-			if !seenGrants[c] {
-				seenGrants[c] = true
+			key := model.CanonicalGrantKey(c)
+			if !seenGrants[key] {
+				seenGrants[key] = true
 				grants = append(grants, model.Grant{Capability: c, Via: model.GrantSource(f.path)})
 			}
 			continue
@@ -569,8 +571,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 					continue
 				}
 			}
-			if !seenGrants[c] {
-				seenGrants[c] = true
+			key := model.CanonicalGrantKey(c)
+			if !seenGrants[key] {
+				seenGrants[key] = true
 				grants = append(grants, model.Grant{
 					Capability: c,
 					Via:        model.GrantSource(f.path),
