@@ -4,7 +4,7 @@
 
 **The core rule:** in `credential: token` mode, no GCP service account private key is ever created or placed in a sandbox. The `gcp` capability server holds or inherits the admin identity outside the sandbox, places an `external_account` Application Default Credentials (ADC) configuration plus a random per-attempt bearer secret inside the sandbox, and exchanges that secret over a forwarded loopback port (`127.0.0.1:4252`) for short-lived OAuth 2.0 access tokens and OIDC ID tokens minted on demand via the Google Cloud IAM Credentials API (`generateAccessToken` / `generateIdToken`), bounded to the attempt's `attempt_id`, target service account, and lease deadline.
 
-**Status:** describes `main` as of 2026-11-08 (`pkg/capability/gcpsets` and `pkg/capability/intree/gcp_token.go`). [`capabilities.design.md`](capabilities.design.md) is the capability architecture overview; the normative capability and wire contract is [`capabilities.spec.md` §6.1](../spec/capabilities/capabilities.spec.md#61-leased-cloud-credential-gcp-key--mint_gcp-key--release_gcp-key), and the operator setup guide is [`docs/gcp-key-permission-sets.md`](../../docs/gcp-key-permission-sets.md). Where this document and the spec disagree, the spec wins.
+**Status:** describes `main` as of 2026-11-10 (`pkg/capability/gcpsets` and `pkg/capability/intree/gcp_token.go`). [`capabilities.design.md`](capabilities.design.md) is the capability architecture overview; the normative capability and wire contract is [`capabilities.spec.md` §6.1](../spec/capabilities/capabilities.spec.md#61-leased-cloud-credential-gcp-key--mint_gcp-key--release_gcp-key), and the operator setup guide is [`docs/gcp-key-permission-sets.md`](../../docs/gcp-key-permission-sets.md). Where this document and the spec disagree, the spec wins.
 
 ## Context and Motivation
 
@@ -15,7 +15,12 @@ Enterprise Google Cloud Platform (GCP) organizations commonly enforce the organi
 3. **Orphaned-key hazard on shared accounts:** For service accounts Grain creates itself, a periodic reaper (`ReapInterval = 10m`) deletes keys past `max_lease + 5m` if a server crash loses an attempt's `release_gcp-key` call. On a pre-existing service account (`service_account: <email>`), Grain cannot distinguish keys it minted from keys belonging to other systems, so the reaper never touches the account; an unreleased key lingers until an operator deletes it manually.
 4. **Exportable credential material in the guest:** Although a leased key is deleted on `release_gcp-key`, raw RSA private key material sits in the sandbox filesystem for the duration of the attempt.
 
-Grain's built-in `gcp` capability server (`https://grain.dev/capabilities/gcp#gcp-key`) solves this for permission sets targeting an existing service account (`service_account: <email>`) by defaulting to **`credential: token`**. Instead of creating keys, Grain configures `gcloud`, ADC, and Google Cloud client libraries inside the sandbox with a standard Workload Identity Federation (`external_account`) credential file pointing at a local RFC 8693 token broker forwarded from the `gcp` capability server (`127.0.0.1:4252`).
+Grain's built-in `gcp` capability server (`https://grain.dev/capabilities/gcp#gcp-key`) solves this across **both** managed and pre-existing service accounts via **`credential: token`** (offered as `"token (recommended, no keys)"` by default for new sets in Settings):
+
+- **Managed token sets (`credential: "token"`, `service_account` omitted):** Grain creates (or adopts) one service account `<prefix>-<deployment>-<set>@<project>.iam.gserviceaccount.com` marked as grain-managed (`OwnerDescriptionWithScope`), reconciles `roles` on `project` or `resource_scope` (`buckets/<name>` or `repositories/<location>/<repo>` for Artifact Registry) bounded by `admin.role_ceiling`, and grants the admin principal `roles/iam.serviceAccountTokenCreator` **on that service account only** — all idempotently on `configure` (`Reconcile`) and `mint_gcp-key`, with orphan unbind + account deletion via `delete_orphans`.
+- **Existing-account token sets (`service_account: <email>`, `credential` defaulting to `"token"`):** Grain impersonates the pre-existing account directly without creating, modifying, or binding anything (`person_granted` defaults to `true`).
+
+Instead of creating keys, Grain configures `gcloud`, ADC, and Google Cloud client libraries inside the sandbox with a standard Workload Identity Federation (`external_account`) credential file pointing at a local RFC 8693 token broker forwarded from the `gcp` capability server (`127.0.0.1:4252`). When an existing pool/key-mode set fails `CreateKey` under `constraints/iam.disableServiceAccountKeyCreation`, Grain refuses the mint without switching automatically and prints the exact `credential: "token"` JSON snippet to switch the set to.
 
 ---
 
@@ -170,16 +175,17 @@ In Go's `golang.org/x/oauth2`, `authorized_user` and `service_account` token sou
 
 ### Mode Comparison
 
-| Property | Existing SA: `credential: token` (Default) | Existing SA: `credential: key` | Managed Pool Set (No `service_account`) |
-| :--- | :--- | :--- | :--- |
-| **Works with `iam.disableServiceAccountKeyCreation`** | **Yes** (no key ever created) | No (`iam.serviceAccountKeys.create` blocked) | No (`iam.serviceAccountKeys.create` blocked) |
-| **Admin IAM permissions required** | `roles/iam.serviceAccountTokenCreator` on the target SA only | `iam.serviceAccountKeys.create` & `.delete` on the target SA | `grainGcpKeyAdmin` custom role on the project (+ bucket IAM if scoped) |
-| **GCP account / IAM mutations by Grain** | None (`set.fixed()`) | Keys created/deleted only; SA & bindings untouched | Creates `<prefix>-<deploy>-<set>-<n>` SAs & reconciles role bindings |
-| **Sandbox file at `~/.gcp-service-account.json`** | `type: "external_account"` config (no secret key material) | `type: "service_account"` RSA private key JSON | `type: "service_account"` RSA private key JSON |
-| **Port forward into sandbox** | `127.0.0.1:4252` (`DefaultGCPTokenPort`) | None | None |
-| **Concurrent attempts limit** | **Unlimited** (no per-account key cap) | **10** (`KeysPerAccount = 10`) | `10 × pool_max` (default `30`) |
-| **`person_granted` default** | **`true`** (`GrantByPerson`) | **`true`** (`GrantByPerson`) | `false` (`GrantCovered`) |
-| **Crash / missed-release cleanup** | Per-attempt broker state vanishes on restart; minted tokens expire in ≤ 1h | **Manual** (reaper skips existing SAs to avoid deleting non-Grain keys) | Automatic (`Reap` deletes unheld keys past `max_lease + 5m` on marked SAs) |
+| Property | Managed Token Set (`credential: token`, no `service_account`) | Existing SA: `credential: token` (Default with `service_account`) | Existing SA: `credential: key` | Managed Pool Set (`credential: key`, or omitted without `service_account`) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Works with `iam.disableServiceAccountKeyCreation`** | **Yes** (no key ever created; Settings default for new sets) | **Yes** (no key ever created) | No (`iam.serviceAccountKeys.create` blocked) | No (`iam.serviceAccountKeys.create` blocked; error prints `credential: token` config snippet) |
+| **Admin IAM permissions required** | `iam.serviceAccounts.{create,delete,get,list,getIamPolicy,setIamPolicy}` on project + project IAM or bucket/AR repo IAM | `roles/iam.serviceAccountTokenCreator` on the target SA only | `iam.serviceAccountKeys.create` & `.delete` on the target SA | `grainGcpKeyAdmin` custom role on the project (+ bucket or AR repo IAM if scoped) |
+| **GCP account / IAM mutations by Grain** | Creates `<prefix>-<deploy>-<set>` SA, binds `roles` (`role_ceiling` enforced), grants admin `tokenCreator` on that SA only | None (`set.fixed()`) | Keys created/deleted only; SA & bindings untouched | Creates `<prefix>-<deploy>-<set>-<n>` SAs & reconciles role bindings |
+| **`resource_scope` support** | `buckets/<name>` or `repositories/<location>/<repo>` | None (exclusive with `service_account`) | None (exclusive with `service_account`) | `buckets/<name>` or `repositories/<location>/<repo>` |
+| **Sandbox file at `~/.gcp-service-account.json`** | `type: "external_account"` config (no secret key material) | `type: "external_account"` config (no secret key material) | `type: "service_account"` RSA private key JSON | `type: "service_account"` RSA private key JSON |
+| **Port forward into sandbox** | `127.0.0.1:4252` (`DefaultGCPTokenPort`) | `127.0.0.1:4252` (`DefaultGCPTokenPort`) | None | None |
+| **Concurrent attempts limit** | **Unlimited** (no per-account key cap) | **Unlimited** (no per-account key cap) | **10** (`KeysPerAccount = 10`) | `10 × pool_max` (default `30`) |
+| **`person_granted` default** | `false` (`GrantCovered`; bounded by `role_ceiling`) | **`true`** (`GrantByPerson`) | **`true`** (`GrantByPerson`) | `false` (`GrantCovered`) |
+| **Set removal / crash cleanup** | Per-attempt broker state vanishes on restart; removed set unbound & SA deleted when named in `delete_orphans` | Per-attempt broker state vanishes on restart; minted tokens expire in ≤ 1h | **Manual** (reaper skips existing SAs to avoid deleting non-Grain keys) | Automatic key reaper (`max_lease + 5m`); removed set unbound & SAs deleted via `delete_orphans` |
 
 ---
 

@@ -68,7 +68,9 @@ for (const [label, viewport] of [
       await page.reload();
       await expect(
         page
-          .getByRole("region", { name: "operator (access code)" })
+          .getByRole("region", {
+            name: /^(operator|alice@example\.com) \(access code\)$/,
+          })
           .filter({ hasText: message }),
       ).toHaveCount(1);
     } finally {
@@ -157,22 +159,30 @@ for (const [label, viewport] of [
       );
       await expect(
         page
-          .getByRole("region", { name: "operator (access code)" })
+          .getByRole("region", {
+            name: /^(operator|alice@example\.com) \(access code\)$/,
+          })
           .filter({ hasText: first }),
       ).toHaveCount(1);
       await expect(
         page
-          .getByRole("region", { name: "operator (access code)" })
+          .getByRole("region", {
+            name: /^(operator|alice@example\.com) \(access code\)$/,
+          })
           .filter({ hasText: second }),
       ).toHaveCount(1);
 
       // Reload confirms both messages persisted once in order on the server.
       await page.reload();
       const firstPersisted = page
-        .getByRole("region", { name: "operator (access code)" })
+        .getByRole("region", {
+          name: /^(operator|alice@example\.com) \(access code\)$/,
+        })
         .filter({ hasText: first });
       const secondPersisted = page
-        .getByRole("region", { name: "operator (access code)" })
+        .getByRole("region", {
+          name: /^(operator|alice@example\.com) \(access code\)$/,
+        })
         .filter({ hasText: second });
       await expect(firstPersisted).toHaveCount(1);
       await expect(secondPersisted).toHaveCount(1);

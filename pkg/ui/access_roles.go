@@ -989,6 +989,11 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 // carries must be one filingEscalation would have let it set on POST /api/tasks.
 func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task model.Task,
 	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	return s.tasks.roleApprovalWithin(ctx, a, task, allowedRepo, normalize)
+}
+
+func (c *Client) roleApprovalWithin(ctx context.Context, a *accessRole, task model.Task,
+	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
 	repo := taskRepo(&task)
 	if !a.allows("tasks:admin", repo) {
 		if repo == "" {
@@ -1010,7 +1015,7 @@ func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task mod
 	if needs, why := model.ChangeTargetNeedsPersonApproval(task.ChangeTarget); needs {
 		return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)", a.label(), task.ID, why)
 	}
-	if s.networkAccessWidens(ctx, "", string(task.NetworkAccess)) {
+	if c.networkAccessWidens(ctx, "", string(task.NetworkAccess)) {
 		return fmt.Errorf("%s cannot approve task %s (networkAccess): widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
 			a.label(), task.ID)
 	}
@@ -1038,7 +1043,7 @@ func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task mod
 	}
 	if id := strings.TrimSpace(task.ReviewTemplateID); id != "" &&
 		!(task.Target != nil && id == model.DefaultReviewTemplateID(*task.Target)) {
-		if tmpl := s.gateTemplate(ctx, id); tmpl != nil &&
+		if tmpl := c.gateTemplate(ctx, id); tmpl != nil &&
 			!(task.Target != nil && tmpl.ID == model.DefaultReviewTemplateID(*task.Target)) {
 			if err := roleTemplateWithin(a, "reviewTemplateId", *tmpl, allowedRepo, normalize); err != nil {
 				why := strings.TrimPrefix(err.Error(), a.label()+" cannot set reviewTemplateId: ")

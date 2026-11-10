@@ -429,6 +429,108 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 	assertInactive(t, "introspect after release", cfg.TokenInfoURL, mintedTok)
 }
 
+func TestGCPManagedTokenSetConfigureMintExchangeAndCleanup(t *testing.T) {
+	cloud := gcpfake.New()
+	cloud.RequireTokenCreator = true
+	cloud.DefaultIdentity = "alice@example.com"
+	s, err := newConfigurableGCP(GCPConfig{Connector: cloud, Listen: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseCfg := func(sets []any, extra map[string]any) map[string]any {
+		cfg := map[string]any{
+			protocol.DeploymentIDConfig: "049f1e09",
+			protocol.InstanceIDConfig:   "049f1e09c0ffee0123456789abcdef01",
+			"permission_sets":           sets,
+		}
+		for k, v := range extra {
+			cfg[k] = v
+		}
+		return cfg
+	}
+
+	arSet := map[string]any{
+		"name":           "ar-writer",
+		"project":        "grain-test-proj",
+		"credential":     "token",
+		"roles":          []any{"roles/artifactregistry.writer"},
+		"resource_scope": "repositories/us-central1/images",
+	}
+	ps, err := attachConfigured(t, s, baseCfg([]any{arSet}, nil), nil)
+	if err != nil {
+		t.Fatalf("attach managed token set: %v", err)
+	}
+	wantSA := "grain-049f1e09-ar-writer@grain-test-proj.iam.gserviceaccount.com"
+	arRes := "projects/grain-test-proj/locations/us-central1/repositories/images"
+	saRes := "projects/grain-test-proj/serviceAccounts/" + wantSA
+	if got := cloud.Members(arRes, "roles/artifactregistry.writer"); len(got) != 1 || got[0] != "serviceAccount:"+wantSA {
+		t.Fatalf("AR bindings = %v, want [serviceAccount:%s]", got, wantSA)
+	}
+	if got := cloud.Members(saRes, "roles/iam.serviceAccountTokenCreator"); len(got) != 1 || got[0] != "user:alice@example.com" {
+		t.Fatalf("SA tokenCreator bindings = %v, want [user:alice@example.com]", got)
+	}
+	// Managed token sets are NOT person-granted by default (unlike existing SA sets).
+	if reserved := ps.Methods["gcp-key"].ArgsSchema["properties"].(map[string]any)["permission_set"].(map[string]any)[protocol.PersonGrantedArgKey]; reserved != nil {
+		t.Fatalf("unexpected person-granted reservation on managed token set: %v", reserved)
+	}
+
+	resp := mint(t, ps, "gcp-key", "m1-1-0", map[string]any{"permission_set": "ar-writer"})
+	if resp.Status != protocol.StatusOK {
+		t.Fatalf("mint = %+v", resp)
+	}
+	if !strings.Contains(resp.PromptSection, "service account "+wantSA+" in project grain-test-proj, roles roles/artifactregistry.writer on repositories/us-central1/images") {
+		t.Errorf("PromptSection = %s", resp.PromptSection)
+	}
+	var cfg struct {
+		Type             string            `json:"type"`
+		TokenURL         string            `json:"token_url"`
+		CredentialSource map[string]string `json:"credential_source"`
+	}
+	if err := json.Unmarshal([]byte(placement(t, resp, GCPKeyPath).Content), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	subject := placement(t, resp, cfg.CredentialSource["file"]).Content
+	code, body := exchange(t, cfg.TokenURL, subject)
+	if code != http.StatusOK || !strings.HasSuffix(body["access_token"].(string), wantSA) {
+		t.Fatalf("exchange = %d %v", code, body)
+	}
+	if cloud.LiveKeys() != 0 || cloud.Calls["CreateKey"] != 0 {
+		t.Fatalf("managed token set created keys: %v", cloud.Calls)
+	}
+
+	// Idempotent reconfigure while attempt is running keeps exchange alive and writes nothing.
+	setsBefore := cloud.Calls["SetPolicy"]
+	if err := ps.Configure(context.Background(), baseCfg([]any{arSet}, nil)); err != nil {
+		t.Fatalf("idempotent reconfigure: %v", err)
+	}
+	if cloud.Calls["SetPolicy"] != setsBefore {
+		t.Errorf("SetPolicy calls changed on idempotent reconfigure: %d -> %d", setsBefore, cloud.Calls["SetPolicy"])
+	}
+	if code, _ := exchange(t, cfg.TokenURL, subject); code != http.StatusOK {
+		t.Fatalf("exchange after reconfigure = %d", code)
+	}
+	if _, err := ps.Release(context.Background(), "gcp-key", "m1-1-0"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Removing ar-writer and adding it to delete_orphans unbinds AR and deletes the SA.
+	otherSet := map[string]any{
+		"name":       "log-reader",
+		"project":    "grain-test-proj",
+		"credential": "token",
+		"roles":      []any{"roles/logging.viewer"},
+	}
+	if err := ps.Configure(context.Background(), baseCfg([]any{otherSet}, map[string]any{"delete_orphans": []any{"ar-writer"}})); err != nil {
+		t.Fatalf("reconfigure with delete_orphans: %v", err)
+	}
+	if got := cloud.Members(arRes, "roles/artifactregistry.writer"); len(got) != 0 {
+		t.Errorf("AR bindings survived delete_orphans: %v", got)
+	}
+	if _, exists := cloud.Accounts["grain-test-proj"][wantSA]; exists {
+		t.Errorf("account %s survived delete_orphans", wantSA)
+	}
+}
+
 // assertInactive posts token to an introspection endpoint and wants RFC
 // 7662's answer for a token it does not recognise: 200 and exactly
 // {"active": false}.

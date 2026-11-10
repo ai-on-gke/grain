@@ -319,6 +319,14 @@ func reviewedPullRequest(ctx context.Context, store *model.Store, task model.Tas
 	if reviewed == nil {
 		return nil, model.PullRequestRef{}, false, nil
 	}
+	if target := linkTarget(task, model.LinkReviewsPullRequest); target != "" {
+		if ref, err := model.ParsePullRequestRef(target); err == nil {
+			return reviewed, ref, true, nil
+		}
+	}
+	if pr := model.TaskPullRequest(*reviewed); pr != nil {
+		return reviewed, *pr, true, nil
+	}
 	for _, l := range reviewed.Links {
 		if l.Kind != model.LinkFixes {
 			continue

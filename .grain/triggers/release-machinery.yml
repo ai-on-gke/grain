@@ -11,9 +11,11 @@
 # decide, leaves the change for a person.
 on: pull_request
 paths:
+  - scripts/granule/**
   - scripts/release-images.sh
   - scripts/release-notes.sh
   - scripts/candidate-gate.sh
+  - scripts/release-patch.sh
   - scripts/patch-tag-guard.sh
   - scripts/build-version.sh
   - scripts/grain-ci-host.sh

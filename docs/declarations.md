@@ -319,7 +319,16 @@ capabilities:                      # optional; capabilities and repository acces
   - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
                                    #   capabilities bounded by the filing team
                                    #   (formerly gcp-key, retired in schema migration 97)
+grants:                            # optional; the unified spelling of capabilities:,
+  - capability: https://grain.dev/capabilities/repo#read
+    with: {repo: acme/upstream}    #   held to the same rule and read as one list with it
 ```
+
+`grants:` (design/design/unified-grants.design.md §3) is accepted beside
+`capabilities:` on templates and schedules indefinitely: each entry is a
+string or a `{capability, with}` mapping, the two keys are read as one list,
+and an entry both name (in either spelling) is held once. Everything this
+section says about `capabilities:` holds for `grants:` as well.
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
@@ -1201,10 +1210,11 @@ and when** -- never what that work may touch:
   "Repository access" above). Those are fetched and pushed with the
   team's own GitHub credential, so they reach no further than that
   credential does. Nothing else reaches past the declaring repository.
-- **No `grants:`, and no capability past the team's.** Capabilities
+- **No capability past the team's.** Capabilities
   are the deployment's to hand out (`Config.DefaultCapabilities`,
   `RepoConfig.DefaultCapabilities`, each capability's `AuthorizedTeams`).
-  A template's or schedule's `capabilities:` may ask for one, and the
+  A template's or schedule's `capabilities:` (or `grants:`, its unified
+  spelling) may ask for one, and the
   filing team bounds what it gets (e8041e94c, "Capabilities and repository
   access" above): an unauthorized one is stripped when the task is filed,
   with a note on its thread. A schedule's `capabilities:` refuses

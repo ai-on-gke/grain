@@ -675,3 +675,90 @@ func TestCapabilityServerSaveGuardsProbeAndBuiltinSpoofing(t *testing.T) {
 		t.Errorf("external mode still ran Probe: probed=%v resolved=%v", p.probed, p.resolved)
 	}
 }
+
+func TestGCPPermissionSetRefusalMapsToField(t *testing.T) {
+	p := &fakeProber{schema: gcpsetsSchemaForTest()}
+	ts, _, _, _ := configTestServer(t, p)
+
+	for _, tc := range []struct {
+		name      string
+		refuse    string
+		wantField string
+	}{
+		{
+			name:      "pool_max exclusive with token mode",
+			refuse:    `permission set "ar-writer": credential: token and pool_max are exclusive: in token mode grain creates one service account`,
+			wantField: "permission_sets[0].pool_max",
+		},
+		{
+			name:      "invalid resource_scope",
+			refuse:    `permission set "ar-writer": resource_scope "topics/x" must be buckets/<name> or repositories/<location>/<repo>`,
+			wantField: "permission_sets[0].resource_scope",
+		},
+		{
+			name:      "grants no roles",
+			refuse:    `permission set "ar-writer" grants no roles: add roles for grain to bind`,
+			wantField: "permission_sets[0].roles",
+		},
+		{
+			name:      "missing project",
+			refuse:    `permission set "ar-writer": "" is not a project id: project is required when service_account is omitted`,
+			wantField: "permission_sets[0].project",
+		},
+		{
+			name:      "service_account exclusive",
+			refuse:    `permission set "ar-writer": service_account "bad" is not a service account email`,
+			wantField: "permission_sets[0].service_account",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p.refuse = tc.refuse
+			body := map[string]any{
+				"id": configCap,
+				"config": map[string]any{
+					"command": "grain",
+					"config": map[string]any{
+						"permission_sets": []any{
+							map[string]any{"name": "ar-writer", "project": "my-project", "credential": "token", "roles": []any{"roles/artifactregistry.writer"}},
+						},
+					},
+				},
+			}
+			var refused struct {
+				Fields map[string]string `json:"fields"`
+			}
+			if code := postJSON(t, ts, "PUT", "/api/capability-servers", body, &refused); code != 400 {
+				t.Fatalf("status = %d, want 400", code)
+			}
+			if got := refused.Fields[tc.wantField]; got == "" {
+				t.Fatalf("fields = %v, want non-empty message under %q", refused.Fields, tc.wantField)
+			}
+		})
+	}
+}
+
+func gcpsetsSchemaForTest() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"permission_sets": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"required":             []any{"name"},
+					"properties": map[string]any{
+						"name":            map[string]any{"type": "string"},
+						"project":         map[string]any{"type": "string"},
+						"credential":      map[string]any{"type": "string", "enum": []any{"token", "key"}},
+						"roles":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"pool_max":        map[string]any{"type": "integer"},
+						"resource_scope":  map[string]any{"type": "string"},
+						"service_account": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	}
+}

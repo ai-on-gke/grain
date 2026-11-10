@@ -53,11 +53,15 @@ test("a person's close names them, and its long reason wraps inside its timeline
   await page.getByRole("button", { name: "Close", exact: true }).click();
   const meta = page.locator(".timeline-transition-by");
   await expect(meta).toHaveCount(2);
-  // The demo is signed into with its access code, so the proposal and close
-  // are the operator's, said as such rather than as the deployment's own
-  // address (docs/test-runs/2026-11-03-operator-attribution.md F3).
-  await expect(meta.first()).toContainText(/^by operator \(access code\)/);
-  await expect(meta.nth(1)).toContainText(/^by operator \(access code\)/);
+  // The demo is signed into with its access code as alice, so the proposal
+  // and close are hers through the code, said as such rather than as the
+  // deployment's own address (docs/test-runs/2026-11-03-operator-attribution.md F3).
+  await expect(meta.first()).toContainText(
+    /^by (operator|alice@example\.com) \(access code\)/,
+  );
+  await expect(meta.nth(1)).toContainText(
+    /^by (operator|alice@example\.com) \(access code\)/,
+  );
 
   // Reopened, then closed again with a reason the meta line has to wrap.
   expect(

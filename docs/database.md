@@ -143,7 +143,7 @@ use one of these:
 - **`grain backup` and `-backup-interval` (Google Drive or GCS).** Snapshots a
   PostgreSQL store online with `pg_dump -Fc` into `database/grain.dump`
   alongside a restorable `config/config-repo.bundle`, and uploads the ZIP to
-  Google Drive or GCS (see the README's [Backups](../README.md#backups)).
+  Google Drive or GCS (see [host-setup.md](host-setup.md#backups)).
   Run it by hand with `grain-daemon.service` stopped (`sudo grain backup
   -data-dir /var/lib/grain/data …`), or schedule `-backup-interval` on the
   running daemon. The archive excludes `$GRAIN_DATA_DIR/secrets` and database
