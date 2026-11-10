@@ -224,7 +224,8 @@ It is asked in two places:
 - **At release.** `release-images.sh push` runs `cmd/reviewed-merge`
   before it signs or tags anything, and refuses an unreviewed commit. The
   chain runs from the commit the branch's published `grain` image was
-  built from. The check reads the forge with `GITHUB_TOKEN`
+  built from, or, on a branch with nothing published yet, from where its
+  history leaves `main`. The check reads the forge with `GITHUB_TOKEN`
   (`pull-requests: read`) and needs the repository variable
   `GRAIN_MERGE_LOGINS`, the logins grain merges as. Until that variable
   is set, only forge-approved merges publish. Setting
@@ -242,7 +243,9 @@ It is asked in two places:
   API's rate limit, `-upgrade-reviewed-merge-token-file`) reads the
   pulled image's revision label, which the signature covers. It then
   asks the forge how that commit was merged, and how every first-parent
-  commit since the running build's was merged. Nothing from the new
+  commit since the running build's was merged. For an image of another
+  branch (a release branch, upgraded to from a `main` build) the chain
+  runs from where the two branches part. Nothing from the new
   commit runs to decide. The check runs in the `signature` step, after
   the signature. It needs `-upgrade-verify-cmd`: without a signature the
   label is only what the registry says, so the check refuses when that
