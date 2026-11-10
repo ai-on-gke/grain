@@ -60,11 +60,15 @@ type ReviewedMergeConfig struct {
 	// Forge reads the forge's records; reviewedmerge.REST on a real
 	// deployment.
 	Forge reviewedmerge.Forge
-	// Ahead reports whether head is a descendant of base. When the
-	// target is, the chain from the running build up to it is checked.
-	// When it is not (a rollback, or another branch), the target is
-	// checked alone. Nil checks the target alone.
-	Ahead func(ctx context.Context, repo, base, head string) (bool, error)
+	// Compare is the forge's comparison of the running build's commit
+	// (base) with the target's (head). When the target is ahead, the
+	// chain from the running build up to it is checked. When the two have
+	// diverged (another branch, such as a release branch cut from main),
+	// the chain from their merge base is: checking the target alone would
+	// let a reviewed merge on top of a branch's unreviewed commits carry
+	// them in. When the target is behind (a rollback), it is checked
+	// alone. Nil checks the target alone.
+	Compare func(ctx context.Context, repo, base, head string) (reviewedmerge.Comparison, error)
 	// RevisionCmd prints a pulled image's revision label, with the image
 	// appended; docker image inspect's when nil.
 	RevisionCmd []string
@@ -124,13 +128,21 @@ func (u *Upgrader) checkReviewedMerge(ctx context.Context, p *progress, step str
 		running = rc.RunningRevision()
 	}
 	since := ""
-	if fullSHA.MatchString(running) && running != target && rc.Ahead != nil {
-		ahead, err := rc.Ahead(ctx, rc.Policy.Repo, running, target)
+	if fullSHA.MatchString(running) && running != target && rc.Compare != nil {
+		cmp, err := rc.Compare(ctx, rc.Policy.Repo, running, target)
 		if err != nil {
-			return "", fmt.Errorf("asking the forge whether %s is ahead of the running %s: %w", shortSHA(target), shortSHA(running), err)
+			return "", fmt.Errorf("asking the forge how %s compares with the running %s: %w", shortSHA(target), shortSHA(running), err)
 		}
-		if ahead {
+		switch cmp.Status {
+		case "ahead", "identical":
 			since = running
+		case "diverged":
+			if !fullSHA.MatchString(cmp.MergeBase) {
+				return "", fmt.Errorf("the forge names no merge base (%q) for %s and the running %s, so the chain to %s cannot be checked", cmp.MergeBase, shortSHA(target), shortSHA(running), shortSHA(target))
+			}
+			if cmp.MergeBase != target {
+				since = cmp.MergeBase
+			}
 		}
 	}
 	max := rc.MaxChain

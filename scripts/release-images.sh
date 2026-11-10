@@ -1486,9 +1486,13 @@ sign_image() {
 # was merged. So is every first-parent commit between $commit and the one
 # this branch's published grain image was built from, since a reviewed merge on top of an
 # unreviewed one carries it into the release too. Where that image is not
-# an ancestor of $commit (an on-demand build of a superseded commit, a
-# branch with nothing published yet) $commit is checked alone: a newer
-# published image was checked with its own chain.
+# an ancestor of $commit (a branch with nothing published yet, such as a
+# new release/v*) the chain runs from where $commit's history leaves
+# main's: checking a release branch's tip alone would let a reviewed merge
+# on top of commits pushed onto that branch carry them in. A commit on
+# main itself with no ancestor published (an on-demand build of a
+# superseded commit) is checked alone: a newer published image was
+# checked with its own chain.
 #
 # Sets reviewed_merge_record to the record's file, which sign_image attests
 # onto each image it signs, as the image's provenance of how its commit
@@ -1515,6 +1519,9 @@ check_reviewed_merge() {
   held="$(image_revision "$root/grain:$branch")"
   if [[ "$held" =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$held" "$commit" 2>/dev/null; then
     since="$held"
+  else
+    since="$(git merge-base "$commit" refs/remotes/origin/main 2>/dev/null || true)"
+    [ "$since" != "$commit" ] || since=""
   fi
   out="${TMPDIR:-/tmp}/reviewed-merge-$short.json"
   if ! go run ./cmd/reviewed-merge -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \

@@ -178,18 +178,29 @@ func (r REST) FirstParent(ctx context.Context, repo, sha string) (string, error)
 	return commit.Parents[0].SHA, nil
 }
 
-// Ahead reports whether head is a descendant of base (or the same commit),
-// from the forge's comparison of the two.
-func (r REST) Ahead(ctx context.Context, repo, base, head string) (bool, error) {
+// Comparison is the forge's comparison of two commits.
+type Comparison struct {
+	// Status is "ahead" (head descends from base), "behind", "identical"
+	// or "diverged".
+	Status string
+	// MergeBase is the newest commit both descend from.
+	MergeBase string
+}
+
+// Compare is the forge's comparison of base and head.
+func (r REST) Compare(ctx context.Context, repo, base, head string) (Comparison, error) {
 	rp, err := repoPath(repo)
 	if err != nil {
-		return false, err
+		return Comparison{}, err
 	}
 	var cmp struct {
-		Status string `json:"status"`
+		Status    string `json:"status"`
+		MergeBase struct {
+			SHA string `json:"sha"`
+		} `json:"merge_base_commit"`
 	}
 	if err := r.get(ctx, rp+"/compare/"+url.PathEscape(base)+"..."+url.PathEscape(head)+"?per_page=1", &cmp); err != nil {
-		return false, err
+		return Comparison{}, err
 	}
-	return cmp.Status == "ahead" || cmp.Status == "identical", nil
+	return Comparison{Status: cmp.Status, MergeBase: cmp.MergeBase.SHA}, nil
 }

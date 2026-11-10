@@ -448,8 +448,8 @@ func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
 			Branches: []string{"main", "release/v*"},
 			Mergers:  cfg.UpgradeReviewedMergeLogins,
 		},
-		Forge: forge,
-		Ahead: forge.Ahead,
+		Forge:   forge,
+		Compare: forge.Compare,
 	}
 }
 

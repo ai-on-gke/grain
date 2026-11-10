@@ -27,13 +27,16 @@ var (
 	runningSHA = strings.Repeat("1", 40)
 	selfSHA    = strings.Repeat("2", 40)
 	targetSHA  = strings.Repeat("3", 40)
+	forkSHA    = strings.Repeat("4", 40)
 )
 
 // chainForge is the forge's record of main: runningSHA, then selfSHA,
 // then targetSHA, each a pull request's merge commit. Grain merged the
 // target; selfMerged says whether the one before it was merged by its own
-// author with no review.
-type chainForge struct{ selfMerged bool }
+// author with no review. With diverged, selfSHA sits on forkSHA instead,
+// the commit a release branch was cut from, and the running build is on
+// a branch of its own past forkSHA.
+type chainForge struct{ selfMerged, diverged bool }
 
 func (f chainForge) PullsForCommit(_ context.Context, _, sha string) ([]reviewedmerge.Pull, error) {
 	by := "grain-bot[bot]"
@@ -47,8 +50,18 @@ func (chainForge) Reviews(context.Context, string, int) ([]reviewedmerge.Review,
 	return nil, nil
 }
 
-func (chainForge) FirstParent(_ context.Context, _, sha string) (string, error) {
+func (f chainForge) FirstParent(_ context.Context, _, sha string) (string, error) {
+	if f.diverged {
+		return map[string]string{targetSHA: selfSHA, selfSHA: forkSHA}[sha], nil
+	}
 	return map[string]string{targetSHA: selfSHA, selfSHA: runningSHA}[sha], nil
+}
+
+func (f chainForge) compare(context.Context, string, string, string) (reviewedmerge.Comparison, error) {
+	if f.diverged {
+		return reviewedmerge.Comparison{Status: "diverged", MergeBase: forkSHA}, nil
+	}
+	return reviewedmerge.Comparison{Status: "ahead", MergeBase: runningSHA}, nil
 }
 
 func reviewedUpgrader(t *testing.T, dir string, verify []string, f chainForge) *Upgrader {
@@ -63,7 +76,7 @@ func reviewedUpgrader(t *testing.T, dir string, verify []string, f chainForge) *
 			ReviewedMerge: &ReviewedMergeConfig{
 				Policy:          reviewedmerge.Policy{Repo: "example/grain", Branches: []string{"main"}, Mergers: []string{"grain-bot[bot]"}},
 				Forge:           f,
-				Ahead:           func(context.Context, string, string, string) (bool, error) { return true, nil },
+				Compare:         f.compare,
 				RevisionCmd:     []string{"sh", "-c", "echo " + targetSHA, "sh"},
 				RunningRevision: func() string { return runningSHA },
 			},
@@ -107,6 +120,32 @@ func TestUpgraderImageRefusesASelfMergedCommitUnderAReviewedOne(t *testing.T) {
 	}
 	if got := stepState(t, status, stepHealthCheck); got != StepPending {
 		t.Errorf("health check step = %q, want it never started", got)
+	}
+}
+
+// TestUpgraderImageChecksADivergedBranchFromItsMergeBase: an image of a
+// branch the running build is not behind -- a release branch cut from
+// main, upgraded to from a main build -- is checked from where the two
+// branches part, not alone. A self-merged commit under a reviewed tip of
+// that branch is refused like one on the running build's own.
+func TestUpgraderImageChecksADivergedBranchFromItsMergeBase(t *testing.T) {
+	for _, selfMerged := range []bool{false, true} {
+		dir := t.TempDir()
+		u := reviewedUpgrader(t, dir, fakeVerifyCmd(filepath.Join(dir, "verify.log"), 0), chainForge{selfMerged: selfMerged, diverged: true})
+		if err := u.Start("main"); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if !selfMerged {
+			status := waitForPhase(t, u, PhaseOK)
+			if got := stepDetail(t, status, stepVerify); !strings.Contains(got, "through 2 reviewed merge(s)") {
+				t.Errorf("signature step detail = %q, want both merges since the merge base checked", got)
+			}
+			continue
+		}
+		status := waitForPhase(t, u, PhaseFailed)
+		if !strings.Contains(status.Detail, "merged by mallory") {
+			t.Errorf("status detail = %q, want it to name the unreviewed merge under the diverged tip", status.Detail)
+		}
 	}
 }
 
