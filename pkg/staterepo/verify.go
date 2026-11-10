@@ -137,6 +137,12 @@ func (r *Repo) verifiedTarget(ctx context.Context, tip string) (string, error) {
 		commits = []string{tip}
 	default:
 		if _, err := r.git(ctx, "merge-base", "--is-ancestor", "--end-of-options", base, tip); err != nil {
+			if slices.Contains(r.verifier.Accepted, tip) {
+				// An operator accepted the rewritten tip by name: the
+				// Accept a rewrite's hold offers.
+				r.held = nil
+				return tip, nil
+			}
 			r.hold(ctx, tip, fmt.Sprintf("the branch no longer contains %s, the last commit applied from it: "+
 				"its history was rewritten, so what changed since cannot be checked commit by commit", shortSHA(base)))
 			return base, nil
@@ -179,7 +185,13 @@ func (r *Repo) verifyCommit(ctx context.Context, sha string) (how, reason string
 	}
 	var why []string
 	if v.AllowedSignersFile != "" {
+		// git picks the verifier by the signature's own armor, not by
+		// gpg.format, so an OpenPGP or X.509 signature would be checked
+		// against whatever keyring this host's user has and could report
+		// G too. Only an SSH signature by an allowed_signers key is meant
+		// to verify; the other two programs are made to fail.
 		out, err := r.git(ctx, "-c", "gpg.format=ssh", "-c", "gpg.ssh.allowedSignersFile="+v.AllowedSignersFile,
+			"-c", "gpg.openpgp.program=false", "-c", "gpg.x509.program=false",
 			"log", "-1", "--format=%G?", "--end-of-options", sha)
 		if err == nil && strings.TrimSpace(out) == "G" {
 			return "signed by an allowed key", ""

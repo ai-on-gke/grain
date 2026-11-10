@@ -20,7 +20,8 @@ import (
 )
 
 // An approval counts only from a reviewer other than the author, as their
-// latest word, and on the head commit that merged.
+// latest word, on the head commit that merged, and from an account with
+// standing in the repository (owner, member or collaborator).
 func TestMergedPullRequestReviewCountsApprovalsOfTheMergedHead(t *testing.T) {
 	sha := "1111111111111111111111111111111111111111"
 	transport := NewFakeTransport(
@@ -31,19 +32,22 @@ func TestMergedPullRequestReviewCountsApprovalsOfTheMergedHead(t *testing.T) {
 			"merge_commit_sha": "` + sha + `", "user": {"login": "writer"}, "merged_by": {"login": "writer"},
 			"head": {"sha": "head2"}}`)},
 		ApiResponse{Status: 200, Body: []byte(`[
-			{"state": "APPROVED", "commit_id": "head2", "user": {"login": "writer"}},
-			{"state": "APPROVED", "commit_id": "head1", "user": {"login": "stale"}},
-			{"state": "APPROVED", "commit_id": "head2", "user": {"login": "changed-mind"}},
-			{"state": "CHANGES_REQUESTED", "commit_id": "head2", "user": {"login": "changed-mind"}},
-			{"state": "APPROVED", "commit_id": "head2", "user": {"login": "reviewer"}},
-			{"state": "COMMENTED", "commit_id": "head2", "user": {"login": "reviewer"}}]`)},
+			{"state": "APPROVED", "commit_id": "head2", "author_association": "OWNER", "user": {"login": "writer"}},
+			{"state": "APPROVED", "commit_id": "head1", "author_association": "MEMBER", "user": {"login": "stale"}},
+			{"state": "APPROVED", "commit_id": "head2", "author_association": "MEMBER", "user": {"login": "changed-mind"}},
+			{"state": "CHANGES_REQUESTED", "commit_id": "head2", "author_association": "MEMBER", "user": {"login": "changed-mind"}},
+			{"state": "APPROVED", "commit_id": "head2", "author_association": "NONE", "user": {"login": "drive-by"}},
+			{"state": "APPROVED", "commit_id": "head2", "author_association": "CONTRIBUTOR", "user": {"login": "past-contributor"}},
+			{"state": "APPROVED", "commit_id": "head2", "author_association": "COLLABORATOR", "user": {"login": "reviewer"}},
+			{"state": "COMMENTED", "commit_id": "head2", "author_association": "COLLABORATOR", "user": {"login": "reviewer"}},
+			{"state": "APPROVED", "commit_id": "head2", "author_association": "MEMBER", "user": {"login": "member"}}]`)},
 	)
 	c := NewClient(transport, StaticToken{})
 	got, err := c.MergedPullRequestReview("acme", "config", "main", sha)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := &MergedReview{Number: 4, URL: "https://forge.example/pr/4", Author: "writer", MergedBy: "writer", Approvers: []string{"reviewer"}}
+	want := &MergedReview{Number: 4, URL: "https://forge.example/pr/4", Author: "writer", MergedBy: "writer", Approvers: []string{"reviewer", "member"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("MergedPullRequestReview = %+v, want %+v", got, want)
 	}

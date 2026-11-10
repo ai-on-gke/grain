@@ -4760,7 +4760,11 @@ func (c *RESTClient) ListTags(owner, repo string) ([]Tag, error) {
 // An approver is a reviewer other than the author whose latest review,
 // among the first hundred, is APPROVED and was left on the head commit
 // the pull request merged: an approval of an earlier push does not
-// cover what was pushed after it.
+// cover what was pushed after it. Only a reviewer the forge names as the
+// repository's owner, a member of its organization or a collaborator on
+// it counts, as in branch protection: anybody may leave an APPROVED
+// review on a public repository, so one from an account with no standing
+// there would let a writer approve their own change from a second one.
 func (c *RESTClient) MergedPullRequestReview(owner, repo, base, sha string) (*MergedReview, error) {
 	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s/pulls?per_page=100", owner, repo, quoteAll(sha)))
 	if err != nil {
@@ -4829,9 +4833,10 @@ func (c *RESTClient) MergedPullRequestReview(owner, repo, base, sha string) (*Me
 		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
 	var reviews []struct {
-		State    string `json:"state"`
-		CommitID string `json:"commit_id"`
-		User     struct {
+		State             string `json:"state"`
+		CommitID          string `json:"commit_id"`
+		AuthorAssociation string `json:"author_association"`
+		User              struct {
 			Login string `json:"login"`
 		} `json:"user"`
 	}
@@ -4853,11 +4858,21 @@ func (c *RESTClient) MergedPullRequestReview(owner, repo, base, sha string) (*Me
 	}
 	for _, login := range order {
 		r := reviews[latest[login]]
-		if r.State == "APPROVED" && r.CommitID == pr.Head.SHA {
+		if r.State == "APPROVED" && r.CommitID == pr.Head.SHA && reviewerHasStanding(r.AuthorAssociation) {
 			out.Approvers = append(out.Approvers, login)
 		}
 	}
 	return out, nil
+}
+
+// reviewerHasStanding is whether a review's author_association is one
+// whose approval MergedPullRequestReview counts.
+func reviewerHasStanding(association string) bool {
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
 }
 
 // MergedReview is MergedPullRequestReview's answer.

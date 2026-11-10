@@ -202,12 +202,57 @@ func TestRequireVerifiedAppliesOnlyCommitsGrainCanVouchFor(t *testing.T) {
 		t.Fatalf("HEAD = %s, held %+v; want %s kept and %s held as a rewrite", head(t, r), h, c3, c4)
 	}
 
+	// The rewrite's hold is released by accepting its tip by name.
+	v.Accepted = append(v.Accepted, c4)
+	if _, err := r.PullExternal(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if head(t, r) != c4 || r.Held() != nil {
+		t.Fatalf("HEAD = %s, held %+v; want the accepted rewrite %s applied", head(t, r), r.Held(), c4)
+	}
+	if err := r.setLoadedHead(ctx, c4); err != nil {
+		t.Fatal(err)
+	}
+	tip := c4
+
+	// Signed with OpenPGP by a key this host's own keyring holds: git
+	// would report that a good signature, but it is no allowed SSH key.
+	if _, err := exec.LookPath("gpg"); err == nil {
+		gnupg := filepath.Join(tmp, "gnupg")
+		if err := os.Mkdir(gnupg, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GNUPGHOME", gnupg)
+		if out, err := exec.Command("gpg", "--quiet", "--batch", "--passphrase", "", "--quick-gen-key",
+			"host <host@example.com>", "ed25519", "sign", "never").CombinedOutput(); err != nil {
+			t.Fatalf("gpg: %v\n%s", err, out)
+		}
+		if err := os.WriteFile(filepath.Join(work, "tables_e.json"), []byte("[]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, work, "add", "--all", ".")
+		runGit(t, work, "-c", "user.email=host@example.com", "-c", "user.name=host", "-c", "gpg.format=openpgp",
+			"commit", "--quiet", "-S", "-m", "change tables_e.json")
+		runGit(t, work, "push", "--quiet", "origin", "HEAD:main")
+		c5 := runGit(t, work, "rev-parse", "HEAD")
+		if got := runGit(t, work, "log", "-1", "--format=%G?", c5); got != "G" {
+			t.Fatalf("the OpenPGP-signed commit reads as %q to plain git, want G", got)
+		}
+		if _, err := r.PullExternal(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if h := r.Held(); head(t, r) != c4 || h == nil || h.SHA != c5 || !strings.Contains(h.Reason, "not signed by an allowed key") {
+			t.Fatalf("HEAD = %s, held %+v; want %s kept and the OpenPGP-signed %s held", head(t, r), h, c4, c5)
+		}
+		tip = c5
+	}
+
 	// Off again, and the tip is applied as it always was.
 	r.SetVerifier(nil)
 	if _, err := r.PullExternal(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if head(t, r) != c4 || r.Held() != nil {
-		t.Fatalf("HEAD = %s with require_verified off, want %s", head(t, r), c4)
+	if head(t, r) != tip || r.Held() != nil {
+		t.Fatalf("HEAD = %s with require_verified off, want %s", head(t, r), tip)
 	}
 }

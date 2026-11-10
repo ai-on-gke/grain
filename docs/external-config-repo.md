@@ -26,7 +26,9 @@ that branch exactly as you treat an unlimited role in grain:
 
 Naming or repointing the repository (`POST /api/state-repo/remote`,
 Settings → Config Repo) needs an unlimited role for the same reason
-(task 3965).
+(task 3965). That is a person's role: an agent's run reaches the same
+route with an `api:settings:write` grant, so treat that grant as an
+administrator's too.
 
 ## Require verified commits (`require_verified`)
 
@@ -36,14 +38,18 @@ can verify it, in one of these ways:
 - **an approved pull request**: the commit is the merge (or squash) commit
   of a pull request into the branch, and at least *required approvals*
   reviewers other than its author approved the pull request's final head
-  commit (their latest review, on that commit). Read from GitHub, so this
+  commit (their latest review, on that commit). Only reviewers GitHub
+  names as the repository's owner, a member of its organization or a
+  collaborator on it count, as in branch protection -- anybody may approve
+  a pull request on a public repository. Read from GitHub, so this
   needs a `https://github.com/...` remote and a credential for it;
 - **merged by grain**: that pull request was merged by one of *grain's
   forge accounts* -- the accounts grain's merge queue merges as, which a
   person's Submit in grain releases;
 - **a signature**: the commit carries a good SSH signature by a key in
   the *allowed signing keys* (an ssh `allowed_signers` file,
-  `gpg.ssh.allowedSignersFile`);
+  `gpg.ssh.allowedSignersFile`). OpenPGP and X.509 signatures never
+  verify, whatever keyring this host holds;
 - **accepted by an operator**: an unlimited role accepted the commit by
   its full SHA (`acceptCommit`).
 
@@ -53,7 +59,8 @@ does not is **held**: neither it nor anything after it is applied, the
 journal logs it once, and Settings → Config Repo shows a notice naming
 the commit, its subject and why it did not verify, with an **Accept**
 button. A branch whose history was rewritten (the last applied commit is
-no longer on it) is held the same way, whatever its tip is. The first
+no longer on it) is held the same way, whatever its tip is, until its
+tip is accepted by name. The first
 commit grain applies from a newly named repository is checked on its own;
 if it does not verify, nothing is imported until it is accepted. A
 rebase-merged pull request does not verify through its review (only its
@@ -63,7 +70,8 @@ use merge or squash merges.
 The mode's settings live in `<data-dir>/state-repo.json` on this host,
 never in the repository they guard -- a writer there must not be able to
 turn them off -- and are set through the same route as the remote, so
-they need an unlimited role:
+they need an unlimited role (or, for an agent, `api:settings:write`, as
+above):
 
 ```json
 POST /api/state-repo/remote
