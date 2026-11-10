@@ -291,7 +291,9 @@ func ListCursorFor(offset int) string {
 
 // ParseListCursor is the offset a ListCursorFor cursor starts at, for a
 // caller that pages a list it filtered itself (`grain mcp`'s
-// list_grain_tasks); a cursor it did not hand out is refused.
+// list_grain_tasks); a cursor it did not hand out is refused. A
+// ListCursorFor cursor names no row to resume after, so only the offset
+// is returned.
 func ParseListCursor(text string) (int, error) {
 	offset, _, err := decodeListCursor(strings.TrimSpace(text))
 	return offset, err

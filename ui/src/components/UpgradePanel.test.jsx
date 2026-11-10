@@ -76,6 +76,44 @@ describe("UpgradePanel", () => {
     );
   });
 
+  // task 4083: an edition's notice about how this deployment upgrades
+  // (upgrade.RegisterNotice) is a warning with the command that fixes
+  // it, whether or not the deployment can upgrade itself.
+  it("shows each notice GET /api/upgrade reports, with its command", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      notices: [
+        {
+          kind: "stale-flag",
+          message: "The unit's -upgrade-image flag names a retired repository.",
+          command: "sudo systemctl edit grain",
+          docsUrl: "https://example.com/docs/upgrade",
+        },
+      ],
+    });
+    render(<UpgradePanel showError={() => {}} />);
+
+    const notice = await screen.findByTestId("upgrade-notice");
+    expect(notice).toHaveTextContent(
+      "The unit's -upgrade-image flag names a retired repository.",
+    );
+    expect(screen.getByTestId("upgrade-notice-command")).toHaveTextContent(
+      "sudo systemctl edit grain",
+    );
+    expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://example.com/docs/upgrade",
+    );
+  });
+
+  it("shows no notice when GET /api/upgrade reports none", async () => {
+    api.mockResolvedValue({ enabled: false });
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(await screen.findByText(/Not available:/)).toBeInTheDocument();
+    expect(screen.queryByTestId("upgrade-notice")).not.toBeInTheDocument();
+  });
+
   // grain/task-3689: the box starts on the channel the deployment
   // follows, so a deployment installed on latest is offered the next
   // release rather than main's head -- even when its last upgrade
