@@ -161,6 +161,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/tasks/{id}/context":                                   trusted,
 	"POST /api/tasks/{id}/compact":                                  trusted,
 	"POST /api/tasks/{id}/brief":                                    trusted,
+	"POST /api/tasks/{id}/rollover":                                 trusted,
 	"POST /api/tasks/{id}/pull-request":                             trusted,
 	"POST /api/pull-requests/adopt":                                 trusted,
 	"POST /api/pull-requests/review":                                trusted,

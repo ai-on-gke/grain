@@ -144,6 +144,7 @@ var routeDocs = map[string]string{
 	"GET /api/tasks/{id}/context":                                          "Read a task's brief, handover age and compaction cursor.",
 	"POST /api/tasks/{id}/compact":                                         "Compact a task to a handover, or ask its next run to.",
 	"POST /api/tasks/{id}/brief":                                           "Rewrite a task's current brief.",
+	"POST /api/tasks/{id}/rollover":                                        "Roll a task over to a successor with a fresh record.",
 	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs api:task-admin.",
 	"POST /api/notifications":                                              "Raise an operator notification, or bump the open one with the same subject; it never parks anybody.",
 	"POST /api/notifications/{id}/clear":                                   "Clear an operator notification.",

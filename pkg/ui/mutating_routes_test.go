@@ -446,6 +446,11 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:tasks:write"},
 		recorded:    lastEvent,
 	},
+	"POST /api/tasks/{id}/rollover": {
+		setup:       fileTask(true),
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    lastEvent,
+	},
 	"POST /api/tasks/{id}/reopen": {
 		setup: func(t *testing.T, client *ui.Client, send sender) string {
 			id := fileTask(true)(t, client, send)

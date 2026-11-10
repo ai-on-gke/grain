@@ -332,6 +332,13 @@ type Task struct {
 	// replaced nothing and was replaced by nothing.
 	Supersedes   string `json:"supersedes,omitempty"`
 	SupersededBy string `json:"supersededBy,omitempty"`
+	// RolledOverFrom is the durable task this one was rolled over from,
+	// and RolledOverTo the successor this one was rolled over to --
+	// model.LinkRolledOverFrom and model.LinkRolledOverTo
+	// (design/design/durable-tasks.design.md#DT-15). RolledOverTo is the
+	// forward a reader of a closed task follows to the work's live task.
+	RolledOverFrom string `json:"rolledOverFrom,omitempty"`
+	RolledOverTo   string `json:"rolledOverTo,omitempty"`
 	// SupersedeMoved is the open dependents of the task this one
 	// superseded that now wait on this one instead
 	// (model.SupersedeResult.Moved), and SupersedeKept the ones left
@@ -1322,6 +1329,12 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		}
 		if l.Kind == model.LinkSupersededBy {
 			out.SupersededBy = l.Target
+		}
+		if l.Kind == model.LinkRolledOverFrom {
+			out.RolledOverFrom = l.Target
+		}
+		if l.Kind == model.LinkRolledOverTo {
+			out.RolledOverTo = l.Target
 		}
 		if l.Kind == model.LinkReverts {
 			out.Reverts = l.Target
