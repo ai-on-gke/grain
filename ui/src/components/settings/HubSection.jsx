@@ -79,7 +79,8 @@ export default function HubSection({ s }) {
     readOnly,
   } = s;
 
-  const reg = settings.registry || {};
+  const reg = settings.hub || settings.registry || {};
+  const tokenSet = Boolean(settings.hubTokenSet ?? settings.registryTokenSet);
   const authMode = reg.authMode || "token";
   const rules = Array.isArray(reg.scopes) ? reg.scopes : [];
   const locked = Boolean(readOnly) || Boolean(s.configLocked);
@@ -103,20 +104,14 @@ export default function HubSection({ s }) {
 
   useEffect(() => {
     loadSnapshot();
-  }, [
-    loadSnapshot,
-    reg.url,
-    reg.entry,
-    reg.authMode,
-    settings.registryTokenSet,
-  ]);
+  }, [loadSnapshot, reg.url, reg.entry, reg.authMode, tokenSet]);
 
   const updateRegistry = (patch) => {
     const next = {
       ...reg,
       ...patch,
     };
-    saveChoice({ registry: next });
+    saveChoice({ hub: next });
   };
 
   const onRegistryTextBlur = (field) => (evt) => {
@@ -487,7 +482,7 @@ export default function HubSection({ s }) {
             name: "Registration token (grc_…)",
             secret: "registry-registration-token",
             key: "value",
-            set: Boolean(settings.registryTokenSet),
+            set: tokenSet,
           }}
           showError={showError || (() => {})}
           onChanged={handleSecretChanged}

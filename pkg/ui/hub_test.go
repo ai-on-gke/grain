@@ -15,6 +15,7 @@
 package ui_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -22,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,6 +34,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
+	"github.com/ai-on-gke/grain/pkg/hubenv"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -470,5 +473,190 @@ func TestHubTunnelHandlerRequiresAssertionAndRejectsShortcuts(t *testing.T) {
 	gotStatus := decode[api.InstanceStatusResponse](t, okRec)
 	if len(gotStatus.Scopes) != 1 || gotStatus.Scopes[0].Repo != "acme/widgets" {
 		t.Errorf("tunnel InstanceStatusResponse.Scopes = %+v, want [acme/widgets]", gotStatus.Scopes)
+	}
+}
+
+func TestSettingsHubKeyAndRegistryDeprecationWarning(t *testing.T) {
+	// Not parallel: swaps hubenv.Log and resets hubenv's per-process warning map.
+	var warnBuf bytes.Buffer
+	prevLog := hubenv.Log
+	hubenv.Log = func() io.Writer { return &warnBuf }
+	hubenv.ResetForTest()
+	t.Cleanup(func() {
+		hubenv.Log = prevLog
+		hubenv.ResetForTest()
+	})
+
+	// 1. UpdateSettingsRequest marshals "hub", never "registry".
+	hubCfg := model.HubConfig{URL: "https://hub.example.com", Entry: "grain-dev"}
+	marshaled, err := json.Marshal(ui.UpdateSettingsRequest{Hub: &hubCfg})
+	if err != nil {
+		t.Fatalf("json.Marshal(UpdateSettingsRequest): %v", err)
+	}
+	var rawReq map[string]json.RawMessage
+	if err := json.Unmarshal(marshaled, &rawReq); err != nil {
+		t.Fatalf("json.Unmarshal(marshaled): %v", err)
+	}
+	if _, ok := rawReq["hub"]; !ok {
+		t.Fatalf("marshaled UpdateSettingsRequest missing \"hub\": %s", marshaled)
+	}
+	if _, ok := rawReq["registry"]; ok {
+		t.Fatalf("marshaled UpdateSettingsRequest still carries \"registry\": %s", marshaled)
+	}
+
+	// 2. Agent-API tool schemas for settings routes advertise "hub", not "registry".
+	tools := ui.AgentAPITools(nil, "1", []string{"api:settings:read", "api:settings:write"})
+	for _, pattern := range []string{"PUT /api/settings", "POST /api/settings", "POST /api/settings/plan"} {
+		var found bool
+		for _, tool := range tools {
+			if !strings.Contains(tool.Description, "Calls "+pattern+" ") {
+				continue
+			}
+			found = true
+			props, _ := tool.InputSchema["properties"].(map[string]any)
+			bodySchema, _ := props["body"].(map[string]any)
+			bodyProps, _ := bodySchema["properties"].(map[string]any)
+			if _, ok := bodyProps["hub"]; !ok {
+				t.Errorf("%s schema (%s) missing body.properties.hub", pattern, tool.Name)
+			}
+			if _, ok := bodyProps["registry"]; ok {
+				t.Errorf("%s schema (%s) still advertises body.properties.registry", pattern, tool.Name)
+			}
+		}
+		if !found {
+			t.Errorf("no AgentAPITool found for %s", pattern)
+		}
+	}
+
+	c, _, ctx := testClient(t)
+	const accessCode = "local-access-code-secret"
+	srv := ui.NewServerWithClient(c)
+	ui.SetAccessCodeForTest(srv, accessCode)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. {"hub": ...}, unrelated fields, null registry, and dual-key payloads never warn,
+	// and "hub" wins when both keys are sent in either order.
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantEntry string
+	}{
+		{
+			name:      "hub only",
+			body:      `{"hub":{"url":"https://hub.example.com","entry":"from-hub"}}`,
+			wantEntry: "from-hub",
+		},
+		{
+			name:      "unrelated field with null registry",
+			body:      `{"pollInterval":"45s","registry":null}`,
+			wantEntry: "from-hub",
+		},
+		{
+			name:      "both keys (hub first)",
+			body:      `{"hub":{"url":"https://hub.example.com","entry":"hub-first"},"registry":{"url":"https://hub.example.com","entry":"reg-second"}}`,
+			wantEntry: "hub-first",
+		},
+		{
+			name:      "both keys (registry first)",
+			body:      `{"registry":{"url":"https://hub.example.com","entry":"reg-first"},"hub":{"url":"https://hub.example.com","entry":"hub-second"}}`,
+			wantEntry: "hub-second",
+		},
+	} {
+		rec := do(t, srv, http.MethodPut, "/api/settings", tc.body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: PUT /api/settings = %d: %s", tc.name, rec.Code, rec.Body.String())
+		}
+		saved := decode[ui.Settings](t, rec)
+		if saved.Hub.Entry != tc.wantEntry || saved.Registry.Entry != tc.wantEntry {
+			t.Fatalf("%s: saved Hub.Entry=%q Registry.Entry=%q, want %q", tc.name, saved.Hub.Entry, saved.Registry.Entry, tc.wantEntry)
+		}
+		if warnBuf.Len() != 0 {
+			t.Fatalf("%s: unexpected deprecation warning: %s", tc.name, warnBuf.String())
+		}
+	}
+
+	// 4. HTTPClient.UpdateSettings and PlanSettings send both "hub" and "registry"
+	// when Hub is set (so a CLI talking to an older daemon still updates it, while
+	// a HEAD daemon does not warn), and omit "registry" when Hub is nil.
+	httpSrv := httptest.NewServer(srv)
+	t.Cleanup(httpSrv.Close)
+	hc := ui.NewHTTPClient(httpSrv.URL)
+	hc.Token = accessCode
+	cliCfg := model.HubConfig{URL: "https://hub.example.com", Entry: "from-cli"}
+	if planned, err := hc.PlanSettings(ctx, ui.UpdateSettingsRequest{Hub: &cliCfg}); err != nil {
+		t.Fatalf("hc.PlanSettings: %v", err)
+	} else if planned.Hub.Entry != "from-cli" {
+		t.Fatalf("hc.PlanSettings Hub.Entry = %q, want from-cli", planned.Hub.Entry)
+	}
+	if updated, err := hc.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &cliCfg}); err != nil {
+		t.Fatalf("hc.UpdateSettings: %v", err)
+	} else if updated.Hub.Entry != "from-cli" {
+		t.Fatalf("hc.UpdateSettings Hub.Entry = %q, want from-cli", updated.Hub.Entry)
+	}
+	if warnBuf.Len() != 0 {
+		t.Fatalf("HTTPClient.UpdateSettings/PlanSettings triggered deprecation warning: %s", warnBuf.String())
+	}
+
+	var wireBodies []map[string]json.RawMessage
+	oldDaemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var m map[string]json.RawMessage
+		_ = json.Unmarshal(body, &m)
+		wireBodies = append(wireBodies, m)
+		var preRename struct {
+			Registry *model.HubConfig `json:"registry"`
+		}
+		_ = json.Unmarshal(body, &preRename)
+		var out ui.Settings
+		if preRename.Registry != nil {
+			out.Registry = *preRename.Registry
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	t.Cleanup(oldDaemon.Close)
+	oldHC := ui.NewHTTPClient(oldDaemon.URL)
+	oldAns, err := oldHC.UpdateSettings(ctx, ui.UpdateSettingsRequest{Hub: &cliCfg})
+	if err != nil {
+		t.Fatalf("oldHC.UpdateSettings(Hub): %v", err)
+	}
+	if oldAns.Registry.Entry != "from-cli" {
+		t.Fatalf("pre-rename daemon received Registry.Entry = %q, want from-cli", oldAns.Registry.Entry)
+	}
+	poll := "30s"
+	if _, err := oldHC.UpdateSettings(ctx, ui.UpdateSettingsRequest{PollInterval: &poll}); err != nil {
+		t.Fatalf("oldHC.UpdateSettings(PollInterval): %v", err)
+	}
+	if len(wireBodies) != 2 {
+		t.Fatalf("recorded %d wire bodies, want 2", len(wireBodies))
+	}
+	if _, hasHub := wireBodies[0]["hub"]; !hasHub {
+		t.Errorf("wire body with Hub missing \"hub\": %v", wireBodies[0])
+	}
+	if _, hasReg := wireBodies[0]["registry"]; !hasReg {
+		t.Errorf("wire body with Hub missing \"registry\" for older daemons: %v", wireBodies[0])
+	}
+	if _, hasReg := wireBodies[1]["registry"]; hasReg {
+		t.Errorf("wire body without Hub carried \"registry\": %v", wireBodies[1])
+	}
+
+	// 5. {"registry": ...} alone warns once per process, even across multiple saves.
+	for i, entry := range []string{"legacy-one", "legacy-two"} {
+		rec := do(t, srv, http.MethodPut, "/api/settings",
+			`{"registry":{"url":"https://hub.example.com","entry":"`+entry+`"}}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("legacy save %d: PUT /api/settings = %d: %s", i, rec.Code, rec.Body.String())
+		}
+		saved := decode[ui.Settings](t, rec)
+		if saved.Hub.Entry != entry {
+			t.Fatalf("legacy save %d: saved Hub.Entry = %q, want %q", i, saved.Hub.Entry, entry)
+		}
+	}
+	gotWarns := strings.Count(warnBuf.String(), `warning: settings key "registry" is deprecated`)
+	if gotWarns != 1 || !strings.Contains(warnBuf.String(), `use "hub"`) {
+		t.Fatalf("want exactly 1 warning naming settings key \"registry\" -> \"hub\", got %d:\n%s",
+			gotWarns, warnBuf.String())
 	}
 }
