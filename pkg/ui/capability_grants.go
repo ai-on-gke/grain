@@ -331,7 +331,9 @@ func (c *Client) SetCapabilityGrant(ctx context.Context, id string, req GrantReq
 	if err := c.catalogueEditRefusalFor(ctx, id, normalized); err != nil {
 		return err
 	}
-	return c.mutate(ctx, id, func(task *model.Task) error {
+	var before, after []string
+	if err := c.mutate(ctx, id, func(task *model.Task) error {
+		before = grantStrings(task.Grants)
 		kept := make([]model.Grant, 0, len(task.Grants)+1)
 		placed := false
 		for _, g := range task.Grants {
@@ -352,8 +354,13 @@ func (c *Client) SetCapabilityGrant(ctx context.Context, id string, req GrantReq
 			return validationErrorf("%w", err)
 		}
 		task.Grants = kept
+		after = grantStrings(kept)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	c.noteGrantChanges(ctx, id, before, after)
+	return nil
 }
 
 type checkGrantsRequest struct {

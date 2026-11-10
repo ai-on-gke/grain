@@ -363,7 +363,7 @@ export const ATTRIBUTES = [
     // a vocabulary nobody could guess at -- while a filter on the branch
     // alone is a question nobody asks. The branch each target goes on
     // stays where it is chosen, on the task's own page
-    // (WriteReposField).
+    // (its repo#write line in the Grants list, RepoGrants.jsx).
     //
     // Its own attribute rather than folded into "repo": that one is
     // still the single repo this task's own runs push to, and widening
