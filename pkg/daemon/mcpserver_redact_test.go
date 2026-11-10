@@ -57,12 +57,15 @@ func TestChildRedactorAsksTheDaemonInsteadOfOpeningTheKey(t *testing.T) {
 	if redact == nil {
 		t.Fatal("childRedactor = nil with a daemon serving redaction")
 	}
+	if calls.Load() != 0 {
+		t.Fatal("building the redactor reached the daemon; only a redaction should")
+	}
 	lines, n := redact([]string{"pw=hunter2"})
 	if n != 1 || lines[0] != "pw=[redacted: secret db/password]" {
 		t.Fatalf("redact = %q, %d", lines, n)
 	}
-	if calls.Load() != 2 { // the probe, and the call
-		t.Fatalf("daemon calls = %d, want 2", calls.Load())
+	if calls.Load() != 1 {
+		t.Fatalf("daemon calls = %d, want 1", calls.Load())
 	}
 
 	// A daemon that stops answering withholds lines, never serves them
@@ -79,5 +82,19 @@ func TestChildRedactorAsksTheDaemonInsteadOfOpeningTheKey(t *testing.T) {
 func TestChildRedactorFallsBackWithoutADaemon(t *testing.T) {
 	if r := childRedactor(nil, t.TempDir()); r != nil {
 		t.Fatal("childRedactor with no daemon and no key = non-nil")
+	}
+}
+
+// A daemon too old to serve redaction (404) is answered from the store
+// on disk; with no key there either, lines are withheld, never served.
+func TestChildRedactorFallsBackWhenTheDaemonDoesNotServeIt(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	client := ui.NewHTTPClient(srv.URL)
+	client.RetryPolicy = &ui.RetryPolicy{}
+	redact := childRedactor(client, t.TempDir())
+	lines, _ := redact([]string{"pw=hunter2"})
+	if strings.Contains(lines[0], "hunter2") {
+		t.Fatalf("served %q with nothing to redact it by", lines[0])
 	}
 }
