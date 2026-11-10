@@ -137,6 +137,7 @@ describe("InboxPage", () => {
       questionSummary: "Retry or give up?",
       questionCommentId: 37,
     });
+    window.history.replaceState({}, "", "/inbox");
     renderInbox({ tasks: [asked], onOpenTask });
 
     const link = screen.getByRole("link", { name: "Investigate the stall" });
@@ -151,7 +152,13 @@ describe("InboxPage", () => {
     expect(onOpenTask).not.toHaveBeenCalled();
 
     await user.click(link);
-    expect(pushState).toHaveBeenCalledWith({}, "", "/tasks/4#comment=37");
+    // The pushed entry keeps the inbox as the page behind the pane, so
+    // its "← Back" (and a Back then Forward onto it) returns there.
+    expect(pushState).toHaveBeenCalledWith(
+      { behind: "/inbox" },
+      "",
+      "/tasks/4#comment=37",
+    );
     expect(window.location.hash).toBe("#comment=37");
     expect(onOpenTask).not.toHaveBeenCalled();
     window.history.replaceState({}, "", "/");

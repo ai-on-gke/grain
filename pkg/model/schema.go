@@ -633,7 +633,12 @@ import "strconv"
 // 133 adds repository skill discovery configuration (`skills` on
 // `grain_config`, `repo_config`, `task` and `template`, and `declared_skills`
 // on `repo_config`).
-const SchemaVersion = 133
+// 134 adds `schedule`.`overlap_group` (model.Schedule.OverlapGroup) and
+// `scheduled_firing_skip`.`held_by_schedule_id`
+// (model.ScheduleSkip.HeldByScheduleID): an overlap group shared by the
+// schedules of one repository, and the schedule that held a skipped
+// firing when it was another one in that group (grain/task-3895).
+const SchemaVersion = 134
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2066,6 +2071,7 @@ var Tables = []string{
   ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   ` + "`grain_ci`" + `              INTEGER  NOT NULL DEFAULT 0,
+  ` + "`overlap_group`" + `         TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3026,7 +3032,8 @@ var Tables = []string{
   ` + "`resolved_at`" + `   DATETIME,
   ` + "`fired_task_id`" + ` TEXT     NOT NULL DEFAULT '',
   ` + "`folded`" + `        INTEGER  NOT NULL DEFAULT 0,
-  ` + "`noted_task_id`" + ` TEXT     NOT NULL DEFAULT ''
+  ` + "`noted_task_id`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`held_by_schedule_id`" + ` TEXT NOT NULL DEFAULT ''
 )`,
 
 	// What the merge queue had to do over again because something else

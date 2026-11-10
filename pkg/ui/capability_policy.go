@@ -73,8 +73,10 @@ type CapabilityPolicyPreview struct {
 // configured server's capability_id with every holder of a reference to
 // it. A server nothing grants is listed with no holders.
 type CapabilityServerUsage struct {
-	ID      string                  `json:"id"`
-	Holders []CapabilityGrantHolder `json:"holders"`
+	ID               string                  `json:"id"`
+	Holders          []CapabilityGrantHolder `json:"holders"`
+	HolderCount      int                     `json:"holderCount,omitempty"`
+	HoldersTruncated bool                    `json:"holdersTruncated,omitempty"`
 }
 
 // CapabilityPolicy reads the stored policy.
@@ -385,6 +387,8 @@ func (s *Server) handlePreviewCapabilityPolicy(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, out)
 }
 
+const maxPagedUsageHolders = 3
+
 func (s *Server) handleCapabilityServerUsage(w http.ResponseWriter, r *http.Request) {
 	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
@@ -399,6 +403,15 @@ func (s *Server) handleCapabilityServerUsage(w http.ResponseWriter, r *http.Requ
 	out = filterList(out, func(u CapabilityServerUsage) bool {
 		return list.matches(u.ID)
 	})
+	if list.Paged {
+		for i := range out {
+			out[i].HolderCount = len(out[i].Holders)
+			if len(out[i].Holders) > maxPagedUsageHolders {
+				out[i].Holders = out[i].Holders[:maxPagedUsageHolders]
+				out[i].HoldersTruncated = true
+			}
+		}
+	}
 	writeList(w, out, list)
 }
 

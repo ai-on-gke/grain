@@ -337,7 +337,7 @@ func TestListRoutesPageForAgents(t *testing.T) {
 	if len(body) > mcpToolResultCap {
 		t.Errorf("an agent's default page is %d bytes; want under %d", len(body), mcpToolResultCap)
 	}
-	if !got.Truncated || got.NextCursor == "" || got.Total != 241 || len(got.Items) != 50 {
+	if !got.Truncated || got.NextCursor == "" || got.Total != 241 || len(got.Items) != 20 {
 		t.Errorf("agent's page = %d items, total %d, truncated %v, cursor %q", len(got.Items), got.Total, got.Truncated, got.NextCursor)
 	}
 
