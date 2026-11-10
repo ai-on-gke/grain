@@ -469,11 +469,44 @@ else `$GRAIN_DATA_DIR/local-api-token`, else `/etc/grain/cli.env`'s data
 directory) and sends it as `Authorization: Bearer <code>` to a daemon on
 loopback, as it always has with the local API token. The daemon sets
 `GRAIN_LOCAL_API_TOKEN_FILE` in its own environment, so processes it
-starts on the host can find the file. That includes a run's
-`grain mcpserver`, which re-reads the file on every request and so keeps
-working across a rotation. A bearer code is accepted from any address,
-because the code is the credential, unless the daemon requires IAP
-(`-ui-require-iap`), which takes it over unforwarded loopback only.
+starts on the host can find the file. A bearer code is accepted from any
+address, because the code is the credential, unless the daemon requires
+IAP (`-ui-require-iap`), which takes it over unforwarded loopback only.
+
+### Runs carry their own credential
+
+A run's `grain mcpserver`, and the `grain-controller` proxy attached to
+a run holding `api:*` grants, do not use the code. The daemon mints each
+run a **run credential** (`grr_...`, `pkg/ui/run_credential.go`) bound
+to that run's task and run ids, and hands it to the mcpserver in its
+environment (`GRAIN_RUN_CREDENTIAL`, taken out again at start, never on
+its argv). The mcpserver sends it as `Authorization: Bearer <credential>`
+on every request.
+
+- It is an HMAC of the two ids under a per-deployment key kept in
+  `-data-dir/run-credential-key` (mode 0600, written on first start).
+  Nothing is stored per run, so a run the daemon adopts after a restart
+  keeps working. To rotate the key, delete the file and restart. That
+  ends every live run's credential.
+- The daemon accepts a credential only while its run is live. Once the
+  run has finished (`task_run.finished_at`), the credential is answered
+  `401`. It is never accepted over the hub tunnel.
+- It says which task the request acts for. On a request carrying it,
+  `X-Grain-Acting-Task` must name the credential's own task and
+  `X-Grain-Acting-Run` its own run, or the request is refused `403`.
+  Calls that name the task go through the agent API gate and are held
+  to that task's api grants.
+- A daemon that issues run credentials (any daemon with a data
+  directory) refuses `401` an `X-Grain-Acting-Task` request that only
+  the access code admitted, on the REST gate and on `POST /api/mcp`
+  alike. The code no longer vouches for which task its holder is. A
+  request handed to the API in-process, such as the sandbox proxy's
+  `grain api` channel, which authenticated the sandbox itself, is
+  unaffected.
+- The run's other daemon calls (reading its task, posting status and
+  comments, staging attachments) name no acting task. They are admitted
+  as grain's own on the strength of the credential, as they were on the
+  code's, but only while the run is live.
 
 ## Who the code is recorded as
 
@@ -530,13 +563,12 @@ verified sign-in still has the host.
   per name and source, with every raise counted) that names who used it
   and from where. Until such a person exists, recovery works like
   **on**, so it cannot lock out the bootstrap it is meant to protect.
-- **off**: the code is refused as a bearer token, in
-  `X-Grain-Access-Code`, as a session, and at sign-in. One exception
-  remains: a run's own plumbing (`grain mcpserver` requests carrying
-  `X-Grain-Acting-Task`, held to that task's grants and recorded as the
-  task) still reaches the daemon with the code, until runs carry a
-  credential of their own. Undo it with `grain access-code mode on` on
-  the host.
+- **off**: the code is refused on every request: as a bearer token, in
+  `X-Grain-Access-Code`, as a session, and at sign-in, with or without
+  `X-Grain-Acting-Task`. Runs keep working, because they reach the
+  daemon with their own run credential
+  ([Runs carry their own credential](#runs-carry-their-own-credential)).
+  Undo it with `grain access-code mode on` on the host.
 
 A mode file holding anything else is read as **off**, so a typo never
 opens the code wider than intended.
@@ -610,8 +642,9 @@ Agents must not be able to read the code. What holds today:
   staging, with no bubblewrap there to hide them.
 - **Transcripts and logs:** the code isn't in any of them.
   The daemon logs the file's path, never its contents. The code travels
-  only as an `Authorization` header from the CLI or `grain mcpserver` to
-  the daemon, and as the login form's body. Neither is logged or recorded
+  only as an `Authorization` header from the CLI to the daemon, and as
+  the login form's body. A run's credential travels the same way from
+  its `grain mcpserver`. Neither is logged or recorded
   in a transcript.
 - **Host sandboxes** (`-host-sandboxes`) run a command as the same
   account grain runs as, and that account can read a `0600` file it
