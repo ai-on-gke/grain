@@ -240,6 +240,37 @@ func TestSetPendingSecretRefusesGrainsOwnCredentials(t *testing.T) {
 	}
 }
 
+// A GCP key may mint through a minter secret of any name, which no
+// fixed list can know; the write refuses the ones this deployment's keys
+// name, and leaves a secret of the same shape that no key uses alone.
+func TestSetPendingSecretRefusesAConfiguredMinterCredential(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	secretStore := withSecrets(t, c)
+	if err := store.PutGCPKey(ctx, model.GCPKey{
+		Name: "research", ProjectID: "example-project",
+		ServiceAccountEmail: "minter@example-project.iam.gserviceaccount.com",
+		MinterCredential:    "research-sa",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	task := parkedOnASecret(t, c, store, ctx, "research-sa/key.json")
+
+	err := c.SetPendingSecret(ctx, task.ID, `{"type":"service_account"}`)
+	var ve *ui.ValidationError
+	if err == nil || !errors.As(err, &ve) {
+		t.Fatalf("SetPendingSecret for a configured minter = %v, want a validation error", err)
+	}
+	if has, _ := secretStore.Has("research-sa", "key.json"); has {
+		t.Fatal("the refused value was written to the store")
+	}
+
+	other := parkedOnASecret(t, c, store, ctx, "analytics-sa/key.json")
+	if err := c.SetPendingSecret(ctx, other.ID, `{"type":"service_account"}`); err != nil {
+		t.Fatalf("SetPendingSecret for a secret no GCP key names = %v, want it stored", err)
+	}
+}
+
 func TestSetPendingSecretNeedsAValue(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
