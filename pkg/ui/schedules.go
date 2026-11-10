@@ -2248,9 +2248,22 @@ type scheduleBusyError struct {
 	ID       string
 	Review   string
 	Workflow bool
+	// HeldBy is the other schedule in this one's overlap group whose
+	// unfinished firing is what is holding it (grain/task-3895), and
+	// Group that group; empty when it is its own previous run.
+	HeldBy string
+	Group  string
 }
 
 func (e *scheduleBusyError) Error() string {
+	if e.HeldBy != "" {
+		msg := "schedule " + e.ID + ": schedule " + e.HeldBy + " has a run that has not finished yet, and the two " +
+			"share overlap group \"" + e.Group + "\", so they never run at the same time -- wait for it to finish"
+		if e.Review != "" {
+			msg += " (what has not finished is the review of its last run, task " + e.Review + ")"
+		}
+		return msg
+	}
 	msg := "schedule " + e.ID + ": its previous run has not finished yet, and this schedule is set to skip " +
 		"a run that would overlap one -- wait for it, or set \"If the last run has not finished\" to start it anyway"
 	if e.Workflow {
@@ -2306,7 +2319,11 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 		if sched.TemplateID != nil {
 			workflow = model.IsWorkflowReviewTemplateID(*sched.TemplateID)
 		}
-		return ScheduleRun{}, &scheduleBusyError{ID: id, Review: firing.OpenReview, Workflow: workflow}
+		busy := &scheduleBusyError{ID: id, Review: firing.OpenReview, Workflow: workflow}
+		if firing.Skip != nil && firing.Skip.HeldByScheduleID != "" {
+			busy.HeldBy, busy.Group = firing.Skip.HeldByScheduleID, sched.OverlapGroup
+		}
+		return ScheduleRun{}, busy
 	}
 	// The cadence answers this one by quietly not firing (model.Store's
 	// own suppressOffTargetRepos), because nobody is waiting on it and
