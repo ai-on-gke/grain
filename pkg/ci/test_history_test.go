@@ -200,3 +200,20 @@ func TestQueryTestHistoryGitHubActionsCountsFailuresOnly(t *testing.T) {
 		t.Errorf("an Actions history with no failure should say it saw none, not that the test never ran:\n%s", none)
 	}
 }
+
+func TestQueryTestHistoryFallsBackToRunStartedAt(t *testing.T) {
+	at := time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC)
+	runs := []Run{{
+		ID: "gha:acme:widgets:9505", Provider: ProviderGitHubActions, Repo: "acme/widgets", Ref: "main",
+		StartedAt: &at, Conclusion: ConclusionFailure,
+		Actions: &ActionsRun{Workflow: ".github/workflows/nightly.yml"},
+		Jobs: []JobRun{{
+			Name: "go-long", Conclusion: ConclusionFailure,
+			Steps: []StepRun{{Name: "test", Output: "--- FAIL: TestNightly (1.00s)\n"}},
+		}},
+	}}
+	rendered := QueryTestHistory(runs, "TestNightly").Render()
+	if strings.Contains(rendered, "unknown time") || !strings.Contains(rendered, "2026-11-10 03:00 UTC | run gha:acme:widgets:9505") {
+		t.Fatalf("expected execution to inherit run StartedAt rather than unknown time:\n%s", rendered)
+	}
+}

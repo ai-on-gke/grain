@@ -77,6 +77,9 @@ describe("comment deep links (/tasks/<id>#comment=<id>)", () => {
     expect(el).toHaveTextContent("message number 42");
     expect(el).toHaveClass("comment-highlight");
     expect(screen.queryByTestId("comment-link-notice")).toBeNull();
+    // Focus goes with it, for a screen reader to read the comment out.
+    expect(el.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(el);
   });
 
   it("follows a hash changed on the task already open", async () => {
@@ -121,6 +124,17 @@ describe("comment deep links (/tasks/<id>#comment=<id>)", () => {
     expect(
       await screen.findByText(
         "Comment 99999 is not in this task's conversation.",
+      ),
+    ).toBeInTheDocument();
+    expect(scrolled).toHaveLength(0);
+  });
+
+  it("says a #comment= naming no comment does not name one", async () => {
+    window.history.replaceState(null, "", "/tasks/12#comment=abc");
+    renderTask({ ...baseTask, comments: longConversation(10) });
+    expect(
+      await screen.findByText(
+        "This link's #comment=abc does not name a comment.",
       ),
     ).toBeInTheDocument();
     expect(scrolled).toHaveLength(0);

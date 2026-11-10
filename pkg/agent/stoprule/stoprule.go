@@ -78,8 +78,8 @@ const SessionContinueReason = "You said you would continue. Do it now, or use `c
 const BackgroundContinueReason = "A reply without a tool call ends your run, and this run has not finished: " +
 	"nothing has been pushed and nothing has been reported. Before you stop, do one of these: push your " +
 	"branch, leave your findings with `comment_on_issue`, ask with `ask_question`, request a credential with " +
-	"`request_secret`, ask for more access with `request_access`, park on another task with `wait_for_task`, or say no change is needed with " +
-	"`nothing_needed`. If you meant to keep working, keep working now."
+	"`request_secret`, ask for more access with `request_access`, park on another task with `wait_for_task`, " +
+	"suspend with `resume_later`, or say no change is needed with `nothing_needed`. If you meant to keep working, keep working now."
 
 // Block is one time the stop rule sent a run back, recorded on the
 // run's agent.Result (Result.StopBlocks) so that the run's transcript and
@@ -153,6 +153,10 @@ func MadeClosingMove(calls []Call) bool {
 			return true
 		}
 		switch c.Name {
+		case "resume_later":
+			if !c.IsError {
+				return true
+			}
 		case "wait_for_task":
 			if park, _ := c.Arguments["park"].(bool); park {
 				return true

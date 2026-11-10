@@ -798,6 +798,93 @@ var NeverAutoMergePaths = []string{
 	"schema-version",
 }
 
+// stateScopePaths is what a config-repository change to each path confers
+// once staterepo.Apply imports it, said as the API scopes a person must
+// hold to make the same change directly (ui's route scopes): a change
+// that adds a host script or widens a scope set is a capabilities:admin
+// grant whichever route it took, and one that binds a credential is a
+// secrets:write one. Every other path needs settings:write alone, which
+// approving any config change already asks for (task 3965).
+var stateScopePaths = []struct {
+	glob   string
+	scopes []string
+}{
+	// Capability servers (mcp_servers: host scripts, gcp admins and role
+	// ceilings), capability policy and default capabilities live in the
+	// deployment's config row; repo_config carries each repository's
+	// capabilities; api_scope_set is what every role and api:* grant
+	// resolves to.
+	{"tables/grain_config.json", []string{"capabilities:admin"}},
+	{"tables/repo_config.json", []string{"capabilities:admin"}},
+	{"tables/api_scope_set.json", []string{"capabilities:admin"}},
+	{"settings/capabilities.yml", []string{"capabilities:admin"}},
+	{ConfigPolicyPath, []string{"capabilities:admin"}},
+	// What templates, schedules, suites, sessions and qualification
+	// plans hand the tasks they file: grants, reads, writes, approval.
+	{"settings/templates.yml", []string{"capabilities:admin"}},
+	{"settings/schedules.yml", []string{"capabilities:admin"}},
+	{"settings/suites.yml", []string{"capabilities:admin"}},
+	{"settings/new-task-form.yml", []string{"capabilities:admin"}},
+	{"tables/template*.json", []string{"capabilities:admin"}},
+	{"tables/schedule*.json", []string{"capabilities:admin"}},
+	{"tables/suite*.json", []string{"capabilities:admin"}},
+	{"tables/qualification*.json", []string{"capabilities:admin"}},
+	{"tables/console_session.json", []string{"capabilities:admin"}},
+	{"tables/repo_workflow.json", []string{"capabilities:admin"}},
+	// What a sandbox runs and the secrets bound into it.
+	{"tables/standing_sandbox.json", []string{"capabilities:admin"}},
+	{"tables/persistent_sandbox.json", []string{"capabilities:admin"}},
+	{"tables/standing_sandbox_secret.json", []string{"capabilities:admin", "secrets:write"}},
+	{"tables/standing_sandbox_env.json", []string{"capabilities:admin", "secrets:write"}},
+	// Credentials and keys.
+	{"tables/gcp_key.json", []string{"capabilities:admin", "secrets:write"}},
+	{"tables/git_credential.json", []string{"secrets:write"}},
+	{"tables/repo_git_credential.json", []string{"secrets:write"}},
+	{"tables/agent_backend.json", []string{"connections:write"}},
+	// Code the daemon runs.
+	{"scripts/**", []string{"capabilities:admin"}},
+	{"workflows/**", []string{"capabilities:admin"}},
+	{".github/**", []string{"capabilities:admin"}},
+	{".grain/**", []string{"capabilities:admin"}},
+	{"schema-version", []string{"capabilities:admin"}},
+}
+
+// StateScopes is every API scope, beyond the settings:write any config
+// change needs, that a person must hold to let a change to these
+// grain/config paths merge: what the change confers once it is applied
+// (stateScopePaths), sorted, each once. A path outside settings/ and
+// tables/ that stateScopePaths does not name (prose aside) confers
+// capabilities:admin, since what it would do once applied is not
+// something this build can say.
+func StateScopes(paths []string) []string {
+	set := map[string]bool{}
+	for _, raw := range paths {
+		p := cleanStatePath(raw)
+		if p == "" {
+			continue
+		}
+		matched := false
+		for _, e := range stateScopePaths {
+			if MatchStatePath(e.glob, p) {
+				matched = true
+				for _, sc := range e.scopes {
+					set[sc] = true
+				}
+			}
+		}
+		if !matched && !strings.HasPrefix(p, "settings/") && !strings.HasPrefix(p, "tables/") &&
+			!strings.HasSuffix(p, ".md") {
+			set["capabilities:admin"] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for sc := range set {
+		out = append(out, sc)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ConfigPolicy is the parsed representation of settings/config-policy.yml.
 type ConfigPolicy struct {
 	AutoMergePaths []string `yaml:"auto_merge_paths"`

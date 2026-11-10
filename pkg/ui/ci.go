@@ -843,6 +843,13 @@ type CIRunsResponse struct {
 	// no forge connection that reads Actions, a low API budget, or a
 	// forge read that failed (ci_actions.go).
 	ActionsNote string `json:"actionsNote,omitempty"`
+	// RepoProvider is the active CI provider for the single repository the
+	// query narrowed to (?repo=owner/name): ci.ProviderGitHubActions when
+	// its Actions runs are listed (ci_mode: github), or ci.ProviderGrain
+	// otherwise. Carried here under ci:read so `grain ci test-history` can
+	// default to GitHub Actions without needing capabilities:read on
+	// GET /api/repos/{owner}/{name}/capabilities.
+	RepoProvider string `json:"repoProvider,omitempty"`
 	// Truncated says ?limit= (or an agent's default page size) stopped
 	// short of Matched, and NextCursor asks for the next page.
 	Truncated  bool   `json:"truncated,omitempty"`
@@ -1298,13 +1305,18 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if runner == nil {
+		var repoProvider string
+		if filter, ferr := ciRunFilterFrom(r.URL.Query(), time.Now()); ferr == nil {
+			repoProvider = s.repoCIProvider(r.Context(), filter.Repo)
+		}
 		faults := s.tasks.CISharedFaults(r.Context())
 		if isAgentListCaller(r) && len(faults) > listPageSmall {
 			faults = faults[:listPageSmall]
 		}
 		writeJSON(w, http.StatusOK, CIRunsResponse{
-			Enabled: false,
-			Faults:  faults,
+			Enabled:      false,
+			Faults:       faults,
+			RepoProvider: repoProvider,
 		})
 		return
 	}
@@ -1334,9 +1346,10 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		s.writeCIRuns(w, r, runner.Find(grainFilter, fetchLimit), filter, list, compact, repo)
 		return
 	}
+	repoProvider := s.repoCIProvider(r.Context(), filter.Repo)
 	if filter.Provider != "" && !strings.EqualFold(filter.Provider, ci.ProviderGrain) {
 		// A provider no run of this answer is from.
-		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}})
+		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}, RepoProvider: repoProvider})
 		return
 	}
 	filter.Provider = ""
@@ -1363,14 +1376,29 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		listed = append(listed, ciListSummary(run))
 	}
 	writeJSON(w, http.StatusOK, CIRunsResponse{
-		Enabled:    true,
-		Runs:       listed,
-		Matched:    page.Matched,
-		Stored:     page.Stored,
-		Faults:     faults,
-		Truncated:  truncated,
-		NextCursor: nextCursor,
+		Enabled:      true,
+		Runs:         listed,
+		Matched:      page.Matched,
+		Stored:       page.Stored,
+		Faults:       faults,
+		RepoProvider: repoProvider,
+		Truncated:    truncated,
+		NextCursor:   nextCursor,
 	})
+}
+
+func (s *Server) repoCIProvider(ctx context.Context, repoText string) string {
+	if s.tasks == nil || strings.TrimSpace(repoText) == "" {
+		return ""
+	}
+	repo, err := s.tasks.parseRepo(repoText)
+	if err != nil {
+		return ""
+	}
+	if s.tasks.actionsListedFor(ctx, repo) {
+		return ci.ProviderGitHubActions
+	}
+	return ci.ProviderGrain
 }
 
 // writeCIRuns answers GET /api/ci/runs with grain's page merged with
@@ -1417,14 +1445,15 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		listed = append(listed, ciListSummary(run))
 	}
 	writeJSON(w, http.StatusOK, CIRunsResponse{
-		Enabled:     true,
-		Runs:        listed,
-		Matched:     page.Matched,
-		Stored:      page.Stored,
-		Faults:      faults,
-		ActionsNote: note,
-		Truncated:   truncated,
-		NextCursor:  nextCursor,
+		Enabled:      true,
+		Runs:         listed,
+		Matched:      page.Matched,
+		Stored:       page.Stored,
+		Faults:       faults,
+		ActionsNote:  note,
+		RepoProvider: ci.ProviderGitHubActions,
+		Truncated:    truncated,
+		NextCursor:   nextCursor,
 	})
 }
 
