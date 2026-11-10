@@ -19,10 +19,33 @@ import TaskLink from "./detail/TaskLink.jsx";
 // deriveMergeGates returns t.mergeGates when populated by the server, or
 // synthesizes the same gate list from legacy task fields when a caller or
 // test fixture omits mergeGates.
+// gateId is a gate's identifier: the server's MergeGate sends `id`
+// (model.MergeGate), and gates derived here also carry it as `name`.
+export function gateId(gate) {
+  return gate?.id || gate?.name || "";
+}
+
+// normalizeGate gives a server MergeGate the fields this file reads:
+// `name`, `by` (approver or overrider) and `tasks` (its review tasks).
+function normalizeGate(g) {
+  const tasks = Array.isArray(g?.tasks)
+    ? g.tasks.map(String)
+    : g?.reviewTask
+      ? [String(g.reviewTask)]
+      : [];
+  return {
+    ...g,
+    id: gateId(g),
+    name: gateId(g),
+    by: g?.by || g?.approvedBy || "",
+    tasks,
+  };
+}
+
 export function deriveMergeGates(t) {
   if (!t) return [];
   if (Array.isArray(t.mergeGates) && t.mergeGates.length > 0) {
-    return t.mergeGates;
+    return t.mergeGates.map(normalizeGate);
   }
   if (!t.pullRequest && !(t.state === "running" && t.ci?.commit)) {
     return [];
@@ -206,6 +229,9 @@ export function needsHumanApproval(t) {
   if (t.humanApprovedBy) return false;
   const app = approvalGate(t);
   if (app) return app.state === "needed";
+  // The server lists an approval gate whenever a person's approval is
+  // required; a change it lists none for is waiting on reviews alone.
+  if (Array.isArray(t.mergeGates) && t.mergeGates.length > 0) return false;
   return true;
 }
 
