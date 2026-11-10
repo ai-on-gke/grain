@@ -1,0 +1,260 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The release images' vulnerability gate (docs/image-vulnerability-scanning.md)
+# outside a release:
+#
+#   pr       a pull request that changes what goes into an image -- a
+#            Dockerfile or Granulefile (the base images, the apt package
+#            lists, the pinned docker/kubectl/cosign binaries and agent
+#            CLI versions all live there) -- or the gate itself builds the
+#            release's four images from the PR and scans them, failing
+#            the way the release would.
+#   weekly   every Monday, the published `latest` images (or the tag a
+#            dispatch names) are scanned and reported without failing:
+#            what is open, which allowlist entries expire soon, and what
+#            is new since the previous week's report.
+#
+# release.yml runs the same scan between its build and its push, and
+# nightly.yml's image-vulns job runs it on every RC as part of Stage 1.
+
+name: image-vulns
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile*"
+      - "Granulefile*"
+      - "scripts/granule/**"
+      - ".grain/baselines/image-vulns-allowlist.yaml"
+      - "scripts/scan-images.sh"
+      - "cmd/image-vulns/**"
+      - ".github/workflows/image-vulns.yml"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published image tag to report on (default latest)"
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
+
+jobs:
+  pr:
+    name: image vulnerabilities
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: ${{ github.workflow }}-pr-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Fill the npm cache from the registry
+        run: |
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+          ./scripts/warm-npm-cache.sh ui
+
+      - name: Build the images
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The release's four images, built from this PR the way
+          # scripts/release-images.sh builds them, under local names that
+          # are pushed nowhere.
+          docker build -f Dockerfile.k8s-sandbox -t image-vulns/sandbox-k8s:pr .
+          make image IMAGE=image-vulns/grain:pr K8S_SANDBOX_IMAGE=image-vulns/sandbox-k8s:pr
+          make image-hub IMAGE_HUB=image-vulns/hub:pr
+
+          # The guest: the published cache for these exact inputs when
+          # there is one (nothing that goes into it changed), otherwise
+          # built through granule as the release builds it.
+          # shellcheck source=scripts/release-image-repos.sh
+          . ./scripts/release-image-repos.sh
+          mapfile -t inputs < <(./scripts/granule/guest-inputs.sh guest)
+          key="$(git rev-parse "${inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
+          cache="$(release_image_repo_for sandbox):inputs-$key"
+          if docker pull "$cache"; then
+            docker tag "$cache" image-vulns/sandbox:pr
+          else
+            echo "no published guest for inputs $key; building it"
+            IMAGE=granule:vendored GUEST_SOURCE_REPO="https://github.com/${REPO}" ./scripts/granule/build-granule-image.sh
+            go run github.com/gke-labs/granule/cmd/granule granulefile build -kontur-image granule:vendored \
+              -f Granulefile.guest-base -t granule-guest-base:vendored
+            go run github.com/gke-labs/granule/cmd/granule granulefile build -kontur-image granule:vendored \
+              -f Granulefile -t image-vulns/sandbox:pr
+          fi
+
+      - name: Date the vulnerability database
+        id: trivy-db
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the scanner and its vulnerability database
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/trivy
+            ~/.cache/grain
+          key: trivy-${{ runner.os }}-${{ steps.trivy-db.outputs.day }}
+          restore-keys: |
+            trivy-${{ runner.os }}-
+
+      - name: Scan the images
+        run: |
+          bash ./scripts/scan-images.sh --out image-vulns-report --title "PR image vulnerabilities" \
+            grain=image-vulns/grain:pr sandbox=image-vulns/sandbox:pr \
+            sandbox-k8s=image-vulns/sandbox-k8s:pr hub=image-vulns/hub:pr
+
+      # No code scanning upload from a PR: a fork's token cannot write
+      # security events, and the release and nightly runs upload theirs.
+      - name: Keep the reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-vulns-pr
+          path: image-vulns-report
+          if-no-files-found: ignore
+
+  weekly:
+    name: weekly image vulnerability report
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # The previous week's report, read off its run's artifacts.
+      actions: read
+      security-events: write
+    concurrency:
+      group: ${{ github.workflow }}-weekly
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Date the vulnerability database
+        id: trivy-db
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the scanner and its vulnerability database
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/trivy
+            ~/.cache/grain
+          key: trivy-${{ runner.os }}-${{ steps.trivy-db.outputs.day }}
+          restore-keys: |
+            trivy-${{ runner.os }}-
+
+      - name: Fetch the previous weekly report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The newest earlier run of this job that left a report. None
+          # (the first week, or expired artifacts) only loses "new since".
+          id="$(gh run list -R "$REPO" --workflow image-vulns.yml --status success --limit 20 \
+            --json databaseId,event --jq '[.[] | select(.event != "pull_request")][0].databaseId // empty' || true)"
+          if [ -n "$id" ] && gh run download "$id" -R "$REPO" -n image-vulns-weekly -D previous-report; then
+            echo "comparing with run $id"
+          else
+            echo "no previous weekly report; nothing is marked new"
+          fi
+
+      - name: Scan the published images
+        env:
+          IMAGE_VULNS_SARIF_CATEGORY: weekly-images
+          TAG: ${{ inputs.tag || 'latest' }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -f previous-report/image-vulns.json ]; then
+            args+=(--previous previous-report/image-vulns.json)
+          fi
+          bash ./scripts/scan-images.sh --tag "$TAG" --report-only --out image-vulns-report \
+            --title "Weekly image vulnerability report (:$TAG)" "${args[@]}"
+
+      - name: Upload the scan to code scanning
+        if: ${{ !cancelled() && hashFiles('image-vulns-report/*.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: image-vulns-report
+
+      - name: Keep the report for next week
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-vulns-weekly
+          path: image-vulns-report
+          retention-days: 90
+          if-no-files-found: ignore
