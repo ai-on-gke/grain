@@ -201,3 +201,132 @@ for (const [name, size] of Object.entries({
     expect(overflow).toBeLessThanOrEqual(1);
   });
 }
+
+test("the linked comment takes focus, and a link naming no comment says so", async ({
+  page,
+  request,
+}) => {
+  const filed = await request.post("/api/tasks", {
+    data: { title: "Deep link focus", body: "x", approved: false },
+  });
+  const task = await filed.json();
+  for (let i = 0; i < 5; i++) {
+    await request.post(`/api/tasks/${task.id}/comments`, {
+      data: { body: `Focus line ${i}` },
+    });
+  }
+  const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
+  const target = detail.comments[2];
+
+  await page.goto(`/tasks/${task.id}#comment=${target.id}`);
+  const entry = page.locator(`[data-comment-id="${target.id}"]`);
+  await expect(entry).toHaveClass(/comment-highlight/);
+  // For a screen reader to read it out, and for Tab to go on from it.
+  await expect(entry).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(entry.getByRole("button", { name: "Copy link" })).toBeFocused();
+
+  // A truncated or mistyped fragment is said, not silently ignored.
+  for (const hash of ["#comment=abc", "#comment="]) {
+    await page.goto("about:blank");
+    await page.goto(`/tasks/${task.id}${hash}`);
+    await expect(page.getByTestId("comment-link-notice")).toContainText(
+      `This link's ${hash} does not name a comment.`,
+    );
+    await expect(page.locator(".comment-highlight")).toHaveCount(0);
+  }
+
+  // A comment of another task's is not this one's.
+  const other = await (await request.get("/api/tasks/4")).json();
+  const foreign = other.comments[0].id;
+  await page.goto("about:blank");
+  await page.goto(`/tasks/${task.id}#comment=${foreign}`);
+  await expect(page.getByTestId("comment-link-notice")).toContainText(
+    `Comment ${foreign} is not in this task's conversation.`,
+  );
+});
+
+test("Copy link copies the comment's address without the Clipboard API", async ({
+  page,
+  request,
+}) => {
+  // A page served over plain HTTP from anywhere but localhost is not a
+  // secure context and has no navigator.clipboard. The fallback used to
+  // select a <textarea> appended to <body>, which the task pane's dialog
+  // focus trap took focus straight back from: nothing was copied, and
+  // the button said Copied.
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, "clipboard", {
+      get: () => undefined,
+      configurable: true,
+    });
+    window.__copied = [];
+    window.addEventListener("copy", (e) => {
+      window.__copied.push(e.clipboardData?.getData("text/plain") || "");
+    });
+  });
+  const filed = await request.post("/api/tasks", {
+    data: { title: "Deep link insecure copy", body: "x", approved: false },
+  });
+  const task = await filed.json();
+  await request.post(`/api/tasks/${task.id}/comments`, {
+    data: { body: "Copy my link over plain HTTP." },
+  });
+  const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
+  const c = detail.comments[0];
+
+  await page.goto(`/tasks/${task.id}`);
+  const entry = page.locator(`[data-comment-id="${c.id}"]`);
+  await entry.getByRole("button", { name: "Copy link" }).click();
+  await expect(entry.getByRole("button", { name: "Copied" })).toBeVisible();
+  const origin = new URL(page.url()).origin;
+  expect(await page.evaluate(() => window.__copied)).toEqual([
+    `${origin}/tasks/${task.id}#comment=${c.id}`,
+  ]);
+});
+
+test("Back and Forward retrace a comment link followed in place", async ({
+  page,
+  request,
+}) => {
+  const target = await (
+    await request.post("/api/tasks", {
+      data: { title: "Deep link history target", body: "x", approved: false },
+    })
+  ).json();
+  for (let i = 0; i < 40; i++) {
+    await request.post(`/api/tasks/${target.id}/comments`, {
+      data: { body: `History line ${i}` },
+    });
+  }
+  const td = await (await request.get(`/api/tasks/${target.id}`)).json();
+  const tc = td.comments[3].id;
+  const source = await (
+    await request.post("/api/tasks", {
+      data: { title: "Deep link history source", body: "x", approved: false },
+    })
+  ).json();
+  await request.post(`/api/tasks/${source.id}/comments`, {
+    data: { body: `Go [there](/tasks/${target.id}#comment=${tc}).` },
+  });
+
+  await page.goto(`/tasks/${source.id}`);
+  await page.evaluate(() => {
+    window.__noReload = true;
+  });
+  await page.getByRole("link", { name: "there" }).click();
+  const entry = page.locator(`[data-comment-id="${tc}"]`);
+  await expect(entry).toBeInViewport();
+
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`/tasks/${source.id}$`));
+  await expect(page.getByRole("link", { name: "there" })).toBeVisible();
+
+  await page.goForward();
+  await expect(page).toHaveURL(
+    new RegExp(`/tasks/${target.id}#comment=${tc}$`),
+  );
+  await expect(entry).toBeInViewport();
+  await expect(entry).toHaveClass(/comment-highlight/);
+  expect(await page.evaluate(() => window.__noReload)).toBe(true);
+});
