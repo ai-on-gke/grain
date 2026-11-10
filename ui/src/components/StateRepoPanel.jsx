@@ -448,6 +448,35 @@ export default function StateRepoPanel({
         {status.secretsPublicKey || "(no key yet)"}
       </Typography>
 
+      {/* Keys an import replaced. Each is still a whole private key that
+          opens whatever was sealed to it, so they are listed rather than
+          left for a disk image to reveal. Deleting is a host command on
+          purpose: it cannot be undone. */}
+      {status.retiredSecretsKeys?.length > 0 && (
+        <Box sx={{ mt: 1 }} data-testid="retired-secrets-keys">
+          <Typography variant="body2" color="text.secondary">
+            {status.retiredSecretsKeys.length === 1
+              ? "One key this host replaced is still kept beside it"
+              : `${status.retiredSecretsKeys.length} keys this host replaced are still kept beside it`}
+            , and each still opens anything that was encrypted to it. Once
+            nothing you keep needs one, remove it on the host with{" "}
+            <code>grain state key retired delete NAME</code>.
+          </Typography>
+          {status.retiredSecretsKeys.map((k) => (
+            <Typography
+              key={k.name}
+              variant="caption"
+              component="pre"
+              sx={{ mt: 0.5, overflowX: "auto" }}
+            >
+              {k.name}
+              {"\n"}
+              {k.publicKey || "(not a readable key)"}
+            </Typography>
+          ))}
+        </Box>
+      )}
+
       {/* Where the encrypted file itself is, which is a separate question
           from the key that opens it: the key is handed back by hand, and
           the file only comes back if it was pushed somewhere. Said either
