@@ -1,0 +1,83 @@
+=== item 4a: E2 shapes in configuration ===
+  grain-hub validate hub-e2.yaml -> exit 1 : grain-hub: config: compute.shapes[2] (cheap) machine_type "e2-medium" does not support nested virtualization, which hosted VMs need; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4) 
+  grain-hub serve hub-e2.yaml    -> exit 1 : grain-hub: config: compute.shapes[2] (cheap) machine_type "e2-medium" does not support nested virtualization, which hosted VMs need; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4)
+  grain-hub validate hub-e2z.yaml -> exit 1 : grain-hub: config: compute.shapes[2] (cheap-zonal) machine_type "zones/us-central1-a/machineTypes/e2-small" does not support nested virtualization, which hosted VMs need; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4) 
+  grain-hub serve hub-e2z.yaml    -> exit 1 : grain-hub: config: compute.shapes[2] (cheap-zonal) machine_type "zones/us-central1-a/machineTypes/e2-small" does not support nested virtualization, which hosted VMs need; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4)
+  N2 config: config /tmp/fakegcp-walk/hub.yaml is valid
+
+=== item 4b: API requests naming an E2 machine type ===
+  GET /api/shapes: {"default_shape":"n2-standard-2","shapes":[{"name":"n2-standard-2","machine_type":"n2-standard-2","boot_disk_gb":50,"quota_units":1},{"name":"n2-standard-4","machine_type":"n2-standard-4","boot_disk_gb":100,"quota_units":2}]}
+
+  POST /api/entries {"name":"e2-api","kind":"instance","shape":"cheap"} -> HTTP 400 {"error":"unknown shape \"cheap\"","code":"invalid_argument"}
+  POST /api/entries {"name":"e2-api","kind":"instance","machine_type":"zones/us-central1-a/machineTypes/e2-small"} -> HTTP 202 {"entry":{"name":"e2-api","url":"https://e2-api.grain-user.test","kind":"instance","state":"creating","status":"offline","health":"ok","owner":"alice@example.com","listed":false,"shape":"n2-standard-2","machine_type":"n2-standard-2","boot_disk_gb":50,"allow_ssh":true,"ship_logs":false,"auto_wake":tr
+      {"status":"offline","machine_type":"n2-standard-2","status_detail":null}
+  POST /api/entries {"name":"e2-api","kind":"instance","shape":"n2-standard-2","machine_type":"zones/us-central1-a/machineTypes/e2-small"} -> HTTP 409 {"error":"registry store: conflict: entry \"e2-api\" already exists","code":"conflict"}
+  a shape row an older config seeded (zonal e2-small), inserted after migration 8:
+    columns: name,machine_type,boot_disk_gb,boot_disk_iops,quota_units,description
+    created hosted instance entry legacy-e2-vm (state=creating, shape=legacy-e2, url=https://legacy-e2-vm.grain-user.test)
+    {"status":"offline","shape":"legacy-e2","status_detail":"creating GCE instance failed: gcp compute: machine_type \"zones/us-central1-a/machineTypes/e2-small\": machine type does not support nested virtualization; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4)"}
+
+=== item 4c: per-instance actAs (self_principal serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com) ===
+--- baseline: create act-plain
+    created hosted instance entry act-plain (state=creating, shape=n2-standard-2, url=https://act-plain.grain-user.test)
+    {"status":"online","status_detail":null}
+    POST gi-act-plain@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+    POST gi-act-plain@made-up-proj.iam.gserviceaccount.com:setIamPolicy -> 200
+    policy: {"etag":"ZXRhZy0y","bindings":[{"role":"roles/iam.serviceAccountUser","members":["serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com"]}]}
+    instance: {"labels":{"grain-entry":"act-plain","grain-generation":"1","grain-managed":"true","grain-registry":"walk-hub-7"},"serviceAccounts":["gi-act-plain@made-up-proj.iam.gserviceaccount.com"]}
+--- inject 409, 409 on setIamPolicy: create act-409
+    created hosted instance entry act-409 (state=creating, shape=n2-standard-2, url=https://act-409.grain-user.test)
+    {"status":"online","status_detail":null}
+    POST gi-act-409@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+    POST gi-act-409@made-up-proj.iam.gserviceaccount.com:setIamPolicy -> 409
+    POST gi-act-409@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+    POST gi-act-409@made-up-proj.iam.gserviceaccount.com:setIamPolicy -> 409
+    POST gi-act-409@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+    POST gi-act-409@made-up-proj.iam.gserviceaccount.com:setIamPolicy -> 200
+    policy: {"etag":"ZXRhZy0y","bindings":[{"role":"roles/iam.serviceAccountUser","members":["serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com"]}]}
+--- a real concurrent writer (etag moves between the hub's read and write): create act-race
+    created hosted instance entry act-race (state=creating, shape=n2-standard-2, url=https://act-race.grain-user.test)
+    {"status":"online","status_detail":null}
+    POST gi-act-race@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+      (gcpstub: a concurrent writer added {"role":"roles/iam.serviceAccountTokenCreator","members":["user:ops@example.com"]} to gi-act-race@made-up-proj.iam.gserviceaccount.com)
+    POST gi-act-race@made-up-proj.iam.gserviceaccount.com:setIamPolicy -> 409
+    POST gi-act-race@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+    POST gi-act-race@made-up-proj.iam.gserviceaccount.com:setIamPolicy -> 200
+    policy: {"etag":"ZXRhZy0z","bindings":[{"role":"roles/iam.serviceAccountTokenCreator","members":["user:ops@example.com"]},{"role":"roles/iam.serviceAccountUser","members":["serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com"]}]}
+--- inject 404, 404 on getIamPolicy (account not yet visible to IAM): create act-404
+    created hosted instance entry act-404 (state=creating, shape=n2-standard-2, url=https://act-404.grain-user.test)
+    {"status":"online","status_detail":null}
+    POST gi-act-404@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 404
+    POST gi-act-404@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 404
+    POST gi-act-404@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+    POST gi-act-404@made-up-proj.iam.gserviceaccount.com:setIamPolicy -> 200
+    policy: {"etag":"ZXRhZy0y","bindings":[{"role":"roles/iam.serviceAccountUser","members":["serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com"]}]}
+--- an existing unconditional binding (plus a conditional one) is left untouched: create act-existing
+    created hosted instance entry act-existing (state=creating, shape=n2-standard-2, url=https://act-existing.grain-user.test)
+    {"status":"online","status_detail":null}
+    POST gi-act-existing@made-up-proj.iam.gserviceaccount.com:getIamPolicy -> 200
+    before: {"etag":"ZXRhZy0x","bindings":[{"role":"roles/iam.serviceAccountUser","members":["user:ops@example.com","serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com"]},{"role":"roles/iam.serviceAccountUser","members":["user:temp@example.com"],"condition":{"title":"until-friday","expression":"request.time < timestamp('2026-11-14T00:00:00Z')"}}]}
+    after:  {"etag":"ZXRhZy0x","bindings":[{"role":"roles/iam.serviceAccountUser","members":["user:ops@example.com","serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com"]},{"role":"roles/iam.serviceAccountUser","members":["user:temp@example.com"],"condition":{"title":"until-friday","expression":"request.time < timestamp('2026-11-14T00:00:00Z')"}}]}
+    -> policy byte-for-byte unchanged (no setIamPolicy)
+--- 409 on every write (exhausts the retries): create act-stuck
+    created hosted instance entry act-stuck (state=creating, shape=n2-standard-2, url=https://act-stuck.grain-user.test)
+    {"status":"offline","status_detail":"provisioning instance resources failed: gcp iam: granting serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com roles/iam.serviceAccountUser on gi-act-stuck@made-up-proj.iam.gserviceaccount.com: the account's IAM policy kept changing underneath us (6 etag conflicts): HTTP 409: {\"error\":{\"code\":409,\"message\":\"injected by gcpstub\",\"status\":\"Conflict\"}}"}
+    no access token in any logged URL: 0 hits; tokeninfo calls: 0
+
+=== CLI view (grain hub list / show) ===
+  act-404                  instance   running    online    listed=false owner=alice@example.com        https://act-404.grain-user.test
+  act-409                  instance   running    online    listed=false owner=alice@example.com        https://act-409.grain-user.test
+  act-existing             instance   running    online    listed=false owner=alice@example.com        https://act-existing.grain-user.test
+  act-plain                instance   running    online    listed=false owner=alice@example.com        https://act-plain.grain-user.test
+  act-race                 instance   running    online    listed=false owner=alice@example.com        https://act-race.grain-user.test
+  act-stuck                instance   failed     offline   listed=false owner=alice@example.com        https://act-stuck.grain-user.test  detail=provisioning instance resources failed: gcp iam: granting serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com roles/iam.serviceAccountUser on gi-act-stuck@made-up-proj.iam.gserviceaccount.com: the account's IAM policy kept changing underneath us (6 etag conflicts): HTTP 409: {"error":{"code":409,"message":"injected by gcpstub","status":"Conflict"}}
+  e2-api                   instance   running    online    listed=false owner=alice@example.com        https://e2-api.grain-user.test
+  legacy-e2-vm             instance   failed     offline   listed=false owner=alice@example.com        https://legacy-e2-vm.grain-user.test  detail=creating GCE instance failed: gcp compute: machine_type "zones/us-central1-a/machineTypes/e2-small": machine type does not support nested virtualization; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4)
+  Name:        act-stuck
+  URL:         https://act-stuck.grain-user.test
+  Kind:        instance (host_kind=registry-vm)
+  State:       failed (status=offline, listed=false)
+  Detail:      provisioning instance resources failed: gcp iam: granting serviceAccount:hub-walk@made-up-proj.iam.gserviceaccount.com roles/iam.serviceAccountUser on gi-act-stuck@made-up-proj.iam.gserviceaccount.com: the account's IAM policy kept changing underneath us (6 etag conflicts): HTTP 409: {"error":{"code":409,"message":"injected by gcpstub","status":"Conflict"}}
+  Owner:       alice@example.com
+  Shape:       n2-standard-2
+  Disk:        50 GB

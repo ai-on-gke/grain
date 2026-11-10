@@ -1551,6 +1551,10 @@ describe("Grain Hub UI", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(/removes it from your entries/i);
+    // The Grain Registry is the Grain Hub: whoever restores it is a hub
+    // administrator.
+    expect(dialog).toHaveTextContent(/or a hub administrator\)/i);
+    expect(dialog).not.toHaveTextContent(/registry/i);
     fireEvent.change(within(dialog).getByLabelText(/Type .* to confirm/i), {
       target: { value: "platform-vm" },
     });
