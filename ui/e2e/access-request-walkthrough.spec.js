@@ -402,7 +402,7 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
       });
       await expect(taskCard).toBeVisible();
       await expect(taskCard.getByTestId("access-earlier")).toContainText(
-        "Answered before by console-rest-e2e-operator: 2 granted, 1 declined (api:tasks:admin).",
+        /Answered before by (console-rest-e2e-operator|access-code:alice@example\.com): 2 granted, 1 declined \(api:tasks:admin\)\./,
       );
       await expect(taskCard.getByTestId("access-holds")).toContainText(
         "reads acme/docs",

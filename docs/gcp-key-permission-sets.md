@@ -18,7 +18,7 @@ gcloud projects add-iam-policy-binding PROJECT \
 # a user admin (ambient on a host): --member=user:you@example.com
 ```
 
-For a set scoped to a bucket, also grant the admin `roles/storage.admin` on that bucket, or a custom role holding `storage.buckets.getIamPolicy` and `storage.buckets.setIamPolicy`.
+For a set scoped to a bucket (`resource_scope: "buckets/<name>"`), also grant the admin `roles/storage.admin` on that bucket, or `storage.buckets.getIamPolicy` and `storage.buckets.setIamPolicy`. For a set scoped to an Artifact Registry repository (`resource_scope: "repositories/<location>/<repo>"`), grant `roles/artifactregistry.repoAdmin` on that repository (or `artifactregistry.repositories.getIamPolicy` and `artifactregistry.repositories.setIamPolicy`).
 
 ## 2. Add the admin and a permission set in Settings
 
@@ -26,7 +26,7 @@ Open Settings → Capabilities → Capability servers. The built-in **gcp** tab 
 
 1. Under **Admin accounts**, add `{name, credential_source, projects, role_ceiling}`. `role_ceiling` is every role this admin may hand out — keep it short.
 2. For a configured admin, paste into **Configured admin credentials** a JSON object from the admin's name to its credential: `{"minter": { …the key JSON… }}`. The field is write-only: grain stores it in its secrets store and never shows it again.
-3. Under **Permission sets**, add `{name, admin, project, roles}`, and optionally `resource_scope` (`buckets/<name>`), `max_lease` (default `24h`), `pool_max` (default 3) and `adopt_legacy` (see [Accounts from before deployment ids](#accounts-from-before-deployment-ids)) — or, to use an account you already have, `{name, admin, service_account}` (see [Using an existing service account](#using-an-existing-service-account)). **Service account name prefix** (`account_prefix`, default `grain`) starts every account the sets create.
+3. Under **Permission sets**, new sets default **credential** to **`token (recommended, no keys)`**: add `{name, admin, project, credential: "token", roles}`, and optionally `resource_scope` (`buckets/<name>` or `repositories/<location>/<repo>`), `max_lease` (default `24h`) and `adopt_legacy` (see [Accounts from before deployment ids](#accounts-from-before-deployment-ids)). On configure, grain creates one service account `<prefix>-<deployment id>-<set>@<project>`, binds `roles` on the project or `resource_scope` (bounded by `role_ceiling`), grants the admin `roles/iam.serviceAccountTokenCreator` on **that account only**, and mints short-lived access tokens per run with no keys — working cleanly under `constraints/iam.disableServiceAccountKeyCreation`. Choose **`key (service-account key pool)`** (with optional `pool_max`, default 3) only if a tool inside the sandbox cannot read an `external_account` ADC file; or, to impersonate an account you already manage outside grain, set `{name, admin, service_account}` (see [Using an existing service account](#using-an-existing-service-account)). **Service account name prefix** (`account_prefix`, default `grain`) starts every account the sets create.
 4. Press **Test**. The `gcp-key` method's description then says which deployment id the accounts are named after (`deployment 049f1e09 (instance …): new service accounts are named grain-049f1e09-<set>-<n>`), which identity each admin resolved to, and every permission it is missing on each project. Fix those before saving — an admin that cannot create service accounts will fail the first mint.
 5. Save.
 

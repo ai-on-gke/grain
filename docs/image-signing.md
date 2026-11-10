@@ -1,6 +1,6 @@
 # Image signing
 
-grain/task-1773, following #2386 and grain/task-1706. See also [release-asset-upgrades.md](release-asset-upgrades.md) for how `release-assets` upgrades verify `images.json` SHA-256 digests, `.sha256` sidecars, Docker image IDs, and `-upgrade-verify-cmd` on tarballs loaded without registry `RepoDigests`.
+grain/task-1773, following #2386 and grain/task-1706.
 
 ## The gap this closes
 

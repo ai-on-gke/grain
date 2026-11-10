@@ -105,11 +105,6 @@ type ImageTarget struct {
 	SourceDefault     bool
 	SourceLocked      bool
 	Fallback          ImageSource
-	ReleaseRepository string
-	ManifestAsset     string
-	ReleaseAsset      string
-	ChecksumAsset     string
-	ChecksumSuffix    string
 }
 
 // ImageTarget reports where an image upgrade would pull from, and false
@@ -118,18 +113,12 @@ func (u *Upgrader) ImageTarget() (ImageTarget, bool) {
 	if u.Mode() != ModeImage {
 		return ImageTarget{}, false
 	}
-	ra := u.EffectiveReleaseAssets()
 	t := ImageTarget{
-		Repository:        u.EffectiveRepository(),
-		Source:            u.EffectiveImageSource(),
-		SourceDefault:     !u.IsImageSourceExplicit(),
-		SourceLocked:      u.cfg.Image.SourceLocked,
-		Fallback:          u.EffectiveImageFallback(),
-		ReleaseRepository: ra.Repository,
-		ManifestAsset:     ra.ManifestAsset,
-		ReleaseAsset:      ra.Asset,
-		ChecksumAsset:     ra.ChecksumAsset,
-		ChecksumSuffix:    ra.ChecksumSuffix,
+		Repository:    u.EffectiveRepository(),
+		Source:        u.EffectiveImageSource(),
+		SourceDefault: !u.IsImageSourceExplicit(),
+		SourceLocked:  u.cfg.Image.SourceLocked,
+		Fallback:      u.EffectiveImageFallback(),
 	}
 	if u.cfg.Image.Track != "" {
 		t.DefaultRepository = installtrack.DefaultRepository(u.cfg.Image.Track)

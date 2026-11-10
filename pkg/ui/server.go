@@ -74,8 +74,12 @@ type Server struct {
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
-	access            accessLimiter
-	accessCode        atomic.Pointer[accessCodeFile]
+	access     accessLimiter
+	accessCode atomic.Pointer[accessCodeFile]
+	// accessCodeMode is the code's mode file and accessCodeNotices the
+	// throttle on its recovery-use notifications (access_code_mode.go).
+	accessCodeMode    atomic.Pointer[accessCodeFile]
+	accessCodeNotices accessNoticeThrottle
 	externalLimiter   *externalAgentLimiter
 	defaultGroupsOnce sync.Once
 	defaultGroups     GroupMemberChecker
@@ -215,6 +219,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 		}
+		if s.accessCodeModeNow() == AccessCodeOff && strings.TrimSpace(r.Header.Get(ActingTaskHeader)) == "" {
+			// Off: no code is accepted, so every check of it -- the gate,
+			// the sign-in, a session cookie -- refuses alike. A run's own
+			// plumbing (ActingTaskHeader, held to its task's grants) still
+			// reaches the daemon with it until runs carry a credential of
+			// their own (docs/access-code.md).
+			iapCfg.LocalAPIToken = ""
+		}
 		if tunnelReq {
 			iapCfg.RequireVerifier = string(AuthMethodHub)
 			iapCfg.RequireIAP = false
@@ -314,7 +326,14 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
-			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
+			src := trustedRequestSource(r)
+			r = r.WithContext(withRequestSource(r.Context(), src))
+			if src == model.SourceAccessCode {
+				var admitted bool
+				if r, admitted = s.admitAccessCodeRequest(w, r); !admitted {
+					return
+				}
+			}
 		}
 	}
 	r = r.WithContext(model.WithEventActor(r.Context(), RequestActor(r.Context())))

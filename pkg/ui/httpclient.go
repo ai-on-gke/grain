@@ -138,6 +138,11 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 		tok = strings.TrimSpace(strings.TrimPrefix(tok, "Bearer "))
 		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("X-Grain-Tunnel-Token", tok)
+		if couldBeAccessCodeShape(tok) {
+			if name := AccessCodeClientName(); name != "" {
+				req.Header.Set(AccessNameHeader, name)
+			}
+		}
 	}
 	if c.User != "" {
 		req.Header.Set("X-Forwarded-User", c.User)

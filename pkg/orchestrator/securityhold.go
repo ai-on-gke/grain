@@ -224,7 +224,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	// and the hold must be lifted under it.
 	if known && headSHA != "" && linkTarget(*current, model.LinkTrustBoundaryCleared) == cleared.Target &&
 		(!bypass || linkTarget(*current, model.LinkBaseRepairBypass) == headSHA) &&
-		securityReviewReusable(ctx, store, prevReview) {
+		securityReviewReusable(ctx, store, prevReview, ref) {
 		return nil
 	}
 
@@ -296,7 +296,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	}
 
 	tmpl := model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
-	review, fileErr := putSecurityReview(ctx, store, *current, *tmpl,
+	review, fileErr := putSecurityReview(ctx, store, *current, ref, *tmpl,
 		securityReviewTitle(*current), securityReviewBody(*tmpl, *current, ref, matches, known), now)
 	if fileErr == nil {
 		fileErr = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -704,15 +704,37 @@ func reviewOutcome(review model.Task, obs *model.Observation) (pushed, landed, o
 	return true, false, false
 }
 
+// reviewIsAboutPullRequest reports whether review was filed to read ref:
+// true when review carries no LinkReviewsPullRequest (legacy reviews filed
+// before the link existed, where holdIsAbout on the reviewed task decides)
+// or when LinkReviewsPullRequest names ref.
+func reviewIsAboutPullRequest(review model.Task, ref model.PullRequestRef) bool {
+	if ref == (model.PullRequestRef{}) {
+		return true
+	}
+	target := linkTarget(review, model.LinkReviewsPullRequest)
+	if target == "" {
+		return true
+	}
+	reviewedRef, err := model.ParsePullRequestRef(target)
+	if err != nil {
+		return false
+	}
+	return model.SamePullRequest(reviewedRef, ref)
+}
+
 // securityReviewReusable reports whether reviewID is an open/in-flight
-// security review or one that already completed cleanly for the head it was
-// filed against.
-func securityReviewReusable(ctx context.Context, store *model.Store, reviewID string) bool {
+// security review or one that already completed cleanly for ref and the head
+// it was filed against.
+func securityReviewReusable(ctx context.Context, store *model.Store, reviewID string, ref model.PullRequestRef) bool {
 	if reviewID == "" {
 		return false
 	}
 	review, err := store.GetTask(ctx, reviewID)
 	if err != nil || review == nil {
+		return false
+	}
+	if !reviewIsAboutPullRequest(*review, ref) {
 		return false
 	}
 	obs, err := store.GetObservation(ctx, reviewID)
@@ -756,15 +778,29 @@ func securityReviewReusable(ctx context.Context, store *model.Store, reviewID st
 // a review already settled is skipped, so a retry after a failed note
 // does not say the same thing twice.
 //
-// A review with a pull request of its own is left alone: what happens to
-// commits stacked on a branch that has gone is the merge queue's
-// question, not this one's.
+// Only the pull request the hold and its review are actually about may
+// close that review: an earlier settled pull request on a reopened or
+// multi-attempt task must never close the review filed for a newer pull
+// request. A review with a pull request of its own is left alone: what
+// happens to commits stacked on a branch that has gone is the merge
+// queue's question, not this one's.
 func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, ref model.PullRequestRef, detail github.PullRequestDetail, health model.PrHealth,
 	now time.Time) error {
 
 	if health != model.PrMerged && health != model.PrClosed {
 		return nil
+	}
+	if !holdIsAbout(task, ref) {
+		return nil
+	}
+	if current, err := store.GetTask(ctx, task.ID); err != nil {
+		return fmt.Errorf("orchestrator: reading %s before settling its security review: %w", task.ID, err)
+	} else if current != nil {
+		task = *current
+		if !holdIsAbout(task, ref) {
+			return nil
+		}
 	}
 	if health == model.PrMerged && mergedThroughOverrideOrBypass(ctx, store, task) {
 		// Never close a review unfinished when merged under an explicit
@@ -799,7 +835,7 @@ func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading security review %s: %w", reviewID, err)
 	}
-	if review == nil || hasPullRequest(*review) {
+	if review == nil || hasPullRequest(*review) || !reviewIsAboutPullRequest(*review, ref) {
 		return nil
 	}
 	state, err := store.State(ctx, reviewID)

@@ -254,7 +254,7 @@ func TestPlainBinarySwapFromSchema64StoreAndDumpMigratesBoth(t *testing.T) {
 	if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
 		t.Errorf("task_branch_template = %q, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
 	}
-	for _, want := range []string{"api:memory", "api:dispatch-control", model.GrainHealthGrant, model.GrainSQLReadGrant} {
+	for _, want := range []string{model.APIRef("memory"), model.APIRef("dispatch-control"), model.GrainHealthGrant, model.GrainSQLReadGrant} {
 		if !slices.Contains(cfg.DefaultCapabilities, want) {
 			t.Errorf("default_capabilities = %v, missing migrated grant %q", cfg.DefaultCapabilities, want)
 		}
