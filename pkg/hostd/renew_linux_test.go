@@ -30,14 +30,24 @@ import (
 )
 
 // renewHarness is a controller that knows one key-bound host, ws-renew,
-// and mints a fresh token on every in-band renewal.
+// and mints a fresh token on every in-band renewal. Like the real one
+// (model.Store.RenewHostdCredential, hostdRenewGrace), it keeps taking
+// the token a renewal superseded: a renewal answered just as the
+// connection drops never reaches the host, which comes back on the old
+// token and renews again rather than being locked out.
 type renewHarness struct {
-	remote  *hostd.Remote
-	url     string
-	priv    ed25519.PrivateKey
-	mu      sync.Mutex
-	current string
-	renews  int
+	remote     *hostd.Remote
+	url        string
+	priv       ed25519.PrivateKey
+	mu         sync.Mutex
+	current    string
+	superseded string
+	renews     int
+}
+
+// live says whether tok is a token the controller takes. h.mu is held.
+func (h *renewHarness) live(tok string) bool {
+	return tok == h.current || (tok != "" && tok == h.superseded)
 }
 
 func newRenewHarness(t *testing.T) *renewHarness {
@@ -52,7 +62,7 @@ func newRenewHarness(t *testing.T) *renewHarness {
 		ResolveCredential: func(_ context.Context, tok string) (hostd.ResolvedCredential, bool, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			if tok != h.current {
+			if !h.live(tok) {
 				return hostd.ResolvedCredential{}, false, nil
 			}
 			return hostd.ResolvedCredential{Name: "ws-renew", Owner: "alice@example.com", PublicKey: pubStr}, true, nil
@@ -60,11 +70,11 @@ func newRenewHarness(t *testing.T) *renewHarness {
 		Renew: func(_ context.Context, name, curTok string) (string, time.Time, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			if curTok != h.current {
+			if !h.live(curTok) {
 				return "", time.Time{}, fmt.Errorf("stale token %q", curTok)
 			}
 			h.renews++
-			h.current = fmt.Sprintf("ghd_renew_%d", h.renews)
+			h.superseded, h.current = h.current, fmt.Sprintf("ghd_renew_%d", h.renews)
 			return h.current, time.Now().Add(30 * 24 * time.Hour), nil
 		},
 	}
