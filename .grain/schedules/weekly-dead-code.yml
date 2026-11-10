@@ -1,0 +1,12 @@
+name: Weekly dead-code scan
+template: weekly-dead-code
+base: main
+# UTC, Sunday: after the 02:11 nightly CI workflow, the 03:30 security
+# review and the 04:00 package prune.
+weekly:
+  day: sunday
+  at: "04:30"
+overlap: skip
+# Queues only what the template permits: trust-boundary deletions are
+# filed with hold_for_approval and stay held for a person.
+auto-approve-proposals: true

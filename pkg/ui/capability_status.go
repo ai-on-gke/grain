@@ -334,21 +334,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 	return providers
 }
 
-// capabilityShipped reports whether name is a capability this build
-// ships a provider for at all -- the catalog above, regardless of
-// whether this deployment configures it or the picker offers it.
-func capabilityShipped(name string) bool {
-	if _, ok := model.GCPKeyName(name); ok {
-		return true
-	}
-	for _, spec := range capabilityCatalog() {
-		if spec.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 // ciOnlyCapability reports whether name is a capability this build ships
 // for CI jobs and for nothing else (model.CapabilitySpec.CIOnly): read
 // off the catalog, so the answer is the provider's own and not a second

@@ -361,10 +361,6 @@ func (l *callerLedger) callerStats() map[string]CallerStats {
 // Callers is the process-wide spend by caller label.
 func Callers() map[string]CallerStats { return ledger.callerStats() }
 
-// Budget is the hour's budget for the tightest credential this process
-// has heard about recently, with its projection.
-func Budget(now time.Time) BudgetSnapshot { return ledger.budget(now) }
-
 // BudgetLow is whether the budget is under LowBudgetFraction for any
 // credential heard from recently.
 func BudgetLow(now time.Time) bool { return ledger.low(now) }

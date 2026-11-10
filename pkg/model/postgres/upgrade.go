@@ -292,23 +292,6 @@ func unquoteKVValue(v string) string {
 	return b.String()
 }
 
-// TestPostgresConnection tests whether a connection can be established with the target PostgreSQL config.
-func TestPostgresConnection(ctx context.Context, pgCfg Config) error {
-	db, err := Open(pgCfg)
-	if err != nil {
-		return fmt.Errorf("connecting to postgres: %w", err)
-	}
-	defer db.Close()
-
-	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if err := db.PingContext(pingCtx); err != nil {
-		return fmt.Errorf("pinging postgres: %w", err)
-	}
-	return nil
-}
-
 // UpgradeFromSQLite migrates an existing SQLite database into PostgreSQL.
 // It initializes the schema on the target PostgreSQL database, dumps all rows from sqliteDB,
 // and imports them into PostgreSQL using staterepo.ImportMigrated.

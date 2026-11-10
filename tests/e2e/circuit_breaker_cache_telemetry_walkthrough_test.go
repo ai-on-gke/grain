@@ -233,12 +233,6 @@ func (w *breakerWorld) scriptChanges(ids ...string) {
 	})
 }
 
-func (w *breakerWorld) dispatchCount(id string) int {
-	w.dispatchedMu.Lock()
-	defer w.dispatchedMu.Unlock()
-	return w.dispatched[id]
-}
-
 // baseRow is grain's record of main.
 func (w *breakerWorld) baseRow() *model.BaseBranchCI {
 	w.t.Helper()
@@ -326,29 +320,6 @@ func (w *breakerWorld) get(path string, out any) string {
 		}
 	}
 	return string(body)
-}
-
-// links is id's links as the store holds them.
-func (w *breakerWorld) links(id string) []model.Link {
-	w.t.Helper()
-	task, err := w.store.GetTask(w.ctx, id)
-	if err != nil || task == nil {
-		w.t.Fatalf("GetTask %s: %v", id, err)
-	}
-	return task.Links
-}
-
-// dependsOn reports whether id carries a depends-on link to target, which
-// is how a red base branch holds work on main: the task leaves the ready
-// list until the branch's repair task closes.
-func (w *breakerWorld) dependsOn(id, target string) bool {
-	w.t.Helper()
-	for _, l := range w.links(id) {
-		if l.Kind == model.LinkDependsOn && l.Target == target {
-			return true
-		}
-	}
-	return false
 }
 
 // blockedBy is what the task pane shows a queued task waiting on: the
