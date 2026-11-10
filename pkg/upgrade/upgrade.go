@@ -1359,7 +1359,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		// signature verification, this refuses.
 		reviewed, err := u.checkReviewedMerge(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref)
 		if err != nil {
-			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+			return failImage(fmt.Errorf("%w; leaving this deployment on the image it already runs", err))
 		}
 		if reviewed != "" {
 			verified = append(verified, reviewed)
