@@ -1070,8 +1070,28 @@ current brief carried with the handover. It is never automatic in the
 middle of a conversation: past the limit, the director is told and
 rolls over when the conversation next rests.
 
-**Status:** designed here, not implemented in grain/task-4107. It is the
-storage backstop, not something prompts or page loads depend on.
+**Status:** implemented in grain/task-4195 (`model.Store.Rollover`,
+`orchestrator.reconcileRollover`, `grain rollover`,
+`POST /api/tasks/{id}/rollover` under `dispatch:write`, beside compaction,
+for the reason under "Routes and scopes"). As built:
+
+- The successor and the predecessor are linked both ways by
+  `rolled-over-from` / `rolled-over-to` (`model.LinkRolledOverFrom`,
+  `LinkRolledOverTo`), provenance only like the supersede pair, and the
+  task view carries `rolledOverFrom` / `rolledOverTo`. A wait on the
+  predecessor reports outcome `rolled_over` and `rolledOverTo`.
+- The successor takes the predecessor's links except its own lineage
+  (continues, supersedes, superseded-by, reverted-by, ported-by and the
+  rollover pair). Its change links (the pull request or changelist) and
+  its goal *move*; tags (which bind a schedule's standing task) are
+  copied, and with the predecessor closed only the successor answers to
+  them.
+- Rollover is refused for a closed task, a running one (the reconciler
+  tries again once the run ends) and a console session, whose session
+  tag cannot be shared and which already rolls over by being closed and
+  refiled. Telling the director it is past the limit is not built yet.
+- The UI banner on `/tasks/N` is follow-up work under the deployment's
+  screenshot rule; the API already answers with `rolledOverTo`.
 
 ### Follow-up work
 
@@ -1082,7 +1102,8 @@ storage backstop, not something prompts or page loads depend on.
 - UI: the Compact button, the brief editor with its edit history,
   summarised comments collapsed under the handover, and the
   stale-handover badge, all under the deployment's screenshot rule.
-- Rollover as designed above.
+- Rollover's task-page banner, and telling a console session past the
+  limit that it should be closed and refiled.
 
 ## Store and schema changes (summary)
 
@@ -1097,6 +1118,7 @@ storage backstop, not something prompts or page loads depend on.
 | `task_run_api_call`, `task_run_report_check`; `GET /api/pipeline/changes` | DT-S8, DT-S11 |
 | `Config.JudgementModel`; symbolic model `judgement` | DT-S9 |
 | `task_context`, `task_brief_edit` (schema 136); `Config.AutoCompactBytes`; `GET /api/tasks/{id}/context`, `POST /api/tasks/{id}/compact`, `POST /api/tasks/{id}/brief` | DT-15 |
+| `rolled-over-from` / `rolled-over-to` task links (no schema change); `POST /api/tasks/{id}/rollover` | DT-15 |
 
 Each table is new, so older stores gain empty tables. The one column added
 to an existing table, `task_run.suspend_kind`, is nullable and backfilled

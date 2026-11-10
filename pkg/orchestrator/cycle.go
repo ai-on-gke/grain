@@ -582,6 +582,10 @@ func Reconcilers() []Reconciler {
 		// Right after it, so that a branch found green this tick closes
 		// the goal tasks waiting on it on this tick (reconcileTaskGoals).
 		{Name: "task-goals", Reconcile: reconcileTaskGoals},
+		// After it, so a goal met this tick closes its task rather than
+		// rolling it over to a successor that would have to meet it again
+		// (reconcileRollover).
+		{Name: "rollover", Reconcile: reconcileRollover},
 		// Beside it, and deliberately not inside it: the work that
 		// follows a base branch without judging it -- a repository's
 		// content-addressed build cache above all -- is dispatched here,

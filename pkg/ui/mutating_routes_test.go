@@ -448,7 +448,7 @@ var attributedRoutes = map[string]attributedRoute{
 	},
 	"POST /api/tasks/{id}/rollover": {
 		setup:       fileTask(true),
-		agentGrants: []string{"api:tasks:write"},
+		agentGrants: []string{"api:dispatch:write"},
 		recorded:    lastEvent,
 	},
 	"POST /api/tasks/{id}/reopen": {
