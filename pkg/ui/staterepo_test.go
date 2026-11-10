@@ -800,3 +800,25 @@ func TestExternalConfigRepoDeploymentNamesItsConfigRepoAsOwnerName(t *testing.T)
 		t.Errorf("GET /api/deployment configCloneURL = %q, want the remote", got.ConfigCloneURL)
 	}
 }
+
+// An exported file that carries a credential somebody typed in -- a
+// capability server header saved before saves refused one -- is shown
+// with it cut, since settings:read (grain/viewer's) reads the browser
+// (docs/security/audits/2026-11-10-credential-exposure.md).
+func TestStateRepoFileIsRedacted(t *testing.T) {
+	t.Parallel()
+	const token = "ghp_PLANTEDstateREPOtoken0123456789"
+	fake := &fakeStateRepo{files: map[string]ui.StateRepoFile{
+		"settings/capabilities.yml": {Path: "settings/capabilities.yml", Size: 60,
+			Content: "headers:\n  X-Api-Key: " + token + "\n"},
+	}}
+	srv := stateRepoServer(t, fake)
+	rec := do(t, srv, http.MethodGet, "/api/state-repo/file?path=settings%2Fcapabilities.yml", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	got := decode[ui.StateRepoFile](t, rec)
+	if strings.Contains(got.Content, token) || !strings.Contains(got.Content, "[redacted: github token]") {
+		t.Fatalf("content = %q, want the token redacted", got.Content)
+	}
+}
