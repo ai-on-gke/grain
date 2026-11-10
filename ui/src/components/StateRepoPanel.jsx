@@ -453,7 +453,11 @@ export default function StateRepoPanel({
           left for a disk image to reveal. Deleting is a host command on
           purpose: it cannot be undone. */}
       {status.retiredSecretsKeys?.length > 0 && (
-        <Box sx={{ mt: 1 }} data-testid="retired-secrets-keys">
+        <Box
+          id="retired-secrets-keys"
+          sx={{ mt: 1 }}
+          data-testid="retired-secrets-keys"
+        >
           <Typography variant="body2" color="text.secondary">
             {status.retiredSecretsKeys.length === 1
               ? "One key this host replaced is still kept beside it"
