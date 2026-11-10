@@ -192,11 +192,6 @@ func (g sandboxCLIGate) WaitForGitHubChecks(ctx context.Context, taskID string,
 	return a.WaitForGitHubChecks(ctx, taskID, timeout, poll, onPoll)
 }
 
-// NewWaitCreditor returns a gitproxy.CLIWaitCreditor backed by credits.
-func NewWaitCreditor(credits *orchestrator.RunWaitCredits) gitproxy.CLIWaitCreditor {
-	return waitCreditAdapter{credits: credits}
-}
-
 // CreditCLIWait is gitproxy.CLIWaitCreditor over the same registry
 // CreditWaitForTask credits, reported as its own source so that a run's
 // CLI waits add to its MCP waits rather than competing with them

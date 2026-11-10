@@ -343,19 +343,6 @@ type convertedAppManifest struct {
 	HTMLURL       string
 }
 
-// convertManifest exchanges a one-time manifest code for the new App's
-// credentials -- the one real API call in the whole flow
-// (docs.github.com's own "app-manifests/{code}/conversions"),
-// unauthenticated beyond the code itself, which only GitHub's redirect
-// (never anything grain constructs) can produce.
-func convertManifest(host, code string) (appID, privateKey, htmlURL string, err error) {
-	c, err := convertManifestFull(host, code)
-	if err != nil {
-		return "", "", "", err
-	}
-	return c.AppID, c.PEM, c.HTMLURL, nil
-}
-
 func convertManifestFull(host, code string) (convertedAppManifest, error) {
 	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("https://%s/app-manifests/%s/conversions", apiHost(host), code), nil)
 	if err != nil {
