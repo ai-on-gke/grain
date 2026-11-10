@@ -117,6 +117,7 @@ func buildNamespaceRedactorFor(dataDir string, secretStore *secrets.Store) *reda
 				known = append(known, redact.KnownValue{Label: "github credential " + name, Value: *cred.Token})
 			}
 		}
+		known = append(known, knownLooseCredentials(secretsDir)...)
 	}
 	return redact.New(known)
 }

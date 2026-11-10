@@ -45,21 +45,6 @@ cluster's rather than a number an operator sized by hand.
 
 Three things have to exist first.
 
-**Images from release assets, if you use them.** Grain also publishes its
-images as GitHub release assets
-([docs/release-assets.md](../../docs/release-assets.md)), which a cluster
-cannot `docker load`. To run a release from its assets rather than from
-`docker.io/grainai/*`, load and push it into a registry the cluster can pull
-from -- the deployment's own `sandbox_image_mirror`, for example an Artifact
-Registry repository in the cluster's project -- with
-`scripts/release-assets.sh mirror <release> <registry/prefix>`, and name the
-pushed refs in the Deployment's `image:` and `-k8s-sandbox-image`.
-`scripts/migrate-local-to-gke.sh --mirror <registry/path>` does the same push
-for a host that was installed from release assets. Never leave a
-`grain/<image>:sha-<12 hex>` manifest ref in a pod spec: it names no registry,
-so kubelet would look for it on Docker Hub, and the daemon refuses to hand it
-to a pod.
-
 **A sandbox image.** CI publishes `docker.io/grainai/sandbox-k8s`
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
 `bash`, `curl`, and a non-root user with a writable home. Each grain build

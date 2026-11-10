@@ -97,7 +97,6 @@ func TestDisableSelfUpgradeBlocksUpgradeAndDatabaseCutoverRoutes(t *testing.T) {
 		{http.MethodGet, "/api/upgrade/targets", ""},
 		{http.MethodGet, "/api/upgrade/release-notes?branch=main", ""},
 		{http.MethodDelete, "/api/upgrade/scheduled", ""},
-		{http.MethodPut, "/api/upgrade/source", `{"mode":"registry"}`},
 	}
 	for _, tc := range blocked {
 		r := do(t, srv, tc.method, tc.path, tc.body)

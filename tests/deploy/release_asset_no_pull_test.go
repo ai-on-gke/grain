@@ -15,6 +15,9 @@
 package deploy
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -49,7 +52,7 @@ func TestReleaseAssetRefIsTheContractsLocalRefsOnly(t *testing.T) {
 // ensure_granule_oci_image used to `docker pull` the sandbox image
 // unconditionally: for a release-asset install that asks Docker Hub for
 // grain/guest:sha-..., and a pull that succeeded would replace the image
-// install_release_assets had just checked.
+// an earlier release's release-asset install had checked.
 func TestGranuleSandboxImageFromReleaseAssetsIsNeverPulled(t *testing.T) {
 	fn := shellFunction(t, "release_asset_ref") + shellFunction(t, "ensure_granule_oci_image")
 	stubs := `
@@ -97,4 +100,109 @@ func TestNothingSetupLeavesBehindPullsAReleaseAssetImage(t *testing.T) {
 	contains(t, units, guard)
 	before(t, units, guard, "ExecStart=$DOCKER_BIN run --name grain-daemon",
 		"the daemon unit refuses a missing release-asset image before docker run could pull it")
+}
+
+// pull_image used to reach release-asset refs only through
+// install_release_assets, which loaded them and never pulled. With that
+// path gone, a GRAIN_IMAGE naming a grain/ repository (or a host whose
+// earlier install left one) must still never become a `docker pull` of
+// Docker Hub's grain/ namespace: a copy already on the host is deployed,
+// and a missing one stops the install. A registry ref is pulled as before.
+func TestPullImageNeverPullsAReleaseAssetRef(t *testing.T) {
+	fn := shellFunction(t, "release_asset_ref") + shellFunction(t, "pull_image")
+	stubs := `
+log() { echo "log: $*"; }
+step_start() { :; }
+step_done() { :; }
+registry_login() { echo "docker login" >> "$DOCKER_LOG"; }
+verify_grain_image() { echo "verified $GRAIN_IMAGE_REF"; }
+report_image_revision() { :; }
+docker() {
+  echo "docker $*" >> "$DOCKER_LOG"
+  if [ "$1" = image ] && [ "$2" = inspect ]; then [ "$LOADED" = 1 ]; return; fi
+  return 0
+}
+`
+	for _, tc := range []struct {
+		ref, loaded string
+		wantPull    bool
+		wantOK      bool
+	}{
+		{"grain/grain:main", "1", false, true},
+		{"grain/grain:main", "0", false, false},
+		{"docker.io/grainai/grain:main", "0", true, true},
+	} {
+		log := t.TempDir() + "/docker.log"
+		out := runBash(t, stubs+fn+`
+: > "$DOCKER_LOG"
+GRAIN_DOCKER_AVAILABLE=1
+GRAIN_IMAGE_TAG=main
+GRAIN_IMAGE="${REF%:*}"
+GRAIN_IMAGE_REF="$REF"
+if (pull_image); then echo "status=ok"; else echo "status=failed"; fi
+cat "$DOCKER_LOG"
+`, "DOCKER_LOG="+log, "LOADED="+tc.loaded, "REF="+tc.ref)
+		pulled := strings.Contains(out, "docker pull") || strings.Contains(out, "docker login")
+		if pulled != tc.wantPull {
+			t.Errorf("%s (loaded=%s): reached the registry = %v, want %v:\n%s", tc.ref, tc.loaded, pulled, tc.wantPull, out)
+		}
+		if ok := strings.Contains(out, "status=ok"); ok != tc.wantOK {
+			t.Errorf("%s (loaded=%s): pull_image succeeded = %v, want %v:\n%s", tc.ref, tc.loaded, ok, tc.wantOK, out)
+		}
+	}
+}
+
+// An earlier release's release-asset install recorded the local grain/grain
+// ref it loaded in /etc/grain/image.env. A setup.sh re-run keeps that
+// channel when shifting onto the default registry repository, while refusing
+// the reverse transition onto GRAIN_IMAGE=grain/grain (which would pull from
+// Docker Hub).
+func TestSetupReRunKeepsAReleaseAssetHostsChannel(t *testing.T) {
+	for _, tc := range []struct{ ref, tag, channel string }{
+		{"grain/grain:main", "main", "main"},
+		{"grain/grain:candidate", "candidate", "candidate"},
+		{"grain/grain:sha-0123456789ab", "sha-0123456789ab", ""},
+	} {
+		f := refFile(t, tc.ref)
+		out, tag, channel, ok := resolveTag(t, nil, f, f)
+		if !ok || tag != tc.tag || channel != tc.channel {
+			t.Errorf("re-run over %s settled on tag=%q channel=%q (ok=%v), want %q %q:\n%s",
+				tc.ref, tag, channel, ok, tc.tag, tc.channel, out)
+		}
+	}
+	// grain/grain is only ever a repository a re-run keeps a tag from,
+	// never one it moves onto: it would be pulled from Docker Hub.
+	f := refFile(t, "docker.io/grainai/grain:main")
+	out, tag, _, _ := resolveTag(t, []string{"GRAIN_IMAGE=grain/grain"}, f, f)
+	if tag != "latest" {
+		t.Errorf("a re-run onto GRAIN_IMAGE=grain/grain kept tag %q; want latest (no shift onto grain/grain):\n%s", tag, out)
+	}
+}
+
+func TestInstallGrainRefusesImageWithoutRegistryHost(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "scripts", "install-grain.sh")
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dockerLog := filepath.Join(dir, "docker.log")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"" + dockerLog + "\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"grain/grain", "grainai/grain", "grain"} {
+		cmd := exec.Command("bash", script, "-version", "v1.9.0", "-image", bad, "-dest", filepath.Join(dir, "out"))
+		cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Errorf("install-grain.sh -image %q succeeded, want refusal:\n%s", bad, out)
+		}
+		if !strings.Contains(string(out), "names no registry host") {
+			t.Errorf("install-grain.sh -image %q output = %q, want 'names no registry host'", bad, out)
+		}
+		if raw, _ := os.ReadFile(dockerLog); len(raw) > 0 {
+			t.Errorf("install-grain.sh -image %q invoked docker: %s", bad, raw)
+		}
+	}
 }
