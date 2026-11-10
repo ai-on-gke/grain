@@ -21,7 +21,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -128,8 +131,39 @@ func confirmSelfFromContext(ctx context.Context) bool {
 	return v
 }
 
+var (
+	accessReasonANSIOSC = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+	accessReasonANSICSI = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	accessReasonANSIESC = regexp.MustCompile(`\x1b[@-_]`)
+)
+
+// cleanAccessReason flattens whitespace/newlines and strips ANSI escape
+// sequences and control or format characters so config_audit summaries,
+// `grain access list` and daemon logs stay single-line and free of terminal
+// escapes. A reason consisting only of escapes or control bytes becomes "".
 func cleanAccessReason(reason string) string {
-	return strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(reason))
+	reason = accessReasonANSIOSC.ReplaceAllString(reason, " ")
+	reason = accessReasonANSICSI.ReplaceAllString(reason, " ")
+	reason = accessReasonANSIESC.ReplaceAllString(reason, " ")
+	var b strings.Builder
+	space := false
+	for _, r := range reason {
+		switch {
+		case r == utf8.RuneError:
+			continue
+		case unicode.IsSpace(r):
+			space = b.Len() > 0
+			continue
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			continue
+		}
+		if space {
+			b.WriteByte(' ')
+			space = false
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func withActingReason(ctx context.Context, reason string) context.Context {
@@ -595,7 +629,7 @@ func (c *Client) checkAccessChange(ctx context.Context, ch accessChange) error {
 	if caller == nil {
 		return nil
 	}
-	if err := checkSelfAccessChange(ctx, caller, ch); err != nil {
+	if err := checkSelfAccessEscalation(ctx, caller, ch); err != nil {
 		return err
 	}
 	for _, role := range []string{ch.current, ch.role} {
@@ -611,7 +645,10 @@ func (c *Client) checkAccessChange(ctx context.Context, ch accessChange) error {
 			}
 		}
 	}
-	return c.checkLastFullAdmin(ctx, ch)
+	if err := c.checkLastFullAdmin(ctx, ch); err != nil {
+		return err
+	}
+	return checkSelfAccessConfirm(ctx, caller, ch)
 }
 
 // describeAccessChange is ch in words, for a message.
@@ -626,13 +663,13 @@ func describeAccessChange(ch accessChange) string {
 	}
 }
 
-// checkSelfAccessChange refuses a change to an entry that admits the caller
+// checkSelfAccessEscalation refuses a change to an entry that admits the caller
 // when it would add or widen what the entry grants, or add or lift a deny on
-// it, and asks for confirmation before narrowing it. Adding a matching entry
-// is refused too so a caller admitted through a group cannot entrench a direct
-// user: entry or re-POST a matching entry wider after DELETE?confirmSelf=1.
-// A group whose membership cannot be looked up is taken to match.
-func checkSelfAccessChange(ctx context.Context, caller *accessRole, ch accessChange) error {
+// it. Adding a matching entry is refused too so a caller admitted through a
+// group cannot entrench a direct user: entry or re-POST a matching entry wider
+// after DELETE?confirmSelf=1. A group whose membership cannot be looked up is
+// taken to match.
+func checkSelfAccessEscalation(ctx context.Context, caller *accessRole, ch accessChange) error {
 	mine, err := caller.matchesEntry(ctx, ch.entry)
 	how := "matches you"
 	if err != nil {
@@ -652,10 +689,23 @@ func checkSelfAccessChange(ctx context.Context, caller *accessRole, ch accessCha
 			return forbiddenCodeErrorf("self_escalation", "%s %s: you may not widen it from %s to %s (%v); another admin, or the access code, can", ch.entry, how, ch.current, ch.role, err)
 		}
 	}
-	if !ch.confirmSelf {
-		return forbiddenCodeErrorf("confirm_self", "%s %s: confirm that you want to %s, which narrows your own access (confirmSelf, or --confirm-self)", ch.entry, how, describeAccessChange(ch))
-	}
 	return nil
+}
+
+// checkSelfAccessConfirm requires ch.confirmSelf before narrowing or removing
+// an entry that admits the caller. It runs after checkLastFullAdmin so the last
+// full admin receives last_admin directly instead of being asked to confirm a
+// narrowing that will be refused anyway.
+func checkSelfAccessConfirm(ctx context.Context, caller *accessRole, ch accessChange) error {
+	mine, err := caller.matchesEntry(ctx, ch.entry)
+	how := "matches you"
+	if err != nil {
+		mine, how = true, "may match you (its membership could not be checked)"
+	}
+	if !mine || ch.current == ch.role || ch.confirmSelf {
+		return nil
+	}
+	return forbiddenCodeErrorf("confirm_self", "%s %s: confirm that you want to %s, which narrows your own access (confirmSelf, or --confirm-self)", ch.entry, how, describeAccessChange(ch))
 }
 
 // checkLastFullAdmin refuses removing or narrowing the only user: or

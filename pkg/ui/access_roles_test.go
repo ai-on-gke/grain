@@ -15,9 +15,11 @@
 package ui_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -430,9 +432,21 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 		t.Fatalf("other DELETE admins group: %d %s", code, body)
 	}
 
-	// Newlines in a reason are flattened so config_audit and logs stay one line.
-	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/viewer","reason":"line1\r\nforged"}`); code != http.StatusOK {
-		t.Fatalf("ops PATCH with newline reason: %d %s", code, body)
+	// Newlines, ANSI CSI/OSC escapes and control/bidi characters in a reason
+	// are stripped so config_audit and daemon logs stay one clean line, and a
+	// pure-escape reason is refused as empty.
+	var logBuf bytes.Buffer
+	prevLogOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(prevLogOut) })
+
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"),
+		`{"role":"grain/viewer","reason":"line1\r\nforged\u001b[31mRED\u001b[0m\u001b]52;c;dGVzdA==\u0007\u202eend"}`); code != http.StatusOK {
+		t.Fatalf("ops PATCH with newline/ANSI reason: %d %s", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"),
+		`{"role":"grain/operator","reason":"\u001b[31m\u001b[0m\r\n"}`); code != http.StatusBadRequest || !strings.Contains(body, "reason") {
+		t.Fatalf("ops PATCH with pure-ANSI reason: %d %s, want 400 naming reason", code, body)
 	}
 	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/operator","reason":"restore"}`); code != http.StatusOK {
 		t.Fatalf("ops PATCH restore other: %d %s", code, body)
@@ -442,17 +456,27 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range auditsAfterNL {
-		if strings.ContainsAny(a.Summary, "\r\n") {
-			t.Fatalf("config_audit summary contains raw newline: %q", a.Summary)
+		if strings.ContainsAny(a.Summary, "\r\n\x1b\x07\u202e") {
+			t.Fatalf("config_audit summary contains raw newline or terminal escape: %q", a.Summary)
 		}
 	}
+	if strings.ContainsAny(logBuf.String(), "\x1b\x07\u202e") {
+		t.Fatalf("daemon log contains terminal escape or bidi control: %q", logBuf.String())
+	}
 
-	// The last full admin is never removed or narrowed by a session.
+	// The last full admin is never removed or narrowed by a session, and
+	// receives last_admin directly even when confirmSelf is omitted.
 	if code, body := h.call("ops@example.com", http.MethodDelete, path("user:other@example.com")+"?reason=offboarded", ""); code != http.StatusOK {
 		t.Fatalf("ops DELETE another admin: %d %s", code, body)
 	}
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:ops@example.com"), `{"role":"grain/viewer","reason":"x"}`); code != http.StatusForbidden || !strings.Contains(body, "last_admin") || !strings.Contains(body, "access code") {
+		t.Fatalf("ops PATCH the last admin narrower without confirmSelf: %d %s, want 403 last_admin naming the access code", code, body)
+	}
 	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:ops@example.com"), `{"role":"grain/viewer","reason":"x","confirmSelf":true}`); code != http.StatusForbidden || !strings.Contains(body, "last_admin") || !strings.Contains(body, "access code") {
 		t.Fatalf("ops PATCH the last admin narrower: %d %s, want 403 last_admin naming the access code", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodDelete, path("user:ops@example.com")+"?reason=x", ""); code != http.StatusForbidden || !strings.Contains(body, "last_admin") {
+		t.Fatalf("ops DELETE the last admin without confirmSelf: %d %s, want 403 last_admin", code, body)
 	}
 	if code, body := h.call("ops@example.com", http.MethodDelete, path("user:ops@example.com")+"?reason=x&confirmSelf=1", ""); code != http.StatusForbidden || !strings.Contains(body, "last_admin") {
 		t.Fatalf("ops DELETE the last admin: %d %s, want 403 last_admin", code, body)
