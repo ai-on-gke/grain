@@ -78,7 +78,9 @@ type gitHubTokenInfo struct {
 	// Connections is the scope of every deployment git connection naming
 	// this credential ("" for a host default, "owner" or "owner/repo"),
 	// which is what makes deleting one a question rather than a click.
-	Connections []string `json:"connections,omitempty"`
+	Connections          []string `json:"connections,omitempty"`
+	ConnectionCount      int      `json:"connectionCount,omitempty"`
+	ConnectionsTruncated bool     `json:"connectionsTruncated,omitempty"`
 	// Capability is the id a task holds to push through this token.
 	Capability string `json:"capability,omitempty"`
 	// MintError is an App-backed credential this deployment cannot
@@ -331,7 +333,7 @@ func (c *Client) gitCredentialGrantHolders(ctx context.Context, name string) ([]
 // deployment's GitHub credentials, the connections naming them and the
 // local directory they live in -- a system administrator's to read.
 func (s *Server) handleListGitHubTokens(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -359,6 +361,13 @@ func (s *Server) handleListGitHubTokens(w http.ResponseWriter, r *http.Request) 
 			return list.matches(keys...)
 		})
 		page := pageOf(matched, list)
+		for i := range page.Items {
+			page.Items[i].ConnectionCount = len(page.Items[i].Connections)
+			if len(page.Items[i].Connections) > listPageSmall {
+				page.Items[i].Connections = page.Items[i].Connections[:listPageSmall]
+				page.Items[i].ConnectionsTruncated = true
+			}
+		}
 		resp.Tokens = page.Items
 		resp.Total = page.Total
 		resp.Truncated = page.Truncated

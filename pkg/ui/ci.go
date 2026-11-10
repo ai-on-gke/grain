@@ -1237,7 +1237,7 @@ func ciRunMatchesQuery(run ci.Run, list listQuery) bool {
 	if list.Q == "" {
 		return true
 	}
-	keys := []string{run.ID, run.Repo, run.Ref, run.Commit, string(run.Event)}
+	keys := []string{run.ID, run.Repo, run.Ref, run.Commit, string(run.Event), run.RequestedBy}
 	if run.Actions != nil {
 		keys = append(keys, run.Actions.Workflow, run.Actions.WorkflowName)
 	}
@@ -1291,7 +1291,7 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	defaultLimit := listPageSmall
 	if compact {
-		defaultLimit = listPageMedium
+		defaultLimit = listPageLarge
 	}
 	list, err := parseListQuery(r, defaultLimit)
 	if err != nil {
@@ -1364,15 +1364,15 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		faults = s.tasks.CISharedFaults(r.Context())
 	}
 	page, truncated, nextCursor := pageCIRunResult(rawPage, list)
+	if isAgentListCaller(r) && len(faults) > listPageSmall {
+		faults = faults[:listPageSmall]
+	}
 	if compact {
 		resp := ciCompactRuns(page, faults)
 		resp.Truncated = truncated
 		resp.NextCursor = nextCursor
 		writeJSON(w, http.StatusOK, resp)
 		return
-	}
-	if isAgentListCaller(r) && len(faults) > listPageSmall {
-		faults = faults[:listPageSmall]
 	}
 	listed := make([]ci.Run, 0, len(page.Runs))
 	for _, run := range page.Runs {
@@ -1432,6 +1432,9 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 	page.Stored += actionsMatched
 	page, truncated, nextCursor := pageCIRunResult(page, list)
 	faults := s.tasks.CISharedFaults(r.Context())
+	if isAgentListCaller(r) && len(faults) > listPageSmall {
+		faults = faults[:listPageSmall]
+	}
 	if compact {
 		resp := ciCompactRuns(page, faults)
 		resp.ActionsNote = note
@@ -1439,9 +1442,6 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		resp.NextCursor = nextCursor
 		writeJSON(w, http.StatusOK, resp)
 		return
-	}
-	if isAgentListCaller(r) && len(faults) > listPageSmall {
-		faults = faults[:listPageSmall]
 	}
 	listed := make([]ci.Run, 0, len(page.Runs))
 	for _, run := range page.Runs {

@@ -19,12 +19,21 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
+
+func settingsHubConfig(s ui.Settings) model.HubConfig {
+	if !reflect.DeepEqual(s.Hub, model.HubConfig{}) {
+		return s.Hub
+	}
+	return s.Registry
+}
 
 func visitedFlags(fs *flag.FlagSet) map[string]bool {
 	m := map[string]bool{}
@@ -71,9 +80,10 @@ func (tf hubTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*api.Cli
 	aud := strings.TrimSpace(*tf.oidcAudience)
 	if regURL == "" && c != nil {
 		if settings, err := c.GetSettings(ctx); err == nil {
-			regURL, urlSource = resolveHubURL("", settings.Registry.URL)
+			hubCfg := settingsHubConfig(settings)
+			regURL, urlSource = resolveHubURL("", hubCfg.URL)
 			if aud == "" {
-				aud = strings.TrimSpace(settings.Registry.OIDCAudience)
+				aud = strings.TrimSpace(hubCfg.OIDCAudience)
 			}
 		}
 	}

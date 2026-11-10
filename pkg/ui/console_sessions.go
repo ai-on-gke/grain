@@ -1669,6 +1669,12 @@ func (s *Server) handleListConsoleSessions(w http.ResponseWriter, r *http.Reques
 			return list.matches(cs.ID, cs.Title, cs.TaskID, cs.Team)
 		})
 		page := pageOf(matched, list)
+		for i := range page.Items {
+			page.Items[i].MissingShippedDefaults = nil
+			if len(page.Items[i].AutoReads) > listPageSmall {
+				page.Items[i].AutoReads = page.Items[i].AutoReads[:listPageSmall]
+			}
+		}
 		writeJSON(w, http.StatusOK, ConsoleSessionSettingsResponse{
 			Sessions:   page.Items,
 			Total:      page.Total,
