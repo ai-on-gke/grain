@@ -241,6 +241,13 @@ func ListCursorFor(offset int) string {
 	return encodeListCursor(max(offset, 0))
 }
 
+// ParseListCursor is the offset a ListCursorFor cursor starts at, for a
+// caller that pages a list it filtered itself (`grain mcp`'s
+// list_grain_tasks); a cursor it did not hand out is refused.
+func ParseListCursor(text string) (int, error) {
+	return decodeListCursor(strings.TrimSpace(text))
+}
+
 // describeListQuery is the sentence every paged route's tool description
 // ends with, naming the three parameters.
 func describeListQuery(what string, defaultLimit int) string {

@@ -293,11 +293,15 @@ func TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask(t *testing.T) {
 	if err != nil || listRes.IsError {
 		t.Fatalf("list_grain_tasks failed: err=%v text=%s", err, listRes.Text())
 	}
-	var listed []ui.Task
+	var listed struct {
+		Tasks     []ui.Task `json:"tasks"`
+		Total     int       `json:"total"`
+		Truncated bool      `json:"truncated"`
+	}
 	if err := json.Unmarshal([]byte(listRes.Text()), &listed); err != nil {
 		t.Fatalf("unmarshal list_grain_tasks: %v", err)
 	}
-	if len(listed) != 1 || listed[0].ID != createdTask.ID {
+	if len(listed.Tasks) != 1 || listed.Tasks[0].ID != createdTask.ID || listed.Total != 1 || listed.Truncated {
 		t.Fatalf("list_grain_tasks = %+v, want [%s]", listed, createdTask.ID)
 	}
 

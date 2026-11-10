@@ -2181,8 +2181,23 @@ func (c *HTTPClient) CISharedFaults(ctx context.Context) ([]CIFault, error) {
 // run the deployment keeps rather than the newest page of them
 // (ci.RunStore.Find, grain/task-289).
 func (c *HTTPClient) FindCIRuns(ctx context.Context, f ci.RunFilter, limit int) (CIRunsResponse, error) {
+	return c.FindCIRunsPage(ctx, f, CIRunsPage{Limit: limit})
+}
+
+// CIRunsPage is which page of GET /api/ci/runs to ask for: at most Limit
+// runs (0 for the route's default), starting at Cursor (a previous
+// answer's NextCursor), keeping only runs whose id, repository, ref,
+// commit, workflow or job names contain Q.
+type CIRunsPage struct {
+	Limit  int
+	Cursor string
+	Q      string
+}
+
+// FindCIRunsPage is FindCIRuns asking for one page.
+func (c *HTTPClient) FindCIRunsPage(ctx context.Context, f ci.RunFilter, p CIRunsPage) (CIRunsResponse, error) {
 	var resp CIRunsResponse
-	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, limit, ""), nil, &resp); err != nil {
+	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, p, ""), nil, &resp); err != nil {
 		return CIRunsResponse{}, err
 	}
 	return resp, nil
@@ -2192,16 +2207,21 @@ func (c *HTTPClient) FindCIRuns(ctx context.Context, f ci.RunFilter, limit int) 
 // (CICompactRunsResponse): each run's identity and verdict and a line per
 // job that did not succeed, which is what a page of a week's runs fits in.
 func (c *HTTPClient) FindCIRunsCompact(ctx context.Context, f ci.RunFilter, limit int) (CICompactRunsResponse, error) {
+	return c.FindCIRunsCompactPage(ctx, f, CIRunsPage{Limit: limit})
+}
+
+// FindCIRunsCompactPage is FindCIRunsCompact asking for one page.
+func (c *HTTPClient) FindCIRunsCompactPage(ctx context.Context, f ci.RunFilter, p CIRunsPage) (CICompactRunsResponse, error) {
 	var resp CICompactRunsResponse
-	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, limit, "compact"), nil, &resp); err != nil {
+	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, p, "compact"), nil, &resp); err != nil {
 		return CICompactRunsResponse{}, err
 	}
 	return resp, nil
 }
 
-// ciRunsPath is GET /api/ci/runs with a filter, a limit and a view as
+// ciRunsPath is GET /api/ci/runs with a filter, a page and a view as
 // its query.
-func ciRunsPath(f ci.RunFilter, limit int, view string) string {
+func ciRunsPath(f ci.RunFilter, p CIRunsPage, view string) string {
 	query := url.Values{}
 	if repo := strings.TrimSpace(f.Repo); repo != "" {
 		query.Set("repo", repo)
@@ -2236,8 +2256,14 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if !f.Descending {
 		query.Set("order", "asc")
 	}
-	if limit > 0 {
-		query.Set("limit", strconv.Itoa(limit))
+	if p.Limit > 0 {
+		query.Set("limit", strconv.Itoa(p.Limit))
+	}
+	if cursor := strings.TrimSpace(p.Cursor); cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	if q := strings.TrimSpace(p.Q); q != "" {
+		query.Set("q", q)
 	}
 	if view != "" {
 		query.Set("view", view)
