@@ -1293,6 +1293,7 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				},
 				"grants": map[string]any{
 					"type":        "array",
+					"items":       map[string]any{},
 					"description": "Unified grants, each a grant string or a {capability, with} object, as POST /api/tasks takes them (repo#target, repo#read and repo#write included). A request that also names the same kind the old way -- capabilities, reads, writes, or repo/base/no_repo beside repo#target -- is refused.",
 				},
 				"depends_on": map[string]any{

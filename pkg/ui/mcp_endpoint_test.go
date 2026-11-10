@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -899,4 +906,167 @@ func TestControllerMCPSubmitTaskForwardsGrants(t *testing.T) {
 			t.Errorf("%s: a refused request filed a task (%d tasks, then %d)", tc.name, len(before), len(after))
 		}
 	}
+}
+
+// Gemini rejects eagerly registered MCP tool declarations when any "array"
+// schema omits "items" (INVALID_ARGUMENT: ...properties[...].items: missing
+// field). Verify every controller MCP tool in tools/list -- along with the
+// agent API route tools, sandbox mcpserver tools, and in-process capability
+// toolsets -- defines an object "items" schema on every array node.
+func TestControllerMCPToolSchemasSpecifyArrayItems(t *testing.T) {
+	t.Parallel()
+	srv, _, code := newSingleTenantControllerMCPServer(t)
+	headers := map[string]string{ui.AccessCodeHeader: code}
+	rec := callControllerMCP(t, srv, headers, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tools/list = %d: %s", rec.Code, rec.Body.String())
+	}
+	assertToolsListJSONHasArrayItems(t, "controller", rec.Body.Bytes())
+
+	var apiGrants []string
+	for _, r := range ui.AgentAPIRoutes() {
+		apiGrants = append(apiGrants, "api:"+string(r.Scope))
+	}
+	assertMCPToolsSpecifyArrayItems(t, "agent_api", ui.AgentAPITools(nil, "1", apiGrants))
+
+	var sandboxTools []mcp.Tool
+	for _, group := range [][]mcp.Tool{
+		mcp.NewSandboxTools(""),
+		mcp.NewMockTools(&mcp.MockSink{}, []string{"owner/repo"}),
+		mcp.NewLiveProposalTools(&mcp.MockSink{}, []string{"owner/repo"}, "1", nil),
+		mcp.NewPullRequestTools(nil, nil, mcp.PullRequestScope{Owner: "owner", Repo: "repo", Branch: "b"}),
+		mcp.NewWaitForChecksTools(nil, nil, mcp.PullRequestScope{Owner: "owner", Repo: "repo", Branch: "b"}),
+		mcp.NewOpenPullRequestTools(nil),
+		mcp.NewWaitForTaskTools(nil, nil),
+		mcp.NewResumeLaterTools(nil, nil),
+		mcp.NewGrainCIWaitTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}, "main"),
+		mcp.NewGrainCIReadTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}, "main"),
+		mcp.NewGrainCIArtifactTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}, "", "main"),
+		mcp.NewRunCIJobTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}),
+		mcp.NewChangeChecksTools(nil),
+		mcp.NewChangeReviewTools(nil),
+		mcp.NewRecreateSandboxTools(nil),
+		mcp.NewRevertTools(nil),
+		mcp.NewNotifyTools(nil),
+		mcp.NewIssueTools(nil, mcp.IssueScope{}),
+		mcp.NewMergeQueueTools(nil),
+		mcp.NewHumanReviewTools(nil),
+		mcp.NewPipelineTools(nil),
+		mcp.NewTaskTools(nil),
+		mcp.NewMetricsTools(nil),
+		mcp.NewRenameSessionTools(nil),
+		mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{}),
+		mcp.NewStatusTools(nil),
+		mcp.NewChatTools(nil, nil),
+	} {
+		sandboxTools = append(sandboxTools, group...)
+	}
+	sandboxTools = append(sandboxTools, mcp.NewProposeConfigChangeTools(nil, "1", sandboxTools)...)
+	assertMCPToolsSpecifyArrayItems(t, "sandbox_mcpserver", sandboxTools)
+
+	var capTools []mcp.Tool
+	for _, group := range [][]mcp.Tool{
+		dbaccess.Tools(dbaccess.Config{AllowWrite: true}),
+		deploymenthealth.Tools(deploymenthealth.Config{}),
+		grainlog.Tools(grainlog.Config{}),
+		selfrepair.HostCommandTools(nil, "1", 0, 0),
+		selfrepair.ConfirmedHostCommandTools(nil),
+	} {
+		capTools = append(capTools, group...)
+	}
+	assertMCPToolsSpecifyArrayItems(t, "capability_tools", capTools)
+
+	for name, ps := range map[string]map[string]any{
+		"grain":  methodsSchemaMap(grainserver.Server().Methods),
+		"api":    methodsSchemaMap(grainserver.APIServer().Methods),
+		"repo":   methodsSchemaMap(grainserver.RepoServer().Methods),
+		"github": methodsSchemaMap(grainserver.GitHubServer().Methods),
+	} {
+		raw, err := json.Marshal(ps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var normalized any
+		if err := json.Unmarshal(raw, &normalized); err != nil {
+			t.Fatal(err)
+		}
+		assertArraySchemasHaveItems(t, "capability_server."+name, normalized)
+	}
+}
+
+func methodsSchemaMap[M any](methods map[string]M) map[string]any {
+	raw, err := json.Marshal(methods)
+	if err != nil {
+		panic(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		panic(err)
+	}
+	return out
+}
+
+func assertMCPToolsSpecifyArrayItems(t *testing.T, suite string, tools []mcp.Tool) {
+	t.Helper()
+	reg := mcp.NewRegistry()
+	reg.Register(tools...)
+	raw := reg.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	assertToolsListJSONHasArrayItems(t, suite, raw)
+}
+
+func assertToolsListJSONHasArrayItems(t *testing.T, suite string, payload []byte) {
+	t.Helper()
+	var resp struct {
+		Result struct {
+			Tools []struct {
+				Name        string         `json:"name"`
+				InputSchema map[string]any `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		t.Fatalf("%s: unmarshal tools/list: %v", suite, err)
+	}
+	if len(resp.Result.Tools) == 0 {
+		t.Fatalf("%s: tools/list returned no tools", suite)
+	}
+	for _, tool := range resp.Result.Tools {
+		assertArraySchemasHaveItems(t, suite+"."+tool.Name+".inputSchema", tool.InputSchema)
+	}
+}
+
+func assertArraySchemasHaveItems(t *testing.T, path string, node any) {
+	t.Helper()
+	switch v := node.(type) {
+	case map[string]any:
+		if schemaHasArrayType(v["type"]) {
+			items, ok := v["items"].(map[string]any)
+			if !ok || items == nil {
+				t.Errorf("%s: array schema must define an object \"items\" field: %+v", path, v)
+			}
+		}
+		for k, child := range v {
+			assertArraySchemasHaveItems(t, path+"."+k, child)
+		}
+	case []any:
+		for i, child := range v {
+			assertArraySchemasHaveItems(t, fmt.Sprintf("%s[%d]", path, i), child)
+		}
+	}
+}
+
+func schemaHasArrayType(raw any) bool {
+	switch typ := raw.(type) {
+	case string:
+		return typ == "array"
+	case []any:
+		for _, elem := range typ {
+			if s, _ := elem.(string); s == "array" {
+				return true
+			}
+		}
+	case []string:
+		return slices.Contains(typ, "array")
+	}
+	return false
 }
