@@ -343,6 +343,16 @@ Hosted instances move through a narrow state machine:
      repo.
   4. `probing` → `running`: once `/healthz` and `/api/registry/status`
      respond on the new `backend_url`, the entry returns to `running`.
+
+  Hosted `instance` VMs run with `-disable-self-upgrade`, so this external VM
+  replacement does not use the daemon's in-place `pkg/upgrade` pipeline and
+  cannot be cancelled with `DELETE /api/upgrade/current` or
+  `grain upgrade cancel` (run `grain hub upgrade -version <previous> <name>`
+  afterwards to move back). By contrast, `connected` entries run their own
+  `grain daemon` and support per-instance upgrade cancellation, grace-window
+  countdown, and one-click rollback via the Hub's proxied
+  `[Settings → Upgrade](/settings/upgrade)` pane, `DELETE /api/upgrade/current`,
+  or `grain -context <name> upgrade cancel`.
 - **Stop and start (`stopping` → `stopped`).** An entry manager can
   park an idle instance with `grain hub stop <name>` (or
   `POST /api/entries/<name>/stop`, or **Stop** on the entry's page and
@@ -1158,7 +1168,7 @@ for machine-readable JSON output on every subcommand.
 | `grain hub update [flags] <name>` | Edit catalog metadata, `owner_group`, `listed`/`unlisted`, `tags`, `host_kind`, `connected_principal`, `shape`, `allow_ssh`, or `ship_logs` |
 | `grain hub scopes [-set <repo[:prefix[:role]]>]... [-clear] <name>` | View or replace `declared` repository scope overrides on `<name>` |
 | `grain hub rotate-credential [flags] <name>` | Mint a replacement `grc_…` token for a `connected` entry (`-overlap`, `-revoke-previous`, `-cred-id`, `-label`, `-token-file`) |
-| `grain hub upgrade [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto the target (or current default) release image |
+| `grain hub upgrade [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto the target (or current default) release image (`connected` entries upgrade in place via `grain -context <name> upgrade` and cancel via `grain -context <name> upgrade cancel`) |
 | `grain hub resize [-shape <shape>] [-disk-gb <gb>] [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto a new shape and/or boot disk size (`20`–`4000` GB) |
 | `grain hub delete [-confirm <name>\|-yes] [-delete-disk] <name>` | Delete an entry (fencing a hosted instance's database for the 7-day restore window unless `-delete-disk` is set, and holding the name for 30 days) |
 | `grain hub stop <name>` | Stop a hosted `instance`'s VM while keeping its state (`stopping` → `stopped`) |
