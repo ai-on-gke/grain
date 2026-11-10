@@ -161,10 +161,14 @@ type upgradeStatusResponse struct {
 	// reference for the channel the deployment follows, and the
 	// repositories an operator may choose instead (startUpgradeRequest's
 	// Image). All empty on any other pipeline.
-	ImageRepo        string               `json:"imageRepo,omitempty"`
-	DefaultImageRepo string               `json:"defaultImageRepo,omitempty"`
-	DefaultImageRef  string               `json:"defaultImageRef,omitempty"`
-	ImageRepos       []string             `json:"imageRepos,omitempty"`
+	ImageRepo        string   `json:"imageRepo,omitempty"`
+	DefaultImageRepo string   `json:"defaultImageRepo,omitempty"`
+	DefaultImageRef  string   `json:"defaultImageRef,omitempty"`
+	ImageRepos       []string `json:"imageRepos,omitempty"`
+	// ImageRepoWarning is upgrade.Upgrader.RepositoryWarning: ImageRepo
+	// names no registry host, so the Upgrade button would be refused,
+	// and what to set instead. Shown before anybody presses it.
+	ImageRepoWarning string               `json:"imageRepoWarning,omitempty"`
 	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc,omitempty"`
 	// RetractedRelease is set when the release this deployment runs has
 	// been retracted since it upgraded onto it: the pane tells the
@@ -308,6 +312,7 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 			resp.ImageRepo = target.Repository
 			resp.DefaultImageRepo = target.DefaultRepository
 			resp.ImageRepos = target.Repositories
+			resp.ImageRepoWarning = target.RepositoryWarning
 			if channel != "" && target.Repository != "" {
 				resp.DefaultImageRef = target.Repository + ":" + upgrade.TagForBranch(channel)
 			}
