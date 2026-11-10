@@ -845,8 +845,19 @@ func refusedConfigField(config map[string]any, msg string) string {
 		if name, _ := set["name"].(string); name != m[1] {
 			continue
 		}
-		if strings.Contains(msg, "role ceiling") {
+		switch {
+		case strings.Contains(msg, "role ceiling"), strings.Contains(msg, "grants no roles"), strings.Contains(msg, "is not a role"):
 			return fmt.Sprintf("permission_sets[%d].roles", i)
+		case strings.Contains(msg, "and pool_max are exclusive"):
+			return fmt.Sprintf("permission_sets[%d].pool_max", i)
+		case strings.Contains(msg, "resource_scope"):
+			return fmt.Sprintf("permission_sets[%d].resource_scope", i)
+		case strings.Contains(msg, "is not a project id"), strings.Contains(msg, "project is required"), strings.Contains(msg, `is not one of admin`) && !strings.Contains(msg, "service account "):
+			return fmt.Sprintf("permission_sets[%d].project", i)
+		case strings.Contains(msg, "service_account ") || strings.Contains(msg, "service account "):
+			return fmt.Sprintf("permission_sets[%d].service_account", i)
+		case strings.Contains(msg, "credential must be"), strings.Contains(msg, "credential: token and accounts"):
+			return fmt.Sprintf("permission_sets[%d].credential", i)
 		}
 		return fmt.Sprintf("permission_sets[%d]", i)
 	}
