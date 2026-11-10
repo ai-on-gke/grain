@@ -40,6 +40,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -493,12 +494,20 @@ func (u *Upgrader) registryRepository() string {
 	return ""
 }
 
-// registryTags lists the tags upgrades can reach from the image registry.
+func (u *Upgrader) tagCacheKey(repository string) string {
+	return repository
+}
+
+// registryTags lists the tags upgrades can reach from the image registry,
+// and reports whether repository is a dedicated edition image repository
+// (dedicatedImageRepository) -- where a bare vX.Y.Z is this edition's own
+// release -- rather than a registry shared with open-source builds.
 func (u *Upgrader) registryTags(ctx context.Context, repository string) (tags []string, dedicated bool, err error) {
+	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	defer u.tags.mu.Unlock()
-	if u.tags.repo == repository && time.Since(u.tags.fetched) < tagListTTL {
-		return u.tags.tags, false, nil
+	if u.tags.repo == key && time.Since(u.tags.fetched) < tagListTTL {
+		return u.tags.tags, u.tags.dedicated, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -510,12 +519,31 @@ func (u *Upgrader) registryTags(ctx context.Context, repository string) (tags []
 	if err != nil {
 		return nil, false, err
 	}
-	u.tags.repo, u.tags.tags, u.tags.fetched, u.tags.dedicated = repository, tags, time.Now(), false
-	return tags, false, nil
+	dedicated = u.dedicatedImageRepository(repository)
+	u.tags.repo, u.tags.tags, u.tags.fetched, u.tags.dedicated = key, tags, time.Now(), dedicated
+	return tags, dedicated, nil
 }
 
-func (u *Upgrader) tagCacheKey(repository string) string {
-	return repository
+// dedicatedImageRepository reports whether repository belongs to a registered
+// non-OSS install track rather than to the open-source or pre-split shared
+// image repositories. A post-split edition builds from its own repository and
+// tags releases in its dedicated registry as bare vX.Y.Z / vX.Y.Z-rc.N.
+func (u *Upgrader) dedicatedImageRepository(repository string) bool {
+	var track installtrack.Track
+	switch u.Mode() {
+	case ModeKube:
+		track = u.cfg.Kube.Track
+	case ModeImage:
+		track = u.cfg.Image.Track
+	}
+	if track == "" || track == installtrack.TrackOSS {
+		return false
+	}
+	repo := strings.TrimSpace(repositoryOf(strings.TrimSpace(repository)))
+	if repo == "" || installtrack.IsLegacyRepository(repo) || installtrack.ResolveLegacyRepository(repo) == installtrack.DefaultOSSGrainRepository {
+		return false
+	}
+	return installtrack.ValidateTargetRepository(installtrack.DefaultRepository(track), repo) == nil
 }
 
 // tagFilter is which editions' tags a deployment accepts from one tag

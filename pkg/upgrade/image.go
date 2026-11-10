@@ -213,6 +213,10 @@ type ImageConfig struct {
 	// from ImageSourceRegistry, and any legacy "release-assets" value logs a
 	// one-time warning and falls back to ImageSourceRegistry.
 	Source ImageSource
+	// Fallback is kept for edition/config compatibility; because
+	// ImageSourceRegistry is the only supported image source, fallback is a
+	// no-op and any legacy "release-assets" value logs a one-time warning.
+	Fallback ImageSource
 	// SourceOverrideFile, when set, is inspected once on startup so any legacy
 	// stored "release-assets" override (<data-dir>/upgrade-image-source.json)
 	// is migrated to the registry source with a one-time warning.

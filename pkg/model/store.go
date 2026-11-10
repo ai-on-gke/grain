@@ -5609,7 +5609,12 @@ type TaskPullRequestLink struct {
 // them had each cycle overwrite the other's head, file a fresh security
 // review for whichever it read last, repair a conflict that only the stale
 // one had, and close the task when somebody closed the stale one.
-// PruneOffTargetPullRequestLinks removes such links for good.
+// PruneOffTargetPullRequestLinks removes such links for good. For the same
+// reason, when a reopened or multi-attempt task carries an earlier settled
+// LinkFixes pull request alongside a newer one in the same target
+// repository, only the task's current pull request (TaskPullRequest:
+// Target over Writes, and highest number within a repository) is returned,
+// while the earlier link stays on the task as history (mergedPullRequestOf).
 func (s *Store) OpenPullRequestLinks(ctx context.Context) ([]TaskPullRequestLink, error) {
 	kept, _, err := s.openPullRequestLinks(ctx)
 	return kept, err
@@ -5713,17 +5718,59 @@ func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...
 	if err != nil {
 		return nil, nil, err
 	}
+	type selected struct {
+		idx       int
+		ref       PullRequestRef
+		ownTarget bool
+		hasTarget bool
+	}
+	bestByTask := make(map[string]selected, len(rows))
+	keepParsed := func(link TaskPullRequestLink, ref PullRequestRef, hasTarget, ownTarget bool) {
+		if prev, exists := bestByTask[link.TaskID]; exists {
+			better := false
+			if hasTarget && prev.ownTarget != ownTarget {
+				better = ownTarget
+			} else {
+				better = PullRequestRefLess(prev.ref, ref)
+			}
+			if better {
+				kept[prev.idx] = link
+				bestByTask[link.TaskID] = selected{
+					idx:       prev.idx,
+					ref:       ref,
+					ownTarget: ownTarget,
+					hasTarget: hasTarget,
+				}
+			}
+			return
+		}
+		bestByTask[link.TaskID] = selected{
+			idx:       len(kept),
+			ref:       ref,
+			ownTarget: ownTarget,
+			hasTarget: hasTarget,
+		}
+		kept = append(kept, link)
+	}
 	for _, r := range rows {
 		ref, perr := ParsePullRequestRef(r.link.PullRequest)
-		if perr != nil || r.target == nil || ref.Repo.Same(*r.target) {
+		if perr != nil {
 			// One that will not parse is still returned, for its
 			// readers to report as they always have.
 			kept = append(kept, r.link)
 			continue
 		}
+		if r.target == nil {
+			keepParsed(r.link, ref, false, false)
+			continue
+		}
+		if ref.Repo.Same(*r.target) || IsUpstreamRepoFor(*r.target, ref.Repo) {
+			keepParsed(r.link, ref, true, true)
+			continue
+		}
 		if rc, err := s.GetRepoConfig(ctx, *r.target); err == nil && rc != nil {
 			if up, cross, err := rc.PullRequestRepo(*r.target); err == nil && cross && ref.Repo.Same(up) {
-				kept = append(kept, r.link)
+				keepParsed(r.link, ref, true, true)
 				continue
 			}
 		}
@@ -5747,7 +5794,7 @@ func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...
 			off = append(off, r.link)
 			continue
 		}
-		kept = append(kept, r.link)
+		keepParsed(r.link, ref, true, false)
 	}
 	return kept, off, nil
 }
@@ -6124,7 +6171,7 @@ func newScheduleID(ctx context.Context, tx *sql.Tx) (string, error) {
 
 const scheduleColumns = "`id`,`title`,`body`,`target_owner`,`target_name`,`base`," +
 	"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`," +
-	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`"
+	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`"
 
 func scanSchedule(scan func(...any) error) (Schedule, error) {
 	var t Schedule
@@ -6135,7 +6182,7 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 	if err := scan(&t.ID, &t.Title, &t.Body, &t.Target.Owner, &t.Target.Name, &base,
 		&t.AutoMerge, &t.AutoApproveProposals, &templateID, &suiteID, &kind, &everyNHours, &timeOfDay, &weekday, &dayOfMonth,
 		&overlap, &networkAccess, &nothingNeeded, &t.Model, &t.Enabled, &t.NextRunAt, &lastRun, &t.CreatedAt, &timeZone,
-		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting); err != nil {
+		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting, &t.GrainCI); err != nil {
 		return Schedule{}, err
 	}
 	t.Admission = Admission(strings.TrimSpace(admission))
@@ -6207,12 +6254,12 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`schedule`"+` (
   `+"`id`,`title`,`body`,`target_owner`,`target_name`,`base`,"+
 		"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`,"+
-		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`"+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`"+`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
 		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
-		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting))
+		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting), t.GrainCI)
 	if err != nil {
 		return fmt.Errorf("writing schedule %s: %w", t.ID, err)
 	}

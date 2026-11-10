@@ -151,9 +151,12 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// CLI installer to setup-scripts and the release helper scripts to
 	// release-machinery, task 3625; v27 only adds pkg/hubenv/ to
 	// auth-routes and keeps cmd/grain-registry/ and pkg/registry/ in
-	// credential-proxy, task 3762).
-	if trustboundary.Version != "trust-boundary/v27" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v27, the build has %s", trustboundary.Version)
+	// credential-proxy, task 3762; v28 only adds scripts/granule/ and
+	// scripts/release-patch.sh to release-machinery, GCE instance init/bake
+	// scripts to setup-scripts, pkg/hostinit/ to exec-sandbox and
+	// pkg/installtrack/ to upgrade-images, task 3926).
+	if trustboundary.Version != "trust-boundary/v28" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v28, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

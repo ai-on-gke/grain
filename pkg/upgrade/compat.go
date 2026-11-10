@@ -42,9 +42,12 @@ const (
 )
 
 // TrackImageDefaults holds edition-registered default upgrade image source
-// settings for an installtrack.Track.
+// settings for an installtrack.Track. Both Source and Fallback are kept so
+// edition packages registering TrackImageDefaults{Source: ImageSourceRegistry,
+// Fallback: "none"} continue to compile cleanly.
 type TrackImageDefaults struct {
-	Source ImageSource
+	Source   ImageSource
+	Fallback ImageSource
 }
 
 var (
@@ -83,6 +86,12 @@ func RegisterTrackDefaults(track installtrack.Track, d TrackImageDefaults) {
 		d.Source = ImageSourceRegistry
 	} else if strings.TrimSpace(string(d.Source)) == "" {
 		d.Source = ImageSourceRegistry
+	}
+	if strings.EqualFold(strings.TrimSpace(string(d.Fallback)), legacyReleaseAssetsSource) {
+		warnLegacyReleaseAssetsOnce("track-fb:"+string(track), fmt.Sprintf(
+			"grain upgrade: track %q registered retired image fallback %q; disabling fallback",
+			track, d.Fallback))
+		d.Fallback = ""
 	}
 	trackDefaultsMu.Lock()
 	defer trackDefaultsMu.Unlock()
@@ -123,10 +132,52 @@ func NormalizeImageSource(raw string) (ImageSource, error) {
 	}
 }
 
+// ParseImageFallback normalizes a configured fallback image source. Empty,
+// "none", or "off" disables fallback; legacy "release-assets" disables
+// fallback with a one-time warning.
+func ParseImageFallback(raw string) (ImageSource, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	switch trimmed {
+	case "", "none", "off":
+		return "", nil
+	case string(ImageSourceRegistry):
+		return ImageSourceRegistry, nil
+	case legacyReleaseAssetsSource:
+		warnLegacyReleaseAssetsOnce("fallback:"+trimmed, fmt.Sprintf(
+			"grain upgrade: image fallback %q is no longer supported; disabling fallback",
+			raw))
+		return "", nil
+	default:
+		return "", fmt.Errorf("invalid upgrade image fallback %q: want \"none\" or %q", raw, ImageSourceRegistry)
+	}
+}
+
+// IsImageSourceExplicit reports whether the deployment's image source was
+// explicitly set via ImageConfig.Source or TrackImageDefaults.Source.
+func (u *Upgrader) IsImageSourceExplicit() bool {
+	if u.cfg.Image == nil {
+		return false
+	}
+	if strings.TrimSpace(string(u.cfg.Image.Source)) != "" {
+		return true
+	}
+	if d, ok := TrackDefaultsFor(u.cfg.Image.Track); ok && strings.TrimSpace(string(d.Source)) != "" {
+		return true
+	}
+	return false
+}
+
 // EffectiveImageSource returns the active image source for ModeImage, which is
 // always ImageSourceRegistry.
 func (u *Upgrader) EffectiveImageSource() ImageSource {
 	return ImageSourceRegistry
+}
+
+// EffectiveImageFallback returns the configured fallback image source for
+// ModeImage. Because ImageSourceRegistry is the only image source, there is
+// never a distinct fallback source, so this always returns "".
+func (u *Upgrader) EffectiveImageFallback() ImageSource {
+	return ""
 }
 
 type legacyImageSourceOverride struct {
@@ -151,6 +202,14 @@ func (u *Upgrader) migrateLegacyImageSource() {
 				raw, ImageSourceRegistry))
 		}
 		u.cfg.Image.Source = ImageSourceRegistry
+	}
+	if fb := strings.TrimSpace(string(u.cfg.Image.Fallback)); fb != "" {
+		if strings.EqualFold(fb, legacyReleaseAssetsSource) {
+			warnLegacyReleaseAssetsOnce("cfg-fb:"+fb, fmt.Sprintf(
+				"grain upgrade: configured image fallback %q is no longer supported; disabling fallback",
+				fb))
+		}
+		u.cfg.Image.Fallback = ""
 	}
 	p := strings.TrimSpace(u.cfg.Image.SourceOverrideFile)
 	if p == "" {

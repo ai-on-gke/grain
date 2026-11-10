@@ -449,3 +449,14 @@ func TestStageKubeVerifiesAPinnedSandboxImageByItsOwnDigest(t *testing.T) {
 		t.Error("no pod ran the sandbox image")
 	}
 }
+
+// Every container-image deployment defaults to pulling from the registry,
+// with or without a signature verifier configured.
+func TestAVerifyingDeploymentDefaultsToTheRegistry(t *testing.T) {
+	for _, verify := range [][]string{nil, {"cosign", "verify"}} {
+		u := New(Config{Image: &ImageConfig{Repository: "docker.io/grainai/grain", VerifyCmd: verify}})
+		if got := u.EffectiveImageSource(); got != ImageSourceRegistry {
+			t.Fatalf("VerifyCmd=%v: EffectiveImageSource = %q, want %q", verify, got, ImageSourceRegistry)
+		}
+	}
+}

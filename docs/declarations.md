@@ -319,7 +319,16 @@ capabilities:                      # optional; capabilities and repository acces
   - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
                                    #   capabilities bounded by the filing team
                                    #   (formerly gcp-key, retired in schema migration 97)
+grants:                            # optional; the unified spelling of capabilities:,
+  - capability: https://grain.dev/capabilities/repo#read
+    with: {repo: acme/upstream}    #   held to the same rule and read as one list with it
 ```
+
+`grants:` (design/design/unified-grants.design.md §3) is accepted beside
+`capabilities:` on templates and schedules indefinitely: each entry is a
+string or a `{capability, with}` mapping, the two keys are read as one list,
+and an entry both name (in either spelling) is held once. Everything this
+section says about `capabilities:` holds for `grants:` as well.
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
@@ -498,6 +507,7 @@ overlap: skip                      # optional; "skip" (default) or "allow"; "ski
                                    # "skip" holds a firing that overlaps the last one and fires it once
                                    # when that closes; every skip is recorded (see "Skipped firings")
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
+grain-ci: true                     # optional, workflow: only; run on grain CI even when ci_mode is github
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
 admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
 hosting: console                   # optional; raises the template's own to console; refused with suite:
@@ -1085,6 +1095,39 @@ per schedule and reviews one run at a time. A `base:` that does not carry
 the workflow file is a run with nothing in it, reported as such by the
 review. `auto-approve-proposals` defaults to true, as a cron's does.
 
+#### Running on grain CI in a `ci_mode: github` repository: `grain-ci:`
+
+grain/task-3878. A repository whose `ci_mode` is `github` has said GitHub
+Actions is its CI, so grain drops a `workflow:` firing there rather than
+start a grain CI run. A schedule file can make an exception for itself:
+
+```yaml
+# .grain/schedules/release-lag.yml
+workflow: release-lag      # .grain/workflows/release-lag.yml, with an `on: schedule` of its own
+grain-ci: true
+every:
+  hours: 6
+```
+
+The firing then runs exactly as it would on a `ci_mode: grain`
+repository: a trusted schedule run of the workflow on `base:` (or the
+default branch), no task while it runs, and a review task only when the run
+does not pass (or every run, with `review: always`). That makes it the way
+to run a repository script on a cadence with no agent: a job that runs the
+script, holding whatever `api:` grants it needs in its `capabilities:`
+(`api:tasks:read` to look at what is open, `api:tasks:from-template` to file
+one of the repository's own templates when there is work to do --
+`docs/agent-api.md`), exits 0 on a quiet night and costs no agent run.
+
+The exception is this schedule's and nothing else's. The run is a schedule
+event, so it is no pull request's check and posts no commit status; pull
+requests are still judged by GitHub Actions, and the repository's other
+`.grain/workflows` still run on none of its pushes. `ci_mode: none` still
+drops the firing, since that mode says no CI runs here at all. The key is
+refused on a schedule that runs a template or a suite, and a workflow's own
+`on: schedule` cron cannot say it -- a schedule file that names the workflow
+can. A settings-owned schedule row may carry the same `grain-ci:` key.
+
 A schedule carries no title or body of its own: a schedule is a cadence
 and a template is the work, so a file that tries to be both is refused.
 Unknown keys are refused too, naming the key -- a misspelt `auto_merge`
@@ -1167,10 +1210,11 @@ and when** -- never what that work may touch:
   "Repository access" above). Those are fetched and pushed with the
   team's own GitHub credential, so they reach no further than that
   credential does. Nothing else reaches past the declaring repository.
-- **No `grants:`, and no capability past the team's.** Capabilities
+- **No capability past the team's.** Capabilities
   are the deployment's to hand out (`Config.DefaultCapabilities`,
   `RepoConfig.DefaultCapabilities`, each capability's `AuthorizedTeams`).
-  A template's or schedule's `capabilities:` may ask for one, and the
+  A template's or schedule's `capabilities:` (or `grants:`, its unified
+  spelling) may ask for one, and the
   filing team bounds what it gets (e8041e94c, "Capabilities and repository
   access" above): an unauthorized one is stripped when the task is filed,
   with a note on its thread. A schedule's `capabilities:` refuses

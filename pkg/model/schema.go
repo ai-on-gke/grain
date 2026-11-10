@@ -622,7 +622,15 @@ import "strconv"
 // run that reported its provider usage; `usage_capacity`, the usage a
 // (connection, model) window had consumed when its provider refused it;
 // and `usage_setting`, the operator's budgets and concurrency mode.
-const SchemaVersion = 130
+// 131 adds `schedule`.`grain_ci` (model.Schedule.GrainCI): a schedule's
+// `workflow:` firing runs on grain CI even on a ci_mode: github
+// repository (grain/task-3878).
+// 132 changes no table: it rewrites every grant still stored as
+// `api:<what>[@repo]` (or a non-canonical api reference), `repo-read:` or
+// `repo-write:` to its canonical `https://grain.dev/capabilities/api#…` /
+// `…/repo#read|#write` reference, slice 4 of
+// design/design/unified-grants.design.md (canonical_grant_migration.go).
+const SchemaVersion = 132
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2014,6 +2022,11 @@ var Tables = []string{
 	// that runs a workflow files a review of the run: DEFAULT '' here and
 	// in Store.migrate, which reads as "on-failure" (grain/task-3160).
 	//
+	// grain_ci is model.Schedule.GrainCI: a schedule that runs a
+	// workflow on grain CI even on a ci_mode: github repository
+	// (grain/task-3878). DEFAULT 0 here and in migration 131, which is
+	// what every schedule did before it could say otherwise.
+	//
 	// every_n_minutes is model.Recurrence.EveryNMinutes, every_n_hours'
 	// counterpart for RecurrenceEveryNMinutes: NULL on every other kind,
 	// and last in the table because schema version 33 added it with
@@ -2048,6 +2061,7 @@ var Tables = []string{
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
   ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
+  ` + "`grain_ci`" + `              INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

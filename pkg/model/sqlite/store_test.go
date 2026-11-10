@@ -718,6 +718,68 @@ func TestOpenPullRequestLinksKeepsWatchingATaskBeingRepaired(t *testing.T) {
 	}
 }
 
+// A reopened or multi-attempt task that opens a second pull request in the
+// same repository keeps its earlier LinkFixes link as history, while
+// OpenPullRequestLinks and ClosedUnsettledPullRequestLinks return only the
+// newest pull request (compared numerically across digit boundaries, such as
+// #954 -> #1023) so SyncPullRequests never reconciles a settled historical PR
+// against the task's current observation row or security review.
+func TestOpenPullRequestLinksSelectsNewestSameRepoPullRequest(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	tk := task("t3546", true)
+	// Stored lexicographically "owner/payments-api#1023" sorts before "#954",
+	// so selecting the newest must compare PR numbers rather than strings.
+	tk.Links = []model.Link{
+		{Kind: model.LinkFixes, Target: "owner/payments-api#954"},
+		{Kind: model.LinkFixes, Target: "owner/payments-api#1023"},
+	}
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	done := now.Add(time.Hour)
+	if err := store.Observe(ctx, model.Observation{TaskID: tk.ID, CompletedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
+
+	links, err := store.OpenPullRequestLinks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].TaskID != tk.ID || links[0].PullRequest != "owner/payments-api#1023" {
+		t.Fatalf("OpenPullRequestLinks = %+v, want only owner/payments-api#1023", links)
+	}
+	// Pruning off-target links leaves historical same-repo LinkFixes intact.
+	pruned, err := store.PruneOffTargetPullRequestLinks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pruned) != 0 {
+		t.Fatalf("PruneOffTargetPullRequestLinks = %+v, want none", pruned)
+	}
+	stored, err := store.GetTask(ctx, tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Links) != 2 {
+		t.Fatalf("stored links = %+v, want both historical and active LinkFixes kept", stored.Links)
+	}
+
+	// ClosedUnsettledPullRequestLinks follows the same rule once the task closes
+	// before its second pull request settles.
+	closed := done.Add(time.Hour)
+	if err := store.Observe(ctx, model.Observation{TaskID: tk.ID, CompletedAt: &done, ClosedAt: &closed}); err != nil {
+		t.Fatal(err)
+	}
+	unsettled, err := store.ClosedUnsettledPullRequestLinks(ctx, done)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unsettled) != 1 || unsettled[0].PullRequest != "owner/payments-api#1023" {
+		t.Fatalf("ClosedUnsettledPullRequestLinks = %+v, want only owner/payments-api#1023", unsettled)
+	}
+}
+
 // Withdrawing approval is the one way a task moves back up the
 // precedence order rather than down it, so it is worth proving against a
 // real database rather than only against StateOf: the state comes out of

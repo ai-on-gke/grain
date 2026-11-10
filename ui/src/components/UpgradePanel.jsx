@@ -906,7 +906,7 @@ function ImageChooser({
           className="upgrade-image-ref"
           sx={{ mt: 1, overflowWrap: "anywhere" }}
         >
-          Will pull <code>{will}</code>
+          Will pull <code className="upgrade-will-ref">{will}</code>
         </Typography>
       )}
     </Box>

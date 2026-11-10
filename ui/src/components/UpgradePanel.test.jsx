@@ -1973,6 +1973,44 @@ describe("AutoUpgradeSettings", () => {
   });
 });
 
+describe("Registry image mode on UpgradePanel", () => {
+  it("renders registry pull description without an image source selector", async () => {
+    const baseStatus = {
+      enabled: true,
+      mode: "image",
+      channel: "main",
+      running: { image: "docker.io/grainai/grain:main" },
+      phase: "done",
+      branch: "main",
+      detail: "pulled docker.io/grainai/grain:main",
+      imageRepo: "docker.io/grainai/grain",
+      defaultImageRepo: "docker.io/grainai/grain",
+      imageRepos: ["docker.io/grainai/grain"],
+    };
+
+    api.mockImplementation((url) => {
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve(baseStatus);
+    });
+
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText(
+        /Pulls the image CI published for the branch below/i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("upgrade-image-source"),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("External management notice on UpgradePanel", () => {
   it("replaces in-VM upgrade and SQLite migration controls with an external management notice when selfUpgradeDisabled is set", async () => {
     api.mockResolvedValue({

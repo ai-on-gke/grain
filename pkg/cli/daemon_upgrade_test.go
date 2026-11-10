@@ -433,3 +433,26 @@ func waitForPath(t *testing.T, path, what string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestLegacyUpgradeSourceFlagsAreIgnoredWithoutFailingStart(t *testing.T) {
+	refFile := filepath.Join(t.TempDir(), "image.env")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, unknown, err := parseDaemonArgs([]string{
+		"-upgrade-image=docker.io/grainai/grain",
+		"-upgrade-image-ref-file=" + refFile,
+		"-upgrade-image-source=release-assets",
+		"-upgrade-image-fallback=registry",
+		"-upgrade-release-repo=github.com/ai-on-gke/grain",
+	})
+	if err != nil {
+		t.Fatalf("parseDaemonArgs with legacy upgrade flags failed: %v", err)
+	}
+	if cfg.UpgradeImage != "docker.io/grainai/grain" {
+		t.Errorf("cfg.UpgradeImage = %q, want docker.io/grainai/grain", cfg.UpgradeImage)
+	}
+	if len(unknown) != 3 {
+		t.Errorf("unknown flags = %v, want the 3 retired flags", unknown)
+	}
+}

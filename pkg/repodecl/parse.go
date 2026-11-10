@@ -162,6 +162,10 @@ type rawTemplate struct {
 	// template carries, and only that: `repo-read:<owner>/<repo>` and
 	// `repo-write:<owner>/<repo>` (parseRepoAccess).
 	Capabilities model.CapabilityList `yaml:"capabilities"`
+	// Grants is the unified spelling of Capabilities
+	// (design/design/unified-grants.design.md §3): the same entries, held
+	// to the same rule, read as one list with it (declaredGrants).
+	Grants model.CapabilityList `yaml:"grants"`
 	// Push is the refs beyond their own branch that the runs of tasks
 	// filed from this template may update in this repository
 	// (model.RefPush, grain/task-2536; parsePush).
@@ -284,7 +288,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err != nil {
 		return model.Template{}, raw, fmt.Errorf("%s: %w", f.path, err)
 	}
-	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, raw.Capabilities)
+	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, declaredGrants(raw.Capabilities, raw.Grants))
 	if err != nil {
 		return model.Template{}, raw, err
 	}
@@ -386,7 +390,32 @@ func parsePush(f file, raw []rawPush) (model.RefPushSet, error) {
 	return out, nil
 }
 
-// parseCapabilities parses a declared template's or schedule's `capabilities:`.
+// declaredGrants is a declaration's `capabilities:` and `grants:` read as
+// one list: `grants:` is the unified spelling of the same key
+// (design/design/unified-grants.design.md §3), so an entry both name, in
+// either spelling (model.CanonicalGrantKey), is held once.
+func declaredGrants(capabilities, grants []string) []string {
+	if len(grants) == 0 {
+		return capabilities
+	}
+	out := slices.Clone(capabilities)
+	seen := make(map[string]bool, len(out)+len(grants))
+	for _, c := range out {
+		seen[model.CanonicalGrantKey(strings.TrimSpace(c))] = true
+	}
+	for _, g := range grants {
+		k := model.CanonicalGrantKey(strings.TrimSpace(g))
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, g)
+	}
+	return out
+}
+
+// parseCapabilities parses a declared template's or schedule's
+// `capabilities:` and `grants:` (declaredGrants).
 //
 // Each `repo-read:<owner>/<repo>` becomes one of the filed task's Reads
 // and each `repo-write:<owner>/<repo>` one of its Writes, landing on that
@@ -486,8 +515,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				}
 			}
 			ciRead := model.APIGrantString("ci-read", repo.String())
-			if !seenGrants[ciRead] {
-				seenGrants[ciRead] = true
+			ciReadKey := model.CanonicalGrantKey(ciRead)
+			if !seenGrants[ciReadKey] {
+				seenGrants[ciReadKey] = true
 				grants = append(grants, model.Grant{Capability: ciRead, Via: model.GrantSource(f.path)})
 			}
 			continue
@@ -522,8 +552,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 					"pass repo: <owner>/<repo> (or refs/force for branch push)", f.path, c))
 				continue
 			}
-			if !seenGrants[c] {
-				seenGrants[c] = true
+			key := model.CanonicalGrantKey(c)
+			if !seenGrants[key] {
+				seenGrants[key] = true
 				grants = append(grants, model.Grant{Capability: c, Via: model.GrantSource(f.path)})
 			}
 			continue
@@ -540,8 +571,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 					continue
 				}
 			}
-			if !seenGrants[c] {
-				seenGrants[c] = true
+			key := model.CanonicalGrantKey(c)
+			if !seenGrants[key] {
+				seenGrants[key] = true
 				grants = append(grants, model.Grant{
 					Capability: c,
 					Via:        model.GrantSource(f.path),
@@ -719,6 +751,7 @@ type rawSchedule struct {
 	TimeZone             string               `yaml:"timezone"`
 	AutoApproveProposals *bool                `yaml:"auto-approve-proposals"`
 	Capabilities         model.CapabilityList `yaml:"capabilities"`
+	Grants               model.CapabilityList `yaml:"grants"`
 	Every                *rawEvery            `yaml:"every"`
 	Daily                *rawAt               `yaml:"daily"`
 	Weekly               *rawWeekly           `yaml:"weekly"`
@@ -726,6 +759,7 @@ type rawSchedule struct {
 	Trigger              *rawScheduleTrigger  `yaml:"trigger"`
 	Overlap              string               `yaml:"overlap"`
 	Review               string               `yaml:"review"`
+	GrainCI              *bool                `yaml:"grain-ci"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
@@ -914,6 +948,17 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		return model.Schedule{}, fmt.Errorf("%s: `review:` says when the run of a scheduled workflow is "+
 			"reviewed, and this schedule runs no `workflow:`", f.path)
 	}
+	// Whether the run is on grain CI even when this repository's
+	// ci_mode is github (model.Schedule.GrainCI): a setting of a schedule
+	// that runs one of its own `.grain/workflows`, and of nothing else --
+	// a GitHub Actions run is GitHub's to start.
+	if raw.GrainCI != nil {
+		if workflow == "" {
+			return model.Schedule{}, fmt.Errorf("%s: `grain-ci:` says the run of a scheduled workflow is on "+
+				"grain CI even on a ci_mode: github repository, and this schedule runs no `workflow:`", f.path)
+		}
+		sched.GrainCI = *raw.GrainCI
+	}
 	if raw.AutoApproveProposals != nil {
 		sched.AutoApproveProposals = *raw.AutoApproveProposals
 	}
@@ -938,7 +983,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		return model.Schedule{}, fmt.Errorf("%s: %w", f.path, err)
 	}
 
-	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, raw.Capabilities)
+	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, declaredGrants(raw.Capabilities, raw.Grants))
 	if err != nil {
 		return model.Schedule{}, err
 	}

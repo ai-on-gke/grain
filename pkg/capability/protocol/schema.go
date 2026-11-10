@@ -140,8 +140,9 @@ var annotationKeywords = map[string]bool{
 	"title": true, "description": true, "default": true, "examples": true,
 	"format": true, "deprecated": true, "readOnly": true, "writeOnly": true,
 	// Grain's own: who may grant a value, which GrantKindOf enforces, not
-	// the validator.
-	PersonGrantedArgKey: true,
+	// the validator; and display labels for enum options in UI forms.
+	PersonGrantedArgKey:   true,
+	"x-grain-enum-labels": true,
 }
 
 var schemaTypes = map[string]bool{

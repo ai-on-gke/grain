@@ -169,8 +169,54 @@ func TestConfiguredReleaseAssetsSourceFallsBackWithOneTimeWarning(t *testing.T) 
 
 	const track installtrack.Track = "compat-test-track"
 	t.Cleanup(func() { UnregisterTrackDefaults(track) })
-	RegisterTrackDefaults(track, TrackImageDefaults{Source: ImageSourceRegistry})
-	if d, ok := TrackDefaultsFor(track); !ok || d.Source != ImageSourceRegistry {
-		t.Fatalf("TrackDefaultsFor(%q) = (%+v, %v), want registry", track, d, ok)
+	RegisterTrackDefaults(track, TrackImageDefaults{
+		Source:   ImageSourceRegistry,
+		Fallback: "none",
+	})
+	if d, ok := TrackDefaultsFor(track); !ok || d.Source != ImageSourceRegistry || d.Fallback != "none" {
+		t.Fatalf("TrackDefaultsFor(%q) = (%+v, %v), want registry/none", track, d, ok)
+	}
+	trackUp := New(Config{
+		StatusFile: filepath.Join(dir, "status-track.json"),
+		Image: &ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    filepath.Join(dir, "image.env"),
+			Track:      track,
+		},
+	})
+	if !trackUp.IsImageSourceExplicit() {
+		t.Error("IsImageSourceExplicit() = false, want true when track defaults register Source")
+	}
+	if got := trackUp.EffectiveImageFallback(); got != "" {
+		t.Errorf("EffectiveImageFallback() = %q, want empty", got)
+	}
+	if fb, err := ParseImageFallback("none"); err != nil || fb != "" {
+		t.Errorf("ParseImageFallback(none) = (%q, %v), want (\"\", nil)", fb, err)
+	}
+	if fb, err := ParseImageFallback("release-assets"); err != nil || fb != "" {
+		t.Errorf("ParseImageFallback(release-assets) = (%q, %v), want (\"\", nil)", fb, err)
+	}
+}
+
+func TestPullImageRefusesLocalReleaseAssetRefWithoutRegistryHost(t *testing.T) {
+	dir := t.TempDir()
+	u := New(Config{
+		StatusFile: filepath.Join(dir, "status.json"),
+		Image: &ImageConfig{
+			Repository: "grain/grain",
+			RefFile:    filepath.Join(dir, "image.env"),
+			PullCmd:    []string{"false"},
+		},
+	})
+	if err := u.Start("main"); err != nil {
+		t.Fatalf("Start(main): %v", err)
+	}
+	<-u.Done()
+	st, err := u.Status()
+	if err != nil {
+		t.Fatalf("Status(): %v", err)
+	}
+	if st.Phase != PhaseFailed || !strings.Contains(st.Detail, "names no registry host") {
+		t.Fatalf("Status = (%q, %q), want failed with 'names no registry host'", st.Phase, st.Detail)
 	}
 }
