@@ -1011,19 +1011,26 @@ nothing load the whole of it at once. Where that stands:
 | Path | Today | Plan |
 |---|---|---|
 | Dispatch prompt | Bounded: the cursor, then the positional cut | Done here |
-| `model.Store.Comments` in dispatch | Reads every comment, then drops the summarised ones in memory | Read `CommentsAfter(cursor)` plus the handover: O(since compaction) |
-| `GET /api/tasks/{id}` / `TaskDetail` | Whole conversation and every run | Page: last N comments and runs, `before=` cursors, summarised comments fetched on demand |
+| `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
+| `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID) and `?attempts_limit=` answer the newest page, with `olderComments`/`olderAttempts` counts (grain/task-4194). The detail is still built whole, once per change token, and cached | Build the page from the store (`Store.CommentsBefore`), not from the cached whole detail. The derived fields (transitions, the ask a task is parked on, session names) need their own bounded reads first |
+| `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
 | Task page (UI) | Renders what the detail returns | Lazy-load the thread and the run list; summarised comments collapsed under the handover |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
 | Reconcilers reading all comments (`WriteTaskHandover`, `relayHandover`, wait targets) | Read the whole thread to find the last handover | Read `handover_version`, and the last handover by index |
 
-Measuring #3557 and the director session (task 2923) from a run needs
-`api:tasks:read`, which this task did not hold, so those numbers are
-follow-up work alongside the paging. The limits to set: a task page
-loads at most 50 comments and 20 runs before asking for more; a
-dispatch reads at most the comments after the cursor.
+Measured by grain/task-4194 on 2026-11-10, through `GET /api/tasks/{id}`:
+
+| Task | Detail | Comments (body bytes) | Runs | Transitions |
+|---|---|---|---|---|
+| #3557 (Grain Hub maintainer) | 151 KB | 103 (81 KB) | 43 | 93 |
+| #2923 (the director session) | 368 KB | 409 (248 KB) | 34 | 69 |
+
+Neither is too large to load yet; the director's grows about a comment
+an exchange. The limits to set: a task page loads at most 50 comments
+and 20 runs before asking for more (`?comments_limit=50&attempts_limit=20`);
+a dispatch reads at most the comments after the cursor.
 
 ### Rollover to a successor task
 
@@ -1077,8 +1084,10 @@ storage backstop, not something prompts or page loads depend on.
 
 - A compaction-only dispatch for a person's request on a resting task,
   so the request does not wait for the next wake.
-- Paging the record (the table above) and measuring #3557 and #2923
-  with `api:tasks:read`.
+- The rest of paging the record (the table above): the task detail
+  built from a store page rather than trimmed from the whole, the task
+  page loading 50 comments and 20 runs and fetching older ones on
+  demand, and the reconcilers reading the last handover by index.
 - UI: the Compact button, the brief editor with its edit history,
   summarised comments collapsed under the handover, and the
   stale-handover badge, all under the deployment's screenshot rule.

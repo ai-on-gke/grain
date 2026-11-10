@@ -23,6 +23,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -799,6 +800,13 @@ type TaskDetail struct {
 	// agents#445: "show attempts and their status, in order, in the task
 	// view").
 	Attempts []Attempt `json:"attempts,omitempty"`
+	// OlderComments and OlderAttempts are how many comments and runs a
+	// paged read (?comments_limit=, ?attempts_limit=) left out before the
+	// ones it answered: 0 for the whole record, and for a page that
+	// reaches the start of it. Ask again with comments_before= the first
+	// answered comment's id for the page before.
+	OlderComments int `json:"olderComments,omitempty"`
+	OlderAttempts int `json:"olderAttempts,omitempty"`
 	// Usage is every attempt's Usage summed: what the task has spent at
 	// its providers so far. Nil when no attempt reported any.
 	Usage *TaskUsage `json:"usage,omitempty"`
@@ -2634,6 +2642,28 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		detail.Comments = commentsAfter(detail.Comments, since)
+		if err := pageTaskDetail(&detail, r.URL.Query()); err != nil {
+			writeClientError(w, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	// ?comments_limit=, ?comments_before= and ?attempts_limit= page a
+	// long record (durable-tasks.design.md#DT-15): the newest comments
+	// and runs, and how many older ones were left out. Not cached under
+	// the whole detail's ETag, for the same reason as comments_since.
+	if q := r.URL.Query(); q.Has("comments_limit") || q.Has("comments_before") || q.Has("attempts_limit") {
+		var detail TaskDetail
+		if err := json.Unmarshal(body, &detail); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := pageTaskDetail(&detail, q); err != nil {
+			writeClientError(w, err)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-cache")
 		writeJSON(w, http.StatusOK, detail)
 		return
@@ -3526,6 +3556,56 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 // commentsAfter is the comments created strictly after since, in order.
+// maxTaskDetailPage is the most comments or runs one paged task detail
+// read answers.
+const maxTaskDetailPage = 500
+
+// pageTaskDetail trims detail to the page q asks for: the newest
+// comments_limit comments older than comment comments_before (every
+// comment before it when no limit is given), and the newest
+// attempts_limit runs, recording how many older ones it left out.
+func pageTaskDetail(detail *TaskDetail, q url.Values) error {
+	limit := func(name, raw string) (int, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > maxTaskDetailPage {
+			return 0, validationErrorf("%s must be an integer from 1 to %d", name, maxTaskDetailPage)
+		}
+		return n, nil
+	}
+	commentsLimit, err := limit("comments_limit", q.Get("comments_limit"))
+	if err != nil {
+		return err
+	}
+	attemptsLimit, err := limit("attempts_limit", q.Get("attempts_limit"))
+	if err != nil {
+		return err
+	}
+	if raw := strings.TrimSpace(q.Get("comments_before")); raw != "" {
+		before, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || before <= 0 {
+			return validationErrorf("comments_before must be a comment id")
+		}
+		end := len(detail.Comments)
+		for end > 0 && detail.Comments[end-1].ID >= before {
+			end--
+		}
+		detail.Comments = detail.Comments[:end]
+	}
+	if commentsLimit > 0 && len(detail.Comments) > commentsLimit {
+		detail.OlderComments = len(detail.Comments) - commentsLimit
+		detail.Comments = detail.Comments[detail.OlderComments:]
+	}
+	if attemptsLimit > 0 && len(detail.Attempts) > attemptsLimit {
+		detail.OlderAttempts = len(detail.Attempts) - attemptsLimit
+		detail.Attempts = detail.Attempts[detail.OlderAttempts:]
+	}
+	return nil
+}
+
 func commentsAfter(comments []Comment, since time.Time) []Comment {
 	out := make([]Comment, 0, len(comments))
 	for _, c := range comments {

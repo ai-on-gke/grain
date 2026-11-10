@@ -218,7 +218,7 @@ func (s *Store) WriteTaskHandover(ctx context.Context, taskID, runID, body strin
 	if s == nil || taskID == "" || body == "" {
 		return nil
 	}
-	existing, err := s.Comments(ctx, taskID)
+	last, err := s.LatestHandover(ctx, taskID)
 	if err != nil {
 		return err
 	}
@@ -227,22 +227,19 @@ func (s *Store) WriteTaskHandover(ctx context.Context, taskID, runID, body strin
 		_ = s.db.QueryRowContext(ctx,
 			"SELECT `started_at` FROM `task_run` WHERE `id` = ?", runID).Scan(&runStart)
 	}
-	for i := len(existing) - 1; i >= 0; i-- {
-		if existing[i].Handover {
-			if strings.TrimSpace(existing[i].Body) == body {
-				return nil
-			}
-			if !runStart.IsZero() && !existing[i].CreatedAt.Before(runStart) {
-				targetID := existing[i].ID
-				now := time.Now().UTC()
-				return s.write(ctx, "update handover on task "+taskID, func(tx *sql.Tx) error {
-					_, err := tx.ExecContext(ctx,
-						"UPDATE `task_comment` SET `body` = ?, `created_at` = ? WHERE `id` = ?",
-						body, now, targetID)
-					return err
-				})
-			}
-			break
+	if last != nil {
+		if strings.TrimSpace(last.Body) == body {
+			return nil
+		}
+		if !runStart.IsZero() && !last.CreatedAt.Before(runStart) {
+			targetID := last.ID
+			now := time.Now().UTC()
+			return s.write(ctx, "update handover on task "+taskID, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx,
+					"UPDATE `task_comment` SET `body` = ?, `created_at` = ? WHERE `id` = ?",
+					body, now, targetID)
+				return err
+			})
 		}
 	}
 	if err := s.BumpHandoverVersion(ctx, taskID); err != nil {
