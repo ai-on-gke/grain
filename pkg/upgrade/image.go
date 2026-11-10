@@ -115,6 +115,11 @@ type ImageConfig struct {
 	// Nil skips the check, and the signature step says so on every
 	// upgrade: see verify.go for why that warns rather than refuses.
 	VerifyCmd []string
+	// ReviewedMerge, when set, also refuses an image whose commit did not
+	// reach its branch through a reviewed merge, asked of the forge in the
+	// signature step after the signature (reviewed.go). It needs
+	// VerifyCmd: an upgrade with this set and no VerifyCmd is refused.
+	ReviewedMerge *ReviewedMergeConfig
 	// RemoveCmd removes an image ref, appended as its last argument;
 	// {"docker", "image", "rm"} when left nil. Overridable so a test can
 	// swap in something that needs no docker daemon. Never give it -f:

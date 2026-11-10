@@ -500,6 +500,17 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"(docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the "+
 			"command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead "+
 			"unverified and say so.")
+	// Whether a reviewed commit went into it (pkg/upgrade/reviewed.go,
+	// pkg/reviewedmerge): the signature says only that CI built it.
+	upgradeReviewedMergeRepo := fs.String("upgrade-reviewed-merge-repo", "",
+		"owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach "+
+			"its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the "+
+			"forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. "+
+			"Omitted, nothing is asked")
+	upgradeReviewedMergeLogins := fs.String("upgrade-reviewed-merge-logins", "",
+		"comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed")
+	upgradeReviewedMergeTokenFile := fs.String("upgrade-reviewed-merge-token-file", "",
+		"file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously)")
 	disableSelfUpgrade := fs.Bool("disable-self-upgrade", false,
 		"disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) "+
 			"and hide in-VM upgrade controls in the UI in favour of external lifecycle management "+
@@ -1284,6 +1295,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		IapBackendService: *iapBackendService,
 		IapResource:       *iapResource,
 		UpgradeSrcDir:     *upgradeSrcDir, UpgradeInstallPath: *upgradeInstallPath, UpgradeRestartCmd: upgradeRestartCmd, UpgradeVerifyCmd: upgradeVerifyCmd,
+		UpgradeReviewedMergeRepo: *upgradeReviewedMergeRepo, UpgradeReviewedMergeLogins: daemon.SplitBranchPatterns(*upgradeReviewedMergeLogins), UpgradeReviewedMergeTokenFile: *upgradeReviewedMergeTokenFile,
 		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,

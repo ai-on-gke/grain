@@ -176,3 +176,19 @@ func (r REST) FirstParent(ctx context.Context, repo, sha string) (string, error)
 	}
 	return commit.Parents[0].SHA, nil
 }
+
+// Ahead reports whether head is a descendant of base (or the same commit),
+// from the forge's comparison of the two.
+func (r REST) Ahead(ctx context.Context, repo, base, head string) (bool, error) {
+	rp, err := repoPath(repo)
+	if err != nil {
+		return false, err
+	}
+	var cmp struct {
+		Status string `json:"status"`
+	}
+	if err := r.get(ctx, rp+"/compare/"+url.PathEscape(base)+"..."+url.PathEscape(head)+"?per_page=1", &cmp); err != nil {
+		return false, err
+	}
+	return cmp.Status == "ahead" || cmp.Status == "identical", nil
+}

@@ -1192,12 +1192,24 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 
 	// Who published it, before the health check below runs it: the pin
 	// says which bytes, and this says whose (verify.go).
-	if len(u.cfg.Image.VerifyCmd) > 0 {
+	if len(u.cfg.Image.VerifyCmd) > 0 || u.cfg.Image.ReviewedMerge != nil {
 		p.start(stepVerify)
-		if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
+		if len(u.cfg.Image.VerifyCmd) > 0 {
+			if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
+				return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+			}
+		}
+		// And whether a reviewed commit went into it (reviewed.go): the
+		// signature says only that CI built it.
+		reviewed, err := u.checkReviewedMerge(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref)
+		if err != nil {
 			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 		}
-		p.done(stepVerify, ref+" is signed")
+		detail := ref + " is signed"
+		if reviewed != "" {
+			detail += ", and " + reviewed
+		}
+		p.done(stepVerify, detail)
 	} else {
 		p.logf("%s: warning: %s", stepVerify, unverifiedNote)
 		p.skip(stepVerify, unverifiedNote)
