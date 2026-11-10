@@ -388,6 +388,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	MoveLooseCredentialsIntoStore(cfg, secretStore)
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
