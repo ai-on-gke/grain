@@ -433,7 +433,7 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 			if provider == "" {
 				provider = "none"
 			}
-			r.failEntry(ctx, entry, fmt.Sprintf("no compute provider is configured (compute.provider is %q), so this registry cannot create hosted instances; configure compute.provider (for example \"gce\") and recreate the entry", provider))
+			r.failEntry(ctx, entry, fmt.Sprintf("no compute provider is configured (compute.provider is %q), so this hub cannot create hosted instances; configure compute.provider (for example \"gce\") and recreate the entry", provider))
 		}
 		return nil
 	}
@@ -471,7 +471,7 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 			if errors.Is(err, hub.ErrServiceAccountNotReady) {
 				if wait, attempt, ok := r.scheduleCreateRetry(entry.ID, bundle, configRepoURL); ok {
 					r.noteCreatingReason(ctx, entry, fmt.Sprintf(
-						"waiting for service account %s, and the registry's permission to attach it, to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
+						"waiting for service account %s, and the hub's permission to attach it, to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
 						bundle.ServiceAccountEmail, attempt, wait, err))
 					return nil
 				}
