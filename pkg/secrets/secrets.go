@@ -104,10 +104,15 @@ const (
 // sandbox-access and package-cache CAs (pkg/daemon/ca_store.go), the
 // release-approval signing key (pkg/releaseapproval/keystore.go), the
 // state and secrets repositories' tokens and the imported relay and
-// registry-registration tokens (pkg/daemon/loose_credentials.go).
-// grainHeldSecretPrefix is the git credentials' prefix
-// (gitproxy.CredentialSecretPrefix). pkg/daemon's tests check these
-// against the constants they are spelled out from.
+// registry-registration tokens (pkg/daemon/loose_credentials.go). Beside
+// them are the credentials that were in the store before that: the agent
+// frameworks' own keys (above), the default GCP minter key
+// (gcpkey.DefaultMinterCredential), the cosign key and password
+// (imagesigning.KeyCredential/PasswordCredential, one "image-signing"
+// secret) and the GitHub App github-sandbox mints through
+// (githubsandbox.DefaultAppIDCredential/PrivateKeyCredential, one
+// "github-app" secret). pkg/daemon's tests check these against the
+// constants they are spelled out from.
 var grainHeldSecrets = []string{
 	"sandbox-access-ca",
 	"package-cache-ca",
@@ -116,21 +121,42 @@ var grainHeldSecrets = []string{
 	"secrets-repo-token",
 	"relay",
 	HubRegistrationTokenSecret,
+	GeminiAPIKeySecret,
+	ClaudeOAuthTokenSecret,
+	OpenAIAPIKeySecret,
+	"gcp-key-minter",
+	"image-signing",
+	"github-app",
 }
 
-const grainHeldSecretPrefix = "github-credential-"
+// grainHeldSecretPrefixes name the families of grain-held secrets with a
+// name per instance: the git credentials (gitproxy.CredentialSecretPrefix),
+// custom agent backends' credentials (AgentBackendCredentialSecret), the
+// minter keys named GCP keys fall back to (model.GCPKeyMinterCredential)
+// and repository-scoped release secrets (ci.ReleaseSecretAddress). A GCP
+// key may also name a minter secret of any other name; pkg/ui's
+// SetPendingSecret refuses those against the deployment's configured keys.
+var grainHeldSecretPrefixes = []string{
+	"github-credential-",
+	"agent-backend-",
+	"gcp-key-minter-",
+	"repo-release-",
+}
 
 // GrainHeld reports whether secret -- a secret's name, or a
 // "<secret>/<key>" reference -- is one grain keeps its own credentials or
 // signing material in. Each has its own place to be set (Settings ->
-// GitHub, the State pane, the hub pane) or is minted by grain itself, so
-// an agent's request_secret may not name one: a human pasting what such a
-// request suggests would replace the deployment's CA, signing key or git
-// credential with a value the agent chose.
+// GitHub, Agent frameworks, GCP keys, CI, the State pane, the hub pane)
+// or is minted by grain itself, so an agent's request_secret may not
+// name one: a human pasting what such a request suggests would replace
+// the deployment's CA, signing key, model credential or git credential
+// with a value the agent chose.
 func GrainHeld(secret string) bool {
 	secret, _, _ = strings.Cut(secret, "/")
-	if strings.HasPrefix(secret, grainHeldSecretPrefix) {
-		return true
+	for _, p := range grainHeldSecretPrefixes {
+		if strings.HasPrefix(secret, p) {
+			return true
+		}
 	}
 	for _, s := range grainHeldSecrets {
 		if secret == s {
