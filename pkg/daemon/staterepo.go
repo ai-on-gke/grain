@@ -198,7 +198,11 @@ func OpenSecrets(dataDir string) *secrets.Store {
 	// unreadable until the operator imports that key. Said once at startup, where it
 	// is a line about the deployment, rather than only later as a run
 	// that could not resolve a credential.
-	if err := store.Check(); err != nil {
+	if err := store.Check(); errors.Is(err, secrets.ErrKMS) {
+		log.Printf("grain: the secrets key %s could not be unwrapped: %v -- grain keeps running, but "+
+			"nothing that needs a secret works until Cloud KMS answers; the store retries with backoff",
+			store.KeyFile(), err)
+	} else if err != nil {
 		log.Printf("grain: this host cannot read %s: %v", store.File(), err)
 		if recipient, rerr := store.FileRecipient(); rerr == nil && recipient != "" {
 			log.Printf("grain: it is encrypted to %s -- install that key with "+
@@ -206,6 +210,26 @@ func OpenSecrets(dataDir string) *secrets.Store {
 		}
 	}
 	return store
+}
+
+// retrySecretsKey keeps the daemon's store trying to unwrap a key Cloud
+// KMS refused or could not be reached for at start, on the store's own
+// backoff, so that the store unlocks when KMS answers rather than on the
+// first request that happens to need a secret afterwards. It returns as
+// soon as the key loads, or the store fails for any other reason.
+func retrySecretsKey(ctx context.Context, store *secrets.Store) {
+	for {
+		err := store.Check()
+		if !errors.Is(err, secrets.ErrKMS) {
+			return
+		}
+		wait := max(store.KeyRetryIn(), time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
 }
 
 // moveSecretsOutOfStateRepo lifts an encrypted secrets file an earlier

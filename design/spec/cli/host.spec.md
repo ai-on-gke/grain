@@ -2275,6 +2275,8 @@ This covers where the installation's state repository lives and what it holds. T
 | `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
 | `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |
 | `key retired delete (-all \| NAME...)` | delete replaced keys by exact name. Refuses the live key, anything that is not an archive beside it, and the archive the secrets file is still encrypted to when the live key does not open it |
+| `key wrap -kms KEY` | wrap the private key with the Cloud KMS key `KEY` (`projects/P/locations/L/keyRings/R/cryptoKeys/K`), in the daemon when one answers and in this process otherwise. It wraps, unwraps the result and compares before replacing the file by a rename, then lists the plaintext copies of a private key it can still see (`secrets.key.replaced-*`, `/run/grain-secrets`) and notes the escrow ([secrets key protection §6.2](../../design/secrets-key-protection.design.md#SKP-6-2)) |
+| `key unwrap` | put the private key back in plaintext form, verified against KMS and read back before it is done. Run it before downgrading to a build that cannot read the wrapped form |
 
 <!-- BEGIN GENERATED FLAGS: grain state -->
 _No flags._
@@ -2336,7 +2338,17 @@ _No flags._
 | `-key-file` | string |  |  | file holding the private key; defaults to reading stdin |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_retired_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
+<!-- BEGIN GENERATED FLAGS: grain state key wrap -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-kms` | string |  |  | the Cloud KMS key to wrap with: projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k> (required) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain state key unwrap -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_retired_test.go`; `pkg/cli/state_wrap_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
 
 ### 6.5 `grain backup`, `grain export`, `grain import` {#CLI-54}
 

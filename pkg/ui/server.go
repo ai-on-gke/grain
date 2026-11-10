@@ -726,6 +726,8 @@ func (s *Server) routes() {
 	s.route("POST /api/state-repo/pull-requests", s.handleOpenConfigPullRequest)
 	s.route("POST /api/state-repo/remote", s.handleSetStateRepoRemote)
 	s.route("POST /api/state-repo/secrets-key", s.handleImportSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/wrap", s.handleWrapSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/unwrap", s.handleUnwrapSecretsKey)
 	s.route("POST /api/state-repo/import-key", s.handleImportSecretsKey)
 	s.route("POST /api/state-repo/secrets-repo", s.handleSetSecretsRepo)
 	s.route("POST /api/state-repo/reset-notice", s.handleDismissResetNotice)

@@ -309,6 +309,8 @@ var routeScopes = map[string]APIScope{
 	"POST /api/state-repo/remote":                                          "settings:write",
 	"POST /api/state-repo/secrets-key":                                     "secrets:write",
 	"POST /api/state-repo/import-key":                                      "secrets:write",
+	"POST /api/state-repo/secrets-key/wrap":                                "secrets:write",
+	"POST /api/state-repo/secrets-key/unwrap":                              "secrets:write",
 	"POST /api/state-repo/secrets-repo":                                    "secrets:write",
 	"POST /api/state-repo/reset-notice":                                    "settings:write",
 	"POST /api/host/reboot":                                                "deployment:reboot",

@@ -923,6 +923,13 @@ func (m *StateManager) status(ctx context.Context) ui.StateRepoStatus {
 		if err := m.secrets.Check(); err != nil {
 			out.SecretsError = err.Error()
 		}
+		if m.secrets.Backend() == secrets.BackendFile {
+			p := m.secrets.KeyProtection()
+			out.SecretsKeyProtection, out.SecretsKMSKey = p.Mode, p.KMSKey
+			if !p.LastUnwrap.IsZero() {
+				out.SecretsKeyLastUnwrap = p.LastUnwrap.UTC().Format(time.RFC3339)
+			}
+		}
 	}
 	// And whether that file exists anywhere but this disk, read off the
 	// settings rather than off the open repository: a deployment that has
@@ -1046,6 +1053,53 @@ func (m *StateManager) ImportSecretsKey(ctx context.Context, key string) (ui.Sta
 		return ui.StateRepoStatus{}, err
 	}
 	return m.status(ctx), nil
+}
+
+// WrapSecretsKey wraps this daemon's secrets key with a Cloud KMS key
+// (`grain state key wrap -kms`): the key in memory is the one wrapped,
+// and it is verified by a round trip before the file is replaced, so
+// nothing restarts and nothing is lost if KMS refuses.
+func (m *StateManager) WrapSecretsKey(ctx context.Context, kmsKey string) (ui.SecretsKeyWrapResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.secrets == nil {
+		return ui.SecretsKeyWrapResult{}, errors.New("this deployment has no secret store whose key could be wrapped")
+	}
+	rep, err := m.secrets.WrapKeyWithKMS(ctx, kmsKey, nil)
+	if err != nil {
+		return ui.SecretsKeyWrapResult{}, err
+	}
+	log.Printf("grain: wrapped the secrets key %s with Cloud KMS key %s", rep.KeyFile, kmsKey)
+	return secretsKeyWrapResult(rep, m.status(ctx)), nil
+}
+
+// UnwrapSecretsKey puts the secrets key back in plaintext form
+// (`grain state key unwrap`), which a downgrade to a build that cannot
+// read the wrapped form needs first.
+func (m *StateManager) UnwrapSecretsKey(ctx context.Context) (ui.SecretsKeyWrapResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.secrets == nil {
+		return ui.SecretsKeyWrapResult{}, errors.New("this deployment has no secret store whose key could be unwrapped")
+	}
+	rep, err := m.secrets.UnwrapKeyFromKMS(ctx, nil)
+	if err != nil {
+		return ui.SecretsKeyWrapResult{}, err
+	}
+	log.Printf("grain: unwrapped the secrets key %s back to a plaintext key file", rep.KeyFile)
+	return secretsKeyWrapResult(rep, m.status(ctx)), nil
+}
+
+func secretsKeyWrapResult(rep secrets.KeyWrapReport, status ui.StateRepoStatus) ui.SecretsKeyWrapResult {
+	return ui.SecretsKeyWrapResult{
+		Status:          status,
+		KeyFile:         rep.KeyFile,
+		PublicKey:       rep.Public,
+		Protection:      rep.Protection.Mode,
+		KMSKey:          rep.Protection.KMSKey,
+		PlaintextCopies: rep.PlaintextCopies,
+		Notes:           rep.Notes,
+	}
 }
 
 // SetSecretsRepo names the repository this deployment's encrypted
