@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/reviewedmerge"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -248,6 +249,9 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 				Repository: cfg.UpgradeImage,
 				RefFile:    cfg.UpgradeImageRefFile,
 				VerifyCmd:  cfg.UpgradeVerifyCmd,
+				// And whether a reviewed commit went into the image, asked
+				// of the forge (pkg/upgrade/reviewed.go).
+				ReviewedMerge: upgradeReviewedMerge(cfg),
 				// Only for a deployment that actually runs sandbox
 				// containers: it asks the newly pulled image which one
 				// it expects (sandboximage.go) and pulls that too, so
@@ -423,4 +427,38 @@ func upgradeRestartRequest(cfg Config) func(branch string) {
 	return func(branch string) {
 		requests.recordOrLog("upgrade to "+branch, log.Printf)
 	}
+}
+
+// upgradeReviewedMerge is the image path's reviewed-merge check, from
+// -upgrade-reviewed-merge-repo and the flags beside it, or nil when that
+// is not set.
+func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
+	repo := strings.TrimSpace(cfg.UpgradeReviewedMergeRepo)
+	if repo == "" {
+		return nil
+	}
+	forge := reviewedmerge.REST{}
+	if path := strings.TrimSpace(cfg.UpgradeReviewedMergeTokenFile); path != "" {
+		// A file that cannot be read leaves the token empty, and the
+		// forge's refusal of the anonymous read says why.
+		forge.Token = readTrimmed(path)
+	}
+	return &upgrade.ReviewedMergeConfig{
+		Policy: reviewedmerge.Policy{
+			Repo:     repo,
+			Branches: []string{"main", "release/v*"},
+			Mergers:  cfg.UpgradeReviewedMergeLogins,
+		},
+		Forge:   forge,
+		Compare: forge.Compare,
+	}
+}
+
+func readTrimmed(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("grain daemon: reading -upgrade-reviewed-merge-token-file: %v", err)
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
