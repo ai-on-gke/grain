@@ -660,6 +660,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	prompt += nothingNeededSection(task)
 	prompt += questionSummarySection
+	prompt += personActionSection
 	prompt += statusSection(canOpenPullRequest)
 	prompt += chatSection(task, canOpenPullRequest)
 	prompt += runtimeSection(task, maxRuntime)
@@ -1138,6 +1139,16 @@ const questionSummarySection = "\n\nWhenever you ask a person something -- ask_q
 	"it?\"). The inbox, the task list and notifications show only that line, with your " +
 	"full question behind an expander, so never write \"I have a question\" or " +
 	"\"Need input\"."
+
+// personActionSection is what every run is told about an outcome that
+// needs a person to act (model.PersonActionInstruction): that it is a
+// question, not a closing note. Task #4256 ended a repair that only a
+// repository admin could finish with a note whose inbox line was its
+// opening sentence, and the action halfway down it, hedged as a choice.
+// A task body that says how it must finish (a qualification run's
+// verdict footer, say) still decides, which the last sentence leaves to it.
+const personActionSection = "\n\n" + model.PersonActionInstruction + " Where the task " +
+	"itself names the tool to finish with, do as it says, and still give that tool's `summary`."
 
 // statusSection is the paragraph about update_status: that a run can put
 // one line on its own task's row saying what it is doing, and when doing
@@ -1710,22 +1721,23 @@ func grainCLICIBullet(repo string, access runCIAccess) string {
 }
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
-// grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (db-write) is not here: the
+// grants unlocks, in the order grainCLIGrantBullets lists them, each under
+// the canonical reference a person grants it by. A grant whose tools stay
+// model tools (grain#sql {write: true}) is not here: the
 // tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.GrainSourceRef, "`grain ls/read/grep src://...` (and `src://core/...`)"},
-	{"api:self-debug", "`grain task list`, `grain task read <id>`, " +
+	{model.APIRef("self-debug"), "`grain task list`, `grain task read <id>`, " +
 		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes [--cursor <c>] [--page N]`"},
-	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
-	{"deployment-health", "`grain health`, `grain read deploy://state`"},
-	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
-	{"memory", "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
+	{model.GrainJournalRef, "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
+	{model.GrainHealthRef, "`grain health`, `grain read deploy://state`"},
+	{model.BootstrapPlaybooksGrant, "`grain playbooks [<name>]`"},
+	{model.APIRef("memory"), "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
 		"`grain memory doc-write <name> --summary <s> --file <f> [--repo owner/name]`"},
-	{"release-notes", "`grain release-notes stats [--period <p>]`, `grain release-notes publish --title <t> --file <f> [--period <p>]`"},
-	{"read-issues", "`grain issue list`, `grain issue read <n>`"},
-	{"test-quarantine", "`grain quarantine <pkg> <test> --reason <why>`"},
-	{"db-read", "`grain db query <sql>`"},
+	{model.APIRef("release-notes"), "`grain release-notes stats [--period <p>]`, `grain release-notes publish --title <t> --file <f> [--period <p>]`"},
+	{model.GitHubReadIssuesRef, "`grain issue list`, `grain issue read <n>`"},
+	{model.APIRef("test-quarantine"), "`grain quarantine <pkg> <test> --reason <why>`"},
+	{model.GrainSQLRef, "`grain db query <sql>`"},
 }
 
 // grainCLIGrantBullets is one bullet per grant the task holds naming the
@@ -1743,34 +1755,34 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	}
 	apiSet := model.APIGrantsOf(names)
 	if apiSet.Has("memory:write") {
-		held["memory"] = true
+		held[model.APIRef("memory")] = true
 	}
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
-		held["release-notes"] = true
+		held[model.APIRef("release-notes")] = true
 	}
 	if grainserver.HasSource(names) {
 		held[model.GrainSourceRef] = true
 	}
 	if apiSet.Allows("tasks:read", "") && apiSet.Allows("deployment:read", "") {
-		held["api:self-debug"] = true
+		held[model.APIRef("self-debug")] = true
 	}
 	if grainserver.HasJournal(names) {
-		held["grain-log"] = true
+		held[model.GrainJournalRef] = true
 	}
 	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
-		held["deployment-health"] = true
+		held[model.GrainHealthRef] = true
 	}
 	if model.HasBootstrapPlaybooks(names) {
-		held["bootstrap-playbooks"] = true
+		held[model.BootstrapPlaybooksGrant] = true
 	}
 	if grainserver.HasSQL(names) {
-		held["db-read"] = true
+		held[model.GrainSQLRef] = true
 	}
 	if grainserver.HasReadIssues(names) {
-		held["read-issues"] = true
+		held[model.GitHubReadIssuesRef] = true
 	}
 	if apiSet.Has("tests:write") {
-		held["test-quarantine"] = true
+		held[model.APIRef("test-quarantine")] = true
 	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
@@ -2027,7 +2039,7 @@ func stateRepoSection(prepared checkout, image string) string {
 		"at all: those rows stay in grain's database on the server, so there is no " +
 		"`tables/task.json` or `tables/task_run.json` here to read, and a file you write " +
 		"for one is deleted by grain's next export rather than imported. If you need to " +
-		"know what this deployment has actually run, that is the self-debug capability's " +
+		"know what this deployment has actually run, that is the `https://grain.dev/capabilities/api#self-debug` grant's " +
 		"task tools (`list_grain_tasks`, `read_grain_task`); without them, say the " +
 		"history is not available to you rather than inferring it from the settings.\n\n" +
 		"Check what you propose before it merges. There is no `grain` binary in your " +
@@ -2093,9 +2105,9 @@ func directorStateSection(prepared checkout, task model.Task) string {
 	switch prepared.DirectorState {
 	case directorStateReady:
 		if prepared.DirectorStateWritable {
-			return fmt.Sprintf("\n\nGrain checked out this deployment's state repository, %[3]s, at `%[1]s`, and this session may propose changes to it. Read the files there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. To change the configuration, edit the files in `%[1]s` (`settings/*.yml`, `tables/*.json`, `memory/**`), check them with `grain state check %[1]s` where that command is available, and then call `propose_config_change` with a one-line summary: it commits and pushes your edits to a branch of %[3]s, validates them, and shows the person in this chat the diff with Approve and Reject buttons. That ends your turn; you are woken with their decision. Do not commit to or push `main` yourself -- grain's Git proxy refuses it -- and nothing you push takes effect until the person approves it. For any other repository listed in this task's read scope, clone `%[2]s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase, prepared.DirectorStateRepo)
+			return fmt.Sprintf("\n\nGrain checked out this deployment's state repository, %[3]s, at `%[1]s`, and this session may propose changes to it. Read the files there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the `api#self-debug` task tools if you hold them, and reported as unavailable if you do not. To change the configuration, edit the files in `%[1]s` (`settings/*.yml`, `tables/*.json`, `memory/**`), check them with `grain state check %[1]s` where that command is available, and then call `propose_config_change` with a one-line summary: it commits and pushes your edits to a branch of %[3]s, validates them, and shows the person in this chat the diff with Approve and Reject buttons. That ends your turn; you are woken with their decision. Do not commit to or push `main` yourself -- grain's Git proxy refuses it -- and nothing you push takes effect until the person approves it. For any other repository listed in this task's read scope, clone `%[2]s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase, prepared.DirectorStateRepo)
 		}
-		return fmt.Sprintf("\n\nGrain checked out this deployment's state repository read-only at `%s`. Read the JSON files under `tables/` there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. Its `origin` uses grain's scoped Git proxy, and pushing is disabled. For any other repository listed in this task's read scope, clone `%s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase)
+		return fmt.Sprintf("\n\nGrain checked out this deployment's state repository read-only at `%s`. Read the JSON files under `tables/` there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the `api#self-debug` task tools if you hold them, and reported as unavailable if you do not. Its `origin` uses grain's scoped Git proxy, and pushing is disabled. For any other repository listed in this task's read scope, clone `%s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase)
 	case directorStateAbsent:
 		return "\n\nThis deployment has no configured state repository, so no state checkout is available. Start normally and say that plainly when this deployment's own configuration is needed."
 	case directorStateUnauthorized:

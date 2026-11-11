@@ -96,8 +96,8 @@ jobs:
     # the registry write, and the tag it reads moves without the tree
     # moving.
     cache: false
-    capabilities: [package-publish]
-    optional-capabilities: [image-signing]
+    capabilities: ["https://grain.dev/capabilities/release#package-publish"]
+    optional-capabilities: ["https://grain.dev/capabilities/release#image-signing"]
     # Sized for the one tick per release that rebuilds the grain image
     # (the UI's npm build, the Go build and the agent CLIs); every other
     # tick is a few manifest copies.

@@ -434,6 +434,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// and the New task pickers can offer what it can (grain/task-1850).
 		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: restClientHost(cfg.GithubHost)},
 		GitHubBranches:         githubClient,
+		MergeLoginWarnings:     mergeLoginWarnings(cfg, store, githubClient),
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
 		GitHubForkPullRequests: githubClient,

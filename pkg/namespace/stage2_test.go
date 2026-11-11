@@ -222,7 +222,7 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/100/attempts/1/transcript.md", nil); rec.Code != http.StatusOK || rec.Body.String() != "transcript 1\n" {
 		t.Fatalf("own task attempt transcript: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/200/record.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"api:tasks:read"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/task/200/record.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/api#tasks:read"`) {
 		t.Fatalf("other task without api:tasks:read: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
@@ -250,7 +250,7 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/memory/repos/bwsalmon/grain/MEMORY.md", nil); rec.Code != http.StatusOK {
 		t.Fatalf("own repo memory: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/memory/repos/acme/private/MEMORY.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"memory"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/memory/repos/acme/private/MEMORY.md", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/api#memory"`) {
 		t.Fatalf("other repo memory without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
@@ -258,7 +258,7 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/merge-queue", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Merge queue") {
 		t.Fatalf("deploy://merge-queue: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"api:deployment:read"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/api#deployment:read"`) {
 		t.Fatalf("deploy://metrics without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/health", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#health"`) {

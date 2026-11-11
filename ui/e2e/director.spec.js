@@ -1016,7 +1016,7 @@ test("Adopt shipped defaults and grant edits keep a grant another tab made since
     );
     await page
       .getByTestId("session-director-grants")
-      .getByRole("button", { name: /^Remove api:deployment:read/ })
+      .getByRole("button", { name: /^Remove api#deployment:read/ })
       .click();
     const removal = (await removePut).postDataJSON();
     expect(removal.expectCapabilities).toContain(

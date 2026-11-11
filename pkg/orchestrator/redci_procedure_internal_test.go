@@ -97,6 +97,11 @@ func TestGrainFiledRepairBodiesReferToTheRedCIProcedure(t *testing.T) {
 		if strings.Contains(body, "1. Get the failing job") {
 			t.Errorf("%s body repeats the procedure instead of referring to it:\n%s", name, body)
 		}
+		// The repair #4256 ended on an admin-only variable with a closing
+		// note: each of these bodies says that is a question instead.
+		if !strings.Contains(body, model.RepairNeedsAPersonReminder) {
+			t.Errorf("%s body does not say a fix only a person can make ends with ask_question:\n%s", name, body)
+		}
 	}
 }
 

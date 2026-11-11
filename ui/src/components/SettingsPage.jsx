@@ -100,6 +100,18 @@ const NOT_CONFIG = new Set([
 ]);
 const NO_SAVE_STATE = new Set(["upgrade", "audit", "cli"]);
 
+// What a revealed setting focuses: its first control a keyboard reaches.
+// A MUI select's first <input> is its hidden native one (aria-hidden,
+// tabindex -1), and focusing that left nothing visibly focused; the
+// combobox in front of it is what Tab stops on.
+const FOCUSABLE_CONTROL = [
+  'input:not([type=hidden]):not([aria-hidden="true"]):not([tabindex="-1"])',
+  'textarea:not([aria-hidden="true"]):not([tabindex="-1"])',
+  "select",
+  "button",
+  '[role="combobox"]:not([aria-disabled="true"])',
+].join(",");
+
 // SECTION_WRITE_SCOPE is the scope a section's saves need
 // (pkg/ui/route_scopes.go): PUT /api/settings for the settings rows,
 // and the connection, repository, memory and capability routes for the
@@ -306,9 +318,9 @@ export default function SettingsPage({
       el.scrollIntoView?.(scrollOptions);
       settling.current?.();
       settling.current = keepInView(el, scrollOptions);
-      const input = el.matches?.("input,textarea,select,button")
+      const input = el.matches?.(FOCUSABLE_CONTROL)
         ? el
-        : el.querySelector?.("input:not([type=hidden]),textarea,select,button");
+        : el.querySelector?.(FOCUSABLE_CONTROL);
       input?.focus?.({ preventScroll: true });
       el.classList.add("setting-highlight");
       setTimeout(() => el.classList.remove("setting-highlight"), 2000);

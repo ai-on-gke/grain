@@ -263,8 +263,9 @@ func (w Why) Reason() string {
 		return "a repository's own declarations say what work to do in it and when, " +
 			"never what that work may touch -- a task filed from this file targets this repository, " +
 			"holds the capabilities this deployment already gives tasks here, and reaches another " +
-			"repository only where a template says `capabilities: [\"repo-read:<owner>/<repo>\", " +
-			"\"repo-write:<owner>/<repo>\"]`, which its team's own GitHub credential then has to allow. " +
+			"repository only where a template says `capabilities: [{capability: " +
+			"\"https://grain.dev/capabilities/repo#read\", with: {repo: <owner>/<repo>}}]` (or #write), " +
+			"which its team's own GitHub credential then has to allow. " +
 			"A template that needs more than that belongs in grain's own settings"
 	case Authority:
 		return "a repository says what its own work does, never what that work is allowed to do: " +
@@ -809,6 +810,10 @@ func scheduleSchema() Schema {
 			// hold this repository's own schedules, because it is scoped to
 			// the repository the firing goes into.
 			{Model: "OverlapGroup", Keys: carried("overlap-group"), Columns: []string{"overlap_group"}},
+			// A condition outside the schedule that holds its firings
+			// (model.Schedule.SkipWhen, grain/task-4393): today only
+			// `publishing-held`. Carried: it only ever holds work back.
+			{Model: "SkipWhen", Keys: carried("skip-when"), Columns: []string{"skip_when"}},
 			{Model: "TimeZone", Keys: carried("timezone"), Columns: []string{"time_zone"}},
 			{Model: "Enabled", Keys: carried("enabled"), Columns: []string{"enabled"}},
 			{Model: "Base", Keys: carried("base"), Columns: []string{"base"}},

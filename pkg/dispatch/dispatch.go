@@ -206,7 +206,7 @@ func (a Admission) refusalWords() string {
 // warning rather than as routine queueing.
 func logRefusal(taskID string, priority bool, admission Admission) {
 	if priority {
-		log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) refused admission by %s",
+		log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) refused admission by %s",
 			taskID, admission.refusalWords())
 		return
 	}
@@ -812,7 +812,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				}
 				reason := capacityReasonFor(limits, live, req.Merger, true, want)
 				setQuotaWait(ctx, store, req.TaskID, reason, now)
-				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) skipped: no sandbox -- %s",
+				log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) skipped: no sandbox -- %s",
 					req.TaskID, reason)
 				continue
 			}
@@ -1000,7 +1000,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				}
 				reason := capacityReasonFor(limits, live, merger, true, want)
 				setQuotaWait(ctx, store, candidate, reason, now)
-				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) skipped: no sandbox -- %s",
+				log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) skipped: no sandbox -- %s",
 					candidate, reason)
 				continue
 			}
@@ -1048,7 +1048,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				reason := capacityReasonFor(limits, live, merger, priority, want)
 				setQuotaWait(ctx, store, candidate, reason, now)
 				if priority {
-					log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) skipped: at capacity during start -- %s: %v",
+					log.Printf("dispatch: WARNING: priority task %s (a console session or a bypass- or durable-admission task) skipped: at capacity during start -- %s: %v",
 						candidate, reason, err)
 				} else {
 					log.Printf("dispatch: candidate %s skipped: at capacity during start -- %v", candidate, err)
