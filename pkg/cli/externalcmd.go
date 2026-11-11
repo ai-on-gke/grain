@@ -36,6 +36,7 @@ import (
 // externalCommands are this file's verbs, as dispatchCLI runs them.
 var externalCommands = map[string]func(context.Context, *ui.HTTPClient, *printer, []string) error{
 	"reply": cmdReply, "inbox": cmdInbox, "wait": cmdWait, "logs": cmdLogs,
+	"compact": cmdCompact, "brief": cmdBrief, "rollover": cmdRollover,
 }
 
 // cliStdin is what --body-file - reads; a test swaps it.

@@ -1,4 +1,4 @@
-# GitHub Actions CI (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `gcp-smoke.yml`)
+# GitHub Actions CI (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `gcp-smoke.yml`, `live-agent.yml`, `live-frameworks.yml`)
 
 This document describes the GitHub Actions ports in `.github/workflows/` of the non-agent test suites defined in `.grain/workflows/`, targeting GitHub-hosted `ubuntu-latest` runners:
 
@@ -11,7 +11,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 
 - **Triggers (`on:`)**:
   - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch` (with optional comma-separated `jobs` input for selective job execution)
-  - `nightly.yml`: `push` of release-candidate tags (`v*-rc.*`, excluding `v*-rc.*-*` markers such as `-discarded`), `schedule` (`cron: "11 2 * * *"`, a safety net on `main`) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `upgrade-test` for a single-job flake retry on an RC, or `kvm-route-stress`). It is Stage 1 of RC qualification (`design/playbook/releases.playbook.md`); runs on `main` and on `refs/tags/v*` are never cancelled by a later run on the same ref, and its `stage-1` job fails unless all 14 hosted Stage 1 jobs ended `success` (a skipped job fails it). A tag pushed with the default `GITHUB_TOKEN` starts no `push` workflow, so a train pushing with it must dispatch `nightly.yml` on the tag instead
+  - `nightly.yml`: `push` of release-candidate tags (`v*-rc.*`, excluding `v*-rc.*-*` markers such as `-discarded`), `schedule` (`cron: "11 2 * * *"`, a safety net on `main`; its `idle-gate` job skips every other job, `stage-1` included, when a `vX.Y.Z-rc.N` run concluded in the last 24h) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `upgrade-test` for a single-job flake retry on an RC, or `kvm-route-stress`). It is Stage 1 of RC qualification (`design/playbook/releases.playbook.md`); runs on `main` and on `refs/tags/v*` are never cancelled by a later run on the same ref, and its `stage-1` job fails unless all 14 hosted Stage 1 jobs ended `success` (a skipped job fails it). A tag pushed with the default `GITHUB_TOKEN` starts no `push` workflow, so a train pushing with it must dispatch `nightly.yml` on the tag instead
   - `post-reset-e2e.yml`: `schedule` (`cron: "23 5 * * *"`) and `workflow_dispatch`
   - `gcp-smoke.yml`: `schedule` (`cron: "41 4 * * *"`) and `workflow_dispatch`
 - **Concurrency (`concurrency:`)**:
@@ -65,7 +65,7 @@ Because GitHub Actions only supports native `paths:` / `paths-ignore:` filters a
 
 ### 2. Nightly Suite (`.grain/workflows/nightly.yml` -> `.github/workflows/nightly.yml`)
 
-Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_dispatch` (optional `jobs`). The `stage-1` job (`stage 1 qualification verdict`) needs the 14 hosted jobs from `go-long` through `upgrade-test` below (KVM and `real-kubernetes` excluded until they are required) and is the run's Stage 1 verdict.
+Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_dispatch` (optional `jobs`). The `stage-1` job (`stage 1 qualification verdict`) needs `idle-gate` and the 15 hosted jobs from `go-long` through `upgrade-test` below (KVM and `real-kubernetes` excluded until they are required) and is the run's Stage 1 verdict. Every job needs `idle-gate`, which outputs `run=false` only on a `schedule` run within 24h of an rc's Stage 1 (playbook §15), so that run skips cleanly instead of failing.
 
 | Job ID | Display Name | Grain CI (`.grain/workflows/nightly.yml`) | GitHub Actions (`.github/workflows/nightly.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |
@@ -81,7 +81,7 @@ Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_di
 | `ui-e2e-long` | `ui e2e, repeated` | Runs `make test-e2e-long` (3 full passes of Chromium + WebKit Playwright e2e suite) and uploads `ui/playwright-report` + `ui/test-results` | Sharded across `matrix.pass: [1, 2, 3]` on `ubuntu-latest` (`timeout-minutes: 60` per pass) with third-party apt list cleanup, `/var/cache/playwright` caching, `::error` annotations, and `actions/upload-artifact` on failure | Active (`ubuntu-latest`) |
 | `installer-variants` | `installer trixie and hostmode` | Assembles `grain-installer:test` (`GRAIN_INSTALLER_SANDBOX_IMAGE=debian:trixie`) and runs `./tests/installer/trixie` + `./tests/installer/hostmode` | Same commands on `ubuntu-latest` with `fetch-depth: 0` (required by `scripts/export-source.sh`), Go/Node setup, caches, and `git config` | Active (`ubuntu-latest`) |
 | `vulns` | `govulncheck` | Runs `make vuln` (`govulncheck ./...` under `go.mod` toolchain) | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
-| `image-vulns` | — (GitHub Actions only) | Scans the RC's published images with Trivy (OS and language packages) and fails on a fixable CRITICAL/HIGH finding outside `.grain/baselines/image-vulns-allowlist.yaml` ([image-vulnerability-scanning.md](image-vulnerability-scanning.md)) | `scripts/scan-images.sh --tag <rc>` on `ubuntu-latest`, Trivy DB cached | Active (`ubuntu-latest`) |
+| `image-vulns` | — (GitHub Actions only) | Scans the RC commit's published images with Trivy (OS and language packages) and fails on a fixable CRITICAL/HIGH finding outside `.grain/baselines/image-vulns-allowlist.yaml` ([image-vulnerability-scanning.md](image-vulnerability-scanning.md)) | `scripts/scan-images.sh --tag sha-<short>` on `ubuntu-latest` (`:main` on the schedule), Trivy DB cached | Active (`ubuntu-latest`) |
 | `cmd-grain-stress` | `pkg/cli stress under load` | Runs 4-way parallel `go test -race -count=1 ./pkg/cli` rounds within a 1,800s budget | Same stress loop on `ubuntu-latest` with Go setup, cache, `bubblewrap`, and `git config` | Active (`ubuntu-latest`) |
 | `kvm-sandboxes` | `real KVM sandboxes` | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | Resolves `grain-guest:e2e-test` (`scripts/granule-guest-resolve.sh`), configures `/dev/kvm` udev permissions, and runs all 5 real KVM sandbox tests on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`) | Active (`ubuntu-latest`) |
 | `kvm-route-stress` | `twenty two-VM boots` | Resolves guest image and runs 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | Same 20-boot two-VM stress suite on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`); also dispatchable standalone via `nightly.yml` `workflow_dispatch` with `jobs=kvm-route-stress` | Active (`ubuntu-latest`) |
@@ -105,6 +105,37 @@ Schedule: `cron: "41 4 * * *"` and `workflow_dispatch`.
 | Job ID | Display Name | Grain CI (`.grain/workflows/gcp-smoke.yml`) | GitHub Actions (`.github/workflows/gcp-smoke.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |
 | `smoke` | `GCE and GKE lifecycle` | Activates `/home/debian/.gcp-service-account.json` (`https://grain.dev/capabilities/gcp#gcp-key`), installs `kubectl` + `gke-gcloud-auth-plugin`, runs `scripts/gce-vm-smoke.sh --iap` and `scripts/gke-cluster-smoke.sh`, and sweeps stale resources | Gates the job at the job level (`if: vars.GCP_WIF_PROVIDER != '' \|\| vars.GCP_SA_EMAIL != ''`) so unconfigured runs conclude `skipped` rather than a false green `success` (emitting a `::warning` and failing if only one variable is set); when configured via `scripts/setup-gcp-smoke-wif.sh`, authenticates via `google-github-actions/auth` (Workload Identity Federation) and runs the GCE/GKE smoke and `if: always()` cleanup steps | Active (`ubuntu-latest`; `skipped` until WIF variables are set) |
+
+### 5. Live Real-Model Suites (`.grain/workflows/live-agent.yml`, `live-frameworks.yml` -> `.github/workflows/live-agent.yml`, `live-frameworks.yml`)
+
+These drive the real agent CLIs against the real model providers (`GRAIN_LIVE_AGENT_TEST=1`). They ran on grain CI until this repository moved to `ci_mode: github`, after which grain stopped firing its scheduled grain CI workflows and both suites silently stopped running (`live-frameworks` last ran 2026-10-31, `live-agent` earlier). The grain CI files are removed; the Actions files are the only source of truth.
+
+| Job ID | Display Name | Grain CI (retired) | GitHub Actions | Hosted Runner Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `live-agy` | `live agy run` | `capabilities: [gemini-key]`, nightly 07:37 UTC; installed agy from the `Dockerfile` pin and ran `pkg/agent/antigravity`'s live probes and `go test ./tests/e2e/ -run 'TestLive'` | Same install and tests, nightly 07:37 UTC and `workflow_dispatch`; `GEMINI_API_KEY` from environment `live-models`; skips `TestLiveClaude*` (run by `live-claude`); includes `TestLiveAgyAcceptsTheControllerToolsOfAnAPIGrant` | Active (`ubuntu-latest`; red until the secret is set) |
+| `live-claude` | `live claude run` | `optional-capabilities: [claude-proxy]`, nightly 06:19 UTC; **skipped green** without a token | `go test ./pkg/agent/claude/ -run 'TestLive'` and `go test ./tests/e2e/ -run 'TestLiveClaude'` (the api-grant case), nightly 06:19 UTC and `workflow_dispatch`; `CLAUDE_CODE_OAUTH_TOKEN` from `live-models`, **required**; model `claude-haiku-4-5` unless `vars.GRAIN_LIVE_CLAUDE_MODEL` says otherwise | Active (`ubuntu-latest`; red until the secret is set) |
+| `live-codex` | `live codex run` | `optional-capabilities: [openai-proxy]`; credential-free probes, then the live run when a key was present | Same; `OPENAI_API_KEY` from `live-models` is optional, and its absence is a `::warning` annotation rather than a silent skip | Active (`ubuntu-latest`) |
+
+How the credentials are held:
+
+- **Triggers:** `schedule` and `workflow_dispatch` only. Never `push`, `pull_request` or `pull_request_target`, so no fork or unreviewed branch runs with a key. Every job is `if: github.ref == 'refs/heads/main'`.
+- **Secrets:** read only as `secrets.*` of the GitHub environment `live-models`, at job level, whose deployment branch rule admits `main` alone. Each job holds one vendor's key and never the other's. The keys are masked (`::add-mask::`) and no step prints the environment.
+- **Permissions:** `contents: read` and nothing else; no `id-token`.
+- **Missing secrets fail:** the first step of each job fails with `set secret X in environment live-models`. With `GRAIN_LIVE_AGENT_TEST=1` the tests' own `skipUnlessLiveRequired` fails the same way (naming the secret and the environment) rather than skipping, because a skip and a pass are the same `ok` in `go test`'s summary, and a quiet skip is how these suites went dark.
+- **Spend:** each workflow's header notes a run's approximate number of model sessions. The jobs are capped at 60 (`live-agy`), 45 (`live-claude`) and 30 (`live-codex`) minutes.
+- **Tests:** `tests/deploy`'s `TestOnlyDefaultBranchLiveJobsHoldAModelCredential` and `TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart` pin all of the above.
+
+### 6. Workflows That Stay on Grain CI
+
+These `.grain/workflows/` files have no Actions counterpart, because they need something only a grain sandbox provides:
+
+| Workflow | Trigger | Why it stays on grain CI |
+| :--- | :--- | :--- |
+| `agy-surface.yml`, `claude-surface.yml`, `codex-surface.yml` | `workflow_dispatch` | They capture each agent CLI's tool and config surface inside grain's own sandbox image and network, which is what they compare against. They hold no credential. |
+| `kvm-route-stress.yml` | `workflow_dispatch` | The grain-sandbox form of the stress run; the scheduled form is `nightly.yml`'s `kvm-route-stress` job. |
+| `live-secrets-repo.yml` | `schedule` (05:53 UTC), `workflow_dispatch` | It needs the `github-sandbox` capability: a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. **Its schedule no longer fires in a `ci_mode: github` repository**; it needs a `.grain/schedules/` entry with `grain-ci: true` (`docs/declarations.md`) to run nightly again. |
+
+A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
 
 ## What Was Emulated from the Grain Sandbox Image (`Granulefile`)
 
@@ -153,6 +184,12 @@ No job in `.github/workflows/` is gated on `vars.ENABLE_SELF_HOSTED_TESTS` any m
   - `GCP_PROJECT_ID` *(optional, for `gcp-smoke.yml`)*: Explicit GCP project ID to configure in `gcloud`; if omitted, `gcp-smoke.yml` derives the project ID from `GCP_SA_EMAIL`.
   - `ENABLE_SELF_HOSTED_TESTS` *(unused)*: No workflow job reads it any more; every former self-hosted job runs on `ubuntu-latest`. It can be deleted from repository variables.
   - `SELF_HOSTED_RUNNER` *(unused)*: Formerly the runner label for self-hosted jobs; no workflow job reads it any more.
+
+- **Environment `live-models` (`Settings -> Environments`)**, for `live-agent.yml` and `live-frameworks.yml` only. Its deployment branches are limited to `main`.
+  - `GEMINI_API_KEY` *(secret, required by `live-agent.yml`)*: a Gemini API key for agy.
+  - `CLAUDE_CODE_OAUTH_TOKEN` *(secret, required by `live-frameworks.yml`'s `live-claude`)*: a Claude Code token (`claude setup-token`).
+  - `OPENAI_API_KEY` *(secret, optional, `live-codex`)*: without it only codex's credential-free probes run, with a warning.
+  - `GRAIN_LIVE_AGY_MODEL`, `GRAIN_LIVE_CLAUDE_MODEL` *(variables, optional)*: the model each live job asks for. The defaults are agy's default model and `claude-haiku-4-5`.
 
 ---
 

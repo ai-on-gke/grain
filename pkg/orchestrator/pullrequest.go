@@ -154,6 +154,11 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 				"already carries what you push there -- there is no second pull request to open",
 			task.ID, branch, reviewedID)
 	}
+	if reviewCommentsOnly(task) {
+		return PullRequestStatus{}, fmt.Errorf(
+			"orchestrator: task %s is a review filed to post findings on the pull request it reviews, "+
+				"not to fix them -- record them with add_review_comment; there is no pull request to open", task.ID)
+	}
 	pushed, err := targetBranchExists(client, *task.Target, branch)
 	if err != nil {
 		return PullRequestStatus{}, fmt.Errorf("orchestrator: checking %s's branch: %w", task.ID, err)

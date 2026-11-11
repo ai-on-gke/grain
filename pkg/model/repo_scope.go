@@ -87,7 +87,12 @@ func RepoAllowed(allowed []string, target RepoRef) bool {
 			if parsed.Same(target) {
 				return true
 			}
-			if strings.EqualFold(parsed.Owner, target.Owner) && (parsed.Name == "*" || parsed.Name == "") {
+			// An owner wildcard is that owner on its own host only: one
+			// owner/name can exist on two hosts as two repositories, and
+			// `host/owner/*` must not admit the default host's owner/name
+			// (nor `owner/*` another host's), just as Same compares hosts.
+			if strings.EqualFold(parsed.Owner, target.Owner) && (parsed.Name == "*" || parsed.Name == "") &&
+				parsed.OffDefaultHost() == target.OffDefaultHost() {
 				return true
 			}
 		}
@@ -198,11 +203,40 @@ func OffAllowlistAtDispatchComment(target RepoRef, allowed []string) string {
 			"reply after that lets it run.", target, QuotedRepoList(allowed))
 }
 
+// OffAllowlistAtProxyReason is what the git proxy refuses a run's clone
+// or push with when the repository it was dispatched against came off
+// the list while the run was live (gitproxy.ModelAuthorizer): the run
+// was let in when the repo was on the list, and the removal is what
+// stops it, so that is what it is told rather than a bare "not in
+// scope" it would read as grain being broken.
+func OffAllowlistAtProxyReason(target RepoRef, allowed []string) string {
+	return fmt.Sprintf(
+		"%s is no longer on this deployment's target repo list, so no sandbox may clone or push "+
+			"it: the repository was removed from the deployment after this run was dispatched "+
+			"against it. The list currently holds %s. An operator puts the repo back under Settings "+
+			"for a later run to reach it.", target, QuotedRepoList(allowed))
+}
+
+// OffAllowlistAtMergeComment is what a task whose pull request is open
+// against a repo that came off the list is told when the merge queue
+// takes its auto-merge back (orchestrator.withdrawForRemovedRepo). The
+// pull request is left open, and putting the repo back does not merge
+// it by itself: a removal is an operator saying the deployment no
+// longer works there, and whatever was queued before it was said is
+// for a person to send again.
+func OffAllowlistAtMergeComment(target RepoRef, allowed []string) string {
+	return fmt.Sprintf(
+		"`%s` is no longer on this deployment's target repo list, so grain will not merge this "+
+			"pull request into it: its auto-merge is withdrawn and the pull request is left open. "+
+			"The list currently holds %s. Putting the repo back under Settings does not merge it "+
+			"by itself -- a person presses Submit after that.", target, QuotedRepoList(allowed))
+}
+
 // StrandedWork is one repository a proposed Config.TargetRepos would
 // stop naming, and the work already stored against it that the narrowing
 // would strand there -- what Store.StrandedByTargetRepos answers with,
 // and what an operator is told before the save that does it
-// (ui.Settings.TargetReposStranded).
+// (ui.TargetReposPlan, POST /api/repos/plan).
 //
 // "Stranded" is exact rather than dramatic: none of this is deleted,
 // disabled or closed. A task still in play is parked on its next
@@ -254,6 +288,32 @@ type StrandedWork struct {
 // reported as a nil-everywhere row.
 func (w StrandedWork) Empty() bool {
 	return len(w.Tasks) == 0 && len(w.Schedules) == 0 && !w.QualificationPlan
+}
+
+// Summary is the sentence an operator is shown for w before the save or
+// removal that strands it: which repository comes off the list, and what
+// of its stored work stops because of that.
+func (w StrandedWork) Summary() string {
+	var parts []string
+	if n := len(w.Tasks); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s still in play there %s parked instead of dispatched",
+			n, plural(n, "task", "tasks"), plural(n, "is", "are")))
+	}
+	if n := len(w.Schedules); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s firing into it (%s) %s firing until it is back",
+			n, plural(n, "schedule", "schedules"), strings.Join(w.Schedules, ", "), plural(n, "stops", "stop")))
+	}
+	if w.QualificationPlan {
+		parts = append(parts, "its release-qualification plan no longer runs")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	if len(parts) > 1 {
+		last = strings.Join(parts[:len(parts)-1], ", ") + ", and " + last
+	}
+	return fmt.Sprintf("`%s` comes off this deployment's target repo list, so %s.", w.Repo, last)
 }
 
 func plural(n int, one, many string) string {

@@ -71,7 +71,7 @@ With no state repository (`Config.StateRepo == nil` and no external remote, e.g.
 The bootstrap set is exactly what `clearBootstrap` (`pkg/ui/config_bootstrap.go`) zeroes:
 
 - **Models:** `agentBackends`, `defaultModel`, `agentBackendId`, `modelSettings`, `judgementModel`.
-- **Sandboxes:** `maxWorkers`, `sandboxBackend`, `sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`, `sandbox{Cpu,Memory,Disk}Overcommit`, `sandboxMemoryReserveMb`, `sandboxDiskFloorShare`, `sandboxDiskFloorMinMb`, `sandboxOvercommit` (adaptive overcommit), `networkAccess`, `sandboxImage`, `sandboxImageMirror`, every `k8s*` field (including `k8sPriorityClass{Interactive,Agent,Ci}`).
+- **Sandboxes:** `maxWorkers`, `sandboxBackend`, `sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`, `sandbox{Cpu,Memory,Disk}Overcommit`, `sandboxMemoryReserveMb`, `sandboxDiskFloorShare`, `sandboxDiskFloorMinMb`, `sandboxOvercommit` (adaptive overcommit), `sandboxShapeLimits`, `networkAccess`, `sandboxImage`, `sandboxImageMirror`, every `k8s*` field (including `k8sPriorityClass{Interactive,Agent,Ci}`).
 - **CLI run locations:** `cliRun`.
 - **The lock:** `settingsLocked`.
 
@@ -227,7 +227,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Upgrade now / scheduled | Action — `POST /api/upgrade`, `DELETE /api/upgrade/scheduled` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
-| `upgradeCheckMode`, `upgradeCheckPausesPipeline`, `autoUpgradeChannel`, `autoUpgradeTime` | Yes — General → Updates; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
+| `upgradeCheckMode`, `upgradeCheckPausesPipeline`, `autoUpgradeOn`, `autoUpgradeChannel`, `autoUpgradeTime`, `autoUpgradeMinIntervalHours` | Yes — General → Updates; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
 | Power (restart, reboot, shutdown) | Action — System → Power; `POST /api/host/{restart,reboot,shutdown}` | No — action | Unlocked (Action) | No | |
 
 ### 3.8 Caches (`/settings/caches`)

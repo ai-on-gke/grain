@@ -217,6 +217,22 @@ func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {
 	if want := []string{grainserver.RepoCredentialMethod, grainserver.RepoReadMethod, grainserver.RepoTargetMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
 		t.Fatalf("RepoStatus() = %+v, want %s with %v", st, grainserver.RepoID, want)
 	}
+
+	// The UI offers repo#write's variants by their titles.
+	var titles []string
+	for _, md := range st.MethodDetails {
+		if md.Name != grainserver.RepoWriteMethod {
+			continue
+		}
+		variants, _ := md.Args["oneOf"].([]any)
+		for _, v := range variants {
+			title, _ := v.(map[string]any)["title"].(string)
+			titles = append(titles, title)
+		}
+	}
+	if want := []string{"CI push to another repo", "Write target (repo + base)", "Push any branch/tag (refs + force)"}; !slices.Equal(titles, want) {
+		t.Fatalf("repo#write variant titles = %q, want %q", titles, want)
+	}
 }
 
 // repo#read {repo} and repo#write {repo} -- a CI job's access to another

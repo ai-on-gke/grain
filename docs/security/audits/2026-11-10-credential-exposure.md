@@ -39,10 +39,10 @@ agent granted the same `:read` scopes.
 | ID | Finding | Severity | Status |
 | --- | --- | --- | --- |
 | CE-1 | Console output (`GET /api/console/{id}/output`, `sessions:read`) served a run's raw terminal, unredacted | High | **Fixed here** |
-| CE-2 | Capability server `env` / `headers` / `args` / `serverUrl` accepted typed-in credentials, and `GET /api/capability-servers` (`capabilities:read`) returned them verbatim | High | **Fixed here** for the API and new saves; state repo, grain/config pull requests and existing rows → follow-up task |
+| CE-2 | Capability server `env` / `headers` / `args` / `serverUrl` accepted typed-in credentials, and `GET /api/capability-servers` (`capabilities:read`) returned them verbatim | High | **Fixed here** for the API and new saves; grain/config pull requests and existing rows fixed by task 4003. Values already in state-repo history must be rotated |
 | CE-3 | Attempt transcripts (`tasks:read`): with no object store, the DB copy is redacted only of the sandbox env and credential shapes, and a live tail not at all | High | **Fixed here** (redacted on read) |
 | CE-4 | Credentials kept in files beside the store (Codex logins, GitHub App webhook secrets, setup.sh agent key files, state/secrets repo tokens, relay token file, Postgres password) were in no redaction list | Medium | **Fixed here** |
-| CE-5 | `sessions:write` (e.g. `grain/delegate`) can type into any task's console, whatever grants that run holds | High | Follow-up task |
+| CE-5 | `sessions:write` (e.g. `grain/delegate`) can type into any task's console, whatever grants that run holds | High | **Fixed** (follow-up task 4004) |
 | CE-6 | A bare access code / `LocalAPIToken`, the legacy `grain-local-<hex>` token and the secrets private key (`grain-secret-key-v1:`) had no redaction shape (only the `X-Grain-Access-Code:` header did) | Low | **Fixed here** |
 | CE-7 | State browser (`GET /api/state-repo/file`, `settings:read`) served exported rows with no redaction | Low (CE-2's carrier) | **Fixed here** |
 | CE-8 | Capability server errors (`Status.Error`) are scrubbed of the server's own resolved secrets, not of shapes or other secrets | Low | Noted; no confirmed leak |
@@ -57,7 +57,13 @@ secret file. **Fix:** output now goes through `Config.LogRedactor`, the
 list the Logs pane uses, before it is encoded. Offsets stay the session's
 own. If that list cannot be built, the output is withheld rather than
 served. **Residual:** redaction runs per polled chunk, so a value split
-across two reads can survive. That is covered with CE-5's follow-up.
+across two reads can survive. That is covered with CE-5's follow-up, which
+closed it from both ends: a poll reads from the start of the line its
+offset falls in, so a credential begun before the offset is cut whole; and
+while a live console has printed within the last 500 ms, the trailing
+token it has not finished (8 bytes to 8 KiB with no whitespace after it)
+is left for the next poll rather than served half-printed
+(`consoleHeldTail`, `pkg/ui/console.go`).
 
 ### CE-2: typed-in capability server credentials (reproduced)
 
@@ -83,12 +89,30 @@ saved into `grain_config.mcp_servers` and returned verbatim by
   $secret:cap-token`) are kept. Shapes are cut from args, URL and config
   strings.
 
-**Still open (follow-up task):** the same row is exported to the state
+**Follow-up (task 4003):** the same row was exported to the state
 repository and readable with `settings:read` through the State browser
 (CE-7 redacts shapes and known values there, but not a shapeless
-literal), `config://` and the settings history. A grain/config pull
-request can still add one. The follow-up adds the rule to `statecheck`
-and migrates existing literals into the store.
+literal), `config://` and the settings history, and a grain/config pull
+request could still add one. Now:
+
+- `grain state check` applies the same rule
+  (`statecheck.LiteralCredentials`). A literal the pull request adds or
+  changes, compared with its base, fails the check. One the base
+  already held is a warning. The check grain posts reads the base from
+  the clone's `origin/HEAD`, and the CLI takes `-base <rev>`.
+- At every start, before the capability servers do, the daemon moves
+  each literal in a stored entry's `env` or `headers` into the secrets
+  store as `capability-server-<id>/<field>` and rewrites the entry to
+  `$secret:<name>` (`migrateLiteralCredentials`). The journal logs what
+  moved, by name only. Literals in `args` and `serverUrl` cannot be
+  referenced, so they are logged for the operator to edit.
+  `ServerConfig.Validate` is unchanged, so an upgrade detaches no live
+  server.
+
+**Residual:** a value that was ever exported stays in the state
+repository's git history. The operator must rotate every credential the
+migration moved (`docs/capabilities.md`, "Typed-in credentials";
+secrets-key-protection §4.3).
 
 ### CE-3: attempt transcripts (reproduced)
 
@@ -132,6 +156,21 @@ by the PEM block rule, and their installation tokens by the `ghs_` shape.
 they don't. That reaches every credential the run holds. Follow-up task:
 hold console input to the caller's own grants, the way
 `roleApprovalWithin` holds approvals.
+
+**Fix:** every `/api/console/{id}` route -- input, resize, close and
+reading output -- resolves its session through `Server.console`, which
+holds a limited role to `roleTaskWithin` ("access console of"): the
+caller's role must cover every grant (bar repository defaults it does not
+deny), write, read, admission and setting the console's task carries, or
+the call answers 403. Standing console sessions' edit, restart, cancel and
+delete go through `roleConsoleSessionWithin`, which applies the same
+containment to the session's configuration and its open task. Only an
+unlimited role (`grain/operator`, the access code) drives every console.
+`TestDelegatePersonCannotDriveAConsoleHoldingMoreThanItsRole`
+(`tests/security`) is the regression test: a `grain/delegated` person is
+refused input, resize, close and output on a console whose task holds
+`api:secrets:write`, and still types into one whose task holds nothing
+past their role.
 
 ### CE-6: grain's own credentials had no shape (reproduced)
 
@@ -189,7 +228,7 @@ a git SHA is left alone.
 | Host credential / enrollment code (`ghd_`, `ghe_`) | ✔ | — | ✔ (`LocalTables`) | R | R | R | not exported |
 | Standing sandbox secrets | ✔ names (`standing_sandbox_secret` holds names) | — | ✔ names | R | ✔\* | R | operator only |
 | Capability server `$secret:` values | ✔ names + presence | ✔ | ✔ references | R | ✔\* | R | operator only |
-| Capability server **typed-in** values | — | ✔\* withheld / refused | ✗ CE-2 follow-up (R where shaped) | R | ✔\* | R | in `grain_config` |
+| Capability server **typed-in** values | — | ✔\* withheld / refused | ✔\* moved to the store at start, refused in pull requests (history: rotate) | R | ✔\* | R | moved out of `grain_config` |
 | `request_secret` answers (store) | ✔ (`PUT /api/tasks/{id}/secret` is write-only) | — | ✔ (`pending_secret` is a name) | ✔\* | ✔\* | R | operator only |
 | State / secrets repo tokens | ✔ write-only (`POST /api/state-repo/secrets-repo`) | — | ✔ | ✔\* | ✔\* | ✔\* | operator only |
 | Secrets private key / `secrets.enc` | ✔ (no route returns it; `secrets-key` is write-only) | — | ✔ (`secrets.enc` is outside `browsableDirs`, and moved out of the repo) | ✔\* (shape) | ✔\* | ✔\* | operator only |
@@ -229,6 +268,8 @@ no live sandbox: the console test starts a real PTY with `/bin/sh`.
 | `TestStateRepoFileIsRedacted` | `pkg/ui` | CE-7 |
 | `TestLiteralCredentialsNamesTypedInCredentialsOnly`, `TestWithheldLiteralsKeepsReferencesAndCutsValues` | `pkg/capability/protocol` | CE-2 rules |
 | `TestTextRedactsBareGrainCredentials` | `pkg/redact` | CE-6 |
+| `TestStateCheckRefusesALiteralHeaderAPullRequestAdds` | `pkg/staterepo/statecheck` | CE-2: a grain/config pull request (task 4003) |
+| `TestMigrateLiteralCredentialsLeavesNoLiteralInConfigOrExport` | `pkg/daemon` | CE-2: existing rows (task 4003) |
 
 Each of the sweep's capability-server and transcript checks was seen to
 fail with its fix disabled.

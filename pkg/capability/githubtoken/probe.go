@@ -31,12 +31,16 @@ package githubtoken
 // carries the token.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -152,6 +156,10 @@ func Probe(transport github.Transport, token string, app bool, repos []string) R
 		report.Error = refusal(resp)
 		return report
 	}
+	if why, ok := notTheAPI(resp); ok {
+		report.Error = why
+		return report
+	}
 	var limit struct {
 		Resources struct {
 			Core coreLimit `json:"core"`
@@ -202,6 +210,11 @@ func (a api) identifyUser(token string, report *Report) bool {
 			}
 		}
 	}
+	if why, ok := notTheAPI(resp); ok {
+		report.OK = false
+		report.Error = why
+		return false
+	}
 	switch resp.Status {
 	case 200:
 		var user struct {
@@ -228,6 +241,9 @@ func (a api) identifyUser(token string, report *Report) bool {
 func (a api) identifyInstallation(token string, report *Report) {
 	resp, err := a.get(token, "/installation/repositories?per_page=1")
 	if err != nil || resp.Status != 200 {
+		return
+	}
+	if _, ok := notTheAPI(resp); ok {
 		return
 	}
 	report.Expires = strings.TrimSpace(headerValue(resp.Headers, "GitHub-Authentication-Token-Expiration"))
@@ -263,6 +279,10 @@ func (a api) probeRepo(token string, repo model.RepoRef) RepoProbe {
 		}
 		return out
 	}
+	if why, ok := notTheAPI(resp); ok {
+		out.Error = why
+		return out
+	}
 	var body struct {
 		Permissions *struct {
 			Pull  bool `json:"pull"`
@@ -276,6 +296,39 @@ func (a api) probeRepo(token string, repo model.RepoRef) RepoProbe {
 		out.Push = body.Permissions.Push || body.Permissions.Admin
 	}
 	return out
+}
+
+// notTheAPI says why resp was not answered by the forge's REST API, when
+// it was not: a request a redirect took off the API's host (a front end
+// sending it to a sign-in page, which answers 200 with HTML), or an
+// answer that is a web page rather than JSON. Either is a front end in
+// the way, never a token that was accepted, so Probe reports it rather
+// than counting the page as a pass.
+func notTheAPI(resp github.ApiResponse) (string, bool) {
+	if _, to, ok := strings.Cut(resp.URL, " -> "); ok {
+		// RealTransport names the host a redirect ended on (and only
+		// its scheme and host: the rest may be a signed URL).
+		if u, err := url.Parse(strings.TrimSpace(to)); err == nil && u.Hostname() != "" {
+			if fix, ok := authfix.ClassifyRedirect(u); ok {
+				return fix.Summary + ": " + fix.Action + " (the API answered with a redirect to " + u.Hostname() + ")", true
+			}
+			return "the API request was redirected to " + u.Hostname() +
+				", which is not the forge's API: a sign-in page or proxy in front of the host answered instead", true
+		}
+	}
+	if ct := strings.TrimSpace(headerValue(resp.Headers, "Content-Type")); ct != "" {
+		media, _, err := mime.ParseMediaType(ct)
+		if err != nil || (media != "application/json" && !strings.HasSuffix(media, "+json")) {
+			return "the host answered with " + ct + " rather than the API's JSON: " +
+				"a sign-in page or proxy in front of the host answered instead", true
+		}
+		return "", false
+	}
+	if body := bytes.TrimSpace(resp.Body); len(body) > 0 && body[0] == '<' {
+		return "the host answered with a web page rather than the API's JSON: " +
+			"a sign-in page or proxy in front of the host answered instead", true
+	}
+	return "", false
 }
 
 // refusal explains a non-200 answer by its status and GitHub's own

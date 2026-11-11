@@ -47,8 +47,15 @@
 #     The live-provider suites (CANDIDATE_GATE_ADVISORY: gcp-smoke and
 #     live-*, post-reset-e2e) are reported and never block. Every
 #     required suite found infra is reported as needing a re-run.
-#     --tasks-json and --now are accepted and ignored, for callers from
-#     before nightly.yml left LKG selection.
+#     The live real-model suites (CANDIDATE_GATE_LIVE: live-agent and
+#     live-frameworks) are also held to a freshness policy, which warns
+#     and never blocks: each one's newest verdict and newest pass on REF
+#     are printed, and a "WARNING live" line is printed when the newest
+#     verdict is not a pass, or there is no pass newer than
+#     CANDIDATE_GATE_LIVE_MAX_AGE_DAYS (3) before --now (an epoch or a
+#     date; default the clock) -- a suite that stopped running is how
+#     v3.5.0 shipped a schema Gemini refuses. --tasks-json is accepted
+#     and ignored, for callers from before nightly.yml left LKG selection.
 #
 #     Prints one line per commit it looked at and a last line
 #     "LKG <sha>", exiting 0; or "LKG none", exiting 1.
@@ -121,6 +128,8 @@ set -euo pipefail
 
 CANDIDATE_GATE_REQUIRED="${CANDIDATE_GATE_REQUIRED-tests release}"
 CANDIDATE_GATE_ADVISORY="${CANDIDATE_GATE_ADVISORY-gcp-smoke live-* post-reset-e2e}"
+CANDIDATE_GATE_LIVE="${CANDIDATE_GATE_LIVE-live-agent live-frameworks}"
+CANDIDATE_GATE_LIVE_MAX_AGE_DAYS="${CANDIDATE_GATE_LIVE_MAX_AGE_DAYS-3}"
 # Stage 1's required nightly.yml jobs, each "id=name" (the job's key in
 # the workflow and the name GitHub reports it by): the playbook's Stage 1
 # table, as nightly.yml's own stage-1 job needs them.
@@ -213,13 +222,14 @@ listed() { # listed <word> <space-separated globs>
 # --- select-lkg -------------------------------------------------------------
 
 select_lkg() {
-  local runs="" floor="" ref="origin/main" max=200
+  local runs="" floor="" ref="origin/main" max=200 now=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --runs-json) runs="${2:-}"; shift 2 ;;
       --floor-sha) floor="${2:-}"; shift 2 ;;
       --ref) ref="${2:-}"; shift 2 ;;
-      --tasks-json | --now) shift 2 ;;
+      --now) now="${2:-}"; shift 2 ;;
+      --tasks-json) shift 2 ;;
       --max-commits) max="${2:-}"; shift 2 ;;
       *) usage ;;
     esac
@@ -318,11 +328,54 @@ select_lkg() {
     echo "  advisory $w.yml: $v at $c (does not block)."
   done <<< "$adv"
 
+  live_freshness "$head" "$now" "$table"
+
   if [ -z "$lkg" ]; then
     echo "LKG none"
     return 1
   fi
   echo "LKG $lkg"
+}
+
+# live_freshness <head> <now> <table>: select-lkg's live-suite policy
+# (CANDIDATE_GATE_LIVE). For each suite, its newest verdict and newest pass
+# among head's ancestors, and a WARNING line when the newest is not a pass
+# or the newest pass is older than CANDIDATE_GATE_LIVE_MAX_AGE_DAYS.
+live_freshness() {
+  local head="$1" now="$2" table="$3"
+  if [ -z "$now" ]; then
+    now="$(date -u +%s)"
+  elif ! [[ "$now" =~ ^[0-9]+$ ]]; then
+    now="$(date -u -d "$now" +%s)" || die "--now $2 is neither an epoch nor a date"
+  fi
+  local limit=$((CANDIDATE_GATE_LIVE_MAX_AGE_DAYS * 86400))
+  local suite c w v t full newest newest_t pass pass_t
+  for suite in $CANDIDATE_GATE_LIVE; do
+    newest="" newest_t=0 pass="" pass_t=0
+    while IFS=$'\t' read -r c w v t; do
+      [ "$w" = "$suite" ] || continue
+      full="$(git rev-parse --verify -q "$c^{commit}" 2>/dev/null || true)"
+      [ -n "$full" ] || continue
+      git merge-base --is-ancestor "$full" "$head" 2>/dev/null || continue
+      [ "$v" != pending ] || continue
+      if [ "$t" -gt "$newest_t" ]; then newest="$v at ${full:0:12}"; newest_t="$t"; fi
+      if [ "$v" = success ] && [ "$t" -gt "$pass_t" ]; then pass="${full:0:12}"; pass_t="$t"; fi
+    done <<< "$table"
+    if [ -z "$newest" ]; then
+      echo "  WARNING live $suite.yml: no verdict on any commit of this ref; the release has no live-model verdict (does not block)."
+      continue
+    fi
+    local age=$(( (now - pass_t) / 3600 ))
+    if [ -z "$pass" ]; then
+      echo "  WARNING live $suite.yml: newest is $newest and it has never passed here (does not block)."
+    elif [ "${newest%% *}" != success ]; then
+      echo "  WARNING live $suite.yml: newest is $newest; newest pass at $pass, ${age}h old (does not block)."
+    elif [ $((now - pass_t)) -gt "$limit" ]; then
+      echo "  WARNING live $suite.yml: newest pass at $pass is ${age}h old, past ${CANDIDATE_GATE_LIVE_MAX_AGE_DAYS}d -- is its schedule still firing? (does not block)."
+    else
+      echo "  live $suite.yml: passed at $pass, ${age}h old."
+    fi
+  done
 }
 
 # --- check-qualification ----------------------------------------------------

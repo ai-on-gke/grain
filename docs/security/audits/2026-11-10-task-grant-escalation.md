@@ -23,7 +23,7 @@ CLI, and MCP (`/mcp` and `/api/mcp`).
 | 1b | Direct `POST /api/tasks` with `approved: true` / `interactive: true` targeting `grain/config` or a person-held change target by a limited `tasks:admin` role or delegated caller | `pkg/ui/agent_api_gate.go`, `pkg/ui/client.go` | **Fixed here** | High |
 | 1c | Omitting `capabilities` on `POST /api/tasks` attaches `DefaultCapabilities` even when vetoed by a role's `deny` list | `pkg/ui/client.go`, `pkg/ui/access_roles.go` | **Fixed here** | Medium |
 | 1d | `GET /api/persistent-sandboxes/{name}/logs` (`deployment:read`) serves unredacted output containing bound secrets and ignores repository limits | `pkg/ui/persistent_sandboxes.go`, `pkg/ui/access_roles.go` | **Fixed here** | High |
-| 1e | Per-task `sandboxCpus`, `sandboxMemoryMb`, and `sandboxDiskGb` have no upper bound or role/agent ceiling | `pkg/ui/client.go`, `pkg/ui/agent_api_gate.go` | Open; follow-up task filed (`knownGapSandboxShapeCeiling`) | Medium |
+| 1e | Per-task `sandboxCpus`, `sandboxMemoryMb`, and `sandboxDiskGb` have no upper bound or role/agent ceiling | `pkg/ui/client.go`, `pkg/ui/agent_api_gate.go`, `pkg/ui/access_roles.go`, `pkg/ui/sandbox_shape_limits.go`, `pkg/model/sandbox_shape_limits.go` | Closed by task 4018 (`sandboxShapeLimits` deployment maximum and per-role ceilings; `knownGapSandboxShapeCeiling = false`); regression tests added | Medium |
 | 2a | `PATCH /api/tasks/{id}` adding capabilities, `autoMerge`, elevated `priority`, widened `networkAccess`, or out-of-scope `reads`/`writes`; `approve` and unapproved `run-now` on wider proposals (#3735) | `pkg/ui/access_roles.go`, `pkg/ui/agent_api_gate.go` | Verified closed (#3735, #3759, #3923, #3925); regression tests added | -- |
 | 2b | Overwriting `description` (prompt) via `PATCH /api/tasks/{id}`, or calling approved `run-now`, `retry`, `reopen`, `undefer`, `resume`, `comments`, or `reply` on an operator-filed task carrying wider grants | `pkg/ui/access_roles.go`, `pkg/ui/agent_api_gate.go` | **Fixed here** | Critical |
 | 2c | Ownerless `gma_` external token holding `tasks:admin` approving a proposal past the token's own grant ceiling | `pkg/ui/agent_api_gate.go` (`externalApprovalRail`) | Closed by #3924 (`externalApprovalWithin`); regression test flipped | -- |
@@ -31,7 +31,7 @@ CLI, and MCP (`/mcp` and `/api/mcp`).
 | 3b | Limited role holding `capabilities:admin` (e.g. repo-scoped) granting `gcp#gcp-key`, `host-script`, dangerous `api:*`, `network: open`, or out-of-scope repos through `POST /api/tasks/{id}/access-request/grant` | `pkg/ui/task_access_request.go` | **Fixed here** | Critical |
 | 4a | Agent `propose_task` auto-approval ceilings, self-mutation blocks, and in-sandbox `grain api` channel (`GitProxy.ServeAPIHTTP` + `SandboxAPIGrantsOf`) | `pkg/ui/client.go`, `pkg/ui/agent_api_gate.go`, `pkg/gitproxy/namespace.go` | Closed; regression tests added | -- |
 | 4b | In-grain task agent calling `POST /api/tasks/{id}/comments` or `/reply` clears human-held `PendingQuestionCommentID` / `PendingSecret` / `PendingAccess` | `pkg/ui/client.go` (`addAttributedComment`) | **Fixed here** | High |
-| 4c | Agent holding non-dangerous `api:tasks:write` on a repo overwriting `description`/`promptExtension` or steering another task in that repo that holds wider grants | `pkg/ui/agent_api_gate.go` | Open; follow-up task filed (`knownGapAgentCrossTaskPromptSteering`) | High |
+| 4c | Agent holding non-dangerous `api:tasks:write` on a repo overwriting `description`/`promptExtension` or steering another task in that repo that holds wider grants | `pkg/ui/agent_api_gate.go`, `pkg/ui/agent_cross_task.go` | Fixed by task 4019 (`agentCrossTaskRail`); `knownGapAgentCrossTaskPromptSteering` flipped | High |
 | 5a | Non-admin pressing `Submit` (`POST /api/tasks/{id}/submit`) or `config-change/approve` (#3965) | `pkg/ui/agent_api_gate.go`, `pkg/ui/task_config_change.go` | Closed; regression tests added | -- |
 | 5b | Non-admin releasing a `HumanReviewHold` (`POST /api/tasks/{id}/human-review/release`, scope `tasks:write`) to re-arm `AutoMerge: true`, or calling `POST /api/tasks/{id}/force-merge` under a limited role | `pkg/ui/agent_api_gate.go`, `pkg/ui/human_review.go`, `pkg/ui/client.go` | **Fixed here** | Critical |
 | 6a | Creating, editing, or running a schedule (`POST /api/schedules`, `PATCH /api/schedules/{id}`, `POST /api/schedules/{id}/run`) without `tasks:write` on repo, targeting `grain/config`, or carrying wider `networkAccess`/grants | `pkg/ui/access_roles.go` | **Fixed here** | High |
@@ -102,13 +102,29 @@ Every task-creation entry point — the browser form (`POST /api/tasks`), `grain
    `handlePersistentSandboxLogs` redacts through `Config.LogRedactor` (failing closed on
    redactor error, matching `logs.go`) or `grainlog.NewRedactor(nil)`.
 
-### Follow-up task filed
+### Closed by task 4018
 
 - **Per-task sandbox resource shape (`sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`):**
-  `validateSandboxShape` (`pkg/ui/client.go`) validates only lower bounds (`>= 1` CPU,
-  `>= 128` MB RAM, `>= 0` GB disk), and neither `filingEscalation` nor `propose_task`
-  enforces an upper bound or role ceiling. Pinned by `TestPath1KnownGapPerTaskSandboxShapeUncapped`
-  (`knownGapSandboxShapeCeiling`).
+  originally `validateSandboxShape` (`pkg/ui/client.go`) validated only lower bounds
+  (`>= 1` CPU, `>= 128` MB RAM, `>= 0` GB disk), and neither `filingEscalation` nor
+  `propose_task` enforced an upper bound or role ceiling. Task 4018 adds
+  `grain_config.sandbox_shape_limits` (`model.SandboxShapeLimits`, schema 138, settable as
+  `sandboxShapeLimits` through `PUT /api/settings`):
+  - a deployment-wide maximum (defaults 32 vCPU, 128 GiB memory, 1024 GiB disk) that binds
+    every caller, `grain/operator` included, on create, `PATCH`, approve, run-now, and
+    propose (`Client.refuseSandboxShapeAboveMax`, a 400);
+  - optional per-role ceilings beneath it, keyed by scope set name: a limited role may not set
+    a shape above its ceiling in any task, template, schedule, or session body
+    (`filingEscalation`), nor approve, run, or edit a stored task above it (`roleTaskWithin`),
+    a 403;
+  - an agent's proposal above the sandbox its proposing task runs in
+    (`model.ProposalSandboxShapeAbove`, part of `model.PersonOnlyProposalSettings`) is filed
+    held for a person through `propose_task` and the end-of-run relay, refused over the API
+    (`POST /api/tasks` with an acting task), and cannot be approved by a limited role, an
+    agent, or an external credential -- only by an unlimited role.
+
+  None of these clamps a request. `TestPath1KnownGapPerTaskSandboxShapeUncapped` now asserts
+  the refusal, and `TestPath1SandboxShapeCeilings` covers each route.
 
 ---
 
@@ -226,17 +242,37 @@ user's own agent.
   `PendingQuestionCommentID` / `PendingSecret` / `PendingAccess` when `inGrainAgentTaskID(by.Actor) != ""`
   or `by.Actor.Kind == model.PrincipalAutomation`.
 
-### Follow-up task filed
+### Fixed by task 4019: cross-task agent prompt and execution steering
 
 - **Cross-task agent prompt and execution steering under `api:tasks:write`:**
-  While limited *human* roles are now blocked by `roleTaskWithin` from editing or steering
-  higher-privilege tasks (Path 2b), an *agent* holding non-dangerous `api:tasks:write` on a
-  repository can still call `PATCH /api/tasks/{other}` (`description`/`promptExtension`),
+  Limited *human* roles were already blocked by `roleTaskWithin` from editing or steering
+  higher-privilege tasks (Path 2b), but an *agent* holding non-dangerous `api:tasks:write` on a
+  repository could still call `PATCH /api/tasks/{other}` (`description`/`promptExtension`),
   `retry`/`reopen`, or `comments`/`agent-messages` against another task in that repository
-  carrying wider grants (`gcp#gcp-key`, `host-script`, `autoMerge: true`). Separating benign
-  triage metadata updates (`api:task-admin`) from prompt/execution steering on higher-privilege
-  tasks requires a dedicated design and capability split; filed as a follow-up task and pinned
-  by `TestPath4KnownGapAgentCrossTaskPromptSteering` (`knownGapAgentCrossTaskPromptSteering`).
+  carrying wider grants (`gcp#gcp-key`, `host-script`, `autoMerge: true`).
+- **Fix:** `agentRails` now calls `agentCrossTaskRail` (`pkg/ui/agent_cross_task.go`) for every
+  steering route (`PATCH /api/tasks/{id}`, `retry`, `reopen`, `undefer`, `resume`,
+  `comments`, `reply`, `PUT goal`, `agent-messages`, `notes`). It refuses the call with `403`
+  unless the target task is within the calling task's envelope (`agentTaskWithin`, the agent
+  counterpart of `roleTaskWithin`): every grant the target carries (capabilities, `api:*`
+  scopes, and the secrets and credentials a capability's arguments bind) must be covered by
+  the caller's own grants (`agentCoversGrant`, sharing `agentHoldsGrant` with
+  `agentGrantRefusal`), every extra repository it writes or reads must be one the caller writes
+  or reads, its network access must not be wider than the caller's, and it must not carry
+  `autoMerge` the caller lacks. A repository default grant (`GrantByDefault`) is skipped unless
+  it is dangerous, as `roleTaskWithin` skips defaults. Exceptions: the caller's own task (still held by the
+  self-mutation rails) and tasks in its own proposal chain, which filing and approval already
+  held to the existing ceilings. Approved `run-now` stays outside the rail: it changes only
+  when a task runs (`api:dispatch-control`), adds nothing to its prompt, and an unapproved
+  target is already held by `agentApprovalRail`.
+- **Comments to wider tasks:** plain comments, replies and `agent-messages` to an unrelated
+  wider task are refused, since a comment is delivered to the live run like a person's. Messages
+  between parent and child (`agent-messages`, `notes`) stay allowed so a director's children can
+  report back, and when the sender is the narrower task the message is prefixed with an
+  `[Untrusted agent input: ...]` notice (`untrustedAgentInputNotice`) in the recipient's
+  conversation, telling the receiving run to treat it as information, not instructions.
+- Pinned by `TestPath4KnownGapAgentCrossTaskPromptSteering` (now asserting the refusal) and
+  `pkg/ui/agent_cross_task_test.go`.
 
 ---
 
@@ -330,11 +366,12 @@ is ready to be wired into the consolidated nightly `security-attacks` job alongs
 #3981, #3983, and #3984:
 
 - `TestPath1NonAdminTaskFilingAndTemplateGrantCeilings`
-- `TestPath1KnownGapPerTaskSandboxShapeUncapped` (`knownGapSandboxShapeCeiling`)
+- `TestPath1KnownGapPerTaskSandboxShapeUncapped` (was `knownGapSandboxShapeCeiling`; closed by task 4018)
+- `TestPath1SandboxShapeCeilings`
 - `TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings`
 - `TestPath2ExternalTokenApprovalCeiling` (was `knownGapExternalTokenApprovalCeiling`, #3905; closed by #3924)
 - `TestPath3NonAdminAccessRequestGrantCeilings`
 - `TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries` (includes live `gitproxy.BuildProxy` + `sandboxcli.Main` `grain api` execution)
-- `TestPath4KnownGapAgentCrossTaskPromptSteering` (`knownGapAgentCrossTaskPromptSteering`)
+- `TestPath4KnownGapAgentCrossTaskPromptSteering` (was `knownGapAgentCrossTaskPromptSteering`; closed by task 4019)
 - `TestPath5NonAdminMergeSubmitForceMergeAndHumanReviewRelease`
 - `TestPath6NonAdminScheduleConsoleSessionAndLivePTYCeilings`

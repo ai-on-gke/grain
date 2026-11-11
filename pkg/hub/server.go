@@ -2453,6 +2453,7 @@ func (s *Server) handleInternalHeartbeat(w http.ResponseWriter, r *http.Request)
 		Status:               s.store.DeriveStatus(updated),
 		NextIntervalSeconds:  server.HeartbeatIntervalSeconds(s.cfg.Catalog.HeartbeatInterval),
 		NextHeartbeatSeconds: server.HeartbeatIntervalSeconds(s.cfg.Catalog.HeartbeatInterval),
+		EnvironmentName:      api.EnvironmentNameForEntry(updated.DisplayName, updated.Name),
 	})
 }
 

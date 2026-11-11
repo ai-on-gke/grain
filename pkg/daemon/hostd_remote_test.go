@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/whererun"
@@ -126,8 +127,12 @@ func TestAKubernetesDaemonRunsHostCLIsThroughAHostdThatDialsIn(t *testing.T) {
 	if !strings.Contains(r.Reason, "dials in") {
 		t.Errorf("reason = %q, want it to say the hostd dials in", r.Reason)
 	}
-	if _, err := cfg.cliHostdHost(r); err != nil {
+	h, err := cfg.cliHostdHost(r)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !agent.SupportsHookPolicy(h) {
+		t.Errorf("cliHostdHost against this build's hostd = %+v, want SupportsHookPolicy true", h)
 	}
 
 	c := cfg.capabilityHostd()

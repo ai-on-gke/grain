@@ -447,8 +447,8 @@ func fileCoalesced(ctx context.Context, store *model.Store, tag string, now time
 }
 
 // putFiledTask writes a task fileCoalesced's build made -- or, for one
-// build already wrote (a stacked review), updates it to carry the tags
-// and links build added.
+// build already wrote (a stacked review), updates it to carry the tags,
+// links and deferral build added.
 func putFiledTask(ctx context.Context, store *model.Store, task model.Task) error {
 	existing, err := store.GetTask(ctx, task.ID)
 	if err != nil {
@@ -461,6 +461,7 @@ func putFiledTask(ctx context.Context, store *model.Store, task model.Task) erro
 		t.Tags = task.Tags
 		t.Links = task.Links
 		t.Approval, t.ApprovedAt = task.Approval, task.ApprovedAt
+		t.DeferredAt, t.DeferredUntil = task.DeferredAt, task.DeferredUntil
 		return nil
 	})
 }

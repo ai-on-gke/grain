@@ -208,6 +208,74 @@ configured a failure always refuses. Changing the default to refuse
 belongs after the steps below, once every supported rollback target is
 signed.
 
+### A signature is not a review
+
+A release-key signature shows that CI built the image. It does not show
+that a reviewed commit went into it. Somebody with write access to the
+repository and no grain access can merge on the forge, or push where
+branch protection allows it, and skip every grain hold. CI then builds and
+signs that commit like any other
+(`docs/security/audits/2026-11-10-insider-risk.md`, finding 3).
+`pkg/reviewedmerge` is the rule for what does count. The commit is the
+merge commit of a pull request merged into `main` or `release/v*`, and
+one of these holds:
+
+- grain merged it: the merger is one of the forge logins grain merges
+  as, which only grain's credential is;
+- the pull request carries the forge's review record: an approval of
+  the merged head by somebody other than its author, with no change
+  request outstanding. Only reviews by the repository's owner, its
+  organization's members and its collaborators count, as with the
+  forge's own required reviews: any account can approve a public
+  repository's pull request.
+
+Every first-parent commit since the last one checked must pass as well.
+Otherwise a reviewed merge on top of a self-merged one would carry the
+unreviewed change in with it.
+
+It is asked in two places:
+
+- **At release.** `release-images.sh push` runs `cmd/reviewed-merge`
+  before it signs or tags anything, and refuses an unreviewed commit. The
+  chain runs from the commit the branch's published `grain` image was
+  built from, or, on a branch with nothing published yet, from where its
+  history leaves `main`. The check reads the forge with `GITHUB_TOKEN`
+  (`pull-requests: read`) and needs the repository variable
+  `GRAIN_MERGE_LOGINS`, the logins grain merges as. Until that variable
+  is set, only forge-approved merges publish. Setting
+  `REQUIRE_REVIEWED_MERGE=false` skips the check, and the build log says
+  so. The record of how each commit was merged is attested onto every
+  image the release signs, as in-toto predicate type
+  `https://github.com/ai-on-gke/grain/reviewed-merge/v1`
+  (`cosign verify-attestation --type ...`).
+- **At upgrade.** This check runs from the commit it checks. A commit
+  that rewrote the release workflow gets past it, and so does any
+  attestation that workflow writes. The check that holds against such a
+  commit is the deployment's own. `grain daemon
+  -upgrade-reviewed-merge-repo=owner/name` (with
+  `-upgrade-reviewed-merge-logins` and, for a private repository or the
+  API's rate limit, `-upgrade-reviewed-merge-token-file`) reads the
+  pulled image's revision label, which the signature covers. It then
+  asks the forge how that commit was merged, and how every first-parent
+  commit since the running build's was merged. For an image of another
+  branch (a release branch, upgraded to from a `main` build) the chain
+  runs from where the two branches part. Nothing from the new
+  commit runs to decide. The check runs in the `signature` step, after
+  the signature. It needs `-upgrade-verify-cmd`: without a signature the
+  label is only what the registry says, so the check refuses when that
+  flag is missing. It covers the host image path, the Kubernetes path
+  and both release-notes previews. The Kubernetes path pulls nothing
+  before a pod runs the image, so it reads the label from the registry
+  by the digest the verifier signed off on. It holds the manifest, and
+  the config blob the manifest names, to their digests. For an index it
+  reads every platform's manifest, and all of them must name the same
+  commit.
+
+Whether a missing `-upgrade-verify-cmd` should refuse everywhere has the
+same answer as the section above. It refuses for a deployment that asked
+for the reviewed-merge check. Everywhere else it warns, until installs
+carry the release key by default.
+
 ### Signatures in the registry
 
 cosign stores a signature as a tag on the same package:

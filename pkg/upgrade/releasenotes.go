@@ -236,6 +236,9 @@ func (u *Upgrader) imageReleaseNotes(ctx context.Context, p *progress, branch st
 			return ref, report, nil, fmt.Errorf("%w; not running it to read its release notes", err)
 		}
 	}
+	if _, err := u.checkImageReviewedMerge(ctx, p, stepVerify, ref); err != nil {
+		return ref, report, nil, fmt.Errorf("%w; not running it to read its release notes", err)
+	}
 	out, err := runAsked(ctx, p, releaseNotesStep, imageRunTimeout, imageRunner{u: u, ref: ref}.run(nil, args))
 	if err != nil {
 		if ranAndFailed(err) {
@@ -279,6 +282,9 @@ func (u *Upgrader) kubeReleaseNotes(ctx context.Context, p *progress, branch str
 		if ref, err = verifyTag(ctx, p, stepVerify, u.cfg.Kube.VerifyCmd, ref); err != nil {
 			return ref, report, nil, fmt.Errorf("%w; not running it to read its release notes", err)
 		}
+	}
+	if _, err := u.checkKubeReviewedMerge(ctx, p, stepVerify, ref); err != nil {
+		return ref, report, nil, fmt.Errorf("%w; not running it to read its release notes", err)
 	}
 	out, err := kubeRunner{u: u, ref: ref, security: security, pod: releaseNotesPod}.ask(ctx, p, args)
 	if err != nil {

@@ -318,6 +318,12 @@ func TestBaseBranchStatusOnlyEverReadsItsOwnScope(t *testing.T) {
 // documents for the whole roster.
 func TestBaseBranchStatusWithoutARepoSaysSo(t *testing.T) {
 	res := callBase(t, nil, PullRequestScope{})
+	// It names what reaches the same checks from the sandbox (task 4361).
+	for _, want := range []string{"`grain pr open`", "`grain ci wait`"} {
+		if !strings.Contains(res.Text, want) {
+			t.Errorf("answer does not name %s:\n%s", want, res.Text)
+		}
+	}
 	if !res.IsError || !strings.Contains(res.Text, "no GitHub repository configured") {
 		t.Errorf("answer = %q (isError=%v), want the nothing-configured explanation",
 			res.Text, res.IsError)

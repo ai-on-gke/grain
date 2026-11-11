@@ -188,6 +188,9 @@ export function displayCounts(counts) {
 // answered in a comment and opened no pull request), "message" (an
 // interactive task or console session waiting for its next message),
 // "access" (an agent's request_access -- ui.Task.AwaitingAccess),
+// "unanswered" (a person's comment no run has been shown --
+// ui.Task.UnansweredCommentFrom, which a reply to it would otherwise
+// hide behind a plain "Answered in a comment" for the owner),
 // "stopped" (a turn the reader stopped -- ui.Task.TurnStopped) or
 // "submit" (awaiting_submit); title is the chip's tooltip; action is what
 // ends it, "reply", "grant" or "submit".
@@ -235,6 +238,12 @@ export function askedCase(t) {
     return { kind: "stopped", title: "Stopped by you", action: "reply" };
   if (t.awaitingAccess)
     return { kind: "access", title: "Asked for access", action: "grant" };
+  if (t.unansweredCommentFrom)
+    return {
+      kind: "unanswered",
+      title: `Unanswered question from ${t.unansweredCommentFrom}`,
+      action: "reply",
+    };
   if (t.interactive || t.consoleSession)
     return {
       kind: "message",
@@ -1017,6 +1026,27 @@ const REASON_CONTROLS = {
   },
 };
 
+// actionScope is the role scope the request behind one of a row's
+// answers needs (pkg/ui's roleScopeOf for POST /api/tasks/{id}<post>), or
+// null for an answer that only reads -- opening the task, or a link out.
+// AccessGate disables the button for a role without it and says why,
+// rather than leaving a grain/viewer an Approve whose click ends in a 403
+// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
+export function actionScope(action) {
+  if (action.open || action.href) return null;
+  if (action.forceMerge || action.overrideReviewGates) return "merge:force";
+  switch (action.post) {
+    case "/approve":
+      return "tasks:admin";
+    case "/run-now":
+      return "dispatch:write";
+    case "/retry-merge":
+      return "merge:write";
+    default:
+      return "tasks:write";
+  }
+}
+
 // reasonControl is the button that ends this task's wait, as a row
 // offers it ({label, post, ...}), or null where its sub-case names no
 // control a row can press. A merge-queue sub-case's own control (Retry
@@ -1163,9 +1193,7 @@ export function baseRepairWaitReason(t) {
       return `waiting on review questions from #${t.reviewQuestions}`;
     }
     if (t.state === "awaiting_reply") {
-      return t.questionSummary || t.pendingSecret
-        ? "waiting for a reply to its question"
-        : "answered in a comment";
+      return awaitingReplyPhrase(t);
     }
     if (t.state === "failed") {
       return "failed and waiting for retry";
@@ -1194,9 +1222,7 @@ export function baseRepairWaitReason(t) {
     return `stalled (${t.stall})`;
   }
   if (t.state === "awaiting_reply") {
-    return t.questionSummary || t.pendingSecret
-      ? "waiting for a reply to its question"
-      : "answered in a comment";
+    return awaitingReplyPhrase(t);
   }
   if (t.state === "failed") {
     return "failed and waiting for retry";
@@ -1211,6 +1237,18 @@ export function baseRepairWaitReason(t) {
     return t.repairing ? "queued for repair" : "queued";
   }
   return "waiting in the merge queue";
+}
+
+// awaitingReplyPhrase is what an awaiting_reply task is waiting on, for
+// the phrase above: a person's comment no run has been shown is named
+// first, since it is waiting on an agent and not on the owner.
+function awaitingReplyPhrase(t) {
+  if (t.unansweredCommentFrom) {
+    return `unanswered question from ${t.unansweredCommentFrom}`;
+  }
+  return t.questionSummary || t.pendingSecret
+    ? "waiting for a reply to its question"
+    : "answered in a comment";
 }
 
 // redBaseRepairSentence formats the banner and inbox sentence for a waiting

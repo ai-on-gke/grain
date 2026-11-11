@@ -420,6 +420,7 @@ main() {
   resolve_grain_account
 
   local instance_name deployment_owner owner_group issuer instance_domain audience jwks_url management_url
+  local environment_name
   local sql_instance db_name db_user db_dsn db_password_secret sql_private_ip sm_prefix object_store config_repo config_repo_branch
 
   instance_name="$(printf '%s' "$config_json" | jq -r '.instance // .name // empty')"
@@ -430,6 +431,10 @@ main() {
   audience="$(printf '%s' "$config_json" | jq -r '.audience // .registry_audience // empty')"
   jwks_url="$(printf '%s' "$config_json" | jq -r '.jwks_url // .registry_keys_url // empty')"
   management_url="$(printf '%s' "$config_json" | jq -r '.management_url // empty')"
+  # The hub entry's display name (else its entry name), already cut to a
+  # single env-file-safe line by the hub: the daemon's default
+  # environment name, which never overrides one its operator set.
+  environment_name="$(printf '%s' "$config_json" | jq -r '.environment_name // empty' | tr -d '\n\r')"
   sql_instance="$(printf '%s' "$config_json" | jq -r '.sql_instance // .cloud_sql_instance // empty')"
   db_name="$(printf '%s' "$config_json" | jq -r '.db_name // empty')"
   db_user="$(printf '%s' "$config_json" | jq -r '.db_user // empty')"
@@ -530,6 +535,7 @@ main() {
     fi
     echo "GRAIN_DISABLE_SELF_UPGRADE=true"
     [ -n "$management_url" ] && echo "GRAIN_MANAGEMENT_URL=${management_url}"
+    [ -n "$environment_name" ] && echo "GRAIN_DEFAULT_ENVIRONMENT_NAME=${environment_name}"
     if [ -n "$db_dsn" ]; then
       echo "GRAIN_DB_DRIVER=postgres"
       echo "GRAIN_DB_DSN=${db_dsn}"

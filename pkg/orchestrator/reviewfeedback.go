@@ -558,7 +558,7 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: questions.Target()})
 		model.AddReviewFindings(t, model.ReviewFindingsRecord{
-			Gate:       reviewGateOf(*t, review.ID),
+			Gate:       reviewGateOf(*t, review.ID, review.Tags...),
 			ReviewTask: review.ID,
 			Summary:    summary,
 			At:         now,

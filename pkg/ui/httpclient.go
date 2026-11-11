@@ -1000,6 +1000,26 @@ func (c *HTTPClient) AddCommentWithAuthor(ctx context.Context, id, body string, 
 		addCommentRequest{Body: body, Attachments: attachments, Author: author}, nil)
 }
 
+// Comment is AddComment with the rest of what the route says: reopen
+// asks for a closed task to be reopened along with the comment (Client.
+// AddCommentReopening), and notice is the server's sentence for a
+// comment that reached no agent because its task is still closed -- ""
+// when the comment was delivered as any other.
+func (c *HTTPClient) Comment(ctx context.Context, id, body string, attachments []AttachmentUpload, reopen bool) (notice string, err error) {
+	var resp struct {
+		CommentDelivery string `json:"commentDelivery"`
+		Notice          string `json:"notice"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/comments",
+		addCommentRequest{Body: body, Attachments: attachments, Reopen: reopen}, &resp); err != nil {
+		return "", err
+	}
+	if resp.CommentDelivery == CommentNotDelivered && resp.Notice == "" {
+		return CommentNotDeliveredNotice, nil
+	}
+	return resp.Notice, nil
+}
+
 // Close is Client.Close over the wire, opts and all: the flag travels as
 // the request body's own close_pull_request, which the server reads back
 // into the same CloseOptions. Sent on every call rather than only when
