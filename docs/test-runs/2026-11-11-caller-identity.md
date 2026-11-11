@@ -160,8 +160,10 @@ Findings (follow-up 3, not fixed here):
 - `go test ./tests/hygiene/... ./tests/security/... ./pkg/cli/...` pass.
 - `go test ./pkg/ui/ ./pkg/daemon/` pass.
 - Each new regression test was confirmed to fail with its fix reverted (F1, F2, F3), or asserts the exact mode bits `HEAD` got wrong (F4, F5).
-- **Red inherited from `main`** (`2ab9a53ad`, merged into this branch). None of it is in this branch's diff:
-  - `tests/security` `TestRatchetRules` (`go model`) flags `pkg/staterepo/settingshistory.go:424` ("git cat-file: spec is not after `--`"), from `6326eddc6` (PR #1260).
-  - `tests/deploy` `TestTheGoJobsCoverEveryPackageInTheModuleOnce` (`go e2e`): `pkg/infrasig` is in no Go test job. It was already red at this branch's base, `7abd7c144`.
-  - `pkg/model/postgres` `TestUpgradeFromSQLite` failed locally with `driver: bad connection`, against a PostgreSQL the walkthrough daemons were also using.
-  - `go unit` and `ui e2e` (`api-scope-set-edit.spec.js`, `session-pending-grants.spec.js`) are red on PR #1272. Their logs were cut off in the sandbox. Neither touches this branch's files.
+- **Red inherited from `main`, repaired in this branch** (attempt 2, the merge queue's repair run):
+  - `go model`: `tests/security` `TestRatchetRules` flagged `pkg/staterepo/settingshistory.go`'s `git cat-file blob <spec>` (from `6326eddc6`). It now passes `--end-of-options`.
+  - `go e2e`: `tests/deploy` `TestTheGoJobsCoverEveryPackageInTheModuleOnce` reported `pkg/infrasig` in no shard. It joins `go unit` in `.github/workflows/tests.yml` and `.grain/workflows/tests.yml`.
+  - `go unit`:
+    - `pkg/ci` `TestOnlyBuildersNameTheCIService` flagged `pkg/daemon/ci_gocache.go`, which wires the built CI service. It is now listed in `ciBuilders`.
+    - `pkg/gitproxy` `TestDefaultCIReadScopeReadsItsOwnGitHubActionsCI` expected the legacy `api:ci-read@repo` spelling. It now expects the canonical `api#ci-read with {repo: …}`.
+  - `ui e2e`: `api-scope-set-edit`, `session-pending-grants` and `capability-policy-pickers` expected legacy grant labels that the UI shows in canonical spelling since task 4366. All three specs pass locally.
