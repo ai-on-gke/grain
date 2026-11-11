@@ -602,24 +602,6 @@ func consoleSessionRest(ctx context.Context, deps Deps, taskID string) (waiting 
 	return false, unanswered, nil
 }
 
-// undeliveredHumanComment is the first comment a person posted on a task
-// that no run has been given, or nil when every one of them has been.
-// recorded is false when there is no mark to judge by -- no run has been
-// dispatched since grain started keeping one -- and the caller has to
-// decide some other way.
-//
-// Given means either of two things. The comment is at or before
-// Observation.DeliveredCommentID, the last comment a run was actually
-// shown: in its prompt, as an addendum, or as a chat reply. Or it was
-// already there when the latest run started, which is a run dispatched
-// for it: that run either had it in its prompt or failed on the way to
-// its agent, and a failure is answered by grain's own note in the
-// conversation rather than by dispatching into it again and again. The
-// second rule is what keeps a dispatch that failed before it could
-// record the mark from turning into a loop.
-//
-// Human comments only: what a run says, and what grain says about it,
-// are never something to dispatch a run to answer.
 // consoleSessionTailComments reads only the tail of a session's conversation
 // that consoleSessionRest needs: back to grain's latest session line and
 // Observation.DeliveredCommentID, oldest first.
@@ -703,6 +685,24 @@ func consoleSessionTailRuns(ctx context.Context, store *model.Store, taskID stri
 	return out, nil
 }
 
+// undeliveredHumanComment is the first comment a person posted on a task
+// that no run has been given, or nil when every one of them has been.
+// recorded is false when there is no mark to judge by -- no run has been
+// dispatched since grain started keeping one -- and the caller has to
+// decide some other way.
+//
+// Given means either of two things. The comment is at or before
+// Observation.DeliveredCommentID, the last comment a run was actually
+// shown: in its prompt, as an addendum, or as a chat reply. Or it was
+// already there when the latest run started, which is a run dispatched
+// for it: that run either had it in its prompt or failed on the way to
+// its agent, and a failure is answered by grain's own note in the
+// conversation rather than by dispatching into it again and again. The
+// second rule is what keeps a dispatch that failed before it could
+// record the mark from turning into a loop.
+//
+// Human comments only: what a run says, and what grain says about it,
+// are never something to dispatch a run to answer.
 func undeliveredHumanComment(comments []model.Comment, obs *model.Observation, runs []model.Run) (pending *model.Comment, recorded bool) {
 	if obs == nil || obs.DeliveredCommentID == nil {
 		return nil, false
