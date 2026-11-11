@@ -399,7 +399,7 @@ sandbox:
   `GET /api/templates` (`sandbox: {cpus, memoryMb, diskGb}`), and in the
   preview beside the New Task form.
 
-**Which grain accepts it.** `sandbox:` on a template is new in schema 142.
+**Which grain accepts it.** `sandbox:` on a template is new in schema 143.
 The first release that accepts it is the first one cut from a `main` that
 has this change: **v3.6.0** if v3.6.0 is cut after it lands, otherwise the
 release after. v3.5.1 and every v3.6.0 release candidate up to rc.6 don't

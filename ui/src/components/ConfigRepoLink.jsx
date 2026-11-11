@@ -83,9 +83,15 @@ export function useStateRepoFiles(enabled = true) {
 // and where to change them. Optional files such as settings/capabilities.yml
 // are dropped when the Config Repo Browser's listing says they have not
 // been exported, keeping at least the first path.
+//
+// `what` is the sentence's subject and is plural by default ("These
+// settings live ..."); `singular` is for a subject that names one thing
+// -- a repository's qualification plan -- which otherwise read "plan
+// live ... and are read-only" (2026-11-11 repository walkthrough).
 export function ConfigManagedNotice({
   paths,
   what = "These settings",
+  singular = false,
   id,
   sx,
 }) {
@@ -102,8 +108,10 @@ export function ConfigManagedNotice({
       data-testid="config-managed-notice"
     >
       <Typography variant="body2">
-        {what} live in the config repo and are read-only here. Change them with
-        a config pull request, or ask the Director to.
+        {what} {singular ? "lives" : "live"} in the config repo and{" "}
+        {singular ? "is" : "are"} read-only here. Change{" "}
+        {singular ? "it" : "them"} with a config pull request, or ask the
+        Director to.
       </Typography>
       <Box
         component="ul"

@@ -660,10 +660,15 @@ import "strconv"
 // 141 adds `schedule`.`skip_when` (model.Schedule.SkipWhen): a condition
 // outside the schedule, such as its base branch's publishing being held,
 // that holds its firings (grain/task-4393).
-// 142 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
+// 142 changes no table: it rewrites the owner column of the qualification
+// plan tables and `scheduled_workflow_run` to StoredOwner (host/owner off
+// the default host), which every other repo-keyed table already holds,
+// for rows their schedule or a target repo places on another host
+// (migrateStoredOwners, grain/task-4335).
+// 143 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
 // shape every task filed from a template asks for, as JSON, empty for
 // none (grain/task-4591).
-const SchemaVersion = 142
+const SchemaVersion = 143
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

@@ -1033,7 +1033,14 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version:     142,
+		Version: 142,
+		Description: "host-qualify the owner column of qualification_config, qualification_item, " +
+			"qualification_item_depends_on and scheduled_workflow_run (StoredOwner) for rows a schedule " +
+			"or a target repo places off the default host (grain/task-4335)",
+		Up: migrateStoredOwners,
+	},
+	{
+		Version:     143,
 		Description: "add template.sandbox, the sandbox shape every task filed from a template asks for (grain/task-4591)",
 		Statements: []string{
 			"ALTER TABLE `template` ADD COLUMN `sandbox` TEXT NOT NULL DEFAULT ''",
