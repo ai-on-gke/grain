@@ -35,6 +35,7 @@ var ciBuilders = map[string]string{
 	// off the engine, and LiveCI's handle on the in-process service.
 	"pkg/daemon/ci.go":                 "builds the daemon's CI service",
 	"pkg/daemon/ci_capability_pass.go": "wires the built service's grant admission",
+	"pkg/daemon/ci_gocache.go":         "wires the built service's Go build-cache writers into its sandboxes",
 	// The demo's observability scene runs a real engine against a fake
 	// sandbox backend, so it builds the service the daemon would.
 	"pkg/demo/demo_observability.go": "builds the observability demo's CI service",
