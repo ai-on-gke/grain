@@ -81,6 +81,13 @@ func (c *Client) Usage(ctx context.Context) (UsageResponse, error) {
 // SetUsageSettings replaces the usage settings and reports the usage
 // they produce.
 func (c *Client) SetUsageSettings(ctx context.Context, settings model.UsageSettings) (UsageResponse, error) {
+	// usage_setting is a settings table (staterepo.SettingsTables), set
+	// from Settings -> Models: writable here in internal mode and
+	// exported to grain/config, refused in favour of a pull request when
+	// an external config repository owns it.
+	if err := c.checkBootstrapWritable(ctx, "usage_setting"); err != nil {
+		return UsageResponse{}, err
+	}
 	if err := settings.Validate(); err != nil {
 		return UsageResponse{}, validationErrorf("%v", err)
 	}
