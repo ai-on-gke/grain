@@ -38,14 +38,62 @@ type REST struct {
 	Client *http.Client
 }
 
+// restAttempts is how many times get asks before it gives up on a
+// response it counts as transient (restTransient); restBackoff is the
+// wait before the second attempt, doubled before each one after it.
+// A single 503 from the API used to refuse a release outright
+// (run 43048355272), so the gate now rides out a brief outage the way
+// a person re-running the job would -- and still refuses, with the
+// last error, once the outage outlasts every attempt.
+var (
+	restAttempts = 5
+	restBackoff  = 2 * time.Second
+)
+
+// restTransient reports whether a response status is worth asking
+// again for: rate limiting and the gateway and server errors GitHub
+// returns while it is degraded. Anything else -- 401, 403, 404, 422 --
+// says the same thing on every attempt.
+func restTransient(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
 func (r REST) get(ctx context.Context, p string, into any) error {
+	wait := restBackoff
+	var err error
+	for attempt := 1; ; attempt++ {
+		var retry bool
+		retry, err = r.getOnce(ctx, p, into)
+		if err == nil || !retry || attempt >= restAttempts || ctx.Err() != nil {
+			break
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return fmt.Errorf("%w (giving up after %d attempts: %v)", err, attempt, ctx.Err())
+		case <-t.C:
+		}
+		wait *= 2
+	}
+	return err
+}
+
+// getOnce makes one request; retry reports whether its error is one a
+// second attempt might not meet.
+func (r REST) getOnce(ctx context.Context, p string, into any) (retry bool, err error) {
 	base := strings.TrimRight(r.BaseURL, "/")
 	if base == "" {
 		base = "https://api.github.com"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+p, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -58,17 +106,19 @@ func (r REST) get(ctx context.Context, p string, into any) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		// A connection reset or a timeout talking to the API is as
+		// passing as a 503 from it.
+		return true, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return err
+		return true, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s: %s", p, resp.Status, strings.TrimSpace(string(body)))
+		return restTransient(resp.StatusCode), fmt.Errorf("GET %s: %s: %s", p, resp.Status, strings.TrimSpace(string(body)))
 	}
-	return json.Unmarshal(body, into)
+	return false, json.Unmarshal(body, into)
 }
 
 func repoPath(repo string) (string, error) {
