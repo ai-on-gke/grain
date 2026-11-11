@@ -41,8 +41,8 @@ export function useTaskContext(t) {
   const [context, setContext] = useState(null);
   const durable = isDurable(t);
   const id = t?.id;
-  const comments = t?.comments?.length || 0;
-  const attempts = t?.attempts?.length || 0;
+  const comments = (t?.comments?.length || 0) + (t?.olderComments || 0);
+  const attempts = (t?.attempts?.length || 0) + (t?.olderAttempts || 0);
   const state = t?.state;
   useEffect(() => {
     if (!durable || !id) {

@@ -631,16 +631,17 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 const learnLoginsTimeout = 10 * time.Second
 
 // learnLogins asks the hostd that just connected over sess for its hello
-// and keeps the agent CLI logins it reports (Hello.Logins) in its
-// status, for Settings' host pickers. It changes nothing a run reads,
-// and a hostd that does not answer -- or one too old to say -- simply
-// shows none known.
+// and keeps its contract features (Hello.Features, or legacyFeatures for
+// older hosts) and agent CLI logins (Hello.Logins) in its status, for
+// Settings' host views and pickers. Has(FeatureLogins) distinguishes an
+// authoritative empty list ("no logins") from an older host that does
+// not report them ("not known").
 func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
 	ctx, cancel := context.WithTimeout(ctx, learnLoginsTimeout)
 	defer cancel()
 	c := Client{Dial: func(ctx context.Context) (net.Conn, error) { return sess.m.OpenStream(ctx) }}
 	h, err := c.Hello(ForDisplay(ctx))
-	if err != nil || h.Protocol < 2 {
+	if err != nil {
 		return
 	}
 	r.mu.Lock()
@@ -652,7 +653,9 @@ func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
 		return
 	}
 	st := r.last[name]
-	st.Logins, st.LoginsKnown = append([]string(nil), h.Logins...), true
+	if h.Has(FeatureLogins) || len(h.Logins) > 0 {
+		st.Logins, st.LoginsKnown = append([]string(nil), h.Logins...), true
+	}
 	if len(h.Features) > 0 {
 		st.Features = append([]Feature(nil), h.Features...)
 	} else {

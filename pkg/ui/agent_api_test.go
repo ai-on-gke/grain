@@ -535,7 +535,11 @@ func TestAgentAPIChildNotesItsDirector(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(comments, func(c model.Comment) bool {
-		return c.Body == "finished the check" && c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
+		// The director holds grants its child does not, so the note
+		// arrives marked as untrusted agent input (agentCrossTaskRail).
+		return strings.HasSuffix(c.Body, "finished the check") &&
+			strings.HasPrefix(c.Body, "[Untrusted agent input: task 101 ") &&
+			c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
 	}) {
 		t.Errorf("director comments = %+v, want the child's note", comments)
 	}

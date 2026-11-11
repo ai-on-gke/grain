@@ -39,6 +39,12 @@ export function forgetETags() {
   etags.clear();
 }
 
+// forgetVerifierTrouble ends any run of verifier_unavailable refusals
+// verifierTroubleSince is counting, for the same kind of test.
+export function forgetVerifierTrouble() {
+  setVerifierTrouble(null);
+}
+
 // isUnreachable is whether an error api() threw means the daemon could
 // not be reached at all -- a network-level failure fetch itself
 // rejected with (a dead connection, a timeout, a DNS failure: the Fetch
@@ -57,13 +63,86 @@ export function forgetETags() {
 // open -- is as out of reach as one that refuses it, and without a
 // bound on the wait the request never rejects at all, so nothing could
 // ever say so (grain/task-3619).
+//
+// A verifier_unavailable 503 (isVerifierUnavailable below) is not one:
+// it is the daemon itself answering, saying the sign-in verifier it
+// consults could not check this request's identity right now.
 export function isUnreachable(err) {
   if (!err || err.notGrain) return false;
+  if (isVerifierUnavailable(err)) return false;
   if (err.timedOut) return true;
   if (typeof err.status === "number") {
     return err.status === 502 || err.status === 503 || err.status === 504;
   }
   return err instanceof TypeError;
+}
+
+// isVerifierUnavailable is whether an error api() threw is the daemon
+// refusing a request because the sign-in verifier in front of its
+// allowlist could not check the caller's identity right now -- its
+// identity backend briefly out of reach (pkg/ui's writeVerifierUnavailable).
+// It is transient and the daemon is up: a poll retries it quietly, and
+// only verifierTroubleSince running past VERIFIER_SUSTAINED_MS is worth
+// saying anything about.
+export function isVerifierUnavailable(err) {
+  return err?.status === 503 && err?.code === "verifier_unavailable";
+}
+
+// VERIFIER_SUSTAINED_MS is how long verifier_unavailable refusals have to
+// go on, with no request getting through, before the page says so.
+export const VERIFIER_SUSTAINED_MS = 30_000;
+
+// verifierTrouble is when the current run of verifier_unavailable
+// refusals began, across every request this tab makes: null once any
+// request succeeds. Kept here rather than in App's state because every
+// poll on every page goes through api(), and any one of them answering
+// is the run's end.
+let verifierTrouble = null;
+const verifierListeners = new Set();
+
+function setVerifierTrouble(next) {
+  if (next === verifierTrouble) return;
+  verifierTrouble = next;
+  for (const fn of verifierListeners) fn(next);
+}
+
+// verifierTroubleSince is when the current run of verifier_unavailable
+// refusals began, or null when there is none.
+export function verifierTroubleSince() {
+  return verifierTrouble;
+}
+
+// onVerifierTrouble calls fn with verifierTroubleSince's new value each
+// time it changes, and returns the function that stops it.
+export function onVerifierTrouble(fn) {
+  verifierListeners.add(fn);
+  return () => verifierListeners.delete(fn);
+}
+
+// verifierTroubleSustained is whether the current run of
+// verifier_unavailable refusals has lasted VERIFIER_SUSTAINED_MS.
+export function verifierTroubleSustained(now = Date.now()) {
+  return (
+    verifierTrouble !== null &&
+    now - verifierTrouble.getTime() >= VERIFIER_SUSTAINED_MS
+  );
+}
+
+// VERIFIER_ACTION_REASON is what a toast says for an action of the
+// operator's own the verifier refused: what happened and that a retry
+// is all it needs, rather than that the deployment is unreachable.
+export const VERIFIER_ACTION_REASON =
+  "Sign-in verification could not check your identity just now, so this was not done -- try again in a few seconds.";
+
+// verifierSustainedReason is the standing warning's sentence for a run of
+// verifier_unavailable refusals that began at since.
+export function verifierSustainedReason(since, now = Date.now()) {
+  const secs = Math.max(
+    Math.round(VERIFIER_SUSTAINED_MS / 1000),
+    Math.floor((now - since.getTime()) / 1000),
+  );
+  const age = secs < 120 ? `${secs}s` : `${Math.floor(secs / 60)} min`;
+  return `Sign-in verification has been temporarily unable to check your identity for ${age} — retrying automatically.`;
 }
 
 const NETWORK_UNREACHABLE_REASON =
@@ -183,6 +262,7 @@ async function request(path, opts) {
       init,
     ),
   );
+  if (res.ok || res.status === 304) setVerifierTrouble(null);
   if (poll && res.status === 304) return UNCHANGED;
   const contentType = res.headers.get("Content-Type") || "";
   const isJSON = contentType.includes("application/json");
@@ -198,6 +278,18 @@ async function request(path, opts) {
     // for a save from a copy somebody has since saved over
     // (components/StaleEdit.jsx).
     if (body && body.code) err.code = body.code;
+    // What a verifier_unavailable refusal says about itself: the backend
+    // that was out of reach ("tonic_unreachable") and when to ask again.
+    if (body && body.reason) err.reason = body.reason;
+    if (body && typeof body.retryAfter === "number") {
+      err.retryAfter = body.retryAfter;
+    }
+    // Whether this was a read or an action, for showError: a refused
+    // read is retried by the poll that asked, a refused action is not.
+    err.method = method;
+    if (isVerifierUnavailable(err) && verifierTrouble === null) {
+      setVerifierTrouble(new Date());
+    }
     // A capability grant's refusal keyed by the argument it is about
     // (pkg/ui's ValidationError fields), which a grant form marks.
     if (body && body.fields) err.fields = body.fields;

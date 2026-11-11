@@ -1311,20 +1311,35 @@ func CarryConsoleSessionHandover(ctx context.Context, store *Store, previous, ta
 	if previous == "" {
 		return nil
 	}
-	comments, err := store.Comments(ctx, previous)
-	if err != nil {
-		return err
-	}
 	handover := ""
-	for _, c := range comments {
-		if c.Handover && strings.TrimSpace(c.Body) != "" {
-			handover = c.Body
+	if latest, err := store.LatestHandover(ctx, previous); err != nil {
+		return err
+	} else if latest != nil && strings.TrimSpace(latest.Body) != "" {
+		handover = latest.Body
+	} else if latest != nil {
+		// Rare case: an empty-body handover sat after a non-empty one.
+		var before int64 = latest.ID
+		for before > 0 && handover == "" {
+			page, more, perr := store.CommentsBefore(ctx, previous, before, 32)
+			if perr != nil {
+				return perr
+			}
+			for i := len(page) - 1; i >= 0; i-- {
+				if page[i].Handover && strings.TrimSpace(page[i].Body) != "" {
+					handover = page[i].Body
+					break
+				}
+			}
+			if !more || len(page) == 0 {
+				break
+			}
+			before = page[0].ID
 		}
 	}
 	if handover == "" {
 		return nil
 	}
-	_, err = store.AddComment(ctx, Comment{
+	_, err := store.AddComment(ctx, Comment{
 		TaskID:    taskID,
 		Author:    Attribution{Actor: ConsoleSessionPrincipal},
 		Body:      fmt.Sprintf(ConsoleSessionHandoverNote, previous, handover),
@@ -1338,15 +1353,12 @@ func CarryConsoleSessionHandover(ctx context.Context, store *Store, previous, ta
 // grain says one line, and the task is parked on it.
 func ParkConsoleSessionTask(ctx context.Context, store *Store, taskID, note string, now time.Time) error {
 	var commentID int64
-	comments, err := store.Comments(ctx, taskID)
+	last, err := store.LatestComment(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if len(comments) > 0 {
-		last := comments[len(comments)-1]
-		if last.Author.Actor == ConsoleSessionPrincipal && last.Body == note {
-			commentID = last.ID
-		}
+	if last != nil && last.Author.Actor == ConsoleSessionPrincipal && last.Body == note {
+		commentID = last.ID
 	}
 	if commentID == 0 {
 		var err error
@@ -1368,7 +1380,7 @@ func ParkConsoleSessionTask(ctx context.Context, store *Store, taskID, note stri
 		return err
 	}
 	if note == ConsoleSessionResting {
-		runs, err := store.Runs(ctx, taskID)
+		runs, err := store.LatestRunsForState(ctx, taskID)
 		if err != nil {
 			return err
 		}

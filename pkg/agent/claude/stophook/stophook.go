@@ -16,12 +16,12 @@
 // payload on stdin, the stop rule (pkg/agent/stoprule) applied to the
 // session it names, and the decision on stdout.
 //
-// It is a leaf -- it imports nothing of grain's but the stop rule -- so
-// that every binary a run may name as its hook can carry it cheaply:
-// cmd/grain, and grain-agentd, which runs the CLIs on a machine that is
-// not the daemon's and must stay small. pkg/agent/claude writes the hook
-// into a run's settings (stopHookSettings) and re-exports Subcommand and
-// Run under their old names (StopHookSubcommand, ServeStopHook).
+// It is a leaf -- it imports only stoprule and hookpolicy -- so that every
+// binary a run may name as its hook can carry it cheaply: cmd/grain, and
+// grain-agentd, which runs the CLIs on a machine that is not the daemon's
+// and must stay small. When -policy names a staged per-run policy file, the
+// hook evaluates that data directly rather than its compiled-in default rule;
+// when the file is absent, it falls back to stoprule.DefaultPolicy.
 package stophook
 
 import (
@@ -31,6 +31,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 	"github.com/ai-on-gke/grain/pkg/agent/stoprule"
 )
 
@@ -44,10 +45,14 @@ import (
 // are: the hook must be an executable named in a config written per run,
 // and the one a deployment is guaranteed to have is this binary. It runs
 // beside the CLI, on the same host, and reads only what Claude Code hands
-// it on stdin and the session transcript that names; it asks the daemon
-// nothing, holds no credential, and can change nothing but whether this
-// one turn ends.
+// it on stdin, the session transcript that names, and the staged per-run
+// policy file (-policy); it asks the daemon nothing, holds no credential,
+// and can change nothing but whether this one turn ends.
 const Subcommand = "claude-stop-hook"
+
+// FlagPolicy is the flag pointing claude-stop-hook at a staged per-run
+// hookpolicy.File.
+const FlagPolicy = "-policy"
 
 // input is the part of Claude Code's Stop hook payload this hook reads.
 // last_assistant_message is only sent by newer builds; an older one is
@@ -73,8 +78,10 @@ const maxTranscript = 64 << 20
 
 // Run answers one Claude Code Stop hook: the payload on stdin, the
 // decision on stdout. Its arguments are what the run's settings wrote --
-// -interactive for a task somebody is sitting with, and -record naming the
-// file each block is appended to for the run's transcript and census.
+// -interactive for a task somebody is sitting with, -record naming the
+// file each block is appended to for the run's transcript and census, and
+// -policy naming the staged per-run hookpolicy.File (when the host supports
+// hook_policy).
 //
 // It never exits non-zero and writes nothing at all for a stop it allows:
 // a hook that fails must cost a run nothing, and an empty stdout with exit
@@ -89,14 +96,21 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	fs.SetOutput(stderr)
 	interactive := fs.Bool("interactive", false, "the task is a session somebody is sitting with")
 	record := fs.String("record", "", "file to append each block to")
+	policyPath := fs.String("policy", "", "staged per-run hook policy file")
 	if err := fs.Parse(args); err != nil {
 		return
+	}
+	policy := stoprule.DefaultPolicy()
+	if file, err := hookpolicy.Load(*policyPath); err != nil {
+		return
+	} else if file != nil && file.Stop != nil {
+		policy = *file.Stop
 	}
 	var in input
 	if err := json.NewDecoder(io.LimitReader(stdin, 1<<20)).Decode(&in); err != nil {
 		return
 	}
-	d, block := decide(in, *interactive, readTranscript)
+	d, block := decideWith(in, *interactive, policy, readTranscript)
 	if !block {
 		return
 	}
@@ -106,10 +120,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 	json.NewEncoder(stdout).Encode(output{Decision: "block", Reason: d.Reason})
 }
 
-// decide is the hook's policy apart from its I/O: whether this stop is
-// blocked, and with what. transcript reads the session the payload names,
-// and is a parameter so the policy is testable without one on disk.
+// decide is the hook's policy apart from its I/O under DefaultPolicy.
 func decide(in input, interactive bool, transcript func(path string) string) (stoprule.Decision, bool) {
+	return decideWith(in, interactive, stoprule.DefaultPolicy(), transcript)
+}
+
+func decideWith(in input, interactive bool, policy hookpolicy.StopPolicy, transcript func(path string) string) (stoprule.Decision, bool) {
 	if in.StopHookActive {
 		return stoprule.Decision{}, false
 	}
@@ -120,32 +136,29 @@ func decide(in input, interactive bool, transcript func(path string) string) (st
 	if in.TranscriptPath != "" {
 		session = transcript(in.TranscriptPath)
 	}
-	calls, last := ParseSession(session)
+	prefixes := policy.ToolPrefixes
+	if len(prefixes) == 0 {
+		prefixes = stoprule.DefaultToolPrefixes
+	}
+	calls, last := ParseSessionWithPrefixes(session, prefixes)
 	final := in.LastAssistantMessage
 	if final == "" {
 		final = last
 	}
-	d := stoprule.Decide(interactive, final, calls)
+	d := stoprule.DecideWith(policy, interactive, final, calls)
 	return d, d.Block
 }
 
-// toolNamespace is the MCP server name grain registers its tools under
-// (pkg/mcp.ToolNamespace; pkg/agent/claude's tests hold the two equal).
-const toolNamespace = "grain-sandbox"
-
 // ParseSession reads what the stop rule needs out of a Claude Code session
-// transcript: every tool call it made, by bare name (the
-// "mcp__grain-sandbox__" prefix Claude Code reports a grain tool under
-// stripped, as pkg/mcp.BareToolName does), with its arguments and whether
-// its result was an error, and the last text block -- the message the
-// agent is ending its turn on.
-//
-// A session transcript's assistant and user lines are the same shape as
-// the stream-json ones pkg/agent/claude's own parser reads, and this reads
-// them the same way (its tests hold the two in agreement): a line that is
-// not JSON is skipped, and a message's content is either a list of typed
-// blocks or a plain string, read as one text block.
+// transcript using DefaultToolPrefixes.
 func ParseSession(session string) (calls []stoprule.Call, lastText string) {
+	return ParseSessionWithPrefixes(session, stoprule.DefaultToolPrefixes)
+}
+
+// ParseSessionWithPrefixes reads every tool call in session, stripping the
+// first matching prefix in prefixes to recover bare tool names, along with
+// each call's arguments, error flag, and the session's last text block.
+func ParseSessionWithPrefixes(session string, prefixes []string) (calls []stoprule.Call, lastText string) {
 	pending := map[string]int{}
 	for _, line := range strings.Split(session, "\n") {
 		line = strings.TrimSpace(line)
@@ -171,8 +184,13 @@ func ParseSession(session string) (calls []stoprule.Call, lastText string) {
 					lastText = b.Text
 				}
 			case "tool_use":
-				name := strings.TrimPrefix(b.Name, "mcp__"+toolNamespace+"__")
-				name = strings.TrimPrefix(name, "mcp_"+toolNamespace+"_")
+				name := b.Name
+				for _, pref := range prefixes {
+					if after, ok := strings.CutPrefix(name, pref); ok {
+						name = after
+						break
+					}
+				}
 				calls = append(calls, stoprule.Call{Name: name, Arguments: b.Input})
 				pending[b.ID] = len(calls) - 1
 			case "tool_result":
