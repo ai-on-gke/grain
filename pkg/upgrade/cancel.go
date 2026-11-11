@@ -143,7 +143,7 @@ func (u *Upgrader) StartScheduled(branch string) error {
 	if err := u.checkConfiguredEdition(); err != nil {
 		return err
 	}
-	return u.startWithOptions(branch, "", nil, false)
+	return u.startWithOptions(branch, "", nil, false, "")
 }
 
 // Cancel stops an in-progress upgrade if it has not yet reached its point of no

@@ -1348,9 +1348,9 @@ function hasRollbackTarget(status) {
   if (status.previousImage) {
     return status.previousImage !== status.running?.image;
   }
-  if (status.previousRelease) {
-    return status.previousRelease !== status.running?.release;
-  }
+  // A source deployment rolls back to the commit it replaced, by object
+  // id; a release recorded without one has nothing the rollback can
+  // check out, so it is shown only as the commit's label.
   if (status.previousCommit) {
     return status.previousCommit !== status.running?.commit;
   }
@@ -1703,19 +1703,11 @@ export default function UpgradePanel({
     setRollingBack(true);
     setUnchangedBranch("");
     try {
-      let payload;
-      if (status.previousImage) {
-        const tag = imageTagOf(status.previousImage);
-        payload = {
-          branch: tag ? tag.replaceAll("..", "/") : "",
-          image: status.previousImage,
-          afterTasksFinish: false,
-        };
-      } else {
-        const target = status.previousRelease || status.previousCommit || "";
-        if (!target) return;
-        payload = { branch: target, afterTasksFinish: false };
-      }
+      // The daemon picks the target from its own record of the build the
+      // last upgrade replaced (a digest-pinned image, or on a source
+      // deployment the commit, checked out by id): naming it here as a
+      // branch would build whatever branch carries that name.
+      const payload = { rollback: true };
       const next = await api("/api/upgrade", {
         method: "POST",
         body: JSON.stringify(payload),

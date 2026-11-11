@@ -39,7 +39,7 @@ Subcommands:
                                       start or schedule an upgrade onto <branch> (defaults to deployment channel)
   cancel  [-reason <why>] [-scheduled]
                                       cancel an upgrade currently in progress (or a scheduled upgrade waiting to drain)
-  rollback [-after-tasks-finish]      roll back to the image or commit the last completed upgrade replaced`
+  rollback                            roll back to the image or commit the last completed upgrade replaced`
 
 // operatorCommands are the deployment operator's verbs -- notices to
 // every agent, releases, and in-place upgrades -- as dispatchCLI runs
@@ -196,9 +196,13 @@ func cmdUpgradeCancel(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 	return nil
 }
 
+// cmdUpgradeRollback starts the one-click rollback. It names no target:
+// the daemon goes back to what its own status records the last upgrade
+// replaced -- a digest-pinned image, or on a source deployment the
+// commit, checked out by object id (upgrade.Upgrader.StartRollback). A
+// rollback always starts now; it cannot be scheduled.
 func cmdUpgradeRollback(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain upgrade rollback", flag.ContinueOnError)
-	after := fs.Bool("after-tasks-finish", false, "hold the queue and wait for running tasks and CI jobs to finish before rolling back (source/branch rollback only)")
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -213,33 +217,20 @@ func cmdUpgradeRollback(ctx context.Context, c *ui.HTTPClient, out *printer, arg
 	if !cur.Enabled {
 		return errors.New("in-place upgrades are not enabled on this deployment")
 	}
-	if cur.PreviousImage != "" {
-		if *after {
-			return errors.New("rolling back to a pinned previous image runs immediately; omit -after-tasks-finish")
-		}
-		st, err := c.StartUpgradeImage(ctx, "", cur.PreviousImage, false, model.Principal{})
-		if err != nil {
-			return err
-		}
-		if out.json {
-			out.encode(st)
-			return nil
-		}
-		label := cur.PreviousImageLabel
-		if label == "" {
-			label = cur.PreviousImage
-		}
-		fmt.Printf("started rollback to %s (phase=%s)\n", label, st.Phase)
-		return nil
+	label := cur.PreviousImageLabel
+	if label == "" {
+		label = cur.PreviousImage
 	}
-	target := cur.PreviousRelease
-	if target == "" {
-		target = cur.PreviousCommit
+	if label == "" {
+		label = cur.PreviousRelease
 	}
-	if target == "" {
+	if label == "" {
+		label = cur.PreviousCommit
+	}
+	if label == "" {
 		return errors.New("no previous image or build is recorded on the last upgrade to roll back to")
 	}
-	st, err := c.StartUpgrade(ctx, target, *after, model.Principal{})
+	st, err := c.StartUpgradeRollback(ctx)
 	if err != nil {
 		return err
 	}
@@ -247,7 +238,7 @@ func cmdUpgradeRollback(ctx context.Context, c *ui.HTTPClient, out *printer, arg
 		out.encode(st)
 		return nil
 	}
-	fmt.Printf("started rollback to %s (phase=%s)\n", target, st.Phase)
+	fmt.Printf("started rollback to %s (phase=%s)\n", label, st.Phase)
 	return nil
 }
 

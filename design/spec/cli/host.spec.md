@@ -917,7 +917,7 @@ Manages in-place upgrades of a running `grain daemon` deployment (`GET /api/upgr
 - `grain upgrade` / `grain upgrade status` reads `GET /api/upgrade` and prints the running image or commit, any pending scheduled upgrade, whether an in-progress upgrade is still cancellable (with any remaining manual grace window or the point-of-no-return message), and the image or commit the last completed upgrade replaced.
 - `grain upgrade start [-after-tasks-finish] [-image <ref>] [<branch>]` posts `POST /api/upgrade` to start an immediate upgrade (subject to `-upgrade-grace-window`) or schedule one after active tasks and CI jobs drain.
 - `grain upgrade cancel [-reason <why>] [-scheduled]` cancels an upgrade currently in progress via `DELETE /api/upgrade/current`, recording the operator and reason in `config_audit` and ending progress in `cancelled`. If no upgrade is running and a scheduled upgrade is waiting to drain, it cancels `DELETE /api/upgrade/scheduled` (`-scheduled` cancels only a scheduled upgrade). Once the upgrade has reached its point of no return, the daemon returns `409 Conflict` (`restarting onto <target> — too late to cancel; upgrade back to <previous> afterwards`).
-- `grain upgrade rollback [-after-tasks-finish]` starts a rollback onto the `previousImage` (or `previousRelease` / `previousCommit` on source deployments) persisted by the last completed upgrade.
+- `grain upgrade rollback` posts `POST /api/upgrade` with `rollback: true`, starting a rollback onto the build the last completed upgrade replaced: its digest-pinned `previousImage`, or on source deployments its `previousCommit`, checked out by object id. The daemon reads the target from its own status file, and a rollback always starts now (it cannot be scheduled).
 - For Grain Hub entries: `connected` instances run `pkg/upgrade` and support per-instance `grain -context <name> upgrade cancel`; hosted `instance` VMs run with `-disable-self-upgrade` and upgrade externally by VM replacement (`grain hub upgrade <name>`).
 
 <!-- BEGIN GENERATED FLAGS: grain upgrade -->
@@ -951,9 +951,7 @@ _No flags._
 #### `grain upgrade rollback`
 
 <!-- BEGIN GENERATED FLAGS: grain upgrade rollback -->
-| Flag | Type | Default | Env | Description |
-|---|---|---|---|---|
-| `-after-tasks-finish` | bool |  |  | hold the queue and wait for running tasks and CI jobs to finish before rolling back (source/branch rollback only) |
+_No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `TestGrainUpgradeCLI` in `pkg/cli/upgrade_cmd_test.go`.
