@@ -25,9 +25,14 @@ describe("describeSuppression", () => {
     expect(describeSuppression({ reason: "task" })).toMatch(/task/);
     expect(describeSuppression({ reason: "suiteRun" })).toMatch(/suite run/);
     expect(describeSuppression({ reason: "workflowRun" })).toMatch(/CI run/);
-    expect(describeSuppression({ reason: "publishingHeld" })).toMatch(/publishing/);
+    expect(describeSuppression({ reason: "publishingHeld" })).toMatch(
+      /publishing/,
+    );
     expect(
-      describeSuppression({ reason: "publishingHeld", detail: "skipped: publishing held by task 4256" }),
+      describeSuppression({
+        reason: "publishingHeld",
+        detail: "skipped: publishing held by task 4256",
+      }),
     ).toBe("skipped: publishing held by task 4256");
     expect(describeSuppression({ reason: "review" })).toMatch(/review/);
   });
