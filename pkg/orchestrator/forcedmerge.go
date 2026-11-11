@@ -81,6 +81,19 @@ func forcedMergeOf(obs *model.Observation) *forcedMerge {
 		headSHA: strings.TrimSpace(obs.ForceMergeHeadSHA)}
 }
 
+// forcedMergeKeepsCI reports whether task's gate override for head names
+// review gates but not CI (model.GateOverriddenBy). ui.Client's
+// ForceMergeWithGates records CI alone for a plain force merge, so only an
+// override that named its gates and left CI out keeps CI standing; a stamp
+// with no recorded override is the legacy CI override it always was.
+func forcedMergeKeepsCI(task model.Task, head string) bool {
+	ov, ok := model.LatestGateOverride(task)
+	if !ok || head == "" || !strings.EqualFold(ov.HeadSHA, head) {
+		return false
+	}
+	return !model.GateOverriddenBy(model.GateCI, ov.Gates)
+}
+
 // clearForceMerge spends or withdraws an override: every field of the
 // stamp, so that nothing of one request is left to be read as part of
 // the next.

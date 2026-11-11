@@ -99,6 +99,12 @@ func TestMergeGatesWalkthrough20261111(t *testing.T) {
 	if mergedBranch(sim, branch) {
 		t.Fatal("merged after Submit with three reviews still running")
 	}
+	// The code-review gate stands for both trigger reviews and says so
+	// (finding F4): it used to name only the first one filed.
+	if g := gateOf(t, ctx, store, task.ID, model.GateReview); g.State != model.GateStateRunning ||
+		!slices.Equal(g.Tasks, trig) || g.Detail != "running (tasks #"+strings.Join(trig, ", #")+")" {
+		t.Fatalf("review gate with two trigger reviews running = %+v, want both named", g)
+	}
 
 	// 3. The security review and the planner review pass; the secrets
 	// review leaves a finding. The finding keeps the PR open after Submit.
@@ -118,6 +124,12 @@ func TestMergeGatesWalkthrough20261111(t *testing.T) {
 	}
 	completeReview(t, ctx, store, secID)
 	completeReview(t, ctx, store, plannerID)
+	// With the planner review done, the gate points at the one still
+	// running, not at the first one filed.
+	if g := gateOf(t, ctx, store, task.ID, model.GateReview); g.State != model.GateStateRunning ||
+		g.ReviewTask != secretsID || g.Detail != "running (task #"+secretsID+")" {
+		t.Fatalf("review gate with only the secrets review running = %+v, want it to name task %s", g, secretsID)
+	}
 	secrets3 := reloaded(t, ctx, store, secretsID)
 	if err := orchestrator.ProcessResult(ctx, store, client, secrets3,
 		toolResult(reviewFinding("plaintext token", "config/secrets/prod.yml", 1)),
@@ -407,5 +419,59 @@ func TestMergeGatesWalkthrough20261111ReviewsOpenNoPullRequests(t *testing.T) {
 	logGates(t, ctx, store, task.ID, "after a findings-only review pushed and finished")
 	for _, b := range commentBodies(t, ctx, store, trigID) {
 		t.Logf("review thread: %.200q", b)
+	}
+}
+
+// A forced merge skips only the gates its override names (finding F5): an
+// override naming the review gate alone does not merge over checks still
+// running or failing on GitHub, and merges once they pass; naming ci too
+// merges over the failure.
+func TestMergeGatesWalkthrough20261111AnOverrideNotNamingCIWaitsForChecks(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		checks []github.CheckRun
+		gates  []string
+		merge  bool
+	}{
+		"review only, checks running": {checks: []github.CheckRun{{Name: "tests", Status: "in_progress"}},
+			gates: []string{"review"}},
+		"review only, checks failing": {checks: []github.CheckRun{{Name: "tests", Status: "completed", Conclusion: strPtr("failure")}},
+			gates: []string{"review"}},
+		"review and ci, checks failing": {checks: []github.CheckRun{{Name: "tests", Status: "completed", Conclusion: strPtr("failure")}},
+			gates: []string{"review", "ci"}, merge: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, store, sim, client, task := finishGated(t,
+				[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+				"config/secrets/prod.yml")
+			branch := model.BranchName(task.ID)
+			setMergeable(sim, true)
+			sim.CheckRuns[branch] = tc.checks
+			got := reloaded(t, ctx, store, task.ID)
+			c := walkUIClient(store, client, baseTime.Add(3*time.Minute))
+			if _, err := c.SubmitPullRequest(ctx, ui.SubmitPullRequestRequest{PR: model.TaskPullRequest(got).String(),
+				OverrideGates: tc.gates, Reason: "outage", Head: prHeadOf(t, client, got)}); err != nil {
+				t.Fatalf("override %v: %v", tc.gates, err)
+			}
+			if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(6*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if merged := mergedBranch(sim, branch); merged != tc.merge {
+				t.Fatalf("override of %v with checks %s: merged = %v, want %v", tc.gates, tc.checks[0].Status, merged, tc.merge)
+			}
+			if tc.merge {
+				return
+			}
+			// The checks pass: the override still stands for this head, and
+			// the change merges on it.
+			sim.CheckRuns[branch] = greenCheck
+			if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(8*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if !mergedBranch(sim, branch) {
+				t.Fatalf("override of %v did not merge once the checks passed", tc.gates)
+			}
+		})
 	}
 }

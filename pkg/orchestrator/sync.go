@@ -1696,6 +1696,9 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		}
 		forced = nil
 	}
+	if forced != nil {
+		forced.keepsCI = forcedMergeKeepsCI(task, forced.headSHA)
+	}
 	forcing := forced != nil && !settled && health != model.PrConflicted
 	switch {
 	case !forcing && !blocked && review.overdue:
