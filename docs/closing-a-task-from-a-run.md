@@ -174,3 +174,64 @@ work. If the same run asked a question (or is waiting on a chat reply),
 the task parks on it; if it pushed a branch, the ordinary pull request
 flow runs. Either way the reason is still posted as a comment beside it,
 and the run keeps the outcome it would have had without the call.
+
+## Addendum: report-only sub-tasks close when they answer
+
+grain/task-4384. A run that splits its work into report-only sub-tasks
+with `propose_task`, and wires `depends_on` between them, used to
+deadlock them. Each child finished correctly on a closing note
+(`comment_on_issue`, no pull request) and completed into
+`awaiting_reply/answered`, but a depends-on link is satisfied only when
+its target **closes** (the `task_blocked` view). So the second child sat
+`queued/blocked_on_task` until a person read and closed a report that
+only the parent needed.
+
+Of the designs on the table, grain takes **(a): the child closes
+itself**. It does not take (b), satisfying `depends_on` on "completed
+with an answer":
+
+- (a) changes one ending of one kind of task. (b) changes what every
+  blocking link means: `task_blocked`, `IsBlocked`, `wait_for_task` and
+  the `tasks-closed` goal all read "closed". "Completed" also covers
+  states that are not finished in any sense a dependent wants, such as a
+  review that posted findings, or a task resting on a goal.
+- With (a), "until closed" keeps its meaning everywhere. A parent that
+  does want a person's close still gets it (below), and nothing that
+  waits on a close needs a second rule.
+
+**The rule** (`model.ClosesOnAnswer`, applied in
+`orchestrator.ProcessResult` via `finishAnswered`) covers a task filed by
+another task's *run*: `propose_task`, or the agent API from a sandbox
+(`Task.Proposer.TaskID` is set and the proposer is not a console
+session). When such a task's run ends on a closing note alone (no
+branch pushed, no question, no park, no review findings), grain:
+
+- stamps `completed_at` and `closed_at`;
+- notes the close on the child;
+- posts a pointer on the parent's thread, `[Task N](/tasks/N) … answered
+  and closed itself`, so a person reading the parent sees it.
+
+Dependents dispatch on the close. A parent parked on the child
+(`wait_for_task`) resumes with the child's closing note quoted in its
+prompt (`WaitTarget.ClosingNote`, `parkedResumeSection`).
+
+**Opting out.** The switch is the proposal's existing
+`nothing_needed_action`, which now covers both of a run's "I'm done, no
+change" endings for an agent-filed task:
+
+- `close`, the default, closes the child on `nothing_needed` or on a
+  closing note. A parent can pass it explicitly to say "this child is
+  report-only".
+- `ack` leaves both endings in `awaiting_reply` for a person to read and
+  close. Its dependents wait for that close.
+
+A `person-closes` goal also keeps a person's close: a goal task rests on
+its goal whatever its run says.
+
+**Unchanged:**
+
+- A task a person filed, a console session's proposal, a template's or a
+  schedule's task: their closing note is for the person who asked, and
+  they complete into `awaiting_reply` as before.
+- A child that asks a question parks on it and still blocks.
+- A child that pushed a branch follows the pull request path.

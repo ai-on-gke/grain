@@ -1101,13 +1101,19 @@ func nothingNeededSection(task model.Task) string {
 	if task.NothingNeededAction.Resolved() == model.NothingNeededAck {
 		what = "leaves this task for a human to acknowledge"
 	}
-	return "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
+	s := "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
 		"reason: " + mcp.NothingNeededDescription + ". It ends your run the way " +
 		"comment_on_issue does, posts the reason as the closing comment and " + what +
 		". A finding, an answer or a recommendation somebody should read is still a " +
 		"comment_on_issue note, and anything you pushed or asked in the same run still " +
 		"wins: the pull request is opened, or the question is asked, with the reason " +
 		"posted beside it."
+	if model.ClosesOnAnswer(task) {
+		s += " Task " + task.Proposer.TaskID + " filed this task as a report-only sub-task, so a " +
+			"comment_on_issue closing note with no pull request closes it too: that task, and any " +
+			"task depending on this one, reads your note, so put the whole answer in it."
+	}
+	return s
 }
 
 // questionSummarySection is what every run is told about the one-line
