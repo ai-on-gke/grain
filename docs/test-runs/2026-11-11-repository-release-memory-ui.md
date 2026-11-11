@@ -359,6 +359,12 @@ Grain's own API and React UI were never mocked or intercepted; no
     fix.
   - `port-settings-walkthrough.spec.js` asserted the duplicated state; it
     now checks that each finding is said exactly once.
+  - `sessions-worktree-pinned-nav-walkthrough.spec.js` ("Every scenario's
+    declarations together") also asserted the duplicated state (2 in the
+    Ports box, 4 on the page). That broke `ui e2e` on this branch's pull
+    request after the first merge of main. It now expects 0 in the Ports
+    box and 2 on the page. The test came in with the tree import and was
+    not a flake.
 - **Verified** on demo D at 1280 and 390 px, light and dark: 1 warning
   (base demo A: 2), with no overflow.
 
