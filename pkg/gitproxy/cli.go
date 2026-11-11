@@ -71,6 +71,7 @@ var cliRouteTools = map[string]string{
 	"revert-info":       "revert_task",
 	"status":            "update_status",
 	"handover":          "write_handover",
+	"report/check":      "check_report",
 	"notify":            "notify_operator",
 	"tasks/notes":       "message_task",
 	"tasks/wait":        "wait_for_task",

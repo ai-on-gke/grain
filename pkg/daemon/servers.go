@@ -205,6 +205,9 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 		// credit their waits earn (sandbox_cli.go).
 		CLIActions:      sandboxCLIGate{},
 		WaitCredit:      waitCreditAdapter{runWaitCredits},
+		// grain report check: a draft closing report checked the way it
+		// will be once posted (orchestrator.CheckStewardReportDraft).
+		ReportChecker: reportCheckAdapter{store},
 		API:             LiveAPI,
 		ShutdownStarted: shutdownStarted,
 		// External capability tools a run or CI job may call from its

@@ -178,6 +178,7 @@ var sandboxCommands = map[string][]string{
 	"merge-queue":   nil,
 	"status":        nil,
 	"handover":      {"write"},
+	"report":        {"check"},
 	"notify":        nil,
 	"task":          {"list", "read", "prompt", "transcript", "wait", "message", "propose"},
 	"api":           nil,
@@ -220,6 +221,7 @@ var sandboxCommandFlags = map[string][]string{
 	"merge-queue":           nil,
 	"status":                {"file"},
 	"handover write":        {"file"},
+	"report check":          {"file"},
 	"notify":                {"subject", "title", "body", "file", "severity", "task", "clears-when", "json"},
 	"task list":             {"state", "repo", "limit", "search", "changed-since", "stalled", "kind", "json"},
 	"task read":             nil,
@@ -553,6 +555,8 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.status(p)
 	case "handover write":
 		return c.handoverWrite(p)
+	case "report check":
+		return c.reportCheck(p)
 	case "notify":
 		return c.notify(p)
 	case "task list":

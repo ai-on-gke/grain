@@ -619,3 +619,49 @@ func TestStewardReportCheckReadsOnlyTheClaimedState(t *testing.T) {
 		}
 	}
 }
+
+// grain report check sees the reads the grain CLI made earlier in the
+// same run, and fails a draft citing a task the run never read.
+func TestCheckStewardReportDraftUsesTheRunsCLIReadsSoFar(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+	for _, id := range []string{"768", "832", "833"} {
+		task := model.Task{
+			ID:         id,
+			Intent:     model.IntentImplement,
+			Title:      "task " + id,
+			Body:       "body",
+			Origin:     model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Approval:   &model.Attribution{Actor: human},
+			Binding:    model.BindingDirective,
+			CreatedAt:  &now,
+			ApprovedAt: &now,
+		}
+		if id == "768" {
+			task.TemplateID = model.PipelineStewardTemplateID
+		}
+		if err := store.PutTask(ctx, task); err != nil {
+			t.Fatalf("PutTask %s: %v", id, err)
+		}
+	}
+	if err := store.RecordProxyAPICall(ctx, "768-3", "read_pipeline_changes", "832", 512); err != nil {
+		t.Fatalf("RecordProxyAPICall: %v", err)
+	}
+
+	text, failed, err := CheckStewardReportDraft(ctx, store, "768", "768-3", "- Task 832 needs a person [task 832]")
+	if err != nil || failed {
+		t.Fatalf("draft citing a read task: failed=%v err=%v\n%s", failed, err, text)
+	}
+	text, failed, err = CheckStewardReportDraft(ctx, store, "768", "768-3",
+		"- Task 832 needs a person [task 832]\n- Task 833 needs a person [task 833]")
+	if err != nil || !failed {
+		t.Fatalf("draft citing an unread task: failed=%v err=%v\n%s", failed, err, text)
+	}
+	if !strings.Contains(text, "Cited but not read in this run: 833.") || !strings.Contains(text, "## Unverified") {
+		t.Errorf("failing draft's text does not name 833 and the Unverified heading:\n%s", text)
+	}
+}

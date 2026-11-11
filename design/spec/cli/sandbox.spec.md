@@ -450,6 +450,23 @@ Usage: `grain handover write (<text> | --file <f>)`
 
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`.
 
+### 4.2.1 `grain report check` {#CLI-111}
+
+`grain report check (<text> | --file f | -)` sends `POST /cli/report/check {"report"}`. The proxy checks the draft the same way grain checks a pipeline steward's closing report once it is posted (`orchestrator.CheckStewardReportDraft`). It uses every read the run has made so far, which the proxy records as it serves them.
+- A passing report prints `Report check passes: claims=<n> uncited=0 unread=0 mismatched=0`.
+- A failing one is answered 422. The command exits non-zero and prints the counts, the task ids cited but not read in this run, and each line that is uncited or mismatched.
+- Lines under an `Unverified` heading are not checked.
+
+<!-- BEGIN GENERATED FLAGS: grain report check -->
+Usage: `grain report check (<text> | --file <f>)`
+
+| Flag | Type |
+|---|---|
+| `--file` | string |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/gitproxy/activity_test.go`: `TestReportCheckRouteAnswersTheDraftsVerdict`.
+
 ### 4.3 `grain notify` {#CLI-98}
 
 `grain notify --subject <key> --title <t> [--body b | --file f | <body…>]` sends `POST /cli/notify` with `{subject, title, body, severity, task, clears_when}`.

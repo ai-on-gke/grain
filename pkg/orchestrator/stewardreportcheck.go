@@ -613,6 +613,88 @@ func loadStewardCheckTasks(ctx context.Context, store *model.Store) (map[string]
 	return out, nil
 }
 
+// checkStewardReportAgainstStore runs stewardReportCheck on report against
+// calls and the records in store, counting what the task's own prompt and
+// wake notes named as read.
+func checkStewardReportAgainstStore(ctx context.Context, store *model.Store, task model.Task, runID, report string,
+	calls []model.RunAPICall) (StewardReportCheckResult, error) {
+
+	tasks, err := loadStewardCheckTasks(ctx, store)
+	if err != nil {
+		return StewardReportCheckResult{}, err
+	}
+	// The steward's own task is not a record it has to read to name: its
+	// notify subjects and messages are agent.<its id>:...
+	promptIDs := append([]string{task.ID}, extractCitedTaskIDs(task.Body)...)
+	if comments, err := store.Comments(ctx, task.ID); err == nil {
+		for _, c := range comments {
+			if c.Author.Actor == model.SchedulePrincipal {
+				promptIDs = append(promptIDs, extractCitedTaskIDs(c.Body)...)
+			}
+		}
+	}
+	return stewardReportCheck(runID, report, calls, tasks, promptIDs...), nil
+}
+
+// CheckStewardReportDraft is grain report check: report checked, before it
+// is posted, against what run runID of taskID has read so far -- the grain
+// CLI's reads are recorded as they are served (Store.RecordProxyAPICall),
+// so they are all there. It is the check checkAndRecordStewardReportText
+// runs once the report is posted, so a draft that passes here passes there
+// unless a record changes in between. The text says what failed, line by
+// line, and what to do about it.
+func CheckStewardReportDraft(ctx context.Context, store *model.Store, taskID, runID, report string) (string, bool, error) {
+	task, err := store.GetTask(ctx, taskID)
+	if err != nil {
+		return "", false, err
+	}
+	if task == nil {
+		return "", false, fmt.Errorf("task %s not found", taskID)
+	}
+	calls, err := store.RunAPICallsForRun(ctx, runID)
+	if err != nil {
+		return "", false, err
+	}
+	res, err := checkStewardReportAgainstStore(ctx, store, *task, runID, report, calls)
+	if err != nil {
+		return "", false, err
+	}
+	return FormatStewardReportCheck(res), res.HasMismatch(), nil
+}
+
+// FormatStewardReportCheck is res as grain report check prints it.
+func FormatStewardReportCheck(res StewardReportCheckResult) string {
+	var b strings.Builder
+	c := res.Check
+	verdict := "passes"
+	if res.HasMismatch() {
+		verdict = "fails"
+	}
+	fmt.Fprintf(&b, "Report check %s: claims=%d uncited=%d unread=%d mismatched=%d\n",
+		verdict, c.Claims, c.Uncited, c.Unread, c.Mismatched)
+	if !res.HasMismatch() {
+		return b.String()
+	}
+	if len(res.UnreadIDs) > 0 {
+		fmt.Fprintf(&b, "\nCited but not read in this run: %s. Run `grain task read <id>` for each, "+
+			"then restate only what the record says.\n", strings.Join(res.UnreadIDs, ", "))
+	}
+	if len(res.MismatchLines) > 0 {
+		b.WriteString("\nSay a kind or state the record does not have:\n")
+		for _, l := range res.MismatchLines {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+	}
+	if len(res.UncitedLines) > 0 {
+		b.WriteString("\nMake a claim with no id to cite:\n")
+		for _, l := range res.UncitedLines {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+	}
+	b.WriteString("\nFix each line from the record, or move it under a `## Unverified` heading.\n")
+	return b.String()
+}
+
 // checkAndRecordStewardReport resolves the posted closing report from result and
 // runs checkAndRecordStewardReportText.
 func checkAndRecordStewardReport(ctx context.Context, store *model.Store, task model.Task, runID string,
@@ -660,24 +742,11 @@ func checkAndRecordStewardReportText(ctx context.Context, store *model.Store, ta
 		calls = runTelemetryAt(result, now).APICalls
 	}
 
-	tasks, err := loadStewardCheckTasks(ctx, store)
+	checkRes, err := checkStewardReportAgainstStore(ctx, store, task, runID, report, calls)
 	if err != nil {
 		log.Printf("orchestrator: run %s: loading tasks for steward report check: %v", runID, err)
 		return
 	}
-
-	// The steward's own task is not a record it has to read to name: its
-	// notify subjects and messages are agent.<its id>:...
-	promptIDs := append([]string{task.ID}, extractCitedTaskIDs(task.Body)...)
-	if comments, err := store.Comments(ctx, task.ID); err == nil {
-		for _, c := range comments {
-			if c.Author.Actor == model.SchedulePrincipal {
-				promptIDs = append(promptIDs, extractCitedTaskIDs(c.Body)...)
-			}
-		}
-	}
-
-	checkRes := stewardReportCheck(runID, report, calls, tasks, promptIDs...)
 	if err := store.RecordRunReportCheck(ctx, checkRes.Check); err != nil {
 		log.Printf("orchestrator: run %s: recording steward report check: %v", runID, err)
 		return
