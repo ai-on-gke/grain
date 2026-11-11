@@ -511,3 +511,42 @@ func TestRemovingTheLastRepositoryLeavesAnUnrestrictedDeployment(t *testing.T) {
 		t.Fatalf("today an empty allowlist is unrestricted, but the task was parked: %+v", after.State)
 	}
 }
+
+// Scenario 7: the agent API gate on the add/remove routes. A task without
+// repos:write or connections:write may not add or remove a repository or
+// a connection, and a task granted repos:write on its own repository
+// alone may not widen its reach by adding another one.
+func TestAgentsCannotAddOrRemoveRepositoriesOrConnectionsBeyondTheirGrant(t *testing.T) {
+	r := newLifecycleRig(t)
+	r.must(http.MethodPost, "/api/repos", `{"repo":"acme/widgets"}`)
+	cred := r.addConnection("github.com", "", "ghp_gate")
+
+	seedAPITask(t, r.client, "901", "acme/widgets", "api:tasks:write@acme/widgets")
+	seedAPITask(t, r.client, "902", "acme/widgets", "api:repos:write@acme/widgets")
+
+	for _, tc := range []struct {
+		task, method, path, body string
+	}{
+		{"901", http.MethodPost, "/api/repos", `{"repo":"other/thing"}`},
+		{"901", http.MethodDelete, "/api/repos/acme/widgets", ""},
+		{"901", http.MethodPost, "/api/deployment/git-connections", `{"host":"github.com","kind":"github","type":"pat","scope":"other","value":"ghp_x"}`},
+		{"901", http.MethodDelete, "/api/deployment/git-connections/" + cred, ""},
+		{"901", http.MethodPut, "/api/github-tokens/agent-made", `{"token":"ghp_y"}`},
+		{"902", http.MethodPost, "/api/repos", `{"repo":"other/thing"}`},
+		{"902", http.MethodDelete, "/api/deployment/git-connections/" + cred, ""},
+	} {
+		code, out := asAgent(t, r.srv, tc.task, tc.method, tc.path, tc.body, "testing the gate")
+		if code != http.StatusForbidden {
+			t.Errorf("task %s %s %s = %d %s, want 403", tc.task, tc.method, tc.path, code, out)
+		}
+	}
+	if got := r.targets(); !slices.Equal(got, []string{"acme/widgets"}) {
+		t.Fatalf("targets after refused agent calls = %v", got)
+	}
+	if views := r.connections(); len(views) != 1 || views[0].Credential != cred {
+		t.Fatalf("connections after refused agent calls = %+v", views)
+	}
+	if r.credentialExists("agent-made") {
+		t.Fatal("a refused agent call stored a token")
+	}
+}
