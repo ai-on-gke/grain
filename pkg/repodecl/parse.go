@@ -71,10 +71,37 @@ func decodeInto(f file, v any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(f.text))
 	dec.KnownFields(true)
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("%s: %w", f.path, err)
+		err = fmt.Errorf("%s: %w", f.path, err)
+		// A file that is well-formed YAML and still does not decode has
+		// a key this build does not know, or a known key in a shape it
+		// does not know -- which is what a file written for a newer
+		// grain looks like to an older one (SchemaError).
+		var doc yaml.Node
+		if yaml.Unmarshal(f.text, &doc) == nil {
+			return &SchemaError{Path: f.path, Err: err}
+		}
+		return err
 	}
 	return nil
 }
+
+// SchemaError is a declaration file this build cannot decode although it
+// is well-formed YAML: an unknown key, or a known key in a shape the
+// decoder has no case for (`overlap: {skip: true}` read by a build that
+// only knows `overlap: skip`). Its message is the decoder's own, unchanged.
+//
+// It is told apart from every other error because it is the one a
+// deployment meets when a repository's `.grain` is newer than the daemon
+// reading it, and LoadForwardCompatible holds back only that file rather
+// than refusing the whole set (docs/declarations.md, "Declarations newer
+// than the daemon").
+type SchemaError struct {
+	Path string
+	Err  error
+}
+
+func (e *SchemaError) Error() string { return e.Err.Error() }
+func (e *SchemaError) Unwrap() error { return e.Err }
 
 // refuse is the whole of what a repository may not say about itself,
 // checked against declschema rather than against a list kept here.
