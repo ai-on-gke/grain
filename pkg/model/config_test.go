@@ -133,4 +133,9 @@ func TestAutoUpgradeMode(t *testing.T) {
 			t.Errorf("AutoUpgradeMinInterval(%d) = %s, want 0", hours, got)
 		}
 	}
+	// An hour count past what a time.Duration holds stays the longest
+	// interval instead of wrapping round to a short or negative one.
+	if got := (model.Config{AutoUpgradeMinIntervalHours: 1 << 40}).AutoUpgradeMinInterval(); got != time.Duration(1<<63-1) {
+		t.Errorf("AutoUpgradeMinInterval(1<<40) = %s, want the longest time.Duration", got)
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -1130,10 +1131,15 @@ const DefaultAutoUpgradeMinIntervalHours = 6
 
 // AutoUpgradeMinInterval returns the minimum interval between two completed
 // automatic upgrades in AutoUpgradeOnRelease mode, or 0 when turned off (or
-// negative in a hand-edited row).
+// negative in a hand-edited row). An hour count too large for a
+// time.Duration is read as the longest one rather than wrapping round to a
+// short or negative interval.
 func (c Config) AutoUpgradeMinInterval() time.Duration {
 	if c.AutoUpgradeMinIntervalHours <= 0 {
 		return 0
+	}
+	if int64(c.AutoUpgradeMinIntervalHours) > math.MaxInt64/int64(time.Hour) {
+		return math.MaxInt64
 	}
 	return time.Duration(c.AutoUpgradeMinIntervalHours) * time.Hour
 }
