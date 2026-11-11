@@ -430,7 +430,7 @@ func TestHostdRunContinuesAcrossHostdHandoverWithZeroLoss(t *testing.T) {
 			AllowHandover:   true,
 		}
 	}
-	srv1 := makeSrv("v1")
+	srv1 := makeSrv("build-old")
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	done1 := make(chan error, 1)
 	go func() { done1 <- srv1.Serve(ctx1) }()
@@ -440,7 +440,7 @@ func TestHostdRunContinuesAcrossHostdHandoverWithZeroLoss(t *testing.T) {
 		if _, err := client.Hello(context.Background()); err == nil {
 			break
 		} else if i > 100 {
-			t.Fatalf("hostd v1 never answered: %v", err)
+			t.Fatalf("hostd build-old never answered: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -471,7 +471,7 @@ func TestHostdRunContinuesAcrossHostdHandoverWithZeroLoss(t *testing.T) {
 	}
 	done1 <- nil
 
-	srv2 := makeSrv("v2")
+	srv2 := makeSrv("build-new")
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	done2 := make(chan error, 1)
 	go func() { done2 <- srv2.Serve(ctx2) }()

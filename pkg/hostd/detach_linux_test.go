@@ -776,7 +776,7 @@ func TestHandoverAdoptsLiveDetachedRunsAcrossServerReplacement(t *testing.T) {
 		DisconnectGrace: 500 * time.Millisecond,
 		Env:             []string{"PATH=" + os.Getenv("PATH")},
 		Logf:            logs2.logf,
-		Build:           "v2",
+		Build:           "build-new",
 	}
 	ctxSrv2, cancelSrv2 := context.WithCancel(context.Background())
 	done2 := make(chan error, 1)
@@ -785,7 +785,7 @@ func TestHandoverAdoptsLiveDetachedRunsAcrossServerReplacement(t *testing.T) {
 
 	client2 := Client{Socket: sock}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if h, err := client2.Hello(context.Background()); err == nil && h.Build == "v2" {
+		if h, err := client2.Hello(context.Background()); err == nil && h.Build == "build-new" {
 			break
 		}
 		if time.Now().After(deadline) {
