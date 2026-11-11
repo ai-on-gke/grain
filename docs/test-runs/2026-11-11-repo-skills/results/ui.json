@@ -1,0 +1,278 @@
+[
+  {
+    "width": "desktop",
+    "theme": "light",
+    "checks": [
+      {
+        "ok": true,
+        "what": "Settings -> Repositories Skills cell reads \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "Settings -> Repositories does not scroll sideways (1440px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor's discovery checkbox is on"
+      },
+      {
+        "ok": true,
+        "what": "the folder field holds \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "the skills section sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the folder field sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the Agents tab does not scroll sideways (1440px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor shows what .grain/settings.yml declares"
+      }
+    ],
+    "settingsCell": ".claude/skills, skills",
+    "settingsCellBox": {
+      "x": 861.203125,
+      "y": 230.515625,
+      "width": 152.953125,
+      "height": 33.015625
+    },
+    "settingsScrollWidth": 1440,
+    "background": "rgb(247, 246, 243)",
+    "enabled": true,
+    "folders": ".claude/skills, skills",
+    "sectionText": "repository skills discover */SKILL.md folders from acme/widgets's base branch at run start skill folders for acme/widgets skill folders for acme/widgets Comma-separated folders relative to the repository root, scanned one level deep for */SKILL.md on the base branch. Leave empty to inherit the deployment or built-in defaults. Effective folders for acme/widgets: .claude/skills, skills Declared by acme/widgets in .grain/settings.yml: layer/declared",
+    "sectionBox": {
+      "x": 260,
+      "y": 382.578125,
+      "width": 648,
+      "height": 211.8125
+    },
+    "fieldBox": {
+      "x": 260,
+      "y": 454.546875,
+      "width": 648,
+      "height": 40
+    },
+    "checkboxBox": {
+      "x": 260,
+      "y": 408.546875,
+      "width": 38,
+      "height": 38
+    },
+    "agentsScrollWidth": 1440
+  },
+  {
+    "width": "desktop",
+    "theme": "dark",
+    "checks": [
+      {
+        "ok": true,
+        "what": "Settings -> Repositories Skills cell reads \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "Settings -> Repositories does not scroll sideways (1440px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor's discovery checkbox is on"
+      },
+      {
+        "ok": true,
+        "what": "the folder field holds \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "the skills section sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the folder field sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the Agents tab does not scroll sideways (1440px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor shows what .grain/settings.yml declares"
+      }
+    ],
+    "settingsCell": ".claude/skills, skills",
+    "settingsCellBox": {
+      "x": 861.203125,
+      "y": 230.515625,
+      "width": 152.953125,
+      "height": 33.015625
+    },
+    "settingsScrollWidth": 1440,
+    "background": "rgb(15, 16, 19)",
+    "enabled": true,
+    "folders": ".claude/skills, skills",
+    "sectionText": "repository skills discover */SKILL.md folders from acme/widgets's base branch at run start skill folders for acme/widgets skill folders for acme/widgets Comma-separated folders relative to the repository root, scanned one level deep for */SKILL.md on the base branch. Leave empty to inherit the deployment or built-in defaults. Effective folders for acme/widgets: .claude/skills, skills Declared by acme/widgets in .grain/settings.yml: layer/declared",
+    "sectionBox": {
+      "x": 260,
+      "y": 382.578125,
+      "width": 648,
+      "height": 211.8125
+    },
+    "fieldBox": {
+      "x": 260,
+      "y": 454.546875,
+      "width": 648,
+      "height": 40
+    },
+    "checkboxBox": {
+      "x": 260,
+      "y": 408.546875,
+      "width": 38,
+      "height": 38
+    },
+    "agentsScrollWidth": 1440
+  },
+  {
+    "width": "phone",
+    "theme": "light",
+    "checks": [
+      {
+        "ok": true,
+        "what": "Settings -> Repositories Skills cell reads \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "Settings -> Repositories does not scroll sideways (390px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor's discovery checkbox is on"
+      },
+      {
+        "ok": true,
+        "what": "the folder field holds \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "the skills section sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the folder field sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the Agents tab does not scroll sideways (390px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor shows what .grain/settings.yml declares"
+      }
+    ],
+    "settingsCell": ".claude/skills, skills",
+    "settingsCellBox": {
+      "x": 243.984375,
+      "y": 220.5,
+      "width": 86.15625,
+      "height": 48.6875
+    },
+    "settingsScrollWidth": 390,
+    "background": "rgb(247, 246, 243)",
+    "enabled": true,
+    "folders": ".claude/skills, skills",
+    "sectionText": "repository skills discover */SKILL.md folders from acme/widgets's base branch at run start skill folders for acme/widgets skill folders for acme/widgets Comma-separated folders relative to the repository root, scanned one level deep for */SKILL.md on the base branch. Leave empty to inherit the deployment or built-in defaults. Effective folders for acme/widgets: .claude/skills, skills Declared by acme/widgets in .grain/settings.yml: layer/declared",
+    "sectionBox": {
+      "x": 28,
+      "y": 303.203125,
+      "width": 334,
+      "height": 293.6875
+    },
+    "fieldBox": {
+      "x": 28,
+      "y": 377.203125,
+      "width": 334,
+      "height": 40
+    },
+    "checkboxBox": {
+      "x": 28,
+      "y": 330.1875,
+      "width": 38,
+      "height": 38
+    },
+    "agentsScrollWidth": 390
+  },
+  {
+    "width": "phone",
+    "theme": "dark",
+    "checks": [
+      {
+        "ok": true,
+        "what": "Settings -> Repositories Skills cell reads \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "Settings -> Repositories does not scroll sideways (390px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor's discovery checkbox is on"
+      },
+      {
+        "ok": true,
+        "what": "the folder field holds \".claude/skills, skills\""
+      },
+      {
+        "ok": true,
+        "what": "the skills section sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the folder field sits inside the viewport"
+      },
+      {
+        "ok": true,
+        "what": "the Agents tab does not scroll sideways (390px)"
+      },
+      {
+        "ok": true,
+        "what": "the editor shows what .grain/settings.yml declares"
+      }
+    ],
+    "settingsCell": ".claude/skills, skills",
+    "settingsCellBox": {
+      "x": 243.984375,
+      "y": 220.5,
+      "width": 86.15625,
+      "height": 48.6875
+    },
+    "settingsScrollWidth": 390,
+    "background": "rgb(15, 16, 19)",
+    "enabled": true,
+    "folders": ".claude/skills, skills",
+    "sectionText": "repository skills discover */SKILL.md folders from acme/widgets's base branch at run start skill folders for acme/widgets skill folders for acme/widgets Comma-separated folders relative to the repository root, scanned one level deep for */SKILL.md on the base branch. Leave empty to inherit the deployment or built-in defaults. Effective folders for acme/widgets: .claude/skills, skills Declared by acme/widgets in .grain/settings.yml: layer/declared",
+    "sectionBox": {
+      "x": 28,
+      "y": 303.203125,
+      "width": 334,
+      "height": 293.6875
+    },
+    "fieldBox": {
+      "x": 28,
+      "y": 377.203125,
+      "width": 334,
+      "height": 40
+    },
+    "checkboxBox": {
+      "x": 28,
+      "y": 330.1875,
+      "width": 38,
+      "height": 38
+    },
+    "agentsScrollWidth": 390
+  }
+]
