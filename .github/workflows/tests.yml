@@ -178,8 +178,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -199,7 +200,7 @@ jobs:
         run: make fmt
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -256,8 +257,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -317,7 +319,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -885,13 +887,14 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -902,6 +905,10 @@ jobs:
       - name: Test frontend
         working-directory: ui
         run: npm test -- --maxWorkers=4
+
+      - name: Lint and test the new (Angular) frontend
+        working-directory: ui-ng
+        run: npm ci && npm run lint && npm test -- --maxWorkers=4
 
       - name: Test registry frontend
         working-directory: ui-hub
@@ -955,8 +962,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -976,7 +984,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -1167,8 +1175,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -1178,7 +1187,7 @@ jobs:
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
           git config --global user.email "grain-ci@example.com"
-          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Configure authenticated Docker Hub pulls
         env:

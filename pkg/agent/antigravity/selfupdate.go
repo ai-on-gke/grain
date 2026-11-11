@@ -104,3 +104,10 @@ func agyEnv(home, apiKey string) []string {
 	}
 	return env
 }
+
+// HostdEnv is every variable name Run may send agy when starting it through a
+// host agent (agyEnv). Hosts advertising FeatureEnvOpen condense this to
+// [HOME, "*"] via hostd.CLIEntryEnv; older hosts need the closed list.
+func HostdEnv() []string {
+	return []string{"HOME", "AGY_CLI_DISABLE_AUTO_UPDATE", "GEMINI_API_KEY", "GOOGLE_API_KEY"}
+}

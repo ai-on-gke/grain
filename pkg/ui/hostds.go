@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -66,8 +67,6 @@ type HostdView struct {
 	AllowlistSnippet string `json:"allowlistSnippet,omitempty"`
 }
 
-var agyHostClosedEnv = []string{"HOME", "AGY_CLI_DISABLE_AUTO_UPDATE", "GEMINI_API_KEY", "GOOGLE_API_KEY"}
-
 // HostCLISnippet renders a clis: allowlist entry snippet in Settings for
 // framework on a host whose hello is peer. Hosts advertising FeatureEnvOpen
 // get env: ["*"] (or [HOME, "*"] for agy) and ~/-relative stage paths; older
@@ -81,7 +80,7 @@ func HostCLISnippet(framework string, peer hostd.Hello) string {
 	case model.AgentFrameworkCodex:
 		name, bin, closedEnv = "codex", "/usr/local/bin/codex", codex.HostdEnv()
 	default:
-		name, bin, closedEnv = "agy", "/usr/local/bin/agy", agyHostClosedEnv
+		name, bin, closedEnv = "agy", "/usr/local/bin/agy", antigravity.HostdEnv()
 	}
 	roots := []string{"/var/lib/grain"}
 	home := ""

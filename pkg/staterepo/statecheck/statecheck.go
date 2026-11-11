@@ -326,6 +326,11 @@ func UnrunnableSettings(ctx context.Context, db *sql.DB) ([]string, error) {
 			"a daemon reading this will run at its own instead of at anything this repository says",
 			cfg.SandboxDiskOvercommit))
 	}
+	if cfg.AutoUpgradeMinIntervalHours < 0 {
+		out = append(out, fmt.Sprintf("the settings row's auto_upgrade_min_interval_hours is %d, which is negative -- "+
+			"a daemon reading this treats it as 0 (no minimum interval between automatic upgrades)",
+			cfg.AutoUpgradeMinIntervalHours))
+	}
 	if err := cfg.SandboxOvercommit.Validate(); err != nil {
 		out = append(out, fmt.Sprintf("the settings row's sandbox_overcommit is not usable (%v) -- "+
 			"a daemon reading this will hold its overcommit ratios fixed", err))

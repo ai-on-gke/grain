@@ -66,7 +66,17 @@ const s = {
 };
 
 const SECTIONS = {
-  general: <GeneralSection s={s} config={{}} />,
+  // General renders daily and release modes so both autoUpgradeTime and
+  // autoUpgradeMinIntervalHours are exercised against SETTINGS_INDEX.
+  general: (
+    <>
+      <GeneralSection s={s} config={{}} />
+      <GeneralSection
+        s={{ ...s, settings: { ...settings, autoUpgradeOn: "release" } }}
+        config={{}}
+      />
+    </>
+  ),
   agents: <AgentsSection s={s} />,
   engine: <EngineSection s={s} />,
   ci: <CISection s={s} />,
