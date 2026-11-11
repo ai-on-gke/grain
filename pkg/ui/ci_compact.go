@@ -88,6 +88,11 @@ type CICompactRun struct {
 	// or still unfinished. A job skipped because something it needed
 	// failed is left out -- the job it needed is here already.
 	Jobs []CICompactJob `json:"jobs,omitempty"`
+	// JobCount and JobsTruncated say a paged read cut Jobs to its first
+	// ciCompactRunPageJobs lines (failures before jobs still waiting):
+	// how many jobs did not succeed, and that Jobs is not all of them.
+	JobCount      int  `json:"jobCount,omitempty"`
+	JobsTruncated bool `json:"jobsTruncated,omitempty"`
 }
 
 // CICompactJob is one job that did not succeed, in a line.

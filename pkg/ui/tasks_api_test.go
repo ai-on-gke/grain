@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,5 +125,82 @@ func TestListDerivedFromAndFiledViaFiltersAndGetCommentsSince(t *testing.T) {
 	}
 	if code, _ := serve(t, srv, http.MethodGet, "/api/tasks/"+derived.ID+"?comments_since=yesterday", ""); code != http.StatusBadRequest {
 		t.Errorf("a comments_since that is no time answered %d, want 400", code)
+	}
+}
+
+// GET /api/tasks/{id}?comments_limit=&comments_before=&attempts_limit=
+// pages a long record from its newest end (durable-tasks.design.md#DT-15):
+// the newest comments and runs, how many older ones were left out, and a
+// comment cursor for the page before.
+func TestGetTaskPagesItsCommentsAndRuns(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	tk, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "long", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if _, err := client.Store.AddComment(ctx, model.Comment{TaskID: tk.ID, Body: string(rune('a' + i)),
+			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+			CreatedAt: at.Add(time.Duration(i) * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for n := 1; n <= 3; n++ {
+		runID := tk.ID + "-" + strconv.Itoa(n)
+		if err := client.Store.StartRun(ctx, model.Run{ID: runID, TaskID: tk.ID, Attempt: n,
+			StartedAt: at.Add(time.Duration(n) * time.Hour)}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.Store.FinishRun(ctx, runID, at.Add(time.Duration(n)*time.Hour+time.Minute), "failed", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := func(query string) ui.TaskDetail {
+		t.Helper()
+		code, body := serve(t, srv, http.MethodGet, "/api/tasks/"+tk.ID+"?"+query, "")
+		if code != http.StatusOK {
+			t.Fatalf("GET ?%s: %d %s", query, code, body)
+		}
+		var detail ui.TaskDetail
+		if err := json.Unmarshal([]byte(body), &detail); err != nil {
+			t.Fatal(err)
+		}
+		return detail
+	}
+	bodies := func(d ui.TaskDetail) string {
+		var out []string
+		for _, c := range d.Comments {
+			out = append(out, c.Body)
+		}
+		return strings.Join(out, ",")
+	}
+
+	newest := page("comments_limit=2&attempts_limit=1")
+	if got := bodies(newest); got != "d,e" || newest.OlderComments != 3 {
+		t.Errorf("newest page = %q with %d older, want d,e with 3 older", got, newest.OlderComments)
+	}
+	if len(newest.Attempts) != 1 || newest.Attempts[0].Number != 3 || newest.OlderAttempts != 2 {
+		t.Errorf("newest runs = %+v with %d older, want run 3 with 2 older", newest.Attempts, newest.OlderAttempts)
+	}
+	before := page("comments_limit=2&comments_before=" + strconv.FormatInt(newest.Comments[0].ID, 10))
+	if got := bodies(before); got != "b,c" || before.OlderComments != 1 {
+		t.Errorf("page before = %q with %d older, want b,c with 1 older", got, before.OlderComments)
+	}
+	if len(before.Attempts) != 3 {
+		t.Errorf("a page asking for no run limit answered %d runs, want all 3", len(before.Attempts))
+	}
+	first := page("comments_limit=2&comments_before=" + strconv.FormatInt(before.Comments[0].ID, 10))
+	if got := bodies(first); got != "a" || first.OlderComments != 0 {
+		t.Errorf("first page = %q with %d older, want a alone with none older", got, first.OlderComments)
+	}
+	if whole := page(""); bodies(whole) != "a,b,c,d,e" || whole.OlderComments != 0 {
+		t.Errorf("unpaged read = %q, want the whole conversation", bodies(whole))
+	}
+	for _, bad := range []string{"comments_limit=0", "comments_limit=501", "attempts_limit=x", "comments_before=-1"} {
+		if code, _ := serve(t, srv, http.MethodGet, "/api/tasks/"+tk.ID+"?"+bad, ""); code != http.StatusBadRequest {
+			t.Errorf("?%s answered %d, want 400", bad, code)
+		}
 	}
 }

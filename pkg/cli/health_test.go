@@ -136,12 +136,14 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 		(&printer{}).health(ui.SandboxHealthResponse{CapabilityServers: []ui.CapabilityServerDown{
 			{ID: "https://walk.example/caps/cm", State: "failed", Reason: "initialize: mcp: capability server closed its output: EOF"},
 			{ID: "https://grain.dev/capabilities/gcp", State: "needs-config", ConfigRefused: true, Reason: "gcp: permission set org: roles/owner is not grantable"},
+			{ID: "https://walk.example/caps/corp", State: "needs-config", Waiting: "a renewed host credential", Reason: "configure: the host credential expired"},
 		}})
 	})
 	for _, want := range []string{
 		"FAILING: capability servers out of use",
 		"https://walk.example/caps/cm (failed): initialize: mcp: capability server closed its output: EOF",
 		"https://grain.dev/capabilities/gcp (refused its saved config): gcp: permission set org: roles/owner is not grantable",
+		"https://walk.example/caps/corp (waiting for a renewed host credential, retried every minute): configure: the host credential expired",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("grain health output missing %q:\n%s", want, out)

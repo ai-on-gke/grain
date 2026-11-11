@@ -115,6 +115,11 @@ type ImageConfig struct {
 	// Nil skips the check, and the signature step says so on every
 	// upgrade: see verify.go for why that warns rather than refuses.
 	VerifyCmd []string
+	// ReviewedMerge, when set, also refuses an image whose commit did not
+	// reach its branch through a reviewed merge, asked of the forge in the
+	// signature step after the signature (reviewed.go). It needs
+	// VerifyCmd: an upgrade with this set and no VerifyCmd is refused.
+	ReviewedMerge *ReviewedMergeConfig
 	// RemoveCmd removes an image ref, appended as its last argument;
 	// {"docker", "image", "rm"} when left nil. Overridable so a test can
 	// swap in something that needs no docker daemon. Never give it -f:
@@ -139,6 +144,13 @@ type ImageConfig struct {
 	// pulling one it will never run would be a slow no-op with a real
 	// failure mode of its own.
 	SandboxImageArgs []string
+	// EditionArgs, when set, is the subcommand the verify step runs in
+	// the pulled image to ask which edition it is ("version", "--json":
+	// its "edition" stamp, absent for core). On a deployment with a
+	// Track, an image that answers with another edition is refused
+	// before anything cuts over, unless the upgrade is an explicit
+	// edition switch (edition.go). Unset asks nothing.
+	EditionArgs []string
 	// SandboxImagePin is the sandbox image this deployment's own
 	// configuration pins on purpose, when it pins one --
 	// pkg/cli/daemon.go's chooseSandboxImage, which is also what
@@ -368,12 +380,21 @@ func (u *Upgrader) effectiveRepository() (string, error) {
 	// (StartImage) -- stay on that shifted repository across subsequent
 	// upgrades, provided the shift is still a permitted one. A re-run of
 	// scripts/setup.sh rewrites both, so it is what moves a deployment back.
+	//
+	// Except onto another edition's repository: a ref file naming one is
+	// a deployment an edition switch (or, before grain/task-4153, a
+	// mistaken pick on the pane) moved, and the next ordinary upgrade
+	// goes back to this track's own repository rather than quietly
+	// carrying on in the other edition. Staying there is another
+	// explicit switch.
 	if base != "" && u.cfg.Image.RefFile != "" {
 		if prevRef, err := u.readImageRef(); err == nil {
 			prevRepo := repositoryOf(prevRef)
 			if prevRepo != "" && prevRepo != base &&
 				installtrack.CanTransitionRepository(base, prevRepo, u.cfg.Image.AllowedRepositories...) {
-				return installtrack.RepositoryForTrack(prevRepo, u.cfg.Image.Track), nil
+				if _, cross := u.otherEdition(prevRepo); !cross {
+					return installtrack.RepositoryForTrack(prevRepo, u.cfg.Image.Track), nil
+				}
 			}
 		}
 	}
@@ -429,13 +450,14 @@ func (u *Upgrader) imageRefIn(repository, branch string) (string, error) {
 // holding a usable one. No token, or a login that fails, is only logged
 // -- the pull is what says whether it mattered.
 func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string) error {
-	// A ref naming no registry host -- such as the local grain/guest:sha-...
-	// tag an earlier release's release-asset install left behind -- is not
-	// a pullable image: docker would resolve it to Docker Hub, where anybody
-	// may have published that name. Images from Docker Hub are named with
-	// an explicit docker.io/ host.
+	// A ref naming no registry host is never pulled: docker would resolve
+	// it to Docker Hub, where anybody may have published that name.
+	// Images from Docker Hub are named with an explicit docker.io/ host.
 	if registryauth.HostOf(ref) == "" {
-		return fmt.Errorf("refusing to pull %s: it names no registry host, and docker would fetch it from Docker Hub, where anybody may have published that name; name its registry (for example docker.io/)", ref)
+		if repo := repositoryOf(ref); repo == u.EffectiveRepository() {
+			return fmt.Errorf("refusing to pull %s: %s", ref, u.hostlessRepositoryProblem(repo))
+		}
+		return fmt.Errorf("refusing to pull %s: it names no registry host, so docker would fetch it from Docker Hub, where anybody may publish that name; only a registry-qualified image is pulled", ref)
 	}
 	argv := u.cfg.Image.PullCmd
 	if len(argv) == 0 {
@@ -450,6 +472,48 @@ func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string)
 	}
 	argv = append(append([]string{}, argv...), ref)
 	return runLogged(ctx, p, step, "", argv)
+}
+
+// repositoryOrigin says where the repository effectiveRepository settles
+// on came from, in the words an operator would go looking for it by.
+func (u *Upgrader) repositoryOrigin() string {
+	switch {
+	case strings.TrimSpace(u.cfg.Image.TargetRepository) != "":
+		return "chosen on the Upgrade pane"
+	case strings.TrimSpace(u.cfg.Image.Repository) != "":
+		return "set by the -upgrade-image flag in this deployment's unit"
+	default:
+		return "this build's default"
+	}
+}
+
+// hostlessRepositoryProblem is what is wrong with repo, a repository
+// naming no registry host that this deployment is configured to upgrade
+// from, and how to fix it. Such a name is usually one an older installer
+// wrote as -upgrade-image when releases shipped images as release assets
+// (grain-<edition>/grain), which only ever named a local tag; it is now
+// just a name Docker Hub would be asked for.
+func (u *Upgrader) hostlessRepositoryProblem(repo string) string {
+	msg := fmt.Sprintf("the image repository %s (%s) names no registry host, so docker would fetch it from Docker Hub, where anybody may publish that name. "+
+		"Set -upgrade-image to a registry-qualified repository (registry host, then path)", repo, u.repositoryOrigin())
+	if def := installtrack.DefaultRepository(u.cfg.Image.Track); def != repo && registryauth.HostOf(def) != "" {
+		msg += fmt.Sprintf(", or remove that setting so this build's default, %s, applies", def)
+	}
+	return msg + ": re-run the installer (scripts/setup.sh, leaving GRAIN_IMAGE unset for the default) and it rewrites the unit"
+}
+
+// RepositoryWarning is what the Upgrade pane warns of before anybody
+// presses Upgrade: the configured repository names no registry host, so
+// pullImage would refuse it. Empty when there is nothing to warn of.
+func (u *Upgrader) RepositoryWarning() string {
+	if u.Mode() != ModeImage {
+		return ""
+	}
+	repo := u.EffectiveRepository()
+	if repo == "" || registryauth.HostOf(repo) != "" {
+		return ""
+	}
+	return "Upgrades will be refused: " + u.hostlessRepositoryProblem(repo) + "."
 }
 
 func (u *Upgrader) tagImage(ctx context.Context, p *progress, step, src, dst string) error {

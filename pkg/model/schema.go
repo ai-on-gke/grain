@@ -641,7 +641,11 @@ import "strconv"
 // 135 adds `grain_config`.`ci_api_repos` (model.Config.CIAPIRepos): the
 // repositories whose trusted CI jobs may hold api grants, empty for
 // grain's own only (grain/task-4040).
-const SchemaVersion = 135
+// 136 adds `task_context` and `task_brief_edit` (model.TaskContext,
+// model.TaskBriefEdit): a durable task's compaction cursor, handover
+// version and current brief, and every edit of that brief
+// (design/design/durable-tasks.design.md#DT-15, grain/task-4107).
+const SchemaVersion = 136
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -4368,6 +4372,11 @@ var Tables = []string{
 	taskRunUsageTaskIndex,
 	usageCapacityTable,
 	usageSettingTable,
+
+	// Durable task context (task_context.go, schema 136).
+	taskContextTable,
+	taskBriefEditTable,
+	taskBriefEditTaskIndex,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

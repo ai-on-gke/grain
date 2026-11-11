@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -229,7 +230,7 @@ func (s *Server) handleGetDeploymentSecretAudit(w http.ResponseWriter, r *http.R
 	entries = filterList(entries, func(e model.SecretAuditEntry) bool {
 		return list.matches(e.SecretName, e.Key, e.Principal, e.TaskID)
 	})
-	writeList(w, entries, list)
+	writeListBy(w, entries, list, func(e model.SecretAuditEntry) string { return strconv.FormatInt(e.ID, 10) })
 }
 
 // handleGetDeploymentAuditLogs is the deployment's audit trail, newest

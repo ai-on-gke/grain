@@ -819,6 +819,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		if len(cfg.UpgradeVerifyCmd) == 0 {
 			log.Print("grain daemon: warning: upgrades do not verify image signatures (no -upgrade-verify-cmd), so they run whatever the registry serves")
 		}
+		if strings.TrimSpace(cfg.UpgradeReviewedMergeRepo) != "" && deploymentMode(cfg) == upgrade.ModeKube {
+			log.Print("grain daemon: warning: -upgrade-reviewed-merge-repo is checked only on the host image path; upgrades of this Kubernetes deployment do not ask how their commit was merged")
+		}
 	case cfg.UpgradeSrcDir != "":
 		log.Printf("grain daemon: upgrades build in %s and install to %s%s",
 			cfg.UpgradeSrcDir, cfg.UpgradeInstallPath, restartNote(cfg.UpgradeRestartCmd))

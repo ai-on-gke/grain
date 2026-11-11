@@ -3575,6 +3575,8 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/pull-requests/review":               taskRespNone,
 	"POST /api/pull-requests/submit":               taskRespNone,
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
+	"POST /api/tasks/{id}/compact":                 taskRespNone,
+	"POST /api/tasks/{id}/brief":                   taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
 	"POST /api/tasks/{id}/submit":                  taskRespSingle,

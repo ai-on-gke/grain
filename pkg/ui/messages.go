@@ -226,7 +226,7 @@ func (c *Client) messagesSince(ctx context.Context, id string, after int64, from
 	if task == nil {
 		return nil, &NotFoundError{ID: id}
 	}
-	comments, err := c.Store.Comments(ctx, id)
+	comments, err := c.Store.CommentsAfter(ctx, id, after)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +466,7 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 				return list.matches(m.Author, m.Body, m.Summary)
 			})
 			if len(messages) > 0 || waitCtx.Err() != nil {
-				writeList(w, messages, list)
+				writeListBy(w, messages, list, messageKey)
 				return
 			}
 			select {
@@ -484,8 +484,11 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 	messages = filterList(messages, func(m Message) bool {
 		return list.matches(m.Author, m.Body, m.Summary)
 	})
-	writeList(w, messages, list)
+	writeListBy(w, messages, list, messageKey)
 }
+
+// messageKey names a message for paging (pageOfBy) by its comment id.
+func messageKey(m Message) string { return strconv.FormatInt(m.ID, 10) }
 
 // deliveredRequest is POST /api/tasks/{id}/delivered's body: the last
 // comment the run reporting it has now been shown.
@@ -525,11 +528,11 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 	// quiet on every one of them. The mcpserver only ever reports ids it
 	// read off this task's own conversation, so a real report always
 	// passes.
-	comments, err := c.Store.Comments(ctx, id)
+	comments, err := c.Store.CommentsAfter(ctx, id, through-1)
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(comments, func(comment model.Comment) bool { return comment.ID == through }) {
+	if len(comments) == 0 || comments[0].ID != through {
 		return validationErrorf("through must be the id of a comment on task %s", id)
 	}
 	now := c.now()

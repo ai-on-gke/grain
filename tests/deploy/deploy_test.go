@@ -2944,6 +2944,11 @@ func TestTheSandboxGuestCanActOnThePowerButton(t *testing.T) {
 // of one is a bump of both, so two builds of one grain commit cannot carry
 // different toolchains (TestBothImagesPinTheSameAgentCLIs has the incident
 // that established it). Only the digests differ.
+//
+// kind and actionlint are built from source in Granulefile's
+// guest_tools_builder rather than downloaded, so their pin is the Go
+// checksum database `go install module@version` consults: nothing may
+// turn it off.
 func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 	for _, file := range []string{"Granulefile", "Granulefile.guest-base"} {
 		code := read(t, file)
@@ -2961,24 +2966,41 @@ func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 			`arm64) sha="${GO_SHA256_ARM64}"`,
 			`amd64) node_arch=x64; sha="${NODE_SHA256_AMD64}"`,
 			`arm64) node_arch=arm64; sha="${NODE_SHA256_ARM64}"`,
-			`amd64) sha="${ACTIONLINT_SHA256_AMD64}"`,
-			`arm64) sha="${ACTIONLINT_SHA256_ARM64}"`,
+			`amd64) act_arch=x86_64; sha="${ACT_SHA256_AMD64}"`,
+			`arm64) act_arch=arm64; sha="${ACT_SHA256_ARM64}"`,
+			// npm's tarball and pip's wheel are one file for every
+			// architecture, so each has one pin, and it is checked.
+			`echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c -`,
+			`echo "${PIP_SHA256}  /tmp/pip-${PIP_VERSION}-py3-none-any.whl" | sha256sum -c -`,
 			// An architecture with no pin stops the build rather than
 			// installing a toolchain nobody checked. This is the branch no
 			// build on either architecture ever takes, so it is the one
 			// worth asserting.
 			`no pinned go checksum for $arch`,
 			`no pinned node checksum for $arch`,
-			`no pinned actionlint checksum for $arch`,
+			`no pinned act checksum for $arch`,
 			`| sha256sum -c -`,
 		} {
 			if !strings.Contains(code, want) {
 				t.Errorf("%s does not contain %s", file, want)
 			}
 		}
+		for _, want := range []string{
+			`go install -trimpath "sigs.k8s.io/kind@${KIND_VERSION}"`,
+			`go install -trimpath "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"`,
+		} {
+			if !strings.Contains(code, want) {
+				t.Errorf("%s does not contain %s", file, want)
+			}
+		}
+		for _, gone := range []string{"GOSUMDB=off", "GONOSUMDB", "GONOSUMCHECK", "GOINSECURE", "GOFLAGS=-insecure"} {
+			if strings.Contains(code, gone) {
+				t.Errorf("%s turns off Go's checksum database with %s", file, gone)
+			}
+		}
 		// And no single-architecture pin survives, which is what a careless
 		// revert would reintroduce.
-		for _, gone := range []string{"ARG GO_SHA256=", "ARG NODE_SHA256=", "ARG ACTIONLINT_SHA256="} {
+		for _, gone := range []string{"ARG GO_SHA256=", "ARG NODE_SHA256=", "ARG ACT_SHA256="} {
 			if strings.Contains(code, gone) {
 				t.Errorf("%s still has the single-architecture pin %s", file, gone)
 			}

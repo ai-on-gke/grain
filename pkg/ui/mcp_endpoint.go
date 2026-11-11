@@ -318,7 +318,7 @@ var domainGuidance = map[string]string{
 	"connections":  "Git connections and model backend definitions.",
 	"sessions":     "Interactive console sessions and standing Director/chat sessions.",
 	"caches":       "CI, package, and GitHub Actions cache inspection and flushing.",
-	"dispatch":     "Queue/pipeline pause controls and immediate task dispatch (run-now).",
+	"dispatch":     "Queue/pipeline pause controls, immediate task dispatch (run-now), and what a durable task's next dispatch carries (context compaction and current brief).",
 	"memory":       "Deployment and per-repository standing agent memory documents.",
 }
 
