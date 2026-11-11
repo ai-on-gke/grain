@@ -23,8 +23,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -688,4 +691,331 @@ func TestAProtocol1StartIsListedButNotAttachable(t *testing.T) {
 	}
 	waitGone(t, p.PID, 10*time.Second)
 	<-done
+}
+
+func TestHandoverAdoptsLiveDetachedRunsAcrossServerReplacement(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	var sock string
+	var allow string
+	var dir string
+	ts1 := startServer(t, "", func(s *Server) {
+		s.StateDir = state
+		s.AllowHandover = true
+	})
+	sock = ts1.srv.Socket
+	allow = ts1.srv.Allowlist
+	dir = ts1.dir
+
+	started1 := make(chan Started, 1)
+	c1 := ts1.client
+	c1.OnStarted = func(s Started) { started1 <- s }
+	var first lockedTestBuf
+	streamDone := make(chan error, 1)
+	go func() {
+		_, err := c1.Run(context.Background(), Request{
+			Kind: KindCLI, Name: "sh", Args: []string{"-c", steady(30) + "; exit 5"},
+			Detach: true, Run: "run-handover", Task: "100", Deadline: time.Now().Add(time.Minute),
+		}, strings.NewReader("initial-prompt\n"), &first, nil)
+		streamDone <- err
+	}()
+	st1 := <-started1
+	for !strings.Contains(first.String(), "line4\n") {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Second detached process with a background grandchild and a short deadline,
+	// to verify the replacement server enforces the deadline and kills the group.
+	bgPIDFile := filepath.Join(dir, "bg.pid")
+	started2 := make(chan Started, 1)
+	c2 := detachedClient(ts1, started2)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	go func() {
+		_, _ = c2.Run(ctx2, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:     []string{"-c", `cd "$1" || exit; sleep 60 & echo $! > "$2"; wait`, "sh", dir, filepath.Base(bgPIDFile)},
+			Detach:   true,
+			Run:      "run-deadline",
+			Deadline: time.Now().Add(1500 * time.Millisecond),
+		}, nil, nil, nil)
+	}()
+	st2 := <-started2
+	bgPID := readPID(t, bgPIDFile)
+	cancel2()
+
+	handoverStart := time.Now()
+	if err := ts1.client.Handover(context.Background()); err != nil {
+		t.Fatalf("Handover: %v", err)
+	}
+	select {
+	case err := <-ts1.done:
+		ts1.done <- err
+		if err != nil {
+			t.Fatalf("ts1 Serve after Handover: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ts1 did not return promptly on Handover")
+	}
+	if took := time.Since(handoverStart); took > 3*time.Second {
+		t.Errorf("Handover waited %s, want immediate handover", took)
+	}
+	if err := <-streamDone; !errors.Is(err, ErrNoExit) {
+		t.Fatalf("attached stream across Handover = %v, want ErrNoExit so daemon re-attaches", err)
+	}
+	if !pidAlive(st1.PID) || !pidAlive(st2.PID) {
+		t.Fatalf("detached children died on Handover: pid1=%d alive=%v, pid2=%d alive=%v",
+			st1.PID, pidAlive(st1.PID), st2.PID, pidAlive(st2.PID))
+	}
+
+	// Start replacement server on the same StateDir and Socket.
+	logs2 := &logBuf{}
+	srv2 := &Server{
+		Socket:          sock,
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        state,
+		DisconnectGrace: 500 * time.Millisecond,
+		Env:             []string{"PATH=" + os.Getenv("PATH")},
+		Logf:            logs2.logf,
+		Build:           "v2",
+	}
+	ctxSrv2, cancelSrv2 := context.WithCancel(context.Background())
+	done2 := make(chan error, 1)
+	go func() { done2 <- srv2.Serve(ctxSrv2) }()
+	t.Cleanup(func() { cancelSrv2(); <-done2 })
+
+	client2 := Client{Socket: sock}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if h, err := client2.Hello(context.Background()); err == nil && h.Build == "v2" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("replacement server never answered")
+		}
+	}
+
+	gotBefore := first.String()
+	var rest bytes.Buffer
+	exit1, _, err := client2.Attach(context.Background(), st1.ID, Cursor{Stdout: int64(len(gotBefore))}, &rest, nil)
+	if err != nil {
+		t.Fatalf("Attach on replacement server: %v", err)
+	}
+	if exit1.Code != 5 {
+		t.Errorf("adopted process exit = %+v, want code 5", exit1)
+	}
+	if whole := gotBefore + rest.String(); whole != wantLines(30) {
+		t.Errorf("stream across handover =\n%q\nwant\n%q", whole, wantLines(30))
+	}
+
+	// Replacement server enforces st2's deadline and kills its background grandchild.
+	waitGone(t, st2.PID, 10*time.Second)
+	waitGone(t, bgPID, 10*time.Second)
+	exit2, _, err := client2.Attach(context.Background(), st2.ID, Cursor{}, nil, nil)
+	if err != nil || !exit2.Deadline {
+		t.Errorf("adopted deadline process Attach = %+v, %v; want Deadline=true", exit2, err)
+	}
+}
+
+type lockedTestBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedTestBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedTestBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func TestHelperHostdReexec(t *testing.T) {
+	sock := os.Getenv("GRAIN_TEST_HOSTD_SOCKET")
+	if sock == "" {
+		return
+	}
+	allow := os.Getenv("GRAIN_TEST_HOSTD_ALLOWLIST")
+	state := os.Getenv("GRAIN_TEST_HOSTD_STATE")
+	build := os.Getenv("GRAIN_TEST_HOSTD_BUILD")
+	exe, err := os.Executable()
+	if err != nil {
+		os.Exit(2)
+	}
+	srv := &Server{
+		Socket:          sock,
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        state,
+		DisconnectGrace: 500 * time.Millisecond,
+		Env:             []string{"PATH=" + os.Getenv("PATH")},
+		Build:           build,
+		Reexec: func() error {
+			_ = os.Setenv("GRAIN_TEST_HOSTD_BUILD", build+"-next")
+			return syscall.Exec(exe, os.Args, os.Environ())
+		},
+	}
+	if err := srv.Serve(context.Background()); err != nil {
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+func TestHandoverReexecInPlacePreservesPIDAndAdoptsLiveDetachedRuns(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	sh, err := filepath.EvalSymlinks("/bin/sh")
+	if err != nil {
+		t.Skipf("no /bin/sh: %v", err)
+	}
+	dir, err := os.MkdirTemp("", "hostd-reexec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	allow := filepath.Join(dir, "hostd.yaml")
+	body := fmt.Sprintf("clis:\n  sh:\n    path: %s\n    paths_under: [%[2]s]\n    cwd_under: [%[2]s]\n", sh, dir)
+	if err := os.WriteFile(allow, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "run", "hostd.sock")
+	state := filepath.Join(dir, "state")
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestHelperHostdReexec$")
+	cmd.Env = append(os.Environ(),
+		"GRAIN_TEST_HOSTD_SOCKET="+sock,
+		"GRAIN_TEST_HOSTD_ALLOWLIST="+allow,
+		"GRAIN_TEST_HOSTD_STATE="+state,
+		"GRAIN_TEST_HOSTD_BUILD=v1",
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	hostdPID := cmd.Process.Pid
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	client := Client{Socket: sock}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if h, err := client.Hello(context.Background()); err == nil && h.Build == "v1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("helper hostd v1 never answered")
+		}
+	}
+
+	release := filepath.Join(dir, "release")
+	started := make(chan Started, 1)
+	c := client
+	c.Detach = func(context.Context) bool { return true }
+	c.OnStarted = func(s Started) { started <- s }
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		_, _ = c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:     []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.05; done; echo reexec-ok; exit 9`, "sh", dir, filepath.Base(release)},
+			Detach:   true,
+			Run:      "run-across-exec",
+			Deadline: time.Now().Add(time.Minute),
+		}, nil, nil, nil)
+	}()
+	st := <-started
+	cancel()
+
+	if err := client.Handover(context.Background()); err != nil {
+		t.Fatalf("Handover: %v", err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if h, err := client.Hello(context.Background()); err == nil && h.Build == "v1-next" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("helper hostd never re-execed onto v1-next")
+		}
+	}
+	if !pidAlive(hostdPID) {
+		t.Fatalf("hostd pid %d died instead of re-execing in place", hostdPID)
+	}
+	if !pidAlive(st.PID) {
+		t.Fatalf("detached child pid %d died across in-place re-exec", st.PID)
+	}
+
+	// New detached runs start immediately on v1-next without waiting.
+	var quickOut bytes.Buffer
+	qExit, err := client.Run(context.Background(), Request{
+		Kind: KindCLI, Name: "sh", Args: []string{"-c", "echo during-ok"}, Detach: true, Run: "run-new",
+	}, nil, &quickOut, nil)
+	if err != nil || qExit.Code != 0 || quickOut.String() != "during-ok\n" {
+		t.Fatalf("new detached start after re-exec = %+v, %q, %v", qExit, quickOut.String(), err)
+	}
+
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	exit, _, err := client.Attach(context.Background(), st.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 9 || out.String() != "reexec-ok\n" {
+		t.Fatalf("Attach after in-place re-exec = %+v, %q, %v", exit, out.String(), err)
+	}
+}
+
+func TestDrainCapMarksCancelledProcessesAsDraining(t *testing.T) {
+	ts := startServer(t, "drain_cap: 300ms\n", nil)
+	started := make(chan Started, 1)
+	c := ts.client
+	c.OnStarted = func(s Started) { started <- s }
+	type res struct {
+		exit Exit
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		exit, err := c.Run(context.Background(), Request{
+			Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 60"}, Detach: true, Run: "capped",
+		}, nil, nil, nil)
+		ch <- res{exit, err}
+	}()
+	st := <-started
+	ts.srv.Drain()
+	r := <-ch
+	if r.err != nil {
+		t.Fatalf("Run across drain_cap = %v, want Exit frame", r.err)
+	}
+	if !r.exit.Draining || !strings.Contains(r.exit.String(), "drained for an upgrade") {
+		t.Errorf("Exit at drain_cap = %+v (%q), want Draining=true", r.exit, r.exit.String())
+	}
+	waitGone(t, st.PID, 10*time.Second)
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(10 * time.Second):
+		t.Fatal("hostd did not exit after drain_cap")
+	}
+
+	// A spool left without exit.json when hostd stopped without handover is
+	// also closed with Draining=true by the next hostd's loadSpools.
+	state := filepath.Join(t.TempDir(), "state")
+	spoolDir := filepath.Join(state, "spool", "p-dead")
+	if err := os.MkdirAll(spoolDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	infoBytes, _ := json.Marshal(Process{ID: "p-dead", Kind: KindCLI, Name: "sh", PID: 99999999, Detached: true, Run: "lost"})
+	if err := os.WriteFile(filepath.Join(spoolDir, spoolProcess), infoBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts2 := startServer(t, "", func(s *Server) { s.StateDir = state })
+	p := listed(t, ts2, "p-dead")
+	if !p.Exited || p.Exit == nil || !p.Exit.Draining {
+		t.Fatalf("unclean-stop spool listing = %+v, want Exited with Draining=true", p)
+	}
 }

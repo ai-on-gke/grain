@@ -392,3 +392,207 @@ func TestHostdRunFailsAsLostPastTheReattachTimeout(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// Across a hostd handover (StartHandover -> replacement Server on the same
+// StateDir and Socket), a live HostdHost.Run stream sees ErrNoExit, re-attaches
+// on the replacement hostd from its cursor, and finishes with no lost or
+// repeated lines.
+func TestHostdRunContinuesAcrossHostdHandoverWithZeroLoss(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no shell: %v", err)
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+	dir, err := os.MkdirTemp("", "hostd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	allow := filepath.Join(dir, "hostd.yaml")
+	if err := os.WriteFile(allow, []byte(fmt.Sprintf("clis:\n  sh:\n    path: %s\n", sh)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "run", "hostd.sock")
+	state := filepath.Join(dir, "state")
+	makeSrv := func(build string) *hostd.Server {
+		return &hostd.Server{
+			Socket:          sock,
+			Allowlist:       allow,
+			AllowlistOwners: []uint32{uint32(os.Getuid())},
+			StateDir:        state,
+			DisconnectGrace: 500 * time.Millisecond,
+			Env:             []string{"PATH=" + os.Getenv("PATH")},
+			Logf:            t.Logf,
+			Build:           build,
+			AllowHandover:   true,
+		}
+	}
+	srv1 := makeSrv("v1")
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	done1 := make(chan error, 1)
+	go func() { done1 <- srv1.Serve(ctx1) }()
+	t.Cleanup(func() { cancel1(); <-done1 })
+	client := hostd.Client{Socket: sock, Build: "test"}
+	for i := 0; ; i++ {
+		if _, err := client.Hello(context.Background()); err == nil {
+			break
+		} else if i > 100 {
+			t.Fatalf("hostd v1 never answered: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var seen cursors
+	d := &Hostd{Client: client, OnCursor: seen.on, CursorEvery: time.Millisecond, ReattachTimeout: time.Minute}
+	script, want := steadyLines(30)
+	ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-ho", Deadline: time.Now().Add(time.Hour)})
+	var tee lockedBuf
+	type result struct {
+		out string
+		err error
+	}
+	runDone := make(chan result, 1)
+	go func() {
+		out, err := d.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", script}}, &tee)
+		runDone <- result{out, err}
+	}()
+	for !strings.Contains(tee.String(), "line5\n") {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := client.Handover(context.Background()); err != nil {
+		t.Fatalf("Handover: %v", err)
+	}
+	if err := <-done1; err != nil {
+		t.Fatalf("srv1 Serve: %v", err)
+	}
+	done1 <- nil
+
+	srv2 := makeSrv("v2")
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan error, 1)
+	go func() { done2 <- srv2.Serve(ctx2) }()
+	t.Cleanup(func() { cancel2(); <-done2 })
+
+	r := <-runDone
+	if r.err != nil {
+		t.Fatalf("Run across hostd handover = %v", r.err)
+	}
+	if tee.String() != want || r.out != want {
+		t.Fatalf("transcript across handover =\n%q\nreturned\n%q\nwant\n%q", tee.String(), r.out, want)
+	}
+}
+
+// When an explicit Drain hits drain_cap and cancels a running process, both
+// HostdHost.Run (live run) and Hostd.Attach (adopted run) surface
+// agent.ErrHostdDraining so the orchestrator records interrupted rather than failed.
+func TestHostdDrainCapKillSurfacesErrHostdDrainingOnRunAndAttach(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no shell: %v", err)
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+
+	startCapped := func(t *testing.T) hostd.Client {
+		t.Helper()
+		dir, err := os.MkdirTemp("", "hostd")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		allow := filepath.Join(dir, "hostd.yaml")
+		if err := os.WriteFile(allow, []byte(fmt.Sprintf("drain_cap: 300ms\nclis:\n  sh:\n    path: %s\n", sh)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		srv := &hostd.Server{
+			Socket:          filepath.Join(dir, "run", "hostd.sock"),
+			Allowlist:       allow,
+			AllowlistOwners: []uint32{uint32(os.Getuid())},
+			StateDir:        filepath.Join(dir, "state"),
+			DisconnectGrace: 500 * time.Millisecond,
+			Env:             []string{"PATH=" + os.Getenv("PATH")},
+			Logf:            t.Logf,
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- srv.Serve(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+		c := hostd.Client{Socket: srv.Socket, Build: "test"}
+		for i := 0; ; i++ {
+			if _, err := c.Hello(context.Background()); err == nil {
+				return c
+			} else if i > 100 {
+				t.Fatalf("hostd never answered: %v", err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	t.Run("live Run", func(t *testing.T) {
+		client := startCapped(t)
+		d := &Hostd{Client: client}
+		ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-live", Deadline: time.Now().Add(time.Hour)})
+		var tee lockedBuf
+		done := make(chan error, 1)
+		go func() {
+			_, err := d.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", "echo up; sleep 60"}}, &tee)
+			done <- err
+		}()
+		for !strings.Contains(tee.String(), "up\n") {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err := client.Drain(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; !errors.Is(err, agent.ErrHostdDraining) {
+			t.Fatalf("live Run cancelled at drain_cap = %v, want ErrHostdDraining", err)
+		}
+	})
+
+	t.Run("adopted Attach", func(t *testing.T) {
+		client := startCapped(t)
+		first := &Hostd{Client: client}
+		ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-adopted", Deadline: time.Now().Add(time.Hour)})
+		var tee lockedBuf
+		flushed := make(chan error, 1)
+		go func() {
+			_, err := first.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", "echo up; sleep 60"}}, &tee)
+			flushed <- err
+		}()
+		for !strings.Contains(tee.String(), "up\n") {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if _, err := first.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		<-flushed
+
+		procs, err := client.Processes(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		infos := HostdInfos(procs, hostd.ThisHello("test"))
+		if len(infos) != 1 {
+			t.Fatalf("infos = %+v, want 1", infos)
+		}
+		next := &Hostd{Client: client}
+		attachDone := make(chan error, 1)
+		go func() {
+			_, err := next.Attach(context.Background(), infos[0], int64(len(tee.String())), nil)
+			attachDone <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		if err := client.Drain(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-attachDone; !errors.Is(err, agent.ErrHostdDraining) {
+			t.Fatalf("adopted Attach cancelled at drain_cap = %v, want ErrHostdDraining", err)
+		}
+	})
+}

@@ -114,6 +114,17 @@ type Server struct {
 	// replaced. An entry the file has always wins.
 	Builtins       []BuiltinEntry
 	BuiltinCommand string
+	// Reexec, when set, replaces this process with the new hostd binary once
+	// Serve returns from a handover (StartHandover): same pid, so systemd
+	// keeps the unit's cgroup and the next hostd inherits every live detached
+	// child as its own parent (loadSpools). Nil means this Server has no way
+	// to hand live children to a replacement in the same pid, so OpDrain with
+	// Handover falls back to Cutover unless AllowHandover is set (tests).
+	Reexec func() error
+	// AllowHandover lets StartHandover leave live detached children running
+	// when Serve returns without Reexec, for an in-process test that starts
+	// the replacement Server in the same process.
+	AllowHandover bool
 
 	uid uint32
 	wg  sync.WaitGroup
@@ -127,18 +138,26 @@ type Server struct {
 	procs map[string]*proc
 	// draining is a drain that refuses new CLI starts (Drain); cutover
 	// one that still takes them and ends at the first moment nothing
-	// runs (Cutover); closing is that moment, once waitDrained has seen
-	// it, after which nothing starts at all.
-	draining bool
-	cutover  bool
-	closing  bool
+	// runs (Cutover); handover one that leaves live detached CLI runs
+	// running across Reexec (StartHandover); handedOver records that
+	// waitDrained exited by handover; closing is that moment, once
+	// waitDrained has seen it, after which nothing starts at all.
+	draining   bool
+	cutover    bool
+	handover   bool
+	handedOver bool
+	closing    bool
 	// cliStarts counts the starts of anything but a capability server
-	// that handle is still serving, from the moment one is let through
-	// until its process has ended, so a start that is between the check
-	// and its process table entry still holds a drain open.
+	// between the admission check in serveConn and the process's entry in
+	// procs (or its failing to start), so a start in that window still
+	// holds a drain or handover open.
 	cliStarts int
-	drainCh   chan struct{}
-	drainOnce sync.Once
+	// listeners counts open OpListen loopback listeners, which belong to
+	// the remote session and cannot cross a re-exec.
+	listeners  int
+	drainCh    chan struct{}
+	drainOnce  sync.Once
+	handoverCh chan struct{}
 	// changed is signalled whenever a process ends or is dropped, so a
 	// drain can tell when nothing is left running.
 	changed chan struct{}
@@ -149,13 +168,30 @@ type Server struct {
 // run ended, short enough that abandoned spools do not pile up.
 const DefaultExitedRetention = 24 * time.Hour
 
+type killKind int
+
+const (
+	killNone killKind = iota
+	killCanceled
+	killDeadline
+	killDraining
+)
+
 // proc is one process hostd started.
 type proc struct {
 	info Process // guarded by Server.mu
 	// detached is a protocol-2 start, spooled and attachable.
 	detached bool
-	cancel   context.CancelFunc
-	done     chan struct{}
+	// stdinOpen is true while a detached start is still receiving its
+	// initial stdin from the connection that started it (guarded by Server.mu).
+	stdinOpen bool
+	// killKind is the first reason hostd itself killed the process
+	// (guarded by Server.mu).
+	killKind  killKind
+	cancel    func(killKind)
+	handover  chan struct{}
+	watchDone chan struct{}
+	done      chan struct{}
 	// attachGen counts attaches; an attach whose generation is no longer
 	// current lets go, so a re-attaching daemon supersedes a dead one.
 	attachGen int
@@ -211,8 +247,8 @@ func (s *Server) Serve(ctx context.Context) error {
 		if err := os.MkdirAll(s.StateDir, 0o700); err != nil {
 			return err
 		}
-		s.ReapRecorded()
 		s.loadSpools()
+		s.ReapRecorded()
 	}
 	a, implicit, err := s.loadAllowlist()
 	if err != nil {
@@ -240,6 +276,12 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	stopOnCancel := context.AfterFunc(ctx, func() {
+		if !s.handedOverNow() {
+			s.cancelRunning(killCanceled)
+		}
+	})
+	defer stopOnCancel()
 	if ln != nil {
 		go func() {
 			<-ctx.Done()
@@ -282,6 +324,21 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	s.wg.Wait()
+	if s.handedOverNow() {
+		s.releaseHandoverWatchers()
+		if s.Reexec != nil {
+			s.logf("hostd: execing new build in place (pid %d)", os.Getpid())
+			if err := s.Reexec(); err != nil {
+				s.logf("hostd: exec onto the new build failed (%v); stopping so systemd restarts it", err)
+				s.cancelRunning(killDraining)
+				s.waitRunningDone()
+				return err
+			}
+		}
+		return nil
+	}
+	s.cancelRunning(killCanceled)
+	s.waitRunningDone()
 	return nil
 }
 
@@ -291,7 +348,66 @@ func (s *Server) init() {
 	if s.procs == nil {
 		s.procs = map[string]*proc{}
 		s.drainCh = make(chan struct{})
+		s.handoverCh = make(chan struct{})
 		s.changed = make(chan struct{}, 1)
+	}
+}
+
+func (s *Server) canHandover() bool {
+	return s.Reexec != nil || s.AllowHandover
+}
+
+func (s *Server) handedOverNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.handedOver
+}
+
+func (s *Server) cancelRunning(kind killKind) {
+	s.mu.Lock()
+	var live []*proc
+	for _, p := range s.procs {
+		if !p.info.Exited {
+			live = append(live, p)
+		}
+	}
+	s.mu.Unlock()
+	for _, p := range live {
+		p.cancel(kind)
+	}
+}
+
+func (s *Server) waitRunningDone() {
+	s.mu.Lock()
+	var live []*proc
+	for _, p := range s.procs {
+		if !p.info.Exited {
+			live = append(live, p)
+		}
+	}
+	s.mu.Unlock()
+	for _, p := range live {
+		select {
+		case <-p.done:
+		case <-time.After(WaitDelay + time.Second):
+		}
+	}
+}
+
+func (s *Server) releaseHandoverWatchers() {
+	s.mu.Lock()
+	var live []*proc
+	for _, p := range s.procs {
+		if p.detached && !p.info.Exited && p.handover != nil {
+			live = append(live, p)
+		}
+	}
+	s.mu.Unlock()
+	for _, p := range live {
+		close(p.handover)
+	}
+	for _, p := range live {
+		<-p.watchDone
 	}
 }
 
@@ -317,7 +433,7 @@ func (s *Server) signalChanged() {
 // very runs the drain waits on come from one. Once no run is left
 // running, or at the allowlist's drain_cap, Serve returns, and systemd
 // starts the new binary in its place. A process still running at the cap
-// is cancelled the way a daemon's cancel is, and that is logged.
+// is cancelled with Exit.Draining set, and that is logged.
 //
 // A detached process that has ended before the drain finishes keeps its
 // spool and its exit record on disk, and the next hostd lists it again
@@ -335,13 +451,14 @@ func (s *Server) Drain() {
 }
 
 // Cutover is the drain an upgrade to a build speaking this one's protocol
-// asks for (OpDrain with Idle): new starts are still taken, and Serve
-// returns at the first moment no run's process is running, so the new
-// binary takes over without a daemon's run being refused or cut short --
-// a standing chat session's CLI included, which runs a turn at a time
-// and is never running for good. Only if no such moment comes within the
-// allowlist's drain_cap does it turn into Drain, which refuses new starts
-// so the runs still going can finish, for up to drain_cap again.
+// asks for when handover is not used (OpDrain with Idle): new starts are
+// still taken, and Serve returns at the first moment no run's process is
+// running, so the new binary takes over without a daemon's run being
+// refused or cut short -- a standing chat session's CLI included, which
+// runs a turn at a time and is never running for good. Only if no such
+// moment comes within the allowlist's drain_cap does it turn into Drain,
+// which refuses new starts so the runs still going can finish, for up to
+// drain_cap again.
 func (s *Server) Cutover() {
 	s.init()
 	s.mu.Lock()
@@ -354,7 +471,31 @@ func (s *Server) Cutover() {
 	s.logf("hostd: cutting over to a new build: still taking new starts, and exiting the moment no run is running; %d process(es) running now", s.runningLocked())
 }
 
-// CuttingOver reports whether Cutover has been called.
+// StartHandover hands live detached CLI runs over to the replacement
+// hostd without waiting for them to finish or refusing new starts: once
+// no protocol-1 CLI, carried listener, or initial detached stdin is in
+// flight, Serve detaches active stream connections (which the daemon
+// re-attaches on the replacement hostd), leaves live detached children
+// running, and calls Reexec in the same pid. If this Server has neither
+// Reexec nor AllowHandover, it falls back to Cutover.
+func (s *Server) StartHandover() {
+	if !s.canHandover() {
+		s.Cutover()
+		return
+	}
+	s.init()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.draining || s.handover {
+		return
+	}
+	s.cutover = true
+	s.handover = true
+	s.startDrainLocked()
+	s.logf("hostd: handing over to a new build: keeping live detached runs across re-exec; %d process(es) running now", s.runningLocked())
+}
+
+// CuttingOver reports whether Cutover or StartHandover has been called.
 func (s *Server) CuttingOver() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -366,7 +507,7 @@ func (s *Server) startDrainLocked() {
 }
 
 // Draining reports whether hostd refuses new starts: Drain was called, or
-// a cutover found nothing running and hostd is exiting.
+// a cutover/handover is closing the listener to exit or re-exec.
 func (s *Server) Draining() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -383,10 +524,13 @@ func (s *Server) runningLocked() int {
 	return n
 }
 
-// waitDrained returns once no run's process is running, cancelling
+// waitDrained returns once no non-handover process is running, cancelling
 // whatever still is at the drain cap first. For a cutover the first
 // drain_cap is spent still taking starts, and only the second one ends in
-// a cancel (Cutover).
+// a cancel (Cutover). For a handover (StartHandover), live detached CLI
+// processes whose initial stdin has closed are kept running for the
+// replacement hostd to adopt, so waitDrained finishes without waiting for
+// them or refusing new starts.
 //
 // drain_cap is the allowlist's as it is on each pass, not as it was when
 // the drain began: an operator who shortens it for a drain already under
@@ -407,12 +551,18 @@ func (s *Server) waitDrained(ctx context.Context) {
 	for {
 		s.mu.Lock()
 		n := s.cliStarts
+		if s.handover && !s.draining {
+			n += s.listeners
+		}
 		var stuck, servers []*proc
+		var kept int
 		for _, p := range s.procs {
 			switch {
 			case p.info.Exited:
 			case p.info.Kind == KindCapability:
 				servers = append(servers, p)
+			case s.handover && !s.draining && p.detached && !p.stdinOpen:
+				kept++
 			default:
 				n++
 				if capped {
@@ -422,18 +572,27 @@ func (s *Server) waitDrained(ctx context.Context) {
 		}
 		if n == 0 {
 			// Taken under the same lock as the count, so no start slips
-			// in between this one and hostd exiting.
+			// in between this one and hostd exiting or re-execing.
 			s.closing = true
+			if s.handover && !s.draining {
+				s.handedOver = true
+				close(s.handoverCh)
+			}
 		}
 		refusing := s.draining
+		handedOver := s.handedOver
 		s.mu.Unlock()
 		if n == 0 {
 			for _, p := range servers {
 				s.logf("hostd: drained: ending capability server %q (pid %d); the daemon starts it again on the new build",
 					p.info.Name, p.info.PID)
-				p.cancel()
+				p.cancel(killCanceled)
 			}
-			s.logf("hostd: drained; exiting so the new build takes over")
+			if handedOver {
+				s.logf("hostd: handing %d live detached process(es) over to the new build", kept)
+			} else {
+				s.logf("hostd: drained; exiting so the new build takes over")
+			}
 			return
 		}
 		if refusing && !refused {
@@ -445,7 +604,7 @@ func (s *Server) waitDrained(ctx context.Context) {
 		for _, p := range stuck {
 			s.logf("hostd: drain cap %s reached: cancelling %s %q (pid %d, run %s) so the upgrade can go ahead",
 				limit, p.info.Kind, p.info.Name, p.info.PID, p.info.Run)
-			p.cancel()
+			p.cancel(killDraining)
 		}
 		wait := time.Second
 		if !capped {
@@ -622,9 +781,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpDrain:
-		if req.Idle {
+		switch {
+		case req.Idle && req.Handover && s.canHandover():
+			s.StartHandover()
+		case req.Idle:
 			s.Cutover()
-		} else {
+		default:
 			s.Drain()
 		}
 		_ = writeFrame(conn, frameOK, nil)
@@ -669,14 +831,19 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			"the hostd that replaces it takes new starts", Draining: true})
 		return
 	}
-	if counted {
-		defer func() {
+	var releaseOnce sync.Once
+	releaseStart := func() {
+		if !counted {
+			return
+		}
+		releaseOnce.Do(func() {
 			s.mu.Lock()
 			s.cliStarts--
 			s.mu.Unlock()
 			s.signalChanged()
-		}()
+		})
 	}
+	defer releaseStart()
 	if sessionMux(ctx) != nil {
 		// A run over the session was staged under StageRoot, which the
 		// daemon could not have named in this machine's allowlist.
@@ -688,10 +855,10 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	if req.Detach {
-		s.startDetached(ctx, conn, &req, spec)
+		s.startDetached(ctx, conn, &req, spec, releaseStart)
 		return
 	}
-	s.run(ctx, conn, &req, spec)
+	s.run(ctx, conn, &req, spec, releaseStart)
 }
 
 func (s *Server) env() []string {
@@ -712,7 +879,7 @@ func (s *Server) refuse(conn net.Conn, reason string) {
 // is taken to have stopped reading, and its stdin is closed.
 const stdinBuffer = 1024
 
-func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spec) {
+func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spec, onAdded func()) {
 	deadline := time.Now().Add(spec.MaxDuration)
 	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
 		deadline = req.Deadline
@@ -761,8 +928,17 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	// over this connection only, so nothing can attach to it.
 	id := newID()
 	entry := &proc{info: Process{ID: id, Kind: req.Kind, Name: req.Name, PID: pid, Started: time.Now().UTC(),
-		Deadline: deadline, Run: req.Run, Task: req.Task}, cancel: cancel, done: make(chan struct{})}
+		Deadline: deadline, Run: req.Run, Task: req.Task}, done: make(chan struct{})}
+	entry.cancel = func(kind killKind) {
+		s.mu.Lock()
+		if entry.killKind == killNone {
+			entry.killKind = kind
+		}
+		s.mu.Unlock()
+		cancel()
+	}
 	s.add(id, entry)
+	onAdded()
 	defer s.drop(id)
 	defer close(entry.done)
 	started, _ := json.Marshal(Started{PID: pid})
@@ -846,13 +1022,16 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 
 	err = cmd.Wait()
 	close(done)
-	exit := s.reap(cmd, err, runCtx, req)
+	s.mu.Lock()
+	killed := entry.killKind
+	s.mu.Unlock()
+	exit := s.reap(cmd, err, runCtx, req, killed)
 	sendJSON(frameExit, exit)
 }
 
 // reap turns cmd's Wait into an Exit, and kills whatever the process left
 // in its group.
-func (s *Server) reap(cmd *exec.Cmd, err error, runCtx context.Context, req *Request) Exit {
+func (s *Server) reap(cmd *exec.Cmd, err error, runCtx context.Context, req *Request, killed killKind) Exit {
 	pid := cmd.Process.Pid
 	exit := Exit{Code: -1}
 	if errors.Is(err, exec.ErrWaitDelay) {
@@ -866,7 +1045,10 @@ func (s *Server) reap(cmd *exec.Cmd, err error, runCtx context.Context, req *Req
 			exit.Signal = signalName(ws.Signal())
 		}
 	}
-	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+	switch {
+	case killed == killDraining:
+		exit.Draining = true
+	case killed == killDeadline || (killed == killNone && errors.Is(runCtx.Err(), context.DeadlineExceeded)):
 		exit.Deadline = true
 	}
 	if err != nil && cmd.ProcessState == nil {
@@ -875,7 +1057,7 @@ func (s *Server) reap(cmd *exec.Cmd, err error, runCtx context.Context, req *Req
 	exit.FinishedAt = time.Now().UTC()
 	// Whatever the CLI left in its group goes with it.
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	s.logf("hostd: %s %q (pid %d) ended: code %d signal %q deadline %v", req.Kind, req.Name, pid, exit.Code, exit.Signal, exit.Deadline)
+	s.logf("hostd: %s %q (pid %d) ended: code %d signal %q deadline %v draining %v", req.Kind, req.Name, pid, exit.Code, exit.Signal, exit.Deadline, exit.Draining)
 	return exit
 }
 
@@ -915,9 +1097,20 @@ func (s *Server) forget(pid int) {
 	_ = os.Remove(filepath.Join(s.StateDir, strconv.Itoa(pid)))
 }
 
+func (s *Server) hasLivePID(pid int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.procs {
+		if !p.info.Exited && p.info.PID == pid {
+			return true
+		}
+	}
+	return false
+}
+
 // ReapRecorded kills every process group a previous hostd recorded and
-// that is still the same process: nothing it started can still be doing a
-// daemon's work, because the connection that carried its stdio is gone.
+// that is still the same process, except live detached runs loadSpools
+// has already adopted across a handover.
 func (s *Server) ReapRecorded() {
 	entries, err := os.ReadDir(s.StateDir)
 	if err != nil {
@@ -934,6 +1127,11 @@ func (s *Server) ReapRecorded() {
 			_ = os.Remove(p)
 			continue
 		}
+		if s.hasLivePID(pid) {
+			// Adopted by loadSpools; keep its start-time record for any
+			// later handover until watchDetached reaps it.
+			continue
+		}
 		want, _ := os.ReadFile(p)
 		if got, err := procStartTime(pid); err == nil && got == string(want) {
 			s.logf("hostd: reaping process group %d left by a previous hostd", pid)
@@ -943,25 +1141,36 @@ func (s *Server) ReapRecorded() {
 	}
 }
 
-// procStartTime is field 22 of /proc/<pid>/stat: when the process started,
-// in clock ticks since boot.
-func procStartTime(pid int) (string, error) {
+// procStatFields reads field 4 (ppid) and field 22 (starttime, in clock
+// ticks since boot) of /proc/<pid>/stat.
+func procStatFields(pid int) (ppid int, startTicks string, err error) {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
 	// The command name (field 2) may hold spaces; fields resume after its
 	// closing parenthesis.
 	i := strings.LastIndexByte(string(b), ')')
 	if i < 0 {
-		return "", errors.New("malformed stat")
+		return 0, "", errors.New("malformed stat")
 	}
 	f := strings.Fields(string(b[i+1:]))
-	// f[0] is field 3, so field 22 is f[19].
+	// f[0] is field 3 (state), f[1] is field 4 (ppid), so field 22 is f[19].
 	if len(f) < 20 {
-		return "", errors.New("short stat")
+		return 0, "", errors.New("short stat")
 	}
-	return f[19], nil
+	ppid, err = strconv.Atoi(f[1])
+	if err != nil {
+		return 0, "", err
+	}
+	return ppid, f[19], nil
+}
+
+// procStartTime is field 22 of /proc/<pid>/stat: when the process started,
+// in clock ticks since boot.
+func procStartTime(pid int) (string, error) {
+	_, start, err := procStatFields(pid)
+	return start, err
 }
 
 // socketOwner finds the process holding socket inode open, answering with
