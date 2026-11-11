@@ -2370,21 +2370,13 @@ func runQueuedAt(ctx context.Context, store *model.Store, task model.Task, attem
 	}
 	if store != nil {
 		if attempt > 1 {
-			if runs, err := store.Runs(ctx, task.ID); err == nil {
-				for _, r := range runs {
-					if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
-						q = *r.FinishedAt
-					}
-				}
+			if finishedAt, err := store.LatestRunFinishedBefore(ctx, task.ID, attempt, startedAt); err == nil && finishedAt.After(q) {
+				q = finishedAt
 			}
 		}
 		if attempt > 1 || task.Interactive {
-			if comments, err := store.Comments(ctx, task.ID); err == nil {
-				for _, c := range comments {
-					if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
-						q = c.CreatedAt
-					}
-				}
+			if saidAt, err := store.LatestNonAgentCommentAtBefore(ctx, task.ID, startedAt); err == nil && saidAt.After(q) {
+				q = saidAt
 			}
 		}
 	}

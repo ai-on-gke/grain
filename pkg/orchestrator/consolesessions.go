@@ -328,14 +328,10 @@ func updateConsoleSession(ctx context.Context, deps Deps, session model.ConsoleS
 	}
 	if taskKeepRunning(ctx, deps.Store, task) {
 		if obs != nil && obs.PendingQuestionCommentID != nil {
-			if comments, err := deps.Store.Comments(ctx, task.ID); err == nil {
-				for _, c := range comments {
-					if c.ID == *obs.PendingQuestionCommentID && isConsoleSessionResting(c) {
-						return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
-							o.PendingQuestionCommentID = nil
-						})
-					}
-				}
+			if c, err := deps.Store.Comment(ctx, task.ID, *obs.PendingQuestionCommentID); err == nil && c != nil && isConsoleSessionResting(*c) {
+				return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+					o.PendingQuestionCommentID = nil
+				})
 			}
 		}
 		if waiting, unanswered, err := consoleSessionRest(ctx, deps, task.ID); err == nil && !waiting && unanswered == nil {
@@ -480,11 +476,11 @@ const consoleSessionTunnelNote = "_That has not been answered yet: the cluster's
 // session already ends on is not said again every cycle it stays true.
 // Unlike parkConsoleSession it leaves the task queued.
 func noteConsoleSession(ctx context.Context, deps Deps, taskID, note string, now time.Time) error {
-	comments, err := deps.Store.Comments(ctx, taskID)
+	last, err := deps.Store.LatestComment(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if n := len(comments); n > 0 && comments[n-1].Author.Actor == consoleSessionPrincipal && comments[n-1].Body == note {
+	if last != nil && last.Author.Actor == consoleSessionPrincipal && last.Body == note {
 		return nil
 	}
 	_, err = deps.Store.AddComment(ctx, model.Comment{
@@ -552,23 +548,15 @@ func consoleSessionFailureNote(run model.Run) string {
 // and a session dispatched for those would never stop being
 // dispatched.
 func consoleSessionRest(ctx context.Context, deps Deps, taskID string) (waiting bool, unanswered *model.Run, err error) {
-	comments, err := deps.Store.Comments(ctx, taskID)
-	if err != nil {
-		return false, nil, err
-	}
 	obs, err := deps.Store.GetObservation(ctx, taskID)
 	if err != nil {
 		return false, nil, err
 	}
-	var said time.Time
-	var saidID int64
-	for _, c := range comments {
-		if c.Author.Actor == consoleSessionPrincipal && !c.CreatedAt.Before(said) {
-			said = c.CreatedAt
-			saidID = c.ID
-		}
+	comments, said, saidID, err := consoleSessionTailComments(ctx, deps.Store, taskID, obs)
+	if err != nil {
+		return false, nil, err
 	}
-	runs, err := deps.Store.Runs(ctx, taskID)
+	runs, err := consoleSessionTailRuns(ctx, deps.Store, taskID, said)
 	if err != nil {
 		return false, nil, err
 	}
@@ -632,6 +620,89 @@ func consoleSessionRest(ctx context.Context, deps Deps, taskID string) (waiting 
 //
 // Human comments only: what a run says, and what grain says about it,
 // are never something to dispatch a run to answer.
+// consoleSessionTailComments reads only the tail of a session's conversation
+// that consoleSessionRest needs: back to grain's latest session line and
+// Observation.DeliveredCommentID, oldest first.
+func consoleSessionTailComments(ctx context.Context, store *model.Store, taskID string, obs *model.Observation) ([]model.Comment, time.Time, int64, error) {
+	var pages [][]model.Comment
+	var before int64
+	var said time.Time
+	var saidID int64
+	deliveredReached := obs == nil || obs.DeliveredCommentID == nil
+	for {
+		page, more, err := store.CommentsBefore(ctx, taskID, before, 50)
+		if err != nil {
+			return nil, time.Time{}, 0, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		pages = append(pages, page)
+		for _, c := range page {
+			if c.Author.Actor == consoleSessionPrincipal && (saidID == 0 || !c.CreatedAt.Before(said)) {
+				if c.CreatedAt.After(said) || (c.CreatedAt.Equal(said) && c.ID > saidID) || saidID == 0 {
+					said = c.CreatedAt
+					saidID = c.ID
+				}
+			}
+		}
+		if !deliveredReached && page[0].ID <= *obs.DeliveredCommentID {
+			deliveredReached = true
+		}
+		if !more || (saidID > 0 && deliveredReached) {
+			break
+		}
+		before = page[0].ID
+	}
+	var total int
+	for _, p := range pages {
+		total += len(p)
+	}
+	out := make([]model.Comment, 0, total)
+	for i := len(pages) - 1; i >= 0; i-- {
+		out = append(out, pages[i]...)
+	}
+	return out, said, saidID, nil
+}
+
+// consoleSessionTailRuns reads the recent runs of taskID back through said,
+// oldest first, so consoleSessionRest sees the latest run and every exchange
+// after grain's last rest line without loading the session's whole run history.
+func consoleSessionTailRuns(ctx context.Context, store *model.Store, taskID string, said time.Time) ([]model.Run, error) {
+	if said.IsZero() {
+		return store.Runs(ctx, taskID)
+	}
+	var pages [][]model.Run
+	beforeAttempt := 0
+	for {
+		page, older, err := store.RunsBefore(ctx, taskID, beforeAttempt, 20)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		pages = append(pages, page)
+		oldestEnded := page[0].StartedAt
+		if page[0].FinishedAt != nil && page[0].FinishedAt.After(oldestEnded) {
+			oldestEnded = *page[0].FinishedAt
+		}
+		if older == 0 || !oldestEnded.After(said) {
+			break
+		}
+		beforeAttempt = page[0].Attempt
+	}
+	var total int
+	for _, p := range pages {
+		total += len(p)
+	}
+	out := make([]model.Run, 0, total)
+	for i := len(pages) - 1; i >= 0; i-- {
+		out = append(out, pages[i]...)
+	}
+	return out, nil
+}
+
 func undeliveredHumanComment(comments []model.Comment, obs *model.Observation, runs []model.Run) (pending *model.Comment, recorded bool) {
 	if obs == nil || obs.DeliveredCommentID == nil {
 		return nil, false
@@ -696,11 +767,15 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		// Saved before sessions recorded who titled them: whether the
 		// body asks the agent to name the conversation turns on whether
 		// the title is still what its first message would give.
-		comments, err := deps.Store.Comments(ctx, task.ID)
+		first, err := deps.Store.FirstHumanComment(ctx, task.ID)
 		if err != nil {
 			return err
 		}
-		session.TitleSource = session.ResolvedTitleSource(model.ConsoleSessionFirstMessage(comments))
+		firstMsg := ""
+		if first != nil {
+			firstMsg = first.Body
+		}
+		session.TitleSource = session.ResolvedTitleSource(firstMsg)
 	}
 	prev, hasPrev := model.LastSyncedConsoleSession(ctx, deps.Store, task.ID)
 	configTitle := model.ConsoleSessionTitle(session)

@@ -59,6 +59,12 @@ import { boardMoves } from "./boardOrder.js";
 import { panelMove } from "./panelOrder.js";
 import { sectionMove } from "./sectionOrder.js";
 import { TimeZoneProvider } from "./TimeZoneContext.jsx";
+import {
+  mergeFreshDetail,
+  prependEarlierPage,
+  taskDetailPath,
+  taskEarlierPath,
+} from "./taskDetailPages.js";
 import { AccessConfigProvider } from "./AccessContext.jsx";
 import { canAccess } from "./access.js";
 import Sidebar from "./components/Sidebar.jsx";
@@ -806,6 +812,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
   }, []);
   const [openTaskId, setOpenTaskId] = useState(null);
   const [detail, setDetail] = useState(null);
+  const detailRef = useRef(null);
+  detailRef.current = detail;
   // pendingTaskId is the task a click has asked for whose detail is still
   // on its way. The pane opens on it as a loading pane
   // (TaskLoadingOverlay) if the fetch is slow, so the click visibly
@@ -1400,7 +1408,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         setSessionTask(null);
         return;
       }
-      let detail = await api(`/api/tasks/${taskId}`, {
+      let detail = await api(taskDetailPath(taskId), {
         poll: true,
       });
       if (seq !== sessionTaskSeq.current) {
@@ -1410,7 +1418,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         if (String(sessionTaskRef.current?.id) === String(taskId)) {
           return;
         }
-        detail = await api(`/api/tasks/${taskId}`);
+        detail = await api(taskDetailPath(taskId));
         if (seq !== sessionTaskSeq.current) {
           return;
         }
@@ -1418,7 +1426,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       if (String(openSessionTaskIdRef.current) !== String(taskId)) {
         return;
       }
-      setSessionTask((prev) => keepIfSame(prev, detail));
+      setSessionTask((prev) =>
+        keepIfSame(prev, mergeFreshDetail(prev, detail)),
+      );
       // api.js caches ETags per path, so when the session's task is also
       // open in the task detail overlay, a 200 consumed here advances the
       // ETag the detail poll will send next ( returning 304 UNCHANGED ).
@@ -1426,7 +1436,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // the other.
       setDetail((prev) =>
         prev && String(prev.id) === String(detail?.id)
-          ? keepIfSame(prev, detail)
+          ? keepIfSame(prev, mergeFreshDetail(prev, detail))
           : prev,
       );
     },
@@ -1651,7 +1661,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       const seq = ++openSeq.current;
       setPendingTaskId(id);
       try {
-        const d = await api(`/api/tasks/${id}`);
+        const d = await api(taskDetailPath(id));
         if (seq !== openSeq.current) return;
         setPendingTaskId(null);
         setTaskLoadError(null);
@@ -1662,7 +1672,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           return;
         }
         setOpenTaskId(id);
-        setDetail(d);
+        setDetail((prev) => keepIfSame(prev, mergeFreshDetail(prev, d)));
       } catch (err) {
         if (seq !== openSeq.current) return;
         setPendingTaskId(null);
@@ -1678,6 +1688,47 @@ function AppContent({ onReload = () => window.location.reload() }) {
     [showError],
   );
   const openTask = useCallback((id) => loadTask(id, false), [loadTask]);
+
+  const loadEarlierForTask = useCallback(
+    async (targetId, opts = {}) => {
+      const current =
+        (detailRef.current &&
+          String(detailRef.current.id) === String(targetId) &&
+          detailRef.current) ||
+        (sessionTaskRef.current &&
+          String(sessionTaskRef.current.id) === String(targetId) &&
+          sessionTaskRef.current) ||
+        null;
+      const path = taskEarlierPath(current, opts);
+      if (!path) return null;
+      const wantComments =
+        (current.olderComments || 0) > 0 &&
+        Array.isArray(current.comments) &&
+        current.comments.length > 0;
+      const wantAttempts =
+        !opts.commentsOnly &&
+        (current.olderAttempts || 0) > 0 &&
+        Array.isArray(current.attempts) &&
+        current.attempts.length > 0;
+      try {
+        const earlier = await api(path);
+        const merge = (prev) =>
+          prev && String(prev.id) === String(targetId)
+            ? prependEarlierPage(prev, earlier, {
+                loadedComments: wantComments,
+                loadedAttempts: wantAttempts,
+              })
+            : prev;
+        setDetail(merge);
+        setSessionTask(merge);
+        return earlier;
+      } catch (err) {
+        showError(err);
+        return null;
+      }
+    },
+    [showError],
+  );
 
   const closeDetail = useCallback(() => {
     openSeq.current++;
@@ -1730,7 +1781,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const openTaskFromMetrics = useCallback(
     async (id) => {
       try {
-        const d = await api(`/api/tasks/${id}`);
+        const d = await api(taskDetailPath(id));
         if (d?.consoleSession) {
           setOpenTaskId(null);
           setDetail(null);
@@ -1738,7 +1789,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           return;
         }
         setOpenTaskId(id);
-        setDetail(d);
+        setDetail((prev) => keepIfSame(prev, mergeFreshDetail(prev, d)));
       } catch (err) {
         showError(err);
       }
@@ -2324,7 +2375,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         if (createdRow?.taskId) {
           openSessionTaskIdRef.current = createdRow.taskId;
           try {
-            const detail = await api(`/api/tasks/${createdRow.taskId}`);
+            const detail = await api(taskDetailPath(createdRow.taskId));
             if (detail) {
               sessionTaskSeq.current += 1;
               setSessionTask(detail);
@@ -2715,42 +2766,29 @@ function AppContent({ onReload = () => window.location.reload() }) {
           refreshSessions({ signal: tick.signal }),
         ]);
         if (openTaskId !== null && taskLoadError?.id === openTaskId) {
-          // A task the address bar asked for that failed to load: try it
-          // again, in full rather than conditionally (there is no body on
-          // screen for an "unchanged" to mean anything against). Still
-          // failing leaves the error pane up and the rest of the tick
-          // going.
           const seq = openSeq.current;
           try {
-            const detail = await api(`/api/tasks/${openTaskId}`);
+            const detail = await api(taskDetailPath(openTaskId));
             if (seq === openSeq.current) {
               setTaskLoadError(null);
-              setDetail(detail);
+              setDetail((prev) =>
+                keepIfSame(prev, mergeFreshDetail(prev, detail)),
+              );
             }
           } catch (err) {
             console.warn("grain: task still failing to load", err);
           }
         } else if (openTaskId !== null) {
-          // Conditional for the same reason as refreshList: an open task
-          // pane carries its comment and attempt history, and fetching,
-          // parsing and comparing it every three seconds to say the same
-          // thing is waste before re-rendering even enters the picture.
-          const detail = await api(`/api/tasks/${openTaskId}`, { poll: true });
+          const detail = await api(taskDetailPath(openTaskId), { poll: true });
           if (detail !== UNCHANGED) {
-            // Only over the same task's pane. The tick asked for the
-            // task open when it started, and a click onto another one
-            // can land while this read is still out; written then, the
-            // old task's body would sit under the new one's selection,
-            // and stay there while the new task's own conditional poll
-            // answered UNCHANGED for a body it never delivered.
             setDetail((prev) =>
               prev && String(prev.id) === String(detail?.id)
-                ? keepIfSame(prev, detail)
+                ? keepIfSame(prev, mergeFreshDetail(prev, detail))
                 : prev,
             );
             setSessionTask((prev) =>
               prev && String(prev.id) === String(detail?.id)
-                ? keepIfSame(prev, detail)
+                ? keepIfSame(prev, mergeFreshDetail(prev, detail))
                 : prev,
             );
           }
@@ -4239,6 +4277,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onDraftConsumed={consumeSessionPrompt}
                             onSaved={refreshSessionSaved}
                             onDeleted={deleteStandingSession}
+                            onLoadEarlier={(opts) =>
+                              loadEarlierForTask(openSessionTaskId, opts)
+                            }
                             showError={showError}
                           />
                         ) : view === "settings" ? (
@@ -4383,6 +4424,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
               onOpenCIRun={openCIRun}
               onOpenSuiteRun={openSuiteRun}
               act={act}
+              onLoadEarlier={(opts) => loadEarlierForTask(openTaskId, opts)}
               showError={showError}
             />
           </ErrorBoundary>

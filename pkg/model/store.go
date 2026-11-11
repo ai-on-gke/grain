@@ -1113,6 +1113,87 @@ func (s *Store) LatestHandover(ctx context.Context, taskID string) (*Comment, er
 	return &page[0], nil
 }
 
+// Comment returns one comment on taskID by its id, or nil when taskID has no
+// such comment. Scoped to taskID so another task's comment id never resolves.
+func (s *Store) Comment(ctx context.Context, taskID string, id int64) (*Comment, error) {
+	if id <= 0 {
+		return nil, nil
+	}
+	page, err := s.queryComments(ctx, taskID, "SELECT "+commentColumns+
+		"FROM `task_comment` WHERE `task_id` = ? AND `id` = ? LIMIT 1",
+		taskID, id)
+	if err != nil || len(page) == 0 {
+		return nil, err
+	}
+	return &page[0], nil
+}
+
+// LatestComment returns the newest comment on taskID, or nil when taskID has
+// none.
+func (s *Store) LatestComment(ctx context.Context, taskID string) (*Comment, error) {
+	page, err := s.queryComments(ctx, taskID, "SELECT "+commentColumns+
+		"FROM `task_comment` WHERE `task_id` = ? ORDER BY `id` DESC LIMIT 1",
+		taskID)
+	if err != nil || len(page) == 0 {
+		return nil, err
+	}
+	return &page[0], nil
+}
+
+// FirstHumanComment returns the oldest human comment on taskID, or nil when
+// no person has posted one yet -- ConsoleSessionFirstMessage's own answer in
+// one indexed lookup rather than reading the whole conversation.
+func (s *Store) FirstHumanComment(ctx context.Context, taskID string) (*Comment, error) {
+	page, err := s.queryComments(ctx, taskID, "SELECT "+commentColumns+
+		"FROM `task_comment` WHERE `task_id` = ? AND `author_kind` = ? ORDER BY `id` ASC LIMIT 1",
+		taskID, string(PrincipalHuman))
+	if err != nil || len(page) == 0 {
+		return nil, err
+	}
+	return &page[0], nil
+}
+
+// CountCommentsBefore counts how many comments on taskID have id strictly less
+// than before (every comment on taskID when before <= 0).
+func (s *Store) CountCommentsBefore(ctx context.Context, taskID string, before int64) (int, error) {
+	if before <= 0 {
+		before = math.MaxInt64
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM `task_comment` WHERE `task_id` = ? AND `id` < ?",
+		taskID, before).Scan(&n); err != nil {
+		return 0, fmt.Errorf("counting comments on task %s: %w", taskID, err)
+	}
+	return n, nil
+}
+
+// CommentsCreatedAfter is Comments for only the comments created strictly
+// after since, oldest first (?comments_since=).
+func (s *Store) CommentsCreatedAfter(ctx context.Context, taskID string, since time.Time) ([]Comment, error) {
+	return s.queryComments(ctx, taskID, "SELECT "+commentColumns+
+		"FROM `task_comment` WHERE `task_id` = ? AND `created_at` > ? ORDER BY `id`",
+		taskID, since.UTC())
+}
+
+// LatestNonAgentCommentAtBefore is the latest created_at at or before cutoff
+// among non-agent comments on taskID, or zero when there is none.
+func (s *Store) LatestNonAgentCommentAtBefore(ctx context.Context, taskID string, cutoff time.Time) (time.Time, error) {
+	var at time.Time
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `created_at` FROM `task_comment` "+
+			"WHERE `task_id` = ? AND `author_kind` != ? AND `created_at` <= ? "+
+			"ORDER BY `created_at` DESC, `id` DESC LIMIT 1",
+		taskID, string(PrincipalAgent), cutoff.UTC()).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading latest non-agent comment on task %s: %w", taskID, err)
+	}
+	return at.UTC(), nil
+}
+
 // commentColumns is the select list queryComments scans, in its order.
 const commentColumns = "`id`, `author_kind`, `author_id`, `author_behalf_kind`, `author_behalf_id`, " +
 	"`body`, `created_at`, `handover`, `summary`, `author_source`, `author_behalf_source`, `filed_via` "
@@ -1191,9 +1272,28 @@ func addAttachment(ctx context.Context, tx *sql.Tx, a Attachment) (int64, error)
 // and every comment's attachments. Attachments and GetAttachment are the
 // two calls that read content back.
 func (s *Store) AttachmentMetas(ctx context.Context, taskID string) ([]AttachmentMeta, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+
+	return s.queryAttachmentMetas(ctx, taskID, "SELECT "+
 		"`id`, `comment_id`, `filename`, `content_type`, `size`, `created_at` "+
 		"FROM `task_attachment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+}
+
+// AttachmentMetasInRange returns taskID's own body attachments (comment_id IS
+// NULL) plus attachments posted on comments with ids in [minCommentID,
+// maxCommentID]. When maxCommentID <= 0 only task-body attachments are read.
+func (s *Store) AttachmentMetasInRange(ctx context.Context, taskID string, minCommentID, maxCommentID int64) ([]AttachmentMeta, error) {
+	if maxCommentID <= 0 {
+		return s.queryAttachmentMetas(ctx, taskID, "SELECT "+
+			"`id`, `comment_id`, `filename`, `content_type`, `size`, `created_at` "+
+			"FROM `task_attachment` WHERE `task_id` = ? AND `comment_id` IS NULL ORDER BY `id`", taskID)
+	}
+	return s.queryAttachmentMetas(ctx, taskID, "SELECT "+
+		"`id`, `comment_id`, `filename`, `content_type`, `size`, `created_at` "+
+		"FROM `task_attachment` WHERE `task_id` = ? AND (`comment_id` IS NULL OR (`comment_id` >= ? AND `comment_id` <= ?)) ORDER BY `id`",
+		taskID, minCommentID, maxCommentID)
+}
+
+func (s *Store) queryAttachmentMetas(ctx context.Context, taskID, query string, args ...any) ([]AttachmentMeta, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading attachments on task %s: %w", taskID, err)
 	}
@@ -3138,11 +3238,24 @@ func (s *Store) RunPrompt(ctx context.Context, taskID string, attempt int) (prom
 // never told anything" and "this run was told nothing" are different
 // facts, and a zero here would average into every report as the second.
 func (s *Store) RunPromptSizes(ctx context.Context, taskID string) (map[int]int, error) {
+	return s.RunPromptSizesInRange(ctx, taskID, 0, 0)
+}
+
+// RunPromptSizesInRange is RunPromptSizes bounded to attempts [minAttempt,
+// maxAttempt] when maxAttempt > 0, so a paged task detail does not read
+// prompt overflow pages for older runs outside the page.
+func (s *Store) RunPromptSizesInRange(ctx context.Context, taskID string, minAttempt, maxAttempt int) (map[int]int, error) {
 	out := map[int]int{}
+	where := "WHERE `task_id` = ? AND `prompt` IS NOT NULL"
+	args := []any{taskID}
+	if maxAttempt > 0 {
+		where += " AND `attempt` >= ? AND `attempt` <= ?"
+		args = append(args, minAttempt, maxAttempt)
+	}
 	err := each(ctx, s.db,
 		"SELECT `attempt`,length(CAST(`prompt` AS BLOB)) FROM `task_run` "+
-			"WHERE `task_id` = ? AND `prompt` IS NOT NULL ORDER BY `attempt`",
-		[]any{taskID},
+			where+" ORDER BY `attempt`",
+		args,
 		func(rows *sql.Rows) error {
 			var attempt, size int
 			if err := rows.Scan(&attempt, &size); err != nil {
@@ -3543,6 +3656,40 @@ func (s *Store) Attempts(ctx context.Context, taskID string) (int, error) {
 	return n, err
 }
 
+const runSelectColumns = "`r`.`id`,`r`.`sandbox`,`r`.`unit`,`r`.`attempt`,`r`.`started_at`,`r`.`finished_at`,`r`.`outcome`,`r`.`detail`," +
+	"`r`.`activity`,`r`.`activity_at`,`r`.`agent_started_at`,`r`.`suspend_kind`,`r`.`model`,`r`.`agent_framework`," +
+	"`st`.`queued_at`,`st`.`sandbox_acquired_at`,`st`.`sandbox_prepared_at`,`st`.`first_turn_at` " +
+	"FROM `task_run` AS `r` " +
+	"LEFT JOIN `task_run_startup` AS `st` ON `st`.`run_id` = `r`.`id` "
+
+func scanTaskRun(taskID string, rows *sql.Rows) (Run, error) {
+	r := Run{TaskID: taskID}
+	var unit, outcome, detail, activity, suspended, runModel, runFramework sql.NullString
+	var finishedAt, activityAt, agentStartedAt sql.NullTime
+	var queuedAt, sandboxAcquiredAt, sandboxPreparedAt, firstTurnAt sql.NullTime
+	if err := rows.Scan(&r.ID, &r.Sandbox, &unit, &r.Attempt,
+		&r.StartedAt, &finishedAt, &outcome, &detail, &activity, &activityAt,
+		&agentStartedAt, &suspended, &runModel, &runFramework,
+		&queuedAt, &sandboxAcquiredAt, &sandboxPreparedAt, &firstTurnAt); err != nil {
+		return Run{}, err
+	}
+	r.Unit, r.Outcome, r.Detail = unit.String, outcome.String, detail.String
+	r.SuspendKind = SuspensionKind(suspended.String)
+	r.Model, r.AgentFramework = runModel.String, runFramework.String
+	// agent_started_at comes along for the same reason
+	// TaskActivity selects it: it is what says whether the
+	// activity beside it is grain's own account of this run's
+	// setup or the run's own (Run.AgentStartedAt).
+	r.Activity, r.ActivityAt = activity.String, timePtr(activityAt)
+	r.AgentStartedAt = timePtr(agentStartedAt)
+	r.FinishedAt = timePtr(finishedAt)
+	r.QueuedAt = timePtr(queuedAt)
+	r.SandboxAcquiredAt = timePtr(sandboxAcquiredAt)
+	r.SandboxPreparedAt = timePtr(sandboxPreparedAt)
+	r.FirstTurnAt = timePtr(firstTurnAt)
+	return r, nil
+}
+
 // Runs is every attempt at taskID, oldest first -- the full history
 // Attempts only counts and FailureStreak only summarises, for a caller
 // (Client.GetTask) that wants to show each one: when it ran, whether it
@@ -3550,41 +3697,150 @@ func (s *Store) Attempts(ctx context.Context, taskID string) (int, error) {
 func (s *Store) Runs(ctx context.Context, taskID string) ([]Run, error) {
 	var out []Run
 	err := each(ctx, s.db,
-		"SELECT `r`.`id`,`r`.`sandbox`,`r`.`unit`,`r`.`attempt`,`r`.`started_at`,`r`.`finished_at`,`r`.`outcome`,`r`.`detail`,"+
-			"`r`.`activity`,`r`.`activity_at`,`r`.`agent_started_at`,`r`.`suspend_kind`,`r`.`model`,`r`.`agent_framework`,"+
-			"`st`.`queued_at`,`st`.`sandbox_acquired_at`,`st`.`sandbox_prepared_at`,`st`.`first_turn_at` "+
-			"FROM `task_run` AS `r` "+
-			"LEFT JOIN `task_run_startup` AS `st` ON `st`.`run_id` = `r`.`id` "+
-			"WHERE `r`.`task_id` = ? ORDER BY `r`.`attempt` ASC", taskID,
+		"SELECT "+runSelectColumns+"WHERE `r`.`task_id` = ? ORDER BY `r`.`attempt` ASC", taskID,
 		func(rows *sql.Rows) error {
-			r := Run{TaskID: taskID}
-			var unit, outcome, detail, activity, suspended, runModel, runFramework sql.NullString
-			var finishedAt, activityAt, agentStartedAt sql.NullTime
-			var queuedAt, sandboxAcquiredAt, sandboxPreparedAt, firstTurnAt sql.NullTime
-			if err := rows.Scan(&r.ID, &r.Sandbox, &unit, &r.Attempt,
-				&r.StartedAt, &finishedAt, &outcome, &detail, &activity, &activityAt,
-				&agentStartedAt, &suspended, &runModel, &runFramework,
-				&queuedAt, &sandboxAcquiredAt, &sandboxPreparedAt, &firstTurnAt); err != nil {
+			r, err := scanTaskRun(taskID, rows)
+			if err != nil {
 				return err
 			}
-			r.Unit, r.Outcome, r.Detail = unit.String, outcome.String, detail.String
-			r.SuspendKind = SuspensionKind(suspended.String)
-			r.Model, r.AgentFramework = runModel.String, runFramework.String
-			// agent_started_at comes along for the same reason
-			// TaskActivity selects it: it is what says whether the
-			// activity beside it is grain's own account of this run's
-			// setup or the run's own (Run.AgentStartedAt).
-			r.Activity, r.ActivityAt = activity.String, timePtr(activityAt)
-			r.AgentStartedAt = timePtr(agentStartedAt)
-			r.FinishedAt = timePtr(finishedAt)
-			r.QueuedAt = timePtr(queuedAt)
-			r.SandboxAcquiredAt = timePtr(sandboxAcquiredAt)
-			r.SandboxPreparedAt = timePtr(sandboxPreparedAt)
-			r.FirstTurnAt = timePtr(firstTurnAt)
 			out = append(out, r)
 			return nil
 		})
 	return out, err
+}
+
+// RunsBefore is one page of taskID's attempts read backwards from a cursor:
+// the newest limit runs whose attempt number is strictly less than
+// beforeAttempt (every run when beforeAttempt <= 0), oldest first, and how
+// many older runs remain before the returned page (durable-tasks.design.md#DT-15).
+func (s *Store) RunsBefore(ctx context.Context, taskID string, beforeAttempt, limit int) ([]Run, int, error) {
+	if limit <= 0 {
+		return nil, 0, fmt.Errorf("reading runs on task %s: limit must be positive", taskID)
+	}
+	if beforeAttempt <= 0 {
+		beforeAttempt = math.MaxInt
+	}
+	var page []Run
+	if err := each(ctx, s.db,
+		"SELECT "+runSelectColumns+"WHERE `r`.`task_id` = ? AND `r`.`attempt` < ? ORDER BY `r`.`attempt` DESC LIMIT ?",
+		[]any{taskID, beforeAttempt, limit + 1},
+		func(rows *sql.Rows) error {
+			r, err := scanTaskRun(taskID, rows)
+			if err != nil {
+				return err
+			}
+			page = append(page, r)
+			return nil
+		}); err != nil {
+		return nil, 0, err
+	}
+	more := len(page) > limit
+	if more {
+		page = page[:limit]
+	}
+	slices.Reverse(page)
+	older := 0
+	if more && len(page) > 0 {
+		if err := s.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM `task_run` WHERE `task_id` = ? AND `attempt` < ?",
+			taskID, page[0].Attempt).Scan(&older); err != nil {
+			return nil, 0, fmt.Errorf("counting older runs on task %s: %w", taskID, err)
+		}
+	}
+	return page, older, nil
+}
+
+// LiveRun returns taskID's unfinished run, or nil when none is active.
+func (s *Store) LiveRun(ctx context.Context, taskID string) (*Run, error) {
+	var out []Run
+	if err := each(ctx, s.db,
+		"SELECT "+runSelectColumns+"WHERE `r`.`task_id` = ? AND `r`.`finished_at` IS NULL ORDER BY `r`.`started_at` DESC LIMIT 1",
+		taskID,
+		func(rows *sql.Rows) error {
+			r, err := scanTaskRun(taskID, rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, r)
+			return nil
+		}); err != nil || len(out) == 0 {
+		return nil, err
+	}
+	return &out[0], nil
+}
+
+// LatestRunsForState returns the handful of runs (at most three: the live run,
+// the most recently finished run, and the most recently started run,
+// deduplicated and oldest first) that StateTimesFrom, runNowStale and
+// StateOf's current-state tail inspect on one task, without reading its full
+// run history.
+func (s *Store) LatestRunsForState(ctx context.Context, taskID string) ([]Run, error) {
+	seen := map[string]bool{}
+	var out []Run
+	collect := func(query string) error {
+		return each(ctx, s.db, query, taskID, func(rows *sql.Rows) error {
+			r, err := scanTaskRun(taskID, rows)
+			if err != nil {
+				return err
+			}
+			if !seen[r.ID] {
+				seen[r.ID] = true
+				out = append(out, r)
+			}
+			return nil
+		})
+	}
+	if err := collect("SELECT " + runSelectColumns +
+		"WHERE `r`.`task_id` = ? AND `r`.`finished_at` IS NULL ORDER BY `r`.`started_at` DESC LIMIT 1"); err != nil {
+		return nil, err
+	}
+	if err := collect("SELECT " + runSelectColumns +
+		"WHERE `r`.`task_id` = ? AND `r`.`finished_at` IS NOT NULL ORDER BY `r`.`finished_at` DESC, `r`.`attempt` DESC LIMIT 1"); err != nil {
+		return nil, err
+	}
+	if err := collect("SELECT " + runSelectColumns +
+		"WHERE `r`.`task_id` = ? ORDER BY `r`.`started_at` DESC, `r`.`attempt` DESC LIMIT 1"); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Attempt < out[j].Attempt })
+	return out, nil
+}
+
+// RunAttempt returns runID's attempt number on taskID, or 0 when no such run
+// exists.
+func (s *Store) RunAttempt(ctx context.Context, taskID, runID string) (int, error) {
+	if taskID == "" || runID == "" {
+		return 0, nil
+	}
+	var attempt int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `attempt` FROM `task_run` WHERE `id` = ? AND `task_id` = ?",
+		runID, taskID).Scan(&attempt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return attempt, nil
+}
+
+// LatestRunFinishedBefore is the latest finished_at at or before cutoff among
+// runs of taskID with attempt < beforeAttempt, or zero when there is none.
+func (s *Store) LatestRunFinishedBefore(ctx context.Context, taskID string, beforeAttempt int, cutoff time.Time) (time.Time, error) {
+	var at time.Time
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `finished_at` FROM `task_run` "+
+			"WHERE `task_id` = ? AND `attempt` < ? AND `finished_at` IS NOT NULL AND `finished_at` <= ? "+
+			"ORDER BY `finished_at` DESC, `attempt` DESC LIMIT 1",
+		taskID, beforeAttempt, cutoff.UTC()).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return at.UTC(), nil
 }
 
 // FailureStreak is taskID's own failure streak (Count), plus the most
@@ -3606,15 +3862,9 @@ func (s *Store) Runs(ctx context.Context, taskID string) ([]Run, error) {
 // comment). Their LastFinishedAt/LastOutcome still describe them where
 // they are the most recent run, since those two fields answer "what
 // happened last", not "how badly is this task going".
-func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStreak, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT `outcome`,`started_at`,`finished_at`,`detail`,`suspend_kind` FROM `task_run` "+
-			"WHERE `task_id` = ? AND `finished_at` IS NOT NULL ORDER BY `started_at` DESC", taskID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+const streakBatchSize = 32
 
+func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStreak, error) {
 	var since time.Time
 	if obs, err := getObservation(ctx, s.db, taskID); err != nil {
 		return nil, err
@@ -3623,70 +3873,75 @@ func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStrea
 	}
 
 	var streak *FailureStreak
-	for rows.Next() {
-		var outcome string
-		var startedAt, finishedAt time.Time
-		var detail, suspended sql.NullString
-		if err := rows.Scan(&outcome, &startedAt, &finishedAt, &detail, &suspended); err != nil {
+	offset := 0
+	limit := streakBatchSize
+	for {
+		query := "SELECT `outcome`,`started_at`,`finished_at`,`detail`,`suspend_kind` FROM `task_run` " +
+			"WHERE `task_id` = ? AND `finished_at` IS NOT NULL ORDER BY `started_at` DESC, `attempt` DESC LIMIT ?"
+		args := []any{taskID, limit}
+		if offset > 0 {
+			query += " OFFSET ?"
+			args = append(args, offset)
+		}
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
 			return nil, err
 		}
-		if streak == nil {
-			streak = &FailureStreak{LastStartedAt: startedAt, LastFinishedAt: finishedAt,
-				LastOutcome: outcome, LastDetail: detail.String}
-		}
-		if !since.IsZero() && !startedAt.After(since) {
-			break
-		}
-		// Read before success: a park is a success word and a suspension
-		// (SuspendRequested), and computeStreakForTask skips it.
-		if !suspended.Valid && SucceededOutcome(outcome) {
-			break
-		}
-		if suspended.Valid {
-			// Skipped, not counted and not a boundary: a suspended run
-			// (task_run.suspend_kind, model.SuspensionKind) was stopped
-			// for a reason that is evidence about the deployment and none
-			// at all about this task, so it neither adds to the streak
-			// behind it nor clears it. computeStreakForTask skips the same
-			// rows the same way.
-			//
-			// BackoffCount is incremented for a capacity suspension alone.
-			// Nothing stops dispatch while a provider is overloaded, so
-			// without it the task would be sent back at the same refusal
-			// on every poll for as long as the outage lasted, rebuilding a
-			// sandbox each time. Every other kind either stops dispatch
-			// for as long as it lasts (a usage limit pauses the
-			// deployment) or should be resumed without waiting.
-			if SuspensionKind(suspended.String) == SuspendCapacity {
-				streak.BackoffCount++
+		read := 0
+		stopped := false
+		for rows.Next() {
+			read++
+			var outcome string
+			var startedAt, finishedAt time.Time
+			var detail, suspended sql.NullString
+			if err := rows.Scan(&outcome, &startedAt, &finishedAt, &detail, &suspended); err != nil {
+				rows.Close()
+				return nil, err
 			}
-			continue
+			if streak == nil {
+				streak = &FailureStreak{LastStartedAt: startedAt, LastFinishedAt: finishedAt,
+					LastOutcome: outcome, LastDetail: detail.String}
+			}
+			if !since.IsZero() && !startedAt.After(since) {
+				stopped = true
+				break
+			}
+			// Read before success: a park is a success word and a suspension
+			// (SuspendRequested), and computeStreakForTask skips it.
+			if !suspended.Valid && SucceededOutcome(outcome) {
+				stopped = true
+				break
+			}
+			if suspended.Valid {
+				if SuspensionKind(suspended.String) == SuspendCapacity {
+					streak.BackoffCount++
+				}
+				continue
+			}
+			if outcome == EnvironmentOutcome {
+				continue
+			}
+			if StoppedByPerson(outcome, detail.String) {
+				continue
+			}
+			if streak.Count == 0 {
+				streak.LastFailureAt = finishedAt
+				streak.LastFailureDetail = detail.String
+			}
+			streak.Count++
+			streak.BackoffCount++
 		}
-		if outcome == EnvironmentOutcome {
-			// Skipped from Count and from BackoffCount: a host whose
-			// credentials expired says nothing about this task
-			// (EnvironmentOutcome's doc comment), and the task is parked
-			// until a human has fixed the host and replied, so there is
-			// no retry here to space out.
-			continue
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
 		}
-		if StoppedByPerson(outcome, detail.String) {
-			// Skipped from Count and from BackoffCount, and not a
-			// boundary either: a person closing the task under a live run
-			// (TaskClosedDetail) or stopping its turn (TurnStoppedDetail)
-			// made a decision about the task, which says nothing about
-			// whether it fails. Reopening it, or replying, should
-			// dispatch it at once rather than wait out a backoff.
-			continue
+		rows.Close()
+		if stopped || read < limit {
+			return streak, nil
 		}
-		if streak.Count == 0 {
-			streak.LastFailureAt = finishedAt
-			streak.LastFailureDetail = detail.String
-		}
-		streak.Count++
-		streak.BackoffCount++
+		offset += read
+		limit *= 2
 	}
-	return streak, rows.Err()
 }
 
 // ConsecutiveOOMRuns is how many of taskID's most recent finished runs,
@@ -3696,13 +3951,6 @@ func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStrea
 // retry request (task_observation.retry_requested_at) ends it too, as it
 // ends the failure streak.
 func (s *Store) ConsecutiveOOMRuns(ctx context.Context, taskID string) (int, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT `outcome`,`started_at` FROM `task_run` "+
-			"WHERE `task_id` = ? AND `finished_at` IS NOT NULL ORDER BY `started_at` DESC", taskID)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
 	var since time.Time
 	if obs, err := getObservation(ctx, s.db, taskID); err != nil {
 		return 0, err
@@ -3710,25 +3958,55 @@ func (s *Store) ConsecutiveOOMRuns(ctx context.Context, taskID string) (int, err
 		since = *obs.RetryRequestedAt
 	}
 	n := 0
-	for rows.Next() {
-		var outcome string
-		var startedAt time.Time
-		if err := rows.Scan(&outcome, &startedAt); err != nil {
+	offset := 0
+	limit := streakBatchSize
+	for {
+		query := "SELECT `outcome`,`started_at` FROM `task_run` " +
+			"WHERE `task_id` = ? AND `finished_at` IS NOT NULL ORDER BY `started_at` DESC, `attempt` DESC LIMIT ?"
+		args := []any{taskID, limit}
+		if offset > 0 {
+			query += " OFFSET ?"
+			args = append(args, offset)
+		}
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
 			return 0, err
 		}
-		if !since.IsZero() && !startedAt.After(since) {
+		read := 0
+		stopped := false
+		for rows.Next() {
+			read++
+			var outcome string
+			var startedAt time.Time
+			if err := rows.Scan(&outcome, &startedAt); err != nil {
+				rows.Close()
+				return 0, err
+			}
+			if !since.IsZero() && !startedAt.After(since) {
+				stopped = true
+				break
+			}
+			switch outcome {
+			case OOMOutcome:
+				n++
+				continue
+			case PausedOutcome, CapacityOutcome, InterruptedOutcome, EnvironmentOutcome:
+				continue
+			}
+			stopped = true
 			break
 		}
-		switch outcome {
-		case OOMOutcome:
-			n++
-			continue
-		case PausedOutcome, CapacityOutcome, InterruptedOutcome, EnvironmentOutcome:
-			continue
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return 0, err
 		}
-		break
+		rows.Close()
+		if stopped || read < limit {
+			return n, nil
+		}
+		offset += read
+		limit *= 2
 	}
-	return n, rows.Err()
 }
 
 // OOMRetryActivity is the task row's line for a queued task whose last
