@@ -103,7 +103,8 @@
 #   agentd-publish <release> [DIR]
 #           upload DIR's grain-agentd binaries and manifests to <release>
 #           (vX.Y.Z or vX.Y.Z-rc.N), manifests last. A release already
-#           carrying all four grain-agentd assets is never overwritten.
+#           carrying all four assets is never overwritten; one carrying only
+#           some (an interrupted upload) has them deleted and uploaded again.
 #
 # --dry-run (or DRY_RUN=true) does everything that reads and prints every
 # write it would make instead of making it.
@@ -1236,6 +1237,11 @@ validate_agentd() {
         (if (.min_contract_features | type) != "array" or (.min_contract_features | length) == 0
             or ([.min_contract_features[] | (type == "string" and test("^[a-z0-9_]+$"))] | all | not)
           then "invalid min_contract_features" else empty end),
+        (if (.features // [] | type) != "array"
+            or ([(.features // [])[] | (type == "string" and test("^[a-z0-9_]+$"))] | all | not)
+          then "invalid features" else empty end),
+        (if (.key_id // "") != "" and ((.key_id | type) != "string" or (.key_id | test("^[0-9a-f]{16}$") | not))
+          then "invalid key_id" else empty end),
         (if ((.signature // "") == "") != ((.key_id // "") == "")
           then "key_id and signature must either both be set or both be empty" else empty end)
       ] | .[]' "$d/$mf" 2>&1)" || die "$d/$mf is not valid JSON: $problems"
@@ -1397,7 +1403,7 @@ case "$cmd" in
   agentd-sign) agentd_sign "$@" ;;
   agentd-publish) agentd_publish "$@" ;;
   *)
-    sed -n '17,108p' "$0" >&2
+    sed -n '17,110p' "$0" >&2
     exit 2
     ;;
 esac
