@@ -47,7 +47,7 @@ var (
 // pinnedAgyVersion is the agy release a build of this repository installs,
 // read from the Dockerfile ARG that every consumer of the pin derives from:
 // the image build itself, Dockerfile.k8s-sandbox (held equal to it by
-// tests/deploy), and .grain/workflows/live-agent.yml, which installs it and
+// tests/deploy), and .github/workflows/live-agent.yml, which installs it and
 // then measures it.
 //
 // Several things in this package are true of one vendor release and no

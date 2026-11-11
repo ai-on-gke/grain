@@ -693,7 +693,11 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	if r.designReview {
 		b.WriteString(designReviewInstructions)
 	}
-	b.WriteString("Inspect the changes against the base branch, run relevant tests, and record each " +
+	b.WriteString("Inspect the changes against the base branch, read existing CI check statuses " +
+		"(`grain ci checks <sha>`, `grain ci list`, `grain ci log`) rather than re-running broad " +
+		"test suites or calling `grain ci wait` (run only a narrowly targeted test such as " +
+		"`go test ./pkg/x -run TestName` when needed to confirm or refute a specific finding, and " +
+		"say which tests you ran in your closing note), and record each " +
 		"finding with `add_review_comment` (supplying `path` and `line` for inline diff findings). " +
 		"If the pull request looks clean with no findings, summarize what you checked via `comment_on_issue`.")
 
