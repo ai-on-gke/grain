@@ -140,11 +140,9 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 			"orchestrator: task %s has no repo attached, so there is no branch to open a pull request for", task.ID)
 	}
 	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			if reason := src.GitOnly(prRepo.StoredOwner(), prRepo.Name); reason != "" {
-				return PullRequestStatus{}, fmt.Errorf("orchestrator: %s", reason)
-			}
+	if src, ok := client.(github.GitOnlySource); ok {
+		if reason := src.GitOnly(prRepo.StoredOwner(), prRepo.Name); reason != "" {
+			return PullRequestStatus{}, fmt.Errorf("orchestrator: %s", reason)
 		}
 	}
 	branch := task.BranchName()
