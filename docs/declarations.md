@@ -330,6 +330,10 @@ hosting: unattended                # optional; "unattended" or "console" -- what
                                    #   console capability gave (capabilities.md); a bare console
                                    #   under capabilities: is read as this, with a warning
 priority: 10                       # optional; positive integer (unset/0 files tasks at default 5)
+sandbox:                           # optional; the sandbox every task it files gets -- see below
+  cpus: 4                          #   each key optional; left out, that dimension is the
+  memory-mb: 16384                 #   deployment's default (2 vCPU / 8192 MiB / 30 GiB unless
+  disk-gb: 100                     #   an operator changed it). Needs grain v3.6.0 or later
 custom-fields:                     # optional; this deployment's declared fields
   team: infra
   reviewers: [ana, bo]
@@ -358,6 +362,67 @@ grants:                            # optional; the unified spelling of capabilit
 string or a `{capability, with}` mapping, the two keys are read as one list,
 and an entry both name (in either spelling) is held once. Everything this
 section says about `capabilities:` holds for `grants:` as well.
+
+#### Sizing the sandbox: `sandbox:` on a template
+
+A template can say how big a machine its work needs, with the same three
+keys a `.grain/workflows` job's own `sandbox:` uses:
+
+```yaml
+# .grain/templates/publish-images.yml
+title: Publish the release images
+sandbox:
+  disk-gb: 100      # the image build needs ~100 GB; the default disk is 30 GB
+```
+
+- `cpus` (vCPUs), `memory-mb` (MiB) and `disk-gb` (GiB) are each optional.
+  A key left out leaves that dimension on the deployment's default.
+- Each is a positive integer, at most the ceiling a task's own sandbox
+  shape is held to: 32 vCPUs, 131072 MiB and 1024 GiB. `memory-mb` is at
+  least 128. `0`, a negative number, or anything above the ceiling refuses
+  the repository's declarations, as any value out of range does. Any other
+  key under `sandbox:` is refused by name.
+- Every task filed from the template carries the shape: a schedule
+  firing it, a suite or qualification pass, `propose_task` or
+  `POST /api/tasks` naming its id, and the New Task form. A filing that
+  states a dimension of its own (`sandbox_disk_gb` on `propose_task`,
+  `sandboxDiskGb` on the API, the form's own boxes) keeps its value for
+  that dimension, and the template fills the rest.
+- A filing through the API or the form is also held to the deployment's
+  own `sandboxShapeLimits` (Settings → Sandboxes), exactly as a task sized
+  by hand is. On a deployment whose sandboxes are host directories, which
+  have no shape, the form and the API leave the template's shape off. A
+  schedule firing there files the shape anyway, and the run fails at
+  sandbox setup, so don't declare `sandbox:` for such a deployment.
+- The template's shape shows on its page (opened from its row on the
+  Processes page), in
+  `GET /api/templates` (`sandbox: {cpus, memoryMb, diskGb}`), and in the
+  preview beside the New Task form.
+
+**Which grain accepts it.** `sandbox:` on a template is new in schema 142.
+The first release that accepts it is the first one cut from a `main` that
+has this change: **v3.6.0** if v3.6.0 is cut after it lands, otherwise the
+release after. v3.5.1 and every v3.6.0 release candidate up to rc.6 don't
+know the key. Check the reading daemon's version before you declare
+`sandbox:`. If a daemon doesn't know the key, it refuses the file loudly:
+
+- A daemon from before forward-compatible parsing (v3.5.1, and
+  v3.6.0-rc.6 and earlier) refuses the repository's **whole** declaration
+  set at that commit. It keeps the declarations of the last commit it
+  could read, and records the refusal (the file, the line and `field
+  sandbox not found`) as the repository's declaration-sync error
+  (`repo_declaration_sync.last_error`).
+- A daemon with forward-compatible parsing but without this change
+  *holds back* just that template file: it keeps the version it already
+  had (still without the shape), and raises an Inbox notice under
+  `declarations held back by this grain build:`. See [Declarations newer
+  than the daemon](#declarations-newer-than-the-daemon).
+
+Neither daemon files a task without the shape while saying nothing
+about it. `grain declarations check` in CI runs the code on the pull
+request's own branch, so it accepts `sandbox:` once this change is on
+`main`, whatever the deployment runs. That check alone does not show the
+deployment can read the key.
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 

@@ -282,6 +282,10 @@ type Composition struct {
 	Skills *SkillsConfig
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
+	// Sandbox is the sandbox shape the task asks for (Task.SandboxCPUs
+	// and its two siblings). Only a template says so (Template.Sandbox):
+	// an inline schedule's firing takes the deployment's default.
+	Sandbox SandboxShape
 
 	// TemplateID and TemplateName name the template this task's content
 	// came from, both empty for a schedule firing its own inline
@@ -343,6 +347,9 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		Admission:            NormalizeAdmission(c.Admission),
 		Hosting:              NormalizeHosting(c.Hosting),
 		Skills:               c.Skills.Clone(),
+		SandboxCPUs:          c.Sandbox.CPUs,
+		SandboxMemoryMB:      c.Sandbox.MemoryMB,
+		SandboxDiskGB:        c.Sandbox.DiskGB,
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -466,6 +473,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Hosting:              tmpl.Hosting,
 		Skills:               tmpl.Skills.Clone(),
 		Priority:             priority,
+		Sandbox:              tmpl.Sandbox,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
 		Sources: CompositionSources{

@@ -1032,6 +1032,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `schedule` ADD COLUMN `skip_when` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     142,
+		Description: "add template.sandbox, the sandbox shape every task filed from a template asks for (grain/task-4591)",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `sandbox` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

@@ -660,7 +660,10 @@ import "strconv"
 // 141 adds `schedule`.`skip_when` (model.Schedule.SkipWhen): a condition
 // outside the schedule, such as its base branch's publishing being held,
 // that holds its firings (grain/task-4393).
-const SchemaVersion = 141
+// 142 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
+// shape every task filed from a template asks for, as JSON, empty for
+// none (grain/task-4591).
+const SchemaVersion = 142
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2230,6 +2233,7 @@ var Tables = []string{
   ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   ` + "`skills`" + `             TEXT NOT NULL DEFAULT '',
+  ` + "`sandbox`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
