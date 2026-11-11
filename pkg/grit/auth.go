@@ -156,30 +156,56 @@ func ParseScopeSpec(spec string) (ClientScope, error) {
 }
 
 // clientRateLimiter enforces per-client sliding-window rate limits on run
-// submissions and tree upload bytes.
+// submissions and tree upload bytes: a request counts against everything the
+// client did in the minute before it, not against a wall-clock minute, so a
+// burst straddling a minute boundary cannot get twice the limit through.
 type clientRateLimiter struct {
 	mu      sync.Mutex
 	windows map[string]*clientWindow
 }
 
-type clientWindow struct {
-	minuteStart time.Time
-	runs        int
-	uploadBytes int64
+type windowEvent struct {
+	at time.Time
+	n  int64
 }
+
+type clientWindow struct {
+	runs    []windowEvent
+	uploads []windowEvent
+}
+
+const (
+	rateWindow  = time.Minute
+	eventBucket = time.Second
+)
 
 func newClientRateLimiter() *clientRateLimiter {
 	return &clientRateLimiter{windows: make(map[string]*clientWindow)}
 }
 
-func (l *clientRateLimiter) window(clientID string, now time.Time) *clientWindow {
-	trunc := now.UTC().Truncate(time.Minute)
+func (l *clientRateLimiter) window(clientID string) *clientWindow {
 	w, ok := l.windows[clientID]
-	if !ok || !w.minuteStart.Equal(trunc) {
-		w = &clientWindow{minuteStart: trunc}
+	if !ok {
+		w = &clientWindow{}
 		l.windows[clientID] = w
 	}
 	return w
+}
+
+// prune drops events older than the window before now and returns the sum of
+// what is left.
+func prune(events []windowEvent, now time.Time) ([]windowEvent, int64) {
+	cutoff := now.Add(-rateWindow)
+	i := 0
+	for i < len(events) && !events[i].at.After(cutoff) {
+		i++
+	}
+	events = events[i:]
+	var total int64
+	for _, e := range events {
+		total += e.n
+	}
+	return events, total
 }
 
 func (l *clientRateLimiter) allowRun(c ClientRecord, now time.Time) bool {
@@ -188,11 +214,13 @@ func (l *clientRateLimiter) allowRun(c ClientRecord, now time.Time) bool {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	w := l.window(c.ID, now)
-	if w.runs >= c.RunsPerMinute {
+	w := l.window(c.ID)
+	var runs int64
+	w.runs, runs = prune(w.runs, now)
+	if runs >= int64(c.RunsPerMinute) {
 		return false
 	}
-	w.runs++
+	w.runs = append(w.runs, windowEvent{at: now, n: 1})
 	return true
 }
 
@@ -202,10 +230,32 @@ func (l *clientRateLimiter) allowTreeUpload(c ClientRecord, nBytes int64, now ti
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	w := l.window(c.ID, now)
-	if w.uploadBytes+nBytes > c.TreeUploadBytesPerMinute {
+	w := l.window(c.ID)
+	var uploaded int64
+	w.uploads, uploaded = prune(w.uploads, now)
+	if uploaded+nBytes > c.TreeUploadBytesPerMinute {
 		return false
 	}
-	w.uploadBytes += nBytes
+	// An empty upload counts for nothing, so it is not kept either: a
+	// client sending them as fast as it can would otherwise grow the
+	// window by one event a request.
+	if nBytes > 0 {
+		w.uploads = addEvent(w.uploads, now, nBytes)
+	}
 	return true
+}
+
+// addEvent records n at now, folding it into the last event when both fall
+// in the same eventBucket, so a client making many small uploads keeps at
+// most one event a second rather than one a request. A folded event is
+// stamped with the latest time in it, so its bytes leave the window at most
+// eventBucket late and never early: the limit is only ever stricter for it.
+func addEvent(events []windowEvent, now time.Time, n int64) []windowEvent {
+	if last := len(events) - 1; last >= 0 && !now.Before(events[last].at) &&
+		now.Truncate(eventBucket).Equal(events[last].at.Truncate(eventBucket)) {
+		events[last].at = now
+		events[last].n += n
+		return events
+	}
+	return append(events, windowEvent{at: now, n: n})
 }

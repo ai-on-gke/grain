@@ -15,6 +15,8 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"maps"
 	"slices"
 	"sort"
@@ -219,4 +221,133 @@ func withheldConfigValue(v any) any {
 		return out
 	}
 	return v
+}
+
+// LiteralMove is one typed-in credential MoveLiteralCredentials took out
+// of a server entry: where it was, the secrets store name
+// (<secret>/<key>) it is now referenced by, and the text to store there.
+// Value is the credential itself: store it, never log it.
+type LiteralMove struct {
+	Where  string
+	Secret string
+	Value  string
+}
+
+// LiteralSecretPrefix starts the secret every typed-in credential of a
+// capability server is moved into: capability-server-<id>/<field>.
+const LiteralSecretPrefix = "capability-server-"
+
+// LiteralSecretName is the secrets store name (<secret>/<key>) the
+// typed-in credential at where ("env API_TOKEN", "header X-Api-Key") of
+// server id is moved into: capability-server-<id>/<field>, with id and
+// field cut down to letters, digits, '-' and '_' -- a capability id is
+// usually a URL, and a secret's name holds no '/' -- and, when that
+// changed either, a short hash of the original appended, so that two ids
+// that only differ in punctuation never share a secret.
+func LiteralSecretName(id, where string) string {
+	kind, name, _ := strings.Cut(where, " ")
+	return LiteralSecretPrefix + secretComponent(id) + "/" + secretComponent(kind+"-"+name)
+}
+
+func secretComponent(s string) string {
+	trimmed := s
+	for _, scheme := range []string{"https://", "http://"} {
+		trimmed = strings.TrimPrefix(trimmed, scheme)
+	}
+	var b strings.Builder
+	dash := false
+	for _, r := range trimmed {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-'
+		if ok {
+			b.WriteRune(r)
+			dash = false
+			continue
+		}
+		if !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == s {
+		return out
+	}
+	sum := sha256.Sum256([]byte(s))
+	if out == "" {
+		return hex.EncodeToString(sum[:4])
+	}
+	return out + "-" + hex.EncodeToString(sum[:4])
+}
+
+// MoveLiteralCredentials is c with every typed-in credential in its env
+// and headers -- each LiteralCredentials names there -- replaced by a
+// $secret: reference to LiteralSecretName(id, where), and the moves the
+// caller has to make in the secrets store for the result to resolve to
+// exactly what c did (Resolve). A value with no reference in it moves
+// whole ("Bearer abc123" becomes "$secret:<name>"); in one that already
+// mixes references with typed-in text, each piece of that text moves on
+// its own, to <name>, <name>-2 and so on, and an auth scheme word is
+// kept.
+//
+// stuck names the typed-in credentials it cannot move: those in args
+// and serverUrl, where grain resolves no reference, and a value whose
+// typed-in text runs straight into a reference ("abc$secret:x"), which
+// no rewrite can separate. The returned copy shares no map with c.
+func (c ServerConfig) MoveLiteralCredentials(id string) (out ServerConfig, moves []LiteralMove, stuck []string) {
+	out = c
+	out.Env = maps.Clone(c.Env)
+	out.Headers = maps.Clone(c.Headers)
+	for _, where := range c.LiteralCredentials() {
+		kind, name, _ := strings.Cut(where, " ")
+		var m map[string]string
+		switch kind {
+		case "env":
+			m = out.Env
+		case "header":
+			m = out.Headers
+		default:
+			stuck = append(stuck, where)
+			continue
+		}
+		rewritten, moved, ok := moveLiteralValue(m[name], LiteralSecretName(id, where))
+		if !ok {
+			stuck = append(stuck, where)
+			continue
+		}
+		m[name] = rewritten
+		for _, mv := range moved {
+			moves = append(moves, LiteralMove{Where: where, Secret: mv[0], Value: mv[1]})
+		}
+	}
+	return out, moves, stuck
+}
+
+// moveLiteralValue rewrites v with its typed-in text referenced from
+// secret (and secret-2, ...), returning each [name, value] to store.
+func moveLiteralValue(v, secret string) (string, [][2]string, bool) {
+	lits, refs := splitSecretRefs(v)
+	if len(refs) == 0 {
+		return SecretRef(secret), [][2]string{{secret, v}}, true
+	}
+	var b strings.Builder
+	var moved [][2]string
+	for i, lit := range lits {
+		t := strings.TrimSpace(lit)
+		if t != "" && !authSchemes[strings.ToLower(t)] {
+			if i < len(refs) && strings.HasSuffix(lit, t) {
+				return "", nil, false
+			}
+			name := secret
+			if len(moved) > 0 {
+				name += "-" + strconv.Itoa(len(moved)+1)
+			}
+			moved = append(moved, [2]string{name, t})
+			lit = strings.Replace(lit, t, SecretRef(name), 1)
+		}
+		b.WriteString(lit)
+		if i < len(refs) {
+			b.WriteString(secretPrefix + refs[i])
+		}
+	}
+	return b.String(), moved, true
 }
