@@ -462,13 +462,45 @@ func (c credentialTokenSource) selectMergeCredential(owner, repo string) (string
 // MergeTokenFor is github.MergeTokenSource: the token owner/repo's merge
 // credential gives, nil when it names one the store does not hold or
 // cannot mint a token for -- which refuses the merge rather than making it
-// under the push credential.
+// under the push credential -- and nil too when the push credential's
+// forge traffic goes through its host's own tool (MergeRefusalFor).
 func (c credentialTokenSource) MergeTokenFor(owner, repo string) (*string, bool) {
 	_, cred, ok := c.selectMergeCredential(owner, repo)
 	if !ok {
 		return nil, false
 	}
+	if c.mergeRefusal(owner, repo) != "" {
+		return nil, true
+	}
 	return cred.Token, true
+}
+
+// MergeRefusalFor is github.MergeRefusalSource: why owner/repo's merge
+// credential gave no token for the merge it was asked for, or "" to let
+// the generic ErrNoMergeToken stand.
+func (c credentialTokenSource) MergeRefusalFor(owner, repo string) string {
+	if _, _, ok := c.selectMergeCredential(owner, repo); !ok {
+		return ""
+	}
+	return c.mergeRefusal(owner, repo)
+}
+
+// mergeRefusal is a sentence when owner/repo's push credential sends its
+// forge traffic through its host's tool (`<tool> api`): forgeRouter picks
+// the transport by the push credential, and that transport drops the
+// request's Authorization header and authenticates with the tool's own
+// login, so a merge sent with the merge credential's token would be made
+// as that login -- the person's -- and recorded as the merge credential's.
+func (c credentialTokenSource) mergeRefusal(owner, repo string) string {
+	if c.credentials == nil {
+		return ""
+	}
+	push, ok := c.selectGitCredential(owner, repo)
+	if !ok || !c.credentials.ForgeViaCommand(push.Name) {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s is pushed with %s, whose forge calls go through its host's own tool as that tool's login, "+
+		"which a merge credential cannot replace", owner, repo, push.Name)
 }
 
 // MergeIdentityFor is github.MergeTokenSource: the merge credential's

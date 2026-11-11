@@ -375,7 +375,10 @@ repository whose connection names one:
   commenting on the pull request and reading checks stay on `credential`
   (`github.MergeTokenSource`, `credentialTokenSource.MergeTokenFor`);
 - a merge credential that gives no token (an App whose installation token
-  cannot be minted, a credential not in the store) **refuses the merge**
+  cannot be minted, a credential not in the store, or a connection whose
+  `credential` sends its forge calls through its host's own tool, which
+  authenticates every API call as that tool's login whatever token grain
+  hands it) **refuses the merge**
   (`github.ErrNoMergeToken`, shown as the merge queue's refusal). grain
   never falls back to merging under the push credential: that would be
   the merge-as-a-person the setting is there to stop;
