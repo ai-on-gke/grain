@@ -668,6 +668,40 @@ clis:
 	}
 }
 
+func TestEnvPatternsNeverAdmitInjectionVariables(t *testing.T) {
+	a, root := mustParse(t, `
+clis:
+  patterned:
+    path: /opt/cli
+    paths_under: [ROOT]
+    env: [PYTHON*, NODE_*, BASH_*, PERL*, RUBY*, E*]
+`)
+	mkfiles(t, root, "cfg.json")
+	host := []string{"PATH=/usr/bin", "HOME=/home/me"}
+
+	// A NAME_* pattern admits the names it matches outside the deny set...
+	if _, err := a.Check(&Request{
+		Kind: KindCLI,
+		Name: "patterned",
+		Env:  []string{"PYTHONUNBUFFERED=1", "NODE_ENV=production", "BASH_SILENCE=1", "EDITOR=true"},
+	}, host); err != nil {
+		t.Fatalf("patterned check failed: %v", err)
+	}
+	// ...but never an injection variable, which only its exact name admits.
+	for _, kv := range []string{
+		"PYTHONPATH=" + root,
+		"PYTHONSTARTUP=" + root + "/cfg.json",
+		"NODE_OPTIONS=--require=foo",
+		"BASH_ENV=" + root + "/cfg.json",
+		"PERL5OPT=-Mstrict",
+		"RUBYOPT=-w",
+		"ENV=" + root + "/cfg.json",
+	} {
+		_, err := a.Check(&Request{Kind: KindCLI, Name: "patterned", Env: []string{kv}}, host)
+		wantRefused(t, err, "not one this entry accepts")
+	}
+}
+
 func TestParseAllowlistIgnoresXAnnotationKeysAndKeepsStrictnessElsewhere(t *testing.T) {
 	root := testRoot(t)
 	yamlWithAnnotations := strings.ReplaceAll(`
