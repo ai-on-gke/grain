@@ -834,6 +834,11 @@ func upstreamFailedDenial(err error, credential Credential) ProxyResponse {
 	if credential.Token != nil && *credential.Token != "" {
 		reason = strings.ReplaceAll(reason, *credential.Token, "[token]")
 	}
+	if _, ok := AsLoginRedirect(err); ok {
+		// No answer from the host because a front end before it wants
+		// the grain host's own login renewed (LoginLapsedMarker).
+		return Denial(502, LoginLapsedMarker+"upstream request failed: "+reason)
+	}
 	return Denial(502, "upstream request failed: "+reason)
 }
 

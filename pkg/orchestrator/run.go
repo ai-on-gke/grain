@@ -4027,8 +4027,14 @@ func capacityDetail(capacity *agent.CapacityError) string {
 // the clone's credential, say -- which is the host's doing and is recorded
 // as model.EnvironmentOutcome, in the words that say how to renew them. A setup
 // step's error may have crossed a process (the git proxy answering a
-// clone), so the refusal is also recognised by its text.
+// clone), so the refusal is also recognised by its text. A clone the git
+// proxy refused because the host's own login for a git host has lapsed
+// (hostLoginLapsedError) is the same finding about a different login.
 func setupEnding(err error, outcome, detail string) (string, string) {
+	var lapsed *hostLoginLapsedError
+	if errors.As(err, &lapsed) {
+		return model.EnvironmentOutcome, lapsed.detail()
+	}
 	if expired, ok := authfix.As(authfix.Wrap(err, "", "")); ok {
 		return model.EnvironmentOutcome, expired.Error()
 	}
