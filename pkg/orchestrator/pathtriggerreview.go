@@ -464,6 +464,11 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, task model.
 	default:
 		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
 			reviewFindingsBody(filled, task, ref, task.BranchName())+facts, false, now)
+		if task.Target != nil {
+			// A findings-only review opens no pull request and runs no grain CI
+			// of its own; read-only api:ci-read@<repo> is all it needs.
+			review.Grants = ensureReviewCIReadGrant(withoutGrainCIGrants(review.Grants), *task.Target)
+		}
 		review.Links = append(review.Links, model.Link{Kind: model.LinkReviewCommentsOnly, Target: task.ID})
 	}
 	if err != nil {
@@ -558,9 +563,21 @@ func reviewFindingsBody(tmpl model.Template, task model.Task, ref model.PullRequ
 			"anything pushed is dropped. If the change reads clean, finish with comment_on_issue saying "+
 			"what you checked.",
 		task.ID, task.Title, branch, ref, ref, task.ID)
+	b.WriteString("\n\n" + reviewFindingsTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
 	return b.String()
 }
+
+// reviewFindingsTestingAndCINote is reviewTestingAndCINote for a review that
+// posts findings only and pushes no fixes.
+const reviewFindingsTestingAndCINote = "**Testing and CI.** The change's own GitHub Actions or grain CI run " +
+	"is the test signal: read its result (`grain ci checks <sha>`, `grain ci list`, `grain ci log`, " +
+	"`grain pr status`, or check statuses) rather than re-running suites yourself. Do not run " +
+	"`go test ./...`, package-wide or `-race` runs across packages, or long suites, and do not call " +
+	"`grain ci wait` (or `wait_for_checks`) to wait for CI to finish -- finish the review; grain " +
+	"will not merge a head whose CI has not passed. Do run a narrowly targeted test " +
+	"(`go test ./pkg/x -run TestName`) only when needed to confirm or refute a specific finding, and " +
+	"say which tests you ran in your closing note (`comment_on_issue`)."
 
 // reviewCommentsOnly reports whether task is a review that posts its
 // findings and opens no pull request.
