@@ -1405,12 +1405,3 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	cfg, err = local(cfg, passed)
 	return cfg, fs, unknownFlags, err
 }
-
-// checkConfig validates the flags parsed into cfg (daemon.CheckDaemonFlags plus
-// the CLI's own package-cache upstream syntax check).
-func checkConfig(cfg daemon.Config) error {
-	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
-		return err
-	}
-	return checkHubConfig(cfg)
-}
