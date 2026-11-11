@@ -202,7 +202,7 @@ func OffAllowlistAtDispatchComment(target RepoRef, allowed []string) string {
 // stop naming, and the work already stored against it that the narrowing
 // would strand there -- what Store.StrandedByTargetRepos answers with,
 // and what an operator is told before the save that does it
-// (ui.Settings.TargetReposStranded).
+// (ui.TargetReposPlan, POST /api/repos/plan).
 //
 // "Stranded" is exact rather than dramatic: none of this is deleted,
 // disabled or closed. A task still in play is parked on its next
@@ -254,6 +254,32 @@ type StrandedWork struct {
 // reported as a nil-everywhere row.
 func (w StrandedWork) Empty() bool {
 	return len(w.Tasks) == 0 && len(w.Schedules) == 0 && !w.QualificationPlan
+}
+
+// Summary is the sentence an operator is shown for w before the save or
+// removal that strands it: which repository comes off the list, and what
+// of its stored work stops because of that.
+func (w StrandedWork) Summary() string {
+	var parts []string
+	if n := len(w.Tasks); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s still in play there %s parked instead of dispatched",
+			n, plural(n, "task", "tasks"), plural(n, "is", "are")))
+	}
+	if n := len(w.Schedules); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s firing into it (%s) %s firing until it is back",
+			n, plural(n, "schedule", "schedules"), strings.Join(w.Schedules, ", "), plural(n, "stops", "stop")))
+	}
+	if w.QualificationPlan {
+		parts = append(parts, "its release-qualification plan no longer runs")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	if len(parts) > 1 {
+		last = strings.Join(parts[:len(parts)-1], ", ") + ", and " + last
+	}
+	return fmt.Sprintf("`%s` comes off this deployment's target repo list, so %s.", w.Repo, last)
 }
 
 func plural(n int, one, many string) string {
