@@ -131,6 +131,38 @@ describe("InboxPageComponent", () => {
     expect(rows(f)).toEqual(["Investigate the merge queue stall"]);
   });
 
+  it("keeps a half-typed reply when a refresh brings the same row back", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      {
+        id: "4",
+        title: "Parked",
+        state: "awaiting_reply",
+        questionSummary: "Fix both?",
+      },
+      { id: "9", title: "Bump Go", state: "proposed" },
+    ];
+    const f = await render(api);
+    expect(q(f, '[data-testid="inspector-title"]')?.textContent).toContain(
+      "#4",
+    );
+    const input = q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement;
+    input.value = "Keep both";
+    input.dispatchEvent(new Event("input"));
+    await f.whenStable();
+
+    // Another row leaves and the list is rebuilt, as an SSE event does.
+    api.taskList = api.taskList.filter((t) => t.id !== "9");
+    await TestBed.inject(InboxStore).refresh();
+    await f.whenStable();
+    expect(
+      (q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement).value,
+    ).toBe("Keep both");
+    expect(
+      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
   it("asks before declining, and sends nothing when cancelled", async () => {
     const api = new FakeApi();
     api.taskList = [{ id: "9", title: "Bump Go", state: "proposed" }];

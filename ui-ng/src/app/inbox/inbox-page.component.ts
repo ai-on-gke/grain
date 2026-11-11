@@ -23,6 +23,7 @@ import {
   effect,
   inject,
   signal,
+  untracked,
   viewChild,
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
@@ -737,6 +738,9 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     "POST /api/repos/{owner}/{name}/pending-releases/{version}/reject" as const;
 
   protected readonly draft = signal("");
+  private readonly selectedKey = computed(
+    () => this.store.selected()?.key ?? null,
+  );
   protected readonly denying = signal(false);
   protected readonly unticked = signal<ReadonlySet<number>>(new Set());
   protected readonly allowBreaking = signal(false);
@@ -776,9 +780,13 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   });
 
   constructor() {
-    // A new selection starts with a clean dock.
+    // A new selection starts with a clean dock. Only the selected row's key
+    // is tracked: every refresh (an SSE event, another row answered) builds
+    // fresh entry objects, and resetting on those would wipe a reply the
+    // reader is in the middle of typing.
     effect(() => {
-      const sel = this.store.selected();
+      this.selectedKey();
+      const sel = untracked(() => this.store.selected());
       this.draft.set("");
       this.denying.set(false);
       this.unticked.set(new Set());
