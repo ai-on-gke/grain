@@ -444,7 +444,11 @@ func (d daemonMergeQueue) QueryMergeQueue(ctx context.Context, repo, branch stri
 
 	defaults := make(map[string]string)
 	for _, t := range tasks {
-		if t.MergeQueueState == "" {
+		// Closed wins over a merge-queue state, as it does in the web
+		// UI (ui/src/state.js, mergeQueueStalled and friends): the
+		// observation can outlive the pull request it describes, and a
+		// closed task has no live queue row to report.
+		if t.MergeQueueState == "" || t.State == model.StateClosed {
 			continue
 		}
 		if repo != "" && t.Repo != repo {
