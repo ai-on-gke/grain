@@ -41,13 +41,20 @@ type BaseFile func(path string) ([]byte, error)
 // dir: `grain state check -base <ref>`. A ref git cannot resolve is an
 // error here, rather than a base that seems to hold nothing.
 func GitBase(dir, ref string) (BaseFile, error) {
-	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}").CombinedOutput(); err != nil {
+	// --end-of-options keeps a ref that starts with a dash from being read
+	// as an option, and Env is the caller's own environment on purpose:
+	// git needs its HOME and config to find the checkout it is run in.
+	verify := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+	verify.Env = os.Environ()
+	if out, err := verify.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("-base %s: not a revision in %s: %v %s", ref, dir, err, strings.TrimSpace(string(out)))
 	}
 	return func(path string) ([]byte, error) {
 		// ./<path> is relative to dir, which need not be the
 		// checkout's root.
-		out, err := exec.Command("git", "-C", dir, "show", ref+":./"+path).Output()
+		show := exec.Command("git", "-C", dir, "show", "--end-of-options", ref+":./"+path)
+		show.Env = os.Environ()
+		out, err := show.Output()
 		if err != nil {
 			return nil, fmt.Errorf("%s:%s: %w", ref, path, fs.ErrNotExist)
 		}
