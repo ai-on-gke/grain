@@ -17,6 +17,7 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   FormControl,
   FormControlLabel,
@@ -37,10 +38,14 @@ import {
   fieldKind,
   initialValue,
   isHiddenProperty,
+  isFixedList,
   isMultiline,
   isSecretLooking,
   isStringMap,
+  pickVariant,
   unsupportedReason,
+  validateValue,
+  variantTitle,
 } from "../capabilityArgs.js";
 
 // CapabilityArgsForm renders a capability method's with: arguments from
@@ -59,6 +64,12 @@ import {
 // grain generates and keeps itself (a data-plane token), drawn as
 // "managed by grain" with a Rotate action and its override under
 // Advanced.
+//
+// Arguments whose schema is a oneOf/anyOf of objects (repo#write's
+// {repo}, {repo, base} or {refs, force}) are a variant picker and then
+// the picked option's fields. Any args form can be switched to the JSON
+// editor with "Edit as JSON"; one whose schema the form cannot draw is
+// only ever that.
 export default function CapabilityArgsForm({
   schema,
   value,
@@ -68,14 +79,31 @@ export default function CapabilityArgsForm({
   secrets = null,
 }) {
   const why = unsupportedReason(schema);
+  const [asJSON, setAsJSON] = useState(false);
+  const top = deref(schema, schema);
+  // A server's configuration keeps its secrets out of value, so it is
+  // never offered as JSON text that could not show or set them.
+  const canToggle = !why && !secrets;
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-      <Typography variant="caption" color="text.secondary">
-        {secrets
-          ? "Configuration is exported to grain/config as plain text, except write-only fields: what is typed into one goes only to the encrypted secrets store."
-          : "Arguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers."}
-      </Typography>
-      {why ? (
+      <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+          {secrets
+            ? "Configuration is exported to grain/config as plain text, except write-only fields: what is typed into one goes only to the encrypted secrets store."
+            : "Arguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers."}
+        </Typography>
+        {canToggle && (
+          <Button
+            size="small"
+            sx={{ flexShrink: 0, py: 0 }}
+            data-testid={`${idPrefix}-json-toggle`}
+            onClick={() => setAsJSON(!asJSON)}
+          >
+            {asJSON ? "Edit as form" : "Edit as JSON"}
+          </Button>
+        )}
+      </Box>
+      {why || asJSON ? (
         <JSONArgs
           value={value}
           onChange={onChange}
@@ -83,10 +111,20 @@ export default function CapabilityArgsForm({
           reason={why}
           idPrefix={idPrefix}
         />
+      ) : fieldKind(top) === "variant" ? (
+        <TopLevelVariant
+          root={schema}
+          schema={top}
+          value={value || {}}
+          onChange={onChange}
+          errors={errors}
+          idPrefix={idPrefix}
+          secrets={secrets}
+        />
       ) : (
         <ObjectFields
           root={schema}
-          schema={deref(schema, schema)}
+          schema={top}
           value={value || {}}
           onChange={onChange}
           errors={errors}
@@ -104,19 +142,101 @@ export default function CapabilityArgsForm({
   );
 }
 
-// JSONArgs is the fallback editor: the with: object as JSON text, parsed
+// TopLevelVariant is arguments that are one of several shapes: a picker
+// labelled with each option's title, then the picked option's fields.
+// Picking another option starts its own initial value. The picked
+// option's own field errors are shown against its fields; the
+// arguments-wide error ("matches none of the options -- ...") stays
+// under the form.
+function TopLevelVariant({
+  root,
+  schema,
+  value,
+  onChange,
+  errors,
+  idPrefix,
+  secrets,
+}) {
+  const options = (schema.oneOf || schema.anyOf).map((s) => deref(root, s));
+  const [picked, setPicked] = useState(() => pickVariant(root, options, value));
+  const sub = options[picked];
+  const { "": _whole, ...own } = validateValue(root, sub, value);
+  const shown = { ...own, ...errors };
+  const lbl = schema.title || "Kind of arguments";
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+      <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+        <FormControl size="small" fullWidth>
+          <InputLabel id={`${idPrefix}--variant-label`}>{lbl}</InputLabel>
+          <Select
+            labelId={`${idPrefix}--variant-label`}
+            label={lbl}
+            value={String(picked)}
+            inputProps={{ "data-arg-variant": "" }}
+            onChange={(e) => {
+              const i = Number(e.target.value);
+              setPicked(i);
+              onChange(initialValue(root, options[i], false, true) ?? {});
+            }}
+          >
+            {options.map((o, i) => (
+              <MenuItem key={i} value={String(i)}>
+                {variantTitle(o, i)}
+              </MenuItem>
+            ))}
+          </Select>
+          {sub?.title && sub?.description && (
+            <FormHelperText>{sub.description}</FormHelperText>
+          )}
+        </FormControl>
+        <InfoPopover title={schema.description} label={lbl} sx={{ mt: 1 }} />
+      </Box>
+      {fieldKind(sub) === "object" ? (
+        <ObjectFields
+          key={picked}
+          root={root}
+          schema={sub}
+          value={value}
+          onChange={onChange}
+          errors={shown}
+          path=""
+          idPrefix={idPrefix}
+          secrets={secrets}
+        />
+      ) : (
+        <Field
+          key={picked}
+          name={variantTitle(sub, picked)}
+          root={root}
+          schema={sub}
+          required
+          value={value}
+          onChange={onChange}
+          errors={shown}
+          path=""
+          idPrefix={idPrefix}
+        />
+      )}
+    </Box>
+  );
+}
+
+// JSONArgs is the JSON editor: the with: object as JSON text, parsed
 // here only so far as to be an object -- the schema check is the
-// server's.
+// server's. reason is why the form cannot draw the schema, or "" when
+// the person chose to edit it as JSON.
 function JSONArgs({ value, onChange, errors, reason, idPrefix }) {
   const [text, setText] = useState(() => JSON.stringify(value || {}, null, 2));
   const [parseError, setParseError] = useState("");
   const fieldErrors = Object.entries(errors).filter(([k]) => k !== "");
   return (
     <Box>
-      <Alert severity="info" sx={{ mb: 1, py: 0 }}>
-        This method&apos;s arguments use a schema the form cannot draw ({reason}
-        ), so they are edited as JSON and checked by the server.
-      </Alert>
+      {reason && (
+        <Alert severity="info" sx={{ mb: 1, py: 0 }}>
+          This method&apos;s arguments use a schema the form cannot draw (
+          {reason}), so they are edited as JSON and checked by the server.
+        </Alert>
+      )}
       <TextField
         id={`${idPrefix}-json`}
         label="Arguments (JSON)"
@@ -418,6 +538,19 @@ function Field({
   const infoTitle = schema?.title || name;
   switch (kind) {
     case "choice": {
+      if (typeof schema.const === "boolean")
+        return (
+          <FixedBoolean
+            id={id}
+            lbl={lbl}
+            infoTitle={infoTitle}
+            schema={schema}
+            value={value}
+            onChange={onChange}
+            error={error}
+            path={path}
+          />
+        );
       const options = "enum" in schema ? schema.enum : [schema.const];
       const isTopLevel = !path.includes(".") && !path.includes("[");
       const effective =
@@ -592,6 +725,19 @@ function Field({
         />
       );
     case "array":
+      if (required && isFixedList(root, schema))
+        return (
+          <FixedListField
+            root={root}
+            schema={schema}
+            value={value}
+            onChange={onChange}
+            error={error}
+            path={path}
+            lbl={lbl}
+            infoTitle={infoTitle}
+          />
+        );
       return (
         <ArrayField
           name={name}
@@ -682,6 +828,108 @@ function Field({
     default:
       return null;
   }
+}
+
+// FixedBoolean is a boolean with one allowed value (repo#write's force:
+// true): a box already ticked that cannot be unticked. Should the value
+// be missing, ticking it sets the one value.
+function FixedBoolean({
+  id,
+  lbl,
+  infoTitle,
+  schema,
+  value,
+  onChange,
+  error,
+  path,
+}) {
+  const set = value === schema.const;
+  return (
+    <FormControl error={Boolean(error)}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+        <FormControlLabel
+          sx={{ mr: 0 }}
+          control={
+            <Checkbox
+              id={id}
+              size="small"
+              checked={set ? schema.const : !schema.const}
+              disabled={set}
+              onChange={() => onChange(schema.const)}
+              inputProps={{ "data-arg": path, "data-arg-fixed": "true" }}
+            />
+          }
+          label={lbl}
+        />
+        <InfoPopover title={schema?.description} label={infoTitle} />
+      </Box>
+      <FormHelperText sx={{ mt: -0.5 }}>
+        {error || "Fixed: this option only accepts this value."}
+      </FormHelperText>
+    </FormControl>
+  );
+}
+
+// FixedListField is a required array with only one possible set of
+// items (isFixedList): each of them as a chip, nothing to add or remove.
+function FixedListField({
+  root,
+  schema,
+  value,
+  onChange,
+  error,
+  path,
+  lbl,
+  infoTitle,
+}) {
+  const items = deref(root, schema.items).enum;
+  const complete =
+    Array.isArray(value) &&
+    value.length === items.length &&
+    items.every((i) =>
+      value.some((v) => JSON.stringify(v) === JSON.stringify(i)),
+    );
+  return (
+    <Box
+      role="group"
+      aria-label={lbl}
+      data-arg-fixed-list={path}
+      sx={{
+        border: 1,
+        borderColor: error ? "error.main" : "divider",
+        borderRadius: 1,
+        px: 1.5,
+        pt: 1,
+        pb: 1,
+      }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          {lbl}
+        </Typography>
+        <InfoPopover title={schema?.description} label={infoTitle} />
+      </Box>
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+        {items.map((item) => (
+          <Chip
+            key={JSON.stringify(item)}
+            size="small"
+            variant={complete ? "filled" : "outlined"}
+            label={typeof item === "string" ? item : JSON.stringify(item)}
+            sx={{ fontFamily: "monospace" }}
+          />
+        ))}
+        {!complete && (
+          <Button size="small" onClick={() => onChange([...items])}>
+            Use these
+          </Button>
+        )}
+      </Box>
+      <FormHelperText error={Boolean(error)}>
+        {error || "Fixed: this option only accepts all of these together."}
+      </FormHelperText>
+    </Box>
+  );
 }
 
 // NumberField keeps its own text so "1." or "-" can be typed on the way
@@ -988,12 +1236,7 @@ function VariantField({
   help,
 }) {
   const options = (schema.oneOf || schema.anyOf).map((s) => deref(root, s));
-  const [picked, setPicked] = useState(() => {
-    const i = options.findIndex(
-      (o) => value !== undefined && fieldKind(o) && matchesShape(o, value),
-    );
-    return i < 0 ? 0 : i;
-  });
+  const [picked, setPicked] = useState(() => pickVariant(root, options, value));
   const sub = options[picked];
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
@@ -1015,9 +1258,7 @@ function VariantField({
           >
             {options.map((o, i) => (
               <MenuItem key={i} value={String(i)}>
-                {o?.title ||
-                  o?.description ||
-                  `${o?.type || "option"} ${i + 1}`}
+                {variantTitle(o, i)}
               </MenuItem>
             ))}
           </Select>
@@ -1042,22 +1283,4 @@ function VariantField({
       />
     </Box>
   );
-}
-
-function matchesShape(schema, value) {
-  if ("const" in schema)
-    return JSON.stringify(schema.const) === JSON.stringify(value);
-  if (schema.enum)
-    return schema.enum.some((e) => JSON.stringify(e) === JSON.stringify(value));
-  switch (schema.type) {
-    case "array":
-      return Array.isArray(value);
-    case "object":
-      return value && typeof value === "object" && !Array.isArray(value);
-    case "integer":
-    case "number":
-      return typeof value === "number";
-    default:
-      return typeof value === schema.type;
-  }
 }
