@@ -71,6 +71,7 @@ var cliRouteTools = map[string]string{
 	"revert-info":       "revert_task",
 	"status":            "update_status",
 	"handover":          "write_handover",
+	"report/check":      "check_report",
 	"notify":            "notify_operator",
 	"tasks/notes":       "message_task",
 	"tasks/wait":        "wait_for_task",
@@ -139,7 +140,7 @@ func (p *GitProxy) ServeCLIHTTP(w http.ResponseWriter, r *http.Request) {
 	scope := toNamespaceScope(modelScope)
 	act := CLIRouteActivity(r.URL.Path)
 	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
-	cw := &countingResponseWriter{ResponseWriter: w}
+	cw := newCountingResponseWriter(w, act)
 	p.serveCLIRoute(cw, r, scope)
 	p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
 }

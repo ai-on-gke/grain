@@ -53,6 +53,21 @@ func (c *sandboxCLI) handoverWrite(p sandboxArgs) error {
 	return c.post("/cli/handover", map[string]any{"handover": body}, c.out)
 }
 
+// reportCheck is grain report check: a draft closing report checked against
+// what this run has read (gitproxy's serveReportCheck). A failing report
+// exits non-zero with the reasons on stderr.
+func (c *sandboxCLI) reportCheck(p sandboxArgs) error {
+	if p.get("file") == "" && len(p.positional) == 1 && p.positional[0] == "-" {
+		p.flags["file"] = "-"
+		p.positional = nil
+	}
+	body, err := c.textArg(p, "report")
+	if err != nil {
+		return err
+	}
+	return c.post("/cli/report/check", map[string]any{"report": body}, c.out)
+}
+
 func (c *sandboxCLI) notify(p sandboxArgs) error {
 	subject := strings.TrimSpace(p.get("subject"))
 	if subject == "" {

@@ -135,6 +135,13 @@ func Run(ctx context.Context, out io.Writer, dir string, opts Options) error {
 	for _, w := range implicitMirror {
 		fmt.Fprintf(out, "warning: %s\n", w)
 	}
+	usage, err := UsageSettings(ctx, db)
+	if err != nil {
+		return err
+	}
+	for _, w := range usage {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
 	var baseServers map[string]protocol.ServerConfig
 	if opts.Base != nil && !opts.Migrate {
 		// -migrate checks a dump the running build has just exported,
