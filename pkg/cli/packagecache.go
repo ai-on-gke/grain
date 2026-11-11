@@ -24,6 +24,7 @@ package cli
 // 3. Sandboxes are configured with the Root CA and DNS nameserver.
 
 import (
+	"flag"
 	"fmt"
 	"net/url"
 	"strings"
@@ -32,6 +33,88 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
+
+type packageCacheFlags struct {
+	gb             *int
+	dir            *string
+	aptUpstream    stringSliceFlag
+	pypiIndex      *string
+	npmRegistry    *string
+	goProxy        *string
+	dockerRegistry *string
+	ghcrRegistry   *string
+	gcrRegistry    *string
+}
+
+// registerPackageCacheFlags declares the -package-cache-* flags on fs; read
+// them through apply once fs has parsed.
+func registerPackageCacheFlags(fs *flag.FlagSet) *packageCacheFlags {
+	f := &packageCacheFlags{}
+	// A flag rather than a setting, unlike the switch that decides
+	// whether sandboxes use the cache at all (Settings' own "Package
+	// cache"): this is how much of *this host's* disk the daemon may
+	// spend, which is the same kind of fact as -data-dir and belongs
+	// with the deployment rather than in a row a UI edits.
+	f.gb = fs.Int("package-cache-size-gb", int(pkgcache.DefaultMaxBytes>>30),
+		"how much disk, in GiB, this deployment's package cache may use before it starts evicting the "+
+			"packages it fetched longest ago. 0 leaves it at the default")
+	f.dir = fs.String("package-cache-dir", "",
+		"root directory for the package cache -- defaults to <sandbox-dir>/cache/packages when -sandbox-dir is set, and <data-dir>/cache/packages otherwise")
+	// Where the cache fills itself from, for the installation that
+	// already has a mirror. Flags for the same reason -package-cache-dir
+	// and -package-cache-size-gb are, and not for the reason the switch
+	// beside them is a stored setting: which mirror this host can reach
+	// is a fact about the network this deployment was installed on --
+	// the same kind of fact as -data-dir or -container-git-proxy-host --
+	// rather than a decision anybody makes per task. They are also read
+	// once, when the cache's listeners come up: pkgcache.Server takes
+	// its upstreams at construction and has no live path, so a row in
+	// Settings would be a control that appears to work and takes effect
+	// on the next restart, which is worse than a flag that says what it
+	// is.
+	//
+	// Nothing about a *sandbox* changes when one of these is set. A
+	// sandbox goes on resolving and asking for deb.debian.org,
+	// pypi.org and registry-1.docker.io, and the files that point it
+	// here (pkgcache.SandboxFiles) name those same hosts; this is only
+	// where the cache itself goes on a miss.
+	fs.Var(&f.aptUpstream, "package-cache-apt-upstream",
+		"fetch one intercepted archive from a mirror instead of from itself, as \"archive-host=base-url\" "+
+			"(deb.debian.org=http://mirror.internal/debian) -- repeat for each. The host is one this cache "+
+			"already serves, and is what sandboxes go on asking for; the URL is what this service fetches "+
+			"from, with the request's own path appended. An archive not named here is fetched from itself")
+	f.pypiIndex = fs.String("package-cache-pypi-index", "",
+		"the PyPI simple index this cache proxies, for a deployment running a mirror of its own "+
+			"(http://mirror.internal/pypi/simple). Defaults to https://pypi.org/simple")
+	f.npmRegistry = fs.String("package-cache-npm-registry", "",
+		"the npm registry this cache proxies, for a deployment running a mirror of its own "+
+			"(http://mirror.internal/npm). Defaults to https://registry.npmjs.org")
+	f.goProxy = fs.String("package-cache-go-proxy", "",
+		"the Go module proxy this cache forwards to, for a deployment running an Athens of its own "+
+			"(http://athens.internal). Defaults to https://proxy.golang.org")
+	f.dockerRegistry = fs.String("package-cache-docker-registry", "",
+		"the registry this cache mirrors for Docker Hub, for a deployment running a pull-through cache of "+
+			"its own (https://registry.internal). Defaults to https://registry-1.docker.io")
+	f.ghcrRegistry = fs.String("package-cache-ghcr-registry", "",
+		"the registry this cache mirrors for GitHub Container Registry, for a deployment running a "+
+			"pull-through cache of its own (https://registry.internal/ghcr). Defaults to https://ghcr.io")
+	f.gcrRegistry = fs.String("package-cache-gcr-registry", "",
+		"the registry this cache mirrors for Google Container Registry, for a deployment running a "+
+			"pull-through cache of its own (https://registry.internal/gcr). Defaults to https://gcr.io")
+	return f
+}
+
+func (f *packageCacheFlags) apply(cfg *daemon.Config) {
+	cfg.PackageCacheDir = *f.dir
+	cfg.PackageCacheGB = *f.gb
+	cfg.PackageCacheAptUpstream = f.aptUpstream
+	cfg.PackageCachePyPIIndex = *f.pypiIndex
+	cfg.PackageCacheNPMRegistry = *f.npmRegistry
+	cfg.PackageCacheGoProxy = *f.goProxy
+	cfg.PackageCacheDockerRegistry = *f.dockerRegistry
+	cfg.PackageCacheGHCRRegistry = *f.ghcrRegistry
+	cfg.PackageCacheGCRRegistry = *f.gcrRegistry
+}
 
 // checkPackageCacheUpstreams reports what is wrong with the mirrors a
 // command line named, for checkConfig.

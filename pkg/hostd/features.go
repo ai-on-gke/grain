@@ -80,6 +80,15 @@ const (
 	// accept ~/ relative to hostd's home, and top-level and entry-level x-*
 	// keys are ignored.
 	FeatureEnvOpen Feature = "env_open"
+	// FeatureLoginsMap: Allowlist.Logins configures CLI login paths,
+	// Hello.LoginTargets reports the resolved regular-file targets for
+	// StageSymlink, and StageSymlink accepts any target the map names.
+	// Replaces Hello.CodexAuth.
+	FeatureLoginsMap Feature = "logins_map"
+	// FeatureHookPolicy: the host's agy-tool-hook and claude-stop-hook
+	// subcommands accept -policy <path> and evaluate a staged per-run
+	// hook policy file instead of a compiled-in tool roster or stop rule.
+	FeatureHookPolicy Feature = "hook_policy"
 )
 
 // Features is every feature this build implements, in the order they
@@ -96,6 +105,8 @@ var Features = []Feature{
 	FeatureAgentsOnly,
 	FeatureFeatures,
 	FeatureEnvOpen,
+	FeatureLoginsMap,
+	FeatureHookPolicy,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited

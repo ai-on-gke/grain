@@ -100,8 +100,10 @@ var contractFields = map[string]Feature{
 	"Hello.running": FeatureDrain, "Hello.current": FeatureDrain, "Hello.current_build": FeatureDrain,
 	"Hello.capacity": FeatureStart, "Hello.labels": FeatureStart,
 	"Hello.remote": FeatureStage, "Hello.grain": FeatureStage, "Hello.stage_root": FeatureStage,
-	"Hello.codex_auth": FeatureStage,
-	"Hello.logins":     FeatureLogins, "Hello.agents_only": FeatureAgentsOnly, "Hello.features": FeatureFeatures,
+	"Hello.codex_auth":    FeatureStage, // deprecated: replaced by Hello.login_targets (FeatureLoginsMap)
+	"Hello.logins":        FeatureLogins,
+	"Hello.login_targets": FeatureLoginsMap,
+	"Hello.agents_only":   FeatureAgentsOnly, "Hello.features": FeatureFeatures,
 
 	"Process.id": FeatureDetach, "Process.run": FeatureDetach, "Process.task": FeatureDetach,
 	"Process.kind": FeatureDetach, "Process.name": FeatureDetach, "Process.pid": FeatureDetach,
@@ -130,7 +132,8 @@ var contractFields = map[string]Feature{
 
 	"Allowlist.clis": FeatureStart, "Allowlist.capabilities": FeatureStart,
 	"Allowlist.drain_cap": FeatureDrain, "Allowlist.capacity": FeatureStart, "Allowlist.labels": FeatureStart,
-	"Entry.path": FeatureStart, "Entry.command": FeatureStart, "Entry.args": FeatureStart,
+	"Allowlist.logins": FeatureLoginsMap,
+	"Entry.path":       FeatureStart, "Entry.command": FeatureStart, "Entry.args": FeatureStart,
 	"Entry.extra_args": FeatureStart, "Entry.paths_under": FeatureStart, "Entry.cwd_under": FeatureStart,
 	"Entry.env": FeatureStart, "Entry.pass_env": FeatureStart, "Entry.set_env": FeatureStart,
 	"Entry.max_duration": FeatureStart,
@@ -412,9 +415,11 @@ func TestHelloHasCreditsLegacyPeersFromTheirProtocol(t *testing.T) {
 		{Hello{Protocol: 4}, FeatureListen, true},
 		{Hello{Protocol: 4}, FeatureLogins, false},
 		{Hello{Protocol: 4}, FeatureFeatures, false},
+		{Hello{Protocol: 4}, FeatureHookPolicy, false},
 		{Hello{Protocol: 4, Features: []Feature{FeatureStart, FeatureFeatures}}, FeatureDetach, false},
 		{Hello{Protocol: 4, Features: []Feature{FeatureStart, "some_future_feature"}}, "some_future_feature", true},
 		{ThisHello("x"), FeatureLogins, true},
+		{ThisHello("x"), FeatureHookPolicy, true},
 	}
 	for _, c := range cases {
 		if got := c.h.Has(c.f); got != c.want {
