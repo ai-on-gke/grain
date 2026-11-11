@@ -202,7 +202,7 @@ func workflowReviewBody(stem string) string {
 		"Name the step, quote the error and the few lines around it, and classify whether the failure " +
 		"is a repository code bug or an infrastructure / capability omission:\n" +
 		"- **Capability or secret unavailability**: Missing deployment CI capabilities (such as " +
-		"`github-sandbox`) or missing provider secrets / OAuth tokens (such as `CLAUDE_CODE_OAUTH_TOKEN` or API keys).\n" +
+		"`https://grain.dev/capabilities/github#sandbox-repo`) or missing provider secrets / OAuth tokens (such as `CLAUDE_CODE_OAUTH_TOKEN` or API keys).\n" +
 		"- **Infrastructure or runner preparation errors**: Jobs with duration `0s`, sandbox acquisition failures, " +
 		"or jobs that errored before executing test steps.\n" +
 		"- **External cloud constraints**: Cloud quota exhaustion or organization policy refusals (such as GCP private cluster org policies).\n" +

@@ -281,12 +281,12 @@ jobs:
     cache: false
     # A requirement, not a grant (pkg/ci/requirements.go): every step
     # below is a build whose only point is the push at the end of it, so
-    # a dispatch that reaches this job without `package-publish` should
+    # a dispatch that reaches this job without `release#package-publish` should
     # cost nothing rather than twenty-five minutes of nested-VM build
     # followed by a refusal from ghcr.io. The comment above already says
     # this is what grain enforces; the key is where the job says it, so
     # the refusal names the missing grant.
-    capabilities: [package-publish]
+    capabilities: ["https://grain.dev/capabilities/release#package-publish"]
     # A miss puts the base image, the VM's container and the commit's own
     # layer on one disk -- the GitHub job doing the same work asks for a
     # runner with ~80GB free -- and the build inside it is a VM that

@@ -2215,8 +2215,8 @@ export default function CIPage({
           <Alert severity="info">
             No CI runs yet. Start a run above, against a repo and a branch. A
             repo grain CI has not been enabled for is refused rather than run:
-            that takes the grain-ci capability, on the repo (Settings, Repos) or
-            on this deployment&apos;s defaults.
+            that takes the repo&apos;s CI mode set to grain CI (Settings,
+            Repos), which grants its tasks grain#ci.
           </Alert>
         ) : shown.length === 0 ? (
           // The other emptiness, and the one worth saying out loud: runs

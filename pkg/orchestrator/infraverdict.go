@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/infrasig"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
@@ -180,36 +181,10 @@ func channelLostJobs(run ci.Run) []string {
 	return out
 }
 
-// infraStepOutput are external rate-limit and registry signatures read
-// out of a failing step's own output. A test's output is the tree's, so
-// only signatures specific enough that no assertion prints them by
-// accident are here: GitHub/GCP/registry rate limiting and quota, and
-// the docker client's own wording for a registry 5xx.
-var infraStepOutput = []string{
-	"429 too many requests", "toomanyrequests", "resource_exhausted", "rate limit exceeded",
-	"quota exceeded", "received unexpected http status: 5",
-}
-
-// infraCheckoutOutput are git's own words for a forge that answered a
-// clone or fetch with a 5xx (the release runs of 2026-11-01/02 died on
-// them). A test could print "502" for any reason, so these are git's
-// whole phrases, and they are read only out of a step that checks the
-// tree out (checkoutStep) -- never out of a step that tests it.
-var infraCheckoutOutput = []string{
-	"the requested url returned error: 502",
-	"the requested url returned error: 503",
-	"the requested url returned error: 504",
-	"rpc failed; http 502", "rpc failed; http 503", "rpc failed; http 504",
-}
-
-// infraRunnerLost are what GitHub Actions writes when the runner a job
-// was on went away mid-step -- the hosted VM lost, or shut down under it.
-// The runner's own sentences, which no test prints, so they are read out
-// of any failed job.
-var infraRunnerLost = []string{
-	"lost communication with the server",
-	"the runner has received a shutdown signal",
-}
+// The output signatures themselves -- rate limits, a lost runner, a
+// runner whose resolver stopped answering, git's 5xx -- are
+// pkg/infrasig's, shared with github.OnlyInfraFailures so the merge
+// queue's pull-request path and these trunk gates answer from one list.
 
 // checkoutStep reports whether the step at index i of a job, named name,
 // is the one that checks the tree out: the first step, or one named for
@@ -222,9 +197,9 @@ func checkoutStep(i int, name string) bool {
 	return strings.Contains(n, "checkout") || strings.Contains(n, "git fetch") || strings.Contains(n, "git clone")
 }
 
-// infraStepTail is how much of a failing step's output is searched: the
-// end, which is where a tool that gave up says why.
-const infraStepTail = 4096
+// infraStepTail is how much of a failing step's output is searched
+// (infrasig.StepTail).
+const infraStepTail = infrasig.StepTail
 
 // infraSignature is the infrastructure signature a failed job failed on,
 // or "" for a failure that is the tree's.
@@ -247,22 +222,11 @@ func infraSignature(job ci.JobRun) string {
 }
 
 // infraOutputSignature is the infrastructure signature in the tail of
-// what a failed step printed, or "": the registry and rate-limit ones
-// from any step, git's 5xx ones only from a checkout step.
+// what a failed step printed, or "" (infrasig.Output): the registry,
+// rate-limit, runner-lost and runner-network ones from any step, git's
+// 5xx ones only from a checkout step.
 func infraOutputSignature(checkout bool, out string) string {
-	if len(out) > infraStepTail {
-		out = out[len(out)-infraStepTail:]
-	}
-	if sig := firstContained(out, infraStepOutput); sig != "" {
-		return sig
-	}
-	if sig := firstContained(out, infraRunnerLost); sig != "" {
-		return sig
-	}
-	if checkout {
-		return firstContained(out, infraCheckoutOutput)
-	}
-	return ""
+	return infrasig.Output(checkout, out)
 }
 
 // gitHubInfraVerdict is infraVerdict for a GitHub Actions run that
@@ -304,16 +268,7 @@ func gitHubInfraVerdict(jobs []model.GitHubCIJob, attempt int) (string, bool) {
 }
 
 func firstContained(text string, needles []string) string {
-	if text == "" {
-		return ""
-	}
-	lower := strings.ToLower(text)
-	for _, n := range needles {
-		if strings.Contains(lower, n) {
-			return n
-		}
-	}
-	return ""
+	return infrasig.FirstContained(text, needles)
 }
 
 // infraRetrySuffix marks a run's RequestedBy as the nth automatic re-run
