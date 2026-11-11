@@ -80,7 +80,7 @@ describe("inbox classifier", () => {
     expect(proposal?.actions[0].route).toBe("POST /api/tasks/{id}/approve");
     expect(proposal?.actions[0].params).toEqual({ id: "9" });
     expect(proposal?.actions[2].confirm).toContain("Decline #9");
-    expect(proposal?.taskLink).toBe("/tasks/9");
+    expect(proposal?.taskLink).toBe("/task/9");
 
     const failed = classifyTask(task({ state: "failed" }));
     expect(failed?.actions.map((a) => a.id)).toEqual(["retry", "close"]);

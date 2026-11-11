@@ -81,6 +81,11 @@ export interface Task {
   admission?: string;
   authorKind?: string;
   authorLabel?: string;
+  author?: string;
+  branch?: string;
+  // Tasks this one waits for (task detail).
+  dependsOn?: string[];
+  description?: string;
   body?: string;
   branch?: string;
 }

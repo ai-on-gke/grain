@@ -715,9 +715,8 @@ export class NewTaskSheetComponent {
     }
     const open = {
       label: "Open",
-      // The task page arrives in M4; until then the classic one.
       run: () => {
-        window.location.assign(`/tasks/${id}`);
+        void this.router.navigate(["/task", id]);
       },
     };
     if (approved) {

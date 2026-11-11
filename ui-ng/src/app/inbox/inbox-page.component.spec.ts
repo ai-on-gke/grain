@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
+import { provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
@@ -67,6 +68,7 @@ async function render(
         useValue: api,
       },
       { provide: GrainEvents, useValue: { events: () => NEVER } },
+      provideRouter([{ path: "**", children: [] }]),
     ],
   });
   const fixture = TestBed.createComponent(InboxPageComponent);
@@ -127,7 +129,7 @@ describe("InboxPageComponent", () => {
     );
     expect(
       q(f, '[data-testid="inspector-open-task"]')?.getAttribute("href"),
-    ).toBe("/tasks/9");
+    ).toBe("/task/9");
     (q(f, '[data-testid="action-approve"]') as HTMLButtonElement).click();
     await f.whenStable();
     await TestBed.inject(InboxStore).refresh();

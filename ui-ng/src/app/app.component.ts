@@ -577,7 +577,11 @@ export class AppComponent implements OnInit, OnDestroy {
         this.moreOpen.set(false);
       }
       if (e instanceof NavigationEnd) {
-        this.onSessions.set(e.urlAfterRedirects.startsWith("/sessions"));
+        // Pages with a composer where the FAB would sit.
+        const url = e.urlAfterRedirects;
+        this.onSessions.set(
+          url.startsWith("/sessions") || url.startsWith("/task/"),
+        );
       }
     });
     // The create menu is placed from its button once; a scrolled rail or

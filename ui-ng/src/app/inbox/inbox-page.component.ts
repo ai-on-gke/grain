@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { RouterLink } from "@angular/router";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -300,7 +301,7 @@ export function questionOf(
                   @if (sel.taskLink) {
                     <a
                       class="btn-text"
-                      [href]="sel.taskLink"
+                      [routerLink]="sel.taskLink"
                       data-testid="inspector-open-task"
                       >Open full task</a
                     >
@@ -363,8 +364,9 @@ export function questionOf(
                     <p class="muted dock-note">
                       This run asked for the credential
                       <code>{{ secret.name }}</code
-                      >. Set it from the <a [href]="sel.taskLink">task</a>; the
-                      value never comes back to the page.
+                      >. Set it from the
+                      <a [routerLink]="sel.taskLink">task</a>; the value never
+                      comes back to the page.
                     </p>
                   }
                   <textarea
@@ -794,7 +796,7 @@ export function questionOf(
       }
     </section>
   `,
-  imports: [NgTemplateOutlet],
+  imports: [NgTemplateOutlet, RouterLink],
 })
 export class InboxPageComponent implements OnInit {
   protected readonly store = inject(InboxStore);

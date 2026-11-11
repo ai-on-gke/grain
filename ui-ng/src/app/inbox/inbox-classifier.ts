@@ -464,7 +464,7 @@ function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
     at: t.updatedAt || t.createdAt || null,
     rationale: "",
     taskId: t.id,
-    taskLink: `/tasks/${encodeURIComponent(t.id)}`,
+    taskLink: `/task/${encodeURIComponent(t.id)}`,
     externalLink: pullRequestUrl(t),
     task: t,
     actions: [],
@@ -676,7 +676,7 @@ export function classifyNotification(n: Notification): InboxEntry {
       : "An alert stays open until somebody acknowledges or clears it.",
     taskId: n.investigationTaskId || null,
     taskLink: n.investigationTaskId
-      ? `/tasks/${encodeURIComponent(n.investigationTaskId)}`
+      ? `/task/${encodeURIComponent(n.investigationTaskId)}`
       : null,
     externalLink: null,
     notification: n,

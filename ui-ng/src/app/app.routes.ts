@@ -32,6 +32,13 @@ export const routes: Routes = [
     loadComponent: () =>
       import("./tasks/tasks-page.component").then((m) => m.TasksPageComponent),
   },
+  {
+    path: "task/:id",
+    title: "Task · grain",
+    loadComponent: () =>
+      import("./task/task-page.component").then((m) => m.TaskPageComponent),
+  },
+  { path: "tasks/:id", redirectTo: "task/:id" },
   { path: "director", redirectTo: "sessions/director" },
   {
     path: "sessions",

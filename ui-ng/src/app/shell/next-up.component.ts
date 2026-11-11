@@ -78,7 +78,7 @@ const SHOWN = 7;
             <ol class="next-up-list">
               @for (t of shown(); track t.id; let i = $index) {
                 <li [class.is-head]="t.id === h.id">
-                  <a [href]="'/tasks/' + t.id" (click)="open.set(false)">
+                  <a [routerLink]="['/task', t.id]" (click)="open.set(false)">
                     <span class="tabular muted">{{ i + 1 }}</span>
                     <span class="next-up-row-title"
                       >#{{ t.id }} {{ t.title }}</span

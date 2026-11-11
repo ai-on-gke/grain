@@ -284,7 +284,7 @@ const SORTS: { id: SortId; label: string }[] = [
                     (change)="toggle(t.id)"
                   />
                   <div class="row-main">
-                    <a class="row-title" [href]="taskHref(t)"
+                    <a class="row-title" [routerLink]="['/task', t.id]"
                       ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
                     >
                     <span class="row-sub muted">
@@ -349,7 +349,7 @@ const SORTS: { id: SortId; label: string }[] = [
                     label(t.state)
                   }}</span>
                   <div class="row-main">
-                    <a class="row-title" [href]="taskHref(t)"
+                    <a class="row-title" [routerLink]="['/task', t.id]"
                       ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
                     >
                     @if (t.state === "running" && t.activity) {
@@ -577,7 +577,7 @@ const SORTS: { id: SortId; label: string }[] = [
           (change)="toggle(t.id)"
         />
         <div class="row-main">
-          <a class="row-title" [href]="taskHref(t)"
+          <a class="row-title" [routerLink]="['/task', t.id]"
             ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
           >
           <span class="row-sub muted">
@@ -830,11 +830,6 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.store.stop();
-  }
-
-  protected taskHref(t: Task): string {
-    // The task page arrives in M4; until then the classic one.
-    return `/tasks/${t.id}`;
   }
 
   protected filer(t: Task): string {
