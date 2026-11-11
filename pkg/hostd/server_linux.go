@@ -622,12 +622,15 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpDrain:
+		// Answered first: with nothing running, a drain exits hostd at
+		// once, and an OK written after it raced that exit and was often
+		// lost (Client.Drain tolerates that from older builds).
+		_ = writeFrame(conn, frameOK, nil)
 		if req.Idle {
 			s.Cutover()
 		} else {
 			s.Drain()
 		}
-		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpSocketOwner:
 		_ = writeJSON(conn, frameSocketOwner, SocketOwner{PID: s.socketOwner(req.Inode)})
