@@ -71,10 +71,37 @@ func decodeInto(f file, v any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(f.text))
 	dec.KnownFields(true)
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("%s: %w", f.path, err)
+		err = fmt.Errorf("%s: %w", f.path, err)
+		// A file that is well-formed YAML and still does not decode has
+		// a key this build does not know, or a known key in a shape it
+		// does not know -- which is what a file written for a newer
+		// grain looks like to an older one (SchemaError).
+		var doc yaml.Node
+		if yaml.Unmarshal(f.text, &doc) == nil {
+			return &SchemaError{Path: f.path, Err: err}
+		}
+		return err
 	}
 	return nil
 }
+
+// SchemaError is a declaration file this build cannot decode although it
+// is well-formed YAML: an unknown key, or a known key in a shape the
+// decoder has no case for (`overlap: {skip: true}` read by a build that
+// only knows `overlap: skip`). Its message is the decoder's own, unchanged.
+//
+// It is told apart from every other error because it is the one a
+// deployment meets when a repository's `.grain` is newer than the daemon
+// reading it, and LoadForwardCompatible holds back only that file rather
+// than refusing the whole set (docs/declarations.md, "Declarations newer
+// than the daemon").
+type SchemaError struct {
+	Path string
+	Err  error
+}
+
+func (e *SchemaError) Error() string { return e.Err.Error() }
+func (e *SchemaError) Unwrap() error { return e.Err }
 
 // refuse is the whole of what a repository may not say about itself,
 // checked against declschema rather than against a list kept here.
@@ -769,6 +796,7 @@ type rawSchedule struct {
 	OverlapGroup         string               `yaml:"overlap-group"`
 	Review               string               `yaml:"review"`
 	GrainCI              *bool                `yaml:"grain-ci"`
+	SkipWhen             string               `yaml:"skip-when"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
@@ -1068,6 +1096,12 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 				"grain CI even on a ci_mode: github repository, and this schedule runs no `workflow:`", f.path)
 		}
 		sched.GrainCI = *raw.GrainCI
+	}
+	// A condition outside the schedule that holds its firings
+	// (model.Schedule.SkipWhen): `skip-when: publishing-held` holds them
+	// while its base branch's publishing is held by a release triage task.
+	if sched.SkipWhen, err = model.ParseScheduleSkipWhen(raw.SkipWhen); err != nil {
+		return model.Schedule{}, fmt.Errorf("%s: skip-when: %w", f.path, err)
 	}
 	if raw.AutoApproveProposals != nil {
 		sched.AutoApproveProposals = *raw.AutoApproveProposals

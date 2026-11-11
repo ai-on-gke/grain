@@ -1069,6 +1069,14 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 			}
 		}
 	}
+	// And a condition the schedule declared, such as its base branch's
+	// publishing being held (model.Schedule.SkipWhen, grain/task-4393).
+	if skip, held, err := deps.Store.PublishingHeldSkip(ctx, sched, run.Repo, sched.Base, now); err != nil {
+		return err
+	} else if held {
+		_, _ = deps.Store.RecordScheduleSkip(ctx, skip)
+		return nil
+	}
 
 	row := model.ScheduledWorkflowRun{
 		ScheduleID:  sched.ID,

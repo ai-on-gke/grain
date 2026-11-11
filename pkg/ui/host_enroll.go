@@ -118,20 +118,6 @@ var (
 	hostJoinVerifier   HostJoinVerifier
 )
 
-// RegisterHostJoinVerifier installs fn as the edition's custom enrolling-identity
-// verifier on POST /api/hostd/join and returns an idempotent unregister closure.
-func RegisterHostJoinVerifier(fn HostJoinVerifier) (unregister func()) {
-	hostJoinVerifierMu.Lock()
-	defer hostJoinVerifierMu.Unlock()
-	prev := hostJoinVerifier
-	hostJoinVerifier = fn
-	return func() {
-		hostJoinVerifierMu.Lock()
-		defer hostJoinVerifierMu.Unlock()
-		hostJoinVerifier = prev
-	}
-}
-
 func registeredHostJoinVerifier() HostJoinVerifier {
 	hostJoinVerifierMu.RLock()
 	defer hostJoinVerifierMu.RUnlock()

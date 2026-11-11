@@ -258,6 +258,10 @@ type credentialTokenSource struct {
 	// caller that dropped a RepoRef's host still be authenticated with
 	// the credential for the host forgeRouter sends it to.
 	hostOf func(owner, repo string) string
+	// mergeCredential, when set, is the credential name owner/repo's pull
+	// requests are merged with when that is not its push credential
+	// (model.Store.GitMergeCredentialOn), or false.
+	mergeCredential func(host, owner, repo string) (name string, ok bool)
 }
 
 // ref is owner/repo as a RepoRef: host-qualified as stored
@@ -436,6 +440,52 @@ func (c credentialTokenSource) AppSlugFor(owner, repo string) (string, error) {
 	return strings.TrimSuffix(login, "[bot]"), nil
 }
 
+// selectMergeCredential is owner/repo's merge credential's name, and the
+// credential itself when the store holds it (github.MergeTokenSource).
+func (c credentialTokenSource) selectMergeCredential(owner, repo string) (string, gitproxy.Credential, bool) {
+	if c.mergeCredential == nil {
+		return "", gitproxy.Credential{}, false
+	}
+	ref := c.ref(owner, repo)
+	host := ref.GitHost()
+	name, ok := c.mergeCredential(host, ref.Owner, ref.Name)
+	if !ok || name == "" {
+		return "", gitproxy.Credential{}, false
+	}
+	if c.credentials == nil {
+		return name, gitproxy.Credential{}, true
+	}
+	cred, _ := c.credentials.GetForRepoOn(name, host, ref.Owner, ref.Name)
+	return name, cred, true
+}
+
+// MergeTokenFor is github.MergeTokenSource: the token owner/repo's merge
+// credential gives, nil when it names one the store does not hold or
+// cannot mint a token for -- which refuses the merge rather than making it
+// under the push credential.
+func (c credentialTokenSource) MergeTokenFor(owner, repo string) (*string, bool) {
+	_, cred, ok := c.selectMergeCredential(owner, repo)
+	if !ok {
+		return nil, false
+	}
+	return cred.Token, true
+}
+
+// MergeIdentityFor is github.MergeTokenSource: the merge credential's
+// name, with the App's bot login when it is an App's.
+func (c credentialTokenSource) MergeIdentityFor(owner, repo string) string {
+	name, _, ok := c.selectMergeCredential(owner, repo)
+	if !ok {
+		return ""
+	}
+	if c.credentials != nil {
+		if login, isApp, err := c.credentials.AppBotLogin(name); err == nil && isApp && login != "" {
+			return fmt.Sprintf("merge credential %s (%s)", name, login)
+		}
+	}
+	return "merge credential " + name
+}
+
 func (c credentialTokenSource) TokenFor(owner, repo string) *string {
 	cred, ok := c.selectCredential(owner, repo)
 	if !ok {
@@ -516,6 +566,46 @@ func repoTeamCredential(store *model.Store) func(host, owner, repo string) (stri
 		cache[key] = entry{name: name, ok: ok, at: now}
 		mu.Unlock()
 		return name, ok
+	}
+}
+
+// repoMergeCredential is credentialTokenSource.mergeCredential over
+// store (model.Store.GitMergeCredentialOn), trusting one answer for
+// repoTeamCredentialTTL as repoTeamCredential does. A store error is
+// logged and answered as no merge credential, which leaves the merge on
+// the push credential exactly as before the setting existed.
+func repoMergeCredential(store *model.Store) func(host, owner, repo string) (string, bool) {
+	if store == nil {
+		return nil
+	}
+	type entry struct {
+		name string
+		at   time.Time
+	}
+	var (
+		mu    sync.Mutex
+		cache = map[string]entry{}
+	)
+	return func(host, owner, repo string) (string, bool) {
+		key := strings.ToLower(host + "/" + owner + "/" + repo)
+		now := getRepoTeamCredentialNow()
+		mu.Lock()
+		if e, hit := cache[key]; hit && now.Sub(e.at) < getRepoTeamCredentialTTL() {
+			mu.Unlock()
+			return e.name, e.name != ""
+		}
+		mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		name, err := store.GitMergeCredentialOn(ctx, host, owner, repo)
+		if err != nil {
+			log.Printf("grain daemon: finding the merge credential for %s/%s: %v", owner, repo, err)
+			return "", false
+		}
+		mu.Lock()
+		cache[key] = entry{name: name, at: now}
+		mu.Unlock()
+		return name, name != ""
 	}
 }
 

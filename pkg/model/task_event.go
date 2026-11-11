@@ -85,6 +85,11 @@ const (
 	// its normalized with: -- so a repo#write names its repo and base.
 	TaskEventGrantAttached TaskEventKind = "grant-attached"
 	TaskEventGrantDetached TaskEventKind = "grant-detached"
+	// TaskEventMergedAs records which identity merged a task's pull
+	// request when grain's merge queue merged it: Detail names the
+	// forge's merged_by login and, where the repository has one, the merge
+	// credential grain merged through (task 4386). By is grain.
+	TaskEventMergedAs TaskEventKind = "merged-as"
 )
 
 // TransitionReopened is the timeline's name for a reopen. It is not one

@@ -1905,6 +1905,75 @@ func TestGranuleSandboxesSweepOrphansSparesAVMThatIsStillBooting(t *testing.T) {
 	}
 }
 
+// The window at the other end of a VM's life: Release takes a sandbox out
+// of live before its delete, and the delete lasts as long as docker takes
+// to drop the VM's overlay. A sweep in between used to delete the same VM
+// alongside it, and the second `docker rm -f` failed with "removal of
+// container ... is already in progress" -- logged as an error from both
+// the sweep and the run's release.
+func TestGranuleSandboxesSweepOrphansSparesAVMBeingReleased(t *testing.T) {
+	stateDir := t.TempDir()
+	writeFakeGranule(t, filepath.Join(t.TempDir(), "granule-argv.log"), 30080)
+	writeFakeDockerGuest(t, filepath.Join(t.TempDir(), "docker-argv.log"), filepath.Join(t.TempDir(), "counter"), 0, "")
+
+	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
+		StateDir: stateDir, SSHUser: "debian",
+		ExecKeyPath: "/images/key", Workspace: "/workspace",
+	})
+	sb, err := k.Acquire(context.Background(), "t1-1", orchestrator.Shape{})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	// From here on granule's first delete holds until it is let go, the
+	// way a delete waiting on docker does; any later one logs and returns,
+	// so a sweep that did reach the VM shows up rather than hanging.
+	marks := t.TempDir()
+	deletes := filepath.Join(marks, "deletes.log")
+	dir := t.TempDir()
+	orchestrator.WriteExecutableStub(t, filepath.Join(dir, "granule"), fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "vm" ] && [ "$2" = "delete" ]; then
+  echo "$3" >> %[1]q
+  if mkdir %[2]q 2>/dev/null; then
+    while [ ! -e %[3]q ]; do sleep 0.02; done
+  fi
+  rm -f %[4]q/"$3".json
+fi
+`, deletes, filepath.Join(marks, "first"), filepath.Join(marks, "proceed"), stateDir))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	released := make(chan error, 1)
+	go func() { released <- sb.Release(context.Background()) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if data, _ := os.ReadFile(deletes); len(data) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Release never reached granule's delete")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	swept, err := k.SweepOrphans(context.Background())
+	if err != nil || swept != 0 {
+		t.Errorf("sweeping mid-Release = %d, %v; want the VM left to its release", swept, err)
+	}
+	if data, _ := os.ReadFile(deletes); string(data) != "g-t1-1\n" {
+		t.Errorf("granule deletes = %q, want only the release's own", data)
+	}
+
+	if err := os.WriteFile(filepath.Join(marks, "proceed"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-released; err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if swept, err := k.SweepOrphans(context.Background()); err != nil || swept != 0 {
+		t.Errorf("sweeping after the release = %d, %v; want nothing left to do", swept, err)
+	}
+}
+
 // TestGranuleSandboxesNamesNoAddressWithoutAPool is the default every
 // deployment has run under: grain names no address and docker assigns one,
 // so nothing about the create changes until a pool is configured.

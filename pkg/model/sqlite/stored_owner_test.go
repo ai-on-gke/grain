@@ -99,10 +99,10 @@ func TestOffHostScheduledWorkflowRunKeepsItsHost(t *testing.T) {
 	}
 }
 
-// Migration 141 moves bare-owner qualification and workflow firing rows
+// Migration 142 moves bare-owner qualification and workflow firing rows
 // onto the host their schedule or the one target repo spelling them
 // says, and leaves on the default host every row nothing settles.
-func TestMigration141HostQualifiesQualificationAndWorkflowRunOwners(t *testing.T) {
+func TestMigration142HostQualifiesQualificationAndWorkflowRunOwners(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	if err := store.PutConfig(ctx, testConfig()); err != nil {
@@ -139,7 +139,7 @@ func TestMigration141HostQualifiesQualificationAndWorkflowRunOwners(t *testing.T
 		t.Fatal(err)
 	}
 
-	// The rows a build before 141 wrote: bare owners throughout.
+	// The rows a build before 142 wrote: bare owners throughout.
 	for _, name := range []string{"widgets", "gadgets", "tools"} {
 		for _, stmt := range []string{
 			"INSERT INTO `qualification_config` (`owner`,`name`,`require_approval`,`auto_promote`) VALUES ('acme',?,1,0)",
@@ -165,7 +165,7 @@ func TestMigration141HostQualifiesQualificationAndWorkflowRunOwners(t *testing.T
 
 	migrate := func() {
 		t.Helper()
-		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 140 WHERE `id` = 1"); err != nil {
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 141 WHERE `id` = 1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := model.New(db).Init(ctx); err != nil {

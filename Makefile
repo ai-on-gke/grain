@@ -171,7 +171,7 @@ IMAGE ?= grain:dev
 # IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
 # pre-rename name, honoured for a release (as is `make image-registry`).
 IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -267,6 +267,9 @@ cli: grain
 
 dist-cli:
 	./scripts/build-cli.sh $(BIN)/dist
+
+dist-agentd:
+	./scripts/build-agentd.sh $(BIN)/dist-agentd
 
 builder:
 	$(CONTAINER_ENGINE) build \
@@ -705,6 +708,7 @@ image:
 		--build-arg GO_VERSION=$(GO_VERSION) \
 		--build-arg BUILDVCS=$(BUILDVCS) \
 		--build-arg MAIN_GRAIN=$(MAIN_grain) \
+		$(if $(MAIN_grain-agentd),--build-arg MAIN_GRAIN_AGENTD=$(MAIN_grain-agentd),) \
 		$(if $(SANDBOX_IMAGE),--build-arg SANDBOX_IMAGE=$(SANDBOX_IMAGE),) \
 		$(if $(K8S_SANDBOX_IMAGE),--build-arg K8S_SANDBOX_IMAGE=$(K8S_SANDBOX_IMAGE),) \
 		$(if $(GRAIN_IMAGE_REF),--build-arg GRAIN_IMAGE_REF=$(GRAIN_IMAGE_REF),) \

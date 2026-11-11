@@ -1972,6 +1972,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err != nil {
 			return fmt.Errorf("orchestrator: re-reading %s after merge: %w", ref, err)
 		}
+		recordMergedAs(ctx, store, client, task.ID, ref, detail, now)
 		health = healthOf(detail, checks, e.requiredCheck, checksKnown, checksSettled, grain)
 		if member {
 			// Under MergeRecheckEnforce, each entry in the lane is checked

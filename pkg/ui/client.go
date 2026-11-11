@@ -892,6 +892,10 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	noteSummaries, err := c.Store.NoteSummaries(ctx)
+	if err != nil {
+		return nil, err
+	}
 	accessRequests, err := c.Store.PendingAccessRequests(ctx)
 	if err != nil {
 		return nil, err
@@ -935,6 +939,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 			if p, ok := undelivered[t.ID]; ok {
 				task.UnansweredCommentFrom = p.ID
 			}
+			task.NoteSummary = noteSummaryOf(task, noteSummaries[t.ID])
 		}
 		var wait *model.GrantWait
 		if w, ok := grantWaits[t.ID]; ok {
@@ -1271,6 +1276,9 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		if task.UnansweredCommentFrom, err = c.unansweredCommentFrom(ctx, id, state, obs); err != nil {
 			return Task{}, err
 		}
+		if task.NoteSummary, err = c.noteSummary(ctx, task); err != nil {
+			return Task{}, err
+		}
 	}
 	task = c.withReasons(task, *t, obs, wait)
 	if err := c.attachPause(ctx, &task); err != nil {
@@ -1502,6 +1510,15 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	if task.UnansweredCommentFrom, err = c.unansweredCommentFrom(ctx, id, state, obs); err != nil {
 		return TaskDetail{}, err
+	}
+	if task.NoteSummary, err = c.noteSummary(ctx, task); err != nil {
+		return TaskDetail{}, err
+	}
+	if state == model.StateAwaitingReply {
+		if cm := model.UncountedAgentComment(comments, obs, id); cm != nil {
+			task.UncountedAgentReplyFrom = sessionLabel(cm.Author.Actor, cm.Author.OnBehalfOf, c.sessionTitles(ctx))
+			task.UncountedAgentReplyID = cm.ID
+		}
 	}
 	detail := TaskDetail{
 		Task:          c.withReasons(task, *t, obs, wait),
@@ -2044,6 +2061,32 @@ func questionSummaryComment(state model.State, obs *model.Observation, c *model.
 		return c.Summary
 	}
 	return model.DeriveQuestionSummary(c.Body)
+}
+
+// noteSummaryOf is the NoteSummary an awaiting_reply task t is shown by,
+// given summary, the one its newest comment carries: "" unless t is
+// resting on a note rather than waiting on anything that already has its
+// own line -- a question, a stopped turn, an access request, a person's
+// unanswered comment.
+func noteSummaryOf(t Task, summary string) string {
+	if t.State != model.StateAwaitingReply || t.QuestionSummary != "" || t.TurnStopped ||
+		t.AwaitingAccess || t.UnansweredCommentFrom != "" {
+		return ""
+	}
+	return summary
+}
+
+// noteSummary is noteSummaryOf for one task, reading its newest comment's
+// summary only when the task could be shown by one.
+func (c *Client) noteSummary(ctx context.Context, t Task) (string, error) {
+	if noteSummaryOf(t, "-") == "" {
+		return "", nil
+	}
+	summary, err := c.Store.NoteSummary(ctx, t.ID)
+	if err != nil {
+		return "", err
+	}
+	return noteSummaryOf(t, summary), nil
 }
 
 // CreateTaskRequest is a new task's fields. Repo, Base and AutoMerge were
@@ -6924,6 +6967,43 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 		return nil
 	}
 	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
+// AddRelayedComment is a person's answer that a console session carries
+// to another task for them -- "tell task 2588 yes, use the staging
+// key" said in a director chat. It is written as the person's, via the
+// session ((human, via agent), model.RelayedVia), and does everything a
+// comment the person posted on the task themselves would: it lifts the
+// pending question and sends an awaiting_reply task back to the queue.
+// Whether session may speak for person on the task is the route's
+// question (Server.relayAttribution), asked before this is called.
+func (c *Client) AddRelayedComment(ctx context.Context, id, body string, uploads []AttachmentUpload, person model.Principal, session model.Principal) error {
+	if strings.TrimSpace(body) == "" && len(uploads) == 0 {
+		return validationErrorf("a comment needs a body, an attachment, or both")
+	}
+	if person.Kind != model.PrincipalHuman || session.Kind != model.PrincipalAgent {
+		return forbiddenErrorf("a relayed answer is a person's, carried by a session acting for them")
+	}
+	now := c.now()
+	attachments, err := decodeAttachments(uploads, now)
+	if err != nil {
+		return err
+	}
+	by := model.Attribution{Actor: person, OnBehalfOf: &session}
+	return c.addAttributedComment(ctx, id, body, attachments, by, now, true)
+}
+
+// CommentAwaitingPerson is the commentDelivery an agent's comment is
+// answered with when it lands on a task waiting for a person's reply and
+// does not count as one (Server.handleAddComment), and
+// CommentAwaitingPersonNotice the sentence that says so.
+const CommentAwaitingPerson = "awaiting_person"
+
+// CommentAwaitingPersonNotice says an agent's comment on task id was
+// recorded but left it waiting for a person.
+func CommentAwaitingPersonNotice(id string) string {
+	return fmt.Sprintf("Recorded; task %s is still waiting for a person's reply. An agent's comment does not answer it. "+
+		"A console session acting for a person can pass relay: true (grain task message --relay) to answer for them.", id)
 }
 
 // commentWithAuthor is AddCommentWithAuthor with the one thing a team

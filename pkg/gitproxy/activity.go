@@ -28,10 +28,12 @@ package gitproxy
 // and its response size and status are recorded against the live attempt.
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -212,11 +214,6 @@ func (p *GitProxy) noteActivity(ctx context.Context, taskID, phrase string) {
 	_, _ = p.Activity.SetTaskActivity(ctx, taskID, phrase, now)
 }
 
-// recordToolCall counts one served request against the live attempt.
-func (p *GitProxy) recordToolCall(ctx context.Context, runID, tool string, w *countingResponseWriter) {
-	p.recordRouteCall(ctx, runID, RouteActivity{Tool: tool}, w)
-}
-
 // recordRouteCall counts one served request against the live attempt in
 // task_run_tool, task_run_api_call, and systemlog.
 func (p *GitProxy) recordRouteCall(ctx context.Context, runID string, act RouteActivity, w *countingResponseWriter) {
@@ -224,23 +221,46 @@ func (p *GitProxy) recordRouteCall(ctx context.Context, runID string, act RouteA
 		return
 	}
 	errored := w.statusCode() >= 400
+	targets := act.Targets
+	if w.capture && !errored {
+		// A listing or feed names what it read in its answer, not its
+		// path: the same IDs the MCP tool it replaces is credited with
+		// (orchestrator's extractAPICallTargetIDs), so a report citing a
+		// task the pipeline-changes feed showed is not "unread" just
+		// because the steward read the feed through the CLI.
+		targets = append(slices.Clone(targets), model.ReadOutputIDs(act.Tool, w.body.String())...)
+	}
 	log.Printf("grain: sandbox proxy call run %s -> %s (status %d, %d bytes)", runID, act.Tool, w.statusCode(), w.bytes)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = p.Activity.RecordProxyToolCall(ctx, runID, act.Tool, w.bytes, errored)
 	if !errored {
 		if apiRec, ok := p.Activity.(ProxyAPICallRecorder); ok {
-			_ = apiRec.RecordProxyAPICall(ctx, runID, act.Tool, strings.Join(act.Targets, ","), w.bytes)
+			_ = apiRec.RecordProxyAPICall(ctx, runID, act.Tool, strings.Join(targets, ","), w.bytes)
 		}
 	}
 }
 
 // countingResponseWriter counts the body bytes and captures the status of
-// a response while passing both through.
+// a response while passing both through. With capture set it also keeps
+// the first maxCapturedReadBody bytes of the body, for the IDs a listing
+// or feed read showed (model.ReadOutputIDs).
 type countingResponseWriter struct {
 	http.ResponseWriter
-	status int
-	bytes  int64
+	status  int
+	bytes   int64
+	capture bool
+	body    bytes.Buffer
+}
+
+// maxCapturedReadBody bounds what one listing or feed read keeps in memory
+// to parse IDs from: a pipeline-changes page is at most 500 short lines.
+const maxCapturedReadBody = 1 << 20
+
+// newCountingResponseWriter wraps w for a request served as act, keeping
+// the body when act's tool names its reads in its output.
+func newCountingResponseWriter(w http.ResponseWriter, act RouteActivity) *countingResponseWriter {
+	return &countingResponseWriter{ResponseWriter: w, capture: model.ReadsIDsFromOutput(act.Tool)}
 }
 
 func (w *countingResponseWriter) WriteHeader(code int) {
@@ -256,6 +276,11 @@ func (w *countingResponseWriter) Write(b []byte) (int, error) {
 	}
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += int64(n)
+	if w.capture && n > 0 {
+		if room := maxCapturedReadBody - w.body.Len(); room > 0 {
+			w.body.Write(b[:min(n, room)])
+		}
+	}
 	return n, err
 }
 

@@ -441,6 +441,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/host/top":                       trusted,
 	"GET /api/upgrade":                        trusted,
 	"POST /api/upgrade":                       trusted,
+	"DELETE /api/upgrade/current":             trusted,
 	"DELETE /api/upgrade/scheduled":           trusted,
 	"GET /api/upgrade/targets":                trusted,
 	"GET /api/upgrade/release-notes":          trusted,
@@ -505,9 +506,11 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/hostd/renew":          public,
 	// The script that installs one: grain's own, with no token in it
 	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
-	"GET /api/hostd/install.sh": public,
-	"GET /hostd/install":        public,
-	"GET /cli/install.sh":       public,
+	"GET /api/hostd/install.sh":                       public,
+	"GET /hostd/install":                              public,
+	"GET /api/hostd/agentd/{os}/{arch}":               public,
+	"GET /api/hostd/agentd/{os}/{arch}/manifest.json": public,
+	"GET /cli/install.sh":                             public,
 }
 
 // The people the fixtures name. On the single-tenant daemon

@@ -660,6 +660,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	prompt += nothingNeededSection(task)
 	prompt += questionSummarySection
+	prompt += personActionSection
 	prompt += statusSection(canOpenPullRequest)
 	prompt += chatSection(task, canOpenPullRequest)
 	prompt += runtimeSection(task, maxRuntime)
@@ -1132,6 +1133,16 @@ const questionSummarySection = "\n\nWhenever you ask a person something -- ask_q
 	"it?\"). The inbox, the task list and notifications show only that line, with your " +
 	"full question behind an expander, so never write \"I have a question\" or " +
 	"\"Need input\"."
+
+// personActionSection is what every run is told about an outcome that
+// needs a person to act (model.PersonActionInstruction): that it is a
+// question, not a closing note. Task #4256 ended a repair that only a
+// repository admin could finish with a note whose inbox line was its
+// opening sentence, and the action halfway down it, hedged as a choice.
+// A task body that says how it must finish (a qualification run's
+// verdict footer, say) still decides, which the last sentence leaves to it.
+const personActionSection = "\n\n" + model.PersonActionInstruction + " Where the task " +
+	"itself names the tool to finish with, do as it says, and still give that tool's `summary`."
 
 // statusSection is the paragraph about update_status: that a run can put
 // one line on its own task's row saying what it is doing, and when doing
@@ -4699,11 +4710,6 @@ func runGitCredential(ctx context.Context, store *model.Store, task model.Task) 
 	return name
 }
 
-// hasGrant reports whether task carries a grant for capability, by name
-// alone: model.Grant.Via records how the grant was come by, never what it
-// lets a task do, so a self-debug grant a human ticked and one a repo's
-// defaults attached are the same grant here (model.GrantsSubsetOf draws
-// the same line for the same reason).
 // selfDebugAPIGrant is the api preset the retired self-debug became the
 // REST half of (model.SelfDebugGrants).
 const selfDebugAPIGrant = model.APICapabilityServerID + "#self-debug"
@@ -4714,16 +4720,6 @@ const selfDebugAPIGrant = model.APICapabilityServerID + "#self-debug"
 func hasGrainSource(task model.Task) bool {
 	for _, g := range task.Grants {
 		if model.IsGrainSourceGrant(g.Capability) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasGrant(task model.Task, capability string) bool {
-	want := model.CanonicalGrantKey(capability)
-	for _, g := range task.Grants {
-		if g.Capability == capability || model.CanonicalGrantKey(g.Capability) == want {
 			return true
 		}
 	}
@@ -5143,12 +5139,13 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		runErr = fmt.Errorf("orchestrator: run %s: %w", runID, errDaemonStopped)
 	case runErr != nil && errors.Is(runErr, agent.ErrHostdDraining):
 		// grain hostd refused to start the CLI because it is draining
-		// for its own upgrade: nothing ran, and nothing about the task
-		// earned a strike. Interrupted, as a daemon restart is, so the
-		// task is queued again and its next attempt starts on the hostd
-		// that replaces this one.
+		// for its own upgrade, or ended a running CLI at drain_cap so
+		// the upgrade could finish: nothing about the task earned a
+		// strike. Interrupted, as a daemon restart is, so the task is
+		// queued again and its next attempt runs on the hostd that
+		// replaces this one.
 		outcome = model.InterruptedOutcome
-		detail = runErr.Error()
+		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case runErr != nil && errors.Is(runErr, agent.ErrHostdLost):
 		// The hostd the CLI ran on dropped and was not back within

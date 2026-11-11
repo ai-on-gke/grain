@@ -420,7 +420,7 @@ func hostdProcesses(ctx context.Context, exec HostExecutor) []HostdProcess {
 
 // hostdUpdating is what Settings and a refused run say while grain hostd
 // drains for its own upgrade.
-const hostdUpdating = "the host agent is updating (draining for its own upgrade): new host runs wait until it is back, and runs already going carry on"
+const hostdUpdating = "the host agent is updating (draining for its own upgrade): new host runs wait until it is back, and runs still going at drain_cap are interrupted and re-queued"
 
 // hostdHello fills st's handshake fields from a hello to exec's hostd,
 // and returns why no new host run can start there, or "".

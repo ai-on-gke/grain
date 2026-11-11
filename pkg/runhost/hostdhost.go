@@ -226,6 +226,9 @@ func (d *Hostd) Attach(ctx context.Context, info Info, cursor int64, tee io.Writ
 	if err != nil {
 		return whole.String(), err
 	}
+	if exit.Draining {
+		return whole.String(), fmt.Errorf("%w: %s", agent.ErrHostdDraining, exit.String())
+	}
 	if exit.Code != 0 || exit.Error != "" {
 		tail := stderr.Bytes()
 		if len(tail) > 16<<10 {
@@ -383,7 +386,7 @@ func (d *Hostd) reattach(ctx context.Context, c hostd.Client, run, id string, ou
 		if errors.As(err, &refused) {
 			// hostd answered, and has no such process to attach to: it
 			// is gone (hostd restarted without it), and so is the run.
-			return exit, fmt.Errorf("%s is back, but run %s's CLI (%s) is not: %w", d.hostdName(), run, id, err)
+			return exit, fmt.Errorf("%w: %s is back, but run %s's CLI (%s) is not: %v", agent.ErrHostdLost, d.hostdName(), run, id, err)
 		}
 		if !time.Now().Before(give) {
 			return lost()
