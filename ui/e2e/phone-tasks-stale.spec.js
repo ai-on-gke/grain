@@ -32,9 +32,11 @@ import { test, expect } from "./fixtures.js";
 
 // STALE_WAIT is how long the shell may take to call the list stale: one
 // failed /api/tasks poll is retried quietly, and only TASKS_STALE_AFTER
-// (App.jsx) in a row -- spaced out by the poll's backoff once the 502s
-// count as unreachable -- say "not refreshing".
-const STALE_WAIT = 25_000;
+// (App.jsx) in a row say "not refreshing". The polls fail with a 500, the
+// daemon's own error, rather than a 502: a gateway's 502s also put
+// DisconnectedBanner up above the bar by the time that many have failed,
+// which moves the controls this measures.
+const STALE_WAIT = 20_000;
 test.describe.configure({ timeout: 60_000 });
 
 const LIVE_POLL = /\/api\/tasks(\?(?!.*state=closed).*)?$/;
@@ -104,16 +106,16 @@ for (const colorScheme of ["light", "dark"]) {
 
     await page.route(LIVE_POLL, (route) =>
       route.fulfill({
-        status: 502,
+        status: 500,
         contentType: "application/json",
-        body: JSON.stringify({ error: "synthetic tasks 502" }),
+        body: JSON.stringify({ error: "synthetic tasks 500" }),
       }),
     );
     try {
       await expect(chip).toBeVisible({ timeout: STALE_WAIT });
       await expect(chip).toContainText("Task list not refreshing");
       await expect(chip).toHaveAccessibleName(/not refreshing/);
-      await expect(chip).toHaveAttribute("title", /synthetic tasks 502/);
+      await expect(chip).toHaveAttribute("title", /synthetic tasks 500/);
       // The list is still the one held: stale, not gone.
       await expect(rows).toHaveCount(held);
 
@@ -190,9 +192,9 @@ test("the desktop shell has no phone stale chip: the rail says it there (1440px)
   await expect(page.locator(".task-row").first()).toBeVisible();
   await page.route(LIVE_POLL, (route) =>
     route.fulfill({
-      status: 502,
+      status: 500,
       contentType: "application/json",
-      body: JSON.stringify({ error: "synthetic tasks 502" }),
+      body: JSON.stringify({ error: "synthetic tasks 500" }),
     }),
   );
   try {
