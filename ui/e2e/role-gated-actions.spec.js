@@ -38,13 +38,34 @@ const VIEWER = {
   ],
 };
 
+// rewriteJSON intercepts a GET route and rewrites its JSON body. A request
+// still in flight when the test navigates away or closes its page is
+// cancelled with the page, disposing the response ("Response has been
+// disposed"); nobody is waiting on that answer any more, so let it go.
+async function rewriteJSON(route, transform, fetchOptions) {
+  if (route.request().method() !== "GET") return route.fallback();
+  let response, body;
+  try {
+    response = await route.fetch(fetchOptions);
+    body = await response.json();
+  } catch (err) {
+    if (/disposed|closed|cancel/i.test(String(err))) return;
+    throw err;
+  }
+  await route.fulfill({ response, json: transform(body) }).catch((err) => {
+    if (!/disposed|closed|cancel|handled/i.test(String(err))) throw err;
+  });
+}
+
 async function asViewer(page) {
   await page.route(
     (u) => u.pathname === "/api/config",
     async (route) => {
-      const response = await route.fetch();
-      const json = { ...(await response.json()), access: VIEWER };
-      await route.fulfill({ response, json });
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      await rewriteJSON(route, (body) => ({ ...body, access: VIEWER }), {
+        headers,
+      });
     },
   );
 }
@@ -56,21 +77,25 @@ async function withProposal(page) {
   await page.route(
     (u) => u.pathname === "/api/tasks",
     async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      const response = await route.fetch();
-      const body = await response.json();
-      const list = Array.isArray(body) ? body : body.tasks || [];
-      const extra = {
-        ...(list[0] || {}),
-        id: "9901",
-        title: "Role-gated proposal",
-        state: "proposed",
-        approved: false,
-      };
-      const json = Array.isArray(body)
-        ? [extra, ...list]
-        : { ...body, tasks: [extra, ...list] };
-      await route.fulfill({ response, json });
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      await rewriteJSON(
+        route,
+        (body) => {
+          const list = Array.isArray(body) ? body : body.tasks || [];
+          const extra = {
+            ...(list[0] || {}),
+            id: "9901",
+            title: "Role-gated proposal",
+            state: "proposed",
+            approved: false,
+          };
+          return Array.isArray(body)
+            ? [extra, ...list]
+            : { ...body, tasks: [extra, ...list] };
+        },
+        { headers },
+      );
     },
   );
 }
@@ -287,23 +312,24 @@ test("a viewer's access request Grant and Deny are disabled, and say why", async
   page,
 }) => {
   await asViewer(page);
-  await page.route(/\/api\/tasks\/1$/, async (route) => {
-    if (route.request().method() !== "GET") return route.fallback();
+  await page.route(/\/api\/tasks\/1(\?.*)?$/, async (route) => {
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];
-    const response = await route.fetch({ headers });
-    const json = {
-      ...(await response.json()),
-      awaitingAccess: true,
-      pendingAccess: {
-        summary: "Grant read on acme/docs",
-        reason: "Role-gated fixture.",
-        items: [{ kind: "read", repo: "acme/docs" }],
-        holds: {},
-        earlier: [],
-      },
-    };
-    await route.fulfill({ response, json });
+    await rewriteJSON(
+      route,
+      (body) => ({
+        ...body,
+        awaitingAccess: true,
+        pendingAccess: {
+          summary: "Grant read on acme/docs",
+          reason: "Role-gated fixture.",
+          items: [{ kind: "read", repo: "acme/docs" }],
+          holds: {},
+          earlier: [],
+        },
+      }),
+      { headers },
+    );
   });
   await page.goto("/tasks/1");
   const card = page.getByRole("region", {

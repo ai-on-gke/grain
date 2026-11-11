@@ -281,9 +281,11 @@ type HostdStatus struct {
 	Error     string   `json:"error,omitempty"`
 	Offers    []string `json:"offers,omitempty"`
 	// Protocol and Build are what hostd said in hello (protocol 1 for a
-	// hostd that predates it).
-	Protocol int    `json:"protocol,omitempty"`
-	Build    string `json:"build,omitempty"`
+	// hostd that predates it); Features are the contract features it
+	// advertised (or those inferred from its protocol).
+	Protocol int             `json:"protocol,omitempty"`
+	Build    string          `json:"build,omitempty"`
+	Features []hostd.Feature `json:"features,omitempty"`
 	// Updating is set while hostd drains for its own upgrade, and
 	// Mismatch names a protocol this daemon cannot talk to: either way
 	// no new host run starts, and Error says why.
@@ -427,6 +429,15 @@ func hostdHello(ctx context.Context, exec HostExecutor, st *HostdStatus) string 
 	peer, err := hd.Handshake(ctx)
 	st.Protocol, st.Build = peer.Protocol, peer.Build
 	st.Running, st.Current, st.CurrentBuild = peer.Running, peer.Current, peer.CurrentBuild
+	if len(peer.Features) > 0 {
+		st.Features = append([]hostd.Feature(nil), peer.Features...)
+	} else {
+		for _, f := range hostd.Features {
+			if peer.Has(f) {
+				st.Features = append(st.Features, f)
+			}
+		}
+	}
 	var mismatch *hostd.MismatchError
 	switch {
 	case errors.As(err, &mismatch):
@@ -546,6 +557,12 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
 			return nil, fmt.Errorf("%s is set to run on the host, through the host agent that dials in: %w", cliBinaryName(r.Framework), err)
 		}
+	} else {
+		hctx, cancel := context.WithTimeout(context.Background(), hostdOffersTimeout)
+		if hello, err := h.Client.Hello(hctx); err == nil {
+			h.HookPolicy = hello.Has(hostd.FeatureHookPolicy)
+		}
+		cancel()
 	}
 	return h, nil
 }
@@ -572,7 +589,13 @@ func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 	h.Remote = remote
 	h.Grain = hello.Grain
 	h.StageRoot = hello.StageRoot
-	h.CodexAuth = hello.CodexAuth
+	if hello.Has(hostd.FeatureLoginsMap) {
+		h.HasLoginsMap = true
+		h.LoginTargets = hello.LoginTargets
+	} else {
+		h.CodexAuth = hello.CodexAuth
+	}
+	h.HookPolicy = hello.Has(hostd.FeatureHookPolicy)
 	return nil
 }
 

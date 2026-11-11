@@ -294,16 +294,25 @@ func readTokenFile(path string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// defaultAllowlist is a first allowlist: an entry for agy at agyPath,
-// confined to the staging root a remote run uses, and an empty
-// capabilities section.
+// agyClosedEnv is the closed env: list written for hosts that do not
+// advertise FeatureEnvOpen.
+var agyClosedEnv = []string{"HOME", "AGY_CLI_DISABLE_AUTO_UPDATE", "GEMINI_API_KEY", "GOOGLE_API_KEY"}
+
+// defaultAllowlist is a first allowlist for this build of grain-agentd.
 func defaultAllowlist(stage, server, agyPath string) string {
+	home, _ := os.UserHomeDir()
+	return AllowlistFor(hostd.ThisHello(""), home, stage, server, agyPath)
+}
+
+// AllowlistFor renders a first allowlist targeting a host that reported peer:
+// an entry for agy at agyPath confined to stage, using env: [HOME, "*"] and
+// ~/-relative paths only when peer advertises FeatureEnvOpen, and an empty
+// capabilities section.
+func AllowlistFor(peer hostd.Hello, home, stage, server, agyPath string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s's allowlist: the agent CLIs the grain daemon at\n# %s may start on this machine, as you. %s re-reads it on\n# every request. %s runs agent CLIs only: capabilities: stays empty.\n", Program, server, Program, Program)
 	b.WriteString("clis:\n")
-	fmt.Fprintf(&b, "  agy:\n    path: %s\n    paths_under: [%s]\n    cwd_under: [%s]\n", agyPath, stage, stage)
-	b.WriteString("    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]\n")
-	b.WriteString("    pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]\n")
+	b.WriteString(hostd.CLIEntryYAML("agy", agyPath, home, []string{stage}, agyClosedEnv, hostd.ProxyVars, peer))
 	b.WriteString("capabilities: {}\n")
 	return b.String()
 }

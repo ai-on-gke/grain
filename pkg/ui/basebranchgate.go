@@ -232,8 +232,10 @@ type BaseBranchGate struct {
 	// Detail is the finding in the words a person needs, because this is
 	// a fact three readings away from its consequence and nobody
 	// assembled it from the fields alone the first time -- the same
-	// contract SandboxGuestPublishing.Detail keeps next door.
-	Detail string `json:"detail"`
+	// contract SandboxGuestPublishing.Detail keeps next door. A paged
+	// read leaves it out unless it asks for fields=full: at ~650 bytes
+	// it was most of each row, and a default page of twenty was 15 KB.
+	Detail string `json:"detail,omitempty"`
 }
 
 // baseBranchGates is the reading GET /api/sandboxes carries, and through
@@ -357,6 +359,11 @@ func (s *Server) handleListBaseBranchGates(w http.ResponseWriter, r *http.Reques
 		return list.matches(g.Repo, g.Branch, g.Reason)
 	})
 	page := pageOf(gates, list)
+	if trimsPagedRows(r, list) {
+		for i := range page.Items {
+			page.Items[i].Detail = ""
+		}
+	}
 	writeJSON(w, http.StatusOK, BaseBranchGates{
 		Gates:      page.Items,
 		Total:      page.Total,

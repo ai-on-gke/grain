@@ -236,6 +236,9 @@ func (u *Upgrader) imageReleaseNotes(ctx context.Context, p *progress, branch st
 			return ref, report, nil, fmt.Errorf("%w; not running it to read its release notes", err)
 		}
 	}
+	if _, err := u.checkReviewedMerge(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
+		return ref, report, nil, fmt.Errorf("%w; not running it to read its release notes", err)
+	}
 	out, err := runAsked(ctx, p, releaseNotesStep, imageRunTimeout, imageRunner{u: u, ref: ref}.run(nil, args))
 	if err != nil {
 		if ranAndFailed(err) {

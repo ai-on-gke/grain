@@ -318,7 +318,7 @@ var domainGuidance = map[string]string{
 	"connections":  "Git connections and model backend definitions.",
 	"sessions":     "Interactive console sessions and standing Director/chat sessions.",
 	"caches":       "CI, package, and GitHub Actions cache inspection and flushing.",
-	"dispatch":     "Queue/pipeline pause controls and immediate task dispatch (run-now).",
+	"dispatch":     "Queue/pipeline pause controls, immediate task dispatch (run-now), and what a durable task's next dispatch carries (context compaction and current brief).",
 	"memory":       "Deployment and per-repository standing agent memory documents.",
 }
 
@@ -1293,6 +1293,7 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				},
 				"grants": map[string]any{
 					"type":        "array",
+					"items":       map[string]any{},
 					"description": "Unified grants, each a grant string or a {capability, with} object, as POST /api/tasks takes them (repo#target, repo#read and repo#write included). A request that also names the same kind the old way -- capabilities, reads, writes, or repo/base/no_repo beside repo#target -- is refused.",
 				},
 				"depends_on": map[string]any{

@@ -146,6 +146,8 @@ var toolActivityNotes = map[string]string{
 	"comment_on_issue":      "writing its closing note",
 	"nothing_needed":        "closing the task as needing no work",
 	"write_handover":        "writing a handover for the next run",
+	"compact_context":       "compacting the task's context",
+	"update_brief":          "rewriting the task's brief",
 	"notify_operator":       "notifying the operator",
 	"message_task":          "leaving a note for another task",
 	"propose_task":          "filing a follow-up task",

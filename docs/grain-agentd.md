@@ -151,10 +151,10 @@ The same format as `grain host`'s, with `clis:` only:
 ```yaml
 clis:
   agy:
-    path: /home/you/.local/bin/agy
-    paths_under: [/home/you/.grain/hostd-stage]
-    cwd_under: [/home/you/.grain/hostd-stage]
-    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]
+    path: ~/.local/bin/agy
+    paths_under: [~/.grain/hostd-stage]
+    cwd_under: [~/.grain/hostd-stage]
+    env: [HOME, "*"]
     pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]
 capabilities: {}
 ```
@@ -167,10 +167,14 @@ every request.
 
 A run's agent CLI forks hooks -- agy's pre-tool hook (`agy-tool-hook`) and
 Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote host
-names that host's own binary for them. grain-agentd answers both, from the
-leaf packages `pkg/agent/antigravity/hook` and `pkg/agent/claude/stophook`
-that `cmd/grain` uses too, so the hook decides the same way wherever the CLI
-runs.
+names that host's own binary for them. For hosts advertising contract feature
+`hook_policy`, the daemon stages a versioned per-run hook policy file
+(`pkg/agent/hookpolicy`) beside the run's configuration and passes `-policy` to
+both subcommands, so `grain-agentd` evaluates the daemon's current tool roster,
+host-tool grants and stop-rule parameters as data -- including while the daemon
+restarts -- without needing a host update when those policies change. When the
+policy file is absent (an older daemon), the hooks fall back to the compiled-in
+defaults in `pkg/agent/antigravity/hook` and `pkg/agent/claude/stophook`.
 
 ## For a build that extends it
 

@@ -145,6 +145,10 @@ type Session struct {
 	closed  bool
 	endErr  error
 	endedAt time.Time
+	// wroteAt is when the process last printed anything: a reader that
+	// sees output this fresh may be looking at the middle of a write the
+	// PTY handed over in pieces (LastOutput).
+	wroteAt time.Time
 
 	done chan struct{}
 	// pumped is closed when pump returns: the PTY has been read to its
@@ -342,6 +346,14 @@ func (s *Session) Info() Info {
 	return Info{Spec: s.spec, Live: !s.ended, Bytes: s.base + int64(len(s.buf))}
 }
 
+// LastOutput is when the session last printed anything, zero if it never
+// has.
+func (s *Session) LastOutput() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.wroteAt
+}
+
 // Output returns everything the session has printed since offset, the
 // offset to ask for next time, and whether anything between the two was
 // dropped from the ring before this reader got to it (MaxBuffer).
@@ -484,6 +496,7 @@ func (s *Session) append(p []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.buf = append(s.buf, p...)
+	s.wroteAt = time.Now()
 	if over := len(s.buf) - MaxBuffer; over > 0 {
 		s.buf = s.buf[over:]
 		s.base += int64(over)
