@@ -1198,6 +1198,7 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":         true,
 	"GET /api/tasks/{id}/attempts/{number}/transcript":               true,
 	"GET /api/tasks/{id}/prompt":                                     true,
+	"GET /api/tasks/{id}/diff-preview":                               true,
 	"GET /api/tasks/{id}/tree":                                       true,
 	"GET /api/templates/{id}/composition":                            true,
 	"GET /api/upgrade":                                               true,

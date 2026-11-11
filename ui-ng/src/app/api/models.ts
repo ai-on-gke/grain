@@ -68,6 +68,7 @@ export interface Task {
   stall?: string;
   consoleSession?: unknown;
   body?: string;
+  branch?: string;
 }
 
 export interface AccessRequestItem {
@@ -130,4 +131,40 @@ export interface LocalScriptApproval {
   stdinBytes?: number;
   stdinPreview?: string;
   stdinTruncated?: boolean;
+}
+
+// DiffPreview is GET /api/tasks/{id}/diff-preview (pkg/ui/diff_preview.go):
+// the first hunks of a task's branch against its base, already redacted.
+export interface DiffPreviewLine {
+  kind: "add" | "del" | "ctx";
+  text: string;
+}
+
+export interface DiffPreviewHunk {
+  header: string;
+  lines: DiffPreviewLine[];
+  linesOmitted?: number;
+}
+
+export interface DiffPreviewFile {
+  path: string;
+  oldPath?: string;
+  status: "added" | "deleted" | "renamed" | "modified";
+  binary?: boolean;
+  additions: number;
+  deletions: number;
+  hunks: DiffPreviewHunk[];
+  hunksOmitted?: number;
+}
+
+export interface DiffPreview {
+  repo: string;
+  base: string;
+  head: string;
+  mergeBase?: string;
+  merged?: boolean;
+  files: DiffPreviewFile[];
+  totalFiles: number;
+  totalHunks: number;
+  truncated?: boolean;
 }
