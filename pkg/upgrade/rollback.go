@@ -148,7 +148,10 @@ func (u *Upgrader) checkoutCommit(ctx context.Context, p *progress, oid string) 
 	if err := u.git(ctx, p, "switch", "--quiet", "--detach", "--end-of-options", oid); err != nil {
 		return err
 	}
-	if err := u.git(ctx, p, "reset", "--quiet", "--hard", oid); err != nil {
+	// HEAD rather than oid: switch has just detached onto oid, and the
+	// git this runs on may be older than reset's --end-of-options. That
+	// HEAD is oid is checked below.
+	if err := u.git(ctx, p, "reset", "--quiet", "--hard", "HEAD"); err != nil {
 		return err
 	}
 	head, err := u.headRevision(ctx)
