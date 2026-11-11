@@ -57,6 +57,11 @@
 //                    object itself. Only the page is told; the server
 //                    still answers as the access code, so this shows
 //                    which controls a role is offered, not what it may do.
+//   --merge  MERGE   "PATH=FILE.json": the page's GET PATH (any query)
+//                    answered with the server's own answer and FILE's
+//                    top-level fields laid over it -- to shoot a state
+//                    the demo does not seed, such as a schedule that has
+//                    stopped running. Repeat it for more routes.
 //   --look[=Q] LOOK  send the screenshots to Gemini and print what it sees:
 //                    for an agent whose file reader shows a PNG as bytes.
 //                    Needs GEMINI_API_KEY or ~/.gemini-api-key; Q replaces
@@ -69,6 +74,7 @@
 // a blank pane is not a screenshot.
 import { chromium } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -129,6 +135,7 @@ function parseArgs(argv) {
     click: process.env.CLICK ? [process.env.CLICK] : [],
     type: process.env.TYPE || "",
     headers: process.env.HEADER ? [process.env.HEADER] : [],
+    merges: process.env.MERGE ? [process.env.MERGE] : [],
     access: process.env.ACCESS,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -147,6 +154,10 @@ function parseArgs(argv) {
     }
     if (arg === "--type" || arg.startsWith("--type=")) {
       opts.type = arg.startsWith("--type=") ? arg.slice(7) : argv[++i];
+      continue;
+    }
+    if (arg === "--merge" || arg.startsWith("--merge=")) {
+      opts.merges.push(arg.startsWith("--merge=") ? arg.slice(8) : argv[++i]);
       continue;
     }
     if (arg === "--header" || arg.startsWith("--header=")) {
@@ -184,6 +195,15 @@ function parseArgs(argv) {
     if (at <= 0) throw new Error(`--header ${h}: want "Name: value"`);
     opts.extraHTTPHeaders[h.slice(0, at).trim()] = h.slice(at + 1).trim();
   }
+  opts.merges = opts.merges.map((m) => {
+    const at = m.indexOf("=");
+    if (at <= 0 || !m.startsWith("/"))
+      throw new Error(`--merge ${m}: want "/api/path=file.json"`);
+    return {
+      pathname: m.slice(0, at),
+      json: JSON.parse(readFileSync(path.resolve(m.slice(at + 1)), "utf8")),
+    };
+  });
   if (opts.access) {
     opts.access =
       ACCESS_PRESETS[opts.access] ??
@@ -364,6 +384,16 @@ async function main() {
                     ...(await response.json()),
                     access: opts.access,
                   };
+                  await route.fulfill({ response, json });
+                },
+              );
+            }
+            for (const merge of opts.merges) {
+              await context.route(
+                (u) => u.pathname === merge.pathname,
+                async (route) => {
+                  const response = await route.fetch();
+                  const json = { ...(await response.json()), ...merge.json };
                   await route.fulfill({ response, json });
                 },
               );
