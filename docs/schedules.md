@@ -60,6 +60,10 @@ implementation takes that dissolution all the way — there is no
 per-schedule opt-in to land `proposed` instead, unlike v1's own
 `needs_approval` header. A schedule whose work genuinely needs review
 each time is not what this covers today; see "Left open" below.
+(Since then, one firing does land `proposed`: a schedule or template a
+repository declared in `.grain/` whose firing carries something only a
+person may grant is held until a person accepts the declaration; see
+"Team approval" in [`docs/declarations.md`](declarations.md).)
 
 **Idempotency is a tag on the fired task, not a label matched by
 schedule name.** `firingTag(scheduleID)` produces `"schedule:<id>"`,
