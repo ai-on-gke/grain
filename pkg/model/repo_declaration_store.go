@@ -602,11 +602,12 @@ func (s *Store) ForgetRepo(ctx context.Context, repo RepoRef) error {
 // and polling a CI run for a repository the deployment no longer works
 // in.
 //
-// Every table is matched on StoredOwner. The qualification tables and
-// scheduled_workflow_run write a bare Owner even for another host's
-// repository, so a removal there leaves their rows. Matching on Owner
-// instead would take the default host's same-named repository's rows
-// too, and leaving rows is the safer mistake.
+// Every table is matched on StoredOwner, which every one of them writes.
+// The qualification tables and scheduled_workflow_run wrote a bare Owner
+// even for another host's repository until grain/task-4335; migration
+// 140 (migrateStoredOwners) moved the rows it could place, and a row it
+// could not stays on the default host, where removing that host's
+// repository is what takes it.
 var forgottenRepoTables = []string{
 	"repo_config",
 	"repo_workflow",

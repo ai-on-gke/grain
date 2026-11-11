@@ -657,7 +657,12 @@ import "strconv"
 // `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
 // the minimum interval between two completed automatic upgrades in release
 // mode, and when the last automatic upgrade succeeded (grain/task-4230).
-const SchemaVersion = 139
+// 140 changes no table: it rewrites the owner column of the qualification
+// plan tables and `scheduled_workflow_run` to StoredOwner (host/owner off
+// the default host), which every other repo-keyed table already holds,
+// for rows their schedule or a target repo places on another host
+// (migrateStoredOwners, grain/task-4335).
+const SchemaVersion = 140
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
