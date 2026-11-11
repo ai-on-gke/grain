@@ -662,7 +662,7 @@ var routeQueries = map[string]map[string]string{
 		"author":  "Only work by this author; comma-separated or repeated for several.",
 		"repo":    "Only work on this repository (owner/name); comma-separated or repeated for several.",
 	},
-	"GET /api/sandboxes":           {"section": "counters for only the counters layers registered (ui.RegisterHealthCounters), without the sandbox sweep the rest costs."},
+	"GET /api/sandboxes":           {"section": "counters for only the counters layers registered (ui.RegisterHealthCounters), or staleSchedules for only the schedules that stopped running, without the sandbox sweep the rest costs."},
 	"GET /api/unmatched-failures":  {"window": "How far back: a duration (36h) or a count of days or weeks (7d, 2w).", "limit": "At most this many failures."},
 	"DELETE /api/pause":            {"connection": "Lift this model connection's pauses.", "model": "With connection, only this model's pause on it.", "team": "Lift this team's pauses.", "framework": "With team, only this framework's pause."},
 	"GET /api/console/{id}/output": {"offset": "Only output after this byte offset."},
