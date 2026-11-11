@@ -163,3 +163,46 @@ func parkOffTargetRepos(ctx context.Context, deps Deps, taskID string,
 		o.PendingQuestionCommentID = &commentID
 	})
 }
+
+// withdrawForRemovedRepo is the merge queue's half of reconcileTargetRepos:
+// a task whose pull request is already open against a repository that has
+// since come off the deployment's list is not merged into it. Its
+// auto-merge is taken back, once, with OffAllowlistAtMergeComment saying
+// why; the pull request is left open. held is true for as long as the
+// repository stays off the list, auto-merge or not, so that nothing --
+// a forced merge included -- lands there meanwhile.
+//
+// Putting the repository back does not undo this: auto-merge stays off
+// until a person's Submit turns it on again, so re-adding a repository
+// brings none of what was queued against it back by itself.
+func withdrawForRemovedRepo(ctx context.Context, store *model.Store, task model.Task,
+	ref model.PullRequestRef, now time.Time) (held bool, err error) {
+
+	allowed, err := store.TargetRepos(ctx)
+	if err != nil {
+		return false, fmt.Errorf("orchestrator: reading target repos to check %s against: %w", ref, err)
+	}
+	if model.RepoAllowed(allowed, ref.Repo) {
+		return false, nil
+	}
+	if !task.AutoMerge {
+		return true, nil
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.AutoMerge = false
+		return nil
+	}); err != nil {
+		return true, fmt.Errorf("orchestrator: withdrawing %s's auto-merge off the target repo list: %w", task.ID, err)
+	}
+	log.Printf("orchestrator: %s is against %s, which is no longer on this deployment's "+
+		"target repo list; auto-merge withdrawn rather than merging into it", ref, ref.Repo)
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+		Body:      model.OffAllowlistAtMergeComment(ref.Repo, allowed),
+		CreatedAt: now,
+	}); err != nil {
+		return true, fmt.Errorf("orchestrator: noting %s's withdrawn auto-merge: %w", task.ID, err)
+	}
+	return true, nil
+}
