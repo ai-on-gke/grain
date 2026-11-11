@@ -1401,7 +1401,33 @@ func InstanceGrainConfig(cfg hub.Config, entry *store.EntryRow, bundle *hub.Inst
 		set("object_store", "gs://"+bucket+"/"+folder+"/")
 	}
 	set("config_repo", configRepoURL)
+	// What the instance is called on its own screen (its tab title and
+	// sidebar badge) until its operator names it something else: the
+	// entry's display name, else its entry name. grain-instance-init.sh
+	// hands it to the daemon as $GRAIN_DEFAULT_ENVIRONMENT_NAME, which
+	// only fills an unnamed deployment's name or one the hub gave it
+	// before (model.Config.AdoptHubEnvironmentName).
+	set("environment_name", envFileSafeEnvironmentName(entry.DisplayName, entry.Name))
 	return env
+}
+
+// envFileSafeEnvironmentName is api.EnvironmentNameForEntry with the
+// characters a daemon.env line cannot carry the same way to both of its
+// readers dropped: systemd's EnvironmentFile= unquotes and unescapes a
+// value where docker's --env-file takes it literally, so a quote,
+// backslash, dollar or backtick would reach the daemon as two different
+// names. Losing one from a display name beats failing the boot over it.
+func envFileSafeEnvironmentName(displayName, entryName string) string {
+	strip := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			switch r {
+			case '"', '\'', '\\', '$', '`':
+				return -1
+			}
+			return r
+		}, s)
+	}
+	return api.EnvironmentNameForEntry(strip(displayName), strip(entryName))
 }
 
 // sqlConnectionName is the `project:region:instance` name cloud-sql-proxy
