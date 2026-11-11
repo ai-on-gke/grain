@@ -1039,16 +1039,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	unitFlags := append([]string{}, unknownFlags...)
 	fs.Visit(func(f *flag.Flag) { unitFlags = append(unitFlags, "-"+f.Name) })
 	slices.Sort(unitFlags)
-	if !passed["secrets-backend"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_BACKEND")); env != "" {
-			*secretsBackend = env
-		}
-	}
-	if !passed["secrets-sm-prefix"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")); env != "" {
-			*secretsSMPrefix = env
-		}
-	}
+	envDefault(passed, "secrets-backend", "GRAIN_SECRETS_BACKEND", secretsBackend)
+	envDefault(passed, "secrets-sm-prefix", "GRAIN_SECRETS_SM_PREFIX", secretsSMPrefix)
 	if !passed["db-driver"] {
 		if env := os.Getenv("GRAIN_DB_DRIVER"); env != "" {
 			*dbDriver = env
@@ -1095,35 +1087,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*disableSelfUpgrade = v
 		}
 	}
-	if !passed["management-url"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_MANAGEMENT_URL")); env != "" {
-			*managementURL = env
-		}
-	}
-	if !passed["default-environment-name"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_DEFAULT_ENVIRONMENT_NAME")); env != "" {
-			*defaultEnvironmentName = env
-		}
-	}
-	if !passed["deployment-owner"] {
-		if env := strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv)); env != "" {
-			*deploymentOwner = env
-		}
-	}
-	if !passed["host-accounts"] {
-		if env := strings.TrimSpace(os.Getenv(ui.HostAccountsEnv)); env != "" {
-			*hostAccounts = env
-		}
-	}
+	envDefault(passed, "management-url", "GRAIN_MANAGEMENT_URL", managementURL)
+	envDefault(passed, "default-environment-name", "GRAIN_DEFAULT_ENVIRONMENT_NAME", defaultEnvironmentName)
+	envDefault(passed, "deployment-owner", ui.DeploymentOwnerEnv, deploymentOwner)
+	envDefault(passed, "host-accounts", ui.HostAccountsEnv, hostAccounts)
 	parsedHostAccounts, err := ui.ParseHostAccounts(*hostAccounts)
 	if err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
-	if !passed["object-store"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
-			*objectStoreURI = env
-		}
-	}
+	envDefault(passed, "object-store", "GRAIN_OBJECT_STORE", objectStoreURI)
 	if !passed["db-dsn"] {
 		if env := os.Getenv("GRAIN_DB_DSN"); env != "" {
 			*dbDSN = env
@@ -1343,13 +1315,4 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	}
 	cfg, err = local(cfg, passed)
 	return cfg, fs, unknownFlags, err
-}
-
-// checkConfig validates the flags parsed into cfg (daemon.CheckDaemonFlags plus
-// the CLI's own package-cache upstream syntax check).
-func checkConfig(cfg daemon.Config) error {
-	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
-		return err
-	}
-	return checkHubConfig(cfg)
 }

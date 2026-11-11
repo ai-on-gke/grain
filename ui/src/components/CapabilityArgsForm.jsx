@@ -518,7 +518,18 @@ function Field({
                 <Switch
                   id={id}
                   checked={value === true}
-                  onChange={(e) => onChange(e.target.checked)}
+                  onChange={(e) =>
+                    // Leave an unset optional boolean out of with: rather than
+                    // recording false; keep false when required or overriding a
+                    // default: true that the server would otherwise put back.
+                    onChange(
+                      e.target.checked
+                        ? true
+                        : required || schema?.default === true
+                          ? false
+                          : undefined,
+                    )
+                  }
                   inputProps={{ "data-arg": path, role: "switch" }}
                 />
               }
@@ -739,6 +750,7 @@ function ArrayField({
   name,
   root,
   schema,
+  required,
   value,
   onChange,
   errors,
@@ -813,7 +825,7 @@ function ArrayField({
             sx={{ mt: 0.5 }}
             onClick={() => {
               const next = items.filter((_, j) => j !== i);
-              update(next.length === 0 && !schema.minItems ? undefined : next);
+              update(next.length === 0 && !required ? undefined : next);
             }}
           >
             <CloseIcon fontSize="small" />
@@ -826,7 +838,7 @@ function ArrayField({
         onClick={() =>
           update([
             ...items,
-            initialValue(root, itemSchema) ??
+            initialValue(root, itemSchema, false, true) ??
               (itemSchema?.type === "string" ? "" : undefined),
           ])
         }
@@ -998,7 +1010,7 @@ function VariantField({
             onChange={(e) => {
               const i = Number(e.target.value);
               setPicked(i);
-              onChange(initialValue(root, options[i]));
+              onChange(initialValue(root, options[i], false, required));
             }}
           >
             {options.map((o, i) => (

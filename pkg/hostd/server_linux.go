@@ -781,6 +781,11 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpDrain:
+		// Answered before draining starts: with nothing running, the drain
+		// loop exits the process at once (and a handover re-execs it), and
+		// an answer written after it raced that exit -- a daemon then read
+		// EOF for a drain that had in fact happened (tests/agentdcompat).
+		_ = writeFrame(conn, frameOK, nil)
 		switch {
 		case req.Idle && req.Handover && s.canHandover():
 			s.StartHandover()
@@ -789,7 +794,6 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		default:
 			s.Drain()
 		}
-		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpSocketOwner:
 		_ = writeJSON(conn, frameSocketOwner, SocketOwner{PID: s.socketOwner(req.Inode)})

@@ -18,10 +18,12 @@ package ui
 // current brief (model.TaskContext,
 // design/design/durable-tasks.design.md#DT-15), read by the task view and
 // `grain task context`, and changed by `grain task compact` and
-// `grain task brief`.
+// `grain task brief`; and rolling a task over to a successor
+// (`grain rollover`, model.Store.Rollover).
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -88,15 +90,11 @@ func (c *Client) TaskContext(ctx context.Context, id string) (TaskContextView, e
 		BriefEdits:          edits,
 	}
 	if tc.CompactedThrough > 0 {
-		comments, err := c.Store.Comments(ctx, id)
+		n, err := c.Store.CountCommentsBefore(ctx, id, tc.CompactedThrough+1)
 		if err != nil {
 			return TaskContextView{}, err
 		}
-		for _, cm := range comments {
-			if cm.ID <= tc.CompactedThrough {
-				view.Summarised++
-			}
-		}
+		view.Summarised = n
 	}
 	return view, nil
 }
@@ -135,6 +133,31 @@ func (c *Client) SetTaskBrief(ctx context.Context, id string, by model.Principal
 		return TaskContextView{}, err
 	}
 	return c.TaskContext(ctx, id)
+}
+
+// RolloverTask rolls id over to a successor (model.Store.Rollover): a
+// fresh task carrying its current brief, handover and settings, with id
+// closed as rolled_over, under the name of whoever ctx says is asking.
+func (c *Client) RolloverTask(ctx context.Context, id string) (model.RolloverResult, error) {
+	id = model.NormalizeTaskID(id)
+	t, err := c.Store.GetTask(ctx, id)
+	if err != nil {
+		return model.RolloverResult{}, err
+	}
+	if t == nil {
+		return model.RolloverResult{}, &NotFoundError{ID: id}
+	}
+	result, err := c.Store.Rollover(ctx, id, c.requestActor(ctx), "", c.now())
+	if errors.Is(err, model.ErrRolloverRefused) {
+		return model.RolloverResult{}, validationErrorf("%s", err.Error())
+	}
+	if err != nil {
+		return model.RolloverResult{}, err
+	}
+	if c.Config.Wake != nil {
+		c.Config.Wake()
+	}
+	return result, nil
 }
 
 func contextActor(r *http.Request) model.Principal {
@@ -179,6 +202,15 @@ func (s *Server) handleSetTaskBrief(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+func (s *Server) handleRolloverTask(w http.ResponseWriter, r *http.Request) {
+	result, err := s.tasks.RolloverTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 // TaskContext is GET /api/tasks/{id}/context over the wire.
 func (c *HTTPClient) TaskContext(ctx context.Context, id string) (TaskContextView, error) {
 	var out TaskContextView
@@ -197,5 +229,12 @@ func (c *HTTPClient) CompactTask(ctx context.Context, id string, req CompactRequ
 func (c *HTTPClient) SetTaskBrief(ctx context.Context, id string, req BriefRequest) (TaskContextView, error) {
 	var out TaskContextView
 	err := c.do(ctx, http.MethodPost, "/api/tasks/"+url.PathEscape(id)+"/brief", req, &out)
+	return out, err
+}
+
+// RolloverTask is POST /api/tasks/{id}/rollover over the wire.
+func (c *HTTPClient) RolloverTask(ctx context.Context, id string) (model.RolloverResult, error) {
+	var out model.RolloverResult
+	err := c.do(ctx, http.MethodPost, "/api/tasks/"+url.PathEscape(id)+"/rollover", nil, &out)
 	return out, err
 }

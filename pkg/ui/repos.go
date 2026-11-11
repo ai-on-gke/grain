@@ -17,14 +17,17 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // AddRepoRequest is POST /api/repos' body.
@@ -167,6 +170,14 @@ func (c *Client) githubSpelling(repo model.RepoRef) (model.RepoRef, bool) {
 		// gives it; GitHub has no spelling of it to offer.
 		return repo, false
 	}
+	if repo.OffDefaultHost() != "" {
+		// RepoNames asks the default host by owner/name alone, and its
+		// answer carries no host: adopting it stored
+		// git.example.org/team/app as the default host's team/app, a
+		// different repository (grain/task-4249). Another host's
+		// repository is kept as written.
+		return repo, false
+	}
 	full, err := c.Config.RepoNames.RepoFullName(repo.Owner, repo.Name)
 	if err != nil {
 		return repo, false
@@ -197,8 +208,8 @@ func (c *Client) githubSpelling(repo model.RepoRef) (model.RepoRef, bool) {
 // (orchestrator.reconcileTargetRepos, model.OffAllowlistAtDispatchComment).
 //
 // This used to refuse outright while repo had a task still in play, and
-// now reports instead -- Settings.TargetReposStranded, the same answer
-// PUT /api/settings gives for the same act (Store.StrandedByTargetRepos).
+// now reports instead -- POST /api/repos/plan (PlanTargetRepos), which
+// the pane asks before it removes (Store.StrandedByTargetRepos).
 // Two reasons, and the first is that the refusal's premise expired:
 // it was written when nothing on the dispatch path read TargetRepos, so
 // removal really did hide live work rather than stop it, and since
@@ -267,6 +278,9 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 		return c.GetSettings(ctx)
 	}
 	if removingErr == nil {
+		if err := c.forgetRepoReleaseSecrets(removing); err != nil {
+			return Settings{}, err
+		}
 		if err := c.Store.ForgetRepo(ctx, removing); err != nil {
 			return Settings{}, err
 		}
@@ -279,6 +293,25 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 	}
 	c.triggerHubSync()
 	return c.GetSettings(ctx)
+}
+
+// forgetRepoReleaseSecrets deletes the values of repo's release secrets
+// before ForgetRepo drops the repo_config row that lists them. Without
+// this the values stayed in the encrypted store under the repository's
+// address with nothing left listing them, and a later re-add of the same
+// repository inherited them (grain/task-4249). The repository's whole
+// release namespace goes, not only the names its row lists: a value set
+// whose repo_config write then failed is stored but never listed, and
+// would otherwise survive the removal the same way.
+func (c *Client) forgetRepoReleaseSecrets(repo model.RepoRef) error {
+	if c.Config.Secrets == nil {
+		return nil
+	}
+	namespace, _ := ci.ReleaseSecretAddress(repo.String(), "_")
+	if err := c.Config.Secrets.DeleteSecret(namespace); err != nil && !errors.Is(err, secrets.ErrNoSecret) {
+		return fmt.Errorf("forgetting the release secrets of %s: %w", repo, err)
+	}
+	return nil
 }
 
 // RepoDefaults is one repo's own task defaults -- what GET
@@ -2096,6 +2129,68 @@ func (s *Server) handleAddTargetRepo(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoveTargetRepo answers DELETE /api/repos/{owner}/{name}: take a
 // repo off a team's targets (?team=, or the default team without one).
+// PlanTargetReposRequest is the body of POST /api/repos/plan: the
+// target repo list an add or a remove is about to leave behind.
+type PlanTargetReposRequest struct {
+	TargetRepos []string `json:"targetRepos"`
+}
+
+// StrandedRepo is one repository a proposed target repo list stops
+// naming, with the work stored against it (model.StrandedWork) and the
+// sentence the Remove and first-Add confirmations show for it.
+type StrandedRepo struct {
+	Repo              string   `json:"repo"`
+	Tasks             []string `json:"tasks,omitempty"`
+	Schedules         []string `json:"schedules,omitempty"`
+	QualificationPlan bool     `json:"qualificationPlan,omitempty"`
+	Summary           string   `json:"summary"`
+}
+
+// TargetReposPlan is what POST /api/repos/plan answers.
+type TargetReposPlan struct {
+	TargetReposStranded []StrandedRepo `json:"targetReposStranded"`
+}
+
+// PlanTargetRepos reports what writing proposed as the deployment's
+// target repo list would strand, without writing it.
+//
+// The repos pane's Remove and the first Add (which narrows an
+// unrestricted deployment to one repository) both confirm with this.
+// Until grain/task-4288 they asked POST /api/settings/plan for it. That
+// route lost targetRepos when the list moved under /api/repos, so the
+// question always failed and the confirmation never named the tasks,
+// schedules and qualification plan the click would strand.
+func (c *Client) PlanTargetRepos(ctx context.Context, req PlanTargetReposRequest) (TargetReposPlan, error) {
+	out := TargetReposPlan{TargetReposStranded: []StrandedRepo{}}
+	if c.Store == nil {
+		return out, nil
+	}
+	stranded, err := c.Store.StrandedByTargetRepos(ctx, req.TargetRepos)
+	if err != nil {
+		return out, err
+	}
+	for _, w := range stranded {
+		out.TargetReposStranded = append(out.TargetReposStranded, StrandedRepo{
+			Repo: w.Repo.String(), Tasks: w.Tasks, Schedules: w.Schedules,
+			QualificationPlan: w.QualificationPlan, Summary: w.Summary(),
+		})
+	}
+	return out, nil
+}
+
+func (s *Server) handlePlanTargetRepos(w http.ResponseWriter, r *http.Request) {
+	var req PlanTargetReposRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	plan, err := s.tasks.PlanTargetRepos(r.Context(), req)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
 func (s *Server) handleRemoveTargetRepo(w http.ResponseWriter, r *http.Request) {
 	repo := r.PathValue("owner") + "/" + r.PathValue("name")
 	teamID := r.URL.Query().Get("team")

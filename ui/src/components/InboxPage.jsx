@@ -23,6 +23,7 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
+import { taskDetailPath } from "../taskDetailPages.js";
 import AccessGate from "./AccessGate.jsx";
 import LinkedNote from "../linkedNote.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../taskRefs.js";
@@ -1286,6 +1287,26 @@ function GateOverridesGroup({ tasks, onOpenTask }) {
   );
 }
 
+// preferNextInbox is the per-browser default the new UI's "Default to new
+// UI" switch sets (ui-ng's ThemeService, PREFER_NEXT_STORAGE_KEY): with it
+// on, opening the classic Inbox goes to /next/inbox instead -- unless the
+// address says ?classic=1, which is how the new Inbox links back here.
+// The query is read when this module loads, before App's own routing
+// rewrites the address without it.
+const PREFER_NEXT_KEY = "grain.ui.preferNext";
+const classicAsked =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location?.search || "").has("classic");
+
+export function preferNextInbox() {
+  if (classicAsked) return false;
+  try {
+    return localStorage.getItem(PREFER_NEXT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function InboxPage({
   tasks,
   tasksLoaded = true,
@@ -1307,6 +1328,11 @@ export default function InboxPage({
   const groups = groupTasks(waiting);
   const overriddenTasks = (tasks || []).filter((t) => Boolean(t?.gateOverride));
   const [localScripts, reloadLocalScripts] = usePendingLocalScripts();
+  useEffect(() => {
+    if (window.location?.pathname === "/inbox" && preferNextInbox()) {
+      window.location.replace("/next/inbox");
+    }
+  }, []);
   const syncFailure = config?.stateRepoSyncFailure || null;
   const pendingReleases = notifications.filter(
     (n) => pendingReleaseOf(n) !== null,
@@ -1359,6 +1385,13 @@ export default function InboxPage({
         icon={<NavGlyph kind="inbox" size={20} />}
         action={<NotificationSwitch />}
       />
+      {/* The Angular rewrite's Inbox (ui-ng/, served at /next/inbox;
+          design/design/angular-ui.design.md). Same session, same API. */}
+      <p className="inbox-next-callout">
+        <a href="/next/inbox" className="inbox-try-next">
+          Try the new Inbox
+        </a>
+      </p>
       {/* Deliberately the same sentence it always was, and about tasks
           only: a line promising that every base branch is tested is the
           exact reassurance this page was extended to stop giving. */}
@@ -1646,7 +1679,7 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
       if (!open) prefetchedIdRef.current = t.id;
       setFailed(false);
       Promise.resolve()
-        .then(() => api(`/api/tasks/${t.id}`))
+        .then(() => api(taskDetailPath(t.id)))
         .then((d) => {
           if (live && d) setDetail(d);
         })

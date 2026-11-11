@@ -17,17 +17,17 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"slices"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-// Gemini rejects eagerly registered MCP tool declarations when any "array"
-// schema omits "items". Verify every tool served by `grain mcp` defines an
-// object "items" schema on every array node.
-func TestExternalMCPToolSchemasSpecifyArrayItems(t *testing.T) {
+// `grain mcp` is an MCP surface a model is handed too, so it is held to
+// the same function-declaration rules as the controller's
+// (pkg/ui's TestMCPToolSurfacesConformToModelFunctionDeclarationRules):
+// a provider that refuses one declaration refuses the whole list.
+func TestExternalMCPToolSurfaceConformsToModelFunctionDeclarationRules(t *testing.T) {
 	t.Parallel()
 	reg := newExternalMCPRegistry(ui.NewHTTPClient("http://127.0.0.1:1"))
 	raw := reg.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
@@ -46,42 +46,8 @@ func TestExternalMCPToolSchemasSpecifyArrayItems(t *testing.T) {
 		t.Fatal("tools/list returned no tools")
 	}
 	for _, tool := range resp.Result.Tools {
-		assertExternalArraySchemasHaveItems(t, tool.Name+".inputSchema", tool.InputSchema)
-	}
-}
-
-func assertExternalArraySchemasHaveItems(t *testing.T, path string, node any) {
-	t.Helper()
-	switch v := node.(type) {
-	case map[string]any:
-		if externalSchemaHasArrayType(v["type"]) {
-			items, ok := v["items"].(map[string]any)
-			if !ok || items == nil {
-				t.Errorf("%s: array schema must define an object \"items\" field: %+v", path, v)
-			}
-		}
-		for k, child := range v {
-			assertExternalArraySchemasHaveItems(t, path+"."+k, child)
-		}
-	case []any:
-		for i, child := range v {
-			assertExternalArraySchemasHaveItems(t, fmt.Sprintf("%s[%d]", path, i), child)
+		for _, p := range mcp.FunctionDeclarationProblems(tool.Name, tool.InputSchema) {
+			t.Errorf("%s: %s", tool.Name, p)
 		}
 	}
-}
-
-func externalSchemaHasArrayType(raw any) bool {
-	switch typ := raw.(type) {
-	case string:
-		return typ == "array"
-	case []any:
-		for _, elem := range typ {
-			if s, _ := elem.(string); s == "array" {
-				return true
-			}
-		}
-	case []string:
-		return slices.Contains(typ, "array")
-	}
-	return false
 }

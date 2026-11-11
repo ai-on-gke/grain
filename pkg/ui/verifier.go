@@ -51,8 +51,10 @@ type AccessCodePrecedence interface {
 // it could not check the header at all rather than found it bad: a
 // backend it consults that is not reachable yet, say just after a
 // restart. Unavailable reporting true makes the refusal a 503 with
-// Retry-After and a "starting up" page rather than the 401 a bad
-// signature gets. It is still a refusal: the request is not admitted
+// Retry-After and a "temporarily unavailable" page (or verifier_unavailable
+// JSON) rather than the 401 a bad signature gets; the error may also have
+// UnavailableReason() string, a machine-readable name for what was not
+// reachable ("tonic_unreachable"), which the JSON carries as `reason`. It is still a refusal: the request is not admitted
 // and neither the access code nor another verifier is consulted.
 type VerifierUnavailableError interface {
 	error

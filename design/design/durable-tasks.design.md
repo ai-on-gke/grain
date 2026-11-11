@@ -1012,13 +1012,13 @@ nothing load the whole of it at once. Where that stands:
 |---|---|---|
 | Dispatch prompt | Bounded: the cursor, then the positional cut | Done here |
 | `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
-| `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID) and `?attempts_limit=` answer the newest page, with `olderComments`/`olderAttempts` counts (grain/task-4194). The detail is still built whole, once per change token, and cached | Build the page from the store (`Store.CommentsBefore`), not from the cached whole detail. The derived fields (transitions, the ask a task is parked on, session names) need their own bounded reads first |
+| `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
 | `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
-| Task page (UI) | Renders what the detail returns | Lazy-load the thread and the run list; summarised comments collapsed under the handover |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
-| Reconcilers reading all comments (`WriteTaskHandover`, `relayHandover`, wait targets) | Read the whole thread to find the last handover | Read `handover_version`, and the last handover by index |
+| Reconcilers and tail readers (`WriteTaskHandover`, `relayHandover`, `CarryConsoleSessionHandover`, `TaskHandoverAge`, wait targets, console sessions, `cycle.go`, `Client.Task`, session titles, task owner) | Read `LatestHandover`, `LatestComment`, `Comment(id)`, `FirstHumanComment` or backwards pages (`CommentsBefore`) by index | Done (grain/task-4194, grain/task-4219) |
 
 Measured by grain/task-4194 on 2026-11-10, through `GET /api/tasks/{id}`:
 
@@ -1077,26 +1077,45 @@ current brief carried with the handover. It is never automatic in the
 middle of a conversation: past the limit, the director is told and
 rolls over when the conversation next rests.
 
-**Status:** designed here, not implemented in grain/task-4107. It is the
-storage backstop, not something prompts or page loads depend on.
+**Status:** implemented in grain/task-4195 (`model.Store.Rollover`,
+`orchestrator.reconcileRollover`, `grain rollover`,
+`POST /api/tasks/{id}/rollover` under `dispatch:write`, beside compaction,
+for the reason under "Routes and scopes"). As built:
+
+- The successor and the predecessor are linked both ways by
+  `rolled-over-from` / `rolled-over-to` (`model.LinkRolledOverFrom`,
+  `LinkRolledOverTo`), provenance only like the supersede pair, and the
+  task view carries `rolledOverFrom` / `rolledOverTo`. A wait on the
+  predecessor reports outcome `rolled_over` and `rolledOverTo`.
+- The successor takes the predecessor's links except its own lineage
+  (continues, supersedes, superseded-by, reverted-by, ported-by and the
+  rollover pair). Its change links (the pull request or changelist) and
+  its goal *move*; tags (which bind a schedule's standing task) are
+  copied, and with the predecessor closed only the successor answers to
+  them.
+- Rollover is refused for a task that is not durable (closing one asks
+  `tasks:write`, which `dispatch:write` must not stand in for), a closed
+  task, a running one (the reconciler
+  tries again once the run ends) and a console session, whose session
+  tag cannot be shared and which already rolls over by being closed and
+  refiled. Telling the director it is past the limit is not built yet.
+- The UI banner on `/tasks/N` is follow-up work under the deployment's
+  screenshot rule; the API already answers with `rolledOverTo`.
 
 ### Follow-up work
 
 - A compaction-only dispatch for a person's request on a resting task,
   so the request does not wait for the next wake.
-- The rest of paging the record (the table above): the task detail
-  built from a store page rather than trimmed from the whole, the task
-  page loading 50 comments and 20 runs and fetching older ones on
-  demand, and the reconcilers reading the last handover by index.
-- UI: the Compact button, the brief editor with its edit history,
-  summarised comments collapsed under the handover, and the
+- `grain task read` / `read_grain_task` summary default and `conversation, after:` paging (the remaining open row in the table above).
+- UI: the Compact button, the brief editor with its edit history, and the
   stale-handover badge, all under the deployment's screenshot rule.
   Done in grain/task-4193: a durable task's page shows the current brief
   in place of the description (the original and the edit history folded
   under it), a Context panel with the handover's version, age, stale
   badge, Compact and Write handover…, and summarised comments collapsed
   in place in the timeline (`ui/src/components/detail/TaskContext.jsx`).
-- Rollover as designed above.
+- Rollover's task-page banner, and telling a console session past the
+  limit that it should be closed and refiled.
 
 ## Store and schema changes (summary)
 
@@ -1111,6 +1130,7 @@ storage backstop, not something prompts or page loads depend on.
 | `task_run_api_call`, `task_run_report_check`; `GET /api/pipeline/changes` | DT-S8, DT-S11 |
 | `Config.JudgementModel`; symbolic model `judgement` | DT-S9 |
 | `task_context`, `task_brief_edit` (schema 136); `Config.AutoCompactBytes`; `GET /api/tasks/{id}/context`, `POST /api/tasks/{id}/compact`, `POST /api/tasks/{id}/brief` | DT-15 |
+| `rolled-over-from` / `rolled-over-to` task links (no schema change); `POST /api/tasks/{id}/rollover` | DT-15 |
 
 Each table is new, so older stores gain empty tables. The one column added
 to an existing table, `task_run.suspend_kind`, is nullable and backfilled

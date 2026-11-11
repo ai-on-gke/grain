@@ -534,8 +534,9 @@ func TestCutoverKeepsTakingStartsAndExitsWhenNothingRuns(t *testing.T) {
 	if err := ts.client.Cutover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if h, _ := ts.client.Hello(context.Background()); h.Draining || !h.Cutover {
-		t.Errorf("Hello during a cutover = %+v, want it cutting over and taking starts", h)
+	if h, err := ts.client.Hello(context.Background()); err != nil || h.Draining || !h.Cutover {
+		t.Errorf("Hello during a cutover = %+v, %v; want it cutting over and taking starts\nhostd's log:\n%s",
+			h, err, ts.logs.String())
 	}
 	// A start during the cutover runs, and holds it open as the first
 	// run ends.

@@ -108,6 +108,28 @@ func stage1Watched(ctx context.Context, store *model.Store, run ConcludedGitHubW
 	return "", false, nil
 }
 
+// stage1RunSkipped reports whether a concluded run is one nightly.yml's
+// idle-gate turned off: the scheduled run on the default branch while an
+// rc's Stage 1 ran in the last 24h, where idle-gate passed and every other
+// job, the stage-1 verdict included, was skipped. It carries no Stage 1
+// verdict, so it neither files a repair nor meets a nightly-green goal.
+func stage1RunSkipped(jobs []model.GitHubCIJob) bool {
+	skipped := false
+	for _, j := range jobs {
+		if j.Failed() {
+			return false
+		}
+		if strings.EqualFold(strings.TrimSpace(j.JobName), "idle-gate") {
+			continue
+		}
+		if !strings.EqualFold(j.Conclusion, "skipped") {
+			return false
+		}
+		skipped = true
+	}
+	return skipped
+}
+
 // stage1JobsGreen reports whether every job of a concluded run passed or
 // was skipped: a cancelled job is not a verdict.
 func stage1JobsGreen(conclusion string, jobs []model.GitHubCIJob) bool {
@@ -137,6 +159,10 @@ func handleStage1Verdict(ctx context.Context, deps Deps, run ConcludedGitHubWork
 	base, ok, err := stage1Watched(ctx, deps.Store, run)
 	if err != nil || !ok || !stage1Ref(run.Ref, base) {
 		return err
+	}
+	if !model.GitHubCIFailed(run.Conclusion) && stage1RunSkipped(jobs) {
+		// idle-gate turned this run off: no verdict either way.
+		return nil
 	}
 	if stage1JobsGreen(run.Conclusion, jobs) {
 		return checkNightlyGreenGoals(ctx, deps, run.Repo, now)
@@ -285,18 +311,25 @@ func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGo
 	if err != nil {
 		return goalReading{}, err
 	}
-	// Jobs come newest first; the first matching run is the newest.
-	var runID int64
-	var run []model.GitHubCIJob
+	// Jobs come newest first; the first matching run that idle-gate did not
+	// turn off is the newest verdict.
+	var order []int64
+	byRun := map[int64][]model.GitHubCIJob{}
 	for _, j := range jobs {
 		if !strings.EqualFold(j.Workflow, g.Spec.Workflow) || j.RunID == 0 || !stage1Ref(j.Ref, "") && !isDefaultLike(j.Ref) {
 			continue
 		}
-		if runID == 0 {
-			runID = j.RunID
+		if _, seen := byRun[j.RunID]; !seen {
+			order = append(order, j.RunID)
 		}
-		if j.RunID == runID {
-			run = append(run, j)
+		byRun[j.RunID] = append(byRun[j.RunID], j)
+	}
+	var runID int64
+	var run []model.GitHubCIJob
+	for _, id := range order {
+		if !stage1RunSkipped(byRun[id]) {
+			runID, run = id, byRun[id]
+			break
 		}
 	}
 	if runID == 0 {
