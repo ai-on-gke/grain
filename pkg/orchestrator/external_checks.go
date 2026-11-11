@@ -32,11 +32,6 @@ func SetExternalCheckStallThreshold(d time.Duration) func() {
 	return forge.SetExternalCheckStallThreshold(d)
 }
 
-// ExternalCheckStallThreshold returns the active external-check stall threshold.
-func ExternalCheckStallThreshold() time.Duration {
-	return forge.ExternalCheckStallThreshold()
-}
-
 const externalStallEscalatedOnly = "escalated-without-nudge"
 
 // externalNudgeMatchesHead reports whether obs records an external-check nudge

@@ -242,6 +242,9 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			}
 			summary := t.QuestionSummary
 			if summary == "" {
+				summary = t.NoteSummary
+			}
+			if summary == "" {
 				summary = "reply to run it again, or acknowledge to close it"
 			}
 			// A question's item links to the question itself, not just

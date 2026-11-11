@@ -328,13 +328,6 @@ func ProcessResultWithReach(ctx context.Context, store *model.Store, reach *gitp
 	return processResult(ctx, store, reach, client, nil, task, result, runID, now)
 }
 
-// ProcessResultWithAppBot exercises processResult with an explicit GitHub
-// App bot identity resolver.
-func ProcessResultWithAppBot(ctx context.Context, store *model.Store, client github.Client,
-	appBot AppBotIdentityFunc, task model.Task, result *agent.Result, runID string, now time.Time) error {
-	return processResult(ctx, store, nil, client, appBot, task, result, runID, now)
-}
-
 // ProcessResultFrom is processResult for a run dispatched with its task
 // branch already at preRunBranchSHA.
 func ProcessResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,

@@ -547,6 +547,15 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// NoteSummary is QuestionSummary for an awaiting_reply task that asked
+	// nothing but answered in a comment: the one-line summary its run gave
+	// that closing note (comment_on_issue's `summary`, model.Store.NoteSummary),
+	// shown on the inbox row, the task list's status line and a
+	// notification's title in place of "answered in a comment". Never
+	// derived from the note's body; "" when the note has no summary, and
+	// whenever QuestionSummary, a stopped turn, an access request or an
+	// unanswered comment already says what the task is waiting on.
+	NoteSummary string `json:"noteSummary,omitempty"`
 	// QuestionCommentID is the id of the comment an awaiting_reply task is
 	// parked on (Observation.PendingQuestionCommentID) -- a question, a
 	// credential or access request, or a stopped turn -- so a row can link

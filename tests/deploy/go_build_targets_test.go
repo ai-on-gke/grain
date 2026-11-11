@@ -457,7 +457,7 @@ func TestGoModRequirementsAreReadWithoutTheLinesThatAreNotOne(t *testing.T) {
 	}
 	for _, module := range required {
 		switch module {
-		case mainModule, "go", "1.26.6", "toolchain", "go1.26.10", "(", ")", "replace", "module":
+		case mainModule, "go", "1.26.6", "toolchain", "go1.26.11", "(", ")", "replace", "module":
 			t.Errorf("%q was read as a requirement of go.mod, and it is not one", module)
 		}
 	}

@@ -640,14 +640,6 @@ var (
 	enrollHTTPProvider EnrollHTTPProvider
 )
 
-// RegisterEnrollHTTPClient registers an edition's HTTP client provider for
-// host enrollment handshakes.
-func RegisterEnrollHTTPClient(fn EnrollHTTPProvider) {
-	enrollHTTPMu.Lock()
-	enrollHTTPProvider = fn
-	enrollHTTPMu.Unlock()
-}
-
 // DetectAgentCLIs probes PATH for known agent CLIs on this host.
 func DetectAgentCLIs() []string {
 	candidates := []string{"agy", "claude", "codex", "gemini", "antigravity"}
