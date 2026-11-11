@@ -85,6 +85,7 @@ root-installed host (`allowlist.go`). Parsed **strictly**
 | `pass_env`, `set_env` | host-supplied variables the daemon may not override |
 | `max_duration` | cap on one process's life (24 h default) |
 | `drain_cap`, `capacity`, `labels` | drain bound, concurrent CLI runs, display labels |
+| `logins` | CLI login files on the host (`name -> path`, `~/` allowed), reported by name in `Hello.logins` and allowed as `stage symlink` targets (`Hello.login_targets`; built-in table when absent) |
 
 ### Built-in entries (local hostd only)
 
@@ -240,6 +241,7 @@ that predates the list is credited from its protocol version
 | `agents_only` | contract v1 | `Hello.agents_only` is authoritative | treats it as unknown |
 | `features` | contract v1 | `Hello.features` itself, so silence about a feature is a statement | infers features from the protocol version |
 | `env_open` | contract v1 | `env: ["*"]` (any variable outside the frozen deny set), `~/`-relative `path`/`paths_under`/`cwd_under`, and ignored `x-*` annotation keys | installer and Settings snippets write closed `env:` lists and absolute paths |
+| `logins_map` | contract v1+ | top-level `logins:` map in the allowlist; `Hello.login_targets` and `stage symlink` accept any regular file it names (`Hello.codex_auth` deprecated) | falls back to `Hello.codex_auth` for codex's login |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -320,7 +322,7 @@ clis:
                                     # minus the frozen deny set below
     pass_env: [HTTPS_PROXY, NO_PROXY]
     max_duration: 12h
-logins:                             # proposed (V3, V4)
+logins:                             # V3, V4 (feature logins_map)
   antigravity: ~/.gemini/oauth_creds.json
   codex: ~/.codex/auth.json
 x-notes: anything                   # proposed: x-* keys are ignored
@@ -479,7 +481,7 @@ Filed as separate tasks, each after this one lands:
    policy file (published tools, host-tool grants, stop-rule parameters);
    agentd's `agy-tool-hook` and `claude-stop-hook` evaluate it; feature
    `hook_policy`; the daemon keeps today's behaviour for hosts without it.
-2. **V3 + V4: host-owned `logins:`** -- generic login discovery and
+2. **V3 + V4: host-owned `logins:`** *(done)* -- generic login discovery and
    `stage symlink` targets from the allowlist; feature `logins_map`;
    deprecate `Hello.codex_auth`; the daemon reads `Has(FeatureLogins)` to
    tell "none" from "unknown".
@@ -513,6 +515,7 @@ feature logins
 feature agents_only
 feature features
 feature env_open
+feature logins_map
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]
@@ -545,6 +548,7 @@ json Hello.grain string [stage]
 json Hello.stage_root string [stage]
 json Hello.codex_auth string [stage]
 json Hello.logins []string [logins]
+json Hello.login_targets map[string]string [logins_map]
 json Hello.agents_only bool [agents_only]
 json Hello.features []hostd.Feature [features]
 json Process.id string [detach]
@@ -604,6 +608,7 @@ yaml Allowlist.capabilities map[string]*hostd.Entry [start]
 yaml Allowlist.drain_cap time.Duration [drain]
 yaml Allowlist.capacity int [start]
 yaml Allowlist.labels map[string]string [start]
+yaml Allowlist.logins map[string]string [logins_map]
 yaml Entry.path string [start]
 yaml Entry.command string [start]
 yaml Entry.args []string [start]

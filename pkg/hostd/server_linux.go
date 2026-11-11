@@ -594,10 +594,10 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		h.Cutover = !h.Draining && s.CuttingOver()
 		h.Capacity, h.Labels = a.Capacity, a.Labels
 		describeCopies(ctx, &h, s.CurrentLink)
-		h.Logins = ambientLogins()
+		h.Logins = a.ambientLogins()
 		h.AgentsOnly = s.AgentsOnly
 		if sessionMux(ctx) != nil {
-			s.describeRemote(&h)
+			s.describeRemote(&h, a)
 		}
 		if req.Hello != nil {
 			if err := Compatible(h, *req.Hello); err != nil {
@@ -637,7 +637,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			s.refuse(conn, "stage is served only over a session hostd dialed out on (grain hostd -server)")
 			return
 		}
-		_ = writeJSON(conn, frameStaged, s.stage(req.Stage))
+		_ = writeJSON(conn, frameStaged, s.stageWithAllowlist(req.Stage, a))
 		return
 	case OpListen:
 		m := sessionMux(ctx)
