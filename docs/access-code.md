@@ -451,9 +451,8 @@ which is the owner the daemon expects.
 without the access code too: an enrolling host signs its join and poll
 requests with its generated Ed25519 keypair, presents a shared `ghe_...`
 enrollment code (which grants nothing except filing a pending join request)
-plus a verified enrolling identity (from the proxy `IdentityVerifier`,
-`ui.RegisterHostJoinVerifier`, or a GitHub device-flow token verified
-server-side), and waits for the deployment owner to accept it. For
+plus a verified enrolling identity (from the proxy `IdentityVerifier` or a
+GitHub device-flow token verified server-side), and waits for the deployment owner to accept it. For
 legacy per-host token installs, the script reads the token on the machine
 itself from stdin or `$GRAIN_HOSTD_TOKEN`; `--release` and `--image` are
 filled in only for an admitted caller or passed on the command line.

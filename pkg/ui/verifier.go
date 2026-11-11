@@ -206,16 +206,6 @@ func WithIAPAudience(audience string) IAPVerifierOption {
 	return webauth.WithIAPAudience(audience)
 }
 
-// WithIAPIssuer pins the expected JWT issuer on an IAP IdentityVerifier.
-func WithIAPIssuer(issuer string) IAPVerifierOption {
-	return webauth.WithIAPIssuer(issuer)
-}
-
-// WithIAPKeysURL pins the public-key endpoint URL on an IAP IdentityVerifier.
-func WithIAPKeysURL(keysURL string) IAPVerifierOption {
-	return webauth.WithIAPKeysURL(keysURL)
-}
-
 type iapVerifier struct {
 	inner *webauth.IAPVerifier
 }
@@ -263,44 +253,11 @@ func (v *iapVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 // HubVerifierOption configures a registry IdentityVerifier created by NewHubVerifier.
 type HubVerifierOption = webauth.HubVerifierOption
 
-// WithHubValidator overrides JWT validation on a registry IdentityVerifier.
-func WithHubValidator(v HubValidator) HubVerifierOption {
-	return webauth.WithHubValidator(v)
-}
-
-// WithHubAudience pins an expected single-URL audience on a registry
-// IdentityVerifier, taking precedence over request/package defaults.
-func WithHubAudience(audience string) HubVerifierOption {
-	return webauth.WithHubAudience(audience)
-}
-
-// WithHubIssuer pins the expected JWT issuer on a registry IdentityVerifier.
-func WithHubIssuer(issuer string) HubVerifierOption {
-	return webauth.WithHubIssuer(issuer)
-}
-
-// WithHubKeysURL pins the JWKS endpoint URL on a registry IdentityVerifier.
-func WithHubKeysURL(keysURL string) HubVerifierOption {
-	return webauth.WithHubKeysURL(keysURL)
-}
-
-// WithHubVerifierHTTPClient pins an HTTP client for fetching JWKS keys on
-// a registry IdentityVerifier.
-func WithHubVerifierHTTPClient(client *http.Client) HubVerifierOption {
-	return webauth.WithHubVerifierHTTPClient(client)
-}
-
 type hubVerifier struct {
 	inner *webauth.HubVerifier
 }
 
 var defaultHubVerifier IdentityVerifier = &hubVerifier{inner: webauth.NewHubVerifier()}
-
-// NewHubVerifier constructs an IdentityVerifier for grain-registry
-// (X-Grain-Registry-Assertion).
-func NewHubVerifier(opts ...HubVerifierOption) IdentityVerifier {
-	return &hubVerifier{inner: webauth.NewHubVerifier(opts...)}
-}
 
 func (v *hubVerifier) Name() string {
 	return string(AuthMethodHub)

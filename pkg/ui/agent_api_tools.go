@@ -39,7 +39,7 @@ import (
 // parameters, its query and its body as arguments. Their names,
 // descriptions and input schemas are what grain_explore_scope advertises
 // on POST /api/mcp (mcp_endpoint.go), where grain_invoke dispatches them
-// in-process through s.mux, and what ExternalAgentAPITools serves as one
+// in-process through s.mux, and what externalAgentAPITools serves as one
 // tool per route on POST /mcp. Either way the route runs exactly as the
 // UI's does -- same handler, same validation, same side effects -- and
 // agentAPIGate holds the call to the caller's grants and records it.

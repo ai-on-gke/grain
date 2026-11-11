@@ -18,6 +18,7 @@ pkg/webauth/iap.go:WithIAPVerifierHTTPClient  # the edition's hub delegation pas
 # Reached through an interface, which deadcode does not see as a use.
 pkg/lifecycle/lifecycle.go:Registry.Refresh  # satisfies ui.Lifecycles
 pkg/orchestrator/serving_test.go:dialableRunner.DialStream  # satisfies streamRunner for serving.go's type assertion
+pkg/capability/geminikey/geminikey.go:Capability.ScarceResourceProvider  # marker method; model.IsScarceResourceProvider type-asserts model.ScarceResourceProvider
 
 # Run from build files and CI, not imported.
 ui/e2e/screenshot.mjs  # make ui-screenshots

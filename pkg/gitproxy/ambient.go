@@ -982,10 +982,6 @@ func ambientAccount() string {
 	return name + " on " + host
 }
 
-// AmbientHome is the account's real home directory: where its gh login
-// (.config/gh/hosts.yml) and git config live.
-func AmbientHome() string { return ambientHome() }
-
 // ambientHome is the account's real home directory: where its gh login
 // (.config/gh/hosts.yml) and git config live. A host-mode unit points the
 // daemon's HOME into its data directory (scripts/setup.sh), where no gh

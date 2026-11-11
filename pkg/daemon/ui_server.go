@@ -190,11 +190,6 @@ func CheckUIRequireVerifier(cfg Config) error {
 	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 }
 
-// CheckUIRequireIAP is an alias for CheckUIRequireVerifier.
-func CheckUIRequireIAP(cfg Config) error {
-	return CheckUIRequireVerifier(cfg)
-}
-
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
 // frontend -- on addr, over the same store RunCycle dispatches against,
 // returning a shutdown func the same shape startGitProxy's own is.

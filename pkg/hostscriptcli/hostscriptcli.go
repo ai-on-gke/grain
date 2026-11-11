@@ -208,13 +208,6 @@ func list(dir string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// Call sends argv to d's endpoint and replays the answer: "o <bytes>"
-// frames to stdout and "e <bytes>" to stderr as they arrive, then the
-// status of "x <status>". A call with no exit frame is ExitProtocol.
-func Call(d Descriptor, argv []string, stdout, stderr io.Writer) int {
-	return CallWithStdin(d, argv, nil, stdout, stderr)
-}
-
 // CallWithStdin is Call, also forwarding stdin when stdin is non-nil.
 func CallWithStdin(d Descriptor, argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var head strings.Builder
