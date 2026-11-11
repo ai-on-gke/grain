@@ -27,6 +27,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // attributedRoute is one write path's row in operator-attribution spec
@@ -738,6 +739,37 @@ var attributedRoutes = map[string]attributedRoute{
 			}
 			return p.By
 		},
+	},
+	"DELETE /api/upgrade/current": {
+		client: func(t *testing.T) *ui.Client {
+			t.Helper()
+			client, _, _ := testClient(t)
+			dir := t.TempDir()
+			up := upgrade.New(upgrade.Config{
+				GraceWindow: 30 * time.Second,
+				Image: &upgrade.ImageConfig{
+					Repository: "docker.io/grainai/grain",
+					RefFile:    dir + "/image.env",
+					PullCmd:    []string{"true"},
+				},
+				StatusFile: dir + "/upgrade-status.json",
+			})
+			t.Cleanup(func() { _, _ = up.Cancel("test-cleanup", "") })
+			client.Config.Upgrader = up
+			return client
+		},
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			up := client.Config.Upgrader.(*upgrade.Upgrader)
+			_, _ = up.Cancel("test-reset", "")
+			if err := up.Start("main"); err != nil {
+				t.Fatalf("starting upgrade for cancel test: %v", err)
+			}
+			return ""
+		},
+		body:        `{"reason":"started by mistake"}`,
+		agentGrants: []string{"api:deployment:upgrade"},
+		recorded:    lastConfigAudit,
 	},
 	"PUT /api/settings": {
 		setup: func(t *testing.T, client *ui.Client, _ sender) string {

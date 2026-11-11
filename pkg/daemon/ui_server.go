@@ -340,6 +340,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		DBDriver:                   cfg.DbDriver,
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
+		ReleaseApprovalKMSKey:      cfg.ReleaseApprovalKMSKey,
 		SourceDB:                   db,
 		// The fixed set grain ships providers for, plus the api rows appended
 		// last as a marker that this picker offers the agent API (pickerCapabilities).

@@ -43,6 +43,7 @@ import { earlierButtonLabel } from "../taskDetailPages.js";
 import { nameScrollbars } from "../chatScrollbars.js";
 import { commentUrl } from "../commentLinks.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
+import { useViewerLabel } from "../ViewerContext.jsx";
 import { formatDateTime } from "../time.js";
 import { isTaskPaused } from "../state.js";
 import AttachmentLinks from "./AttachmentLinks.jsx";
@@ -127,6 +128,7 @@ export default function TaskChat({
 }) {
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const zone = useTimeZone();
+  const viewerLabel = useViewerLabel();
   // Keyed on `t` itself, which is exactly as stable as the conversation
   // is: App polls this task every three seconds and writes the result
   // through keepIfSame (poll.js), so an unchanged task keeps its
@@ -484,6 +486,11 @@ export default function TaskChat({
   // land in the order they were typed.
   const post = async (sent, files) => {
     const body = sent.text;
+    // The sender's own label (ViewerContext.jsx), which is the one the
+    // server's copy will carry: a console session's task is grain's, so
+    // its author would put grain's name on the operator's message.
+    const pendingSender =
+      viewerLabel || t.authorLabel || t.creator || t.author || "human";
     const serverComments = t.comments || [];
     const afterCommentLen = serverComments.length;
     const afterMaxId = serverComments.reduce(
@@ -503,7 +510,7 @@ export default function TaskChat({
           kind: "message",
           at: new Date(),
           direction: "outgoing",
-          sender: t.authorLabel || t.creator || t.author || "human",
+          sender: pendingSender,
           body,
           attachments: [],
           afterCommentLen,
@@ -543,7 +550,7 @@ export default function TaskChat({
             kind: "message",
             at: new Date(),
             direction: "outgoing",
-            sender: t.authorLabel || t.creator || t.author || "human",
+            sender: pendingSender,
             body: body.trim() ? body : files.map((f) => f.name).join(", "),
             attachments: [],
             afterCommentLen,

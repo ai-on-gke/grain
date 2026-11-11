@@ -1,0 +1,13 @@
+schema:  133, which is what this build of grain knows
+loaded:  47 rows across 10 tables
+  grain_config                 1
+  repo_config                  2
+  schedule                     6
+  schedule_grant               23
+  schedule_read                6
+  schedule_sequence            1
+  template                     1
+  template_grant               5
+  template_read                1
+  template_sequence            1
+ok: grain can load this

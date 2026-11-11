@@ -999,6 +999,27 @@ func (u *Upgrader) removeImage(ctx context.Context, p *progress, ref string) err
 	return runLogged(ctx, p, stepRecord, "", argv)
 }
 
+// removeImageForCancel removes an image reference that was pulled or tagged
+// only for a cancelled upgrade. Best-effort and never given -f, so Docker
+// refuses to remove any image used by a running container.
+func (u *Upgrader) removeImageForCancel(ctx context.Context, p *progress, ref string) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return
+	}
+	argv := u.cfg.Image.RemoveCmd
+	if len(argv) == 0 {
+		argv = []string{"docker", "image", "rm"}
+	}
+	argv = append(append([]string{}, argv...), ref)
+	cmd := newCommand(ctx, "", argv[0], argv[1:]...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		p.logf("cancel cleanup: keeping or could not remove %s: %v (%s)", ref, err, strings.TrimSpace(string(out)))
+	} else {
+		p.logf("cancel cleanup: removed %s", ref)
+	}
+}
+
 // repositoryOf returns the repository part of an image reference, stripping
 // the tag, the digest, or both (`repo:tag@sha256:...`, which is what
 // pinImage makes). The digest goes first: its own "sha256:" would

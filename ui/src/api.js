@@ -39,6 +39,15 @@ export function forgetETags() {
   etags.clear();
 }
 
+// forgetETag drops one path's entry, for a caller that read a full
+// answer and then threw it away -- a poll a later read superseded. The
+// entry describes that answer, so keeping it would have the next poll
+// told 304 about a body the caller never took, and it would go on
+// holding the older one for as long as nothing changes on the server.
+export function forgetETag(path) {
+  etags.delete(path);
+}
+
 // forgetVerifierTrouble ends any run of verifier_unavailable refusals
 // verifierTroubleSince is counting, for the same kind of test.
 export function forgetVerifierTrouble() {

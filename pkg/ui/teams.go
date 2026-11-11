@@ -810,7 +810,8 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 					if err != nil {
 						return DeploymentRepoConfigResponse{}, err
 					}
-					if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
+					if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef ||
+						model.IsAPIGrantRef(normalized) || model.CapabilityGrantRef(normalized) == model.APICapabilityServerID {
 						if !slices.Contains(cfg.CICapabilities, normalized) && !slices.Contains(cfg.CICapabilities, t) {
 							return DeploymentRepoConfigResponse{}, validationErrorf("ciCapabilities: capability %q is not supported for CI", t)
 						}

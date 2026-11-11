@@ -133,9 +133,9 @@ These `.grain/workflows/` files have no Actions counterpart, because they need s
 | :--- | :--- | :--- |
 | `agy-surface.yml`, `claude-surface.yml`, `codex-surface.yml` | `workflow_dispatch` | They capture each agent CLI's tool and config surface inside grain's own sandbox image and network, which is what they compare against. They hold no credential. |
 | `kvm-route-stress.yml` | `workflow_dispatch` | The grain-sandbox form of the stress run; the scheduled form is `nightly.yml`'s `kvm-route-stress` job. |
-| `live-secrets-repo.yml` | `schedule` (05:53 UTC), `workflow_dispatch` | It needs the `github-sandbox` capability: a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. **Its schedule no longer fires in a `ci_mode: github` repository**; it needs a `.grain/schedules/` entry with `grain-ci: true` (`docs/declarations.md`) to run nightly again. |
+| `live-secrets-repo.yml` | `.grain/schedules/live-secrets-repo.yml` (05:53 UTC, `grain-ci: true`), `workflow_dispatch` | It needs the `github-sandbox` capability: a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. Its own `on: schedule` cron is dropped in a `ci_mode: github` repository; it stays because a schedule can only run a workflow that answers a schedule event. The schedule file's `grain-ci: true` (`docs/declarations.md`) is what runs it nightly. |
 
-A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
+A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself; `tests/deploy/scheduled_workflows_test.go` requires a `grain-ci: true` schedule for every `.grain/workflows` file that declares `on: schedule`. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
 
 ## What Was Emulated from the Grain Sandbox Image (`Granulefile`)
 

@@ -66,8 +66,18 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	if gotRepoReadWrite := decode[ui.RepoDefaults](t, rec); !reflect.DeepEqual(gotRepoReadWrite.CICapabilities, []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"}), model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}) {
 		t.Fatalf("saved repo-read/write: %+v", gotRepoReadWrite)
 	}
-	for _, id := range []string{"self-debug", "unknown", "github-credential:default", model.RepoCredentialGrant("default"), "repo-read:invalid", "repo-write:invalid"} {
-		rec = do(t, srv, http.MethodPut, path, `{"ciCapabilities":["`+id+`"]}`)
+	for _, id := range []string{
+		"self-debug",
+		"unknown",
+		"api:tasks:read",
+		model.APIRef("tasks:read"),
+		model.APIGrantString("tasks:read", "acme/widgets"),
+		"github-credential:default",
+		model.RepoCredentialGrant("default"),
+		"repo-read:invalid",
+		"repo-write:invalid",
+	} {
+		rec = do(t, srv, http.MethodPut, path, `{"ciCapabilities":[`+mustJSON(t, id)+`]}`)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s accepted: %d", id, rec.Code)
 		}
@@ -87,6 +97,27 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	rec = do(t, srv, http.MethodPut, path, `{"ciCapabilities":[]}`)
 	if rec.Code != http.StatusOK || len(decode[ui.RepoDefaults](t, rec).CICapabilities) != 0 {
 		t.Fatalf("clear: %d %s", rec.Code, rec.Body)
+	}
+
+	// An unsupported bare id already stored in repo_config.ci_capabilities (e.g.
+	// from an older schema) does not block editing unrelated CI grants on the repo.
+	if err := c.Store.PutRepoConfig(context.Background(), model.RepoConfig{
+		Repo:           repo,
+		CICapabilities: []string{"self-debug", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, srv, http.MethodPut, path, `{"ciCapabilities":["self-debug","repo-read:acme/tools","repo-read:acme/other"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT preserving stored bare id: %d %s", rec.Code, rec.Body)
+	}
+	wantPreserved := []string{
+		"self-debug",
+		model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"}),
+		model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "other"}),
+	}
+	if gotPreserved := decode[ui.RepoDefaults](t, rec).CICapabilities; !reflect.DeepEqual(gotPreserved, wantPreserved) {
+		t.Fatalf("preserved ciCapabilities = %v, want %v", gotPreserved, wantPreserved)
 	}
 }
 

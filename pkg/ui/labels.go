@@ -1080,6 +1080,11 @@ type Config struct {
 	// store's directory so an Inbox Approve over -github-sim can sign
 	// its record.
 	ReleaseApprovalDir string
+	// ReleaseApprovalKMSKey is the Cloud KMS EC_SIGN_P256_SHA256 key
+	// version (projects/.../cryptoKeyVersions/N) release approvals are
+	// signed with, the daemon's -release-approval-kms-key. Empty keeps
+	// the key in the secrets store under ReleaseApprovalDir.
+	ReleaseApprovalKMSKey string
 	// SourceDB is the raw *sql.DB backing this store, which a task's
 	// database access queries (task_db.go).
 	SourceDB *sql.DB

@@ -144,7 +144,11 @@ func (p Principal) Verified() bool {
 // OnBehalfOf is what a signature marker gestures at with one bit. Grain
 // relaying an agent's question is (automation, on behalf of agent); grain
 // restarting a task because a human commented is (automation, on behalf
-// of human); a human acting directly is (human, nil).
+// of human); a human acting directly is (human, nil). A person's answer
+// a console session relayed for them at their word is (human, via agent)
+// -- the one shape with a human actor and an agent behind it, which
+// RelayedVia reads: the words are the person's and count as theirs, and
+// OnBehalfOf names the session that carried them.
 type Attribution struct {
 	Actor      Principal
 	OnBehalfOf *Principal
@@ -926,7 +930,7 @@ func AlignDefaultBases(child, parent Task, defaultBranch func(RepoRef) string) T
 func AutoSubmitRefusedOnLanding(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		!LandsWhereGranted(child, parent)
 }
@@ -1062,7 +1066,7 @@ var AutoSubmitPrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-submit"
 func AutoSubmits(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		LandsWhereGranted(child, parent)
 }

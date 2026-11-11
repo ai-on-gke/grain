@@ -320,8 +320,12 @@ func (c credentialTokenSource) forgeViaCommand(host, owner, repo string) bool {
 // in (model.Store.WorkRepos: task targets, write targets and repo
 // configs) is on that one other host, and "" otherwise -- a repository it
 // knows on the default host, on two hosts, or not at all stays on the
-// default host. Cached for a short while: the reconcile loop asks once
-// per call, and a repository added a moment ago is not worth a read each.
+// default host. Cached for a short while, since the reconcile loop asks
+// once per call -- except that an owner/name the cache does not hold is
+// read again, at most once every missRetry: a task filed on another host
+// a moment after the last read is otherwise not in it, and the finish of
+// its first run asks the default host for its branch, which answers 404
+// (tests/e2e/git_hosts_daemon_test.go).
 func storeRepoHosts(store *model.Store) func(owner, repo string) string {
 	if store == nil {
 		return nil
@@ -335,7 +339,9 @@ func storeRepoHosts(store *model.Store) func(owner, repo string) string {
 	return func(owner, repo string) string {
 		mu.Lock()
 		defer mu.Unlock()
-		if hosts == nil || time.Since(at) > ttl {
+		key := strings.ToLower(owner + "/" + repo)
+		_, known := hosts[key]
+		if hosts == nil || time.Since(at) > ttl || (!known && time.Since(at) > storeRepoHostsMissRetry) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			repos, err := store.WorkRepos(ctx, 0)
 			cancel()
@@ -348,21 +354,28 @@ func storeRepoHosts(store *model.Store) func(owner, repo string) string {
 				hosts = map[string][]string{}
 				for _, ref := range repos {
 					ref = model.RepoFromStored(ref.StoredOwner(), ref.Name)
-					key := strings.ToLower(ref.Owner + "/" + ref.Name)
+					k := strings.ToLower(ref.Owner + "/" + ref.Name)
 					h := strings.ToLower(ref.OffDefaultHost())
-					if !containsString(hosts[key], h) {
-						hosts[key] = append(hosts[key], h)
+					if !containsString(hosts[k], h) {
+						hosts[k] = append(hosts[k], h)
 					}
 				}
 				at = time.Now()
 			}
 		}
-		if on := hosts[strings.ToLower(owner+"/"+repo)]; len(on) == 1 {
+		if on := hosts[key]; len(on) == 1 {
 			return on[0]
 		}
 		return ""
 	}
 }
+
+// storeRepoHostsMissRetry is how soon storeRepoHosts reads the store
+// again for an owner/name its cache does not hold. Short: a task's first
+// forge call comes after its dispatch, sandbox and run, always longer
+// than this after it was filed, so a cache read from before the filing
+// is always old enough to read again. A var so a test can shorten it.
+var storeRepoHostsMissRetry = 100 * time.Millisecond
 
 func containsString(list []string, s string) bool {
 	for _, v := range list {

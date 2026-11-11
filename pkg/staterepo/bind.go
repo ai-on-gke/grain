@@ -393,6 +393,23 @@ var SettingsTables = []string{
 	// The deployment's GCP keys (model.GCPKey); team_gcp_key's until
 	// schema 23.
 	"gcp_key",
+	// The operator's token budgets, usage mode, automatic-cap floor and
+	// retention (model.UsageSettings, grain/task-3994): one row, written
+	// only by `grain usage` and PUT /api/usage/settings and recorded in
+	// the config audit like the deployment's other settings. Its
+	// neighbours task_run_usage and usage_capacity are grain's own
+	// record and stay off this list; this row is not, and leaving it
+	// off meant a deployment rebuilt from its state repository came
+	// back on advisory with no budgets -- an operator relying on auto to
+	// hold dispatch under a provider's budget got max_workers again.
+	// `grain state check` validates it (statecheck.UsageSettings).
+	//
+	// A state repository written before this build has no file for it,
+	// and settingsMissing's warning is the one that applies: a pull
+	// request branched before the upgrade and merged after it empties
+	// the row, which reads as advisory with no budgets until somebody
+	// runs `grain usage` again.
+	"usage_setting",
 }
 
 var memoryTables = []string{"memory", "memory_document"}

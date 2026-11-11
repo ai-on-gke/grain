@@ -977,7 +977,7 @@ func (s *Store) AddCommentWithAttachments(ctx context.Context, c Comment, attach
 				attachmentIDs[i] = attID
 			}
 		}
-		if c.Author.Actor.Kind == PrincipalAgent || (c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == PrincipalAgent) {
+		if c.Author.Actor.Kind == PrincipalAgent || (c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == PrincipalAgent && RelayedVia(c.Author) == nil) {
 			stamp := c.CreatedAt
 			if stamp.IsZero() {
 				stamp = time.Now()
@@ -1782,6 +1782,19 @@ func CommentByPerson(c Comment) bool {
 	return PersonOf(c.Author) != nil
 }
 
+// RelayedVia is the console session that relayed a person's answer for
+// them (Attribution's (human, via agent) shape, POST
+// /api/tasks/{id}/comments with relay: true), or nil for any other
+// attribution. The Actor of such a comment is the person, so PersonOf
+// counts it as theirs.
+func RelayedVia(a Attribution) *Principal {
+	if a.Actor.Kind != PrincipalHuman || a.OnBehalfOf == nil || a.OnBehalfOf.Kind != PrincipalAgent {
+		return nil
+	}
+	p := *a.OnBehalfOf
+	return &p
+}
+
 // PersonOf is the person a comment's attribution speaks for -- its
 // human actor, or the human a service relayed it for -- or nil.
 func PersonOf(a Attribution) *Principal {
@@ -1815,6 +1828,40 @@ func UndeliveredPersonComment(comments []Comment, obs *Observation) *Comment {
 			return nil
 		}
 		if CommentByPerson(c) {
+			return &comments[i]
+		}
+	}
+	return nil
+}
+
+// UncountedAgentComment is the newest comment another task's agent left
+// on taskID past the question it is parked on (or past what its runs
+// have been shown), with no person's comment after it -- an answer a
+// director or console session relayed as its own words, which never
+// answers a question (Client.reopenAcknowledgeable answers only a
+// person). nil when there is none. The caller asks it only of an
+// awaiting_reply task.
+func UncountedAgentComment(comments []Comment, obs *Observation, taskID string) *Comment {
+	if obs == nil {
+		return nil
+	}
+	var after int64 = -1
+	if obs.DeliveredCommentID != nil {
+		after = *obs.DeliveredCommentID
+	}
+	if obs.PendingQuestionCommentID != nil && *obs.PendingQuestionCommentID > after {
+		after = *obs.PendingQuestionCommentID
+	}
+	if after < 0 {
+		return nil
+	}
+	own := NormalizeTaskID(taskID)
+	for i := len(comments) - 1; i >= 0; i-- {
+		c := comments[i]
+		if c.ID <= after || CommentByPerson(c) {
+			return nil
+		}
+		if c.Author.Actor.Kind == PrincipalAgent && NormalizeTaskID(c.Author.Actor.ID) != own {
 			return &comments[i]
 		}
 	}

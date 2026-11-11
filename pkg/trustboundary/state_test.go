@@ -114,6 +114,7 @@ func TestClassifyStateNeverAutoMergePathsCeiling(t *testing.T) {
 		"tables/agent_backend.json",
 		"tables/console_session.json",
 		"tables/repo_workflow.json",
+		"tables/usage_setting.json",
 		"scripts/guest-customization.sh",
 		"scripts/repos/acme/widgets/setup.sh",
 		"workflows/acme/widgets/ci.yml",

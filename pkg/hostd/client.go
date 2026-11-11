@@ -107,6 +107,15 @@ func drainAnswered(err error) error {
 	return err
 }
 
+// Handover asks hostd to hand live detached runs over to the new build
+// and restart onto it without waiting for them to finish
+// (Server.StartHandover); a hostd that cannot hand over (no Reexec
+// continuation, active carried listeners, or predating FeatureHandover)
+// cuts over when idle instead.
+func (c Client) Handover(ctx context.Context) error {
+	return c.oneShot(ctx, Request{Op: OpDrain, Idle: true, Handover: true}, frameOK, nil)
+}
+
 // SocketOwner asks hostd which process in a process tree it started holds
 // socket inode open (OpSocketOwner). It fails closed when hostd is
 // unreachable, speaks an older protocol that does not serve OpSocketOwner,
@@ -464,6 +473,8 @@ func (e Exit) String() string {
 		return e.Error
 	case e.Deadline:
 		return "killed at its deadline"
+	case e.Draining:
+		return "stopped because the host agent drained for an upgrade"
 	case e.Signal != "":
 		return "killed by SIG" + e.Signal
 	default:
