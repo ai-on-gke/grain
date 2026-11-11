@@ -25,7 +25,7 @@ package e2e
 //	GRAIN_LIVE_AGENT_TEST=1 GEMINI_API_KEY=... \
 //	  go test ./tests/e2e/... -run TestLiveIssueCompletesEndToEnd -v
 //
-// .grain/workflows/live-agent.yml runs exactly that, nightly, with a
+// .github/workflows/live-agent.yml runs exactly that, nightly, with a
 // credential of its own -- so this is a check something remembers rather
 // than only a maintainer. It is scheduled rather than pushed for reasons
 // worth reading before moving it: see that file's header and README's
