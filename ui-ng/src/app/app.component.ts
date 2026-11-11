@@ -294,7 +294,7 @@ interface CreateItem {
       </main>
 
       <footer class="bottom-bar">
-        <span class="muted"
+        <span class="muted bottom-version" [attr.title]="store.version()"
           >grain{{ store.version() ? " " + store.version() : "" }}</span
         >
         <span class="bottom-actions">

@@ -35,6 +35,11 @@ import {
 export const POLL_MS = 3000;
 export const COMMENTS_QUERY = "comments_limit=50&attempts_limit=20";
 
+// rowKey is what about a list row means its detail may have moved.
+function rowKey(t: Task | undefined): string {
+  return t ? `${t.state}|${t.updatedAt ?? ""}|${t.activityAt ?? ""}` : "";
+}
+
 export interface SessionRow {
   session: ConsoleSession;
   task: Task | null;
@@ -59,9 +64,12 @@ export class SessionsStore {
   readonly loaded = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
-  // busy names the action in flight ("send", "stop", "restart", a
-  // capability id, ...), so only that control waits.
-  readonly busy = signal<string | null>(null);
+  // busy holds the actions in flight ("send", "stop", "restart", a
+  // capability id, ...), so only those controls wait, and two at once do
+  // not clear each other.
+  readonly busy = signal<ReadonlySet<string>>(new Set());
+  // detailError is why the selected conversation could not be read.
+  readonly detailError = signal<string | null>(null);
   readonly drafts = signal<Record<string, string>>({});
 
   // The Director first, then the rest in the server's order.
@@ -74,9 +82,10 @@ export class SessionsStore {
     return list.map((session) => {
       const d = session.taskId ? details[session.taskId] : undefined;
       const t = session.taskId ? tasks[session.taskId] : undefined;
-      // The list is read every poll and the detail less often for the
-      // sessions not on screen; the detail wins where both say something.
-      const task = d || t ? ({ ...t, ...d } as Task) : null;
+      // The list is read every poll and the detail of a session not on
+      // screen only when its list row moves, so the list wins for state
+      // and activity; the detail adds the messages.
+      const task = d || t ? ({ ...d, ...t } as Task) : null;
       return {
         session,
         task,
@@ -93,6 +102,10 @@ export class SessionsStore {
     return tid ? (this.details()[tid] ?? null) : null;
   });
   readonly status = computed(() => sessionStatus(this.selected()?.task));
+
+  // What each detail was read for (rowKey of its list row), so a
+  // background session's detail is read again when its row moves.
+  private readonly fetchedFor = new Map<string, string>();
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
@@ -160,7 +173,12 @@ export class SessionsStore {
         `Sessions could not be read: ${errorText(list.reason)}. This page tries again on its own.`,
       );
     }
-    if (tasks.status === "fulfilled" && tasks.value.changed) {
+    // An unchanged answer still seeds an empty map: another reader of the
+    // same URL may have taken the fresh copy (getIfChanged shares tags).
+    if (
+      tasks.status === "fulfilled" &&
+      (tasks.value.changed || Object.keys(this.tasks()).length === 0)
+    ) {
       const map: Record<string, Task> = {};
       for (const t of tasks.value.body ?? []) map[t.id] = t;
       this.tasks.set(map);
@@ -175,25 +193,47 @@ export class SessionsStore {
   }
 
   // loadDetails reads the selected session's conversation every time and
-  // each other session's once, for its last line.
+  // each other session's when its list row has moved since, for its last
+  // line. Only the selected one's failure is shown.
   private async loadDetails(): Promise<void> {
     const sel = this.selected()?.session.taskId;
-    const have = this.details();
+    const tasks = this.tasks();
     const ids = this.sessions()
       .map((s) => s.taskId)
-      .filter((t): t is string => !!t && (t === sel || !have[t]));
-    await Promise.allSettled(ids.map((id) => this.loadDetail(id)));
+      .filter(
+        (t): t is string =>
+          !!t && (t === sel || this.fetchedFor.get(t) !== rowKey(tasks[t])),
+      );
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          await this.loadDetail(id, rowKey(tasks[id]));
+          if (id === sel) this.detailError.set(null);
+        } catch (err) {
+          if (id === sel) {
+            this.detailError.set(
+              `This conversation could not be read: ${errorText(err)}`,
+            );
+          }
+        }
+      }),
+    );
   }
 
-  private async loadDetail(id: string): Promise<void> {
+  private async loadDetail(id: string, key: string): Promise<void> {
     const r = await this.api.getIfChanged<TaskDetail>(
       "GET /api/tasks/{id}",
       { id },
       COMMENTS_QUERY,
     );
+    this.fetchedFor.set(id, key);
     if (r.changed || !this.details()[id]) {
       this.details.update((m) => ({ ...m, [id]: r.body }));
     }
+  }
+
+  isBusy(name: string): boolean {
+    return this.busy().has(name);
   }
 
   draftFor(id: string): string {
@@ -210,15 +250,21 @@ export class SessionsStore {
   async send(): Promise<boolean> {
     const row = this.selected();
     const taskId = row?.session.taskId;
-    const body = row ? this.draftFor(row.session.id).trim() : "";
-    if (!row || !taskId || !body) return false;
+    const typed = row ? this.draftFor(row.session.id) : "";
+    const body = typed.trim();
+    // One send at a time: a second Enter before the first lands would
+    // post the message twice, and each post starts a run.
+    if (!row || !taskId || !body || this.isBusy("send")) return false;
     return this.run("send", async () => {
       await this.api.post(
         "POST /api/tasks/{id}/comments",
         { id: taskId },
         { body, attachments: [] },
       );
-      this.setDraft(row.session.id, "");
+      // Keep anything typed while the message was on its way.
+      if (this.draftFor(row.session.id) === typed) {
+        this.setDraft(row.session.id, "");
+      }
     });
   }
 
@@ -306,7 +352,7 @@ export class SessionsStore {
     name: string,
     fn: () => Promise<unknown>,
   ): Promise<boolean> {
-    this.busy.set(name);
+    this.busy.update((b) => new Set(b).add(name));
     this.actionError.set(null);
     try {
       await fn();
@@ -316,7 +362,11 @@ export class SessionsStore {
       this.actionError.set(errorText(err));
       return false;
     } finally {
-      this.busy.set(null);
+      this.busy.update((b) => {
+        const next = new Set(b);
+        next.delete(name);
+        return next;
+      });
     }
   }
 }

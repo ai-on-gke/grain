@@ -69,7 +69,12 @@ export function clock(iso: string | undefined, now = new Date()): string {
     "(document:keydown.shift.tab)": "onTab($event)",
   },
   template: `
-    <section class="view-panel is-active" aria-labelledby="sessions-headline">
+    <section
+      class="view-panel is-active sessions-panel"
+      [class.is-chat-open]="!!id()"
+      aria-labelledby="sessions-headline"
+      [attr.inert]="newOpen() || confirmDelete() ? '' : null"
+    >
       <div class="stage-header">
         <div class="view-headline-row">
           <div class="headline-cluster">
@@ -110,9 +115,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                 <a
                   class="session-item"
                   [routerLink]="['/sessions', r.session.id]"
-                  [attr.aria-current]="
-                    store.selectedId() === r.session.id ? 'page' : null
-                  "
+                  [attr.aria-current]="id() === r.session.id ? 'page' : null"
                   [attr.data-testid]="'session-' + r.session.id"
                 >
                   <span class="session-item-top">
@@ -147,23 +150,23 @@ export function clock(iso: string | undefined, now = new Date()): string {
                 aria-label="Back to sessions"
                 >←</a
               >
-              <h2 class="chat-title" id="chat-title">
+              <h2 class="chat-title" id="chat-title" tabindex="-1" #chatTitle>
                 {{ row.session.title }}
               </h2>
               <span
                 [class]="'status-pill ' + st.tone"
                 data-testid="chat-status"
+                role="status"
                 [gTip]="st.tip"
-                tabindex="0"
-                >{{ st.label }}</span
+                >{{ st.label }}<span class="sr-only">: {{ st.tip }}</span></span
               >
-              @if (st.live && canWrite()) {
+              @if (st.live && canStop()) {
                 <button
                   type="button"
                   class="btn-text"
                   data-testid="stop"
                   gTip="Stop the run working on your last message; the conversation stays"
-                  [disabled]="store.busy() === 'stop'"
+                  [disabled]="store.isBusy('stop')"
                   (click)="store.stopTurn()"
                 >
                   Stop
@@ -175,7 +178,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                 gTip="Open this session in the classic UI (attachments, grants by method, settings)"
                 >Classic</a
               >
-              @if (row.session.id !== director && canWrite()) {
+              @if (row.session.id !== director && canDelete()) {
                 <button
                   #deleteBtn
                   type="button"
@@ -208,7 +211,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   class="cap-toggle"
                   [attr.aria-pressed]="held"
                   [attr.data-testid]="'cap-' + c.id"
-                  [disabled]="!canWrite() || store.busy() === c.id"
+                  [disabled]="!canEditCaps() || store.isBusy(c.id)"
                   [gTip]="
                     (held
                       ? 'Granted. Select to remove'
@@ -264,7 +267,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                     type="button"
                     class="btn-tonal"
                     data-testid="fresh-chat-handover"
-                    [disabled]="store.busy() === 'restart'"
+                    [disabled]="store.isBusy('restart')"
                     (click)="restart(true)"
                   >
                     Carry the handover note
@@ -273,7 +276,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                     type="button"
                     class="btn-outlined"
                     data-testid="fresh-chat-clean"
-                    [disabled]="store.busy() === 'restart'"
+                    [disabled]="store.isBusy('restart')"
                     (click)="restart(false)"
                   >
                     Start clean
@@ -289,7 +292,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
               </div>
             }
 
-            @if (store.actionError(); as err) {
+            @if (!newOpen() && store.actionError(); as err) {
               <p
                 class="banner banner-error"
                 role="alert"
@@ -333,7 +336,9 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   <div class="msg-body" [innerHTML]="html(c.body)"></div>
                 </article>
               } @empty {
-                @if (store.selectedDetail()) {
+                @if (store.detailError(); as err) {
+                  <p class="banner banner-error" role="alert">{{ err }}</p>
+                } @else if (store.selectedDetail()) {
                   <p class="empty-state">No messages yet. Say hello.</p>
                 } @else {
                   <p class="empty-state">Loading the conversation…</p>
@@ -344,6 +349,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
             @if (canWrite() && row.session.taskId) {
               <form class="chat-composer" (submit)="send($event)">
                 <textarea
+                  #composer
                   class="reply-textarea"
                   rows="2"
                   data-testid="composer"
@@ -362,7 +368,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                     class="btn-primary"
                     data-testid="send"
                     gTip="Send; each message starts a run with this session's grants"
-                    [disabled]="!draft().trim() || store.busy() === 'send'"
+                    [disabled]="!draft().trim() || store.isBusy('send')"
                   >
                     Send
                   </button>
@@ -415,6 +421,15 @@ export function clock(iso: string | undefined, now = new Date()): string {
               (input)="newMessage.set(inputValue($event))"
             ></textarea>
           </label>
+          @if (store.actionError(); as err) {
+            <p
+              class="banner banner-error"
+              role="alert"
+              data-testid="new-session-error"
+            >
+              {{ err }}
+            </p>
+          }
           <div class="dialog-actions">
             <button type="button" class="btn-text" (click)="closeNew()">
               Cancel
@@ -423,7 +438,10 @@ export function clock(iso: string | undefined, now = new Date()): string {
               type="submit"
               class="btn-primary"
               data-testid="new-session-create"
-              [disabled]="store.busy() === 'create'"
+              [disabled]="
+                store.isBusy('create') ||
+                (!newName().trim() && !newMessage().trim())
+              "
             >
               Start session
             </button>
@@ -454,7 +472,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
             #deleteCancel
             type="button"
             class="btn-text"
-            (click)="confirmDelete.set(false)"
+            (click)="cancelDelete()"
           >
             Cancel
           </button>
@@ -462,7 +480,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
             type="button"
             class="btn-primary danger"
             data-testid="delete-confirm"
-            [disabled]="store.busy() === 'delete'"
+            [disabled]="store.isBusy('delete')"
             (click)="remove()"
           >
             Delete
@@ -480,7 +498,9 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private readonly doc = inject(DOCUMENT);
 
   // The :id route parameter (withComponentInputBinding); none on
-  // /sessions, which shows the Director on a wide screen.
+  // /sessions, which shows the Director on a wide screen. /sessions and
+  // /sessions/:id are two routes, so moving between them makes a new
+  // page; the store (drafts, cached conversations) is shared and stays.
   readonly id = input<string>();
 
   protected readonly director = DIRECTOR_ID;
@@ -498,9 +518,24 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     viewChild<ElementRef<HTMLButtonElement>>("deleteCancel");
   private readonly deleteBtn =
     viewChild<ElementRef<HTMLButtonElement>>("deleteBtn");
+  private readonly chatTitle = viewChild<ElementRef<HTMLElement>>("chatTitle");
+  private readonly composer =
+    viewChild<ElementRef<HTMLTextAreaElement>>("composer");
 
   protected readonly canWrite = computed(() =>
     this.access.can("POST /api/tasks/{id}/comments"),
+  );
+  protected readonly canStop = computed(() =>
+    this.access.can("POST /api/console-sessions/{id}/cancel"),
+  );
+  protected readonly canRestart = computed(() =>
+    this.access.can("POST /api/console-sessions/{id}/restart"),
+  );
+  protected readonly canEditCaps = computed(() =>
+    this.access.can("PUT /api/console-sessions/{id}"),
+  );
+  protected readonly canDelete = computed(() =>
+    this.access.can("DELETE /api/console-sessions/{id}"),
   );
   protected readonly canCreate = computed(() =>
     this.access.can("POST /api/console-sessions"),
@@ -535,7 +570,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   // server reporting crowding reliably.
   protected readonly showFresh = computed(() => {
     const t = this.store.selected()?.task;
-    return this.canWrite() && !!t && t.state !== "closed";
+    return this.canRestart() && !!t && t.state !== "closed";
   });
   protected readonly classicHref = computed(() => {
     const id = this.store.selectedId();
@@ -543,6 +578,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   });
 
   private lastCount = 0;
+  private lastSession = "";
 
   constructor() {
     // Follows the route only: select() reads the store's own selection,
@@ -559,8 +595,14 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     // reader has scrolled up to read something older.
     effect(() => {
       const n = this.comments().length;
+      const sid = this.store.selectedId();
       const el = this.log()?.nativeElement;
       if (!el) return;
+      // A different conversation starts at its newest message.
+      if (sid !== this.lastSession) {
+        this.lastSession = sid;
+        this.lastCount = 0;
+      }
       const grew = n > this.lastCount;
       const first = this.lastCount === 0;
       this.lastCount = n;
@@ -589,6 +631,8 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     let h = this.htmlCache.get(body);
     if (h === undefined) {
       h = renderMarkdown(body);
+      // Bounded: a long-lived page must not keep every message it saw.
+      if (this.htmlCache.size >= 500) this.htmlCache.clear();
       this.htmlCache.set(body, h);
     }
     return h;
@@ -648,8 +692,11 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const id = await this.store.create(this.newName(), this.newMessage());
     if (id) {
       this.newOpen.set(false);
-      void this.router.navigate(["/sessions", id]);
+      await this.router.navigate(["/sessions", id]);
       this.snackbar.show("Session started");
+      setTimeout(() =>
+        (this.composer() ?? this.chatTitle())?.nativeElement.focus(),
+      );
     }
   }
 
@@ -659,18 +706,25 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     if (await this.store.remove(row.session.id)) {
       this.confirmDelete.set(false);
       this.snackbar.show(`Deleted ${row.session.title}`);
-      void this.router.navigate(["/sessions"]);
+      await this.router.navigate(["/sessions"]);
+      setTimeout(() => this.chatTitle()?.nativeElement.focus());
     }
   }
 
+  protected cancelDelete(): void {
+    this.confirmDelete.set(false);
+    setTimeout(() => this.deleteBtn()?.nativeElement.focus());
+  }
+
   protected onEscape(ev: Event): void {
+    // Something nearer the focus (a menu, a tooltip) already took it.
+    if (ev.defaultPrevented) return;
     if (this.newOpen()) {
       ev.preventDefault();
       this.closeNew();
     } else if (this.confirmDelete()) {
       ev.preventDefault();
-      this.confirmDelete.set(false);
-      setTimeout(() => this.deleteBtn()?.nativeElement.focus());
+      this.cancelDelete();
     } else if (this.freshOpen()) {
       ev.preventDefault();
       this.freshOpen.set(false);
@@ -692,7 +746,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     if (!dialog) return;
     const items = Array.from(
       dialog.querySelectorAll<HTMLElement>(
-        "button:not([disabled]), input, textarea, a[href]",
+        'button:not([disabled]), input, textarea, select, a[href], [tabindex]:not([tabindex="-1"])',
       ),
     );
     if (items.length === 0) return;

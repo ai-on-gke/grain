@@ -60,11 +60,10 @@ export function sessionStatus(task: Task | null | undefined): SessionStatus {
       return {
         label: "Last reply failed",
         tone: "error",
-        tip: "The last run failed; send a message to try again",
+        tip: "The last run on this conversation failed",
         live: false,
       };
     case "closed":
-    case "done":
       return {
         label: "Closed",
         tone: "quiet",
@@ -191,6 +190,17 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// safeHref keeps http(s) and mailto links and drops everything else
+// (javascript:, data:, relative paths that would navigate this app).
+export function safeHref(href: string): string | null {
+  try {
+    const u = new URL(href);
+    return ["http:", "https:", "mailto:"].includes(u.protocol) ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
 // Raw HTML in a message is shown as text, so a message can only ever
 // produce Markdown's own elements; Angular sanitizes [innerHTML] as well.
 const md = new Marked({
@@ -199,6 +209,23 @@ const md = new Marked({
   renderer: {
     html({ text }) {
       return escapeHtml(text);
+    },
+    // Links open in a new tab and only to web or mail addresses; images
+    // become links, so a message cannot load a remote image (a tracking
+    // pixel) just by being read.
+    link({ href, title, tokens }) {
+      const label = this.parser.parseInline(tokens);
+      const safe = safeHref(href);
+      if (!safe) return label;
+      const t = title ? ` title="${escapeHtml(title)}"` : "";
+      return `<a href="${escapeHtml(safe)}"${t} target="_blank" rel="noopener noreferrer">${label}</a>`;
+    },
+    image({ href, text }) {
+      const safe = safeHref(href);
+      const label = escapeHtml(text || href);
+      return safe
+        ? `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+        : label;
     },
   },
 });

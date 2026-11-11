@@ -100,7 +100,9 @@ class FakeApi {
     };
     return Promise.resolve(list);
   };
+  reads: string[] = [];
   getIfChanged = (route: string, params?: { id: string }) => {
+    this.reads.push(params ? `${route}:${params.id}` : route);
     if (route === "GET /api/tasks") {
       return Promise.resolve({ body: this.taskList, changed: true });
     }
@@ -122,6 +124,22 @@ class FakeApi {
         sessions: structuredClone(this.sessions),
         created: "new1",
       });
+    }
+    if (route === "POST /api/console-sessions/{id}/restart") {
+      this.sessions = this.sessions.map((x) =>
+        x.id === "director" ? { ...x, taskId: "20" } : x,
+      );
+      this.taskList = [
+        ...this.taskList,
+        { id: "20", title: "Director", state: "awaiting_reply" },
+      ];
+      this.details["20"] = {
+        id: "20",
+        title: "Director",
+        state: "awaiting_reply",
+        comments: [{ id: 50, body: "Fresh start", handover: true }],
+      };
+      return Promise.resolve({ sessions: structuredClone(this.sessions) });
     }
     return Promise.resolve({});
   };
@@ -198,7 +216,9 @@ describe("SessionsPageComponent", () => {
       "Director",
       "Release help",
     ]);
-    expect(items[0].getAttribute("aria-current")).toBe("page");
+    // /sessions shows the Director on a wide screen, but no conversation is
+    // the page on a phone, so nothing is marked current until one is open.
+    expect(items[0].getAttribute("aria-current")).toBeNull();
     expect(items[0].textContent).toContain("Asked");
     expect(items[0].textContent).toContain("File a task to bump Go");
     expect(items[1].textContent).toContain("Working");
@@ -253,7 +273,7 @@ describe("SessionsPageComponent", () => {
   it("shows Stop and the activity line while a run is going", async () => {
     const api = new FakeApi();
     const f = await render(api, "rel");
-    expect(text(f, '[data-testid="chat-status"]')).toBe("Working");
+    expect(text(f, '[data-testid="chat-status"]')).toMatch(/^Working:/);
     expect(text(f, '[data-testid="chat-activity"]')).toBe("reading");
     (q(f, '[data-testid="stop"]') as HTMLButtonElement).click();
     await f.whenStable();
@@ -364,5 +384,122 @@ describe("SessionsPageComponent", () => {
     expect(api.calls.find((c) => c.method === "DELETE")).toMatchObject({
       params: { id: "rel" },
     });
+  });
+
+  it("refreshes a background session's status from the list and re-reads its messages when it moves", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const rel = () => q(f, '[data-testid="session-rel"]')!.textContent ?? "";
+    expect(rel()).toContain("Working");
+    const readsBefore = api.reads.filter((r) => r.endsWith(":9")).length;
+    api.taskList = api.taskList.map((t) =>
+      t.id === "9" ? { ...t, state: "awaiting_reply", updatedAt: "t2" } : t,
+    );
+    api.details["9"] = {
+      ...api.details["9"],
+      state: "awaiting_reply",
+      comments: [{ id: 7, body: "Release notes are drafted" }],
+    };
+    await settle(f);
+    expect(rel()).toContain("Asked");
+    expect(rel()).toContain("Release notes are drafted");
+    expect(api.reads.filter((r) => r.endsWith(":9")).length).toBe(
+      readsBefore + 1,
+    );
+    // Nothing moved: no further read of the background conversation.
+    await settle(f);
+    expect(api.reads.filter((r) => r.endsWith(":9")).length).toBe(
+      readsBefore + 1,
+    );
+  });
+
+  it("sends once however fast Enter is pressed, and keeps text typed meanwhile", async () => {
+    const api = new FakeApi();
+    let release!: () => void;
+    const post = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route !== "POST /api/tasks/{id}/comments") {
+        return post(route, params, body);
+      }
+      api.calls.push({ method: "POST", route, params, body });
+      return new Promise((r) => (release = () => r({})));
+    };
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+    store.setDraft("director", "once");
+    const first = store.send();
+    expect(await store.send()).toBe(false);
+    store.setDraft("director", "once and more");
+    release();
+    expect(await first).toBe(true);
+    await f.whenStable();
+    expect(
+      api.calls.filter((c) => c.route === "POST /api/tasks/{id}/comments"),
+    ).toHaveLength(1);
+    expect(store.draftFor("director")).toBe("once and more");
+  });
+
+  it("will not start a session with nothing in it, and shows a refusal inside the dialog", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    (q(f, '[data-testid="new-session"]') as HTMLButtonElement).click();
+    await f.whenStable();
+    const create = q(
+      f,
+      '[data-testid="new-session-create"]',
+    ) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    const name = q(f, '[data-testid="new-session-name"]') as HTMLInputElement;
+    name.value = "Taken";
+    name.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    expect(create.disabled).toBe(false);
+    api.fail["POST /api/console-sessions"] = {
+      status: 409,
+      error: { error: "a session with that name exists" },
+    };
+    create.click();
+    await settle(f);
+    expect(text(f, '[data-testid="new-session-error"]')).toContain(
+      "a session with that name exists",
+    );
+    expect(q(f, ".view-panel")?.hasAttribute("inert")).toBe(true);
+  });
+
+  it("moves the conversation to the new task after a fresh chat", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await TestBed.inject(SessionsStore).restart(true);
+    await settle(f);
+    expect(q(f, '[data-testid="msg-50"]')?.textContent).toContain(
+      "Fresh start",
+    );
+    expect(q(f, '[data-testid="msg-50"]')?.classList).toContain("is-handover");
+  });
+
+  it("puts focus back on Delete when the confirmation is cancelled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = new FakeApi();
+    const f = await render(api, "rel");
+    (q(f, '[data-testid="delete-session"]') as HTMLButtonElement).click();
+    await f.whenStable();
+    vi.advanceTimersByTime(5);
+    expect(document.activeElement?.textContent?.trim()).toBe("Cancel");
+    (document.activeElement as HTMLButtonElement).click();
+    await f.whenStable();
+    vi.advanceTimersByTime(5);
+    expect(document.activeElement).toBe(q(f, '[data-testid="delete-session"]'));
+    vi.useRealTimers();
+  });
+
+  it("stops polling when the page goes away", async () => {
+    vi.useFakeTimers();
+    const api = new FakeApi();
+    const f = await render(api);
+    f.destroy();
+    const n = api.calls.length + api.reads.length;
+    vi.advanceTimersByTime(30000);
+    expect(api.calls.length + api.reads.length).toBe(n);
+    vi.useRealTimers();
   });
 });

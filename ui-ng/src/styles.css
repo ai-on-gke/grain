@@ -1779,6 +1779,14 @@ a.compact-nav-btn {
   font-size: 12px;
 }
 
+/* The version is a long build string; it gives way to the actions. */
+.bottom-version {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .headline-actions {
   display: flex;
   align-items: center;
@@ -2660,6 +2668,11 @@ g-sessions-page {
   }
   .chat-back {
     display: inline-flex;
+  }
+  /* One conversation fills the phone: the page header comes back with
+     the list. */
+  .sessions-panel.is-chat-open .stage-header {
+    display: none;
   }
   .cap-note {
     margin-left: 0;

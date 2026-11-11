@@ -130,6 +130,19 @@ describe("messages", () => {
     expect(renderMarkdown("`a < b`")).toContain("<code>a &lt; b</code>");
   });
 
+  it("opens links in a new tab, drops unsafe ones and never loads images", () => {
+    const ok = renderMarkdown("[docs](https://grain.dev/x)");
+    expect(ok).toContain('href="https://grain.dev/x"');
+    expect(ok).toContain('target="_blank"');
+    expect(ok).toContain('rel="noopener noreferrer"');
+    const bad = renderMarkdown("[click](javascript:alert(1))");
+    expect(bad).not.toContain("href");
+    expect(bad).toContain("click");
+    const img = renderMarkdown("![pixel](https://tracker.example/p.gif)");
+    expect(img).not.toContain("<img");
+    expect(img).toContain('href="https://tracker.example/p.gif"');
+  });
+
   it("recognises the stale-grants refusal", () => {
     expect(isStaleEdit({ status: 409, error: { code: "stale" } })).toBe(true);
     expect(isStaleEdit({ status: 409, error: { code: "other" } })).toBe(false);
