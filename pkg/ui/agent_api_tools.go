@@ -303,7 +303,7 @@ var routeDocs = map[string]string{
 	"DELETE /api/secrets/{secret}":                                         "Delete a secret and every key in it.",
 	"POST /api/state-repo/sync":                                            "Sync the deployment's state repository now.",
 	"POST /api/state-repo/pull-requests":                                   "Open a validated, held grain/config pull request carrying the change a refused configuration write returned (a person only).",
-	"POST /api/state-repo/remote":                                          "Name the external git repository the deployment reads its configuration from, or none: true to go back to the internal one.",
+	"POST /api/state-repo/remote":                                          "Name the external git repository the deployment reads its configuration from, or none: true to go back to the internal one. An agent needs api:capabilities:admin as well as settings:write for it.",
 	"POST /api/state-repo/secrets-key":                                     "Install the key the deployment's secrets file is sealed to.",
 	"POST /api/state-repo/import-key":                                      "Install the key the deployment's secrets file is sealed to.",
 	"POST /api/state-repo/secrets-key/wrap":                                "Wrap the deployment's secrets key with a Cloud KMS key, verified by a round trip before it is written.",

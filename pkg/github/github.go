@@ -451,6 +451,18 @@ type GitBranchSource interface {
 	GitBranchExists(owner, repo, branch string) (exists, ok bool, err error)
 }
 
+var _ GitBranchSource = (*RESTClient)(nil)
+
+// GitBranchExists is GitBranchSource over the client's TokenSource, so a
+// caller holding a Client that wraps this one (the daemon's
+// StateRepoPullRequestClient) can ask it without reaching for Tokens.
+func (c *RESTClient) GitBranchExists(owner, repo, branch string) (exists, ok bool, err error) {
+	if src, isSrc := c.Tokens.(GitBranchSource); isSrc {
+		return src.GitBranchExists(owner, repo, branch)
+	}
+	return false, false, nil
+}
+
 // gitOnly is the error opening or merging a pull request on owner/repo
 // fails with, before anything is sent, when its credential covers git
 // only: said plainly rather than as the 401 or 404 an unauthenticated
