@@ -239,23 +239,27 @@ type result struct {
 
 var reasonLine = regexp.MustCompile(`^\s+\S+\.go:\d+: (.*)$`)
 
-// finish settles a skipped test's status from its reason.
+// finish settles a skipped test's status from its reason: the last
+// file:line message it printed, which is the t.Skip call's own. An
+// earlier t.Log, or a subtest's output, that happens to start "known
+// gap:" does not excuse a skip for some other reason.
 func (r *result) finish() {
 	if r.status != Skip {
 		return
 	}
-	for _, line := range r.output {
-		m := reasonLine.FindStringSubmatch(line)
+	for i := len(r.output) - 1; i >= 0; i-- {
+		m := reasonLine.FindStringSubmatch(r.output[i])
 		if m == nil {
 			continue
 		}
 		reason := strings.ToLower(m[1])
 		switch {
-		case strings.HasPrefix(reason, "known gap"):
+		case strings.HasPrefix(reason, "known gap:"):
 			r.status = KnownGap
 		case strings.HasPrefix(reason, "infrastructure:"):
 			r.status = Infra
 		}
+		return
 	}
 }
 

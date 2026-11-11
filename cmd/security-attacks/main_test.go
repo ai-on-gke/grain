@@ -255,3 +255,22 @@ func TestMainExitCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyTheSkipsOwnReasonExcusesIt(t *testing.T) {
+	for _, c := range []struct {
+		output []string
+		want   Status
+	}{
+		{[]string{"    x_test.go:9: known gap: the cache takes writes"}, KnownGap},
+		{[]string{"    x_test.go:9: Infrastructure: no /dev/kvm"}, Infra},
+		{[]string{"    x_test.go:9: known gaps are listed in the doc"}, Skip},
+		{[]string{"    x_test.go:5: known gap: logged earlier", "    x_test.go:9: initdb not installed"}, Skip},
+		{[]string{"    x_test.go:5: infrastructure: logged earlier", "    x_test.go:9: initdb not installed"}, Skip},
+	} {
+		r := &result{status: Skip, output: c.output}
+		r.finish()
+		if r.status != c.want {
+			t.Errorf("skip with output %q = %s, want %s", c.output, r.status, c.want)
+		}
+	}
+}
