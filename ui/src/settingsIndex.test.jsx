@@ -198,6 +198,23 @@ describe("settingsIndex", () => {
     );
   });
 
+  // Cards a person searches for by their heading or by what they hold,
+  // which the filter once answered "No setting matches" for.
+  it.each([
+    ["budget", "models", "usage"],
+    ["fewest workers", "models", "usage"],
+    ["run location", "models", "cli-run"],
+    ["fallback", "models", "model-defaults"],
+    ["commit identity", "agents", "commit-identity"],
+    ["settings lock", "general", "settings-lock"],
+    ["about", "general", "about"],
+    ["role", "access", "allowed-principals"],
+  ])("finds %s in Settings → %s#%s", (query, section, anchor) => {
+    expect(matchSettings(query)).toContainEqual(
+      expect.objectContaining({ section, anchor }),
+    );
+  });
+
   it("matches nothing for an empty query or a value", () => {
     expect(matchSettings("")).toEqual([]);
     expect(matchSettings("zzqqxx")).toEqual([]);
