@@ -378,6 +378,11 @@ jobs:
     if: needs.publish.outputs.train == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # AGENTD_RELEASE_SIGNING_KEY is an agentd-release environment secret,
+    # released only to the refs that environment's deployment rules allow
+    # (docs/agentd-release-signing.md), not a repository secret any
+    # workflow on any pushed branch could read.
+    environment: agentd-release
     permissions:
       contents: write
     concurrency:

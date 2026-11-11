@@ -496,6 +496,16 @@ func TestEveryPublishedReleaseGetsSignedGrainAgentd(t *testing.T) {
 				t.Errorf("%s: the agentd-assets job does not say %q", file, want)
 			}
 		}
+		// The signing key is an environment secret, so a workflow pushed on
+		// any other branch cannot read it.
+		if !strings.Contains(publish, "environment: agentd-release") {
+			t.Errorf("%s: the agentd-assets job, which reads AGENTD_RELEASE_SIGNING_KEY, does not run in the agentd-release environment", file)
+		}
+		for _, other := range []string{"agentd", releaseJob} {
+			if strings.Contains(namedJob(t, text, other), "AGENTD_RELEASE_SIGNING_KEY") {
+				t.Errorf("%s: the %s job names AGENTD_RELEASE_SIGNING_KEY; only agentd-assets may", file, other)
+			}
+		}
 		if !strings.Contains(publish, "group: grain-agentd-assets-${{ ") {
 			t.Errorf("%s: the agentd-assets job does not queue in the shared grain-agentd-assets-<release> group", file)
 		}
