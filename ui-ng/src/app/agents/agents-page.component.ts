@@ -24,7 +24,7 @@ import {
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import { AccessService } from "../services/access.service";
-import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
+import { KeyboardService } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-view";
@@ -35,13 +35,12 @@ import {
   type GroupBy,
   cpuLevel,
   groupAgents,
-  isAgentd,
+  hostWork,
   minutes,
   quietReason,
   sortAgents,
   spark,
   tokens,
-  whereLabel,
 } from "./agent-view";
 import { AgentsStore } from "./agents.store";
 
@@ -58,8 +57,14 @@ const GROUPS: { id: GroupBy; label: string }[] = [
   { id: "none", label: "No grouping" },
   { id: "repo", label: "Repository" },
   { id: "model", label: "Model" },
-  { id: "where", label: "Where it runs" },
+  { id: "host", label: "Host work" },
 ];
+
+const STATUS_TEXT: Record<AgentStatus, string> = {
+  working: "Working",
+  setup: "Setting up",
+  quiet: "Quiet",
+};
 
 // AgentsPageComponent is Agents (spec D-5): one card per running task,
 // what it is doing now and since when, quiet runs outlined and first, a
@@ -70,16 +75,21 @@ const GROUPS: { id: GroupBy; label: string }[] = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "[class.is-wall]": "wall()",
-    "(document:keydown)": "onKey($event)",
+    "(document:keydown.escape)": "onEscape($event)",
+    "(document:keydown.tab)": "onTab($event)",
+    "(document:keydown.shift.tab)": "onTab($event)",
   },
   template: `
     <section
       class="view-panel is-active agents-panel"
       aria-labelledby="agents-headline"
+      [attr.inert]="contactOpen() ? '' : null"
     >
       <div class="stage-header agents-header">
         <div class="view-headline-row">
-          <h1 class="view-headline" id="agents-headline">Agents</h1>
+          <h1 class="view-headline" id="agents-headline" tabindex="-1">
+            Agents
+          </h1>
           <div class="headline-actions">
             @if (canContact() && store.agents().length) {
               <button
@@ -108,7 +118,6 @@ const GROUPS: { id: GroupBy; label: string }[] = [
           class="agents-summary"
           [class.is-processing]="store.agents().length > 0"
           data-testid="agents-summary"
-          role="status"
         >
           <span
             ><strong class="tabular">{{ counts().working }}</strong>
@@ -122,13 +131,18 @@ const GROUPS: { id: GroupBy; label: string }[] = [
             ><strong class="tabular">{{ counts().quiet }}</strong> quiet</span
           >
           <span
-            ><strong class="tabular">{{ tokenTotal() }}</strong> prompt tokens
-            in flight</span
+            gTip="Estimated size of the prompts the current runs were handed, not what they have spent"
           >
+            <strong class="tabular">≈{{ tokenTotal() }}</strong> prompt tokens
+            (est.)
+          </span>
           @if (cpuSummary(); as c) {
             <span>{{ c }}</span>
           }
         </div>
+        <p class="sr-only" aria-live="polite" data-testid="agents-live">
+          {{ liveText() }}
+        </p>
 
         <div class="agents-controls">
           <div class="filter-strip" role="group" aria-label="Show">
@@ -178,6 +192,11 @@ const GROUPS: { id: GroupBy; label: string }[] = [
               List
             </button>
           </div>
+          @if (wall() && viewFilter.query().trim()) {
+            <span class="status-pill neutral" data-testid="wall-filter-note"
+              >Search ignored in wall view</span
+            >
+          }
         </div>
       </div>
 
@@ -186,14 +205,18 @@ const GROUPS: { id: GroupBy; label: string }[] = [
       }
 
       <div class="agents-body">
-        @if (store.loaded() && store.agents().length === 0) {
+        @if (
+          store.loaded() && !store.loadError() && store.agents().length === 0
+        ) {
           <p class="empty-state" data-testid="agents-empty">
             No agent is running right now.
             <a routerLink="/tasks" [queryParams]="{ tab: 'backlog' }"
               >See what is next in the Backlog</a
             >
           </p>
-        } @else if (store.loaded() && shown().length === 0) {
+        } @else if (
+          store.loaded() && store.agents().length && shown().length === 0
+        ) {
           <p class="empty-state">No running agent matches this filter.</p>
         }
         @for (g of grouped(); track g.key) {
@@ -226,10 +249,11 @@ const GROUPS: { id: GroupBy; label: string }[] = [
                 <thead>
                   <tr>
                     <th scope="col">Task</th>
+                    <th scope="col">Status</th>
                     <th scope="col">Doing</th>
                     <th scope="col">Model</th>
                     <th scope="col">Elapsed</th>
-                    <th scope="col">Tokens</th>
+                    <th scope="col">Prompt (est.)</th>
                     <th scope="col">CPU</th>
                   </tr>
                 </thead>
@@ -244,6 +268,7 @@ const GROUPS: { id: GroupBy; label: string }[] = [
                           >#{{ a.task.id }} {{ a.task.title }}</a
                         >
                       </td>
+                      <td>{{ statusText(a) }}</td>
                       <td>
                         @if (a.status === "quiet") {
                           <strong class="quiet-line">{{
@@ -282,6 +307,7 @@ const GROUPS: { id: GroupBy; label: string }[] = [
             >
           </h3>
         </div>
+        <p class="sr-only">{{ statusText(a) }}</p>
         @if (a.status === "quiet") {
           @let q = quiet(a);
           <p
@@ -310,8 +336,10 @@ const GROUPS: { id: GroupBy; label: string }[] = [
           <dd>{{ a.task.repo || "No repository" }}</dd>
           <dt class="sr-only">Model</dt>
           <dd>{{ a.attempt?.model || "Deployment default" }}</dd>
-          <dt class="sr-only">Where it runs</dt>
-          <dd>{{ where(a) }}</dd>
+          @if (host(a); as h) {
+            <dt class="sr-only">Host work</dt>
+            <dd>{{ h }}</dd>
+          }
           @if (a.task.authorLabel) {
             <dt class="sr-only">Filed by</dt>
             <dd class="muted">{{ a.task.authorLabel }}</dd>
@@ -324,15 +352,18 @@ const GROUPS: { id: GroupBy; label: string }[] = [
           <span class="tabular" gTip="Attempt number"
             >run {{ a.attempt?.number ?? 1 }}</span
           >
-          <span class="tabular" gTip="Prompt tokens for this run">{{
-            tokensOf(a)
-          }}</span>
+          <span
+            class="tabular"
+            gTip="Estimated size of the prompt this run was handed"
+            >{{ tokensOf(a) }}</span
+          >
           <span
             class="cpu"
+            tabindex="0"
             [gTip]="cpuTip(a)"
-            [attr.aria-label]="'CPU ' + cpuText(a)"
+            data-testid="agent-cpu"
           >
-            CPU
+            <span aria-hidden="true">CPU</span>
             @if (a.cpu; as c) {
               <span class="cpu-meter" aria-hidden="true">
                 <span
@@ -340,13 +371,18 @@ const GROUPS: { id: GroupBy; label: string }[] = [
                   [style.width.%]="min100(c.share * 100)"
                 ></span>
               </span>
-              <span class="tabular">{{ pct(c.share) }}%</span>
+              <span class="tabular" aria-hidden="true"
+                >{{ pct(c.share) }}%</span
+              >
               @if (c.bound) {
-                <span class="status-pill error cpu-bound">CPU-bound</span>
+                <span class="status-pill error cpu-bound" aria-hidden="true"
+                  >CPU-bound</span
+                >
               }
             } @else {
-              <span class="tabular">—</span>
+              <span class="tabular" aria-hidden="true">—</span>
             }
+            <span class="sr-only">CPU {{ cpuText(a) }}. {{ cpuTip(a) }}</span>
           </span>
           <svg
             class="spark"
@@ -373,11 +409,7 @@ const GROUPS: { id: GroupBy; label: string }[] = [
     </ng-template>
 
     @if (contactOpen()) {
-      <div
-        class="scrim"
-        aria-hidden="true"
-        (click)="contactOpen.set(false)"
-      ></div>
+      <div class="scrim" aria-hidden="true" (click)="closeContact()"></div>
       <div
         class="g-dialog"
         role="dialog"
@@ -407,7 +439,8 @@ const GROUPS: { id: GroupBy; label: string }[] = [
             <button
               type="button"
               class="btn-text"
-              (click)="contactOpen.set(false)"
+              data-testid="contact-cancel"
+              (click)="closeContact()"
             >
               Cancel
             </button>
@@ -430,8 +463,9 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly keyboard = inject(KeyboardService);
-  private readonly viewFilter = inject(ViewFilter);
+  protected readonly viewFilter = inject(ViewFilter);
   private readonly doc = inject(DOCUMENT);
+  private unregisterF: (() => void) | null = null;
 
   protected readonly filters = FILTERS;
   protected readonly groups = GROUPS;
@@ -452,6 +486,12 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     for (const a of this.store.agents()) c[a.status]++;
     return c;
   });
+  // The live region speaks only when the number of quiet runs changes,
+  // not on every poll.
+  protected readonly liveText = computed(() => {
+    const n = this.counts().quiet;
+    return n ? `${n} run${n === 1 ? "" : "s"} quiet` : "";
+  });
   protected readonly tokenTotal = computed(() =>
     this.store
       .agents()
@@ -471,7 +511,8 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   });
   protected readonly shown = computed(() => {
     const f = this.filter();
-    const q = this.viewFilter.query().trim().toLowerCase();
+    // The wall view hides the search field, so it does not filter there.
+    const q = this.wall() ? "" : this.viewFilter.query().trim().toLowerCase();
     return sortAgents(this.store.agents()).filter(
       (a) =>
         (f === "all" || a.status === f) &&
@@ -487,16 +528,26 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.store.start();
+    this.unregisterF = this.keyboard.register({
+      key: "f",
+      description: "Wall view on or off (Agents)",
+      run: () => this.toggleWall(),
+    });
   }
 
   ngOnDestroy(): void {
     this.store.stop();
+    this.unregisterF?.();
     this.setWall(false);
   }
 
   protected quiet = quietReason;
-  protected where = whereLabel;
+  protected host = hostWork;
   protected level = cpuLevel;
+
+  protected statusText(a: Agent): string {
+    return STATUS_TEXT[a.status];
+  }
 
   protected ago(a: Agent): string {
     return minutes(this.store.now() - Date.parse(a.task.activityAt ?? ""));
@@ -509,7 +560,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   protected tokensOf(a: Agent): string {
     const n = tokens(a.attempt);
-    return n ? `${n.toLocaleString()} tok` : "— tok";
+    return n ? `≈${n.toLocaleString()} tok` : "— tok";
   }
 
   protected pct(share: number): number {
@@ -526,8 +577,6 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   }
 
   protected cpuTip(a: Agent): string {
-    if (isAgentd(a))
-      return "Grain does not probe a person's machine, so CPU is not shown for grain-agentd runs.";
     if (!a.cpu)
       return "No CPU reading for this run's sandbox on this deployment.";
     const mem = a.cpu.memoryUsedMB
@@ -542,11 +591,11 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   protected barH(v: number, a: Agent): number {
     const max = Math.max(1, ...this.sparkOf(a));
-    return v ? Math.max(2, Math.round((v / max) * 16)) : 1;
+    return Math.max(2, Math.round((v / max) * 16));
   }
 
   protected sparkLabel(a: Agent): string {
-    const n = (this.store.history()[a.task.id] ?? []).length;
+    const n = this.sparkOf(a).reduce((x, y) => x + y, 0);
     return `${n} activity update${n === 1 ? "" : "s"} seen in the last 30 minutes`;
   }
 
@@ -561,22 +610,44 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     this.doc.body.classList.toggle("agents-wall", on);
   }
 
-  protected onKey(ev: KeyboardEvent): void {
-    if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
-    if (isTypingTarget(ev.target)) return;
-    if (this.doc.querySelector('[aria-modal="true"]')) {
-      if (ev.key === "Escape" && this.contactOpen()) {
-        ev.preventDefault();
-        this.contactOpen.set(false);
-      }
+  // Escape is not a character key, so it works from any field: it closes
+  // the dialog first, then leaves the wall view. A modal outside this page
+  // (the New task sheet) owns the key.
+  protected onEscape(ev: Event): void {
+    if (ev.defaultPrevented) return;
+    if (this.contactOpen()) {
+      ev.preventDefault();
+      this.closeContact();
       return;
     }
-    if (ev.key === "f" && this.keyboard.enabled() && !ev.repeat) {
-      ev.preventDefault();
-      this.toggleWall();
-    } else if (ev.key === "Escape" && this.wall()) {
+    if (this.doc.querySelector('[aria-modal="true"]')) return;
+    if (this.wall()) {
       ev.preventDefault();
       this.setWall(false);
+    }
+  }
+
+  // The dialog keeps Tab inside itself.
+  protected onTab(ev: KeyboardEvent): void {
+    const dialog = this.doc.querySelector<HTMLElement>(
+      'g-agents-page [aria-modal="true"]',
+    );
+    if (!dialog) return;
+    const items = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input, textarea, select, a[href], [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = this.doc.activeElement;
+    if (ev.shiftKey && (active === first || !dialog.contains(active))) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && (active === last || !dialog.contains(active))) {
+      ev.preventDefault();
+      first.focus();
     }
   }
 
@@ -590,6 +661,18 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     );
   }
 
+  // closeContact returns focus to the button that opened the dialog, or to
+  // the headline when that button is gone (every run finished meanwhile).
+  protected closeContact(): void {
+    this.contactOpen.set(false);
+    setTimeout(() =>
+      (
+        this.doc.querySelector<HTMLElement>('[data-testid="contact-open"]') ??
+        this.doc.getElementById("agents-headline")
+      )?.focus(),
+    );
+  }
+
   protected async sendContact(ev: Event): Promise<void> {
     ev.preventDefault();
     const text = this.contactText().trim();
@@ -597,7 +680,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     this.sending.set(true);
     try {
       const n = await this.store.contact(text);
-      this.contactOpen.set(false);
+      this.closeContact();
       this.snackbar.show(
         `Notice sent to ${n} running agent${n === 1 ? "" : "s"}`,
       );

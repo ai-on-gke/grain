@@ -27,7 +27,7 @@ import {
   sortAgents,
   spark,
   toAgent,
-  whereLabel,
+  hostWork,
 } from "./agent-view";
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
@@ -42,14 +42,14 @@ function detail(attempts: Partial<Attempt>[]): TaskDetail {
 }
 
 describe("agent-view", () => {
-  it("shows running tasks only, not standing sessions", () => {
+  it("shows running tasks, interactive ones too, but not console sessions", () => {
     const list = running([
       task("1"),
       task("2", { state: "queued" } as Partial<Task>),
       task("3", { consoleSession: true } as Partial<Task>),
       task("4", { interactive: true } as Partial<Task>),
     ]);
-    expect(list.map((t) => t.id)).toEqual(["1"]);
+    expect(list.map((t) => t.id)).toEqual(["1", "4"]);
   });
 
   it("marks a run quiet after ten minutes without an update", () => {
@@ -92,6 +92,16 @@ describe("agent-view", () => {
     expect(a.status).toBe("quiet");
   });
 
+  it("falls back to the task's last update when nothing else is known", () => {
+    const a = toAgent(
+      task("1", { updatedAt: iso(QUIET_MS * 2) } as Partial<Task>),
+      null,
+      [],
+      NOW,
+    );
+    expect(a.status).toBe("quiet");
+  });
+
   it("uses the latest attempt", () => {
     const a = toAgent(
       task("1", { activityAt: iso(0) }),
@@ -123,7 +133,7 @@ describe("agent-view", () => {
     expect(list.map((a) => a.task.id)).toEqual(["d", "b", "c", "a"]);
   });
 
-  it("groups by repository, model and where it runs", () => {
+  it("groups by repository, model and host work", () => {
     const a = toAgent(
       task("1", { repo: "o/b" }),
       detail([{ number: 1, model: "m2" }]),
@@ -132,8 +142,8 @@ describe("agent-view", () => {
     );
     const b = toAgent(task("2", { repo: "o/a" }), null, [], NOW);
     const c = toAgent(
-      task("3", { hostd: "laptop" } as Partial<Task>),
-      null,
+      task("3"),
+      detail([{ number: 1, hostd: { hostd: "laptop", deleted: true } }]),
       [],
       NOW,
     );
@@ -146,11 +156,11 @@ describe("agent-view", () => {
       "Deployment default",
       "m2",
     ]);
-    expect(groupAgents([a, c], "where").map((g) => g.key)).toEqual([
-      "Grain sandbox",
-      "grain-agentd laptop",
+    expect(groupAgents([a, c], "host").map((g) => g.key)).toEqual([
+      "Host work on laptop (deleted)",
+      "No host work",
     ]);
-    expect(whereLabel(c)).toBe("grain-agentd laptop");
+    expect(hostWork(a)).toBe("");
   });
 
   it("reads CPU as load over vCPUs and flags CPU-bound", () => {
@@ -178,6 +188,16 @@ describe("agent-view", () => {
     expect(sandboxFor(task("12"), rs)?.name).toBe("grain-task-12");
     expect(sandboxFor(task("7"), rs)?.name).toBe("task7-x");
     expect(sandboxFor(task("2"), rs)).toBeUndefined();
+  });
+
+  it("skips CI and dead sandboxes for the same task", () => {
+    const rs = [
+      { name: "grain-ci-task-5", kind: "ci" },
+      { name: "grain-task-5-old", terminationReason: "gone" },
+      { name: "grain-task-5-x", ready: false },
+      { name: "grain-task-5", kind: "task", terminationReason: "running" },
+    ];
+    expect(sandboxFor(task("5"), rs)?.name).toBe("grain-task-5");
   });
 
   it("explains a quiet run from its CPU", () => {

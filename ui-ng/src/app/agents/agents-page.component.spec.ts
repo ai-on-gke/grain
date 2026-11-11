@@ -20,6 +20,8 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { KeyboardService } from "../services/keyboard.service";
+import { ViewFilter } from "../services/view-filter.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { AgentsPageComponent } from "./agents-page.component";
 import { AgentsStore } from "./agents.store";
@@ -33,13 +35,22 @@ class FakeApi {
   posts: { route: string; body: unknown }[] = [];
   postResult: unknown = { delivered_count: 2 };
   postFails = false;
+  // The list GET answers 304 with the shared newest body, as GrainApi does
+  // after another page took the fresh copy.
+  listUnchanged = false;
+  detailReads: string[] = [];
+  failDetail = new Set<string>();
 
   getIfChanged = (route: string, p?: { id?: string }) => {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
         body: structuredClone(this.live),
-        changed: true,
+        changed: !this.listUnchanged,
       });
+    }
+    this.detailReads.push(p?.id ?? "");
+    if (this.failDetail.has(p?.id ?? "")) {
+      return new Promise((_r, rej) => setTimeout(() => rej(new Error("404"))));
     }
     return Promise.resolve({
       body:
@@ -152,7 +163,7 @@ describe("AgentsPageComponent", () => {
     expect(s).toContain("1 working");
     expect(s).toContain("1 setting up");
     expect(s).toContain("1 quiet");
-    expect(s).toContain(`${(1500).toLocaleString()} prompt tokens`);
+    expect(s).toContain(`≈${(1500).toLocaleString()} prompt tokens (est.)`);
     expect(q(f, '[data-testid="agent-1"] .agent-foot')!.textContent).toContain(
       "run 1",
     );
@@ -192,11 +203,11 @@ describe("AgentsPageComponent", () => {
 
   it("shows CPU as unknown with a reason when there is no probe", async () => {
     const api = new FakeApi();
-    api.live = [run("1"), run("2", { hostd: "laptop" } as Partial<Task>)];
+    api.live = [run("1"), run("2")];
     const f = await render(api);
     expect(
-      q(f, '[data-testid="agent-1"] .cpu')!.getAttribute("aria-label"),
-    ).toBe("CPU —");
+      q(f, '[data-testid="agent-1"] .cpu .sr-only')!.textContent,
+    ).toContain("No CPU reading");
     expect(q(f, '[data-testid="agent-1"] .cpu-meter')).toBeNull();
     expect(q(f, '[data-testid="agents-summary"]')!.textContent).not.toContain(
       "vCPU",
@@ -287,6 +298,114 @@ describe("AgentsPageComponent", () => {
     key("f");
     f.destroy();
     expect(document.body.classList).not.toContain("agents-wall");
+  });
+
+  it("ignores f when shortcuts are off, and lists it in the help", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    const f = await render(api);
+    const kb = TestBed.inject(KeyboardService);
+    expect(kb.list().some((s) => s.key === "f")).toBe(true);
+    kb.setEnabled(false);
+    key("f");
+    await f.whenStable();
+    expect(document.body.classList).not.toContain("agents-wall");
+    kb.setEnabled(true);
+    f.destroy();
+    expect(kb.list().some((s) => s.key === "f")).toBe(false);
+  });
+
+  it("closes the dialog with Escape from the textarea and returns focus", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    const f = await render(api);
+    q(f, '[data-testid="contact-open"]')!.click();
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    const ta = q(f, '[data-testid="contact-text"]')!;
+    expect(document.activeElement).toBe(ta);
+    expect(q(f, ".agents-panel")!.hasAttribute("inert")).toBe(true);
+    ta.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    expect(q(f, '[data-testid="contact-dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(q(f, '[data-testid="contact-open"]'));
+  });
+
+  it("ignores the search box in wall view and says so", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    const f = await render(api);
+    TestBed.inject(ViewFilter).query.set("Task 1");
+    await f.whenStable();
+    expect(cards(f)).toEqual(["agent-1"]);
+    q(f, '[data-testid="wall-toggle"]')!.click();
+    await f.whenStable();
+    expect(cards(f).sort()).toEqual(["agent-1", "agent-2"]);
+    expect(q(f, '[data-testid="wall-filter-note"]')).not.toBeNull();
+  });
+
+  it("takes the shared newest list from an unchanged answer", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    const f = await render(api);
+    api.live = [run("2")];
+    api.listUnchanged = true;
+    await TestBed.inject(AgentsStore).refresh();
+    await f.whenStable();
+    expect(cards(f)).toEqual(["agent-2"]);
+  });
+
+  it("shows interactive running tasks", async () => {
+    const api = new FakeApi();
+    api.live = [run("1", { interactive: true } as Partial<Task>)];
+    const f = await render(api);
+    expect(cards(f)).toEqual(["agent-1"]);
+  });
+
+  it("drops details of finished runs and does not hammer a failing detail", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    api.failDetail.add("2");
+    const f = await render(api);
+    const store = TestBed.inject(AgentsStore);
+    await new Promise((r) => setTimeout(r, 5));
+    const reads = api.detailReads.filter((id) => id === "2").length;
+    expect(reads).toBeGreaterThan(0);
+    await store.refresh();
+    await store.refresh();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(api.detailReads.filter((id) => id === "2").length).toBe(reads);
+    expect(Object.keys(store.details())).toEqual(["1"]);
+    api.live = [run("3")];
+    await store.refresh();
+    await store.refreshSlow();
+    await new Promise((r) => setTimeout(r, 5));
+    await f.whenStable();
+    expect(Object.keys(store.details())).toEqual(["3"]);
+  });
+
+  it("does not claim nothing is running when the list cannot be read", async () => {
+    const api = new FakeApi();
+    api.getIfChanged = () =>
+      new Promise((_r, rej) => setTimeout(() => rej(new Error("down"))));
+    const f = await render(api);
+    expect(q(f, '[role="alert"]')!.textContent).toContain("could not be read");
+    expect(q(f, '[data-testid="agents-empty"]')).toBeNull();
+  });
+
+  it("speaks only the quiet count", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2", { activityAt: iso(20 * 60000) })];
+    const f = await render(api);
+    expect(
+      q(f, '[data-testid="agents-summary"]')!.getAttribute("role"),
+    ).toBeNull();
+    expect(q(f, '[data-testid="agents-live"]')!.textContent!.trim()).toBe(
+      "1 run quiet",
+    );
   });
 
   it("points at the Backlog when nothing is running", async () => {

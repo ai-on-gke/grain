@@ -26,6 +26,9 @@ export type AgentStatus = "working" | "setup" | "quiet";
 
 export interface SandboxReading {
   name: string;
+  kind?: string;
+  ready?: boolean;
+  terminationReason?: string;
   cpus?: number;
   loadAverage?: string;
   memoryUsedMB?: number;
@@ -51,11 +54,10 @@ export interface Agent {
 }
 
 // running is what the screen shows: running tasks, not standing
-// sessions (TaskList.jsx runningTasks).
+// console sessions -- the classic runningTasks (TaskList.jsx) and the
+// set a running_only broadcast reaches (pkg/ui/teams.go).
 export function running(tasks: readonly Task[]): Task[] {
-  return tasks.filter(
-    (t) => t.state === "running" && !t.consoleSession && !t.interactive,
-  );
+  return tasks.filter((t) => t.state === "running" && !t.consoleSession);
 }
 
 export function currentAttempt(d: TaskDetail | null): Attempt | null {
@@ -65,12 +67,20 @@ export function currentAttempt(d: TaskDetail | null): Attempt | null {
 }
 
 // lastActivity is when the run last said what it is doing, falling back
-// to when the attempt started.
-export function lastActivity(t: Task, a: Attempt | null): number {
-  const at = Date.parse(t.activityAt ?? "");
-  if (Number.isFinite(at)) return at;
-  const start = Date.parse(a?.agentStartedAt ?? a?.startedAt ?? "");
-  return Number.isFinite(start) ? start : Date.now();
+// to when the attempt started, then to the task's last update, so a run
+// with nothing to go on can still turn quiet.
+export function lastActivity(t: Task, a: Attempt | null, now: number): number {
+  for (const v of [
+    t.activityAt,
+    a?.agentStartedAt,
+    a?.startedAt,
+    t.updatedAt,
+    t.createdAt,
+  ]) {
+    const at = Date.parse(v ?? "");
+    if (Number.isFinite(at)) return at;
+  }
+  return now;
 }
 
 // cpuOf reads a sandbox probe: the 1-minute load average over its vCPUs.
@@ -89,15 +99,23 @@ export function cpuOf(r: SandboxReading | undefined): Cpu | null {
   };
 }
 
-// sandboxFor finds the probe row for a task's sandbox. Sandboxes are
-// named after their task (grain-task-<id> and similar); a backend that
-// names them otherwise, or does not probe them, gives no reading.
+// sandboxFor finds the probe row for a task's agent sandbox. The probe
+// rows carry no task id, so this is a heuristic: sandboxes are named
+// after their task (grain-task-<id> and similar). CI sandboxes and rows
+// that are no longer running are skipped; a backend that names them
+// otherwise, or does not probe them, gives no reading.
 export function sandboxFor(
   t: Task,
   readings: readonly SandboxReading[],
 ): SandboxReading | undefined {
   const re = new RegExp(`(^|[^0-9])task-?${t.id}([^0-9]|$)`);
-  return readings.find((r) => re.test(r.name));
+  return readings.find(
+    (r) =>
+      re.test(r.name) &&
+      r.ready !== false &&
+      (!r.terminationReason || r.terminationReason === "running") &&
+      !/(^|[^a-z])ci([^a-z]|$)/i.test(`${r.kind ?? ""} ${r.name}`),
+  );
 }
 
 export function toAgent(
@@ -107,7 +125,7 @@ export function toAgent(
   now: number,
 ): Agent {
   const attempt = currentAttempt(d);
-  const quietMs = now - lastActivity(t, attempt);
+  const quietMs = now - lastActivity(t, attempt, now);
   const status: AgentStatus =
     quietMs >= QUIET_MS ? "quiet" : t.activityBySetup ? "setup" : "working";
   return {
@@ -137,7 +155,7 @@ function startOf(a: Agent): number {
   return Number.isFinite(s) ? s : 0;
 }
 
-export type GroupBy = "none" | "repo" | "model" | "where";
+export type GroupBy = "none" | "repo" | "model" | "host";
 
 export function groupKey(a: Agent, by: GroupBy): string {
   switch (by) {
@@ -145,8 +163,8 @@ export function groupKey(a: Agent, by: GroupBy): string {
       return a.task.repo || "No repository";
     case "model":
       return a.attempt?.model || "Deployment default";
-    case "where":
-      return whereLabel(a);
+    case "host":
+      return hostWork(a) || "No host work";
     default:
       return "";
   }
@@ -167,15 +185,13 @@ export function groupAgents(
     .map(([key, agents]) => ({ key, agents }));
 }
 
-// whereLabel is where the run executes: a grain-agentd host when the task
-// is hosted on one, else grain's own sandboxes.
-export function whereLabel(a: Agent): string {
-  const h = (a.task as Task & { hosting?: string; hostd?: string }).hostd;
-  return h ? `grain-agentd ${h}` : "Grain sandbox";
-}
-
-export function isAgentd(a: Agent): boolean {
-  return !!(a.task as Task & { hostd?: string }).hostd;
+// hostWork names the grain hostd the current attempt's host work went to
+// (Attempt.hostd), "" when it resolved none. It says where host work ran,
+// not where the agent itself runs.
+export function hostWork(a: Agent): string {
+  const h = a.attempt?.hostd;
+  if (!h?.hostd) return "";
+  return `Host work on ${h.hostd}${h.deleted ? " (deleted)" : ""}`;
 }
 
 // spark turns activity update times into bucket counts over the window,
@@ -217,6 +233,8 @@ export function cpuLevel(c: Cpu): "low" | "mid" | "high" {
   return "low";
 }
 
+// tokens is the attempt's prompt size estimate (Attempt.promptTokens):
+// how big the prompt it was handed came out, not what it has spent.
 export function tokens(a: Attempt | null): number {
-  return (a as (Attempt & { promptTokens?: number }) | null)?.promptTokens ?? 0;
+  return a?.promptTokens ?? 0;
 }
