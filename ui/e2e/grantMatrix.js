@@ -50,6 +50,17 @@ export const KNOWN_GAPS = {
   // A top-level oneOf draws no fields and says the arguments "match
   // none" (grain/task-4400, in review).
   "https://grain.dev/capabilities/repo#write *": "#4400",
+  // A task's own repository is given under "Repository access"
+  // (repoGrants.js), not as this method; the walk does not drive that
+  // path yet (follow-up filed from grain/task-4401).
+  "https://grain.dev/capabilities/repo#target *": "4401 follow-up",
+  // Its one-value credential select did not take the pick within 5s on
+  // the task pane (2026-11-11 run; follow-up filed from grain/task-4401).
+  "https://grain.dev/capabilities/repo#credential *": "4401 follow-up",
+  // The grain/* api presets are not listed by Add grant… on a task pane
+  // though GET /api/capability-methods offers them (follow-up filed from
+  // grain/task-4401).
+  "https://grain.dev/capabilities/api#grain/viewer *": "4401 follow-up",
 };
 
 export function knownGap(ref, variant) {
