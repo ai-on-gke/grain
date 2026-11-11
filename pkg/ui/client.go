@@ -659,9 +659,10 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 	}
 	if name, ok := model.GCPKeyName(id); ok && name != "" {
 		return Capability{
-			ID:          id,
-			Name:        "GCP key (" + name + ")",
-			Description: "Mint a short-lived GCP service-account key (" + name + ") for this task and place it in its sandbox",
+			ID:   id,
+			Name: "GCP key (" + name + ", retired spelling)",
+			Description: "Read as https://grain.dev/capabilities/gcp#gcp-key with {permission_set: " + name + "}: mint a " +
+				"short-lived GCP service-account key for this task and place it in its sandbox",
 		}, true
 	}
 	// An agent API grant (agent_api.go), a repo-limited one included:
@@ -673,9 +674,9 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 	if name, ok := localScriptsName(id); ok {
 		return Capability{
 			ID:   id,
-			Name: "Local scripts (" + name + ")",
-			Description: "Serve the scripts of the " + name + " local-scripts declaration as tools that run on the node host " +
-				"(docs/local-scripts.md); never granted to a scheduled run",
+			Name: "Local scripts (" + name + ", retired spelling)",
+			Description: "Read as the host-script grants (https://grain.dev/capabilities/host-script#host-script) serving the " +
+				"scripts of the " + name + " local-scripts declaration on the node host (docs/local-scripts.md); never granted to a scheduled run",
 		}, true
 	}
 	return Capability{}, false

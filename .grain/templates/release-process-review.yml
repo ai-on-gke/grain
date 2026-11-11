@@ -3,10 +3,10 @@ title: Weekly review of releases and release pipeline improvements
 base: main
 nothing-needed: close
 capabilities:
-  - "api:ci-read@ai-on-gke/grain"
-  - "api:self-debug"
-  - "api:suites:read@ai-on-gke/grain"
-  - "api:releases:read@ai-on-gke/grain"
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
+  - "https://grain.dev/capabilities/api#self-debug"
+  - {capability: "https://grain.dev/capabilities/api#suites:read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#releases:read", with: {repo: ai-on-gke/grain}}
 body: |
   Review the past week of release pipeline execution on `main` and suggest
   concrete improvements to the release process. Releases go out
@@ -41,8 +41,8 @@ body: |
     `pipeline.rc-failed` triage and `[rc-blocker <rc tag>]` tasks, and
     the `release-qualification` suite runs (`grain task list` / `grain task
     read`, `grain api GET /api/suite-runs` and `grain api GET
-    /api/notifications`, when `api:self-debug` and
-    `api:suites:read@ai-on-gke/grain` are granted) to see where a person had
+    /api/notifications`, when `api#self-debug` and
+    `api#suites:read` on ai-on-gke/grain are granted) to see where a person had
     to act, which rcs were discarded or stalled, and why. If you cannot read
     tasks, say so in the retrospective.
 

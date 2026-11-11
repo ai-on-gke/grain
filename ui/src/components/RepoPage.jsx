@@ -1824,7 +1824,7 @@ export default function RepoPage({
                             >
                               It swaps the gate rather than removing it. Tasks
                               filed against {repo} while this is on are granted
-                              the <code>grain-ci</code> capability, so their
+                              the <code>grain#ci</code> capability, so their
                               branches are judged by {repo}&rsquo;s{" "}
                               <code>.grain/workflows</code>. A commit with no
                               grain CI verdict stays pending and is eventually
