@@ -1,0 +1,165 @@
+{
+  "item": "item1-committed-context",
+  "results": [
+    {
+      "name": "1a refused without -read when autoGrantContextReads is empty",
+      "pass": true,
+      "detail": "HTTP 400 {\"error\":\"committed context \\\"acme/specs:architecture.md@main\\\" is in acme/specs (task target: acme/app): grant read access with -read acme/specs, or add acme/specs to autoGrantContextReads\"}"
+    },
+    {
+      "name": "1b explicit -read files and pins @main to the SHA",
+      "pass": true,
+      "detail": "HTTP 201 id=1"
+    },
+    {
+      "name": "1c PUT /api/settings stores autoGrantContextReads",
+      "pass": true,
+      "detail": "HTTP 200 stored=[acme/specs] {\"configured\":true,\"pollInterval\":\"10s\",\"pollIntervalDefault\":\"10s\",\"maxWorkers\":10,\"maxMergesPerRepo\":5,\"maxAutoSubmitDepth\":2,\"maxAutoSubmitFanOut\":5,\"geminiEfforts\":[\"low\",\"medium\",\"high\"],\"codexEfforts\":[\"none\",\"minimal\",\"low\",\"medium\",\"high\",\"xhigh\",\"max\",\"ultra\"],\"maxAgentTurns\":0,\"githubHost\":\"github.com\",\"githubInsecureHttp\":false,\"gcpProject\":\"\",\"gcpServiceAccountEmail\":\"\",\"gcpServiceAccountCount\":0,\"iapBackendService\":\"\",\"iapResource\":\"\",\"newestFirst\":false,\"sandboxBackend\":\"\",\"sandboxBackends\":[],\"sandboxBackendOptions\":null,\"sandboxCpus\":0,\"sandboxMemoryMb\":0,\"sandboxDiskGb\":0,\"san [clipped]"
+    },
+    {
+      "name": "1d auto-granted -read acme/specs",
+      "pass": true,
+      "detail": "reads=[acme/specs]"
+    },
+    {
+      "name": "1e @main pinned to immutable SHA at filing",
+      "pass": true,
+      "detail": "designs=[acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325 acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325] want [acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325 acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325]"
+    },
+    {
+      "name": "1f sandbox clone detached at pinned SHA1 though main moved to SHA2",
+      "pass": true,
+      "detail": "HEAD=bf7fe98b61f368d569ef277ac88b644e1ab7b325 sha1=bf7fe98b61f368d569ef277ac88b644e1ab7b325 sha2=4347adf03d192a3274b54082a41b560f489992ec"
+    },
+    {
+      "name": "1g sandbox sees approved v1 content",
+      "pass": true,
+      "detail": "architecture.md=\"# Architecture v1 (approved)\\n\""
+    },
+    {
+      "name": "1h prompt names pinned SHA and manifest title, never SHA2",
+      "pass": true,
+      "detail": "pinned=true manifest=true sha2=false"
+    },
+    {
+      "name": "1i tamper: push via read-only remote refused",
+      "pass": true,
+      "detail": "pushURL=grain-read-only out=fatal: 'grain-read-only' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists."
+    },
+    {
+      "name": "1j tamper: push straight to proxy URL refused by scoped proxy",
+      "pass": true,
+      "detail": "out=remote: acme/specs is read-only for this sandbox: it may fetch it but not push to it\nfatal: unable to access 'http://127.0.0.1:41333/acme/specs.git/': The requested URL returned error: 403"
+    },
+    {
+      "name": "1k acme/specs main untouched by sandbox",
+      "pass": true,
+      "detail": "main=4347adf03d192a3274b54082a41b560f489992ec"
+    },
+    {
+      "name": "1l manifest persisted on task after checkout",
+      "pass": true,
+      "detail": "manifest=\u0026{Title:PLC-042 billing spec Description:Approved by design review Files:[{Path:spec.md Kind:design Title:Billing spec SourceURL:https://planner.example.com/PLC-042}]}"
+    },
+    {
+      "name": "1m propose_task child inherits pinned manifest refs",
+      "pass": true,
+      "detail": "child designs=[acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325 acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325]"
+    },
+    {
+      "name": "1n propose_task child inherits -read acme/specs",
+      "pass": true,
+      "detail": "child reads=[acme/specs]"
+    },
+    {
+      "name": "1o propose_task child carries the manifest",
+      "pass": true,
+      "detail": "manifest=\u0026{Title:PLC-042 billing spec Description:Approved by design review Files:[{Path:spec.md Kind:design Title:Billing spec SourceURL:https://planner.example.com/PLC-042}]}"
+    },
+    {
+      "name": "1p GET /api/tasks/{id} renders context refs with manifest",
+      "pass": true,
+      "detail": "HTTP 200 context=[{\"path\":\"architecture.md\",\"placement\":\"read\",\"repo\":\"acme/specs\",\"rev\":\"bf7fe98b61f368d569ef277ac88b644e1ab7b325\"},{\"manifest\":{\"description\":\"Approved by design review\",\"files\":[{\"kind\":\"design\",\"path\":\"spec.md\",\"source_url\":\"https://planner.example.com/PLC-042\",\"title\":\"Billing spec\"}],\"title\":\"PLC-042 billing spec\"},\"path\":\"plc/042\",\"placement\":\"read\",\"repo\":\"acme/specs\",\"rev\":\"bf7fe98b61f368d569ef277ac88b644e1ab7b325\"}]"
+    },
+    {
+      "name": "1p' grain show renders the pinned context refs and manifest",
+      "pass": true,
+      "detail": "err=\u003cnil\u003e out=2 Implement architecture\nstate:      awaiting_reply\nowner:      operator@example.com\nrepo:       acme/app\nreads:      acme/specs\ncontext:    acme/specs:architecture.md@bf7fe98b61f3, acme/specs:plc/042@bf7fe98b61f3\n  acme/specs:plc/042@bf7fe98b61f3: PLC-042 billing spec\n    Approved by design review\n    [design] spec.md -- Billing spec \u003chttps://planner.example.com/PLC-042\u003e\npriority:   5\nauto-merge: false\n\nFollow the pinned spec.\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e proposed        2026-11-08T01:43:51Z by operator (access code)\n  -\u003e queued          2026-11-08T01:43:51Z\n  -\u003e run [clipped]"
+    },
+    {
+      "name": "1q pin to a commit missing upstream fails setup instead of using another revision",
+      "pass": true,
+      "detail": "runs=3 outcome=failed error=orchestrator: checking out committed context acme/specs:architecture.md@abababababababababababababababababababab: exit=128\nstdout:\n\nstderr:\nerror: Server does not allow request for unadvertised object abababababababababababababababababababab"
+    }
+  ],
+  "data": {
+    "1a_refusal": "{\"error\":\"committed context \\\"acme/specs:architecture.md@main\\\" is in acme/specs (task target: acme/app): grant read access with -read acme/specs, or add acme/specs to autoGrantContextReads\"}",
+    "appSeedSHA": "251b66042b0e60130ff5f936a6ed499de174f2c1",
+    "child": {
+      "designs": [
+        "acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325",
+        "acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325"
+      ],
+      "id": "4",
+      "reads": [
+        "acme/specs"
+      ]
+    },
+    "filedTask": {
+      "designs": [
+        "acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325",
+        "acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325"
+      ],
+      "id": "2",
+      "reads": [
+        "acme/specs"
+      ]
+    },
+    "grainShow": "2 Implement architecture\nstate:      awaiting_reply\nowner:      operator@example.com\nrepo:       acme/app\nreads:      acme/specs\ncontext:    acme/specs:architecture.md@bf7fe98b61f3, acme/specs:plc/042@bf7fe98b61f3\n  acme/specs:plc/042@bf7fe98b61f3: PLC-042 billing spec\n    Approved by design review\n    [design] spec.md -- Billing spec \u003chttps://planner.example.com/PLC-042\u003e\npriority:   5\nauto-merge: false\n\nFollow the pinned spec.\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e proposed        2026-11-08T01:43:51Z by operator (access code)\n  -\u003e queued          2026-11-08T01:43:51Z\n  -\u003e running         2026-11-08T01:43:51Z\n  -\u003e awaiting_reply  2026-11-08T01:43:51Z\n\nattempts:\n  #1 started 2026-11-08T01:43:51Z, finished 2026-11-08T01:43:51Z, succeeded\n\n--- comment #2 by grain on behalf of 2 ---\nDone against the pinned spec.",
+    "run": {
+      "detail": "the run made 2 tool call(s) [comment_on_issue x1, propose_task x1]",
+      "outcome": "succeeded"
+    },
+    "sandbox": {
+      "architecture": "# Architecture v1 (approved)\n",
+      "promptManifestTitle": true,
+      "promptMentionsSHA2": false,
+      "promptPinned": true,
+      "pushURL": "grain-read-only",
+      "sandboxHead": "bf7fe98b61f368d569ef277ac88b644e1ab7b325",
+      "tamperProxyPushOutput": "remote: acme/specs is read-only for this sandbox: it may fetch it but not push to it\nfatal: unable to access 'http://127.0.0.1:41333/acme/specs.git/': The requested URL returned error: 403",
+      "tamperProxyPushRefused": true,
+      "tamperPushOutput": "fatal: 'grain-read-only' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
+      "tamperPushRefused": true
+    },
+    "specsSHA1": "bf7fe98b61f368d569ef277ac88b644e1ab7b325",
+    "specsSHA2": "4347adf03d192a3274b54082a41b560f489992ec",
+    "taskDetailContext": [
+      {
+        "path": "architecture.md",
+        "placement": "read",
+        "repo": "acme/specs",
+        "rev": "bf7fe98b61f368d569ef277ac88b644e1ab7b325"
+      },
+      {
+        "manifest": {
+          "description": "Approved by design review",
+          "files": [
+            {
+              "kind": "design",
+              "path": "spec.md",
+              "source_url": "https://planner.example.com/PLC-042",
+              "title": "Billing spec"
+            }
+          ],
+          "title": "PLC-042 billing spec"
+        },
+        "path": "plc/042",
+        "placement": "read",
+        "repo": "acme/specs",
+        "rev": "bf7fe98b61f368d569ef277ac88b644e1ab7b325"
+      }
+    ],
+    "vanishedFiling": "HTTP 201 id=5"
+  }
+}

@@ -1,0 +1,73 @@
+== sandbox container: grain-sandbox-5-1 (grain-sbx:walk)
+== 1. what the grant placed
+ls: cannot access '/home/debian/.gcp-keys': No such file or directory
+-rw-r--r-- 1 debian debian 389 Nov  8 02:23 /home/debian/.gcp-service-account.about
+-rw------- 1 debian debian 369 Nov  8 02:23 /home/debian/.gcp-service-account.json
+drwxr-xr-x debian /home/debian/.gcp-token
+drwxr-xr-x debian /home/debian/.gcp-token/grain-5-1-0
+-rw------- debian /home/debian/.gcp-token/grain-5-1-0/org-deploy.token
+-rwx------ debian /home/debian/.gcp-token/grain-5-1-0/activate.sh
+-rwx------ debian /home/debian/.gcp-token/grain-5-1-0/org-deploy-id-token
+-- ~/.gcp-service-account.json
+{
+  "audience": "//grain.dev/capabilities/gcp/permission-sets/org-deploy",
+  "credential_source": {
+    "file": "/home/debian/.gcp-token/grain-5-1-0/org-deploy.token"
+  },
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": "http://127.0.0.1:4252/runs/grain-5-1-0/token",
+  "type": "external_account",
+  "universe_domain": "googleapis.com"
+}
+-- ~/.gcp-service-account.about
+permission_set: org-deploy
+service_account: deployer@walk-proj.iam.gserviceaccount.com
+project: walk-proj
+roles: roles/run.admin
+key: /home/debian/.gcp-service-account.json
+credential: short-lived access tokens by impersonation (no key exists); /home/debian/.gcp-service-account.json is an external_account config
+id_token: /home/debian/.gcp-token/grain-5-1-0/org-deploy-id-token AUDIENCE
+-- subject token: /home/debian/.gcp-token/grain-5-1-0/org-deploy.token, 64 chars
+-- private_key or client_email anywhere under ~? none
+-- gcloud: not in the image (activate.sh exits 0 without it)
+-- token_url saved on the host for the after-release check: http://127.0.0.1:4252/runs/grain-5-1-0/token
+== 2. exchange at the forwarded listener, then refresh as the clock runs to the deadline
+walk clock: 2026-11-08T02:23:05Z
+-- exchange (t+0): {"access_token":"tok-6-deployer@walk-proj.iam.gserviceaccount.com","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+-- exchange with a wrong subject token: {"error":"invalid_grant","error_description":"this grant's token is unknown or released"}
+ HTTP 401
+-- advance 30m -> 2026-11-08T02:53:05Z
+   refresh: {"access_token":"tok-7-deployer@walk-proj.iam.gserviceaccount.com","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+-- advance 1h -> 2026-11-08T03:53:05Z
+   refresh: {"access_token":"tok-8-deployer@walk-proj.iam.gserviceaccount.com","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+-- advance 1h -> 2026-11-08T04:53:06Z
+   refresh: {"access_token":"tok-9-deployer@walk-proj.iam.gserviceaccount.com","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+-- advance 1h -> 2026-11-08T05:53:06Z
+   refresh: {"access_token":"tok-10-deployer@walk-proj.iam.gserviceaccount.com","expires_in":893,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+-- ID token helper (audience https://walk.example): id-https://walk.example-deployer@walk-proj.iam.gserviceaccount.com exit 0
+-- advance 1h (past the deadline) -> 2026-11-08T06:53:06Z
+   refresh: {"error":"invalid_grant","error_description":"permission set org-deploy: the grant's deadline 2026-11-08T06:07:59Z has passed"}
+ HTTP 401
+   ID token: curl: (22) The requested URL returned error: 401
+ exit 22
+-- rewind the walk clock to real time -> 2026-11-08T02:23:06Z
+   refresh (before the deadline again): {"access_token":"tok-11-deployer@walk-proj.iam.gserviceaccount.com","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+-- lifetimes gcpfake's generateAccessToken was asked for: [1m0s 1m0s 1m0s 1h0m0s 1h0m0s 1h0m0s 1h0m0s 14m54s 1h0m0s]
+== 3. propose_task with the same grant, through the run's own grain MCP server
+grain mcpserver: -grant "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}" names no capability this binary serves tools for (known: …); this run gets no tools from it
+grain mcpserver: pull_request_status and wait_for_checks are unavailable this run: -pr-upstream-repo "/": repo must be owner/name, got "/" (one on another git host is host/owner/name)
+--- tools/call propose_task {"title": "Deploy widgets with org-deploy", "body": "Follow-up that needs the parent's gcp set.", "capabilities": ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\"}"]} ->
+Recorded (1 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it.
+isError=False
+
+== 2026-11-08T02:23:06Z done
+# host side, after task 5's run ended and its grants were released (walk clock back at real time, before the deadline)
+$ curl -X POST http://127.0.0.1:4252/runs/grain-5-1-0/token --data-urlencode subject_token=<run 5's subject token>
+{"error":"invalid_grant","error_description":"this grant's token is unknown or released"}
+ HTTP 401

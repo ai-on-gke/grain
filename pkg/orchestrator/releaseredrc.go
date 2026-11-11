@@ -23,8 +23,10 @@ package orchestrator
 //     the failing items and the commit range `<floor>..<rc_sha>` to
 //     triage. It wakes the pipeline steward, which files the fixes or
 //     reverts as tasks titled model.RCBlockerMarker(rc_tag).
-//   - pipeline.release-escalated:<version> when the red candidate was the
-//     version's ReleaseMaxRCAttempts-th: the train cuts no more of it.
+//   - pipeline.release-escalated:<version>, once, when the red candidate
+//     was the version's ReleaseMaxRCAttempts-th: a threshold, not a stop.
+//     The train keeps cutting rc.(N+1) from main, and the hold below keeps
+//     applying to every red candidate past it.
 //   - pipeline.release-infra-stalled:<rc_tag> when an item used its
 //     infrastructure re-runs, or has been blocked on infrastructure for
 //     ReleaseInfraStalledAfter. The candidate stays qualifying.
@@ -41,6 +43,11 @@ package orchestrator
 // that is where it reads the hold. Each notification is cleared by the same
 // code once its condition is gone: a newer candidate cut, or the version
 // promoted.
+//
+// A candidate the train dropped unjudged -- `-discarded` with
+// `Discard-Reason: daily-cap` or `held-over` (playbook §7) -- is not red:
+// it raises nothing here, holds nothing and counts toward no escalation
+// (droppedUnreleased).
 //
 // What is judgement -- which commit broke it, fix or revert, whether
 // rc.2 broke on trunk churn -- is the steward's, never this file's.
@@ -102,9 +109,12 @@ func superseded(tags map[string]string, rc model.RCTag) bool {
 // raiseRCFailed raises pipeline.rc-failed for q's candidate, posts the
 // initial triage-pending grain/rc-hold check run on q's commit before the
 // completed qualification verdict goes up, and raises
-// pipeline.release-escalated for its version when it was the last attempt.
-// lines are the failing summary.
-func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]string, rc model.RCTag, lines []string) error {
+// pipeline.release-escalated for its version once it reaches
+// ReleaseMaxRCAttempts. The hold is posted either way: the train cuts
+// rc.(N+1) past the threshold too.
+// stage says which stage failed it, Stage 2 (stage2Failure) or Stage 1
+// (stage1Failure); lines are the failing summary.
+func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]string, rc model.RCTag, stage rcFailure, lines []string) error {
 	subject := model.NotificationSubject(model.FamilyRCFailed, q.rcTag)
 	escalate := rc.RC >= model.ReleaseMaxRCAttempts
 	grace := releaseHoldGrace()
@@ -112,19 +122,19 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 		Subject:  subject,
 		Severity: model.NotificationWarning,
 		Title:    fmt.Sprintf("Release candidate %s of %s failed qualification", q.rcTag, q.repo),
-		Body:     rcFailedBody(q.repo, q.check, tags, rc, q.sha, lines, escalate, grace),
+		Body:     rcFailedBody(q.repo, stage, tags, rc, q.sha, lines, escalate, grace),
 		Repo:     q.repo.String(),
 		RaisedBy: releaseQualificationNotifier,
 		Actions:  []string{"investigate"},
 	}, q.now); err != nil {
 		return err
 	}
-	if !escalate {
-		n, err := q.store.OpenNotification(ctx, subject)
-		if err != nil {
-			return err
-		}
-		return syncRCHold(ctx, q.store, q.forge, q.repo, tags, q.rcTag, n, q.now)
+	n, err := q.store.OpenNotification(ctx, subject)
+	if err != nil {
+		return err
+	}
+	if err := syncRCHold(ctx, q.store, q.forge, q.repo, tags, q.rcTag, n, q.now); err != nil || !escalate {
+		return err
 	}
 	body, err := releaseEscalatedBody(ctx, q.store, q.repo, rc)
 	if err != nil {
@@ -133,7 +143,7 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 	return ensurePipelineNotification(ctx, q.store, model.Notification{
 		Subject:  model.NotificationSubject(model.FamilyReleaseEscalated, rc.Version()),
 		Severity: model.NotificationCritical,
-		Title:    fmt.Sprintf("%s of %s failed %d release candidates; the train cuts no more of it", rc.Version(), q.repo, rc.RC),
+		Title:    fmt.Sprintf("%s of %s failed %d release candidates; the train keeps cutting it from main", rc.Version(), q.repo, rc.RC),
 		Body:     body,
 		Repo:     q.repo.String(),
 		RaisedBy: releaseQualificationNotifier,
@@ -141,10 +151,27 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 	}, q.now)
 }
 
-func rcFailedBody(repo model.RepoRef, check string, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool, grace time.Duration) string {
+// rcFailure is which stage of qualification failed a candidate: what
+// pipeline.rc-failed says it failed, and the heading of its failing lines.
+type rcFailure struct {
+	what    string
+	heading string
+}
+
+// stage2Failure is a red grain/release-qualification verdict (check).
+func stage2Failure(check string) rcFailure {
+	return rcFailure{what: fmt.Sprintf("Stage 2 qualification (%s)", check), heading: "Qualification"}
+}
+
+// stage1Failure is a red Stage 1 run (workflow or status, by name).
+func stage1Failure(name string) rcFailure {
+	return rcFailure{what: fmt.Sprintf("Stage 1 qualification (%s)", name), heading: fmt.Sprintf("Stage 1 (%s)", name)}
+}
+
+func rcFailedBody(repo model.RepoRef, stage rcFailure, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool, grace time.Duration) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "`%s` (%s) of %s failed Stage 2 qualification (%s): attempt %d of RELEASE_MAX_RC_ATTEMPTS (%d).\n\n",
-		rc, shortSHA(sha), repo, check, rc.RC, model.ReleaseMaxRCAttempts)
+	fmt.Fprintf(&b, "`%s` (%s) of %s failed %s: attempt %d of RELEASE_MAX_RC_ATTEMPTS (%d).\n\n",
+		rc, shortSHA(sha), repo, stage.what, rc.RC, model.ReleaseMaxRCAttempts)
 	if name, floor, ok := model.ReleaseFloor(tags, rc); ok {
 		fmt.Fprintf(&b, "Commits to triage: `%s..%s` (everything since %s).\n", floor, sha, name)
 	} else {
@@ -153,14 +180,13 @@ func rcFailedBody(repo model.RepoRef, check string, tags map[string]string, rc m
 	if name, prev, ok := model.PreviousCandidate(tags, rc); ok {
 		fmt.Fprintf(&b, "New since %s: `%s..%s`.\n", name, prev, sha)
 	}
-	b.WriteString("\nQualification:\n")
+	b.WriteString("\n" + stage.heading + ":\n")
 	for _, l := range lines {
 		b.WriteString("- " + l + "\n")
 	}
 	if escalate {
-		fmt.Fprintf(&b, "\nThis was the version's last attempt: pipeline.release-escalated:%s is raised, and the "+
-			"train cuts no more of %s until a person resets or advances it.", rc.Version(), rc.Version())
-		return b.String()
+		fmt.Fprintf(&b, "\n%s has used RELEASE_MAX_RC_ATTEMPTS: pipeline.release-escalated:%s is raised, and the "+
+			"train keeps cutting candidates of it from main.\n", rc.Version(), rc.Version())
 	}
 	next := rc
 	next.RC++
@@ -188,8 +214,10 @@ func releaseEscalatedBody(ctx context.Context, store *model.Store, repo model.Re
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s of %s has used RELEASE_MAX_RC_ATTEMPTS (%d) release candidates, and %s failed qualification "+
-		"too. The train cuts no more of %s until a person resets it (cuts another candidate of it by hand) or "+
-		"advances it to the next version.\n", rc.Version(), repo, model.ReleaseMaxRCAttempts, rc, rc.Version())
+		"too. The train does not wait for you: it keeps cutting candidates of %s from main's newest known-good commit "+
+		"until one qualifies, and tasks titled [rc-blocker <rc>] still hold each next cut. Find out why the version "+
+		"keeps failing. This clears once %s is released or the train moves on to a later version.\n",
+		rc.Version(), repo, model.ReleaseMaxRCAttempts, rc, rc.Version(), rc.Version())
 	for _, n := range failed {
 		fmt.Fprintf(&b, "\n### %s\n\n%s\n", strings.TrimPrefix(n.Subject, model.FamilyRCFailed+":"), n.Body)
 	}
@@ -333,35 +361,45 @@ func (q *rcQualification) noteFlakeRetries(ctx context.Context, rerun []string, 
 		if len(h) == 0 || h[len(h)-1].Result != model.ItemFail {
 			continue
 		}
-		redRCMu.Lock()
-		key := redRCKey(q.store, q.repo.String(), item)
-		var kept []time.Time
-		for _, at := range redRCFlakes[key] {
-			if q.now.Sub(at) < model.FlakeBudgetWindow {
-				kept = append(kept, at)
-			}
-		}
-		kept = append(kept, q.now)
-		redRCFlakes[key] = kept
-		redRCMu.Unlock()
-		if len(kept) < model.FlakeBudgetRetries {
-			continue
-		}
-		errs = append(errs, ensurePipelineNotification(ctx, q.store, model.Notification{
-			Subject:  model.NotificationSubject(model.FamilyFlakeBudget, q.repo.String()+":"+item),
-			Severity: model.NotificationWarning,
-			Title:    fmt.Sprintf("Release qualification item %s of %s is flaking", item, q.repo),
-			Body: fmt.Sprintf("%s failed and was retried %d times in the last %s of release qualification, most "+
-				"recently on %s (%s). A flake retry is spent per candidate, so a flaky item makes red candidates "+
-				"out of healthy ones: de-flake it, or quarantine what it tests.", item, len(kept),
-				humanDuration(model.FlakeBudgetWindow), q.rcTag, h[len(h)-1].Reason),
-			Repo:       q.repo.String(),
-			RaisedBy:   releaseQualificationNotifier,
-			Actions:    []string{"investigate"},
-			ClearsWhen: &model.NotificationClear{Kind: model.ClearsOnTTL, TTL: model.FlakeBudgetWindow.String()},
-		}, q.now))
+		errs = append(errs, q.spendFlakeRetry(ctx, item, fmt.Sprintf("Release qualification item %s of %s is flaking", item, q.repo),
+			"release qualification", h[len(h)-1].Reason))
 	}
 	return errors.Join(errs...)
+}
+
+// spendFlakeRetry records one flake retry of target -- a Stage 2 item, or
+// a Stage 1 job -- on q's candidate, and raises
+// pipeline.flake-budget:<repo>:<target> once target has spent
+// FlakeBudgetRetries of them inside FlakeBudgetWindow. where says what
+// retried it, reason what the failure was.
+func (q *rcQualification) spendFlakeRetry(ctx context.Context, target, title, where, reason string) error {
+	redRCMu.Lock()
+	key := redRCKey(q.store, q.repo.String(), target)
+	var kept []time.Time
+	for _, at := range redRCFlakes[key] {
+		if q.now.Sub(at) < model.FlakeBudgetWindow {
+			kept = append(kept, at)
+		}
+	}
+	kept = append(kept, q.now)
+	redRCFlakes[key] = kept
+	redRCMu.Unlock()
+	if len(kept) < model.FlakeBudgetRetries {
+		return nil
+	}
+	return ensurePipelineNotification(ctx, q.store, model.Notification{
+		Subject:  model.NotificationSubject(model.FamilyFlakeBudget, q.repo.String()+":"+target),
+		Severity: model.NotificationWarning,
+		Title:    title,
+		Body: fmt.Sprintf("%s failed and was retried %d times in the last %s of %s, most "+
+			"recently on %s (%s). A flake retry is spent per candidate, so a flaky one makes red candidates "+
+			"out of healthy ones: de-flake it, or quarantine what it tests.", target, len(kept),
+			humanDuration(model.FlakeBudgetWindow), where, q.rcTag, reason),
+		Repo:       q.repo.String(),
+		RaisedBy:   releaseQualificationNotifier,
+		Actions:    []string{"investigate"},
+		ClearsWhen: &model.NotificationClear{Kind: model.ClearsOnTTL, TTL: model.FlakeBudgetWindow.String()},
+	}, q.now)
 }
 
 // releaseHoldGrace is how long grain/rc-hold waits for triage before any
@@ -407,10 +445,7 @@ func syncRedRCHolds(ctx context.Context, store *model.Store, forge ReleaseQualif
 				errs = append(errs, clearPipelineNotification(ctx, store, n.Subject, releaseQualificationNotifier))
 			}
 		case model.FamilyReleaseEscalated:
-			lifted, err := escalationLifted(ctx, store, repo, tags, key)
-			if err != nil {
-				errs = append(errs, err)
-			} else if lifted {
+			if escalationLifted(tags, key) {
 				errs = append(errs, clearPipelineNotification(ctx, store, n.Subject, releaseQualificationNotifier))
 			}
 		}
@@ -480,11 +515,6 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 			return nil
 		}
 		return clearPipelineNotification(ctx, store, model.NotificationSubject(model.FamilyRCFailed, rcTag), releaseQualificationNotifier)
-	}
-	// An escalated version's last attempt cuts no next candidate (Phase 2
-	// stops at RELEASE_MAX_RC_ATTEMPTS), so no hold is posted for it.
-	if rc.RC >= model.ReleaseMaxRCAttempts {
-		return clear()
 	}
 	// Only a hold grain's own App posted is grain's, as with the verdict
 	// (latestCheckRun); a connection grain cannot name posts none.
@@ -617,17 +647,51 @@ func mentionsRCTag(body, rcTag string) bool {
 	}
 }
 
-// escalationLifted reports whether a person has reset or advanced the
-// train past version's escalation: the version is promoted, or a
-// candidate newer than its last red one has been cut.
-func escalationLifted(ctx context.Context, store *model.Store, repo model.RepoRef, tags map[string]string, version string) (bool, error) {
+// escalationLifted reports whether version's escalation is over: the
+// version is promoted, or a candidate of a later version has been cut. A
+// newer candidate of the same version is not enough -- the train cuts
+// those by itself past RELEASE_MAX_RC_ATTEMPTS, so the escalation is
+// raised once and stands until the version converges or is left behind.
+func escalationLifted(tags map[string]string, version string) bool {
 	if _, ok := tags[version]; ok {
-		return true, nil
+		return true
 	}
-	failed, err := failedCandidates(ctx, store, repo, version)
-	if err != nil || len(failed) == 0 {
+	v, ok := model.ParseRCTag(version + "-rc.0")
+	if !ok {
+		return false
+	}
+	for name := range tags {
+		if c, ok := model.ParseRCTag(name); ok && c.Version() != version && v.Less(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// droppedUnreleased reports whether the train dropped name without judging
+// it: its `-discarded` tag carries `Discard-Reason: daily-cap` or
+// `Discard-Reason: held-over` (playbook §7). Neither is red. A forge that
+// cannot read tag messages reads every drop as possibly red, as before
+// the daily cap.
+func droppedUnreleased(forge ReleaseQualificationForge, repo model.RepoRef, name string) (bool, error) {
+	reader, ok := forge.(github.ReleaseTagReader)
+	if !ok {
+		return false, nil
+	}
+	marker := name + "-discarded"
+	refs, err := reader.ListMatchingTags(repo.Owner, repo.Name, marker)
+	if err != nil {
 		return false, err
 	}
-	last, _ := model.ParseRCTag(strings.TrimPrefix(failed[len(failed)-1].Subject, model.FamilyRCFailed+":"))
-	return superseded(tags, last), nil
+	for _, t := range refs {
+		if t.Name != marker || t.ObjectType != "tag" {
+			continue
+		}
+		at, err := reader.GetAnnotatedTag(repo.Owner, repo.Name, t.ObjectSHA)
+		if err != nil || at == nil {
+			return false, err
+		}
+		return model.UnreleasedDrop(at.Message), nil
+	}
+	return false, nil
 }

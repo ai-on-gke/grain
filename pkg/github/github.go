@@ -451,6 +451,18 @@ type GitBranchSource interface {
 	GitBranchExists(owner, repo, branch string) (exists, ok bool, err error)
 }
 
+var _ GitBranchSource = (*RESTClient)(nil)
+
+// GitBranchExists is GitBranchSource over the client's TokenSource, so a
+// caller holding a Client that wraps this one (the daemon's
+// StateRepoPullRequestClient) can ask it without reaching for Tokens.
+func (c *RESTClient) GitBranchExists(owner, repo, branch string) (exists, ok bool, err error) {
+	if src, isSrc := c.Tokens.(GitBranchSource); isSrc {
+		return src.GitBranchExists(owner, repo, branch)
+	}
+	return false, false, nil
+}
+
 // gitOnly is the error opening or merging a pull request on owner/repo
 // fails with, before anything is sent, when its credential covers git
 // only: said plainly rather than as the 401 or 404 an unauthenticated
@@ -2779,8 +2791,8 @@ func (c *RESTClient) SetDefaultBranch(owner, repo, branch string) error {
 // loop asks this question -- the loop works in the repo a task already
 // names, whatever its spelling -- so putting it there would make every
 // implementation of Client carry a method only the settings path calls.
-// pkg/ui declares the one-method interface it needs (ui.RepoNames) and
-// this satisfies it.
+// pkg/daemon's repoNameGate adapts this to pkg/ui's host-aware RepoNames
+// interface.
 func (c *RESTClient) RepoFullName(owner, repo string) (string, error) {
 	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s", owner, repo))
 	if err != nil {
@@ -3171,6 +3183,40 @@ func (c *RESTClient) ListWorkflowRuns(owner, repo, headSHA string) ([]CheckRun, 
 				Name: item.Name, Status: item.Status, Conclusion: item.Conclusion,
 				HTMLURL: item.HTMLURL,
 			})
+		}
+		path = nextPagePath(resp.Headers["Link"])
+	}
+	return runs, nil
+}
+
+// WorkflowRunsOnCommit is every workflow run on headSHA, newest first, as
+// whole runs: ListWorkflowRuns' answer with the run ids and attempts it
+// leaves out, so a caller can go on to read each run's jobs
+// (ListActionsJobAttempts). Release qualification reads Stage 1
+// (nightly.yml) that way, job by job.
+func (c *RESTClient) WorkflowRunsOnCommit(owner, repo, headSHA string) ([]WorkflowRun, error) {
+	var runs []WorkflowRun
+	path := fmt.Sprintf("/repos/%s/%s/actions/runs?head_sha=%s&per_page=100",
+		owner, repo, url.QueryEscape(headSHA))
+	for path != "" {
+		resp, err := c.get(owner, repo, path)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == 404 {
+			return runs, nil
+		}
+		if resp.Status != 200 {
+			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		}
+		var data struct {
+			WorkflowRuns []workflowRunJSON `json:"workflow_runs"`
+		}
+		if err := json.Unmarshal(resp.Body, &data); err != nil {
+			return nil, err
+		}
+		for _, item := range data.WorkflowRuns {
+			runs = append(runs, item.run())
 		}
 		path = nextPagePath(resp.Headers["Link"])
 	}
@@ -4712,4 +4758,140 @@ func (c *RESTClient) ListTags(owner, repo string) ([]Tag, error) {
 		path = nextPagePath(resp.Headers["Link"])
 	}
 	return tags, nil
+}
+
+// MergedPullRequestReview is the review of the pull request whose merge
+// into base is sha -- its merge commit, or its squash -- for an external
+// config repository's require_verified mode (staterepo.Verifier): who
+// opened and merged it, and who approved its final head commit. Only a
+// pull request whose merge_commit_sha is sha counts, so a commit that
+// merely sits on a merged branch, or one a rebase-merge rewrote, is not
+// vouched for by the pull request it came from. nil, nil when no merged
+// pull request into base names sha.
+//
+// An approver is a reviewer other than the author whose latest review,
+// among the first hundred, is APPROVED and was left on the head commit
+// the pull request merged: an approval of an earlier push does not
+// cover what was pushed after it. Only a reviewer the forge names as the
+// repository's owner, a member of its organization or a collaborator on
+// it counts, as in branch protection: anybody may leave an APPROVED
+// review on a public repository, so one from an account with no standing
+// there would let a writer approve their own change from a second one.
+func (c *RESTClient) MergedPullRequestReview(owner, repo, base, sha string) (*MergedReview, error) {
+	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s/pulls?per_page=100", owner, repo, quoteAll(sha)))
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status != 200 {
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var items []struct {
+		Number         int     `json:"number"`
+		MergedAt       *string `json:"merged_at"`
+		MergeCommitSHA string  `json:"merge_commit_sha"`
+		Base           struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	}
+	if err := json.Unmarshal(resp.Body, &items); err != nil {
+		return nil, err
+	}
+	number := 0
+	for _, item := range items {
+		if item.MergedAt != nil && *item.MergedAt != "" && item.MergeCommitSHA == sha && item.Base.Ref == base {
+			number = item.Number
+			break
+		}
+	}
+	if number == 0 {
+		return nil, nil
+	}
+	resp, err = c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number))
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status != 200 {
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var pr struct {
+		HTMLURL        string `json:"html_url"`
+		Merged         bool   `json:"merged"`
+		MergeCommitSHA string `json:"merge_commit_sha"`
+		User           struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		MergedBy *struct {
+			Login string `json:"login"`
+		} `json:"merged_by"`
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(resp.Body, &pr); err != nil {
+		return nil, err
+	}
+	if !pr.Merged || pr.MergeCommitSHA != sha {
+		return nil, nil
+	}
+	out := &MergedReview{Number: number, URL: pr.HTMLURL, Author: pr.User.Login}
+	if pr.MergedBy != nil {
+		out.MergedBy = pr.MergedBy.Login
+	}
+	resp, err = c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100", owner, repo, number))
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status != 200 {
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var reviews []struct {
+		State             string `json:"state"`
+		CommitID          string `json:"commit_id"`
+		AuthorAssociation string `json:"author_association"`
+		User              struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(resp.Body, &reviews); err != nil {
+		return nil, err
+	}
+	// Listed oldest first: the last word each reviewer had is theirs.
+	latest := map[string]int{}
+	var order []string
+	for i, r := range reviews {
+		login := r.User.Login
+		if login == "" || login == out.Author || r.State == "COMMENTED" || r.State == "PENDING" {
+			continue
+		}
+		if _, seen := latest[login]; !seen {
+			order = append(order, login)
+		}
+		latest[login] = i
+	}
+	for _, login := range order {
+		r := reviews[latest[login]]
+		if r.State == "APPROVED" && r.CommitID == pr.Head.SHA && reviewerHasStanding(r.AuthorAssociation) {
+			out.Approvers = append(out.Approvers, login)
+		}
+	}
+	return out, nil
+}
+
+// reviewerHasStanding is whether a review's author_association is one
+// whose approval MergedPullRequestReview counts.
+func reviewerHasStanding(association string) bool {
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
+}
+
+// MergedReview is MergedPullRequestReview's answer.
+type MergedReview struct {
+	Number    int
+	URL       string
+	Author    string
+	MergedBy  string
+	Approvers []string
 }

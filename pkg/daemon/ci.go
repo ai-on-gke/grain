@@ -395,6 +395,12 @@ type CiGrantReservations struct {
 	// answering nil, refuses every reference.
 	Servers func() orchestrator.CapabilityServers
 	Config  func(context.Context) (*model.Config, error)
+	// Declarations records what a job's declared capabilities ask for
+	// that only a person may accept (model.DeclaredCIJobHold) and reports
+	// whether a person's acceptance covers it
+	// (model.Store.NoteCIJobDeclaration). Nil accepts every job, as a
+	// daemon with no store has nobody to accept anything.
+	Declarations func(ctx context.Context, repo model.RepoRef, job, commit string, capabilities []string, now time.Time) (bool, []string, error)
 	// Ports and PortsURL are the daemon's capability port relay and where
 	// a sandbox reaches it (WithCICapabilityPorts), and SetupTimeout
 	// bounds each setup command (zero: the orchestrator's default) --
@@ -457,6 +463,9 @@ func (g *CiGrantReservations) Acquire(ctx context.Context, req ci.SandboxRequest
 	}
 	repo, err := model.ParseRepo(req.Repo)
 	if err != nil {
+		return nil, err
+	}
+	if err := ciDeclarationRefusal(ctx, g.Declarations, repo, req, g.now(), g.Log); err != nil {
 		return nil, err
 	}
 	refs := ciCapabilityRefs(req.Capabilities, req.Event, req.TrustedSchedule, req.WithholdEventGated)
@@ -1169,7 +1178,8 @@ func ciWithheldCapabilityNotes(reg *model.CapabilityRegistry, event ci.Event, tr
 			}
 			continue
 		}
-		if reg == nil || model.IsCapabilityRef(id) {
+		isAPIRef := model.IsAPIGrantRef(id) || model.CapabilityGrantRef(id) == model.APICapabilityServerID
+		if reg == nil || (model.IsCapabilityRef(id) && !isAPIRef) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
@@ -1396,11 +1406,12 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		// (CiGrantReservations.Acquire). grain#ci, in either spelling,
 		// is added below whatever the list says; repository access, in
 		// either spelling, is widened on the proxy by grantRepoAccess.
-		if grainci.IsGrant(id) || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
+		isAPIRef := model.IsAPIGrantRef(id) || model.CapabilityGrantRef(id) == model.APICapabilityServerID
+		if grainci.IsGrant(id) || (model.IsCapabilityRef(id) && !isAPIRef) || model.IsRepoAccessGrant(id) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
-		if !ok && model.IsCapabilityRef(model.CanonicalLegacyGrant(id)) {
+		if !ok && !isAPIRef && model.IsCapabilityRef(model.CanonicalLegacyGrant(id)) {
 			continue
 		}
 		if !ok {
@@ -2702,6 +2713,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	}
 	if store != nil {
 		grantReservations.Config = store.GetConfig
+		grantReservations.Declarations = store.NoteCIJobDeclaration
 	}
 	if tokens != nil && proxyURL != "" {
 		grantReservations.CapServers, grantReservations.ProxyURL, grantReservations.ProxyToken = SandboxCapabilities, proxyURL, tokens.EnsureToken

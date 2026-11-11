@@ -42,6 +42,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -120,6 +121,7 @@ func classifyError(err error) (exit int, code, fix string) {
 	var forbidden *ui.ForbiddenError
 	var unavailable *ui.UnavailableError
 	var status *ui.StatusError
+	var hubAPI *api.APIError
 	var down *ui.DaemonUnavailableError
 	switch {
 	case errors.As(err, &validation):
@@ -130,6 +132,8 @@ func classifyError(err error) (exit int, code, fix string) {
 		return exitAuth, "forbidden", ""
 	case errors.As(err, &status):
 		return classifyStatus(status.StatusCode)
+	case errors.As(err, &hubAPI):
+		return classifyStatus(hubAPI.StatusCode)
 	case errors.As(err, &unavailable):
 		return exitFailed, "unavailable", ""
 	case errors.As(err, &down):
@@ -163,6 +167,11 @@ func classifyStatus(code int) (int, string, string) {
 		return exitUsage, "unprocessable", ""
 	case code == http.StatusNotFound:
 		return exitUsage, "not_found", ""
+	case code == http.StatusTooManyRequests:
+		// The daemon's per-token rate limit (externalAgentLimiter): the
+		// same command succeeds unchanged once the bucket refills, so it
+		// is not a usage error an agent should rewrite its request over.
+		return exitFailed, "rate_limited", ""
 	case code >= 400 && code < 500:
 		return exitUsage, "invalid_request", ""
 	default:

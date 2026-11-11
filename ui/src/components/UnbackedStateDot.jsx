@@ -19,14 +19,22 @@ import { Box } from "@mui/material";
 // and tab, with the full notice behind it. The historic name remains to
 // avoid churn in callers; config-repository mirroring and its unbacked
 // warning no longer exist.
-export default function UnbackedStateDot({ sx, label, title }) {
+export default function UnbackedStateDot({
+  sx,
+  label,
+  title,
+  decorative = false,
+}) {
   return (
     <Box
       component="span"
-      role="img"
-      aria-label={label || DOT_TEXT.label}
+      role={decorative ? undefined : "img"}
+      aria-label={decorative ? undefined : label || DOT_TEXT.label}
+      aria-hidden={decorative ? "true" : undefined}
       title={title || DOT_TEXT.title}
       sx={{
+        display: "inline-block",
+        verticalAlign: "middle",
         width: 8,
         height: 8,
         borderRadius: "50%",

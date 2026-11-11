@@ -74,6 +74,22 @@
 #   load [DIR]
 #           validate DIR, then `docker load` every image and check the
 #           loaded image IDs and refs are the ones the manifest names.
+#   promote-version [vX.Y.Z]
+#           print the release promote would publish: vX.Y.Z, or the one
+#           the git tag latest names.
+#   cli-validate [DIR]
+#           check DIR ($RELEASE_CLI_DIR, default /tmp/release-cli) holds
+#           the grain CLI archives scripts/build-cli.sh writes --
+#           grain-<linux|darwin>-<amd64|arm64>.tar.gz -- and a checksums.txt
+#           in sha256sum's format naming exactly those four, which match.
+#   cli-publish <release> [DIR]
+#           upload DIR's four archives and then checksums.txt to the
+#           vX.Y.Z or vX.Y.Z-rc.N release, which promote or train-tag must
+#           already have published: the files GET /cli/install.sh fetches.
+#           They are never replaced: a release that already carries
+#           checksums.txt is left as it is. A release that does not
+#           exist fails it, or with RELEASE_CLI_SKIP_UNRELEASED=true is
+#           warned of and skipped.
 #
 # --dry-run (or DRY_RUN=true) does everything that reads and prints every
 # write it would make instead of making it.
@@ -360,7 +376,7 @@ may_move() {
 content_type() {
   case "$1" in
     *.json) echo application/json ;;
-    *.sha256) echo text/plain ;;
+    *.sha256 | *.txt) echo text/plain ;;
     *) echo application/gzip ;;
   esac
 }
@@ -768,11 +784,12 @@ source_into() {
   [ "$(jq -r .commit "$dir/images.json")" = "$commit" ] || die "$release holds $(jq -r .commit "$dir/images.json"), not $commit"
 }
 
-promote() {
-  need git jq
-  local version="${1:-}" latest commit sha_release
-  latest="$(remote_commit_of_tag latest)"
+# promote_version [vX.Y.Z]: the release promote publishes -- the one
+# given, or the newest vX.Y.Z the git tag latest names.
+promote_version() {
+  local version="${1:-}" latest
   if [ -z "$version" ]; then
+    latest="$(remote_commit_of_tag latest)"
     [ -n "$latest" ] || die "the git tag latest names nothing on $remote, and no version was given"
     version="$(git ls-remote --tags "$remote" 'refs/tags/v*' |
       awk -v c="$latest" '$1 == c { t = $2; sub(/^refs\/tags\//, "", t); sub(/\^\{\}$/, "", t); print t }' |
@@ -780,6 +797,13 @@ promote() {
     [ -n "$version" ] || die "no vX.Y.Z tag names ${latest:0:12}, the commit the git tag latest names"
   fi
   [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$version is not a vX.Y.Z release"
+  printf '%s\n' "$version"
+}
+
+promote() {
+  need git jq
+  local version commit sha_release
+  version="$(promote_version "${1:-}")"
   commit="$(remote_commit_of_tag "$version")"
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "$remote has no tag $version"
   sha_release="sha-${commit:0:12}"
@@ -942,6 +966,92 @@ train_tag() {
   esac
 }
 
+# --- the grain CLI -------------------------------------------------------
+#
+# vX.Y.Z and vX.Y.Z-rc.N releases also carry the grain CLI as
+# scripts/build-cli.sh builds it, for GET /cli/install.sh
+# (pkg/ui/cli_install.sh): four archives and a checksums.txt the script
+# checks the one it downloads against. They sit beside the release's
+# images.json, which does not name them.
+cli_archives=(grain-linux-amd64.tar.gz grain-linux-arm64.tar.gz grain-darwin-amd64.tar.gz grain-darwin-arm64.tar.gz)
+
+# validate_cli DIR: the four archives, each holding a grain, and a
+# checksums.txt of `<sha256>  <archive>` lines naming each of them once,
+# and nothing else, that they match.
+validate_cli() {
+  local d="$1" a bad
+  need sha256sum tar
+  [ -d "$d" ] || die "$d is not a directory of grain CLI archives (scripts/build-cli.sh DIR)"
+  for a in "${cli_archives[@]}"; do
+    [ -s "$d/$a" ] || die "$d has no $a (scripts/build-cli.sh writes it)"
+  done
+  [ -f "$d/checksums.txt" ] || die "$d has no checksums.txt"
+  bad="$(grep -nvE '^[0-9a-f]{64}  grain-(linux|darwin)-(amd64|arm64)\.tar\.gz$' "$d/checksums.txt" || true)"
+  [ -z "$bad" ] || die "checksums.txt has lines that are not sha256sum's '<hex>  grain-<os>-<arch>.tar.gz': $bad"
+  for a in "${cli_archives[@]}"; do
+    [ "$(awk -v a="$a" '$2 == a' "$d/checksums.txt" | wc -l)" = 1 ] || die "checksums.txt does not name $a exactly once"
+  done
+  [ "$(wc -l < "$d/checksums.txt")" = "${#cli_archives[@]}" ] || die "checksums.txt names more than the ${#cli_archives[@]} archives"
+  (cd "$d" && sha256sum --quiet -c checksums.txt) >&2 || die "the archives in $d do not match their checksums.txt"
+  for a in "${cli_archives[@]}"; do
+    tar -tzf "$d/$a" 2>/dev/null | grep -x grain > /dev/null || die "$d/$a holds no grain binary"
+  done
+}
+
+# cli_publish RELEASE [DIR]: upload DIR's archives, then checksums.txt,
+# to RELEASE. checksums.txt goes last: a release carrying it carries all
+# four, and is never written again. Archives a run that died before
+# checksums.txt left are deleted and uploaded again, since nothing can
+# install them without it.
+cli_publish() {
+  local release="${1:?cli-publish needs a vX.Y.Z or vX.Y.Z-rc.N release}" d="${2:-${RELEASE_CLI_DIR:-/tmp/release-cli}}" id id_left name listed missing
+  need curl jq
+  [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || die "$release is not a vX.Y.Z or vX.Y.Z-rc.N release: only those carry the grain CLI"
+  [ -n "$token" ] || [ "$dry_run" = true ] || die "publishing needs GITHUB_TOKEN (permissions: contents: write)"
+  validate_cli "$d"
+  upload_base=""
+  if release_json "$release"; then
+    id="$(jq -r .id "$scratch/release")"
+    upload_base="$(jq -r '.upload_url | sub("\\{.*$"; "")' "$scratch/release")"
+    asset_list "$id" > "$scratch/existing"
+  elif [ "$dry_run" = true ]; then
+    say "[dry-run] would upload the grain CLI to $release, which promote or train-tag publishes"
+    id=dry-run
+    : > "$scratch/existing"
+  elif [ "${RELEASE_CLI_SKIP_UNRELEASED:-false}" = true ]; then
+    echo "::warning::release-assets.sh: there is no release $release to carry the grain CLI; skipping it"
+    return 0
+  else
+    die "there is no release $release: publish it (promote, or train-tag for an rc) before its grain CLI"
+  fi
+  if grep -q ' checksums.txt$' "$scratch/existing"; then
+    for name in "${cli_archives[@]}"; do
+      grep -q " $name\$" "$scratch/existing" || die "$release carries checksums.txt but no $name"
+    done
+    say "$release already carries the grain CLI; its archives are never replaced"
+    return 0
+  fi
+  for name in "${cli_archives[@]}"; do
+    while read -r id_left; do
+      say "deleting the $name an earlier run left on $release without its checksums.txt"
+      delete_asset "$id_left"
+    done < <(awk -v n="$name" '$2 == n {print $1}' "$scratch/existing")
+  done
+  for name in "${cli_archives[@]}" checksums.txt; do
+    dir="$d" upload "$id" "$name"
+  done
+  # Fail closed: a release missing any of them cannot be installed from.
+  if [ "$dry_run" != true ]; then
+    listed="$(asset_list "$id" | awk '{print $2}')"
+    missing=""
+    for name in "${cli_archives[@]}" checksums.txt; do
+      grep -qx "$name" <<< "$listed" || missing="$missing $name"
+    done
+    [ -z "$missing" ] || die "$release is missing$missing after publishing the grain CLI"
+  fi
+  say "published the grain CLI on $release: ${cli_archives[*]} checksums.txt"
+}
+
 case "$cmd" in
   package) package ;;
   rc | pending | discard-rc | discard-pending | retract) train_phase "$cmd" "$@" ;;
@@ -954,8 +1064,11 @@ case "$cmd" in
   fetch) fetch "$@" ;;
   load) load "$@" ;;
   mirror) mirror "$@" ;;
+  promote-version) need git && promote_version "$@" ;;
+  cli-validate) validate_cli "${1:-${RELEASE_CLI_DIR:-/tmp/release-cli}}" && say "${1:-${RELEASE_CLI_DIR:-/tmp/release-cli}} holds the grain CLI: ${cli_archives[*]} checksums.txt" ;;
+  cli-publish) cli_publish "$@" ;;
   *)
-    sed -n '17,72p' "$0" >&2
+    sed -n '17,92p' "$0" >&2
     exit 2
     ;;
 esac

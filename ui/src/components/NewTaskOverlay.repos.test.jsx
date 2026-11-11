@@ -27,6 +27,7 @@ import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import { clearBranchCache } from "./BranchField.jsx";
 import api from "../api.js";
 import { chooseOption, optionValues } from "../searchSelectTesting.js";
+import { repoGrantBox } from "../repoGrantsTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -165,18 +166,19 @@ describe("NewTaskOverlay", () => {
     await user.type(screen.getByLabelText(/Title/), "Ship");
     await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
 
-    const readsInput = screen.getByLabelText(/Read-only repos/);
-    await user.click(readsInput);
+    // Each is a repo#read grant added from the Grants list's "Add
+    // grant…" (unified-grants slice 5).
+    await user.click(await repoGrantBox(user, "read"));
     await user.click(
       await screen.findByRole("menuitem", { name: "acme/shared-lib" }),
     );
-    await user.click(readsInput);
+    await user.click(await repoGrantBox(user, "read"));
     await user.click(
       await screen.findByRole("menuitem", { name: "other/tooling" }),
     );
     // A repo neither the deployment nor any task has named yet still has
     // to be reachable, the gap RepoField's own "Other…" covers.
-    await user.type(readsInput, "new/repo");
+    await user.type(await repoGrantBox(user, "read"), "new/repo");
     await user.click(
       await screen.findByRole("menuitem", { name: "Add new/repo" }),
     );
@@ -220,9 +222,9 @@ describe("NewTaskOverlay", () => {
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
     await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
-    // The same block, one box further down: no field of its own to find
-    // and no "other repos" wording to work out first.
-    await user.click(screen.getByLabelText(/Another repo/));
+    // A repo#write grant from the Grants list (unified-grants slice 5),
+    // its branch edited on its own line.
+    await user.click(await repoGrantBox(user, "write"));
     await user.click(
       await screen.findByRole("menuitem", { name: "acme/docs" }),
     );
@@ -305,6 +307,15 @@ describe("NewTaskOverlay", () => {
     await user.type(base, "a:b:c");
     expect(screen.getByText(/has more than one ':'/)).toBeInTheDocument();
     expect(base).toHaveAttribute("aria-invalid", "true");
+    // The server refuses a malformed label in these same words, so the
+    // form does not offer a submit that can only come back refused.
+    expect(screen.getByRole("button", { name: "Create task" })).toBeDisabled();
+    await user.clear(base);
+    await user.type(base, "alice:");
+    expect(
+      screen.getByText(/needs both an owner and a branch/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create task" })).toBeDisabled();
 
     await user.clear(base);
     await user.type(base, "andrzejfudro:chore/bump-agy-1.4.9");
@@ -473,7 +484,7 @@ describe("NewTaskOverlay", () => {
     expect(optionValues(target)).toContain("acme/widgets");
     await user.keyboard("{Escape}");
 
-    await user.click(screen.getByLabelText(/Read-only repos/));
+    await user.click(await repoGrantBox(user, "read"));
     expect(
       await screen.findByRole("menuitem", { name: "acme/other" }),
     ).toBeInTheDocument();
@@ -534,7 +545,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
-    await user.click(screen.getByLabelText(/Read-only repos/));
+    await user.click(await repoGrantBox(user, "read"));
     expect(
       await screen.findByRole("menuitem", { name: "acme/docs" }),
     ).toBeInTheDocument();
@@ -545,7 +556,7 @@ describe("NewTaskOverlay", () => {
     // Moving the target moves what is offered with it.
     await user.keyboard("{Escape}");
     await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/docs");
-    await user.click(screen.getByLabelText(/Read-only repos/));
+    await user.click(await repoGrantBox(user, "read"));
     expect(
       await screen.findByRole("menuitem", { name: "acme/widgets" }),
     ).toBeInTheDocument();

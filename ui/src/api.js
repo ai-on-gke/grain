@@ -20,7 +20,7 @@ import { effectiveTimeZone } from "./PreferencesContext.jsx";
 // opened or a message sent from here records it, which is the zone the
 // run that answers is told the time in. Reads go without it -- they
 // change nothing the server would record it on.
-export const TIMEZONE_HEADER = "X-Grain-Time-Zone";
+const TIMEZONE_HEADER = "X-Grain-Time-Zone";
 
 // The ETag each polled path was last answered with, so the next poll of
 // it can ask "still this?" instead of asking for the whole thing again.
@@ -39,6 +39,21 @@ export function forgetETags() {
   etags.clear();
 }
 
+// forgetETag drops one path's entry, for a caller that read a full
+// answer and then threw it away -- a poll a later read superseded. The
+// entry describes that answer, so keeping it would have the next poll
+// told 304 about a body the caller never took, and it would go on
+// holding the older one for as long as nothing changes on the server.
+export function forgetETag(path) {
+  etags.delete(path);
+}
+
+// forgetVerifierTrouble ends any run of verifier_unavailable refusals
+// verifierTroubleSince is counting, for the same kind of test.
+export function forgetVerifierTrouble() {
+  setVerifierTrouble(null);
+}
+
 // isUnreachable is whether an error api() threw means the daemon could
 // not be reached at all -- a network-level failure fetch itself
 // rejected with (a dead connection, a timeout, a DNS failure: the Fetch
@@ -50,12 +65,93 @@ export function forgetETags() {
 // rejection -- a 500, a 403, a validation error, `notGrain` below -- is
 // the daemon (or something that can at least speak for it) answering,
 // which is a different problem with a different fix.
+//
+// A request asked with a `timeout` (api() below) that ran past it
+// counts as well: a daemon that accepts the connection and then never
+// answers -- deadlocked, stopped, or behind a proxy holding the socket
+// open -- is as out of reach as one that refuses it, and without a
+// bound on the wait the request never rejects at all, so nothing could
+// ever say so (grain/task-3619).
+//
+// A verifier_unavailable 503 (isVerifierUnavailable below) is not one:
+// it is the daemon itself answering, saying the sign-in verifier it
+// consults could not check this request's identity right now.
 export function isUnreachable(err) {
   if (!err || err.notGrain) return false;
+  if (isVerifierUnavailable(err)) return false;
+  if (err.timedOut) return true;
   if (typeof err.status === "number") {
     return err.status === 502 || err.status === 503 || err.status === 504;
   }
   return err instanceof TypeError;
+}
+
+// isVerifierUnavailable is whether an error api() threw is the daemon
+// refusing a request because the sign-in verifier in front of its
+// allowlist could not check the caller's identity right now -- its
+// identity backend briefly out of reach (pkg/ui's writeVerifierUnavailable).
+// It is transient and the daemon is up: a poll retries it quietly, and
+// only verifierTroubleSince running past VERIFIER_SUSTAINED_MS is worth
+// saying anything about.
+export function isVerifierUnavailable(err) {
+  return err?.status === 503 && err?.code === "verifier_unavailable";
+}
+
+// VERIFIER_SUSTAINED_MS is how long verifier_unavailable refusals have to
+// go on, with no request getting through, before the page says so.
+export const VERIFIER_SUSTAINED_MS = 30_000;
+
+// verifierTrouble is when the current run of verifier_unavailable
+// refusals began, across every request this tab makes: null once any
+// request succeeds. Kept here rather than in App's state because every
+// poll on every page goes through api(), and any one of them answering
+// is the run's end.
+let verifierTrouble = null;
+const verifierListeners = new Set();
+
+function setVerifierTrouble(next) {
+  if (next === verifierTrouble) return;
+  verifierTrouble = next;
+  for (const fn of verifierListeners) fn(next);
+}
+
+// verifierTroubleSince is when the current run of verifier_unavailable
+// refusals began, or null when there is none.
+export function verifierTroubleSince() {
+  return verifierTrouble;
+}
+
+// onVerifierTrouble calls fn with verifierTroubleSince's new value each
+// time it changes, and returns the function that stops it.
+export function onVerifierTrouble(fn) {
+  verifierListeners.add(fn);
+  return () => verifierListeners.delete(fn);
+}
+
+// verifierTroubleSustained is whether the current run of
+// verifier_unavailable refusals has lasted VERIFIER_SUSTAINED_MS.
+export function verifierTroubleSustained(now = Date.now()) {
+  return (
+    verifierTrouble !== null &&
+    now - verifierTrouble.getTime() >= VERIFIER_SUSTAINED_MS
+  );
+}
+
+// VERIFIER_ACTION_REASON is what a toast says for an action of the
+// operator's own the verifier refused: what happened and that a retry
+// is all it needs, rather than that the deployment is unreachable.
+export const VERIFIER_ACTION_REASON =
+  "Sign-in verification could not check your identity just now, so this was not done -- try again in a few seconds.";
+
+// verifierSustainedReason is the standing warning's sentence for a run of
+// verifier_unavailable refusals that began at since.
+export function verifierSustainedReason(since, now = Date.now()) {
+  const secs = Math.max(
+    Math.round(VERIFIER_SUSTAINED_MS / 1000),
+    Math.floor((now - since.getTime()) / 1000),
+  );
+  const age = secs < 120 ? `${secs}s` : `${Math.floor(secs / 60)} min`;
+  return `Sign-in verification has been temporarily unable to check your identity for ${age} — retrying automatically.`;
 }
 
 const NETWORK_UNREACHABLE_REASON =
@@ -86,6 +182,9 @@ export const RESTARTING_REASON =
 // put on screen, and a bare "502 Bad Gateway" names the symptom without
 // saying what it means.
 export function unreachableReason(err) {
+  if (err?.timedOut) {
+    return `This deployment cannot be reached: it accepted the connection but sent no answer within ${Math.round(err.timeoutMs / 1000)} seconds.`;
+  }
   if (typeof err?.status === "number")
     return gatewayUnreachableReason(err.status);
   return NETWORK_UNREACHABLE_REASON;
@@ -105,7 +204,39 @@ export function unreachableReason(err) {
 // shared per path -- a second caller of the same path, wanting the body
 // and holding no copy of its own, must not be handed somebody else's
 // "you already have this".
+//
+// `timeout: ms` bounds the whole exchange, body included: past it the
+// request is aborted and api() throws an error isUnreachable counts as
+// one, carrying `timedOut`, `timeoutMs` and `sentAt` (when it was
+// asked, which is when the silence began). Opt-in, and only for a read
+// whose answer is expected promptly -- never a long poll the daemon
+// holds open on purpose, nor a mutation, whose abort would leave its
+// outcome unknown.
 export default async function api(path, opts) {
+  const { timeout, ...rest } = opts || {};
+  if (!timeout) return request(path, rest);
+  const controller = new AbortController();
+  const sentAt = new Date();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeout);
+  try {
+    return await request(path, { ...rest, signal: controller.signal });
+  } catch (err) {
+    if (!timedOut) throw err;
+    const late = new Error(`${path} sent no answer within ${timeout}ms`);
+    late.timedOut = true;
+    late.timeoutMs = timeout;
+    late.sentAt = sentAt;
+    throw late;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function request(path, opts) {
   // headers is taken out of init so the caller's own are merged into
   // ours below rather than replacing them wholesale in the Object.assign
   // that builds the request -- which would drop the Content-Type and the
@@ -140,6 +271,7 @@ export default async function api(path, opts) {
       init,
     ),
   );
+  if (res.ok || res.status === 304) setVerifierTrouble(null);
   if (poll && res.status === 304) return UNCHANGED;
   const contentType = res.headers.get("Content-Type") || "";
   const isJSON = contentType.includes("application/json");
@@ -155,6 +287,18 @@ export default async function api(path, opts) {
     // for a save from a copy somebody has since saved over
     // (components/StaleEdit.jsx).
     if (body && body.code) err.code = body.code;
+    // What a verifier_unavailable refusal says about itself: the backend
+    // that was out of reach ("tonic_unreachable") and when to ask again.
+    if (body && body.reason) err.reason = body.reason;
+    if (body && typeof body.retryAfter === "number") {
+      err.retryAfter = body.retryAfter;
+    }
+    // Whether this was a read or an action, for showError: a refused
+    // read is retried by the poll that asked, a refused action is not.
+    err.method = method;
+    if (isVerifierUnavailable(err) && verifierTrouble === null) {
+      setVerifierTrouble(new Date());
+    }
     // A capability grant's refusal keyed by the argument it is about
     // (pkg/ui's ValidationError fields), which a grant form marks.
     if (body && body.fields) err.fields = body.fields;

@@ -193,6 +193,20 @@ func GenerateOrLoadPrivateKey(path string) (ed25519.PrivateKey, error) {
 	return priv, nil
 }
 
+// TokenFileIssuedAt is when the credential in path was written -- issued on
+// acceptance or by the last silent renewal, which rewrites the file -- for
+// Server.RenewedAt; zero when path is empty or unreadable.
+func TokenFileIssuedAt(path string) time.Time {
+	if strings.TrimSpace(path) == "" {
+		return time.Time{}
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return fi.ModTime()
+}
+
 // WriteSecretFile0600 atomically writes data to path with permissions 0600,
 // refusing to overwrite a symlink.
 func WriteSecretFile0600(path string, data []byte) error {

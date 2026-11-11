@@ -202,8 +202,11 @@ var (
 		"/home/debian/.bashrc", "/home/debian/.bash_profile", "/home/debian/.bash_login",
 		"/home/debian/.bash_logout", "/home/debian/.profile",
 		// Grain writes the sandbox's git proxy credential and the config
-		// that points git at it, and the github-sandbox capability's token.
-		"/home/debian/.git-credentials", "/home/debian/.gitconfig", "/home/debian/.github-sandbox-token",
+		// that points git at it. (github#sandbox-repo's token,
+		// /home/debian/.github-sandbox-token, is not reserved: that method
+		// places it through MintPass, and a second grant placing the same
+		// path is still refused by Pass.checkConflicts.)
+		"/home/debian/.git-credentials", "/home/debian/.gitconfig",
 	}
 )
 

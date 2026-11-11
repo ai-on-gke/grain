@@ -73,6 +73,34 @@ func (p OverlapPolicy) Validate() error {
 	}
 }
 
+// maxOverlapGroupLen bounds Schedule.OverlapGroup so it stays readable in
+// tags, skip records and the schedules page.
+const maxOverlapGroupLen = 128
+
+// ValidateOverlapGroup checks that group is either empty (no shared
+// overlap group) or a name made of ASCII letters, digits, '.', '_' and
+// '-', starting with a letter or digit. Refusing colons, slashes and
+// whitespace keeps ScheduleOverlapGroupTag unambiguous.
+func ValidateOverlapGroup(group string) error {
+	if group == "" {
+		return nil
+	}
+	if len(group) > maxOverlapGroupLen {
+		return fmt.Errorf("overlap group %q is longer than %d characters", group, maxOverlapGroupLen)
+	}
+	for i := 0; i < len(group); i++ {
+		c := group[i]
+		alnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if i == 0 && !alnum {
+			return fmt.Errorf("overlap group %q must start with a letter or digit", group)
+		}
+		if !alnum && c != '-' && c != '_' && c != '.' {
+			return fmt.Errorf("overlap group %q may only contain letters, digits, '.', '_' and '-'", group)
+		}
+	}
+	return nil
+}
+
 // Schedule is what a human sets up once and grain refiles as a real
 // Task on a fixed cadence -- bwsalmon/agents#376's v2 equivalent of
 // v1's scheduled_jobs.py, with one deliberate difference: there is no
@@ -180,6 +208,20 @@ type Schedule struct {
 	// only schedules that run a workflow.
 	WorkflowReview WorkflowReviewPolicy
 
+	// GrainCI says a schedule that runs a workflow runs it on grain CI
+	// even when its repository's ci_mode is github (grain/task-3878).
+	// Without it such a firing is dropped, since that mode says GitHub
+	// Actions is this repository's CI. It is an exception for this
+	// schedule's own firings and nothing else: the run is a schedule
+	// event on the base branch, so it gates no pull request and posts no
+	// commit status, and a firing still files a review only when the
+	// run does not pass. ci_mode: none still drops the firing, since that
+	// mode says no CI runs here at all. Meaningless on any other
+	// schedule, and set only by a `.grain/schedules` file with
+	// `workflow:` (`grain-ci: true`), or by a settings row that names a
+	// workflow-review template.
+	GrainCI bool
+
 	// CustomFields is the values every task this schedule files carries
 	// for the fields this deployment declares (CustomField), keyed by
 	// field name -- content alongside Reads, Writes and Grants, and
@@ -256,6 +298,16 @@ type Schedule struct {
 	// unclosed task carrying the schedule's firing tag for one that
 	// files a task, an unfinished run for one that runs a suite.
 	Overlap OverlapPolicy
+	// OverlapGroup widens OverlapSkip across every schedule that names the
+	// same group and fires into the same repository (grain/task-3895): a
+	// firing is held while any schedule in that repository and group has
+	// an unfinished firing -- an open task carrying
+	// ScheduleOverlapGroupTag, an unfinished suite run, or an unsettled
+	// ScheduledWorkflowRun or held review. Scoped per repository so one
+	// repository's declarations cannot hold another's schedules. Empty
+	// (the default) means the schedule checks only its own previous
+	// firing; it is meaningless, and refused, beside OverlapAllow.
+	OverlapGroup string
 	// Enabled is the pause/resume switch a UI toggles -- a disabled
 	// schedule stays around (with its own history in NextRunAt/LastRunAt)
 	// rather than being deleted, the same as closing a task keeps its row

@@ -1,0 +1,1 @@
+grain: dana@example.com (role grain/contributor) cannot set capabilities: cannot grant api:config:write, which the role does not hold

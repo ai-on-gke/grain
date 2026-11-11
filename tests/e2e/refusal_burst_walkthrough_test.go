@@ -378,12 +378,21 @@ func TestWalkthroughReplayedClaudeSessionLimitPausesUntilItsReset(t *testing.T) 
 	if len(paused) != 1 || paused[0].Framework != "claude" {
 		t.Fatalf("paused %v, want claude alone", paused)
 	}
-	// Pause.Begin bounds a named reset to at most a day away.
-	want := limit.ResetAt
-	if ceiling := now.Add(24 * time.Hour); want.After(ceiling) {
-		want = ceiling
+	// Pause.Begin bounds a named reset to at least a minute and at most a
+	// day away, so a run inside the minute before 17:30 UTC pauses until
+	// now+1m rather than the named reset. The cycle's run re-reads the
+	// reset from the wall clock, so if 17:30 passed since the first run it
+	// names tomorrow's.
+	bounded := func(reset time.Time) time.Time {
+		if floor := now.Add(time.Minute); reset.Before(floor) {
+			return floor
+		}
+		if ceiling := now.Add(24 * time.Hour); reset.After(ceiling) {
+			return ceiling
+		}
+		return reset
 	}
-	if !until.Equal(want) {
+	if want, alt := bounded(limit.ResetAt), bounded(next1730(now)); !until.Equal(want) && !until.Equal(alt) {
 		t.Errorf("claude paused until %s, want %s", until, want)
 	}
 	runs := runsOf(t, w, "sl-1")["sl-1"]

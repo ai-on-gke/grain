@@ -135,13 +135,17 @@
   --border: #292b31;
   --border-strong: #3a3d44;
 
-  --text: #e9e7e1;
+  --text: #f1efe9;
   /* The same rule as the light palette's: tertiary holds 4.5:1 on every
-     ground, the lightest here being --surface-active (5.0:1 there, 5.8:1
-     on --surface), and secondary rose with it to keep the step between
-     the two: text ~1.7x secondary ~1.5x tertiary. */
-  --text-secondary: #b8b5ad;
-  --text-tertiary: #959189;
+     ground. The lightest here is not one of these tokens but the task
+     pane (Overlay.jsx's Dialog): MUI paints a dark Paper's elevation as a
+     white background-image over --surface, which at a Dialog's 24 comes
+     out #3a3c3f. Tertiary is 4.7:1 there (7.3:1 on --surface), and
+     secondary and body text rose with it to keep the steps between the
+     three: text ~1.5x secondary ~1.3x tertiary. ui/e2e/dark-contrast.spec.js
+     reads the rendered pixels to hold it. */
+  --text-secondary: #c6c2ba;
+  --text-tertiary: #aca8a0;
   --text-placeholder: #57544e;
 
   /* The grain colour, on the two grounds the mark was drawn against. */
@@ -825,6 +829,21 @@ samp,
 .content-header .inbox-notify {
   margin-left: auto;
   align-self: center;
+}
+/* "Try the new Inbox": a quiet link under the header, to /next/inbox. */
+.inbox-next-callout {
+  margin: 0;
+  padding: 0.5rem 1.75rem 0;
+  font-size: 0.8125rem;
+  text-align: right;
+}
+:root[data-phone="true"] .inbox-next-callout {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+.inbox-try-next {
+  color: var(--accent);
+  text-underline-offset: 2px;
 }
 
 /* ---------- Status dot: a small colored circle stands in for the state
@@ -2391,7 +2410,23 @@ html[data-phone="true"] .gantt-body {
 .panel-keep:hover {
   text-decoration: underline;
 }
-.panel-keep + .panel-open {
+/* Refused for a role without tasks:write (AccessGate): the same word,
+   muted, in the same place -- the gate's wrapper takes the auto margin
+   over so neither it nor "Open" beside it moves. */
+.panel-keep:disabled {
+  color: var(--text-muted);
+  opacity: 0.55;
+  cursor: default;
+  text-decoration: none;
+}
+.panel-header > .access-gate {
+  margin-left: auto;
+}
+.panel-header > .access-gate > .panel-keep {
+  margin-left: 0;
+}
+.panel-keep + .panel-open,
+.panel-header > .access-gate + .panel-open {
   margin-left: 0;
 }
 /* ...and on a finger, the same link with a target under it. "Open" set
@@ -2431,6 +2466,14 @@ html[data-phone="true"] .gantt-body {
     padding: 0 0.9rem;
     margin-top: -0.6rem;
     margin-bottom: -0.6rem;
+  }
+  .panel-header > .access-gate {
+    margin-top: -0.6rem;
+    margin-bottom: -0.6rem;
+  }
+  .panel-header > .access-gate > .panel-keep {
+    margin-top: 0;
+    margin-bottom: 0;
   }
   .panel-open {
     margin-right: -0.9rem;
@@ -2642,8 +2685,8 @@ html[data-phone="true"] .gantt-body {
   flex: none;
   padding-right: 1.75rem;
 }
-/* A pending release's soak beside its Approve (InboxPage's ReleaseSoak),
-   with the SHORT SOAK warning when it was under the minimum. */
+/* A pending release's soak or breaking-change warning beside its Approve
+   (InboxPage's ReleaseSoak), with SHORT SOAK and BREAKING chips. */
 .inbox-release-soak {
   display: inline-flex;
   align-items: center;
@@ -2661,6 +2704,54 @@ html[data-phone="true"] .gantt-body {
   font-weight: 600;
   font-size: 0.7rem;
   letter-spacing: 0.02em;
+}
+.inbox-release-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 1rem;
+  padding: 0 1.75rem 0.35rem 3.6rem;
+  color: var(--text-secondary);
+}
+.inbox-release-options .MuiFormControlLabel-root {
+  margin-left: -0.35rem;
+  margin-right: 0;
+}
+.inbox-release-options .MuiFormControlLabel-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.inbox-release-failure {
+  padding: 0 1.75rem 0.55rem 3.6rem;
+  overflow-wrap: anywhere;
+}
+.inbox-release-remedy {
+  margin-top: 0.3rem;
+}
+.inbox-release-key-actions {
+  margin-top: 0.45rem;
+}
+.inbox-approval-key-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.inbox-approval-key-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.inbox-approval-key {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 /* The one row on this page that is not a task (InboxPage's
    base_branch_gate group): a base branch nothing is judging. It stands
@@ -3116,6 +3207,18 @@ html[data-phone="true"] .gantt-body {
    over a run's life, and the mode phrase is what goes. */
 .suite-run-row .template-name {
   min-width: var(--list-title-min);
+}
+/* ...and the chip strip a floor of one whole chip. It shrinks in
+   proportion with the name and the hints beside it, and once it was
+   narrower than its first chip there was no second line to drop that
+   chip onto, so it was cut inside its own pill instead: 23px of
+   "succeeded" at 620px and 10px of "failed" on a phone, where the
+   status is what the row is read for (2026-11-08 walkthrough). The
+   strip's min-content is its widest chip still laid out -- ChipStrip
+   takes the wrapped ones out -- so the status always reads whole and
+   only the chips after it give way. e2e/narrow.spec.js measures it. */
+.suite-run-row .chips {
+  min-width: min-content;
 }
 /* ...which leaves this hint the one .template-title in the tree that
    keeps a flex item's own default (grain/task-431). Everywhere else the
@@ -4185,6 +4288,23 @@ fieldset legend {
 .timeline-newest-first .timeline-list {
   margin-bottom: 0;
 }
+/* A closed task's note sits over the reply box (Timeline.jsx), taking
+   the box's own top margin so the pair spaces like the box alone. */
+.comment-form-closed {
+  margin: 0.85rem 0 0;
+}
+.comment-form-closed + .comment-form {
+  margin-top: 0.4rem;
+}
+.timeline-newest-first .comment-form-closed {
+  margin-top: 0;
+}
+/* Two buttons beside the textarea ("Reopen and send", "Comment only")
+   keep a label on one line each rather than squeezing it onto two. */
+.comment-form > .MuiButton-root {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 /* An attempt's own row opens AttemptTranscriptOverlay on click or on
    Enter/Space while focused (bwsalmon/agents#446) -- cursor and a subtle
    hover background are this row's only visual difference from a plain
@@ -4289,6 +4409,44 @@ fieldset legend {
   margin-top: 0.15rem;
   word-break: break-word;
 }
+/* A comment a durable task's compaction folded into its handover
+   (DT-15): kept, collapsed behind one muted line. */
+.timeline-summarised > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+/* The current brief's own controls under it: Edit, the original
+   description and the brief's history (DT-15). */
+.brief-header {
+  margin-top: 1rem;
+}
+.brief-header + .description {
+  margin-top: 0.35rem;
+}
+.brief-extras {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: -0.5rem 0 1rem;
+}
+.brief-extras > details {
+  align-self: stretch;
+}
+.brief-extras > details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.brief-history {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+.brief-history .description {
+  margin: 0.25rem 0 0.75rem;
+}
 .comment-form,
 .pending-question-form {
   display: flex;
@@ -4367,6 +4525,8 @@ fieldset legend {
 :root[data-phone="true"] .inbox-group-header,
 :root[data-phone="true"] .inbox-gate,
 :root[data-phone="true"] .inbox-note,
+:root[data-phone="true"] .inbox-release-options,
+:root[data-phone="true"] .inbox-release-failure,
 :root[data-phone="true"] .inbox-responder,
 :root[data-phone="true"] .template-row,
 :root[data-phone="true"] .process-kinds,
@@ -4457,6 +4617,15 @@ fieldset legend {
    title's line, taking width from the title that on a phone they have
    never taken. */
 :root[data-phone="true"] .task-row > .MuiChip-root {
+  order: 4;
+}
+/* So does the control that ends a stalled row's wait, which follows the
+   sub-case chip it answers -- bare, or inside AccessGate's wrapper for a
+   role that may not press it. Without an order it sorted up onto the
+   title's line, a screen's height of row away from the chip naming what
+   it does (2026-11-11 walkthrough). */
+:root[data-phone="true"] .task-row > .task-reason-control,
+:root[data-phone="true"] .task-row > .access-gate {
   order: 4;
 }
 :root[data-phone="true"] .chips {
@@ -5183,6 +5352,59 @@ fieldset legend {
   margin-top: 4px;
 }
 
+/* Paged timeline "Show earlier" control and chat summarised comments
+   disclosure (durable-tasks.design.md#DT-15). */
+.timeline-earlier {
+  display: flex;
+  justify-content: center;
+}
+.timeline-earlier-bottom {
+  padding: 0.75rem 0 0.25rem;
+}
+.timeline-earlier-top {
+  padding: 0.25rem 0 0.75rem;
+}
+.task-chat-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 0 0 0.5rem;
+}
+.task-chat-summarised {
+  margin-top: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  background: var(--canvas);
+}
+.task-chat-summarised > .timeline-summarised-summary {
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.task-chat-summarised[open] > .timeline-summarised-summary {
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-summarised-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.timeline-summarised-item {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-summarised-item:first-child {
+  padding-top: 0;
+}
+.timeline-summarised-item:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 /* The closed-tasks pager at the end of a task view (ClosedTasksMore.jsx). */
 .closed-tasks-more {
   display: flex;
@@ -5302,4 +5524,45 @@ a.committed-context-sha:hover {
 .committed-context-file-source {
   font-size: 0.71rem;
   color: var(--accent);
+}
+
+/* AccessGate's wrapper around a refused control: the control fills it,
+   as it fills the slot it would have taken ungated (AccessGate.jsx). */
+.access-gate > * {
+  flex-grow: 1;
+}
+
+/* A comment a /tasks/<id>#comment=<id> link scrolled to
+   (CommentDeepLink.jsx), marked for as long as HIGHLIGHT_MS and fading
+   out over it. */
+/* The linked comment is focused as well (tabindex -1, so only a script
+   focuses it), and the highlight is what marks it: no outline on top. */
+[data-comment-id][tabindex="-1"]:focus {
+  outline: none;
+}
+.comment-highlight {
+  border-radius: 6px;
+  animation: comment-highlight 2.5s ease-out;
+}
+@keyframes comment-highlight {
+  0%,
+  40% {
+    /* 8%, not more: the comment's own text has to keep 4.5:1 against
+       it in both themes (18% left dark-theme body text at 3.97:1). The
+       ring is what marks the comment. */
+    background: color-mix(in srgb, var(--accent, #6366f1) 8%, transparent);
+    box-shadow: 0 0 0 2px var(--accent, #6366f1);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+.timeline-comment-actions {
+  display: inline-flex;
+  align-items: center;
+}
+.timeline-item[data-comment-id],
+.task-chat-window [data-comment-id] {
+  scroll-margin: 4rem;
 }

@@ -45,11 +45,6 @@ export const SETTINGS_GROUPS = [
     id: "secrets",
     label: "Secrets & access",
     sections: [
-      {
-        id: "credentials",
-        label: "Legacy capabilities",
-        keywords: ["credentials", "secrets", "legacy capabilities"],
-      },
       { id: "access", label: "Access" },
       // The host registry (pkg/model/hostd.go): invited, paired, rotated
       // and revoked here, never declared in the config repo.
@@ -66,6 +61,20 @@ export const SETTINGS_GROUPS = [
           "remote",
           "token",
           "workstation",
+        ],
+      },
+      // Putting the grain CLI on a workstation (external-cli.spec.md
+      // #XC-32): commands to copy, nothing to save.
+      {
+        id: "cli",
+        label: "CLI",
+        keywords: [
+          "cli",
+          "command line",
+          "install",
+          "login",
+          "skill",
+          "terminal",
         ],
       },
       // Who changed what (operator-attribution spec §4.4): read-only
@@ -93,8 +102,15 @@ export const SETTINGS_GROUPS = [
       { id: "engine", label: "Engine" },
       {
         id: "registry",
-        label: "Registry",
-        keywords: ["registry", "heartbeat", "directory", "scopes", "connected"],
+        label: "Hub",
+        keywords: [
+          "hub",
+          "registry",
+          "heartbeat",
+          "directory",
+          "scopes",
+          "connected",
+        ],
       },
       { id: "config-repo", label: "Config repo" },
     ],
@@ -205,7 +221,7 @@ const OLD_SETTINGS_TABS = {
   // Executors were retired with remote executors; the grain hostds that
   // replaced them are registered under Hostds.
   executors: "hostds",
-  integrations: "credentials",
+  integrations: "capabilities",
   state: "config-repo",
   // Upgrade was a System tab (/system/upgrade) until it moved into
   // Settings; old links and bookmarks land on the section.
@@ -224,9 +240,9 @@ const OLD_SYSTEM_TABS = [
 
 // SETTINGS_SECTION_ALIASES are /settings/<section> paths that name a
 // pane by what it holds rather than by its section: the capability
-// servers card is on Capabilities, and the legacy capabilities' secrets
-// are on Legacy capabilities (whose id stays credentials), under
-// Secrets & access.
+// servers card is on Capabilities, and so are the GitHub host, GCP
+// settings and secrets that were Settings → Legacy capabilities (section
+// id credentials) before that tab was retired: its old links land there.
 const SETTINGS_SECTION_ALIASES = {
   "capability-servers": "capabilities",
   // Settings -> Executors was retired with remote executors; the grain
@@ -235,8 +251,9 @@ const SETTINGS_SECTION_ALIASES = {
   executors: "hostds",
   hosts: "hostds",
   host: "hostds",
-  "legacy-capabilities": "credentials",
-  secrets: "credentials",
+  credentials: "capabilities",
+  "legacy-capabilities": "capabilities",
+  secrets: "capabilities",
 };
 
 // settingsSectionFor is the section a /settings/<section> path names,
@@ -249,12 +266,43 @@ export function settingsSectionFor(raw) {
   return SETTINGS_SECTION_ALIASES[id] || "";
 }
 
+// SETTINGS_ALIAS_ANCHORS are the cards an alias names within its
+// section: the retired Legacy capabilities tab is the Deployment
+// credentials card at the foot of Capabilities, and its secrets the
+// Other secrets list in it. Landing at the top of Capabilities left that
+// card some six screens below the fold (2026-11-08 connections walkthrough).
+const SETTINGS_ALIAS_ANCHORS = {
+  credentials: "credentials",
+  "legacy-capabilities": "credentials",
+  secrets: "other-secrets",
+};
+
+// settingsAliasAnchor is the card a /settings/<alias> path should scroll
+// to when it carries no #hash of its own, or "" for none.
+export function settingsAliasAnchor(raw) {
+  return SETTINGS_ALIAS_ANCHORS[String(raw || "").toLowerCase()] || "";
+}
+
+// settingsAliasAnchorAt is settingsAliasAnchor for a whole address: the
+// alias in /settings/<alias>, unless a #hash already names a target.
+export function settingsAliasAnchorAt(pathname, hash) {
+  if (hash && hash !== "#") return "";
+  const path = String(pathname || "");
+  // The old Integrations tab (/admin/integrations, /system/integrations)
+  // held the GitHub host and secrets before Legacy capabilities did, so
+  // it lands on the same card (2026-11-08 deployment credentials card
+  // walkthrough).
+  if (/^\/(admin|system)\/integrations\/?$/i.test(path)) return "credentials";
+  const m = /^\/settings\/([^/]+)\/?$/.exec(path);
+  return m ? settingsAliasAnchor(decodeURIComponent(m[1])) : "";
+}
+
 // systemTabFor is the tab a /system/<tab> path names, or "" for none.
 // An explicit /system/health stays "health" rather than folding into the
 // bare /system: on a phone the bare path is the list of tabs, not Health,
 // so a reloaded or shared /system/health would land on the list. App
 // folds it back to "" on a wider screen, where the two are the same page.
-export function systemTabFor(raw) {
+function systemTabFor(raw) {
   const id = String(raw || "").toLowerCase();
   return SYSTEM_TABS.some((t) => t.id === id) ? id : "";
 }

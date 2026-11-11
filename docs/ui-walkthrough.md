@@ -23,14 +23,14 @@ a template in `.grain/templates/`:
 
 | File | What it walks |
 | --- | --- |
-| `ui-walkthrough-tasks.yml` | Inbox, the New task form, task lists and narrowing, task detail and its controls (pause, force merge, Run now), bulk edit and manual mode |
+| `ui-walkthrough-tasks.yml` | Inbox (including notifications and release approvals), the New task form, task lists, closed-task paging and narrowing, task detail and its controls (admission, hosting, pause, `request_access`, force merge, Run now), bulk edit and manual mode |
 | `ui-walkthrough-boards.yml` | The Boards index and every visualization: list, kanban, timeline, tree, dashboard, report |
-| `ui-walkthrough-repos.yml` | Repos, the repo page's tabs and Settings → Repositories, the merge queue and base-gate warnings, comparing branches, releases and release trains |
-| `ui-walkthrough-automation.yml` | Processes: schedules, templates, suites, suite runs and triggers -- including declared rows |
-| `ui-walkthrough-settings.yml` | Settings' layout, filter, save and config-repo lock model; Preferences, Access, General, Config repo (and its browser), Models, Agents, Memory and Tasks |
-| `ui-walkthrough-infrastructure.yml` | Settings' connections and infrastructure sections: Git, Hosts, Capabilities (servers, policy, API scope sets), Legacy capabilities, Engine, CI, Sandboxes, Caches |
-| `ui-walkthrough-operations.yml` | System and its tabs (Health, Logs, Sandboxes, Caches, Top, Pipeline, Metrics, Power), Settings → Upgrade, the CI page, the alerts bell and the standing banners |
-| `ui-walkthrough-shell.yml` | The shared shell -- page header rail, phone bar and drawer, collapsible nav rail, banners -- at desktop/tablet/phone widths, and the live session and task-chat surfaces |
+| `ui-walkthrough-repos.yml` | Repos, the repo page's tabs and Settings → Repositories, the merge queue and base-gate warnings, comparing branches, releases, qualification plans and release trains |
+| `ui-walkthrough-automation.yml` | Processes: schedules (including `git_ref` triggers), templates, suites, suite runs and triggers -- including declared rows |
+| `ui-walkthrough-settings.yml` | Settings' layout, filter, save, role and config-repo lock model; Preferences, Access, CLI, Audit, General, Config repo (and its browser), Models, Agents, Memory and Tasks |
+| `ui-walkthrough-infrastructure.yml` | Settings' connections and infrastructure sections: Git, Hosts, Capabilities (servers, policy, API scope sets, deployment credentials), Hub, Engine, CI, Sandboxes, Caches |
+| `ui-walkthrough-operations.yml` | System and its tabs (Health, Logs, Sandboxes, Caches, Top, Pipeline, Metrics, Power), Settings → Upgrade (image sources, retracted/discarded banners, offline DB panel), the CI page, the alerts bell and the standing banners |
+| `ui-walkthrough-shell.yml` | The shared shell -- page header rail, phone bar and drawer, collapsible nav rail and user tile, banners -- at desktop/tablet/phone widths, role-gated rendering, and the live session and task-chat surfaces |
 
 Every one of them carries the same walkthrough protocol in its body:
 build and run this repository's real `grain demo` server over a

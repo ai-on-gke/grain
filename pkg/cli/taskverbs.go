@@ -131,6 +131,8 @@ func cmdRetryMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 func cmdForceMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain force-merge", flag.ContinueOnError)
 	head := fs.String("head", "", "the head commit you reviewed; the override is for it alone")
+	overrideGates := fs.String("override-gates", "",
+		"comma-separated unsatisfied gates to override (e.g. security-review, review, ci); required when any review gate is pending or has findings")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -145,7 +147,11 @@ func cmdForceMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 	if reason == "" {
 		return fmt.Errorf("say why: grain force-merge <id> \"the release is broken and this is the fix\"")
 	}
-	if err := c.ForceMerge(ctx, id, reason, *head); err != nil {
+	var gates []string
+	if strings.TrimSpace(*overrideGates) != "" {
+		gates = []string{*overrideGates}
+	}
+	if err := c.ForceMergeWithGates(ctx, id, reason, *head, gates); err != nil {
 		return err
 	}
 	return respond(ctx, c, out, id)
@@ -159,6 +165,7 @@ func cmdForceMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 // it. See ui.Client.RunNow.
 func cmdRunNow(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain run-now", flag.ContinueOnError)
+	reason := fs.String("reason", "", "why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give when run-now approves an unapproved task")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -169,6 +176,7 @@ func cmdRunNow(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	if err != nil {
 		return err
 	}
+	c.ActingReason = *reason
 	if err := c.RunNow(ctx, id); err != nil {
 		return err
 	}

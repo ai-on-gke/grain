@@ -1,0 +1,61 @@
+== grain usage -budget agy-walk=abc/5h
+grain: -budget "agy-walk=abc/5h": tokens "abc" is not a whole number
+exit=1
+== grain usage -budget agy-walk=1000/-5h
+grain: budget 1 (agy-walk): window "-5h" is not a positive duration such as 5h
+exit=1
+== grain usage -budget agy-walk=1000/0h
+grain: budget 1 (agy-walk): window "0h" is not a positive duration such as 5h
+exit=1
+== grain usage -budget nosuch=1000/5h
+mode: advisory   max_workers: 4   effective worker cap: 4   sustainable: unbounded (a connection in use has no known budget)
+deployment: 3 runs, 71k billable (69k in, 1.8k out, 24k cache read, 0 cache write), 71k/h now, since 2026-11-10T07:24:59Z
+
+CONNECTION               MODEL                       USED     LIMIT      LEFT RESET               BURN/H SUSTAINS
+Walk agy                 fake-model                   71k      71k~    paused 11-10 08:28 UTC        71k 0
+nosuch                   (all models)                   0      1.0k      1.0k -                        0 -
+
+(~ marks a limit learned from the usage a window had consumed when its provider refused it)
+warning: default model fake-model on Walk agy is paused until 08:28 UTC; work falls back to nothing -- it is the last model on the default list
+exit=0
+== grain usage -budget agy-walk=-10/5h
+grain: budget 1 (agy-walk): tokens must be positive
+exit=1
+== grain usage -budget agy-walk/fake-model=2000000/5h
+mode: advisory   max_workers: 4   effective worker cap: 4   sustainable: ≈0
+deployment: 3 runs, 71k billable (69k in, 1.8k out, 24k cache read, 0 cache write), 71k/h now, since 2026-11-10T07:24:59Z
+
+CONNECTION               MODEL                       USED     LIMIT      LEFT RESET               BURN/H SUSTAINS
+Walk agy                 fake-model                   71k      2.0M    paused 11-10 08:28 UTC        71k 0
+
+(~ marks a limit learned from the usage a window had consumed when its provider refused it)
+advisory: the remaining budget sustains ≈ 0 workers until the next reset (max_workers is 4)
+warning: default model fake-model on Walk agy is paused until 08:28 UTC; work falls back to nothing -- it is the last model on the default list
+exit=0
+== grain usage -retention-days 7 -min-workers 3
+mode: advisory   max_workers: 4   effective worker cap: 4   sustainable: ≈0
+exit=0
+== PUT /api/usage/settings {"budgets":[{"connection":"agy-walk","tokens":-5,"window":"5h"}]}
+{"error":"budget 1 (agy-walk): tokens must be positive"}
+
+HTTP 400
+== PUT /api/usage/settings {"budgets":[{"connection":"agy-walk","tokens":1000,"window":"-5h"}]}
+{"error":"budget 1 (agy-walk): window \"-5h\" is not a positive duration such as 5h"}
+
+HTTP 400
+== PUT /api/usage/settings {"budgets":[{"connection":"nosuch","tokens":1000,"window":"5h"}]}
+{"generatedAt":"2026-11-10T07:42:23.488915346Z","mode":"advisory","maxWorkers":4,"minWorkers":1,"scopes":[{"connection":"agy-walk","connectionName":"Walk agy","model":"fake-model","runs":3,"inputTokens":69000,"outputTokens":1830,"cacheReadTokens":24000,"cacheWriteTokens":0,"used":70830,"windowStart"
+
+HTTP 200
+== PUT /api/usage/settings {"mode":"sometimes"}
+{"error":"usage mode \"sometimes\": want advisory, auto or off"}
+
+HTTP 400
+== PUT /api/usage/settings {"budgets":[{"connection":"agy-walk","tokens":"abc","window":"5h"}]}
+{"error":"reading usage settings: json: cannot unmarshal string into Go struct field TokenBudget.budgets.tokens of type int64"}
+
+HTTP 400
+== PUT /api/usage/settings {"mode":"advisory","retentionDays":7,"minWorkers":2,"budgets":[{"connection":"agy-walk","tokens":5000000,"window":"5h"}]}
+{"generatedAt":"2026-11-10T07:42:23.529143113Z","mode":"advisory","maxWorkers":4,"minWorkers":2,"scopes":[{"connection":"agy-walk","connectionName":"Walk agy","runs":3,"inputTokens":69000,"outputTokens":1830,"cacheReadTokens":24000,"cacheWriteTokens":0,"used":70830,"windowStart":"2026-11-10T02:42:23
+
+HTTP 200

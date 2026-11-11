@@ -465,7 +465,7 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     // The whoami tile sits over the stamp (operator-attribution spec §5.4).
     await expect(aside.getByTestId("user-tile")).toHaveAttribute(
       "title",
-      /^operator \((access code|local)\)$/,
+      /^(operator|alice@example\.com) \((access code|local)\)$/,
     );
 
     // System and Settings are reachable from the page's header rail
@@ -1355,7 +1355,7 @@ test.describe("Live Interaction Surfaces & Sessions", () => {
       page.locator(".cs-message-input__content-editor"),
     ).toBeVisible();
 
-    const sessionRead = /\/api\/tasks\/\d+$/;
+    const sessionRead = /\/api\/tasks\/\d+(\?.*)?$/;
     await page.route(sessionRead, (route) =>
       route.fulfill({
         status: 503,

@@ -245,6 +245,75 @@ func (w *triggerWorld) heldBySensitive(subject model.Task) model.Task {
 	return got
 }
 
+// approveGatingReviews approves every gating review task subject waits on --
+// its path triggers' and its security review -- so they run. A person's
+// Submit is an approval of the change only: it never stands in for them.
+func (w *triggerWorld) approveGatingReviews(subject string) {
+	w.t.Helper()
+	got := w.task(subject)
+	ids := []string{}
+	for _, l := range got.Links {
+		switch l.Kind {
+		case model.LinkPathTriggerTask:
+			if _, id, ok := strings.Cut(l.Target, "="); ok {
+				ids = append(ids, id)
+			}
+		case model.LinkSecurityReviewTask:
+			ids = append(ids, l.Target)
+		}
+	}
+	for _, id := range ids {
+		if w.state(id) != model.StateProposed {
+			continue
+		}
+		if err := w.ui.Approve(w.as("owner"), id); err != nil {
+			w.t.Fatalf("approving gating review %s: %v", id, err)
+		}
+	}
+}
+
+// releasedAfterReviews runs cycles until subject's gating reviews have
+// finished and it merges itself again.
+func (w *triggerWorld) releasedAfterReviews(subject string) model.Task {
+	w.t.Helper()
+	for i := 0; i < 8 && !w.task(subject).AutoMerge; i++ {
+		w.approveGatingReviews(subject)
+		w.cycle()
+	}
+	return w.task(subject)
+}
+
+// reviewsFinished approves and runs subject's gating reviews until every one
+// has finished.
+func (w *triggerWorld) reviewsFinished(subject string) {
+	w.t.Helper()
+	done := func() bool {
+		for _, l := range w.task(subject).Links {
+			id := ""
+			switch l.Kind {
+			case model.LinkPathTriggerTask:
+				_, id, _ = strings.Cut(l.Target, "=")
+			case model.LinkSecurityReviewTask:
+				id = l.Target
+			}
+			if id == "" {
+				continue
+			}
+			if st := w.state(id); st != model.StateCompleted && st != model.StateClosed {
+				return false
+			}
+		}
+		return true
+	}
+	for i := 0; i < 8 && !done(); i++ {
+		w.approveGatingReviews(subject)
+		w.cycle()
+	}
+	if !done() {
+		w.t.Fatalf("%s's gating reviews never finished: links %+v", subject, w.task(subject).Links)
+	}
+}
+
 func TestPathTriggersWalkthrough(t *testing.T) {
 	t.Parallel()
 
@@ -284,13 +353,20 @@ func TestPathTriggersWalkthrough(t *testing.T) {
 		}
 		w.notMergedWhileHeld(task, 3)
 
-		// alice is named, and her Submit is the release.
+		// The trigger's review runs and comes back clean: its review gate
+		// passes, and the change still waits for a person's approval.
+		w.reviewsFinished(task.ID)
+		if got := w.task(task.ID); got.AutoMerge || w.merged(model.BranchName(task.ID)) {
+			t.Fatalf("a clean review released a change that needs a person's approval: links %+v", got.Links)
+		}
+		// alice is named, and her Submit is the last gate.
 		if err := w.ui.Submit(w.as("alice"), task.ID); err != nil {
 			t.Fatalf("alice's Submit: %v", err)
 		}
 		got := w.task(task.ID)
 		if !got.AutoMerge || len(model.PendingApprovals(got)) != 0 {
-			t.Fatalf("alice's Submit did not release: automerge=%v pending=%v", got.AutoMerge, pendingRules(got))
+			t.Fatalf("alice's Submit after a clean review did not release: automerge=%v pending=%v links=%+v",
+				got.AutoMerge, pendingRules(got), got.Links)
 		}
 		if a := linkTargets(got, model.LinkApprovedBy); len(a) != 1 || a[0] != "trigger:payments=alice" {
 			t.Errorf("approved-by = %v, want trigger:payments=alice", a)
@@ -313,8 +389,9 @@ func TestPathTriggersWalkthrough(t *testing.T) {
 		if err := w.ui.Submit(w.as("carol"), task.ID); err != nil {
 			t.Fatalf("carol's Submit: %v", err)
 		}
-		if got := w.task(task.ID); !got.AutoMerge {
-			t.Fatalf("a person's Submit did not release the hold: pending=%v", pendingRules(got))
+		if got := w.releasedAfterReviews(task.ID); !got.AutoMerge {
+			t.Fatalf("a person's Submit and a clean review did not release the hold: pending=%v links=%+v",
+				pendingRules(got), got.Links)
 		}
 	})
 
@@ -350,8 +427,9 @@ func TestPathTriggersWalkthrough(t *testing.T) {
 		if err := w.ui.Submit(w.as("bob"), task.ID); err != nil {
 			t.Fatalf("bob's Submit: %v", err)
 		}
-		if got := w.task(task.ID); !got.AutoMerge {
-			t.Fatalf("bob's Submit did not release the edit to the triggers: pending=%v", pendingRules(got))
+		if got := w.releasedAfterReviews(task.ID); !got.AutoMerge {
+			t.Fatalf("bob's Submit and clean reviews did not release the edit to the triggers: pending=%v links=%+v",
+				pendingRules(got), got.Links)
 		}
 	})
 

@@ -72,6 +72,23 @@ keyed to it are cleared and listed. Past runs keep its name.
 delete-revoked deletes every revoked host nothing still names, and lists
 the ones it skipped.`
 
+// hostRegistryVerb reports whether word, after "grain host", names one of
+// the host registry's subcommands (cmdHostds) rather than starting the
+// host agent, whose arguments are all flags. It must name every
+// subcommand cmdHostds takes (TestEveryHostSubcommandReachesTheRegistry):
+// one missing here starts the host agent instead, which a machine with no
+// /etc/grain/hostd.yaml answers with "lstat /etc/grain/hostd.yaml" -- what
+// `grain host delete-revoked` said until it was added.
+func hostRegistryVerb(word string) bool {
+	switch word {
+	case "list", "ls", "register", "create", "install", "set-owner", "help",
+		"pending", "accept", "reject", "rekey", "codes", "invite", "rotate-code", "revoke-code",
+		"rename", "update", "revoke", "delete", "rm", "delete-revoked":
+		return true
+	}
+	return false
+}
+
 // cmdHostds is `grain host <subcommand>` (alias `grain hosts`, hidden aliases
 // `grain hostds` and `grain hostd <verb>`): the host registry and enrollment
 // handshake over /api/hostds.

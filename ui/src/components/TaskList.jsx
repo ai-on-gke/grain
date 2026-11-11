@@ -17,10 +17,12 @@ import { Button, Checkbox, Chip, FormControlLabel } from "@mui/material";
 import { heldForRunNow } from "../alerts.js";
 import CampaignIcon from "@mui/icons-material/Campaign";
 import api from "../api.js";
+import AccessGate from "./AccessGate.jsx";
 import GrantChip from "./GrantChip.jsx";
 import KeepRunningChip from "./KeepRunningChip.jsx";
 import {
   STATE_LABELS,
+  actionScope,
   statesOf,
   activityTitle,
   questionActivity,
@@ -66,6 +68,7 @@ import {
   MoveSlot,
   MovingBar,
   gapsOf,
+  taskSlotName,
   usePickup,
 } from "./ReorderPickup.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
@@ -86,24 +89,28 @@ const FILTER_TITLES = {
 // current filter. One that doesn't (its parent fell out of the filtered
 // view, or the parent it names is gone) falls back to a plain row of
 // its own, so it is never silently dropped from the list.
+//
+// That fallback row stays where the backlog has it rather than going to
+// the bottom: a move is told the neighbours it lands between on screen
+// (moveTo below), so a row drawn out of its backlog place sent "to the
+// end of the list" a task that landed beside the stacked one's real
+// place instead (2026-11-11 saved-boards walkthrough).
 function groupByStack(tasks, matches) {
+  const shown = tasks.filter(matches);
+  const isStacked = (t) => t.stacked && t.generatedFrom;
+  const parentIds = new Set(
+    shown.filter((t) => !isStacked(t)).map((t) => t.id),
+  );
   const topLevel = [];
-  const orphans = [];
-  for (const t of tasks) {
-    if (!matches(t)) continue;
-    if (t.stacked && t.generatedFrom) orphans.push(t);
-    else topLevel.push(t);
-  }
-  const topLevelIds = new Set(topLevel.map((t) => t.id));
   const children = new Map();
-  for (const c of orphans) {
-    if (!topLevelIds.has(c.generatedFrom)) {
-      topLevel.push(c);
+  for (const t of shown) {
+    if (!isStacked(t) || !parentIds.has(t.generatedFrom)) {
+      topLevel.push(t);
       continue;
     }
-    const list = children.get(c.generatedFrom) || [];
-    list.push(c);
-    children.set(c.generatedFrom, list);
+    const list = children.get(t.generatedFrom) || [];
+    list.push(t);
+    children.set(t.generatedFrom, list);
   }
   return { topLevel, children };
 }
@@ -463,7 +470,7 @@ export default function TaskList({
                   gaps.has(gapBefore.get(t.id)) && (
                     <MoveSlot
                       className="reorder-slot-gutter"
-                      label={`Move here, above ${t.title}`}
+                      label={`Move here, above ${taskSlotName(t)}`}
                       onMove={() => {
                         moveTo(pickedIds, kept, gapBefore.get(t.id));
                         cancelPickup();
@@ -641,6 +648,11 @@ export function TaskRow({
   // The inbox shows a parked question's summary under the row itself, so
   // its rows leave it off their status line rather than say it twice.
   hideQuestion = false,
+  // Where the row's title links, for a caller whose row means one place
+  // in the task rather than the task: the inbox's parked question links
+  // to the comment it is parked on. onOpenTask is still what a plain
+  // click calls; this is the href a modified click opens in a new tab.
+  href = `/tasks/${encodeURIComponent(t.id)}`,
 }) {
   const zone = useTimeZone();
   const mergedAt = showMergedAt ? taskMergedAt(t) : null;
@@ -754,7 +766,7 @@ export function TaskRow({
           unreached (grain/task-1582). The row keeps a pointer click. */}
       <RowLink
         className="task-title"
-        href={`/tasks/${encodeURIComponent(t.id)}`}
+        href={href}
         onOpen={() => onOpenTask(t.id)}
         aria-label={t.title ? undefined : `Task ${t.id}`}
       >
@@ -844,6 +856,22 @@ export function TaskRow({
             label="imported"
           />
         )}
+        {/* The pull request this task is about but did not open: a
+            fork's, adopted when the task was filed against its head
+            label (ui.Task.ExternalPullRequests). Outlined, as on the
+            task page's header, and not a link here: the row is the link
+            to the task, and the task page links the pull request. */}
+        {(t.externalPullRequests || []).map((ref) => (
+          <Chip
+            key={`external-pr-${ref}`}
+            size="small"
+            variant="outlined"
+            className="chip-external-pr"
+            data-testid="task-external-pr-chip"
+            title={`about pull request ${ref}, opened from a fork rather than by this task`}
+            label={ref}
+          />
+        ))}
         {t.stacked && !nested && (
           <Chip size="small" className="chip-stacked" {...stackedChip(t)} />
         )}
@@ -985,21 +1013,29 @@ export function TaskRow({
           as stuck: the escalation to a person is this button beside the
           sentence that says so (the inbox's stalled group offers the
           same one, and passes no onControl here so it is not offered
-          twice). */}
+          twice). Gated like the inbox's: a role without the scope its
+          request needs sees it disabled with the reason, not a click
+          that ends in a 403. */}
       {stalledControl && (
-        <Button
-          size="small"
-          variant="outlined"
-          className="task-reason-control"
-          color={stalledControl.color}
-          title={stalledControl.title}
-          onClick={(e) => {
-            e.stopPropagation();
-            onControl(t, stalledControl);
-          }}
+        <AccessGate
+          scope={actionScope(stalledControl)}
+          repo={t.repo}
+          config={config}
         >
-          {stalledControl.label}
-        </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            className="task-reason-control"
+            color={stalledControl.color}
+            title={stalledControl.title}
+            onClick={(e) => {
+              e.stopPropagation();
+              onControl(t, stalledControl);
+            }}
+          >
+            {stalledControl.label}
+          </Button>
+        </AccessGate>
       )}
     </div>
   );

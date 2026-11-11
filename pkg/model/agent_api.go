@@ -70,8 +70,8 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "tests:write", Description: "Quarantine flaky or failing tests and file their follow-up repair tasks"},
 	{Scope: "notifications:write", Description: "Raise and clear operator notifications"},
 	{Scope: "teams:broadcast", Description: "Post a comment to every active task of the deployment"},
-	{Scope: "dispatch:read", Description: "Read whether dispatch is paused"},
-	{Scope: "dispatch:write", Description: "Pause and resume dispatch, and run a task now"},
+	{Scope: "dispatch:read", Description: "Read whether dispatch is paused, and what a task's next dispatch carries (its brief and handover)"},
+	{Scope: "dispatch:write", Description: "Pause and resume dispatch, run a task now, and compact or rebrief what its next dispatch carries"},
 	{Scope: "schedules:read", Description: "Read schedules and what they compose"},
 	{Scope: "schedules:write", Description: "Create, edit, delete and run schedules"},
 	{Scope: "templates:read", Description: "Read task templates"},
@@ -441,7 +441,7 @@ func HasGrainSource(grants []string) bool {
 // REST half (every task's record, metrics, pipeline and deployment
 // status) and grain#source for grain's own source checkout.
 func SelfDebugGrants() []string {
-	return []string{APIGrantPrefix + "self-debug", GrainSourceGrant}
+	return []string{APIRef("self-debug"), GrainSourceGrant}
 }
 
 // IsGrainHealthGrant reports whether grant names grain#health (recorded or
@@ -752,16 +752,16 @@ func HasBootstrapPlaybooks(grants []string) bool {
 // name keeps granting what it did so a grant nothing rewrote -- a
 // repository's own .grain declaration, an older grain/config -- keeps working.
 var legacyGrantReplacements = map[string]string{
-	"team-broadcast":   APIGrantPrefix + "team-broadcast",
-	"dispatch-control": APIGrantPrefix + "dispatch-control",
-	"pipeline-control": APIGrantPrefix + "pipeline-control",
-	"memory":           APIGrantPrefix + "memory",
-	"release-notes":    APIGrantPrefix + "release-notes",
+	"team-broadcast":   APIRef("team-broadcast"),
+	"dispatch-control": APIRef("dispatch-control"),
+	"pipeline-control": APIRef("pipeline-control"),
+	"memory":           APIRef("memory"),
+	"release-notes":    APIRef("release-notes"),
 	"grain-log":        GrainJournalGrant,
 	"db-read":          GrainSQLReadGrant,
 	"db-write":         GrainSQLWriteGrant,
-	"self-upgrade":     APIGrantPrefix + "self-upgrade",
-	"test-quarantine":  APIGrantPrefix + "test-quarantine",
+	"self-upgrade":     APIRef("self-upgrade"),
+	"test-quarantine":  APIRef("test-quarantine"),
 	"self-repair":      GrainHostExecGrant,
 	"git-push-any-ref": GitPushAnyRefGrant,
 	"gcp-key":          GCPKeySandboxAgentGrant,
@@ -795,7 +795,7 @@ var legacyGrantReplacements = map[string]string{
 // multiple canonical grants (for example an api scope plus an in-process
 // grain server method).
 var legacyGrantMultiReplacements = map[string][]string{
-	"deployment-health": {APIGrantPrefix + "deployment:read", GrainHealthGrant},
+	"deployment-health": {APIRef("deployment:read"), GrainHealthGrant},
 	// Retired by schema migration 115: the REST half of self-debug is its
 	// api preset, the source checkout the grain server's #source method.
 	SelfDebugCapability: SelfDebugGrants(),
@@ -1061,8 +1061,20 @@ func (g APIGrant) OutsideRepoLimit() error {
 // not an api grant at all; err is set for one that is, but names no
 // scope or preset of the vocabulary, or a repository that does not
 // parse.
+//
+// An api reference (https://grain.dev/capabilities/api#<what>, with an
+// optional {repo}) reads as the api:<what>[@repo] it stands for
+// (CanonicalGrant); g.Name is name as given.
 func ParseAPIGrant(name string) (g APIGrant, ok bool, err error) {
-	rest, isAPI := strings.CutPrefix(strings.TrimSpace(name), APIGrantPrefix)
+	spelled := strings.TrimSpace(name)
+	if _, isRef := apiMethodOf(CapabilityGrantRef(spelled)); isRef {
+		legacy, legal := LegacyGrantString(CanonicalGrant(spelled))
+		if !legal {
+			return APIGrant{}, true, fmt.Errorf("api grant %q: takes no argument but repo", name)
+		}
+		spelled = legacy
+	}
+	rest, isAPI := strings.CutPrefix(spelled, APIGrantPrefix)
 	if !isAPI {
 		return APIGrant{}, false, nil
 	}

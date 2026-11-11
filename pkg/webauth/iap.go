@@ -18,7 +18,7 @@
 // with pluggable directory checkers, and Fetch-Metadata / Origin CSRF checks.
 //
 // It intentionally has no dependency on pkg/model or pkg/ui so standalone
-// binaries such as cmd/grain-registry can import it without pulling in daemon
+// binaries such as cmd/grain-hub can import it without pulling in daemon
 // state packages.
 package webauth
 
@@ -216,7 +216,7 @@ func ResetIAPConfig() {
 	iapHTTPClient = &http.Client{Timeout: 5 * time.Second}
 	googleIAPCertURL = GoogleIAPCertURL
 	iapMu.Unlock()
-	ResetRegistryConfig()
+	ResetHubConfig()
 }
 
 // IAPKeysURL returns the public-key endpoint URL active for ctx.

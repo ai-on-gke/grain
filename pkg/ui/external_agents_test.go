@@ -155,7 +155,7 @@ func TestExternalAgentMCPDoneWhen(t *testing.T) {
 	}
 
 	// Operator issues credential "ops-laptop" with set grain/task-admin restricted to bwsalmon/grain.
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:     "ops-laptop",
 		ScopeSet: "grain/task-admin",
@@ -279,7 +279,7 @@ func TestExternalAgentAuthAndSettingsGate(t *testing.T) {
 	srv, client := testServer(t)
 	store := client.Store
 	ctx := context.Background()
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:   "reader-bot",
@@ -332,7 +332,7 @@ func TestExternalAgentScopesAndReposEnforced(t *testing.T) {
 	store := client.Store
 	ctx := context.Background()
 	enableExternalAgentAPI(t, store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 
 	seedAPITask(t, client, "10", "bwsalmon/grain")
 	seedAPITask(t, client, "11", "other/repo")
@@ -428,7 +428,7 @@ func TestExternalAgentDangerousScopeRequiresPerson(t *testing.T) {
 	}
 
 	// 4. Human issuing dangerous preset grain/task-admin succeeds.
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	adminTok, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:     "human-admin",
 		ScopeSet: "grain/task-admin",
@@ -449,7 +449,7 @@ func TestExternalAgentRevokeRotateExpiryAndKillSwitch(t *testing.T) {
 	store := client.Store
 	ctx := context.Background()
 	enableExternalAgentAPI(t, store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 
 	tok1, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:   "agent-one",
@@ -507,7 +507,7 @@ func TestExternalAgentNoTaskContextRails(t *testing.T) {
 	store := client.Store
 	ctx := context.Background()
 	enableExternalAgentAPI(t, store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 
 	seedAPITask(t, client, "10", "bwsalmon/grain")
 
@@ -558,7 +558,7 @@ func TestExternalAgentRateLimitConcurrencyAndSizeLimit(t *testing.T) {
 	store := client.Store
 	ctx := context.Background()
 	enableExternalAgentAPI(t, store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:          "limited-bot",
@@ -623,7 +623,7 @@ func TestExternalAgentExternalConfigRepoGuidance(t *testing.T) {
 	c.Config.StateRepo = fake
 	srv := ui.NewServerWithClient(c)
 
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := c.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:   "settings-editor",
 		Scopes: []string{"settings:write"},
@@ -653,7 +653,7 @@ func TestExternalAgentTemplateWithinCredential(t *testing.T) {
 	srv, client := testServer(t)
 	ctx := context.Background()
 	enableExternalAgentAPI(t, client.Store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	seedAPITask(t, client, "102", "acme/widgets")
 	ref, _ := model.ParseRepo("acme/widgets")
 	gadgets, _ := model.ParseRepo("acme/gadgets")
@@ -714,7 +714,7 @@ func TestExternalAgentRepoScopedGrantsHoldFiledWork(t *testing.T) {
 	srv, client := testServer(t)
 	ctx := context.Background()
 	enableExternalAgentAPI(t, client.Store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	gadgets, _ := model.ParseRepo("acme/gadgets")
 	if err := client.Store.PutTemplate(ctx, model.Template{ID: "tpl-writes", Name: "writes", Title: "writes",
 		Writes: []model.WriteTarget{{Repo: gadgets}}}); err != nil {
@@ -778,7 +778,7 @@ func TestExternalAgentSingleRepoCredentialListsOnlyItsRepo(t *testing.T) {
 	srv, client := testServer(t)
 	ctx := context.Background()
 	enableExternalAgentAPI(t, client.Store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 
 	seedAPITask(t, client, "10", "bwsalmon/grain")
 	seedAPITask(t, client, "11", "other/repo")
@@ -800,12 +800,14 @@ func TestExternalAgentSingleRepoCredentialListsOnlyItsRepo(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s: status %d (%s)", path, rec.Code, rec.Body.String())
 		}
-		var tasks []ui.Task
-		if err := json.Unmarshal(rec.Body.Bytes(), &tasks); err != nil {
+		var page struct {
+			Tasks []ui.Task `json:"tasks"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
 		var ids []string
-		for _, task := range tasks {
+		for _, task := range page.Tasks {
 			ids = append(ids, task.ID)
 		}
 		return ids
@@ -832,7 +834,7 @@ func TestExternalAgentConcurrencyCapRefusesASecondRequest(t *testing.T) {
 	srv, client := testServer(t)
 	ctx := context.Background()
 	enableExternalAgentAPI(t, client.Store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:          "one-at-a-time",
 		Scopes:        []string{"tasks:read"},
@@ -889,7 +891,7 @@ func TestExternalAgentRateLimitRetryAfterCoversTheRefill(t *testing.T) {
 	srv, client := testServer(t)
 	ctx := context.Background()
 	enableExternalAgentAPI(t, client.Store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:      "slow-bot",
 		Scopes:    []string{"tasks:read"},
@@ -935,7 +937,7 @@ func TestExternalAgentViewKeepsPerScopeRepos(t *testing.T) {
 	_, client := testServer(t)
 	ctx := context.Background()
 	enableExternalAgentAPI(t, client.Store)
-	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:   "widgets-writer",

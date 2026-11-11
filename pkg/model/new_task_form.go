@@ -377,7 +377,7 @@ func (c *CapabilityCatalogue) Defines(g string) bool {
 	if c == nil {
 		return false
 	}
-	g = strings.TrimSpace(g)
+	g = strings.TrimSpace(StoredGrantSpelling(g))
 	switch {
 	case IsCapabilityRef(g):
 		ref := CapabilityGrantRef(g)

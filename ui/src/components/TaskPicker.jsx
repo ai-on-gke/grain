@@ -31,7 +31,7 @@ import { identifierField } from "../identifierField.js";
 // that used to sit wherever a task needed to reference another one.
 //
 // No item glyph on these rows, unlike the repo picker built out of this
-// one (ReadOnlyReposField). A task has a figure of its own since
+// one (RepoPicker). A task has a figure of its own since
 // grain/task-372, so the reason is no longer that there is none to draw:
 // it is that a row here already carries the two things that identify a
 // task, its id and its title, and that every row in this list is a task

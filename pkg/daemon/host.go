@@ -181,6 +181,13 @@ func logRedactor(secretsDir string, secretStore *secrets.Store) func() (*grainlo
 	}
 }
 
+// LogRedactor is logRedactor for a caller outside this package that
+// builds a ui.Config of its own -- tests/security's credential exposure
+// sweep, which must redact with exactly what a daemon hands its UI.
+func LogRedactor(secretsDir string, secretStore *secrets.Store) func() (*grainlog.Redactor, error) {
+	return logRedactor(secretsDir, secretStore)
+}
+
 func HostTopOrNil(cfg Config) func(ctx context.Context, lines int) ([]string, error) {
 	if KubernetesMode(cfg) {
 		return nil
@@ -252,27 +259,6 @@ func upgradeImageNote(cfg Config) string {
 		deployment, container := K8sSelfNames(cfg)
 		return fmt.Sprintf("grain daemon: upgrades health-check %s:<branch> in a throwaway pod and repoint "+
 			"container %s of deployment/%s at it; the rollout restarts this pod", cfg.UpgradeImage, container, deployment)
-	}
-	src := strings.ToLower(strings.TrimSpace(cfg.UpgradeImageSource))
-	if src == "" && len(cfg.UpgradeVerifyCmd) > 0 {
-		// A verifying deployment's default (upgrade.EffectiveImageSource).
-		src = string(upgrade.ImageSourceRegistry)
-	}
-	if src == string(upgrade.ImageSourceRegistry) {
-		return fmt.Sprintf("grain daemon: upgrades pull %s and rewrite %s%s",
-			cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))
-	}
-	relRepo := strings.TrimSpace(cfg.UpgradeReleaseRepo)
-	if relRepo == "" {
-		relRepo = upgrade.ReleaseRepositoryForImage(cfg.UpgradeImage)
-	}
-	if src == string(upgrade.ImageSourceReleaseAssets) && relRepo != "" {
-		return fmt.Sprintf("grain daemon: upgrades load release assets from %s into %s and rewrite %s%s",
-			relRepo, cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))
-	}
-	if relRepo != "" {
-		return fmt.Sprintf("grain daemon: upgrades load release assets from %s (falling back to %s when a release has no image assets) and rewrite %s%s",
-			relRepo, cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))
 	}
 	return fmt.Sprintf("grain daemon: upgrades pull %s and rewrite %s%s",
 		cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))

@@ -221,6 +221,13 @@ type Deps struct {
 	MaxWorkers int
 	MaxMergers int
 	MaxCIJobs  int
+	// UsageCap, when set, is the automatic worker cap token accounting
+	// computes from the remaining provider budget (usage.Cap.Workers):
+	// handed MaxWorkers, it returns the cap to dispatch under, which a
+	// cycle clamps to MaxWorkers again so it can never be exceeded. It
+	// returns MaxWorkers unchanged unless the operator opted in (usage
+	// mode "auto"). nil dispatches under MaxWorkers.
+	UsageCap func(ctx context.Context, now time.Time, maxWorkers int) int
 	// Budget is how much of the machine every live sandbox on this host
 	// may commit between them (model.Budget, grain/task-173): the host's
 	// own cores and memory, less what is reserved for the host itself,
@@ -524,6 +531,11 @@ func Reconcilers() []Reconciler {
 		// repository's ref moves rather than when a clock comes round
 		// (reconcileGitRefSchedules).
 		{Name: "git-ref-schedules", Reconcile: reconcileGitRefSchedules},
+		// Outbound per-release docs/releases/vX.Y.Z.md task filing for
+		// repositories declaring .grain/templates/release-notes.yml
+		// (releasenotes.go). Before "target-repos" and "dispatch" so a
+		// task filed this tick is checked and dispatchable this tick.
+		{Name: "release-notes", Reconcile: reconcileReleaseNotes},
 		// Immediately after "schedule", so that a workflow schedule which
 		// came due on this tick has its CI run started on this tick
 		// rather than on the next one -- and so that the run finishing
@@ -570,6 +582,10 @@ func Reconcilers() []Reconciler {
 		// Right after it, so that a branch found green this tick closes
 		// the goal tasks waiting on it on this tick (reconcileTaskGoals).
 		{Name: "task-goals", Reconcile: reconcileTaskGoals},
+		// After it, so a goal met this tick closes its task rather than
+		// rolling it over to a successor that would have to meet it again
+		// (reconcileRollover).
+		{Name: "rollover", Reconcile: reconcileRollover},
 		// Beside it, and deliberately not inside it: the work that
 		// follows a base branch without judging it -- a repository's
 		// content-addressed build cache above all -- is dispatched here,
@@ -827,6 +843,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -916,6 +933,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -1265,7 +1283,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 			return ""
 		})))
 	limits := model.Limits{
-		Workers: deps.MaxWorkers, Mergers: deps.MaxMergers, CIJobs: deps.MaxCIJobs,
+		Workers: usageCappedWorkers(ctx, deps, now), Mergers: deps.MaxMergers, CIJobs: deps.MaxCIJobs,
 		Durable: deps.Config.maxDurableRuns(),
 		Budget:  deps.Budget, AgentShape: deps.AgentShape, Ledger: deps.Ledger,
 	}
@@ -1948,7 +1966,13 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 				gc.TemplateName = tmpl.Name
 			}
 		}
-		if _, err := cat.ValidateGrants(gc); err != nil {
+		verdict, err := cat.ValidateGrants(gc)
+		if err == nil && len(verdict.RequiresPerson) > 0 {
+			if why := catalogueRequiresPersonHold(ctx, deps, *task, verdict.RequiresPerson); why != "" {
+				return why
+			}
+		}
+		if err != nil {
 			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
 				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
 			}); serr != nil {
@@ -1967,6 +1991,35 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 		}
 		return ""
 	}
+}
+
+// catalogueRequiresPersonHold holds task when the capability catalogue
+// says only a person may give grants it holds and nobody stands behind
+// its approval (model.Store.PersonStandsBehind): a review, a suite pass,
+// a repository's declared schedule whose acceptance does not cover them,
+// anything an agent or automation approved (task 3971). The approval is
+// withdrawn, so the task waits in the proposals for a person -- whose
+// Approve the catalogue already asks for a person (catalogueApprovalRefusal)
+// -- with the reason on its row. "" when it may run.
+func catalogueRequiresPersonHold(ctx context.Context, deps Deps, task model.Task, needsPerson []string) string {
+	ok, err := deps.Store.PersonStandsBehind(ctx, task, needsPerson)
+	if err != nil {
+		log.Printf("orchestrator: checking who approved %s for the capability catalogue: %v", task.ID, err)
+		return "held by settings/capabilities.yml: who approved the task could not be read to check it"
+	}
+	if ok {
+		return ""
+	}
+	why := model.CatalogueRequiresPersonNote(needsPerson) + ", and nobody approved it"
+	if err := deps.Store.WithdrawApproval(ctx, task.ID); err != nil {
+		log.Printf("orchestrator: returning %s to the proposals for a person: %v", task.ID, err)
+	}
+	if err := deps.Store.SetGrantWait(ctx, model.GrantWait{
+		TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: why, WaitingAt: deps.Config.now(),
+	}); err != nil {
+		log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", task.ID, err)
+	}
+	return "held by settings/capabilities.yml: " + why
 }
 
 // changeTargetHold holds a queued task whose change target refuses it as it
@@ -2321,21 +2374,13 @@ func runQueuedAt(ctx context.Context, store *model.Store, task model.Task, attem
 	}
 	if store != nil {
 		if attempt > 1 {
-			if runs, err := store.Runs(ctx, task.ID); err == nil {
-				for _, r := range runs {
-					if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
-						q = *r.FinishedAt
-					}
-				}
+			if finishedAt, err := store.LatestRunFinishedBefore(ctx, task.ID, attempt, startedAt); err == nil && finishedAt.After(q) {
+				q = finishedAt
 			}
 		}
 		if attempt > 1 || task.Interactive {
-			if comments, err := store.Comments(ctx, task.ID); err == nil {
-				for _, c := range comments {
-					if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
-						q = c.CreatedAt
-					}
-				}
+			if saidAt, err := store.LatestNonAgentCommentAtBefore(ctx, task.ID, startedAt); err == nil && saidAt.After(q) {
+				q = saidAt
 			}
 		}
 	}
@@ -2855,7 +2900,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		tools:              tools,
 		sandboxRoot:        sandboxRoot,
 		placer:             placer,
-		mint:               deps.MintSandboxToken,
+		mint:               mintSandboxTokenFor(deps, d.TaskID, d.Attempt),
 		credentialIdentity: deps.CredentialGitIdentity,
 	})
 	defer stopRecreating()
@@ -3221,4 +3266,22 @@ func setupFailedEnding(err error) (outcome, detail string) {
 			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()
+}
+
+// usageCappedWorkers is the worker limit a cycle dispatches under:
+// deps.MaxWorkers, lowered by deps.UsageCap where the operator opted into
+// the automatic cap, and never above deps.MaxWorkers (or below one) --
+// an estimate shapes dispatch, it does not stop it.
+func usageCappedWorkers(ctx context.Context, deps Deps, now time.Time) int {
+	if deps.UsageCap == nil || deps.MaxWorkers <= 0 {
+		return deps.MaxWorkers
+	}
+	n := deps.UsageCap(ctx, now, deps.MaxWorkers)
+	if n > deps.MaxWorkers {
+		n = deps.MaxWorkers
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
 }

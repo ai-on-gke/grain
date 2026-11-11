@@ -395,6 +395,9 @@ func (c *Client) PostTaskNote(ctx context.Context, target, from, body string) (M
 		return Message{}, forbiddenErrorf("task %s may only message its parent or its children, and task %s is neither: "+
 			"message_task to any other task needs api:task-admin", from, target)
 	}
+	// A note from a parent or child narrower than recipient reaches its
+	// run marked as untrusted agent input (agentCrossTaskRail).
+	body = c.untrustedAgentInputNotice(ctx, sender, recipient) + body
 	now := c.now()
 	id, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    target,
@@ -476,23 +479,31 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 		}
 		f.After = after
 	}
-	list, err := s.tasks.ListNotifications(r.Context(), f)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
+	notifications, err := s.tasks.ListNotifications(r.Context(), f)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	notifications = filterList(notifications, func(n model.Notification) bool {
+		return list.matches(n.Subject, n.Title)
+	})
 	if strings.EqualFold(strings.TrimSpace(q.Get("fields")), "list") {
-		for i := range list {
-			list[i].Body = listNotificationBody(list[i])
+		for i := range notifications {
+			notifications[i].Body = listNotificationBody(notifications[i])
 		}
 	}
-	writeJSON(w, http.StatusOK, list)
+	writeListBy(w, notifications, list, func(n model.Notification) string { return strconv.FormatInt(n.ID, 10) })
 }
 
 // pendingReleaseFamily is the release train's "approve this release"
 // notification family, whose body the UI reads more of than its first
-// line (ui/src/notifications.js's pendingReleaseOf: the Soak and SHORT
-// SOAK lines).
+// line (ui/src/notifications.js's pendingReleaseOf: the Soak, SHORT SOAK
+// and BREAKING CHANGES lines).
 const pendingReleaseFamily = "release.pending"
 
 // listNotificationBody is n's body as a polled list needs it: the UI's

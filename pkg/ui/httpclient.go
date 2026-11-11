@@ -45,8 +45,8 @@ import (
 	"google.golang.org/api/idtoken"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/registry/api"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over
@@ -84,6 +84,14 @@ type HTTPClient struct {
 	ContextToken func(ctx context.Context) (string, error)
 	// User is the optional identity to send in proxy identity headers (e.g. X-Forwarded-User).
 	User string
+	// ActingReason, when set, is sent as X-Grain-Acting-Reason: the
+	// reason the agent API gate asks an external agent credential for
+	// on a destructive route (`grain approve -reason`).
+	ActingReason string
+	// Socket is the daemon's API socket (HostAPISocket) when HTTP dials
+	// it rather than BaseURL: the daemon then knows the caller by its uid
+	// (hostaccount.go), so no local API token is offered.
+	Socket string
 	// RetryPolicy is how long a call waits out a daemon that is not
 	// answering. nil means DefaultRetryPolicy; &NoRetry is one attempt.
 	RetryPolicy *RetryPolicy
@@ -134,9 +142,17 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 		tok = strings.TrimSpace(strings.TrimPrefix(tok, "Bearer "))
 		req.Header.Set("Authorization", "Bearer "+tok)
 		req.Header.Set("X-Grain-Tunnel-Token", tok)
+		if couldBeAccessCodeShape(tok) {
+			if name := AccessCodeClientName(); name != "" {
+				req.Header.Set(AccessNameHeader, name)
+			}
+		}
 	}
 	if c.User != "" {
 		req.Header.Set("X-Forwarded-User", c.User)
+	}
+	if reason := strings.TrimSpace(c.ActingReason); reason != "" {
+		req.Header.Set(ActingReasonHeader, strings.NewReplacer("\r", " ", "\n", " ").Replace(reason))
 	}
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "grain-cli")
@@ -187,7 +203,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if IsLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) && c.Socket == "" {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
@@ -667,6 +683,48 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body, out any)
 	return nil
 }
 
+// doList reads a GET collection route that answers a person with a bare
+// JSON array and an agent credential with a ListPage[T], paging through
+// nextCursor when truncated.
+func doList[T any](c *HTTPClient, ctx context.Context, path string) ([]T, error) {
+	var all []T
+	cursor := ""
+	for {
+		u := path
+		if cursor != "" {
+			sep := "?"
+			if strings.Contains(u, "?") {
+				sep = "&"
+			}
+			u += sep + "cursor=" + url.QueryEscape(cursor)
+		}
+		var raw json.RawMessage
+		if err := c.do(ctx, http.MethodGet, u, nil, &raw); err != nil {
+			return nil, err
+		}
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			var list []T
+			if err := json.Unmarshal(trimmed, &list); err != nil {
+				return nil, fmt.Errorf("decoding response from GET %s: %w", u, err)
+			}
+			return list, nil
+		}
+		var page ListPage[T]
+		if err := json.Unmarshal(trimmed, &page); err != nil {
+			return nil, fmt.Errorf("decoding response from GET %s: %w", u, err)
+		}
+		all = append(all, page.Items...)
+		if !page.Truncated || page.NextCursor == "" {
+			if all == nil {
+				all = []T{}
+			}
+			return all, nil
+		}
+		cursor = page.NextCursor
+	}
+}
+
 // httpError reads a {"error": "..."} body (writeError's own shape) and
 // maps the status back to the same error type writeClientError derived
 // it from -- 404 to NotFoundError, 400 to ValidationError, 403 to
@@ -697,6 +755,13 @@ func (c *HTTPClient) statusError(resp *http.Response, plainText bool) error {
 	}
 	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// The external-agent rate limit says when the bucket refills;
+		// a caller (an agent reading the CLI's error) should hear it.
+		if after, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && after > 0 {
+			message += fmt.Sprintf("; retry in %ds", after)
+		}
 	}
 	if resp.StatusCode == http.StatusBadRequest {
 		lower := strings.ToLower(string(body))
@@ -766,11 +831,38 @@ func (c *HTTPClient) SandboxHealth(ctx context.Context) (SandboxHealthResponse, 
 }
 
 func (c *HTTPClient) ListTasks(ctx context.Context) ([]Task, error) {
-	var tasks []Task
-	if err := c.do(ctx, http.MethodGet, "/api/tasks?fields=full", nil, &tasks); err != nil {
-		return nil, err
+	var all []Task
+	cursor := ""
+	for {
+		path := "/api/tasks?fields=full"
+		if cursor != "" {
+			path += "&limit=200&cursor=" + url.QueryEscape(cursor)
+		}
+		var raw json.RawMessage
+		if err := c.do(ctx, http.MethodGet, path, nil, &raw); err != nil {
+			return nil, err
+		}
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			var tasks []Task
+			if err := json.Unmarshal(trimmed, &tasks); err != nil {
+				return nil, fmt.Errorf("decoding response from GET %s: %w", path, err)
+			}
+			return tasks, nil
+		}
+		var page taskListPage[Task]
+		if err := json.Unmarshal(trimmed, &page); err != nil {
+			return nil, fmt.Errorf("decoding response from GET %s: %w", path, err)
+		}
+		all = append(all, page.Tasks...)
+		if !page.Truncated || page.NextCursor == "" || page.NextCursor == cursor {
+			if all == nil {
+				all = []Task{}
+			}
+			return all, nil
+		}
+		cursor = page.NextCursor
 	}
-	return tasks, nil
 }
 
 // TaskStatesPage fetches a page of task states from GET /api/tasks/states.
@@ -908,6 +1000,26 @@ func (c *HTTPClient) AddCommentWithAuthor(ctx context.Context, id, body string, 
 		addCommentRequest{Body: body, Attachments: attachments, Author: author}, nil)
 }
 
+// Comment is AddComment with the rest of what the route says: reopen
+// asks for a closed task to be reopened along with the comment (Client.
+// AddCommentReopening), and notice is the server's sentence for a
+// comment that reached no agent because its task is still closed -- ""
+// when the comment was delivered as any other.
+func (c *HTTPClient) Comment(ctx context.Context, id, body string, attachments []AttachmentUpload, reopen bool) (notice string, err error) {
+	var resp struct {
+		CommentDelivery string `json:"commentDelivery"`
+		Notice          string `json:"notice"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/comments",
+		addCommentRequest{Body: body, Attachments: attachments, Reopen: reopen}, &resp); err != nil {
+		return "", err
+	}
+	if resp.CommentDelivery == CommentNotDelivered && resp.Notice == "" {
+		return CommentNotDeliveredNotice, nil
+	}
+	return resp.Notice, nil
+}
+
 // Close is Client.Close over the wire, opts and all: the flag travels as
 // the request body's own close_pull_request, which the server reads back
 // into the same CloseOptions. Sent on every call rather than only when
@@ -945,8 +1057,13 @@ func (c *HTTPClient) RetryMerge(ctx context.Context, id string) error {
 // end -- there is no spelling of this call without one. head is the
 // commit reviewed, "" for the pull request's head as it is now.
 func (c *HTTPClient) ForceMerge(ctx context.Context, id, reason, head string) error {
+	return c.ForceMergeWithGates(ctx, id, reason, head, nil)
+}
+
+// ForceMergeWithGates is Client.ForceMergeWithGates over the wire.
+func (c *HTTPClient) ForceMergeWithGates(ctx context.Context, id, reason, head string, overrideGates []string) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/force-merge",
-		forceMergeRequest{Reason: reason, Head: head}, nil)
+		forceMergeRequest{Reason: reason, Head: head, OverrideGates: overrideGates}, nil)
 }
 
 // RunNow is Client.RunNow over the wire: ask for an agent to be put on
@@ -1101,27 +1218,19 @@ func (c *HTTPClient) TaskMessages(ctx context.Context, id string, after int64) (
 // TaskMessagesWait is TaskMessages with an optional server-side long-poll wait
 // so a chat turn wakes immediately when a human posts a reply.
 func (c *HTTPClient) TaskMessagesWait(ctx context.Context, id string, after int64, wait time.Duration) ([]Message, error) {
-	var messages []Message
 	path := "/api/tasks/" + id + "/messages?after=" + strconv.FormatInt(after, 10)
 	if ms := wait.Milliseconds(); ms > 0 {
 		path += "&wait_ms=" + strconv.FormatInt(ms, 10)
 	}
-	if err := c.do(ctx, http.MethodGet, path, nil, &messages); err != nil {
-		return nil, err
-	}
-	return messages, nil
+	return doList[Message](c, ctx, path)
 }
 
 // TaskAddenda is Client.AddendaSince over the wire: what a person has
 // said on id since after, plus what other tasks' runs have sent its
 // agent (GET /api/tasks/{id}/messages?agents=true).
 func (c *HTTPClient) TaskAddenda(ctx context.Context, id string, after int64) ([]Message, error) {
-	var messages []Message
 	path := "/api/tasks/" + id + "/messages?agents=true&after=" + strconv.FormatInt(after, 10)
-	if err := c.do(ctx, http.MethodGet, path, nil, &messages); err != nil {
-		return nil, err
-	}
-	return messages, nil
+	return doList[Message](c, ctx, path)
 }
 
 // RecordDelivered is Client.RecordDelivered over the wire: the run
@@ -1237,11 +1346,7 @@ func (c *HTTPClient) ClusterStats(ctx context.Context, period string) (ClusterSt
 // (pkg/cli/mcpserver.go's daemonMemory, behind the memory capability):
 // the rows are the daemon's and the run holds no database.
 func (c *HTTPClient) ListMemoryDocuments(ctx context.Context) ([]MemoryDocument, error) {
-	var docs []MemoryDocument
-	if err := c.do(ctx, http.MethodGet, "/api/memory/documents", nil, &docs); err != nil {
-		return nil, err
-	}
-	return docs, nil
+	return doList[MemoryDocument](c, ctx, "/api/memory/documents")
 }
 
 // GetMemoryDocument is Client.GetMemoryDocument over the wire: one named
@@ -1397,11 +1502,7 @@ func (c *HTTPClient) SkillDeploymentConfig(ctx context.Context) (SkillDeployment
 
 // ListTemplates reads GET /api/templates.
 func (c *HTTPClient) ListTemplates(ctx context.Context) ([]Template, error) {
-	var list []Template
-	if err := c.do(ctx, http.MethodGet, "/api/templates", nil, &list); err != nil {
-		return nil, err
-	}
-	return list, nil
+	return doList[Template](c, ctx, "/api/templates")
 }
 
 func (c *HTTPClient) GetSettings(ctx context.Context) (Settings, error) {
@@ -1412,9 +1513,30 @@ func (c *HTTPClient) GetSettings(ctx context.Context) (Settings, error) {
 	return settings, nil
 }
 
+// settingsWireRequest sends a hub connection under both "hub" and its
+// pre-rename "registry" spelling when req.Hub is set, so a CLI (`grain
+// hub register`, `grain hub unregister`, `grain sync -server`) talking
+// to a pre-rename daemon still updates its connected-entry settings
+// without triggering the "registry"-only deprecation warning on a new
+// daemon.
+type settingsWireRequest struct {
+	UpdateSettingsRequest
+	Registry *model.HubConfig `json:"registry,omitempty"`
+}
+
+func wireSettingsRequest(req UpdateSettingsRequest) any {
+	if req.Hub == nil {
+		return req
+	}
+	return settingsWireRequest{
+		UpdateSettingsRequest: req,
+		Registry:              req.Hub,
+	}
+}
+
 func (c *HTTPClient) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
 	var settings Settings
-	if err := c.do(ctx, http.MethodPut, "/api/settings", req, &settings); err != nil {
+	if err := c.do(ctx, http.MethodPut, "/api/settings", wireSettingsRequest(req), &settings); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil
@@ -1437,27 +1559,10 @@ func (c *HTTPClient) UpdateSettings(ctx context.Context, req UpdateSettingsReque
 // when it gets it.
 func (c *HTTPClient) PlanSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
 	var settings Settings
-	if err := c.do(ctx, http.MethodPost, "/api/settings/plan", req, &settings); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/settings/plan", wireSettingsRequest(req), &settings); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil
-}
-
-// CheckCapability is Client.CheckCapability over the wire: authenticate
-// as one capability's standing credential, make one cheap and harmless
-// call with it, and report what came back.
-//
-// Its caller is `grain settings -check-capability` (cmd/grain/main.go).
-// The question -- "is the credential this deployment holds still one the
-// far end accepts?" -- is asked from a shell on the host at least as
-// often as from a browser, and a host shell is where somebody reading a
-// failed task's error is usually already standing.
-func (c *HTTPClient) CheckCapability(ctx context.Context, id string) (CapabilityCheck, error) {
-	var check CapabilityCheck
-	if err := c.do(ctx, http.MethodPost, "/api/capabilities/"+url.PathEscape(id)+"/check", nil, &check); err != nil {
-		return CapabilityCheck{}, err
-	}
-	return check, nil
 }
 
 // CheckAgentKey is Client.CheckAgentKey over the wire: authenticate as
@@ -1465,7 +1570,7 @@ func (c *HTTPClient) CheckCapability(ctx context.Context, id string) (Capability
 // what the vendor said.
 //
 // Its caller is `grain settings -check-agent-key` (cmd/grain/main.go),
-// for the same reason -check-capability exists beside it: "why did every
+// because "why did every
 // run today fail to authenticate" is asked from a shell on the host at
 // least as often as from a browser, and a host shell is where whoever is
 // reading the failed run's error is already standing.
@@ -1943,34 +2048,46 @@ func (c *HTTPClient) MergeBatches(ctx context.Context, repo string) (MergeBatche
 	return resp, nil
 }
 
-// GetRegistry fetches the deployment's current connected-entry registry
+// GetHub fetches the deployment's current connected-entry registry
 // status, heartbeat timings, and advertised scopes -- GET /api/registry.
-func (c *HTTPClient) GetRegistry(ctx context.Context) (model.RegistrySnapshot, error) {
-	var snap model.RegistrySnapshot
+func (c *HTTPClient) GetHub(ctx context.Context) (model.HubSnapshot, error) {
+	var snap model.HubSnapshot
 	if err := c.do(ctx, http.MethodGet, "/api/registry", nil, &snap); err != nil {
-		return model.RegistrySnapshot{}, err
+		return model.HubSnapshot{}, err
 	}
 	return snap, nil
 }
 
-// TriggerRegistryHeartbeat triggers an immediate registration/heartbeat step
-// against the configured grain registry -- POST /api/registry/heartbeat.
-func (c *HTTPClient) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySnapshot, error) {
-	var snap model.RegistrySnapshot
+// TriggerHubHeartbeat triggers an immediate registration/heartbeat step
+// against the configured grain hub -- POST /api/registry/heartbeat.
+func (c *HTTPClient) TriggerHubHeartbeat(ctx context.Context) (model.HubSnapshot, error) {
+	var snap model.HubSnapshot
 	if err := c.do(ctx, http.MethodPost, "/api/registry/heartbeat", nil, &snap); err != nil {
-		return model.RegistrySnapshot{}, err
+		return model.HubSnapshot{}, err
 	}
 	return snap, nil
 }
 
-// GetRegistryInstanceStatus fetches the wire api.InstanceStatusResponse from
+// GetHubInstanceStatus fetches the wire api.InstanceStatusResponse from
 // GET /api/registry/status.
-func (c *HTTPClient) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
+func (c *HTTPClient) GetHubInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
 	var status api.InstanceStatusResponse
 	if err := c.do(ctx, http.MethodGet, "/api/registry/status", nil, &status); err != nil {
 		return api.InstanceStatusResponse{}, err
 	}
 	return status, nil
+}
+
+// RedactSecrets has the daemon cut every value in its secret store out
+// of lines -- POST /api/secrets/redact -- so a caller never needs the
+// secrets key, or the values, to redact them.
+func (c *HTTPClient) RedactSecrets(ctx context.Context, lines []string) (SecretsRedactResponse, error) {
+	var out SecretsRedactResponse
+	if lines == nil {
+		lines = []string{}
+	}
+	err := c.do(ctx, http.MethodPost, "/api/secrets/redact", SecretsRedactRequest{Lines: lines}, &out)
+	return out, err
 }
 
 // SetSecret writes one secret key in the daemon's secrets store --
@@ -2084,8 +2201,23 @@ func (c *HTTPClient) CISharedFaults(ctx context.Context) ([]CIFault, error) {
 // run the deployment keeps rather than the newest page of them
 // (ci.RunStore.Find, grain/task-289).
 func (c *HTTPClient) FindCIRuns(ctx context.Context, f ci.RunFilter, limit int) (CIRunsResponse, error) {
+	return c.FindCIRunsPage(ctx, f, CIRunsPage{Limit: limit})
+}
+
+// CIRunsPage is which page of GET /api/ci/runs to ask for: at most Limit
+// runs (0 for the route's default), starting at Cursor (a previous
+// answer's NextCursor), keeping only runs whose id, repository, ref,
+// commit, workflow or job names contain Q.
+type CIRunsPage struct {
+	Limit  int
+	Cursor string
+	Q      string
+}
+
+// FindCIRunsPage is FindCIRuns asking for one page.
+func (c *HTTPClient) FindCIRunsPage(ctx context.Context, f ci.RunFilter, p CIRunsPage) (CIRunsResponse, error) {
 	var resp CIRunsResponse
-	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, limit, ""), nil, &resp); err != nil {
+	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, p, ""), nil, &resp); err != nil {
 		return CIRunsResponse{}, err
 	}
 	return resp, nil
@@ -2095,16 +2227,21 @@ func (c *HTTPClient) FindCIRuns(ctx context.Context, f ci.RunFilter, limit int) 
 // (CICompactRunsResponse): each run's identity and verdict and a line per
 // job that did not succeed, which is what a page of a week's runs fits in.
 func (c *HTTPClient) FindCIRunsCompact(ctx context.Context, f ci.RunFilter, limit int) (CICompactRunsResponse, error) {
+	return c.FindCIRunsCompactPage(ctx, f, CIRunsPage{Limit: limit})
+}
+
+// FindCIRunsCompactPage is FindCIRunsCompact asking for one page.
+func (c *HTTPClient) FindCIRunsCompactPage(ctx context.Context, f ci.RunFilter, p CIRunsPage) (CICompactRunsResponse, error) {
 	var resp CICompactRunsResponse
-	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, limit, "compact"), nil, &resp); err != nil {
+	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, p, "compact"), nil, &resp); err != nil {
 		return CICompactRunsResponse{}, err
 	}
 	return resp, nil
 }
 
-// ciRunsPath is GET /api/ci/runs with a filter, a limit and a view as
+// ciRunsPath is GET /api/ci/runs with a filter, a page and a view as
 // its query.
-func ciRunsPath(f ci.RunFilter, limit int, view string) string {
+func ciRunsPath(f ci.RunFilter, p CIRunsPage, view string) string {
 	query := url.Values{}
 	if repo := strings.TrimSpace(f.Repo); repo != "" {
 		query.Set("repo", repo)
@@ -2139,8 +2276,14 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if !f.Descending {
 		query.Set("order", "asc")
 	}
-	if limit > 0 {
-		query.Set("limit", strconv.Itoa(limit))
+	if p.Limit > 0 {
+		query.Set("limit", strconv.Itoa(p.Limit))
+	}
+	if cursor := strings.TrimSpace(p.Cursor); cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	if q := strings.TrimSpace(p.Q); q != "" {
+		query.Set("q", q)
 	}
 	if view != "" {
 		query.Set("view", view)
@@ -2328,11 +2471,7 @@ func (c *HTTPClient) LiftAgentPause(ctx context.Context, lift AgentPauseLift) (s
 
 // ListGCPKeys is GET /api/gcp-keys.
 func (c *HTTPClient) ListGCPKeys(ctx context.Context) ([]model.GCPKey, error) {
-	var keys []model.GCPKey
-	if err := c.do(ctx, http.MethodGet, "/api/gcp-keys", nil, &keys); err != nil {
-		return nil, err
-	}
-	return keys, nil
+	return doList[model.GCPKey](c, ctx, "/api/gcp-keys")
 }
 
 // GetGCPKey is GET /api/gcp-keys/{name}.

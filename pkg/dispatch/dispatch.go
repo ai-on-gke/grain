@@ -313,27 +313,68 @@ func retryBackoff(streakCount int) time.Duration {
 // A suspension that names when its task may restart (model.Suspension's
 // ResumeAt -- a durable task's setup suspension, which waits out
 // maxSetupRetryBackoff with no strike to back off from) holds the task
-// until then as well.
-func retryEligible(ctx context.Context, store *model.Store, taskID string, now time.Time, priority bool) (bool, error) {
+// until then as well, and heldUntil names that time when it is what
+// holds the task, so the cycle can say so rather than call it a backoff.
+func retryEligible(ctx context.Context, store *model.Store, taskID string, now time.Time,
+	priority bool) (eligible bool, heldUntil *time.Time, err error) {
 	resumeAt, err := store.SuspensionResumeAt(ctx, taskID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if resumeAt != nil && now.Before(*resumeAt) {
-		return false, nil
+		return false, resumeAt, nil
 	}
 	streak, err := store.FailureStreak(ctx, taskID)
 	if err != nil {
-		return false, fmt.Errorf("checking %s's failure streak: %w", taskID, err)
+		return false, nil, fmt.Errorf("checking %s's failure streak: %w", taskID, err)
 	}
 	if streak == nil || streak.BackoffCount == 0 {
-		return true, nil
+		return true, nil, nil
 	}
 	backoff := retryBackoff(streak.BackoffCount)
 	if priority && streak.LastOutcome == model.SetupFailedOutcome && backoff > maxSetupRetryBackoff {
 		backoff = maxSetupRetryBackoff
 	}
-	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil
+	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil, nil
+}
+
+// heldBySuspensionWhy is what a task its latest suspension holds until
+// until waits on, as the dispatch log and its grant wait both say it.
+func heldBySuspensionWhy(until time.Time) string {
+	return "held until " + until.UTC().Format(time.RFC3339) + " by its suspension"
+}
+
+// setSuspensionWait records that taskID's suspension holds it until
+// until (model.SuspensionWaitCapability), over any wait an earlier cycle
+// left but the two a dispatch hold records and keeps for itself
+// (heldForTeamSetup, heldForPendingBranch): a task this holds is not
+// reaching admission, so no other wait is current.
+func setSuspensionWait(ctx context.Context, store *model.Store, taskID string, until, at time.Time) {
+	if store == nil || taskID == "" {
+		return
+	}
+	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil &&
+		(existing.Capability == model.TeamSetupWaitCapability || existing.Capability == model.BranchWaitCapability) {
+		return
+	}
+	_ = store.SetGrantWait(ctx, model.GrantWait{
+		TaskID:     taskID,
+		Capability: model.SuspensionWaitCapability,
+		Resource:   heldBySuspensionWhy(until),
+		WaitingAt:  at,
+	})
+}
+
+// clearSuspensionWait takes setSuspensionWait's wait away once the
+// suspension no longer holds taskID.
+func clearSuspensionWait(ctx context.Context, store *model.Store, taskID string) {
+	if store == nil || taskID == "" {
+		return
+	}
+	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil &&
+		existing.Capability == model.SuspensionWaitCapability {
+		_ = store.ClearGrantWait(ctx, taskID)
+	}
 }
 
 // runNowEligible is retryEligible for a run-now request, and it applies
@@ -346,29 +387,29 @@ func retryEligible(ctx context.Context, store *model.Store, taskID string, now t
 // person's say-so. A request made since the last run is the person
 // asking again, after seeing how it ended, and is started straight away
 // as a request always was.
-func runNowEligible(ctx context.Context, store *model.Store, req model.RunNowRequest, now time.Time) (bool, error) {
+func runNowEligible(ctx context.Context, store *model.Store, req model.RunNowRequest, now time.Time) (eligible bool, heldUntil *time.Time, err error) {
 	streak, err := store.FailureStreak(ctx, req.TaskID)
 	if err != nil {
-		return false, fmt.Errorf("checking %s's failure streak: %w", req.TaskID, err)
+		return false, nil, fmt.Errorf("checking %s's failure streak: %w", req.TaskID, err)
 	}
 	if streak == nil || req.At.After(streak.LastStartedAt) {
-		return true, nil
+		return true, nil, nil
 	}
 	resumeAt, err := store.SuspensionResumeAt(ctx, req.TaskID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if resumeAt != nil && now.Before(*resumeAt) {
-		return false, nil
+		return false, resumeAt, nil
 	}
 	if streak.BackoffCount == 0 {
-		return true, nil
+		return true, nil, nil
 	}
 	backoff := retryBackoff(streak.BackoffCount)
 	if req.Priority && streak.LastOutcome == model.SetupFailedOutcome && backoff > maxSetupRetryBackoff {
 		backoff = maxSetupRetryBackoff
 	}
-	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil
+	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil, nil
 }
 
 // Option is one caller's adjustment to a single Cycle call. Variadic
@@ -726,11 +767,22 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			recordSkipQuotaWait(ctx, store, req.TaskID, why, now)
 			continue
 		}
-		if ok, err := runNowEligible(ctx, store, req, now); err != nil {
+		if ok, heldUntil, err := runNowEligible(ctx, store, req, now); err != nil {
 			return out, fmt.Errorf("dispatch: %w", err)
 		} else if !ok {
+			// Said, as a ready candidate's hold is: a request a run gave
+			// back waits out its suspension or the retry backoff, and the
+			// task's row says which rather than reading "asked for".
+			if heldUntil != nil {
+				setSuspensionWait(ctx, store, req.TaskID, *heldUntil, now)
+				log.Printf("dispatch: run-now request for %s skipped: %s", req.TaskID, heldBySuspensionWhy(*heldUntil))
+			} else {
+				clearSuspensionWait(ctx, store, req.TaskID)
+				log.Printf("dispatch: run-now request for %s skipped: backing off after a run that gave it back", req.TaskID)
+			}
 			continue
 		}
+		clearSuspensionWait(ctx, store, req.TaskID)
 		want := taskShape(ctx, store, limits, req.TaskID)
 		repair := false
 		durable := false
@@ -895,10 +947,16 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 		priority := priorities[candidate]
 		merger := mergers[candidate]
 
-		eligible, err := retryEligible(ctx, store, candidate, now, priority)
+		eligible, heldUntil, err := retryEligible(ctx, store, candidate, now, priority)
 		if err != nil {
 			return out, fmt.Errorf("dispatch: %w", err)
 		}
+		if heldUntil != nil {
+			setSuspensionWait(ctx, store, candidate, *heldUntil, now)
+			log.Printf("dispatch: candidate %s skipped: %s", candidate, heldBySuspensionWhy(*heldUntil))
+			continue
+		}
+		clearSuspensionWait(ctx, store, candidate)
 		if !eligible {
 			clearQuotaWait(ctx, store, candidate)
 			log.Printf("dispatch: candidate %s skipped: backing off after failed run", candidate)
@@ -1045,13 +1103,6 @@ func taskShape(ctx context.Context, store *model.Store, limits model.Limits, tas
 		return limits.AgentShape
 	}
 	return limits.TaskShape(*task)
-}
-
-// sandboxShapeShort reports whether an agent sandbox cannot fit in the
-// host resource budget because of its CPU/memory shape rather than a
-// host-wide disk floor violation.
-func sandboxShapeShort(limits model.Limits) bool {
-	return sandboxShapeShortFor(limits, false, limits.AgentShape)
 }
 
 func sandboxShapeShortFor(limits model.Limits, priority bool, want model.Commitment) bool {

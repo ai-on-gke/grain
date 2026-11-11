@@ -96,10 +96,10 @@ func operatorActor(ctx context.Context) model.Principal {
 func RequestActor(ctx context.Context) model.Attribution {
 	if p, ok := PrincipalFromContext(ctx); ok {
 		if del := delegatedIdentityFromContext(ctx); del != nil &&
-			p.Kind == model.PrincipalHuman && p.Source == model.SourceRegistry && strings.EqualFold(p.ID, del.PersonEmail) {
+			p.Kind == model.PrincipalHuman && p.Source == model.SourceHub && strings.EqualFold(p.ID, del.PersonEmail) {
 			return model.Attribution{
-				Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
-				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+				Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceHub},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceHub},
 			}
 		}
 		if p.Kind == model.PrincipalAgent && p.Source == model.SourceExternalToken {
@@ -117,8 +117,8 @@ func RequestActor(ctx context.Context) model.Attribution {
 	}
 	if del := delegatedIdentityFromContext(ctx); del != nil {
 		return model.Attribution{
-			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
-			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceHub},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceHub},
 		}
 	}
 	op := operatorActor(ctx)
@@ -128,7 +128,28 @@ func RequestActor(ctx context.Context) model.Attribution {
 			op.Source = src
 		}
 	}
+	if op.Source == model.SourceAccessCode {
+		// Whoever presented the code, as they named themselves to it
+		// (access_code_mode.go): still the code's power, and still an
+		// unverified source, but no longer nobody.
+		if name := accessCodeNameFromContext(ctx); name != "" && op.Kind == model.PrincipalHuman {
+			op = model.Principal{Kind: model.PrincipalHuman, ID: AccessCodeActorPrefix + name, Source: model.SourceAccessCode}
+		}
+	}
 	return model.Attribution{Actor: op}
+}
+
+// deploymentActorOf is actor, RequestActor's for some request, as the
+// deployment's own actor where it is a named access-code session's: what
+// /api/config reports as the actor a CLI configures itself with, which is
+// the deployment's, not whoever signed in with the code.
+func deploymentActorOf(ctx context.Context, actor model.Principal) model.Principal {
+	if actor.Source != model.SourceAccessCode || !strings.HasPrefix(actor.ID, AccessCodeActorPrefix) {
+		return actor
+	}
+	op := operatorActor(ctx)
+	op.Source = actor.Source
+	return op
 }
 
 // requestActor is RequestActor for a Client method, which may be called

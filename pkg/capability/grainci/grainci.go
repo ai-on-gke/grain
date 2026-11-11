@@ -59,6 +59,7 @@ package grainci
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -86,15 +87,74 @@ func RepoUsesGrainCI(repoCfg *model.RepoConfig, repo model.RepoRef) bool {
 }
 
 // Refusal is what grain answers anybody who names grain#ci (or the
-// retired grain-ci) in a set of
-// capabilities they are choosing -- a task's, a repo's default set or
-// the deployment's. It names the switch that does what they were
-// reaching for, so the next move is on the repo's page rather than in
-// a support question.
-func Refusal() string {
-	return fmt.Sprintf("%s (formerly %s) cannot be attached by hand: grain grants it to every task on a repository whose CI Mode is %q "+
-		"(the repo's page, Settings -> Repos), and to no task on any other. Set the CI Mode instead",
+// retired grain-ci) in a set of capabilities they are choosing -- a
+// task's, a repo's default set, the deployment's, or a run's
+// request_access. It names what does what they were reaching for, which
+// depends on the repository the grant would be for:
+//
+//   - mode CIModeGrain: the repository's tasks hold grain#ci already, so
+//     there is nothing to ask for.
+//   - any other mode, with repo known: the repository deliberately does
+//     not use grain CI, so the advice is not to switch it but to read its
+//     CI with api:ci-read@<repo> (SubstituteGrant) -- what grain#ci asked
+//     for in a declaration is rewritten to (model.applyGrainCIGrant) --
+//     and that `grain ci wait` and `grain pr open` need no grant at all.
+//   - repo unknown ("" -- a deployment's default set): both, and the CI
+//     Mode for whoever wants grain CI to gate a repository.
+//
+// It names the switch or the grant, so the next move is on the repo's
+// page or in a grant rather than in a support question.
+func Refusal(mode model.CIMode, repo string) string {
+	head := fmt.Sprintf("%s (formerly %s) cannot be attached by hand: grain grants it to every task on a repository whose CI Mode is %q "+
+		"(the repo's page, Settings -> Repos), and to no task on any other",
 		model.GrainCIRef, LegacyName, "Use Grain CI")
+	repo = strings.TrimSpace(repo)
+	switch {
+	case mode == model.CIModeGrain && repo != "":
+		return fmt.Sprintf("%s. %s uses grain CI, so its tasks hold it already: there is nothing to ask for", head, repo)
+	case repo != "":
+		return fmt.Sprintf("%s. %s's CI Mode is %q: `grain ci wait` and `grain pr open` need no grant there, and to read its CI runs and logs "+
+			"(grain ci list/show/log, grain pr status, ci://) grant %s with {repo: %q} instead (%s)",
+			head, repo, ciModeLabel(mode), model.APIRef(substituteMethod), repo, SubstituteGrant(repo))
+	}
+	return fmt.Sprintf("%s. To read a repository's CI without grain CI gating it, grant %s scoped to that repository (api:ci-read@<owner/name>); "+
+		"to have grain CI gate a repository, set its CI Mode instead", head, model.APIRef(substituteMethod))
+}
+
+// substituteMethod is the api server method SubstituteGrant names.
+const substituteMethod = "ci-read"
+
+// SubstituteGrant is what stands in for grain#ci on a repository grain CI
+// does not gate: the read-only, repo-scoped api:ci-read@<repo>, the same
+// grant model.applyGrainCIGrant substitutes for a declaration's grain#ci.
+func SubstituteGrant(repo string) string { return model.APIGrantString(substituteMethod, repo) }
+
+// SubstituteRequest is SubstituteGrant as a request_access item asks for
+// it: the api server's ci-read method with the repository as its argument.
+func SubstituteRequest(repo string) (capability string, with map[string]any) {
+	return model.APIRef(substituteMethod), map[string]any{"repo": repo}
+}
+
+// ModeOf is the CI Mode Refusal is given for repo: the configured one,
+// CIModeGrain wherever model.RepoUsesGrainCI says grain CI gates repo.
+func ModeOf(repoCfg *model.RepoConfig, repo model.RepoRef) model.CIMode {
+	if RepoUsesGrainCI(repoCfg, repo) {
+		return model.CIModeGrain
+	}
+	if repoCfg != nil && repoCfg.CIMode != "" {
+		return repoCfg.CIMode
+	}
+	return model.CIModeGitHub
+}
+
+func ciModeLabel(mode model.CIMode) string {
+	switch mode {
+	case model.CIModeNone:
+		return "Use No CI"
+	case model.CIModeGrain:
+		return "Use Grain CI"
+	}
+	return "Use GitHub CI"
 }
 
 // RequiredFor reports whether repo is one Grain must check without an

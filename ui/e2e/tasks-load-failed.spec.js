@@ -156,6 +156,10 @@ test("boards, dashboards and the rail report a failed /api/tasks load instead of
       { width: 390, height: 844 },
     ]) {
       await page.setViewportSize(viewport);
+      await expect(page.locator(":root")).toHaveAttribute(
+        "data-phone",
+        viewport.width < 600 ? "true" : "false",
+      );
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - window.innerWidth,
       );

@@ -13,40 +13,50 @@
 // limitations under the License.
 
 import { useState } from "react";
-import { Alert, Box, Button, FormControl, FormHelperText } from "@mui/material";
+import { Alert, Button } from "@mui/material";
 import api from "../../api.js";
-import { isCapabilityRef } from "../../capabilityArgs.js";
-import { isApiGrant, withoutApiRows } from "../../apiGrants.js";
+import { useAccess } from "../../AccessContext.jsx";
+import { isLegacyApiGrant } from "../../apiGrants.js";
+import { knownRepos } from "../../state.js";
+import { declaredPushRef } from "../Declared.jsx";
 import GrantsPicker from "../GrantsPicker.jsx";
-import SearchSelect from "../SearchSelect.jsx";
-import {
-  LEGACY_CAPABILITIES_HINT,
-  NO_CAPABILITIES_HINT,
-  capabilityRows,
-  capabilityUnavailableHint,
-} from "../../state.js";
+import { useTaskReads, useTaskWrites } from "./taskRepoAccess.js";
 
-export default function CapabilityToggles({ t, config, act }) {
-  const capabilities = config?.capabilities || [];
+export default function CapabilityToggles({
+  t,
+  config,
+  act,
+  tasks = [],
+  showError = () => {},
+}) {
+  // The repos this task reads and writes are lines of the same list
+  // (unified-grants slice 5), each still saved as its whole reads or
+  // writes set (taskRepoAccess.js), beside its own repo and base and
+  // any push: refs its declared template widens it to, read only.
+  const [reads, changeReads] = useTaskReads(t, act, showError);
+  const [writes, setWrites, commitWrites] = useTaskWrites(t, act, showError);
+  const repoOptions = knownRepos(config, tasks);
+  const push = (t.declaredPush?.refs || []).map(
+    (r) => `${t.declaredPush.repo} ${declaredPushRef(r)}`,
+  );
   const held = t.capabilities || [];
-  // Capability server grants, with their arguments, and the agent API's
-  // grants (apiGrants.js) are GrantsPicker's below, one chip list; the
-  // checklist is the legacy in-process ids.
-  const selected = held.filter((id) => !isCapabilityRef(id) && !isApiGrant(id));
-  const apiSelected = held.filter(isApiGrant);
+  // Capability server grants, with their arguments, the agent API's grants
+  // (apiGrants.js), and any bare capability id an older store still holds
+  // are GrantsPicker's below, one list.
+  const apiSelected = held.filter(isLegacyApiGrant);
+  // Every edit here is a write: a grant is POST .../capabilities
+  // (capabilities:admin, or capabilities:detach to remove one) and a repo
+  // line PATCHes the task (tasks:write). A principal holding none of them
+  // -- a viewer -- is shown the grants read only, not offered Remove and
+  // "Add grant…" that end in a 403.
+  const { can } = useAccess(config);
+  const readOnly = ![
+    "tasks:write",
+    "capabilities:admin",
+    "capabilities:detach",
+  ].some((scope) => can(scope, t.repo));
   const [capabilitiesChanged, setCapabilitiesChanged] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  // A task can hold a grant the picker no longer offers -- a capability
-  // renamed or dropped since it was attached ("scratch-repo", now
-  // github-sandbox, bwsalmon/agents#612). capabilityRows (state.js)
-  // gives it a row of its own purely to be turned off; without one it is
-  // a chip nothing can untick, and a grant no provider is registered for
-  // fails every run of the task holding it. SetCapability (pkg/ui,
-  // client.go) is the other half -- it validates on attach only, so the
-  // detach this row sends is accepted. The same call is what leaves an
-  // unconfigured capability off the list altogether unless this task
-  // already holds it (configuredCapabilities, state.js).
-  const rows = withoutApiRows(capabilityRows(capabilities, selected));
 
   const grantPath = `/api/tasks/${t.id}/capabilities`;
   const noteChange = () => {
@@ -77,7 +87,6 @@ export default function CapabilityToggles({ t, config, act }) {
       t.id,
     );
 
-  const handleChange = (e) => applyChange(selected, e.target.value);
   const applyChange = (before, next) => {
     const added = next.filter((id) => !before.includes(id));
     const removed = before.filter((id) => !next.includes(id));
@@ -108,44 +117,38 @@ export default function CapabilityToggles({ t, config, act }) {
 
   return (
     <fieldset>
-      <legend>Legacy capabilities</legend>
-      <FormControl fullWidth size="small">
-        <SearchSelect
-          multiple
-          placeholder="None"
-          inputProps={{ "aria-label": "Legacy capabilities" }}
-          value={selected}
-          onChange={(next) => applyChange(selected, next)}
-          noOptionsText={
-            rows.length === 0 ? NO_CAPABILITIES_HINT : "No matches"
-          }
-          options={rows.map((c) => {
-            const unavailable = capabilityUnavailableHint(c);
-            return {
-              value: c.id,
-              label: c.name,
-              title: unavailable
-                ? `${c.description}\n\n${unavailable}`
-                : c.description,
-              secondary: unavailable ? (
-                <Box component="span" sx={{ color: "warning.main" }}>
-                  {unavailable}
-                </Box>
-              ) : null,
-            };
-          })}
-        />
-        <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-      </FormControl>
+      <legend>Access</legend>
       <GrantsPicker
         config={config}
         grants={held}
         onApiChange={(next) => applyChange(apiSelected, next)}
         onSubmit={submitGrant}
         onRemove={removeGrant}
+        disabled={readOnly}
         idPrefix={`task-${t.id}`}
+        repos={{
+          target: t.repo || "",
+          base: t.base || "",
+          targetNote: "this task's repo -- change it under Repos",
+          reads,
+          writes,
+          readOptions: repoOptions,
+          writeOptions: repoOptions,
+          onReadsChange: changeReads,
+          onWritesChange: setWrites,
+          onWritesCommit: commitWrites,
+          push,
+        }}
         policyRepo={t.repo || ""}
       />
+      {t.state === "running" && (reads.length > 0 || writes.length > 0) && (
+        <p className="hint">
+          This run&apos;s sandbox was checked out when it started, so a repo
+          added now is not cloned into it and the agent is not told about it --
+          comment if the run needs to know. Fetching is allowed or refused as
+          the repos stand, so a removal takes effect immediately.
+        </p>
+      )}
       {t.state === "running" && capabilitiesChanged && (
         <Alert
           severity="info"

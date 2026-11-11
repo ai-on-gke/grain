@@ -275,6 +275,17 @@ func requestedBy(task model.Task) string {
 		return ""
 	}
 	if filer.Kind != model.PrincipalHuman {
+		// An agent filing on behalf of the requester names them only when
+		// somebody verified who that is. An external agent credential
+		// whose owner the shared access code or loopback merely typed
+		// (model.ExternalAgentToken.OwnerSource) files with Creator set to
+		// that owner and OnBehalfOf recorded with the unverified source:
+		// that is the `grain create -author` case above, not a verified
+		// requester, so it gets no Requested-by: either.
+		if b := attr.OnBehalfOf; b != nil && b.Kind == model.PrincipalHuman && !b.Verified() &&
+			strings.EqualFold(requester, strings.TrimSpace(b.ID)) {
+			return ""
+		}
 		return requester
 	}
 	if !strings.EqualFold(requester, strings.TrimSpace(filer.ID)) || !namesAPerson(filer) {

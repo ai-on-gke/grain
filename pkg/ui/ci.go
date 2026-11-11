@@ -68,7 +68,10 @@ type CIRunArtifactsResponse struct {
 	// daemon log says why (pkg/cli/ci.go).
 	Available bool `json:"available"`
 	// Artifacts is what this run still has, oldest run sweeps and all.
-	Artifacts []ci.Artifact `json:"artifacts"`
+	Artifacts  []ci.Artifact `json:"artifacts"`
+	Total      int           `json:"total"`
+	Truncated  bool          `json:"truncated,omitempty"`
+	NextCursor string        `json:"nextCursor,omitempty"`
 }
 
 // CIRunRequest is the body of POST /api/ci/runs: a repository, a
@@ -128,7 +131,10 @@ type CICancelRequest struct {
 // CIWorkflowsResponse is what GET /api/ci/workflows answers with: the
 // workflows a manual run on the asked-for repo and ref can select.
 type CIWorkflowsResponse struct {
-	Workflows []ci.WorkflowOption `json:"workflows"`
+	Workflows  []ci.WorkflowOption `json:"workflows"`
+	Total      int                 `json:"total"`
+	Truncated  bool                `json:"truncated,omitempty"`
+	NextCursor string              `json:"nextCursor,omitempty"`
 }
 
 // TaskCIRunOptions narrows a task-scoped run (Client.StartTaskCIRunOpt).
@@ -186,7 +192,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 	}
 	resetPullRequestPolls(*task)
 	full := len(opt.Jobs) == 0 && opt.Workflow == "" && !opt.Recheck
-	if full && !grainci.RequiredFor(*task.Target) && c.Store != nil {
+	if !grainci.RequiredFor(*task.Target) && c.Store != nil {
 		repoCfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
 		if err != nil {
 			return ci.Run{}, err
@@ -197,7 +203,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 				rulesRequire = rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()
 			}
 			explicitDisabled := repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone)
-			if !rulesRequire && (explicitDisabled || !grainci.GrantedExplicitly(task.Grants)) {
+			if !rulesRequire && (explicitDisabled || (full && !grainci.GrantedExplicitly(task.Grants))) {
 				return ci.Run{}, forbiddenErrorf("%s", ciNotEnabledMessage(*task.Target))
 			}
 		}
@@ -837,6 +843,17 @@ type CIRunsResponse struct {
 	// no forge connection that reads Actions, a low API budget, or a
 	// forge read that failed (ci_actions.go).
 	ActionsNote string `json:"actionsNote,omitempty"`
+	// RepoProvider is the active CI provider for the single repository the
+	// query narrowed to (?repo=owner/name): ci.ProviderGitHubActions when
+	// its Actions runs are listed (ci_mode: github), or ci.ProviderGrain
+	// otherwise. Carried here under ci:read so `grain ci test-history` can
+	// default to GitHub Actions without needing capabilities:read on
+	// GET /api/repos/{owner}/{name}/capabilities.
+	RepoProvider string `json:"repoProvider,omitempty"`
+	// Truncated says ?limit= (or an agent's default page size) stopped
+	// short of Matched, and NextCursor asks for the next page.
+	Truncated  bool   `json:"truncated,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 // CIFaultsResponse is what GET /api/ci/faults answers with: the same
@@ -853,6 +870,13 @@ type CIFaultsResponse struct {
 	// the same distinction CIRunsResponse draws.
 	Enabled bool      `json:"enabled"`
 	Faults  []CIFault `json:"faults,omitempty"`
+	// Total, Truncated and NextCursor are the page's bookkeeping
+	// (list_page.go): how many faults matched across every page, whether
+	// Faults was cut short by the call's limit, and the cursor that reads
+	// on when it was.
+	Total      int    `json:"total"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 // CICacheResponse is what GET /api/ci/cache answers with, and what
@@ -970,6 +994,114 @@ func ciListSummary(run ci.Run) ci.Run {
 	return run
 }
 
+// trimsCIRuns reports whether GET /api/ci/runs cuts each row's jobs,
+// errors and shared-fault list to fit an agent's tool-result budget.
+// Unlike writeList routes, CIPage.jsx polls GET /api/ci/runs?limit=50
+// expecting every job on each run and every shared fault (including
+// standalone GitHub CI faults when grain CI has no runs), so ?limit=
+// from a person leaves rows and faults whole; only an agent call that
+// did not ask for fields=full is trimmed.
+func trimsCIRuns(r *http.Request) bool {
+	return isAgentListCaller(r) && !wantsFullRows(r)
+}
+
+// ciListedRuns is runs as a listing's rows (ciListSummary), and, when
+// trim is set, with each row's jobs cut as pagedCIRun cuts them.
+func ciListedRuns(runs []ci.Run, trim bool) []ci.Run {
+	listed := make([]ci.Run, 0, len(runs))
+	for _, run := range runs {
+		row := ciListSummary(run)
+		if trim {
+			row = pagedCIRun(row)
+		}
+		listed = append(listed, row)
+	}
+	return listed
+}
+
+// pagedCIRun is run as a paged listing's row carries it: at most
+// ciRunPageJobs jobs, those that failed, errored or were cancelled
+// first, with JobCount and JobsTruncated saying how many it has, and its
+// own and its jobs' errors cut to ciRunPageErrorBytes. GET
+// /api/ci/runs/{id} reads the whole run.
+func pagedCIRun(run ci.Run) ci.Run {
+	if jobs, cut := preferredFirst(run.Jobs, ciRunPageJobs, ciJobWentWrong); cut {
+		run.JobCount, run.Jobs, run.JobsTruncated = len(run.Jobs), jobs, true
+	}
+	if text, cut := truncateText(run.Error, ciRunPageErrorBytes); cut {
+		run.Error, run.ErrorTruncated = text, true
+	}
+	// run.Jobs is ciListSummary's copy (or preferredFirst's), so this
+	// writes no slice the runner shares.
+	for i := range run.Jobs {
+		if text, cut := truncateText(run.Jobs[i].Error, ciRunPageErrorBytes); cut {
+			run.Jobs[i].Error = text
+		}
+	}
+	return run
+}
+
+// ciJobWentWrong reports whether job finished without passing: what a
+// reader of a cut-down row most needs to see.
+func ciJobWentWrong(job ci.JobRun) bool {
+	switch job.Conclusion {
+	case ci.ConclusionFailure, ci.ConclusionErrored, ci.ConclusionCancelled:
+		return true
+	}
+	return false
+}
+
+// trimCompactRunJobs cuts each compact run's job lines to
+// ciCompactRunPageJobs, failures before jobs still waiting, for a paged
+// read: a run over a few hundred declared workflows, all of them
+// queued, was 9 KB of lines on its own.
+func trimCompactRunJobs(resp *CICompactRunsResponse) {
+	for i := range resp.Runs {
+		run := &resp.Runs[i]
+		if jobs, cut := preferredFirst(run.Jobs, ciCompactRunPageJobs, func(job CICompactJob) bool {
+			switch job.Conclusion {
+			case ci.ConclusionFailure, ci.ConclusionErrored, ci.ConclusionCancelled:
+				return true
+			}
+			return false
+		}); cut {
+			run.JobCount, run.Jobs, run.JobsTruncated = len(run.Jobs), jobs, true
+		}
+	}
+}
+
+// ciRunsPageFaultRows is the shared faults a paged GET /api/ci/runs
+// (view=full) carries beside its runs: those seen on a run of this page,
+// at most ciRunsPageFaults of them, each cut as a paged GET
+// /api/ci/faults row is (pagedCIFault) -- the faults compact rows name
+// too. Ten whole faults of the deployment's were 5.5 KB on every page
+// whatever runs it held; GET /api/ci/faults pages through all of them.
+func ciRunsPageFaultRows(faults []CIFault, runs []ci.Run) []CIFault {
+	onPage := make(map[string]bool, 2*len(runs))
+	for _, run := range runs {
+		onPage[run.ID] = true
+		if run.Commit != "" {
+			// A GitHub Actions fault names check runs, not the
+			// workflow run a listing shows: its repo, branch and commit do.
+			onPage[strings.ToLower(run.Repo)+"\x00"+run.Ref+"\x00"+run.Commit] = true
+		}
+	}
+	var out []CIFault
+	for _, f := range faults {
+		if len(out) == ciRunsPageFaults {
+			break
+		}
+		repoPrefix := strings.ToLower(f.Repo) + "\x00"
+		for _, run := range f.Runs {
+			if onPage[run.RunID] || (run.Commit != "" && onPage[repoPrefix+run.Ref+"\x00"+run.Commit]) {
+				out = append(out, pagedCIFault(f))
+				break
+			}
+		}
+	}
+	return out
+}
+
 // ciEnabledFor reports whether grain CI is turned on for this repo: the
 // controller-local config repository always, otherwise the repo's own CI
 // mode (model.RepoUsesGrainCI -- "Use Grain CI", or the legacy
@@ -992,6 +1124,9 @@ func (c *Client) ciEnabledFor(ctx context.Context, repo model.RepoRef) (bool, er
 	}
 	if grainci.RepoUsesGrainCI(repoCfg, repo) {
 		return true, nil
+	}
+	if repoCfg != nil && (repoCfg.CIMode == model.CIModeGitHub || repoCfg.CIMode == model.CIModeNone) {
+		return false, nil
 	}
 	wfs, err := c.Store.GetRepoWorkflows(ctx, repo)
 	if err != nil {
@@ -1165,6 +1300,11 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 }
 
 func (s *Server) handleListCIWorkflows(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	runner := s.tasks.Config.CI
 	if runner == nil {
 		writeError(w, http.StatusNotFound, fmt.Errorf("this deployment has no grain CI wired"))
@@ -1191,31 +1331,108 @@ func (s *Server) handleListCIWorkflows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if options == nil {
-		options = []ci.WorkflowOption{}
+	options = filterList(options, func(opt ci.WorkflowOption) bool { return list.matches(opt.Path, opt.Name) })
+	page := pageOf(options, list)
+	writeJSON(w, http.StatusOK, CIWorkflowsResponse{
+		Workflows:  page.Items,
+		Total:      page.Total,
+		Truncated:  page.Truncated,
+		NextCursor: page.NextCursor,
+	})
+}
+
+func ciRunMatchesQuery(run ci.Run, list listQuery) bool {
+	if list.Q == "" {
+		return true
 	}
-	writeJSON(w, http.StatusOK, CIWorkflowsResponse{Workflows: options})
+	keys := []string{run.ID, run.Repo, run.Ref, run.Commit, string(run.Event), run.RequestedBy}
+	if run.Actions != nil {
+		keys = append(keys, run.Actions.Workflow, run.Actions.WorkflowName)
+	}
+	for _, job := range run.Jobs {
+		keys = append(keys, job.Name, job.Workflow)
+	}
+	return list.matches(keys...)
+}
+
+func ciRunFetchLimit(list listQuery) int {
+	if list.Q != "" {
+		return ci.MaxFoundRuns
+	}
+	if list.Offset > 0 {
+		eff := list.Limit
+		if eff <= 0 {
+			eff = ci.MaxListedRuns
+		}
+		return min(list.Offset+eff, ci.MaxFoundRuns)
+	}
+	return list.Limit
+}
+
+func pageCIRunResult(page ci.RunPage, list listQuery) (ci.RunPage, bool, string) {
+	if list.Q != "" {
+		matched := filterList(page.Runs, func(run ci.Run) bool { return ciRunMatchesQuery(run, list) })
+		p := pageOf(matched, list)
+		page.Runs = p.Items
+		page.Matched = p.Total
+		return page, p.Truncated, p.NextCursor
+	}
+	eff := list.Limit
+	if eff <= 0 {
+		eff = ci.MaxListedRuns
+	}
+	start := min(list.Offset, len(page.Runs))
+	end := min(start+eff, len(page.Runs))
+	page.Runs = page.Runs[start:end]
+	nextOffset := list.Offset + len(page.Runs)
+	if nextOffset < page.Matched && len(page.Runs) > 0 {
+		return page, true, encodeListCursor(nextOffset)
+	}
+	return page, false, ""
 }
 
 func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
+	compact, err := ciRunViewFrom(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	defaultLimit := listPageSmall
+	if compact {
+		defaultLimit = listPageLarge
+	}
+	list, err := parseListQuery(r, defaultLimit)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	runner := s.tasks.Config.CI
 	if filter, err := ciRunFilterFrom(r.URL.Query(), time.Now()); err == nil {
 		if repo, ok := s.wantsActions(r, filter); ok && (runner == nil || !ci.IsUp(runner) ||
 			strings.EqualFold(filter.Provider, ci.ProviderGitHubActions)) {
 			// No grain CI to merge with: Actions alone.
-			limit, err := ciRunLimitFrom(r.URL.Query())
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err)
-				return
-			}
-			s.writeCIRuns(w, r, ci.RunPage{}, filter, limit, repo)
+			s.writeCIRuns(w, r, ci.RunPage{}, filter, list, compact, repo)
 			return
 		}
 	}
 	if runner == nil {
+		var repoProvider string
+		if filter, ferr := ciRunFilterFrom(r.URL.Query(), time.Now()); ferr == nil {
+			repoProvider = s.repoCIProvider(r.Context(), filter.Repo)
+		}
+		faults := s.faultsMatchingRepo(s.tasks.CISharedFaults(r.Context()), r.URL.Query().Get("repo"))
+		if trimsCIRuns(r) {
+			// No runs to scope them to: the faults are the answer.
+			kept, _ := firstOf(faults, ciRunsPageFaults)
+			faults = make([]CIFault, len(kept))
+			for i, f := range kept {
+				faults[i] = pagedCIFault(f)
+			}
+		}
 		writeJSON(w, http.StatusOK, CIRunsResponse{
-			Enabled: false,
-			Faults:  s.tasks.CISharedFaults(r.Context()),
+			Enabled:      false,
+			Faults:       faults,
+			RepoProvider: repoProvider,
 		})
 		return
 	}
@@ -1234,16 +1451,7 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	limit, err := ciRunLimitFrom(r.URL.Query())
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	compact, err := ciRunViewFrom(r.URL.Query())
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
+	fetchLimit := ciRunFetchLimit(list)
 	// The filter goes to the store rather than to what the store
 	// answered with: a narrowed question is asked of the whole history
 	// this deployment keeps, not of the newest ci.MaxListedRuns of it
@@ -1251,56 +1459,92 @@ func (s *Server) handleListCIRuns(w http.ResponseWriter, r *http.Request) {
 	if repo, ok := s.wantsActions(r, filter); ok {
 		grainFilter := filter
 		grainFilter.Provider = ""
-		s.writeCIRuns(w, r, runner.Find(grainFilter, limit), filter, limit, repo)
+		s.writeCIRuns(w, r, runner.Find(grainFilter, fetchLimit), filter, list, compact, repo)
 		return
 	}
+	repoProvider := s.repoCIProvider(r.Context(), filter.Repo)
 	if filter.Provider != "" && !strings.EqualFold(filter.Provider, ci.ProviderGrain) {
 		// A provider no run of this answer is from.
-		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}})
+		writeJSON(w, http.StatusOK, CIRunsResponse{Enabled: true, Runs: []ci.Run{}, RepoProvider: repoProvider})
 		return
 	}
 	filter.Provider = ""
-	page := runner.Find(filter, limit)
+	rawPage := runner.Find(filter, fetchLimit)
 	var faults []CIFault
-	if canShareFaultRuns(filter, limit) {
-		faults = s.tasks.ciSharedFaultsForRuns(r.Context(), page.Runs)
+	if canShareFaultRuns(filter, fetchLimit) {
+		faults = s.tasks.ciSharedFaultsForRuns(r.Context(), rawPage.Runs)
 	} else {
 		faults = s.tasks.CISharedFaults(r.Context())
 	}
+	faults = s.faultsMatchingRepo(faults, filter.Repo)
+	page, truncated, nextCursor := pageCIRunResult(rawPage, list)
+	trim := trimsCIRuns(r)
 	if compact {
-		writeJSON(w, http.StatusOK, ciCompactRuns(page, faults))
+		resp := ciCompactRuns(page, faults)
+		if trim {
+			trimCompactRunJobs(&resp)
+		}
+		resp.Truncated = truncated
+		resp.NextCursor = nextCursor
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	listed := make([]ci.Run, 0, len(page.Runs))
-	for _, run := range page.Runs {
-		listed = append(listed, ciListSummary(run))
+	listed := ciListedRuns(page.Runs, trim)
+	if trim {
+		faults = ciRunsPageFaultRows(faults, page.Runs)
 	}
 	writeJSON(w, http.StatusOK, CIRunsResponse{
-		Enabled: true,
-		Runs:    listed,
-		Matched: page.Matched,
-		Stored:  page.Stored,
-		Faults:  faults,
+		Enabled:      true,
+		Runs:         listed,
+		Matched:      page.Matched,
+		Stored:       page.Stored,
+		Faults:       faults,
+		RepoProvider: repoProvider,
+		Truncated:    truncated,
+		NextCursor:   nextCursor,
 	})
+}
+
+func (s *Server) faultsMatchingRepo(faults []CIFault, repoText string) []CIFault {
+	repoText = strings.TrimSpace(repoText)
+	if repoText == "" {
+		return faults
+	}
+	if s.tasks != nil {
+		if parsed, err := s.tasks.parseRepo(repoText); err == nil {
+			repoText = parsed.String()
+		}
+	}
+	return filterList(faults, func(f CIFault) bool { return strings.EqualFold(f.Repo, repoText) })
+}
+
+func (s *Server) repoCIProvider(ctx context.Context, repoText string) string {
+	if s.tasks == nil || strings.TrimSpace(repoText) == "" {
+		return ""
+	}
+	repo, err := s.tasks.parseRepo(repoText)
+	if err != nil {
+		return ""
+	}
+	if s.tasks.actionsListedFor(ctx, repo) {
+		return ci.ProviderGitHubActions
+	}
+	return ci.ProviderGrain
 }
 
 // writeCIRuns answers GET /api/ci/runs with grain's page merged with
 // repo's GitHub Actions runs (ci_actions.go), newest first, every row
 // labelled with its provider.
-func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.RunPage, filter ci.RunFilter, limit int, repo model.RepoRef) {
-	compact, err := ciRunViewFrom(r.URL.Query())
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
+func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.RunPage, filter ci.RunFilter, list listQuery, compact bool, repo model.RepoRef) {
 	if strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
 		page = ci.RunPage{}
 	}
+	fetchLimit := ciRunFetchLimit(list)
 	var actions []ci.Run
 	var actionsMatched int
 	var note string
 	if filter.Provider == "" || strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
-		actions, actionsMatched, note = s.tasks.listActionsRunsCounted(r.Context(), repo, filter, limit)
+		actions, actionsMatched, note = s.tasks.listActionsRunsCounted(r.Context(), repo, filter, fetchLimit)
 	}
 	merged := make([]ci.Run, 0, len(page.Runs)+len(actions))
 	for _, run := range page.Runs {
@@ -1311,33 +1555,37 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 	}
 	merged = append(merged, actions...)
 	sortRunsNewestFirst(merged)
-	if limit <= 0 {
-		limit = ci.MaxListedRuns
-	}
-	if len(merged) > limit {
-		merged = merged[:limit]
-	}
 	page.Runs = merged
 	page.Matched += actionsMatched
 	page.Stored += actionsMatched
-	faults := s.tasks.CISharedFaults(r.Context())
+	page, truncated, nextCursor := pageCIRunResult(page, list)
+	faults := s.faultsMatchingRepo(s.tasks.CISharedFaults(r.Context()), repo.String())
+	trim := trimsCIRuns(r)
 	if compact {
 		resp := ciCompactRuns(page, faults)
+		if trim {
+			trimCompactRunJobs(&resp)
+		}
 		resp.ActionsNote = note
+		resp.Truncated = truncated
+		resp.NextCursor = nextCursor
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	listed := make([]ci.Run, 0, len(page.Runs))
-	for _, run := range page.Runs {
-		listed = append(listed, ciListSummary(run))
+	listed := ciListedRuns(page.Runs, trim)
+	if trim {
+		faults = ciRunsPageFaultRows(faults, page.Runs)
 	}
 	writeJSON(w, http.StatusOK, CIRunsResponse{
-		Enabled:     true,
-		Runs:        listed,
-		Matched:     page.Matched,
-		Stored:      page.Stored,
-		Faults:      faults,
-		ActionsNote: note,
+		Enabled:      true,
+		Runs:         listed,
+		Matched:      page.Matched,
+		Stored:       page.Stored,
+		Faults:       faults,
+		ActionsNote:  note,
+		RepoProvider: ci.ProviderGitHubActions,
+		Truncated:    truncated,
+		NextCursor:   nextCursor,
 	})
 }
 
@@ -1361,41 +1609,35 @@ func canShareFaultRuns(filter ci.RunFilter, limit int) bool {
 // holds the run already and only wants to know whether its red is shared
 // (CIFaultsResponse).
 func (s *Server) handleListCIFaults(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	runner := s.tasks.Config.CI
 	faults := s.tasks.CISharedFaults(r.Context())
 	if runner == nil && len(faults) == 0 {
 		writeJSON(w, http.StatusOK, CIFaultsResponse{Enabled: false})
 		return
 	}
-	writeJSON(w, http.StatusOK, CIFaultsResponse{Enabled: true, Faults: faults})
-}
-
-// ciRunLimitFrom reads ?limit=, which is how many runs the answer
-// carries -- absent (or zero) meaning ci.MaxListedRuns, the bound the
-// unnarrowed poll has always had.
-//
-// It is a separate argument from the filter rather than a field of it
-// because it is not a question about a run: every other word here says
-// which runs are being asked about, and this one says how many of the
-// answer to send. ci.RunStore.Find bounds it in turn (ci.MaxFoundRuns),
-// so a limit with an extra zero in it costs a large answer rather than
-// the daemon's memory.
-//
-// A limit that is not a number, or is negative, is refused rather than
-// ignored, for the reason an unknown filter word is: an argument that is
-// silently dropped answers with something else and says nothing about
-// it.
-func ciRunLimitFrom(query url.Values) (int, error) {
-	text := strings.TrimSpace(query.Get("limit"))
-	if text == "" {
-		return 0, nil
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
+		faults = filterList(faults, func(f CIFault) bool { return strings.EqualFold(f.Repo, repo) })
 	}
-	limit, err := strconv.Atoi(text)
-	if err != nil || limit < 0 {
-		return 0, fmt.Errorf("%q is not a limit: it is how many runs to answer with, a whole number "+
-			"(0, or no limit at all, means the newest %d)", query.Get("limit"), ci.MaxListedRuns)
+	faults = filterList(faults, func(f CIFault) bool {
+		keys := append([]string{f.Digest, string(f.Kind), f.JobName, f.Step, f.Repo}, f.Paths...)
+		return list.matches(keys...)
+	})
+	page := pageOfBy(faults, list, func(f CIFault) string { return f.Repo + "\x00" + f.Digest })
+	if trimsPagedRows(r, list) {
+		for i := range page.Items {
+			page.Items[i] = pagedCIFault(page.Items[i])
+		}
 	}
-	return limit, nil
+	resp := CIFaultsResponse{Enabled: true, Total: page.Total, Truncated: page.Truncated, NextCursor: page.NextCursor}
+	if len(page.Items) > 0 {
+		resp.Faults = page.Items
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ciRunFilterFrom reads GET /api/ci/runs' query into the same filter
@@ -1553,8 +1795,13 @@ func (s *Server) handleGetCIRun(w http.ResponseWriter, r *http.Request) {
 // the route below, are gated the same way -- an artifact is the run's
 // own build output, as much the run's team's as its step output is.
 func (s *Server) handleListCIRunArtifacts(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	if id := r.PathValue("id"); IsActionsRunID(id) {
-		s.handleListActionsArtifacts(w, r, id)
+		s.handleListActionsArtifacts(w, r, id, list)
 		return
 	}
 	runner := s.tasks.Config.CI
@@ -1571,10 +1818,22 @@ func (s *Server) handleListCIRunArtifacts(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if artifacts == nil {
-		artifacts = []ci.Artifact{}
-	}
-	writeJSON(w, http.StatusOK, CIRunArtifactsResponse{Enabled: true, Available: available, Artifacts: artifacts})
+	writeCIRunArtifacts(w, true, available, artifacts, list)
+}
+
+func writeCIRunArtifacts(w http.ResponseWriter, enabled, available bool, artifacts []ci.Artifact, list listQuery) {
+	artifacts = filterList(artifacts, func(a ci.Artifact) bool {
+		return list.matches(a.Job, a.Name)
+	})
+	page := pageOf(artifacts, list)
+	writeJSON(w, http.StatusOK, CIRunArtifactsResponse{
+		Enabled:    enabled,
+		Available:  available,
+		Artifacts:  page.Items,
+		Total:      page.Total,
+		Truncated:  page.Truncated,
+		NextCursor: page.NextCursor,
+	})
 }
 
 // handleGetCIArtifact serves one artifact's bytes -- GET

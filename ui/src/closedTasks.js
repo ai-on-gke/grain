@@ -28,29 +28,49 @@ import api from "./api.js";
 // what closing one looks like from here.
 
 // CLOSED_PAGE_SIZE is how many closed tasks one page holds.
-export const CLOSED_PAGE_SIZE = 200;
+const CLOSED_PAGE_SIZE = 200;
 
 // CLOSED_REFRESH_MS is how often the newest page is asked again.
-export const CLOSED_REFRESH_MS = 60_000;
+const CLOSED_REFRESH_MS = 60_000;
 
 // SEARCH_DEBOUNCE_MS is how long the search box has to sit still before
 // the server is asked to search closed work for it: one request for a
 // word, not one per keystroke.
-export const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 300;
 
 // closedPagePath is the request for the page after cursor ("" for the
 // newest). search narrows it to the closed tasks whose title,
-// description, external reference or id holds that text (pkg/ui's taskListQuery), repo to
-// one repository's, and limit sets the page's size -- a caller that
-// wants only the totals asks for a page of one.
+// description, external reference or id holds that text (pkg/ui's
+// taskListQuery), owner to one owner's (compared case-insensitively),
+// externalRef to the tasks carrying exactly that reference, repo to one
+// repository's, and limit sets the page's size -- a caller that wants
+// only the totals asks for a page of one.
 export function closedPagePath(
   cursor = "",
-  { search = "", repo = "", limit = CLOSED_PAGE_SIZE } = {},
+  {
+    search = "",
+    owner = "",
+    externalRef = "",
+    repo = "",
+    limit = CLOSED_PAGE_SIZE,
+  } = {},
 ) {
   let path = `/api/tasks?state=closed&limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
   if (search) path += `&search=${encodeURIComponent(search)}`;
+  if (owner) path += `&owner=${encodeURIComponent(owner)}`;
+  if (externalRef) path += `&externalRef=${encodeURIComponent(externalRef)}`;
   if (repo) path += `&repo=${encodeURIComponent(repo)}`;
   return path;
+}
+
+// closedQueryKey is one server question about closed work -- the search
+// box's text (searchKey) and the owner and external reference the
+// narrowing pins (taskFilters.js's closedServerFilters) -- as one string,
+// "" when it asks nothing: what useClosedTasks compares to know whether
+// an answer is still the one the views want.
+function closedQueryKey({ q = "", owner = "", externalRef = "" } = {}) {
+  if (!q && !owner && !externalRef) return "";
+  return JSON.stringify([q, owner, externalRef]);
 }
 
 // searchKey is the search box's text as matchesFilters compares it:
@@ -211,7 +231,21 @@ export function closedPartial({ answered, totals, held, nextCursor }) {
 // descriptions), SEARCH_DEBOUNCE_MS after the box goes quiet, and what
 // it finds is drawn beside the rest while the box still holds that text,
 // marked with the text that found it (markSearchHits).
-export function useClosedTasks(enabled = true, search = "") {
+//
+// filters is the owner and external reference the narrowing pins with a
+// single `owner:any:<v>` or `externalRef:any:<v>` condition
+// (taskFilters.js's closedServerFilters), asked of the server the same
+// way and alongside the text: answered only on the pages held, a
+// condition matching one task deep in closed work kept the end of the
+// short list in view and so had ClosedTasksMore page through every
+// closed page until it turned up -- 15 requests and ~10 s against 3,000
+// closed tasks (2026-11-07 walkthrough, F6). The views still apply the
+// condition themselves to whatever comes back.
+export function useClosedTasks(
+  enabled = true,
+  search = "",
+  { owner = "", externalRef = "" } = NO_FILTERS,
+) {
   const [closed, setClosed] = useState([]);
   const [nextCursor, setNextCursor] = useState("");
   const [loading, setLoading] = useState(false);
@@ -238,6 +272,15 @@ export function useClosedTasks(enabled = true, search = "") {
   const inFlight = useRef(false);
   const searchInFlight = useRef(false);
   const q = searchKey(search);
+  const pinnedOwner = String(owner || "").trim();
+  const pinnedRef = String(externalRef || "").trim();
+  // key is the whole server question; searched.q holds the key it was
+  // asked for.
+  const key = closedQueryKey({
+    q,
+    owner: pinnedOwner,
+    externalRef: pinnedRef,
+  });
 
   const refresh = useCallback(async () => {
     if (inFlight.current) return;
@@ -255,52 +298,77 @@ export function useClosedTasks(enabled = true, search = "") {
     }
   }, []);
 
-  // searchPage asks the server's search for key after cursor and merges
-  // what it finds. Each ask takes the next generation, and an answer
-  // that is no longer the newest -- the box has moved on, or emptied --
-  // is dropped rather than recorded as the current search's page.
+  // searchPage asks the server's search for query after cursor and
+  // merges what it finds. Each ask takes the next generation, and an
+  // answer that is no longer the newest -- the box or the narrowing has
+  // moved on, or emptied -- is dropped rather than recorded as the
+  // current search's page.
   const searchGen = useRef(0);
-  const searchPage = useCallback(async (key, cursor) => {
+  const searchPage = useCallback(async (query, cursor) => {
+    const asked = closedQueryKey(query);
     const gen = ++searchGen.current;
     searchInFlight.current = true;
     setSearched((prev) => ({
-      q: key,
-      nextCursor: prev.q === key ? prev.nextCursor : "",
+      q: asked,
+      nextCursor: prev.q === asked ? prev.nextCursor : "",
       loading: true,
     }));
     try {
-      const page = readPage(await api(closedPagePath(cursor, { search: key })));
+      const page = readPage(
+        await api(
+          closedPagePath(cursor, {
+            search: query.q,
+            owner: query.owner,
+            externalRef: query.externalRef,
+          }),
+        ),
+      );
       if (gen !== searchGen.current) return;
       // Not the page's totals: they count the search's matches, and the
-      // rail's counts are of every closed task.
-      const hits = markSearchHits(page.tasks, key);
+      // rail's counts are of every closed task. Only a text search marks
+      // its hits: an owner or external reference is on the listed task
+      // for the views to match themselves.
+      const hits = query.q ? markSearchHits(page.tasks, query.q) : page.tasks;
       setFound((prev) => (cursor ? mergeClosedPage(prev, hits) : hits));
-      setSearched({ q: key, nextCursor: page.nextCursor, loading: false });
+      setSearched({ q: asked, nextCursor: page.nextCursor, loading: false });
     } catch (err) {
       console.warn("grain: searching closed tasks failed", err);
-      if (gen === searchGen.current) setSearched({ ...NO_SEARCH, q: key });
+      if (gen === searchGen.current) setSearched({ ...NO_SEARCH, q: asked });
     } finally {
       if (gen === searchGen.current) searchInFlight.current = false;
     }
   }, []);
 
   useEffect(() => {
-    if (!enabled || q === "") {
+    if (!enabled || key === "") {
       searchGen.current += 1;
       searchInFlight.current = false;
       setSearched(NO_SEARCH);
       setFound(NO_TASKS);
       return undefined;
     }
-    const timer = setTimeout(() => searchPage(q, ""), SEARCH_DEBOUNCE_MS);
+    const query = { q, owner: pinnedOwner, externalRef: pinnedRef };
+    // Only typing is debounced: a condition is picked, not typed, and
+    // arrives whole.
+    const timer = setTimeout(
+      () => searchPage(query, ""),
+      q ? SEARCH_DEBOUNCE_MS : 0,
+    );
     return () => clearTimeout(timer);
-  }, [enabled, q, searchPage]);
+  }, [enabled, key, q, pinnedOwner, pinnedRef, searchPage]);
 
-  const searching = q !== "";
+  const searching = key !== "";
   const loadMore = useCallback(async () => {
     if (searching) {
-      if (!searchInFlight.current && searched.q === q && searched.nextCursor) {
-        await searchPage(q, searched.nextCursor);
+      if (
+        !searchInFlight.current &&
+        searched.q === key &&
+        searched.nextCursor
+      ) {
+        await searchPage(
+          { q, owner: pinnedOwner, externalRef: pinnedRef },
+          searched.nextCursor,
+        );
       }
       return;
     }
@@ -319,7 +387,16 @@ export function useClosedTasks(enabled = true, search = "") {
       inFlight.current = false;
       setLoading(false);
     }
-  }, [nextCursor, searching, q, searched, searchPage]);
+  }, [
+    nextCursor,
+    searching,
+    key,
+    q,
+    pinnedOwner,
+    pinnedRef,
+    searched,
+    searchPage,
+  ]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -346,17 +423,17 @@ export function useClosedTasks(enabled = true, search = "") {
   // box is set, what the server's search for it found.
   const shown = useMemo(
     () =>
-      searching && searched.q === q && found.length > 0
+      searching && searched.q === key && found.length > 0
         ? mergeClosedPage(closed, found)
         : closed,
-    [searching, searched.q, q, found, closed],
+    [searching, searched.q, key, found, closed],
   );
   const unseen = useMemo(() => unseenClosed(totals, shown), [totals, shown]);
   const partial = closedPartial({ answered, totals, held: shown, nextCursor });
   return {
     closed: shown,
     hasMore: searching
-      ? searched.q === q && searched.nextCursor !== ""
+      ? searched.q === key && searched.nextCursor !== ""
       : nextCursor !== "",
     loading: searching ? searched.loading : loading,
     searching,
@@ -421,3 +498,5 @@ export function useRepoClosedCount(repo, enabled) {
 // NO_SEARCH is useClosedTasks' search state with nothing searched.
 const NO_SEARCH = Object.freeze({ q: "", nextCursor: "", loading: false });
 const NO_TASKS = Object.freeze([]);
+// NO_FILTERS is useClosedTasks' filters with nothing pinned.
+const NO_FILTERS = Object.freeze({ owner: "", externalRef: "" });

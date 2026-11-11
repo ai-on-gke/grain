@@ -216,6 +216,11 @@ var notSettings = []string{
 	// would race the daemon writing new ones.
 	"task_comment",
 	"task_attachment",
+	// A durable task's compaction cursor, handover version and current
+	// brief, and the brief's edits (model.TaskContext): written by runs
+	// and people as the task goes, beside its comments.
+	"task_context",
+	"task_brief_edit",
 	// Who closed or reopened a task (model.TaskEvent): grain's record of
 	// what somebody did, written in the same breath as the closure.
 	"task_event",
@@ -356,6 +361,14 @@ var notSettings = []string{
 	// deployment dispatching onto a key that never refused it, and
 	// exporting them would churn the state repository on every limit.
 	"usage_limit_pause",
+	// Token accounting (model/tokenusage.go): what each run spent, what
+	// a provider's refusals taught grain about a window's size, and the
+	// operator's budgets and concurrency mode. Runtime state like the
+	// pauses above: per-run rows churn on every run, and a learned
+	// capacity belongs to the credential this deployment met it on.
+	"task_run_usage",
+	"usage_capacity",
+	"usage_setting",
 	// Memory is written by agents while runs are live, so it remains
 	// outside SettingsTables even though its Markdown representation is
 	// imported separately when a repository change arrives.
@@ -390,6 +403,11 @@ var notSettings = []string{
 	// list until each repository has been polled once.
 	"repo_declaration",
 	"repo_declaration_sync",
+	// A person's acceptance of a declaration's grants
+	// (model.DeclarationAcceptance, task 3971): a grant made through
+	// grain by somebody holding the scope, which a branch of this
+	// repository must not be able to make on a person's behalf.
+	"declaration_acceptance",
 	// A declared template's `push:` list (grain/task-2536), the same kind
 	// of row again: re-read from the repository's default branch by every
 	// sync, and never a setting anybody proposes.
@@ -443,7 +461,7 @@ var notSettings = []string{
 	"secret_resolution_audit",
 	"credential_access_audit",
 	// Non-secret catalogue of secret names and keys stored in Google Cloud
-	// Secret Manager (-secrets-backend=secretmanager, design/design/registry.design.md):
+	// Secret Manager (-secrets-backend=secretmanager, design/design/hub.design.md):
 	// written live by secrets.Store alongside Secret Manager mutations, and
 	// kept out of grain/config so a config-repo merge never overwrites or
 	// erases the instance's secret catalogue.

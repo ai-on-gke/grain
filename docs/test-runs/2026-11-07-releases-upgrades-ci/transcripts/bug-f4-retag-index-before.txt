@@ -1,0 +1,8 @@
+=== Bug F4 Reproduction (unpatched scripts/release-images.sh retag_image without --prefer-index=false) ===
+exit_code=1
+release-images.sh: using Docker's existing credentials for 127.0.0.1:4281
+#1 [internal] pushing 127.0.0.1:4281/grainai/sandbox
+#1 0.000 copying sha256:b31112e4853c88c6d2ccfa8c9af12383a702a30c45316fdf47805826dbfebdfb from 127.0.0.1:4282/bwsalmon/grain/guest@sha256:b31112e4853c88c6d2ccfa8c9af12383a702a30c45316fdf47805826dbfebdfb to 127.0.0.1:4281/grainai/sandbox
+#1 0.007 pushing sha256:958e023204fca78a14cea551ab67f20a38bd5ff87ef54c662a934ed97fd8a840 to 127.0.0.1:4281/grainai/sandbox:sha-9d13fc2
+#1 DONE 0.0s
+release-images.sh: copied 127.0.0.1:4282/bwsalmon/grain/guest:sha-9d13fc2 (sha256:b31112e4853c88c6d2ccfa8c9af12383a702a30c45316fdf47805826dbfebdfb) to 127.0.0.1:4281/grainai/sandbox:sha-9d13fc2, but 127.0.0.1:4281/grainai/sandbox:sha-9d13fc2 is sha256:958e023204fca78a14cea551ab67f20a38bd5ff87ef54c662a934ed97fd8a840: the copy is not the image that was tested

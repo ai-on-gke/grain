@@ -15,7 +15,6 @@
 package ui
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -71,7 +70,7 @@ func whoami(r *http.Request) WhoamiResponse {
 		w := wirePrincipal(*b)
 		resp.OnBehalfOf = &w
 	}
-	if del := delegatedIdentityFromContext(r.Context()); del != nil && who.Actor.Kind == model.PrincipalService && who.Actor.Source == model.SourceRegistry {
+	if del := delegatedIdentityFromContext(r.Context()); del != nil && who.Actor.Kind == model.PrincipalService && who.Actor.Source == model.SourceHub {
 		resp.Via = del.ViaLabel
 	}
 	return resp
@@ -117,17 +116,29 @@ type ConfigAuditView struct {
 // maxConfigAudit bounds one read of GET /api/deployment/config-audit.
 const maxConfigAudit = 500
 
+// configAuditKey names a config audit row for paging (pageOfBy) by its id.
+func configAuditKey(v ConfigAuditView) string { return strconv.FormatInt(v.ID, 10) }
+
 func (s *Server) handleGetConfigAudit(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			writeError(w, http.StatusBadRequest, errors.New("limit must be a positive integer"))
-			return
-		}
-		limit = min(n, maxConfigAudit)
+	q := r.URL.Query()
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
 	}
-	entries, err := s.tasks.Store.ConfigAudit(r.Context(), limit)
+	fetchLimit := maxConfigAudit
+	if !isAgentListCaller(r) && !q.Has("cursor") && !q.Has("q") {
+		list.Paged = false
+		fetchLimit = 100
+		if q.Has("limit") {
+			if list.Limit == 0 {
+				fetchLimit = maxConfigAudit
+			} else {
+				fetchLimit = min(list.Limit, maxConfigAudit)
+			}
+		}
+	}
+	entries, err := s.tasks.Store.ConfigAudit(r.Context(), fetchLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -135,9 +146,19 @@ func (s *Server) handleGetConfigAudit(w http.ResponseWriter, r *http.Request) {
 	title := s.tasks.sessionTitles(r.Context())
 	out := make([]ConfigAuditView, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, ConfigAuditView{ID: e.ID, At: e.At, Actor: e.By.ID, ActorKind: string(e.By.Kind),
-			ActorSource: string(e.By.Source), ActorLabel: sessionLabel(e.By, e.OnBehalfOf, title),
-			Surface: e.Surface, Summary: e.Summary})
+		view := ConfigAuditView{
+			ID:          e.ID,
+			At:          e.At,
+			Actor:       e.By.ID,
+			ActorKind:   string(e.By.Kind),
+			ActorSource: string(e.By.Source),
+			ActorLabel:  sessionLabel(e.By, e.OnBehalfOf, title),
+			Surface:     e.Surface,
+			Summary:     e.Summary,
+		}
+		if list.matches(view.Actor, view.ActorLabel, view.Surface, view.Summary) {
+			out = append(out, view)
+		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeListBy(w, out, list, configAuditKey)
 }

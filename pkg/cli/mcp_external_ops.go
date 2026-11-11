@@ -41,15 +41,28 @@ import (
 // 7. grain_inbox
 func externalInboxTool(c *ui.HTTPClient) mcp.Tool {
 	type args struct {
-		Repo string `json:"repo"`
-		Kind string `json:"kind"`
+		Repo   string `json:"repo"`
+		Kind   string `json:"kind"`
+		Q      string `json:"q"`
+		Limit  int    `json:"limit"`
+		Cursor string `json:"cursor"`
+	}
+	type page struct {
+		Items      []ui.InboxItem `json:"items"`
+		Total      int            `json:"total"`
+		Truncated  bool           `json:"truncated"`
+		NextCursor string         `json:"nextCursor,omitempty"`
 	}
 	return mcp.Tool{
-		Name:        "grain_inbox",
-		Description: "List actionable items waiting for a person in Grain's inbox (questions, secret requests, notifications, held merges, proposals).",
+		Name: "grain_inbox",
+		Description: "List actionable items waiting for a person in Grain's inbox (questions, secret requests, notifications, held merges, proposals). " +
+			fmt.Sprintf("Paged: answers {items, total, truncated, nextCursor}, %d items at a time by default; pass nextCursor back as cursor for the next page.", mcpInboxPage),
 		InputSchema: mcpObjectSchema(map[string]any{
-			"repo": map[string]any{"type": "string", "description": "Filter by repository (owner/name)."},
-			"kind": map[string]any{"type": "string", "description": "Filter by item kind: " + strings.Join(ui.InboxKinds, ", ") + "."},
+			"repo":   map[string]any{"type": "string", "description": "Filter by repository (owner/name)."},
+			"kind":   map[string]any{"type": "string", "description": "Filter by item kind: " + strings.Join(ui.InboxKinds, ", ") + "."},
+			"q":      map[string]any{"type": "string", "description": "Substring of an item's task, title, repository, summary or subject."},
+			"limit":  map[string]any{"type": "integer", "description": fmt.Sprintf("Items per page (default %d, at most %d).", mcpInboxPage, mcpPageMax)},
+			"cursor": map[string]any{"type": "string", "description": "A previous answer's nextCursor, for the page after it (leave out for the first page)."},
 		}),
 		Handler: func(ctx context.Context, raw map[string]any) mcp.Result {
 			var a args
@@ -60,11 +73,16 @@ func externalInboxTool(c *ui.HTTPClient) mcp.Tool {
 			if kind != "" && !slices.Contains(ui.InboxKinds, kind) {
 				return mcpToolErr(fmt.Errorf("grain_inbox: kind %q is not one of %s", kind, strings.Join(ui.InboxKinds, ", ")))
 			}
-			resp, err := c.Inbox(ctx, strings.TrimSpace(a.Repo), kind)
+			resp, err := c.InboxPage(ctx, strings.TrimSpace(a.Repo), kind, strings.TrimSpace(a.Q),
+				mcpPageLimit(a.Limit, mcpInboxPage), strings.TrimSpace(a.Cursor))
 			if err != nil {
 				return mcpToolErr(err)
 			}
-			return mcpJSONResult(resp)
+			out := page{Items: resp.Items, Total: resp.Total, Truncated: resp.Truncated, NextCursor: resp.NextCursor}
+			if out.Items == nil {
+				out.Items = []ui.InboxItem{}
+			}
+			return mcpPageResult(out)
 		},
 	}
 }
@@ -84,11 +102,29 @@ func externalCIRunsTool(c *ui.HTTPClient) mcp.Tool {
 		Sort       string   `json:"sort"`
 		Order      string   `json:"order"`
 		Limit      int      `json:"limit"`
-		Compact    bool     `json:"compact"`
+		Compact    *bool    `json:"compact"`
+		Cursor     string   `json:"cursor"`
+		Q          string   `json:"q"`
+	}
+	// The route's own answers, with total (the runs matching across
+	// every page) and truncated said whatever their value; the outer
+	// fields shadow the embedded ones of the same name.
+	type compactPage struct {
+		ui.CICompactRunsResponse
+		Total      int    `json:"total"`
+		Truncated  bool   `json:"truncated"`
+		NextCursor string `json:"nextCursor,omitempty"`
+	}
+	type fullPage struct {
+		ui.CIRunsResponse
+		Total      int    `json:"total"`
+		Truncated  bool   `json:"truncated"`
+		NextCursor string `json:"nextCursor,omitempty"`
 	}
 	return mcp.Tool{
-		Name:        "ci_runs",
-		Description: "List CI runs recorded by Grain with repository, branch/ref, conclusion, workflow, and time window filters.",
+		Name: "ci_runs",
+		Description: "List CI runs recorded by Grain with repository, branch/ref, conclusion, workflow, and time window filters, newest first. " +
+			fmt.Sprintf("Paged: answers {runs, total, truncated, nextCursor, ...}, %d compact runs (identity, verdict and the jobs that did not succeed) at a time by default, or up to %d runs with every job and step (no step output) for compact: false; pass nextCursor back as cursor for the next page. ci_log reads one run whole.", mcpCIRunsPage, mcpCIRunsFullPage),
 		InputSchema: mcpObjectSchema(map[string]any{
 			"repo":       map[string]any{"type": "string", "description": "Repository as owner/name."},
 			"ref":        map[string]any{"type": "string", "description": "Branch/ref substring filter."},
@@ -100,8 +136,10 @@ func externalCIRunsTool(c *ui.HTTPClient) mcp.Tool {
 			"until":      map[string]any{"type": "string"},
 			"sort":       map[string]any{"type": "string"},
 			"order":      map[string]any{"type": "string", "description": "desc or asc."},
-			"limit":      map[string]any{"type": "integer", "description": "Maximum runs to return (default 20)."},
-			"compact":    map[string]any{"type": "boolean"},
+			"q":          map[string]any{"type": "string", "description": "Substring of a run's id, repository, ref, commit, event, requester, workflow or job names."},
+			"limit":      map[string]any{"type": "integer", "description": fmt.Sprintf("Runs per page (default %d, or %d for compact: false; at most %d).", mcpCIRunsPage, mcpCIRunsFullPage, mcpPageMax)},
+			"cursor":     map[string]any{"type": "string", "description": "A previous answer's nextCursor, for the page after it (leave out for the first page)."},
+			"compact":    map[string]any{"type": "boolean", "description": "true (default) for each run's identity, verdict and failing jobs; false for every job and step of each run (no step output)."},
 		}),
 		Handler: func(ctx context.Context, raw map[string]any) mcp.Result {
 			var a args
@@ -129,24 +167,89 @@ func externalCIRunsTool(c *ui.HTTPClient) mcp.Tool {
 			if err != nil {
 				return mcpToolErr(err)
 			}
-			limit := a.Limit
-			if limit <= 0 {
-				limit = 20
+			// The route pages a person's call only when it is asked to, and
+			// lists every shared fault to one, so both are bounded here as
+			// they would be for an agent's.
+			want := ui.CIRunsPage{Cursor: strings.TrimSpace(a.Cursor), Q: strings.TrimSpace(a.Q)}
+			offset := 0
+			if want.Cursor != "" {
+				// The route refuses a cursor it did not hand out.
+				offset, _ = ui.ParseListCursor(want.Cursor)
 			}
-			if a.Compact {
-				page, err := c.FindCIRunsCompact(ctx, filter, limit)
+			fit := a.Limit <= 0
+			if a.Compact == nil || *a.Compact {
+				want.Limit = mcpPageLimit(a.Limit, mcpCIRunsPage)
+				resp, err := c.FindCIRunsCompactPage(ctx, filter, want)
 				if err != nil {
 					return mcpToolErr(err)
 				}
-				return mcpJSONResult(page)
+				if len(resp.Faults) > mcpCIFaultsMax {
+					resp.Faults = resp.Faults[:mcpCIFaultsMax]
+				}
+				if resp.Runs == nil {
+					resp.Runs = []ui.CICompactRun{}
+				}
+				out := compactPage{CICompactRunsResponse: resp, Total: resp.Matched, Truncated: resp.Truncated, NextCursor: resp.NextCursor}
+				return fitMCPPage(fit, &out.Runs, offset, &out.Truncated, &out.NextCursor, func() mcp.Result { return mcpPageResult(out) })
 			}
-			page, err := c.FindCIRuns(ctx, filter, limit)
+			want.Limit = mcpPageLimit(a.Limit, mcpCIRunsFullPage)
+			resp, err := c.FindCIRunsPage(ctx, filter, want)
 			if err != nil {
 				return mcpToolErr(err)
 			}
-			return mcpJSONResult(page)
+			if resp.Runs == nil {
+				resp.Runs = []ci.Run{}
+			}
+			faults := resp.Faults
+			out := fullPage{CIRunsResponse: resp, Total: resp.Matched, Truncated: resp.Truncated, NextCursor: resp.NextCursor}
+			return fitMCPPage(fit, &out.Runs, offset, &out.Truncated, &out.NextCursor, func() mcp.Result {
+				out.Faults = mcpFaultsOnPage(faults, out.Runs)
+				return mcpPageResult(out)
+			})
 		},
 	}
+}
+
+// mcpFaultsOnPage is the shared faults some run of runs is part of, at
+// most mcpCIFaultsMax of them, each naming at most mcpFaultListMax of the
+// branches and runs it has been seen on. A fault seen on a hundred
+// branches lists every one of them, which alone ran to 16 KB; the compact
+// view (the default) counts them instead.
+func mcpFaultsOnPage(faults []ui.CIFault, runs []ci.Run) []ui.CIFault {
+	onPage := map[string]bool{}
+	for _, run := range runs {
+		onPage[run.ID] = true
+	}
+	var out []ui.CIFault
+	for _, f := range faults {
+		if len(out) == mcpCIFaultsMax {
+			break
+		}
+		if !slices.ContainsFunc(f.Runs, func(r ci.FaultRun) bool { return onPage[r.RunID] }) {
+			continue
+		}
+		f.Refs = f.Refs[:min(len(f.Refs), mcpFaultListMax)]
+		f.Runs = f.Runs[:min(len(f.Runs), mcpFaultListMax)]
+		out = append(out, f)
+	}
+	return out
+}
+
+// fitMCPPage renders a page and, when fit (the caller named no limit),
+// drops rows off its end until it fits mcpPageBudget, pointing nextCursor
+// at the first row dropped: a run with every job and step on it weighs
+// whatever its workflows make it, so no one default page size fits every
+// repository's. A page that started at offset resumes at offset plus the
+// rows it kept, which is what an offset cursor (ui.ListCursorFor) says.
+func fitMCPPage[T any](fit bool, rows *[]T, offset int, truncated *bool, nextCursor *string, render func() mcp.Result) mcp.Result {
+	res := render()
+	for fit && len(res.Text) > mcpPageBudget && len(*rows) > 1 {
+		*rows = (*rows)[:len(*rows)-1]
+		*truncated = true
+		*nextCursor = ui.ListCursorFor(offset + len(*rows))
+		res = render()
+	}
+	return res
 }
 
 // 9. ci_log
@@ -461,7 +564,10 @@ func isSafeCIURISegment(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
 	}
-	return !strings.ContainsAny(s, "/\\?#\r\n\x00")
+	// '%' too: "%2e%2e%2f" is "../" once the daemon decodes the path. The
+	// daemon refuses that traversal itself, but this guard is the client's
+	// own line and should not lean on it; no run or job id holds a '%'.
+	return !strings.ContainsAny(s, "/\\?#%\r\n\x00")
 }
 
 // loadMCPAttachments confines attachment file reads in `grain mcp` to regular

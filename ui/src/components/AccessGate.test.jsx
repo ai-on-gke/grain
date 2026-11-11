@@ -96,6 +96,20 @@ describe("AccessGate", () => {
     );
     expect(screen.queryByRole("button", { name: "Go" })).toBeNull();
   });
+
+  it("moves a refused control's margin onto its wrapper, not both", () => {
+    render(
+      withAccess(
+        viewerConfig,
+        <AccessGate scope="tasks:write" wrapperStyle={{ marginTop: -8 }}>
+          <Button sx={{ mt: -1 }}>Go</Button>
+        </AccessGate>,
+      ),
+    );
+    const button = screen.getByRole("button", { name: "Go" });
+    expect(button.closest(".access-gate").style.marginTop).toBe("-8px");
+    expect(button.style.margin).toBe("0px");
+  });
 });
 
 describe("task actions for a signed-in role", () => {

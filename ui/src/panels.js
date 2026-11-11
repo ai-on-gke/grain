@@ -46,6 +46,7 @@ import { DAY, RANGES, normalizeView } from "./gantt.js";
 import {
   DEFAULT_REPORT_WINDOW,
   hasAbsoluteSpan,
+  reportPath,
   reportScope,
   reportWindow,
 } from "./report.js";
@@ -89,9 +90,7 @@ export const PANEL_KINDS = [
   { id: "metrics", label: "Throughput", view: "metrics" },
 ];
 
-export const PANEL_KINDS_BY_ID = Object.fromEntries(
-  PANEL_KINDS.map((k) => [k.id, k]),
-);
+const PANEL_KINDS_BY_ID = Object.fromEntries(PANEL_KINDS.map((k) => [k.id, k]));
 
 // PANEL_WIDTHS is how much of a row a panel takes. Three widths rather
 // than a column count or a pixel size: a dashboard is read on a laptop
@@ -130,7 +129,7 @@ const METRICS_RANGE_DAYS = Object.fromEntries(
 // DEFAULT_METRICS_RANGE is the default every report here shares, so a
 // panel that does not say shows the same week `grain metrics` prints
 // with no flags.
-export const DEFAULT_METRICS_RANGE = DEFAULT_REPORT_WINDOW;
+const DEFAULT_METRICS_RANGE = DEFAULT_REPORT_WINDOW;
 
 // panelRanges is the vocabulary one kind's `range` takes, and null for
 // the kinds that draw no span at all -- the same split model.
@@ -142,7 +141,7 @@ export function panelRanges(kind) {
   return null;
 }
 
-export function panelKindLabel(kind) {
+function panelKindLabel(kind) {
   return PANEL_KINDS_BY_ID[kind]?.label || PANEL_KINDS[0].label;
 }
 
@@ -475,7 +474,7 @@ export function panelPath(panel, fallback) {
 // case panelMetricsWindow does not decide either: an absolute span is
 // the more specific thing to have said, and reportPath sends it in
 // place of a window at both ends of the link.
-export function panelReportNarrowing(panel, fallback) {
+function panelReportNarrowing(panel, fallback) {
   const narrowing = panelNarrowing(panel, fallback);
   const days = METRICS_RANGE_DAYS[panel?.range];
   if (!days || hasAbsoluteSpan(reportScope(narrowing))) return narrowing;
@@ -508,16 +507,35 @@ export function panelReportNarrowing(panel, fallback) {
 // this panel is not narrowed by, and offering to keep that here would
 // file a task to write a query that changes nothing the reader can see.
 // Narrowed to a repo, it is, and the offer is real.
-export function panelUsesNarrowing(panel, narrowing) {
+//
+// `baseline` is the narrowing the dashboard opens on (its board's own
+// query, or the deployment's default). A dashboard already scoped to
+// acme/widgets and then searched for "retry" is still asking the report
+// exactly what it asked before: the repo came from the board, the search
+// is dropped, and a panel whose own `range` overrides any span the
+// toolbar names ignores that too. So the question is whether the report
+// this panel would fetch differs from the one it fetches on the board's
+// own question -- the same reportPath MetricsPanel keys its fetch on --
+// not merely whether the narrowing carries a scope at all (2026-11-08
+// saved-boards walkthrough, task 3612).
+function metricsQuestion(panel, narrowing) {
+  const scope = reportScope(narrowing);
+  return reportPath({ scope, window: panelMetricsWindow(panel, scope) });
+}
+
+export function panelUsesNarrowing(panel, narrowing, baseline = NO_NARROWING) {
   if (panel?.kind !== "metrics") return true;
   const scope = reportScope(narrowing);
-  return Boolean(
+  if (!(
     scope.repos.length ||
     scope.authors.length ||
     scope.within ||
     scope.since ||
-    scope.until,
-  );
+    scope.until
+  )) {
+    return false;
+  }
+  return metricsQuestion(panel, narrowing) !== metricsQuestion(panel, baseline);
 }
 
 // panelView is what a panel is a small copy of -- one of App's own

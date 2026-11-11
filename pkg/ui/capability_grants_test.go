@@ -218,7 +218,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 	}
 	staging := grantTestCap + `#key={"account":"staging","scopes":["all"]}`
 	prod := grantTestCap + `#key={"account":"prod","project":"web","scopes":["all"]}`
-	got := refGrants(detail.Capabilities)
+	got := refGrants(withoutDefaultCIRead(detail.Capabilities))
 	if len(got) != 2 || !contains(got, staging) || !contains(got, prod) {
 		t.Fatalf("grants = %q, want staging and prod, normalized, once each", got)
 	}
@@ -229,7 +229,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 		t.Fatalf("replace: %d %v", code, out)
 	}
 	detail, _ = client.GetTask(ctx, task.ID)
-	got = refGrants(detail.Capabilities)
+	got = refGrants(withoutDefaultCIRead(detail.Capabilities))
 	if len(got) != 2 || contains(got, prod) || !contains(got, grantTestCap+`#key={"account":"prod","project":"api","scopes":["all"]}`) {
 		t.Fatalf("after replace: %q", got)
 	}
@@ -239,7 +239,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 		t.Fatalf("detach: %d %v", code, out)
 	}
 	detail, _ = client.GetTask(ctx, task.ID)
-	if got = refGrants(detail.Capabilities); len(got) != 1 || contains(got, staging) {
+	if got = refGrants(withoutDefaultCIRead(detail.Capabilities)); len(got) != 1 || contains(got, staging) {
 		t.Fatalf("after detach: %q", got)
 	}
 
@@ -296,11 +296,12 @@ func TestCheckCapabilityGrants(t *testing.T) {
 		map[string]any{"grant": "https://capabilities.example.com/retired#old"},
 		map[string]any{"grant": "gcp-key"},
 		map[string]any{"grant": "read-issues"},
+		map[string]any{"grant": "self-debug"},
 	}}, &out)
-	if code != 200 || len(out) != 6 {
+	if code != 200 || len(out) != 7 {
 		t.Fatalf("%d %+v", code, out)
 	}
-	if out[0].Recorded != grantTestCap+`#key={"account":"prod","scopes":["all"]}` || out[0].Error != "" || out[0].Changed {
+	if out[0].Recorded != grantTestCap+`#key={"account":"prod","scopes":["all"]}` || out[0].Error != "" || out[0].Changed || len(out[0].AliasOf) != 0 {
 		t.Errorf("a fresh grant: %+v", out[0])
 	}
 	if !out[1].Changed || out[1].Error != "" {
@@ -312,11 +313,14 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	if !out[3].Unchecked {
 		t.Errorf("a grant of an unattached server: %+v", out[3])
 	}
-	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" {
+	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" || !slices.Equal(out[4].AliasOf, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("retired gcp-key alias: %+v", out[4])
 	}
-	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" {
+	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" || !slices.Equal(out[5].AliasOf, []string{model.GitHubReadIssuesGrant}) {
 		t.Errorf("retired read-issues alias: %+v", out[5])
+	}
+	if out[6].Error != "" || !slices.Equal(out[6].AliasOf, model.SelfDebugGrants()) {
+		t.Errorf("retired self-debug multi-grant alias: %+v", out[6])
 	}
 }
 
@@ -330,7 +334,7 @@ func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask with read-issues alias: %v", err)
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubReadIssuesGrant {
+	if len(withoutDefaultCIRead(task.Capabilities)) != 1 || withoutDefaultCIRead(task.Capabilities)[0] != model.GitHubReadIssuesGrant {
 		t.Fatalf("CreateTask capabilities = %v, want [%s]", task.Capabilities, model.GitHubReadIssuesGrant)
 	}
 	if err := client.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
@@ -340,7 +344,7 @@ func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(afterDetach.Capabilities) != 0 {
+	if len(withoutDefaultCIRead(afterDetach.Capabilities)) != 0 {
 		t.Fatalf("after detach via alias: %v, want empty", afterDetach.Capabilities)
 	}
 	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
@@ -350,7 +354,7 @@ func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(afterAttach.Capabilities) != 1 || afterAttach.Capabilities[0] != model.GitHubReadIssuesGrant {
+	if len(withoutDefaultCIRead(afterAttach.Capabilities)) != 1 || withoutDefaultCIRead(afterAttach.Capabilities)[0] != model.GitHubReadIssuesGrant {
 		t.Fatalf("after attach via alias: %v, want [%s]", afterAttach.Capabilities, model.GitHubReadIssuesGrant)
 	}
 }
@@ -543,6 +547,37 @@ func TestSetCapabilityGrantRefusesAGrantThePolicyDenies(t *testing.T) {
 	code := postJSON(t, ts, "POST", "/api/tasks/"+task.ID+"/capabilities", map[string]any{"capability": grantTestCap + "#viewer", "attach": true}, &out)
 	if msg, _ := out["error"].(string); code != 400 || !strings.Contains(msg, "capability policy denies") {
 		t.Fatalf("attaching a denied grant: %d %v", code, out)
+	}
+}
+
+// The listing for a repository's CI capabilities names no trigger event,
+// since the list grants to every job the repository runs: a method whose
+// own server hands it only to release jobs is not refused there, as it
+// was when the listing judged an event-less run and the picker disabled
+// every release method (2026-11-09 repository walkthrough). A task is
+// still refused it.
+func TestCapabilityMethodsForCIDoNotRefuseAnEventGatedMethod(t *testing.T) {
+	ts, _ := grantTestServer(t)
+	t.Cleanup(model.RegisterCIGrantRule(grantTestCap+"#key", model.CIGrantRule{Events: []string{"release"}, RepoGranted: true}))
+	refusal := func(path string) string {
+		t.Helper()
+		var methods []ui.CapabilityMethod
+		if code := postJSON(t, ts, "GET", path, nil, &methods); code != 200 {
+			t.Fatalf("GET %s: %d", path, code)
+		}
+		for _, m := range methods {
+			if m.Method == "key" {
+				return m.PolicyRefusal
+			}
+		}
+		t.Fatalf("GET %s listed no key method", path)
+		return ""
+	}
+	if got := refusal("/api/capability-methods?repo=acme/widgets&kind=ci"); got != "" {
+		t.Errorf("acme/widgets CI: %q, want the release-only method offered", got)
+	}
+	if got := refusal("/api/capability-methods?repo=acme/widgets&kind=task"); !strings.Contains(got, "CI capability") {
+		t.Errorf("acme/widgets task: %q, want the CI-only refusal", got)
 	}
 }
 

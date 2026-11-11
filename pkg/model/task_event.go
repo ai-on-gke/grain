@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -73,13 +74,27 @@ const (
 	// is their reason for denying one.
 	TaskEventAccessGranted TaskEventKind = "access-granted"
 	TaskEventAccessDenied  TaskEventKind = "access-denied"
+	// TaskEventGateOverridden records an operator's merge:force override of
+	// named merge gates, with Reason = the operator's typed reason and
+	// Detail = the overridden gates and commit SHA.
+	TaskEventGateOverridden TaskEventKind = "gate-overridden"
+	// TaskEventGrantAttached and TaskEventGrantDetached record one grant
+	// given to or taken from a task after it was filed: a capability, or
+	// a repository read or write (unified-grants Q5). Detail is the
+	// grant's canonical string, Grant.Key -- its reference, then "=" and
+	// its normalized with: -- so a repo#write names its repo and base.
+	TaskEventGrantAttached TaskEventKind = "grant-attached"
+	TaskEventGrantDetached TaskEventKind = "grant-detached"
 )
 
 // TransitionReopened is the timeline's name for a reopen. It is not one
 // of StateOf's answers -- a reopened task is in whatever state its record
 // implies -- but the moment it came back is worth a step of its own, the
 // same way the close it undid is.
-const TransitionReopened State = "reopened"
+const (
+	TransitionReopened       State = "reopened"
+	TransitionGateOverridden State = "gate_overridden"
+)
 
 // TaskEvent is one close or reopen of a task, a change to its
 // auto-merge, or a note of who took one of the actions above.
@@ -196,6 +211,36 @@ func recordCloseInTx(ctx context.Context, tx *sql.Tx, taskID string, before time
 // TaskEvents is one task's events, oldest first.
 func (s *Store) TaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error) {
 	return s.taskEvents(ctx, "WHERE `task_id` = ?", taskID)
+}
+
+// TaskEventsLatest is at most the newest limit events on taskID, oldest first.
+func (s *Store) TaskEventsLatest(ctx context.Context, taskID string, limit int) ([]TaskEvent, error) {
+	if limit <= 0 {
+		return s.TaskEvents(ctx, taskID)
+	}
+	var out []TaskEvent
+	err := each(ctx, s.db,
+		"SELECT `id`,`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`,"+
+			"`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source` "+
+			"FROM `task_event` WHERE `task_id` = ? ORDER BY `at` DESC, `id` DESC LIMIT ?", []any{taskID, limit},
+		func(rows *sql.Rows) error {
+			var e TaskEvent
+			var kind, actorKind, actorSource, behalfSource string
+			var behalfKind, behalfID sql.NullString
+			if err := rows.Scan(&e.ID, &e.TaskID, &kind, &e.At, &actorKind, &e.By.ID,
+				&e.Reason, &e.Detail, &actorSource, &behalfKind, &behalfID, &behalfSource); err != nil {
+				return err
+			}
+			e.Kind, e.By.Kind, e.By.Source = TaskEventKind(kind), PrincipalKind(actorKind), AuthSource(actorSource)
+			e.OnBehalfOf = principalFrom(behalfKind, behalfID, behalfSource)
+			out = append(out, e)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("reading task events: %w", err)
+	}
+	slices.Reverse(out)
+	return out, nil
 }
 
 // TaskEventsSince is every task's events at or after since, oldest first.
@@ -343,6 +388,8 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionHumanReviewRequested
 		case TaskEventHumanReviewReleased:
 			state = TransitionHumanReviewReleased
+		case TaskEventGateOverridden:
+			state = TransitionGateOverridden
 		default:
 			// A note about an action, not a step (TaskEventSubmitted, ...).
 			continue

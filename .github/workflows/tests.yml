@@ -178,8 +178,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-ng/node_modules
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -199,7 +200,7 @@ jobs:
         run: make fmt
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -256,8 +257,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-ng/node_modules
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -317,7 +319,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -543,8 +545,8 @@ jobs:
         run: |
           set +e
           GRAIN_GOTEST_LOG=/tmp/go-unit.log ./scripts/run-go-tests.sh go test -race -timeout 25m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
-            ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/image-vulns/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... ./cmd/reviewed-merge/... \
+            ./docs/releases/... ./tests/agentdcompat/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
             ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
@@ -554,11 +556,11 @@ jobs:
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
-            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
-            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
+            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/reviewedmerge/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
-            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
+            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... ./pkg/usage/... \
             ./pkg/version/... ./pkg/webauth/... ./tests/bench/... | tee /tmp/go-unit.out
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
@@ -751,7 +753,7 @@ jobs:
       - name: Test
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/registry/store/...
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/hub/store/...
 
   run-host:
     name: run host
@@ -766,6 +768,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # Every release tag: the host agent compatibility step builds
+          # grain-agentd from each released tag.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Cache Go modules and build cache
@@ -796,6 +801,15 @@ jobs:
         env:
           GRAIN_RUNHOST_DOCKER: "1"
         run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys|TestRunHostAgentCannotReachAHostDirectorySandbox)$' -v ./pkg/cli/
+
+      # The host agent contract (design/design/agentd-stable-contract.design.md,
+      # "Guard rails"): this tree's daemon side against grain-agentd built
+      # from the oldest release still accepted and the newest releases after
+      # it -- start, detached start, reattach after a daemon restart,
+      # cancel, stage, listen and drain. A change that would strand an
+      # installed host agent fails here rather than on an operator's machine.
+      - name: Released host agents still work with this daemon
+        run: ./scripts/agentd-compat.sh -timeout 10m
 
   host-script-container:
     name: host-script container
@@ -873,13 +887,14 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-ng/node_modules
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -891,8 +906,12 @@ jobs:
         working-directory: ui
         run: npm test -- --maxWorkers=4
 
+      - name: Lint and test the new (Angular) frontend
+        working-directory: ui-ng
+        run: npm ci && npm run lint && npm test -- --maxWorkers=4
+
       - name: Test registry frontend
-        working-directory: ui-registry
+        working-directory: ui-hub
         run: npm ci && npm test -- --maxWorkers=4
 
   ui-e2e:
@@ -943,8 +962,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-ng/node_modules
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -964,7 +984,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -1006,14 +1026,49 @@ jobs:
 
       - name: Install shellcheck and actionlint
         run: |
+          set -euo pipefail
           # Pin ShellCheck to v0.9.0 (matching Debian Bookworm in Granulefile) so
           # newer ShellCheck releases on ubuntu-latest (0.11.0+) do not fail on
-          # unmodified scripts.
-          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.x86_64.tar.xz \
-            | sudo tar -xJ --strip-components=1 -C /usr/local/bin shellcheck-v0.9.0/shellcheck
+          # unmodified scripts. Fall back to the digest-pinned upstream container
+          # image when GitHub Releases downloads return HTTP 504.
+          if curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+            https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.x86_64.tar.xz \
+            -o /tmp/shellcheck.tar.xz; then
+            sudo tar -xJf /tmp/shellcheck.tar.xz --strip-components=1 -C /usr/local/bin shellcheck-v0.9.0/shellcheck
+            rm -f /tmp/shellcheck.tar.xz
+          else
+            rm -f /tmp/shellcheck.tar.xz
+            sc_image="docker.io/koalaman/shellcheck:v0.9.0@sha256:f35e8987b02760d4e76fc99a68ad5c42cc10bb32f3dd2143a3cf92f1e5446a45"
+            docker pull "$sc_image"
+            cid="$(docker create "$sc_image")"
+            docker cp "$cid:/bin/shellcheck" /tmp/shellcheck
+            docker rm "$cid" >/dev/null
+            echo "7087178d54de6652b404c306233264463cb9e7a9afeb259bb663cc4dbfd64149  /tmp/shellcheck" | sha256sum -c -
+            sudo install -m 0755 /tmp/shellcheck /usr/local/bin/shellcheck
+            rm -f /tmp/shellcheck
+          fi
           if ! command -v actionlint >/dev/null 2>&1; then
-            curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz \
-              | sudo tar -xz -C /usr/local/bin actionlint
+            if curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+              https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz \
+              -o /tmp/actionlint.tar.gz; then
+              sudo tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint
+              rm -f /tmp/actionlint.tar.gz
+            elif command -v go >/dev/null 2>&1; then
+              rm -f /tmp/actionlint.tar.gz
+              GOBIN=/tmp/actionlint-bin go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.4
+              sudo install -m 0755 /tmp/actionlint-bin/actionlint /usr/local/bin/actionlint
+              rm -rf /tmp/actionlint-bin
+            else
+              rm -f /tmp/actionlint.tar.gz
+              al_image="docker.io/rhysd/actionlint:1.7.4@sha256:82244e1db1c60d82c7792180a48dd0bcb838370bb589d53ff132503fc9485868"
+              docker pull "$al_image"
+              cid="$(docker create "$al_image")"
+              docker cp "$cid:/usr/local/bin/actionlint" /tmp/actionlint
+              docker rm "$cid" >/dev/null
+              echo "ccecc05e701f9f6453b412f074a6ebd99e0556845068c55a226ce5a93acbde86  /tmp/actionlint" | sha256sum -c -
+              sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+              rm -f /tmp/actionlint
+            fi
           fi
           /usr/local/bin/shellcheck --version
           actionlint -version
@@ -1120,8 +1175,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-ng/node_modules
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -1131,7 +1187,7 @@ jobs:
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
           git config --global user.email "grain-ci@example.com"
-          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Configure authenticated Docker Hub pulls
         env:

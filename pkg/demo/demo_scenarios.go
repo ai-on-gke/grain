@@ -16,7 +16,6 @@ package demo
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -91,14 +90,3 @@ func demoAgentPause(now time.Time) *orchestrator.Pause {
 
 // demoPausedConnection is the seeded connection demoAgentPause pauses.
 const demoPausedConnection = "gemini-pro"
-
-// demoCapabilityChecks makes Settings offer "Test credential" for every
-// capability that has a live check, and answers each press with a
-// refusal: there is no credential behind a demo and nothing to call. A
-// check's answer comes from the service that issued the credential, so a
-// test that wants a particular verdict stubs that answer in the browser.
-type demoCapabilityChecks struct{}
-
-func (demoCapabilityChecks) CheckCapability(_ context.Context, id string) (ui.CapabilityCheckResult, error) {
-	return ui.CapabilityCheckResult{}, fmt.Errorf("grain demo holds no %s credential to test: nothing here is real", id)
-}

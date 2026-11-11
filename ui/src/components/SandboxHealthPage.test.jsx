@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import SandboxHealthPage, {
   CI_SANDBOXES_STORAGE_KEY,
   SandboxClusterFree,
+  SandboxOvercommitStatus,
   appendHistory,
   ciSandboxesSummary,
   runningFor,
@@ -31,6 +32,8 @@ import SandboxHealthPage, {
   StaleSandboxImageAlerts,
 } from "./SandboxHealthPage.jsx";
 import api from "../api.js";
+import { formatDateTime } from "../time.js";
+import { TimeZoneProvider } from "../TimeZoneContext.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -2095,6 +2098,41 @@ describe("SandboxHealthPage", () => {
   });
 });
 
+describe("SandboxOvercommitStatus", () => {
+  // An adjustment is history, often weeks old: the controller can hold a
+  // factor for as long as the host stays calm. It used to be printed as
+  // the browser's clock time alone ("9:20:00 AM"), which on another day
+  // read as earlier today, and in a zone other than the deployment's.
+  it("dates each adjustment, in the deployment's zone", () => {
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <SandboxOvercommitStatus
+          overcommit={{
+            mode: "auto",
+            cpuOvercommit: 2.75,
+            adjustments: [
+              {
+                at: "2026-10-24T09:20:00Z",
+                dimension: "cpu",
+                from: 2.5,
+                to: 2.75,
+                reason: "calm",
+              },
+            ],
+          }}
+        />
+      </TimeZoneProvider>,
+    );
+    const adjustments = screen.getByTestId("overcommit-adjustments");
+    const when = formatDateTime("2026-10-24T09:20:00Z", "Asia/Tokyo");
+    expect(when).toMatch(/2026/);
+    expect(adjustments).toHaveTextContent(`(${when})`);
+    expect(adjustments).not.toHaveTextContent(
+      `(${new Date("2026-10-24T09:20:00Z").toLocaleTimeString()})`,
+    );
+  });
+});
+
 describe("appendHistory", () => {
   const empty = { host: { cpu: [], mem: [], disks: {} }, sandboxes: {} };
 
@@ -2706,5 +2744,117 @@ describe("StaleSandboxImageAlerts", () => {
     expect(container).toBeEmptyDOMElement();
     render(<StaleSandboxImageAlerts />);
     expect(screen.queryByTestId("stale-sandbox-image")).toBeNull();
+  });
+});
+
+describe("deployment time zone formatting on SandboxHealthPage", () => {
+  afterEach(() => api.mockReset());
+
+  it("formats overcommit OOM, standing sandboxes, host credentials, and live row tooltips in the deployment time zone", async () => {
+    const oomAt = "2026-11-07T20:15:00Z";
+    const standingStarted = "2026-11-07T20:00:00Z";
+    const standingNext = "2026-11-08T21:30:00Z";
+    const credsSince = "2026-11-07T19:00:00Z";
+    const liveStarted = "2026-11-07T21:45:00Z";
+
+    api.mockResolvedValue({
+      enabled: true,
+      hostCredentials: {
+        detail: "host credentials expired: renew on build-1.example.test",
+        since: credsSince,
+        runs: 2,
+      },
+      budget: {
+        mode: "auto",
+        cpuOvercommit: 2.0,
+        memoryOvercommit: 1.2,
+        overcommit: {
+          mode: "auto",
+          cpuOvercommit: 2.0,
+          memoryOvercommit: 1.2,
+          oomKills: 1,
+          lastOomAt: oomAt,
+        },
+      },
+      standingSandboxes: [
+        {
+          name: "preview-worker",
+          sandbox: "s-preview",
+          image: "ghcr.io/acme/worker:latest",
+          state: "backoff",
+          failed: true,
+          failures: 2,
+          startedAt: standingStarted,
+          nextAttempt: standingNext,
+          restarts: 2,
+        },
+      ],
+      sandboxes: [
+        {
+          sandbox: "agent-run-7",
+          name: "agent-run-7",
+          kind: "agent",
+          backend: "docker",
+          status: "running",
+          startedAt: liveStarted,
+          cpus: 2,
+          memoryTotalMB: 4096,
+        },
+      ],
+    });
+
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <SandboxHealthPage showError={() => {}} />
+      </TimeZoneProvider>,
+    );
+
+    const oc = await screen.findByTestId("sandbox-overcommit-status");
+    expect(oc).toHaveTextContent(`last ${formatDateTime(oomAt, "Asia/Tokyo")}`);
+
+    const standing = screen.getByTestId("standing-sandboxes");
+    expect(standing).toHaveTextContent(
+      formatDateTime(standingStarted, "Asia/Tokyo"),
+    );
+    expect(screen.getByTestId("standing-next-attempt")).toHaveTextContent(
+      `next attempt ${formatDateTime(standingNext, "Asia/Tokyo")}`,
+    );
+
+    expect(screen.getByText(/host credentials expired/).textContent).toContain(
+      `since ${formatDateTime(credsSince, "Asia/Tokyo")}.`,
+    );
+
+    const liveRow = document.getElementById("live-sandbox-agent-run-7");
+    expect(liveRow).not.toBeNull();
+    const cellsWithTitle = [...liveRow.querySelectorAll("td[title]")].map(
+      (el) => el.getAttribute("title"),
+    );
+    expect(cellsWithTitle).toContain(
+      `Started ${formatDateTime(liveStarted, "Asia/Tokyo")}`,
+    );
+  });
+
+  it("renders targetRepoHostWarnings alerts with a link to Repos", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      targetRepoHostWarnings: [
+        {
+          repo: "experimental/grain",
+          resolvesTo: "github.com",
+          candidates: ["git.forge.example/experimental/grain"],
+          message:
+            "this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+        },
+      ],
+    });
+    render(<SandboxHealthPage showError={() => {}} />);
+    const alert = await screen.findByTestId("repo-host-mismatch-alert");
+    expect(alert).toHaveTextContent(
+      "experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+    );
+    expect(within(alert).getByRole("link", { name: "Repos" })).toHaveAttribute(
+      "href",
+      "/repos",
+    );
   });
 });

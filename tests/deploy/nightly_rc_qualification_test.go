@@ -23,10 +23,19 @@ package deploy
 // verdict job covers the whole Stage 1 table.
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -36,7 +45,7 @@ import (
 var stage1Jobs = []string{
 	"go-long", "staterepo-soak", "loadtest", "scalability", "merge-stress",
 	"long-term-test", "long-sim", "postgres-stress", "tunnel-stress",
-	"ui-e2e-long", "installer-variants", "vulns", "cmd-grain-stress", "upgrade-test",
+	"ui-e2e-long", "installer-variants", "vulns", "image-vulns", "cmd-grain-stress", "upgrade-test",
 }
 
 type nightlyWorkflowFile struct {
@@ -55,12 +64,20 @@ type nightlyWorkflowFile struct {
 		} `yaml:"workflow_dispatch"`
 	} `yaml:"on"`
 	Jobs map[string]struct {
-		If          string   `yaml:"if"`
-		Needs       []string `yaml:"needs"`
+		If          string            `yaml:"if"`
+		Needs       []string          `yaml:"needs"`
+		Permissions map[string]string `yaml:"permissions"`
+		Outputs     map[string]string `yaml:"outputs"`
 		Concurrency struct {
 			Group            string `yaml:"group"`
 			CancelInProgress string `yaml:"cancel-in-progress"`
 		} `yaml:"concurrency"`
+		Steps []struct {
+			Name string            `yaml:"name"`
+			ID   string            `yaml:"id"`
+			Env  map[string]string `yaml:"env"`
+			Run  string            `yaml:"run"`
+		} `yaml:"steps"`
 	} `yaml:"jobs"`
 }
 
@@ -133,20 +150,38 @@ func TestNightlyStartsOnEveryReleaseCandidateTagAndNoMarker(t *testing.T) {
 	}
 }
 
-// A dispatch with jobs=<id> -- the train's flake retry -- runs that job
-// and the verdict, and nothing else; any other event runs everything.
+// A dispatch with jobs=<id> -- the train's flake retry -- runs idle-gate,
+// that job and the verdict, and nothing else; an rc tag runs everything;
+// and a scheduled run idle-gate turns off skips every job, stage-1
+// included, so the no-op run is green rather than a red Stage 1 that grain
+// would file a repair for (pkg/orchestrator/stage1repair.go).
 func TestANightlyDispatchNamingOneJobRunsOnlyThatJob(t *testing.T) {
 	wf := parseNightly(t)
+	if _, ok := wf.Jobs["idle-gate"]; !ok {
+		t.Fatalf("nightly.yml has no idle-gate job")
+	}
 	for id, job := range wf.Jobs {
-		if id == "stage-1" {
-			if job.If != "always()" {
-				t.Errorf("stage-1 if = %q, want always() so it reports on failed and skipped jobs too", job.If)
+		switch id {
+		case "idle-gate":
+			if job.If != "" || len(job.Needs) != 0 {
+				t.Errorf("idle-gate if = %q, needs = %v; want neither, so every event evaluates the gate", job.If, job.Needs)
 			}
-			continue
-		}
-		want := "github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), '," + id + ",')"
-		if job.If != want {
-			t.Errorf("job %s if = %q, want %q so a dispatch naming other jobs skips it", id, job.If, want)
+			if job.Outputs["run"] != "${{ steps.gate.outputs.run }}" {
+				t.Errorf("idle-gate outputs.run = %q, want ${{ steps.gate.outputs.run }}", job.Outputs["run"])
+			}
+		case "stage-1":
+			const want = "always() && needs.idle-gate.outputs.run == 'true'"
+			if job.If != want {
+				t.Errorf("stage-1 if = %q, want %q: it reports on failed and skipped jobs, and skips (not fails) when idle-gate turns a scheduled run off", job.If, want)
+			}
+		default:
+			if !slices.Equal(job.Needs, []string{"idle-gate"}) {
+				t.Errorf("job %s needs = %v, want [idle-gate]", id, job.Needs)
+			}
+			want := "needs.idle-gate.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), '," + id + ",'))"
+			if job.If != want {
+				t.Errorf("job %s if = %q, want %q so idle-gate and a dispatch naming other jobs skip it", id, job.If, want)
+			}
 		}
 	}
 }
@@ -177,10 +212,10 @@ func TestTheStage1VerdictCoversEveryRequiredJob(t *testing.T) {
 	}
 	got := slices.Clone(verdict.Needs)
 	slices.Sort(got)
-	want := slices.Clone(stage1Jobs)
+	want := append([]string{"idle-gate"}, stage1Jobs...)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("stage-1 needs %v, want the Stage 1 table's %v", got, want)
+		t.Errorf("stage-1 needs %v, want idle-gate and the Stage 1 table's %v", got, want)
 	}
 	for _, id := range stage1Jobs {
 		if _, ok := wf.Jobs[id]; !ok {
@@ -193,6 +228,122 @@ func TestTheStage1VerdictCoversEveryRequiredJob(t *testing.T) {
 		if !strings.Contains(step, want) {
 			t.Errorf("stage-1 does not contain %q", want)
 		}
+	}
+
+	// Run stage-1's script: idle-gate in NEEDS is neither judged nor able
+	// to mask a skipped Stage 1 job.
+	if len(verdict.Steps) != 1 {
+		t.Fatalf("stage-1 has %d steps, want 1", len(verdict.Steps))
+	}
+	runStage1 := func(results map[string]string, selected string) (string, error) {
+		needs := map[string]map[string]string{"idle-gate": {"result": "success"}}
+		for id, r := range results {
+			needs[id] = map[string]string{"result": r}
+		}
+		b, _ := json.Marshal(needs)
+		cmd := exec.Command("bash", "-c", verdict.Steps[0].Run)
+		cmd.Env = append(os.Environ(), "NEEDS="+string(b), "SELECTED="+selected)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	green, retry := map[string]string{}, map[string]string{}
+	for _, id := range stage1Jobs {
+		green[id], retry[id] = "success", "skipped"
+	}
+	retry["upgrade-test"] = "success"
+	if out, err := runStage1(green, ""); err != nil || !strings.Contains(out, "judged "+strconv.Itoa(len(stage1Jobs))+" Stage 1 job(s)") {
+		t.Errorf("stage-1 on an all-green run: %v\n%s", err, out)
+	}
+	if out, err := runStage1(retry, "upgrade-test"); err != nil || !strings.Contains(out, "judged 1 Stage 1 job(s)") {
+		t.Errorf("stage-1 on a one-job retry: %v\n%s", err, out)
+	}
+	if out, err := runStage1(retry, ""); err == nil {
+		t.Errorf("stage-1 passed a full run with skipped Stage 1 jobs:\n%s", out)
+	}
+}
+
+// idle-gate turns a scheduled run off only when a vX.Y.Z-rc.N run of
+// nightly.yml concluded (not cancelled) in the last 24h, never a tag push
+// or a dispatch, and fails open when the Actions API cannot be read.
+func TestNightlyIdleGateSkipsAScheduledRunOnlyAfterARecentRCStage1(t *testing.T) {
+	wf := parseNightly(t)
+	gate, ok := wf.Jobs["idle-gate"]
+	if !ok {
+		t.Fatalf("nightly.yml has no idle-gate job")
+	}
+	if len(gate.Permissions) != 1 || gate.Permissions["actions"] != "read" {
+		t.Errorf("idle-gate permissions = %v, want only actions: read", gate.Permissions)
+	}
+	if len(gate.Steps) != 1 || gate.Steps[0].ID != "gate" {
+		t.Fatalf("idle-gate wants one step with id gate, has %+v", gate.Steps)
+	}
+	step := gate.Steps[0]
+	if strings.Contains(step.Run, "${{") {
+		t.Errorf("idle-gate expands ${{ ... }} inside run:; pass context through env:")
+	}
+
+	now := time.Date(2026, 11, 11, 2, 11, 0, 0, time.UTC)
+	type apiRun struct {
+		ID         int64  `json:"id"`
+		HeadBranch string `json:"head_branch"`
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion,omitempty"`
+		UpdatedAt  string `json:"updated_at,omitempty"`
+	}
+	at := func(d time.Duration) string { return now.Add(-d).Format(time.RFC3339) }
+	gateSays := func(t *testing.T, event string, status int, runs []apiRun) (string, int32) {
+		t.Helper()
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			if r.URL.Path != "/repos/acme/widgets/actions/workflows/nightly.yml/runs" || r.Header.Get("Authorization") != "Bearer test-token" {
+				http.NotFound(w, r)
+				return
+			}
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow_runs": runs})
+		}))
+		defer srv.Close()
+		out := filepath.Join(t.TempDir(), "github_output")
+		cmd := exec.Command("bash", "-c", step.Run)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GITHUB_OUTPUT=" + out, "EVENT_NAME=" + event,
+			"GITHUB_TOKEN=test-token", "GITHUB_REPOSITORY=acme/widgets", "GITHUB_API_URL=" + srv.URL,
+			"IDLE_GATE_NOW_EPOCH=" + strconv.FormatInt(now.Unix(), 10)}
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("idle-gate failed: %v\n%s", err, b)
+		}
+		b, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(b)), hits.Load()
+	}
+
+	for _, event := range []string{"push", "workflow_dispatch"} {
+		if got, hits := gateSays(t, event, http.StatusOK, nil); got != "run=true" || hits != 0 {
+			t.Errorf("%s: %q after %d API calls, want run=true without asking", event, got, hits)
+		}
+	}
+	if got, _ := gateSays(t, "schedule", http.StatusOK, []apiRun{
+		{ID: 1, HeadBranch: "v3.2.0-rc.4", Status: "completed", Conclusion: "success", UpdatedAt: at(4 * time.Hour)},
+	}); got != "run=false" {
+		t.Errorf("schedule after a green rc 4h ago: %q, want run=false", got)
+	}
+	if got, _ := gateSays(t, "schedule", http.StatusOK, []apiRun{
+		{ID: 2, HeadBranch: "v3.2.0-rc.5", Status: "completed", Conclusion: "failure", UpdatedAt: at(23 * time.Hour)},
+	}); got != "run=false" {
+		t.Errorf("schedule after a red rc 23h ago: %q, want run=false", got)
+	}
+	if got, _ := gateSays(t, "schedule", http.StatusOK, []apiRun{
+		{ID: 3, HeadBranch: "v3.2.0-rc.3", Status: "completed", Conclusion: "success", UpdatedAt: at(25 * time.Hour)},
+		{ID: 4, HeadBranch: "main", Status: "completed", Conclusion: "success", UpdatedAt: at(2 * time.Hour)},
+		{ID: 5, HeadBranch: "v3.2.0-rc.4-discarded", Status: "completed", Conclusion: "success", UpdatedAt: at(time.Hour)},
+		{ID: 6, HeadBranch: "v3.2.0-rc.6", Status: "completed", Conclusion: "cancelled", UpdatedAt: at(time.Hour)},
+	}); got != "run=true" {
+		t.Errorf("schedule with no rc Stage 1 concluding in 24h: %q, want run=true", got)
+	}
+	if got, _ := gateSays(t, "schedule", http.StatusInternalServerError, nil); got != "run=true" {
+		t.Errorf("schedule when the Actions API fails: %q, want run=true (fail open)", got)
 	}
 }
 

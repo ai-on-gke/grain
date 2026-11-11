@@ -273,8 +273,8 @@ func TestTheMemoryAgentScheduleFilesATaskWithNoTargetAndTheStateRepoToRead(t *te
 	for _, g := range task.Grants {
 		held[g.Capability] = true
 	}
-	if !held["api:memory"] || !held["api:self-debug"] || !held[model.GrainSourceGrant] {
-		t.Errorf("grants = %v, want api:memory (to write anything at all) and what self-debug became", task.Grants)
+	if !held[model.APIRef("memory")] || !held[model.APIRef("self-debug")] || !held[model.GrainSourceGrant] {
+		t.Errorf("grants = %v, want %s (to write anything at all) and what self-debug became", task.Grants, model.APIRef("memory"))
 	}
 	if task.Body == "" || task.Title == "" {
 		t.Error("the filed task carries no prompt; the whole of the memory agent is what it is told")
@@ -526,12 +526,12 @@ func TestSystemSchedulesSeedsTheReleaseNotesJobWeekly(t *testing.T) {
 	for _, g := range tmpl.Grants {
 		granted[g.Capability] = true
 	}
-	for _, want := range []string{"api:release-notes", "api:self-debug", model.GrainSourceGrant} {
+	for _, want := range []string{model.APIRef("release-notes"), model.APIRef("self-debug"), model.GrainSourceGrant} {
 		if !granted[want] {
 			t.Errorf("the release-notes template does not hold %q; its grants are %+v", want, tmpl.Grants)
 		}
 	}
-	if granted["memory"] || granted["api:memory"] {
+	if granted["memory"] || granted["api:memory"] || granted[model.APIRef("memory")] {
 		t.Error("the release-notes job holds the memory grant: a week's report must not be " +
 			"filable as a standing instruction to every run this deployment dispatches")
 	}
@@ -598,7 +598,7 @@ func TestSystemSchedulesSeedsTheInfraReviewNightly(t *testing.T) {
 	}
 	// It reads the record, the measurements and grain's own source
 	// through one grant, and the deployment's CI runs through the other.
-	for _, want := range []string{"api:self-debug", model.GrainSourceGrant, model.GrainCIGrant} {
+	for _, want := range []string{model.APIRef("self-debug"), model.GrainSourceGrant, model.GrainCIGrant} {
 		if !granted[want] {
 			t.Errorf("the infrastructure review template does not hold %q; its grants are %+v",
 				want, tmpl.Grants)
@@ -637,9 +637,9 @@ func TestSystemScheduleSeedsAnEveryNMinutesCadence(t *testing.T) {
 	deps := systemScheduleDeps(store)
 	now := time.Date(2026, 3, 1, 16, 7, 0, 0, time.UTC)
 	tmpl := model.SystemTemplates(stateRepo)[0]
-	every := model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 30}
+	every := model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 90}
 	if err := every.Validate(); err != nil {
-		t.Fatalf("a thirty-minute cadence does not validate: %v", err)
+		t.Fatalf("a ninety-minute cadence does not validate: %v", err)
 	}
 
 	if err := seedSystemSchedule(ctx, deps, tmpl, every, now, time.UTC); err != nil {
@@ -652,8 +652,8 @@ func TestSystemScheduleSeedsAnEveryNMinutesCadence(t *testing.T) {
 	if sched.Recurrence != every {
 		t.Errorf("cadence = %+v, want %+v", sched.Recurrence, every)
 	}
-	if want := now.Add(30 * time.Minute); !sched.NextRunAt.Equal(want) {
-		t.Errorf("first firing %s, want %s: thirty minutes after the seeding cycle", sched.NextRunAt, want)
+	if want := now.Add(90 * time.Minute); !sched.NextRunAt.Equal(want) {
+		t.Errorf("first firing %s, want %s: ninety minutes after the seeding cycle", sched.NextRunAt, want)
 	}
 
 	// A later cycle's resync leaves the cadence alone, whatever the
@@ -664,5 +664,83 @@ func TestSystemScheduleSeedsAnEveryNMinutesCadence(t *testing.T) {
 	}
 	if again, err := store.GetSchedule(ctx, tmpl.ID); err != nil || again.Recurrence != every {
 		t.Errorf("after a resync the cadence is %+v (%v), want still %+v", again.Recurrence, err, every)
+	}
+}
+
+// A cadence shorter than the first-firing grace is not fired inside it
+// either: its first firing is the first occurrence the grace has passed.
+func TestSystemScheduleSeedsAShortCadencePastTheFirstFiringGrace(t *testing.T) {
+	t.Parallel()
+	store, ctx := recreateStore(t)
+	now := time.Date(2026, 3, 1, 16, 7, 0, 0, time.UTC)
+	tmpl := model.SystemTemplates(stateRepo)[0]
+	every := model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 25}
+
+	if err := seedSystemSchedule(ctx, systemScheduleDeps(store), tmpl, every, now, time.UTC); err != nil {
+		t.Fatalf("seedSystemSchedule: %v", err)
+	}
+	sched, err := store.GetSchedule(ctx, tmpl.ID)
+	if err != nil || sched == nil {
+		t.Fatalf("GetSchedule: %v %v", sched, err)
+	}
+	if want := now.Add(75 * time.Minute); !sched.NextRunAt.Equal(want) {
+		t.Errorf("first firing %s, want %s: the first 25-minute occurrence an hour after seeding", sched.NextRunAt, want)
+	}
+}
+
+// A deployment -- or a test's daemon -- that seeds its system schedules
+// seconds before the quiet hour does not fire them at it. On a CI run
+// that crossed 03:00 UTC the memory agent's task took the only worker
+// slot of TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys'
+// daemon, and the test's own task waited behind it until it timed out.
+// Here the clock is 02:59:50 when the schedules are seeded and runs on
+// through the cycles of the next hour: none of them files a task.
+func TestNoSystemScheduleFiresInTheHourAfterItIsSeeded(t *testing.T) {
+	t.Parallel()
+	store, ctx := recreateStore(t)
+	deps := systemScheduleDeps(store)
+	// Longer than any test that starts a daemon may run.
+	const window = time.Hour
+	// A Monday, so the weekly jobs' quiet hour comes round too.
+	seeded := time.Date(2026, 11, 9, 2, 59, 50, 0, time.UTC)
+	if seeded.Weekday() != time.Monday {
+		t.Fatalf("%s is a %s, want a Monday", seeded, seeded.Weekday())
+	}
+	for now := seeded; now.Before(seeded.Add(window)); now = now.Add(10 * time.Second) {
+		for _, r := range Reconcilers() {
+			if r.Name != "system-schedules" && r.Name != "schedule" {
+				continue
+			}
+			if err := r.Reconcile(ctx, deps, now); err != nil {
+				t.Fatalf("%s at %s: %v", r.Name, now.Format(time.RFC3339), err)
+			}
+		}
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		t.Errorf("a system schedule seeded at %s filed task %s (%q) within the hour",
+			seeded.Format(time.RFC3339), task.ID, task.Title)
+	}
+	scheds, err := store.ListSchedules(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scheds) == 0 {
+		t.Fatal("nothing was seeded, so nothing here could have fired")
+	}
+	for _, sched := range scheds {
+		if sched.NextRunAt.Before(seeded.Add(window)) {
+			t.Errorf("schedule %s first comes due %s, inside the hour after it was seeded at %s",
+				sched.ID, sched.NextRunAt.Format(time.RFC3339), seeded.Format(time.RFC3339))
+		}
+		if sched.Recurrence.Kind == model.RecurrenceDaily {
+			if want := seeded.Add(24*time.Hour + 10*time.Second); !sched.NextRunAt.Equal(want) {
+				t.Errorf("daily schedule %s first comes due %s, want the next day's quiet hour %s",
+					sched.ID, sched.NextRunAt.Format(time.RFC3339), want.Format(time.RFC3339))
+			}
+		}
 	}
 }

@@ -38,11 +38,16 @@ test.describe("the upgrade image chooser", () => {
       const branch = page.getByLabel("Branch");
       const image = page.getByLabel("Image (optional)");
       await expect(image).toBeVisible();
+      await expect(page.getByTestId("upgrade-image-source")).toHaveCount(0);
+      await expect(
+        page.getByText(/Pulls the image CI published for the branch below/),
+      ).toBeVisible();
       await branch.fill("main");
-      // The ref an upgrade installs; the line may also name the release
-      // repository it loads from in a code element of its own.
       const willPull = page.locator(".upgrade-image-ref code.upgrade-will-ref");
       await expect(willPull).toHaveText(`${DOCKERHUB}:main`);
+      await expect(page.locator(".upgrade-image-ref")).toContainText(
+        `Will pull ${DOCKERHUB}:main`,
+      );
 
       // Same column as the branch field, below it.
       // The outlined boxes, not the inputs: an Autocomplete pads its own
@@ -67,4 +72,27 @@ test.describe("the upgrade image chooser", () => {
       expect(overflow).toBeLessThanOrEqual(0);
     });
   }
+
+  // 2026-11-08 deployment-operations walkthrough (task 3617): the demo's
+  // image upgrader has no ref file to read, so GET /api/upgrade names
+  // nothing running -- and the pane said nothing about where this
+  // deployment already was, though the build it runs is GET
+  // /api/config's `version` (and the rail's build stamp says so).
+  test("names the build it runs when the upgrader cannot say", async ({
+    page,
+  }) => {
+    const { version = {} } = await (
+      await page.request.get("/api/config")
+    ).json();
+    test.skip(!version.commit, "this binary was built without a commit");
+    const status = await (await page.request.get("/api/upgrade")).json();
+    expect(status.running).toBeFalsy();
+    await page.goto("/settings/upgrade");
+    await expect(page.getByLabel("Branch")).toBeVisible();
+    const running = page.locator("p.upgrade-running");
+    await expect(running).toHaveText(
+      `Now running ${version.commit.slice(0, 7)}${version.modified ? "-dirty" : ""}.`,
+    );
+    await expect(running.getByTitle(version.commit)).toBeVisible();
+  });
 });

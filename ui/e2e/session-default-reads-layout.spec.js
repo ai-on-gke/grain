@@ -15,9 +15,9 @@
 import { expect, test } from "./fixtures.js";
 
 // grain/task-2641: every session reads every repository the deployment
-// works in. The session pane says so under "Repositories it may read",
-// and lists those repositories on a line of their own beneath the
-// session's own reads. Both have to sit inside the pane at desktop and
+// works in. The session pane says so under its Grants list, where its
+// own reads are, and lists those repositories on a line of their own
+// beneath it. Both have to sit inside the pane at desktop and
 // phone widths rather than running off its edge.
 for (const { name, width, height } of [
   { name: "desktop", width: 1440, height: 900 },
@@ -52,24 +52,24 @@ for (const { name, width, height } of [
       .getByRole("button", { name: "Edit Director capabilities" })
       .click();
 
-    const heading = page.getByRole("heading", {
-      name: "Repositories it may read",
-    });
-    await heading.scrollIntoViewIfNeeded();
+    // The repositories it reads are grants in its Grants list
+    // (unified-grants slice 5); the caption saying it reads the rest
+    // sits under that list, aligned with it.
+    const grants = page.getByTestId("session-director-grants");
+    await grants.scrollIntoViewIfNeeded();
     const caption = page.getByText(
-      /besides every repository this deployment works in/,
+      /every session reads every repository this deployment works in/,
     );
     await expect(caption).toBeVisible();
 
-    const headingBox = await heading.boundingBox();
+    const grantsBox = await grants.boundingBox();
     const captionBox = await caption.boundingBox();
     expect(captionBox.x).toBeGreaterThanOrEqual(0);
     expect(captionBox.x + captionBox.width).toBeLessThanOrEqual(width);
-    // The caption sits under its heading, aligned with it.
     expect(captionBox.y).toBeGreaterThanOrEqual(
-      headingBox.y + headingBox.height - 1,
+      grantsBox.y + grantsBox.height - 1,
     );
-    expect(Math.abs(captionBox.x - headingBox.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(captionBox.x - grantsBox.x)).toBeLessThanOrEqual(1);
 
     const autoReads = page.getByTestId("session-auto-reads");
     await expect(autoReads).toContainText(
@@ -79,7 +79,7 @@ for (const { name, width, height } of [
     expect(autoBox.x).toBeGreaterThanOrEqual(0);
     expect(autoBox.x + autoBox.width).toBeLessThanOrEqual(width);
     expect(autoBox.y).toBeGreaterThan(captionBox.y);
-    expect(Math.abs(autoBox.x - headingBox.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(autoBox.x - grantsBox.x)).toBeLessThanOrEqual(1);
     // Not drawn as one of the session's own, removable reads.
     await expect(
       page.getByRole("button", { name: /acme\/widgets/ }),

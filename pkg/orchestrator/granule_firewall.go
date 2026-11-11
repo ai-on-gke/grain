@@ -676,21 +676,33 @@ type openFence struct {
 }
 
 // openFenceAlways is dropped for every open VM, whatever the host's
-// interfaces are.
+// interfaces are: loopback and "this network" (0.0.0.0/8), IPv4-mapped
+// IPv6 (::ffff:0:0/96), link-local (169.254.0.0/16, fe80::/10, covering
+// IPv4 cloud metadata), and IPv6 Unique Local Addresses (fc00::/7,
+// covering GCE/GKE IPv6 metadata fd20:ce::254, EC2 IPv6 IMDS
+// fd00:ec2::254, and private IPv6 bridges).
 var openFenceAlways = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("127.0.0.0/8"),
 	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("::ffff:0:0/96"),
+	netip.MustParsePrefix("fc00::/7"),
 	netip.MustParsePrefix("fe80::/10"),
 }
 
-// prefixes is every destination f drops for nets, by family, masked,
-// sorted, and with any prefix another one already covers left out: nft
-// refuses an anonymous set holding two overlapping intervals, and two
-// prefixes either nest or do not overlap at all. Sorted so one host
-// always writes the same ruleset.
-func (f *openFence) prefixes(nets []guestNetwork) (v4, v6 []string) {
-	all := append(append([]netip.Prefix(nil), openFenceAlways...), f.Connected...)
+// openFenceLoopback is dropped ahead of the port-53 DNS accept, alongside
+// the sandbox's own non-gateway segment, so a sandbox cannot use port 53
+// to reach loopback or peer sandboxes on the same bridge.
+var openFenceLoopback = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("::ffff:0:0/96"),
+}
+
+func guestNetPrefixes(nets []guestNetwork) []netip.Prefix {
+	var out []netip.Prefix
 	for _, n := range nets {
 		if n.CIDR == nil {
 			continue
@@ -700,8 +712,12 @@ func (f *openFence) prefixes(nets []guestNetwork) (v4, v6 []string) {
 			continue
 		}
 		bits, _ := n.CIDR.Mask.Size()
-		all = append(all, netip.PrefixFrom(addr.Unmap(), bits))
+		out = append(out, netip.PrefixFrom(addr.Unmap(), bits))
 	}
+	return out
+}
+
+func dedupPrefixes(all []netip.Prefix) (v4, v6 []string) {
 	seen := map[netip.Prefix]bool{}
 	var p4, p6 []netip.Prefix
 	for _, p := range all {
@@ -744,9 +760,43 @@ func (f *openFence) prefixes(nets []guestNetwork) (v4, v6 []string) {
 	return v4, v6
 }
 
+// prefixes is every destination f drops for nets, by family, masked,
+// sorted, and with any prefix another one already covers left out: nft
+// refuses an anonymous set holding two overlapping intervals, and two
+// prefixes either nest or do not overlap at all. Sorted so one host
+// always writes the same ruleset.
+func (f *openFence) prefixes(nets []guestNetwork) (v4, v6 []string) {
+	all := append(append([]netip.Prefix(nil), openFenceAlways...), f.Connected...)
+	all = append(all, guestNetPrefixes(nets)...)
+	return dedupPrefixes(all)
+}
+
+// preDNSPrefixes is what openFence drops *before* letting port 53 through:
+// loopback and the sandbox's own bridge segments (whose gateways were just
+// accepted on port 53 above), so two open sandboxes on the same segment
+// cannot talk to each other by binding TCP or UDP port 53.
+func (f *openFence) preDNSPrefixes(nets []guestNetwork) (v4, v6 []string) {
+	all := append([]netip.Prefix(nil), openFenceLoopback...)
+	all = append(all, guestNetPrefixes(nets)...)
+	return dedupPrefixes(all)
+}
+
 // write appends f's rules to one family's copy of chain, for a VM on
 // nets.
 func (f *openFence) write(b *strings.Builder, family, chain string, nets []guestNetwork) {
+	for _, n := range nets {
+		if n.Gateway != nil {
+			fmt.Fprintf(b, "add rule %s %s %s %s daddr %s meta l4proto { tcp, udp } th dport 53 accept\n",
+				family, nftTable, chain, ipFamily(n.Gateway), n.Gateway)
+		}
+	}
+	preV4, preV6 := f.preDNSPrefixes(nets)
+	if len(preV4) > 0 {
+		fmt.Fprintf(b, "add rule %s %s %s ip daddr { %s } counter drop\n", family, nftTable, chain, strings.Join(preV4, ", "))
+	}
+	if len(preV6) > 0 {
+		fmt.Fprintf(b, "add rule %s %s %s ip6 daddr { %s } counter drop\n", family, nftTable, chain, strings.Join(preV6, ", "))
+	}
 	v4, v6 := f.prefixes(nets)
 	fmt.Fprintf(b, "add rule %s %s %s meta l4proto { tcp, udp } th dport 53 accept\n", family, nftTable, chain)
 	if len(v4) > 0 {
@@ -755,6 +805,16 @@ func (f *openFence) write(b *strings.Builder, family, chain string, nets []guest
 	if len(v6) > 0 {
 		fmt.Fprintf(b, "add rule %s %s %s ip6 daddr { %s } counter drop\n", family, nftTable, chain, strings.Join(v6, ", "))
 	}
+}
+
+// OpenNetworkFenceRuleset renders the nftables ruleset an open-network
+// sandbox (GranuleSandboxes or ContainerSandboxes) installs for a guest
+// interface on cidr/gateway when the host has connected prefixes and serves
+// services at gateway. Pure, so security regression suites can inspect rule
+// ordering and validate syntax with `nft -c -f -` without mutating host tables.
+func OpenNetworkFenceRuleset(chain string, ip net.IP, cidr *net.IPNet, gateway net.IP, ports []string, connected []netip.Prefix, services []SandboxServicePort) string {
+	nets := []guestNetwork{{IP: ip, CIDR: cidr, Gateway: gateway}}
+	return granuleIsolationRuleset(sanitizeNFTName(chain), nets, ports, gateway, services, len(services) == 0, &openFence{Connected: connected})
 }
 
 // serviceMatches is services as nft match fragments, one per protocol

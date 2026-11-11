@@ -933,6 +933,134 @@ describe("DetailOverlay actions", () => {
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
   });
 
+  // Task 3557: a request a run was started for and gave back must not
+  // leave the button disabled for good, nor promise the next cycle.
+  it("keeps Run now offered for a request a run already gave back, and says what holds it", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          runNowAt: "2026-08-01T00:00:00Z",
+          runNowStale: true,
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Run now" });
+    expect(button).toBeEnabled();
+    expect(screen.queryByText(/next dispatch cycle/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/gave it back\. It waits out the retry backoff/),
+    ).toBeInTheDocument();
+    await user.click(button);
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/run-now", {
+      method: "POST",
+    });
+  });
+
+  it("reads a stale request off the attempts, and names the suspension holding it", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          runNowAt: "2026-08-01T00:00:00Z",
+          activityBySetup: true,
+          activity:
+            "waiting: held until 2026-08-01T00:03:00Z by its suspension",
+          attempts: [
+            { id: "12-1", attempt: 1, startedAt: "2026-08-01T00:01:00Z" },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+    expect(
+      screen.getByText(
+        /It is held until 2026-08-01T00:03:00Z by its suspension\. Press Run now/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps Run now disabled on a stale request while paused on a usage limit or by the operator", () => {
+    const { unmount } = render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          runNowAt: "2026-08-01T00:00:00Z",
+          runNowStale: true,
+        }}
+        tasks={[]}
+        config={{
+          ...config,
+          agentBackends: [{ id: "claude-1", framework: "claude" }],
+          agentPause: {
+            paused: true,
+            until: "2026-08-01T01:00:00Z",
+            reason: "quota exceeded",
+            pauses: [
+              {
+                connection: "claude-1",
+                framework: "claude",
+                until: "2026-08-01T01:00:00Z",
+                reason: "quota exceeded",
+              },
+            ],
+          },
+        }}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(
+      screen.getByText(/once the usage-limit pause ends/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/retry backoff/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Press Run now to start it now/),
+    ).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          paused: { by: "alice@example.com", at: "2026-08-01T00:01:00Z" },
+          runNowAt: "2026-08-01T00:00:00Z",
+          runNowStale: true,
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Asked for a run. It starts ahead of the queue once this task is resumed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows Reopen for a closed task, wired to the reopen endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();
@@ -1045,6 +1173,41 @@ describe("DetailOverlay actions", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/12/close", {
       method: "POST",
       body: JSON.stringify({ close_pull_request: false }),
+    });
+    vi.unstubAllGlobals();
+  });
+
+  // Pause now skips the grace period a run gets to push its work, so
+  // what it has not pushed is lost: it asks first, as Cancel does
+  // (2026-11-08 walkthrough, where one click paused a running task).
+  it("asks before Pause now stops a running task, and pauses only once confirmed", async () => {
+    const act = vi.fn();
+    const confirm = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, state: "running" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Pause now" }));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringMatching(/whatever it has not pushed is lost/),
+    );
+    expect(act).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Pause now" }));
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/pause", {
+      method: "POST",
+      body: JSON.stringify({ immediate: true }),
     });
     vi.unstubAllGlobals();
   });

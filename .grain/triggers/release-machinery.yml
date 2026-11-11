@@ -11,14 +11,20 @@
 # decide, leaves the change for a person.
 on: pull_request
 paths:
+  - scripts/granule/**
   - scripts/release-images.sh
   - scripts/release-notes.sh
   - scripts/candidate-gate.sh
+  - scripts/release-patch.sh
   - scripts/patch-tag-guard.sh
   - scripts/build-version.sh
   - scripts/grain-ci-host.sh
+  - scripts/buildvcs.sh
+  - scripts/configure-dockerhub-auth.sh
+  - scripts/release-image-repos.sh
   - scripts/release-train-actions.sh
   - scripts/release-assets.sh
+  - scripts/build-cli.sh
   - .github/workflows/rc-qualification.yml
   - .grain/workflows/release.yml
   - .github/workflows/release.yml

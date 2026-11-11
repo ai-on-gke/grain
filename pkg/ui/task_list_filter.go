@@ -46,12 +46,13 @@ import (
 
 // taskListQuery is GET /api/tasks' narrowing.
 type taskListQuery struct {
-	repo    string
-	owner   string
-	states  []string
-	search  string
-	limit   int
-	summary bool
+	repo     string
+	owner    string
+	states   []string
+	search   string
+	limit    int
+	limitAll bool
+	summary  bool
 	// derivedFrom and filedVia are the external-cli spec's provenance
 	// filters (#XC-18): ?derived_from=<owner/name#pr or its URL> and
 	// ?filed_via=<substring>.
@@ -83,9 +84,10 @@ const taskListPageDefault = 100
 // the console and interactive sessions' own (which the rail counts under
 // Sessions), and Merged the rest whose pull request merged (PrMergedAt;
 // the rail's Merged entry rather than Closed).
-type taskListPage struct {
-	Tasks      []Task `json:"tasks"`
+type taskListPage[T any] struct {
+	Tasks      []T    `json:"tasks"`
 	NextCursor string `json:"nextCursor,omitempty"`
+	Truncated  bool   `json:"truncated"`
 	Total      int    `json:"total"`
 	Merged     int    `json:"merged"`
 	Sessions   int    `json:"sessions"`
@@ -114,8 +116,14 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 	}
 	if q.Has("limit") {
 		narrowed = true
-		if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
-			out.limit = n
+		if text := strings.TrimSpace(q.Get("limit")); text != "" {
+			if n, err := strconv.Atoi(text); err == nil {
+				if n == 0 {
+					out.limitAll = true
+				} else if n > 0 {
+					out.limit = n
+				}
+			}
 		}
 	}
 	if q.Has("derived_from") {
@@ -150,8 +158,8 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 	fields := strings.ToLower(strings.TrimSpace(q.Get("fields")))
 	out.summary = fields == "summary"
 	out.list = fields == "list"
-	if q.Has("fields") && !narrowed && fields == "full" {
-		out.full = true
+	out.full = fields == "full"
+	if q.Has("fields") && !narrowed && out.full {
 		return out, false
 	}
 	if q.Has("fields") {
@@ -205,10 +213,12 @@ func (q taskListQuery) matches(t Task) bool {
 		// reaching for, and the UI's own search box matches it on the
 		// tasks it holds (ui/src/taskFilters.js's matchesFilters).
 		needle := strings.ToLower(q.search)
+		idNeedle := strings.TrimPrefix(needle, "#")
 		if !strings.Contains(strings.ToLower(t.Title), needle) &&
 			!strings.Contains(strings.ToLower(t.Description), needle) &&
+			!strings.Contains(strings.ToLower(t.Branch), needle) &&
 			!strings.Contains(strings.ToLower(t.ExternalRef), needle) &&
-			t.ID != strings.TrimPrefix(q.search, "#") {
+			!strings.Contains(strings.ToLower(t.ID), idNeedle) {
 			return false
 		}
 	}
@@ -287,7 +297,26 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	if q.paged {
-		writeJSON(w, http.StatusOK, pageTasks(matched, q))
+		page := pageTasks(matched, q)
+		if q.summary {
+			out := taskListPage[taskListSummary]{
+				Tasks:      make([]taskListSummary, 0, len(page.Tasks)),
+				NextCursor: page.NextCursor,
+				Truncated:  page.Truncated,
+				Total:      page.Total,
+				Merged:     page.Merged,
+				Sessions:   page.Sessions,
+			}
+			for _, t := range page.Tasks {
+				out.Tasks = append(out.Tasks, taskListSummary{
+					ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo, ExternalRef: t.ExternalRef,
+					CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall,
+				})
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
 		return
 	}
 	sortTasksByFiling(matched)
@@ -319,7 +348,7 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 // cursor names: a cursor is the place of the last task a page held, so
 // the next page starts after it even when that task has since reopened
 // or been deleted.
-func pageTasks(matched []Task, q taskListQuery) taskListPage {
+func pageTasks(matched []Task, q taskListQuery) taskListPage[Task] {
 	keys := make(map[string]taskPageKey, len(matched))
 	for _, t := range matched {
 		keys[t.ID] = pageKeyOf(t)
@@ -333,12 +362,15 @@ func pageTasks(matched []Task, q taskListQuery) taskListPage {
 			return after.before(keys[matched[i].ID])
 		})
 	}
-	limit := q.limit
-	if limit <= 0 {
-		limit = taskListPageDefault
+	end := len(matched)
+	if !q.limitAll {
+		limit := q.limit
+		if limit <= 0 {
+			limit = taskListPageDefault
+		}
+		end = min(start+limit, len(matched))
 	}
-	end := min(start+limit, len(matched))
-	page := taskListPage{Tasks: make([]Task, 0, end-start), Total: len(matched)}
+	page := taskListPage[Task]{Tasks: make([]Task, 0, end-start), Total: len(matched)}
 	for _, t := range matched {
 		switch {
 		case t.ConsoleSession != "" || t.Interactive:
@@ -348,53 +380,89 @@ func pageTasks(matched []Task, q taskListQuery) taskListPage {
 		}
 	}
 	for _, t := range matched[start:end] {
-		if !q.summary {
+		if !q.summary && !q.full {
 			t = listRow(t)
+			if n := len(t.Reads); n > taskPageRowReads {
+				t.Reads = append([]string(nil), t.Reads[:taskPageRowReads]...)
+				t.ReadCount, t.ReadsTruncated = n, true
+			}
 		}
 		page.Tasks = append(page.Tasks, t)
 	}
 	if end < len(matched) && end > start {
+		page.Truncated = true
 		page.NextCursor = keys[matched[end-1].ID].String()
 	}
 	return page
 }
 
+// taskPageRowReads is how many of a task's Reads a paged list row
+// carries (Task.ReadsTruncated); a director reading 260 repositories made
+// one row 7.8 KB and its page 14 KB.
+const taskPageRowReads = 10
+
 // taskPageKey is a task's place in a page's order.
 type taskPageKey struct {
-	at time.Time
-	id int64
+	at    time.Time
+	id    int64
+	isNum bool
+	rawID string
 }
 
 func pageKeyOf(t Task) taskPageKey {
-	k := taskPageKey{at: closedTime(t)}
-	k.id, _ = strconv.ParseInt(t.ID, 10, 64)
+	k := taskPageKey{at: closedTime(t), rawID: t.ID}
+	if n, err := strconv.ParseInt(t.ID, 10, 64); err == nil {
+		k.id, k.isNum = n, true
+	}
 	return k
 }
 
 // before reports whether k comes before o: later times first, and at the
-// same time the higher id first.
+// same time the higher numeric id (or lexicographically higher rawID) first.
 func (k taskPageKey) before(o taskPageKey) bool {
 	if !k.at.Equal(o.at) {
 		return k.at.After(o.at)
 	}
-	return k.id > o.id
+	if k.isNum && o.isNum && k.id != o.id {
+		return k.id > o.id
+	}
+	if k.isNum != o.isNum {
+		return k.isNum
+	}
+	return k.rawID > o.rawID
 }
 
+// zeroPageTime is a cursor's time for a task with no closing or filing
+// time. time.Time{}.UnixNano() is outside int64's range (it answers
+// -6795364578871345152, which reads back as 1754), so such a cursor read
+// back as a later time than the task it named and the next page started
+// at the same task again: a walk of the list never ended.
+const zeroPageTime = "z"
+
 func (k taskPageKey) String() string {
-	return strconv.FormatInt(k.at.UnixNano(), 10) + "." + strconv.FormatInt(k.id, 10)
+	if k.at.IsZero() {
+		return zeroPageTime + "." + k.rawID
+	}
+	return strconv.FormatInt(k.at.UnixNano(), 10) + "." + k.rawID
 }
 
 func parsePageCursor(s string) (taskPageKey, bool) {
-	at, id, ok := strings.Cut(s, ".")
-	if !ok {
+	at, rawID, ok := strings.Cut(s, ".")
+	if !ok || rawID == "" || strings.ContainsAny(rawID, " \t\r\n") {
 		return taskPageKey{}, false
 	}
-	ns, err1 := strconv.ParseInt(at, 10, 64)
-	n, err2 := strconv.ParseInt(id, 10, 64)
-	if err1 != nil || err2 != nil {
-		return taskPageKey{}, false
+	k := taskPageKey{rawID: rawID}
+	if at != zeroPageTime {
+		ns, err := strconv.ParseInt(at, 10, 64)
+		if err != nil {
+			return taskPageKey{}, false
+		}
+		k.at = time.Unix(0, ns)
 	}
-	return taskPageKey{at: time.Unix(0, ns), id: n}, true
+	if n, err := strconv.ParseInt(rawID, 10, 64); err == nil {
+		k.id, k.isNum = n, true
+	}
+	return k, true
 }
 
 // sortTasksByFiling orders tasks oldest first by CreatedAt, then by the

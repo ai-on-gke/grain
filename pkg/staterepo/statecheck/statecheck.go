@@ -36,6 +36,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // CustomFields is the one thing this command asks of a dump beyond
@@ -325,6 +326,11 @@ func UnrunnableSettings(ctx context.Context, db *sql.DB) ([]string, error) {
 			"a daemon reading this will run at its own instead of at anything this repository says",
 			cfg.SandboxDiskOvercommit))
 	}
+	if cfg.AutoUpgradeMinIntervalHours < 0 {
+		out = append(out, fmt.Sprintf("the settings row's auto_upgrade_min_interval_hours is %d, which is negative -- "+
+			"a daemon reading this treats it as 0 (no minimum interval between automatic upgrades)",
+			cfg.AutoUpgradeMinIntervalHours))
+	}
 	if err := cfg.SandboxOvercommit.Validate(); err != nil {
 		out = append(out, fmt.Sprintf("the settings row's sandbox_overcommit is not usable (%v) -- "+
 			"a daemon reading this will hold its overcommit ratios fixed", err))
@@ -378,10 +384,9 @@ func ImplicitSandboxImageMirror(ctx context.Context, db *sql.DB) ([]string, erro
 
 // mcpServerWarnings checks the settings row's capability servers
 // (model.Config.MCPServers): an entry protocol.ServerConfig.Validate
-// refuses is one the daemon will not attach, and an env or headers value
-// that looks like a credential but is not a $secret:<name> reference is
-// one this repository is carrying in cleartext (design/spec/capabilities/capabilities.spec.md
-// §3.1.2). Neither value is ever repeated in the warning.
+// refuses is one the daemon will not attach. A credential typed into one
+// rather than referenced as $secret:<name> is LiteralCredentials' to
+// report (design/spec/capabilities/capabilities.spec.md §3.1.2).
 func mcpServerWarnings(servers map[string]protocol.ServerConfig) []string {
 	ids := make([]string, 0, len(servers))
 	for id := range servers {
@@ -395,34 +400,40 @@ func mcpServerWarnings(servers map[string]protocol.ServerConfig) []string {
 			out = append(out, fmt.Sprintf("the settings row's capability server %s is not valid (%v) -- "+
 				"a daemon reading this will refuse to attach it", id, err))
 		}
-		for _, kv := range []struct {
-			kind string
-			m    map[string]string
-		}{{"env", sc.Env}, {"header", sc.Headers}} {
-			names := make([]string, 0, len(kv.m))
-			for name := range kv.m {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				if looksLikeCredential(name) && !strings.Contains(kv.m[name], "$secret:") {
-					out = append(out, fmt.Sprintf("the settings row's capability server %s has %s %s in plain text -- "+
-						"a credential belongs in the secrets store, referenced as $secret:<name>", id, kv.kind, name))
-				}
-			}
-		}
 	}
 	return out
 }
 
-func looksLikeCredential(name string) bool {
-	n := strings.ToLower(name)
-	for _, w := range []string{"authorization", "token", "secret", "password", "passwd", "api_key", "apikey", "api-key", "private_key", "credential"} {
-		if strings.Contains(n, w) {
-			return true
+// GitRefSchedules fails the check when an enabled git_ref schedule in the
+// dump watches a forbidden repository: a retired per-team grain/config-<team>
+// alias, local grain/config when an external state repository is configured in
+// dataDir, or the encrypted secrets backup repository configured in dataDir.
+// Disabled (enabled: false) grandfathered schedules are permitted so an
+// existing schedule can be paused cleanly.
+func GitRefSchedules(ctx context.Context, db *sql.DB, dataDir string) error {
+	schedules, err := model.New(db).ListSchedules(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the schedules this dump carries: %w", err)
+	}
+	var bad []string
+	for _, s := range schedules {
+		if !s.Enabled || s.Recurrence.Kind != model.RecurrenceGitRef || s.Recurrence.GitRef == nil {
+			continue
+		}
+		watched, err := model.ParseRepo(s.Recurrence.GitRef.Repo)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("schedule %s: invalid git_ref repo %q: %v", s.ID, s.Recurrence.GitRef.Repo, err))
+			continue
+		}
+		if why := staterepo.ForbiddenGitRefWatch(watched, dataDir); why != "" {
+			bad = append(bad, fmt.Sprintf("schedule %s: git_ref repo %s cannot be watched: %s", s.ID, watched, why))
 		}
 	}
-	return strings.HasSuffix(n, "_key") || strings.HasSuffix(n, "-key")
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("settings/schedules.yml declares %d forbidden git_ref schedule(s):\n  %s",
+		len(bad), strings.Join(bad, "\n  "))
 }
 
 // ScratchStore is an empty SQLite database at this build's schema, in a

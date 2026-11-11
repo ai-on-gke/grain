@@ -17,6 +17,7 @@ import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import PendingAccess from "./detail/PendingAccess.jsx";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
+import LinkIcon from "@mui/icons-material/Link";
 import {
   ChatContainer,
   MainContainer,
@@ -38,7 +39,9 @@ import "@chatscope/chat-ui-kit-styles/dist/default/styles.css";
 import api from "../api.js";
 import fileToAttachment from "../attachments.js";
 import { awaitsReply, chatEntries, typingNote, working } from "../chat.js";
+import { earlierButtonLabel } from "../taskDetailPages.js";
 import { nameScrollbars } from "../chatScrollbars.js";
+import { commentUrl } from "../commentLinks.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
 import { isTaskPaused } from "../state.js";
@@ -110,12 +113,19 @@ export default function TaskChat({
   // uses this same window: the first message is what creates the
   // task, so there is nothing to post it to until it has been sent.
   onSend = null,
+  // handoffRef, when given, lets a caller that is replacing this chat
+  // with a newly created task's own TaskChat (NewSessionPage.jsx ->
+  // ConsoleSessionPage.jsx) take any unsent draft, picked files, and
+  // messages queued behind the first send before unmounting.
+  handoffRef = null,
   placeholder = "Message…",
   draftRequest = null,
   onDraftConsumed,
+  onLoadEarlier = null,
   actions = null,
   children = null,
 }) {
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const zone = useTimeZone();
   // Keyed on `t` itself, which is exactly as stable as the conversation
   // is: App polls this task every three seconds and writes the result
@@ -131,6 +141,9 @@ export default function TaskChat({
   const [pendingComments, setPendingComments] = useState([]);
   const pendingSeq = useRef(0);
   const sendChain = useRef(Promise.resolve());
+  const queuedSendsRef = useRef([]);
+  const handedOffRef = useRef(false);
+  const failEpochRef = useRef(0);
   useEffect(() => {
     setPendingComments([]);
   }, [t.id]);
@@ -199,8 +212,10 @@ export default function TaskChat({
   // post the comment -- and a poll landing mid-message must not lose
   // either (AttachmentPicker's own doc comment on why the files are read
   // only at send).
-  const [attachments, setAttachmentsState] = useState([]);
-  const attachmentsRef = useRef([]);
+  const [attachments, setAttachmentsState] = useState(
+    () => draftRequest?.attachments || [],
+  );
+  const attachmentsRef = useRef(draftRequest?.attachments || []);
   const setAttachments = (next) => {
     const resolved =
       typeof next === "function" ? next(attachmentsRef.current) : next;
@@ -216,11 +231,11 @@ export default function TaskChat({
   // textContent of "a<div>b</div>" is "ab", with the break the person
   // typed silently gone.
   const [draft, setDraftState] = useState(() => ({
-    html: draftRequest?.text || "",
+    html: draftRequest?.html ?? draftRequest?.text ?? "",
     text: draftRequest?.text || "",
   }));
   const draftRef = useRef({
-    html: draftRequest?.text || "",
+    html: draftRequest?.html ?? draftRequest?.text ?? "",
     text: draftRequest?.text || "",
   });
   const setDraft = (next) => {
@@ -271,14 +286,7 @@ export default function TaskChat({
   // every keystroke, and still calls this render's (current t, current
   // pending list) rather than the one that drew it.
   const bubbleActions = useRef({});
-
-  // A shortcut elsewhere in the shell can bring somebody here with words
-  // ready to edit. Apply each request once by identity; task polling must not
-  // reset a draft already being changed in this composer.
-  useEffect(() => {
-    if (!draftRequest) return;
-    setDraft({ html: draftRequest.text, text: draftRequest.text });
-  }, [draftRequest]);
+  const appliedDraftRequest = useRef(null);
 
   // The transcript, held as one memoised element rather than built in
   // the render body below (grain/task-174).
@@ -345,6 +353,7 @@ export default function TaskChat({
           ) : (
             <Message
               key={e.key}
+              data-comment-id={e.commentId ?? undefined}
               className={
                 e.pending
                   ? `task-chat-pending task-chat-${e.pending}`
@@ -376,14 +385,64 @@ export default function TaskChat({
               />
               <Message.CustomContent>
                 <div className="task-chat-message-content">
-                  <Markdown className="task-chat-body">{e.body}</Markdown>
-                  {e.direction === "incoming" && e.body && (
+                  {e.body && (
+                    <Markdown className="task-chat-body">{e.body}</Markdown>
+                  )}
+                  {((e.direction === "incoming" && e.body) ||
+                    (e.commentId != null && !e.pending)) && (
                     <div className="task-chat-actions">
-                      <CopyButton text={e.body} label="Copy response" />
+                      {e.direction === "incoming" && e.body && (
+                        <CopyButton text={e.body} label="Copy response" />
+                      )}
+                      {e.commentId != null && !e.pending && (
+                        <CopyButton
+                          text={commentUrl(t.id, e.commentId)}
+                          label="Copy link"
+                          icon={LinkIcon}
+                          className="task-chat-link"
+                        />
+                      )}
                     </div>
                   )}
                 </div>
                 <AttachmentLinks taskId={t.id} attachments={e.attachments} />
+                {e.summarised?.length > 0 && (
+                  <details
+                    className="timeline-summarised task-chat-summarised"
+                    data-testid="summarised-comments"
+                  >
+                    <summary className="timeline-summarised-summary">
+                      {e.summarised.length} summarised comment
+                      {e.summarised.length === 1 ? "" : "s"}
+                    </summary>
+                    <ul className="timeline-summarised-list">
+                      {e.summarised.map((sc) => (
+                        <li
+                          key={sc.key}
+                          className="timeline-summarised-item"
+                          {...(sc.commentId != null && {
+                            id: `comment-${sc.commentId}`,
+                            "data-comment-id": sc.commentId,
+                          })}
+                        >
+                          <div className="timeline-meta">
+                            {sc.sender}
+                            {sc.at ? ` · ${formatDateTime(sc.at, zone)}` : ""}
+                          </div>
+                          {sc.body && (
+                            <Markdown className="task-chat-body">
+                              {sc.body}
+                            </Markdown>
+                          )}
+                          <AttachmentLinks
+                            taskId={t.id}
+                            attachments={sc.attachments}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
                 {e.pending === "failed" && (
                   <div className="task-chat-retry">
                     <Button
@@ -432,7 +491,11 @@ export default function TaskChat({
       0,
     );
     const optimisticKey = `optimistic-${++pendingSeq.current}`;
-    if (!onSend && body.trim()) {
+    // onSend's message gets the same "Sending…" bubble: on a session
+    // not yet started (NewSessionPage.jsx) it is the first message,
+    // which would otherwise vanish from the box for as long as starting
+    // the session takes, with nothing in the transcript to say it went.
+    if (body.trim()) {
       setPendingComments((cur) => [
         ...cur,
         {
@@ -493,7 +556,27 @@ export default function TaskChat({
       });
       setSendNotice("Message not sent. Retry it from the conversation.");
     };
+    const epoch = failEpochRef.current;
+    const queuedEntry = { key: optimisticKey, sent, files, started: false };
+    queuedSendsRef.current.push(queuedEntry);
     const task = sendChain.current.then(async () => {
+      if (handedOffRef.current) {
+        queuedSendsRef.current = queuedSendsRef.current.filter(
+          (q) => q !== queuedEntry,
+        );
+        return;
+      }
+      // On a chat whose first send creates the session (onSend), a send
+      // queued behind a failed session create must not create the session
+      // out of order with the second message while the first sits unsent.
+      if (onSend && epoch !== failEpochRef.current) {
+        queuedSendsRef.current = queuedSendsRef.current.filter(
+          (q) => q !== queuedEntry,
+        );
+        unsent();
+        return;
+      }
+      queuedEntry.started = true;
       try {
         const uploaded = await Promise.all(
           files.map((f) => fileToAttachment(f)),
@@ -513,15 +596,12 @@ export default function TaskChat({
             posted = true;
           }, t.id);
         }
+        if (handedOffRef.current) return;
         // act() reports a failure and swallows it, so whether the message
         // landed is only known from here.
         if (!posted) {
-          if (onSend) {
-            setDraft((cur) => (cur.text.trim() ? cur : sent));
-            setAttachments((cur) => (cur.length ? cur : files));
-          } else {
-            unsent();
-          }
+          if (onSend) failEpochRef.current += 1;
+          unsent();
         } else {
           setPendingComments((cur) =>
             cur.map((p) =>
@@ -531,18 +611,81 @@ export default function TaskChat({
         }
         onDraftConsumed?.(draftRequest);
       } catch (err) {
-        if (onSend) {
-          setDraft((cur) => (cur.text.trim() ? cur : sent));
-          setAttachments((cur) => (cur.length ? cur : files));
-        } else {
+        if (!handedOffRef.current) {
+          if (onSend) failEpochRef.current += 1;
           unsent();
         }
         throw err;
+      } finally {
+        queuedSendsRef.current = queuedSendsRef.current.filter(
+          (q) => q !== queuedEntry,
+        );
       }
     });
     sendChain.current = task.catch(() => {});
     await task;
   };
+
+  if (handoffRef) {
+    handoffRef.current = {
+      take: () => {
+        handedOffRef.current = true;
+        const queued = queuedSendsRef.current
+          .filter((q) => !q.started)
+          .map(({ sent, files }) => ({ sent, files }));
+        queuedSendsRef.current = [];
+        return {
+          draft: draftRef.current,
+          attachments: attachmentsRef.current,
+          queued,
+        };
+      },
+      hold: () => {
+        let releaseGate;
+        const gate = new Promise((resolve) => {
+          releaseGate = resolve;
+        });
+        sendChain.current = sendChain.current.then(() => gate);
+        return ({ failed = false } = {}) => {
+          if (failed) failEpochRef.current += 1;
+          releaseGate();
+        };
+      },
+    };
+  }
+
+  // A shortcut elsewhere in the shell -- or a handoff from NewSessionPage
+  // as the created session opens -- can bring words, picked files, and
+  // follow-up sends queued while the session was starting. Apply each
+  // request once by identity so polling never resets an in-progress draft
+  // or double-posts queued messages.
+  useEffect(() => {
+    if (!draftRequest || appliedDraftRequest.current === draftRequest) return;
+    appliedDraftRequest.current = draftRequest;
+    if (
+      typeof draftRequest.text === "string" ||
+      typeof draftRequest.html === "string"
+    ) {
+      const text = draftRequest.text || "";
+      const html = draftRequest.html ?? text;
+      setDraft({ html, text });
+    }
+    if (Array.isArray(draftRequest.attachments)) {
+      setAttachments(draftRequest.attachments);
+    }
+    const queued = draftRequest.queued || [];
+    if (queued.length > 0) {
+      for (const item of queued) {
+        post(item.sent, item.files || []).catch(() => {});
+      }
+      onDraftConsumed?.(draftRequest);
+    } else if (
+      draftRequest.attachments?.length > 0 ||
+      draftRequest.consumeOnApply
+    ) {
+      onDraftConsumed?.(draftRequest);
+    }
+  }, [draftRequest]);
 
   const retry = (key) => {
     const failed = pendingComments.find((p) => p.key === key);
@@ -645,6 +788,28 @@ export default function TaskChat({
       <LocalScriptApprovals t={t} act={act} />
       <PendingConfigChange t={t} act={act} />
       <PendingAccess t={t} act={act} />
+      {(t.olderComments || 0) > 0 && typeof onLoadEarlier === "function" && (
+        <div className="task-chat-earlier" data-testid="task-chat-show-earlier">
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={loadingEarlier}
+            onClick={async () => {
+              if (loadingEarlier) return;
+              setLoadingEarlier(true);
+              try {
+                await onLoadEarlier({ commentsOnly: true });
+              } finally {
+                setLoadingEarlier(false);
+              }
+            }}
+          >
+            {loadingEarlier
+              ? "Loading earlier…"
+              : earlierButtonLabel(t.olderComments || 0, 0)}
+          </Button>
+        </div>
+      )}
       <div className="task-chat-window" ref={windowRef} id={windowId}>
         <MainContainer>
           <ChatContainer>

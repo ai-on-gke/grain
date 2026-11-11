@@ -33,8 +33,12 @@ type AccessPrincipalsResponse struct {
 	Entries            []model.AllowedPrincipal `json:"entries"`
 	DroppedFlagEntries []string                 `json:"droppedFlagEntries,omitempty"`
 	// Roles are the scope sets in effect that an entry can be given, for
-	// the role picker: built-ins first, then by name.
-	Roles []AccessRoleChoice `json:"roles"`
+	// the role picker: built-ins first, then by name. Omitted on paged
+	// calls so agent pages stay compact.
+	Roles      []AccessRoleChoice `json:"roles,omitempty"`
+	Total      int                `json:"total,omitempty"`
+	Truncated  bool               `json:"truncated,omitempty"`
+	NextCursor string             `json:"nextCursor,omitempty"`
 }
 
 // AccessRoleChoice is one scope set offered as a role.
@@ -42,8 +46,12 @@ type AccessRoleChoice struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Builtin     bool   `json:"builtin"`
-	// Person is true for a role only an access-code admin may assign.
-	Person   bool       `json:"person"`
+	// Person is true for a role holding a dangerous scope: assigning it
+	// needs a reason, and a person whose own role holds all of it.
+	Person bool `json:"person"`
+	// Denies is true for a role that denies scopes: in a role a deny is a
+	// veto, so changing an entry that has it needs a reason too.
+	Denies   bool       `json:"denies,omitempty"`
 	Resolved []APIScope `json:"resolved"`
 }
 
@@ -53,8 +61,8 @@ type AccessRoleChoice struct {
 //
 // Role is the scope set the entry's sessions are held to, grain/operator
 // when empty (docs/design/access-rbac.md). A role holding a dangerous
-// scope -- grain/operator among them -- is assigned only by an access-code
-// admin, and only with a reason.
+// scope -- grain/operator among them -- is assigned only with a reason, by
+// the access code or by a signed-in person holding every scope of it.
 type AllowPrincipalRequest struct {
 	Entry  string `json:"entry"`
 	Reason string `json:"reason,omitempty"`
@@ -64,9 +72,22 @@ type AllowPrincipalRequest struct {
 
 // SetPrincipalRoleRequest is PATCH /api/access/principals/{entry}: the role
 // to give an entry already on the list, and why.
+//
+// ConfirmSelf confirms narrowing an entry that matches the caller itself,
+// which is refused without it (docs/design/access-rbac.md §3).
 type SetPrincipalRoleRequest struct {
-	Role   string `json:"role"`
-	Reason string `json:"reason,omitempty"`
+	Role        string `json:"role"`
+	Reason      string `json:"reason,omitempty"`
+	ConfirmSelf bool   `json:"confirmSelf,omitempty"`
+}
+
+// DenyPrincipalOptions are DELETE /api/access/principals/{entry}'s query:
+// why the entry is removed (?reason=, required when its role holds a
+// dangerous scope or denies scopes and a signed-in admin removes it) and
+// ?confirmSelf=1 to confirm removing an entry that matches the caller.
+type DenyPrincipalOptions struct {
+	Reason      string
+	ConfirmSelf bool
 }
 
 // SetPrincipalRoleResponse is the response to PATCH
@@ -91,8 +112,28 @@ type DenyPrincipalResponse struct {
 
 type actingReasonContextKey struct{}
 
+type confirmSelfContextKey struct{}
+
+// withConfirmSelf records that the caller confirmed a change narrowing an
+// entry that matches itself (DELETE's ?confirmSelf=1).
+func withConfirmSelf(ctx context.Context, confirm bool) context.Context {
+	if !confirm {
+		return ctx
+	}
+	return context.WithValue(ctx, confirmSelfContextKey{}, true)
+}
+
+func confirmSelfFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(confirmSelfContextKey{}).(bool)
+	return v
+}
+
+func cleanAccessReason(reason string) string {
+	return strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(reason))
+}
+
 func withActingReason(ctx context.Context, reason string) context.Context {
-	reason = strings.TrimSpace(reason)
+	reason = cleanAccessReason(reason)
 	if reason == "" {
 		return ctx
 	}
@@ -177,7 +218,7 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	if _, auditErr := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
 		At:      c.now(),
 		By:      model.Principal{Kind: model.PrincipalAutomation, ID: "flag-migration"},
-		Surface: "access",
+		Surface: accessAuditSurface,
 		Summary: summary,
 	}); auditErr != nil {
 		log.Printf("grain access: recording flag migration in config audit: %v", auditErr)
@@ -251,7 +292,7 @@ func (c *Client) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsRes
 			continue
 		}
 		roles = append(roles, AccessRoleChoice{Name: set.Name, Description: set.Description,
-			Builtin: set.Builtin, Person: set.Person, Resolved: set.Resolved})
+			Builtin: set.Builtin, Person: set.Person, Denies: len(roleDenies(set.Name)) > 0, Resolved: set.Resolved})
 	}
 	return AccessPrincipalsResponse{
 		Entries:            entries,
@@ -266,8 +307,8 @@ func (c *Client) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsRes
 // account whose key grain hands to tasks (the gcp-key / gcp permission-set
 // pools) is always refused. Adding an existing entry is an idempotent no-op.
 func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) (AllowPrincipalResponse, error) {
-	if isDelegatedRequest(ctx) {
-		return AllowPrincipalResponse{}, forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
+	if err := checkAccessWriteCaller(ctx); err != nil {
+		return AllowPrincipalResponse{}, err
 	}
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return AllowPrincipalResponse{}, err
@@ -276,7 +317,7 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 	if err != nil {
 		return AllowPrincipalResponse{}, validationErrorf("%v", err)
 	}
-	reason := strings.TrimSpace(req.Reason)
+	reason := cleanAccessReason(req.Reason)
 	if reason == "" {
 		reason = actingReasonFromContext(ctx)
 	}
@@ -329,7 +370,7 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 		// (PATCH changes one), so nothing is assigned.
 		return AllowPrincipalResponse{Principal: existing, Created: false}, nil
 	}
-	if err := checkAccessRoleAssignment(ctx, canonical, role, "", reason); err != nil {
+	if err := c.checkAccessChange(ctx, accessChange{entry: canonical, role: role, reason: reason}); err != nil {
 		return AllowPrincipalResponse{}, err
 	}
 	p, created, err := c.Store.AddAllowedPrincipalWithOptions(ctx, canonical, writerName(ctx), reason, role, label, c.now())
@@ -348,8 +389,8 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 
 // DenyPrincipal removes an entry from the database allowlist.
 func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrincipalResponse, error) {
-	if isDelegatedRequest(ctx) {
-		return DenyPrincipalResponse{}, forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
+	if err := checkAccessWriteCaller(ctx); err != nil {
+		return DenyPrincipalResponse{}, err
 	}
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return DenyPrincipalResponse{}, err
@@ -361,13 +402,17 @@ func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrinci
 	if owner := c.explicitDeploymentOwnerEmail(); owner != "" && canonical == "user:"+owner {
 		return DenyPrincipalResponse{}, validationErrorf("allowed principal %q is the deployment owner (-deployment-owner) and cannot be removed from the allowlist", canonical)
 	}
-	if existing, ok, err := c.allowedPrincipalNamed(ctx, canonical); err != nil {
+	reason := actingReasonFromContext(ctx)
+	existing, ok, err := c.allowedPrincipalNamed(ctx, canonical)
+	if err != nil {
 		return DenyPrincipalResponse{}, err
-	} else if ok {
-		if err := checkAccessEntryChange(ctx, canonical, existing.Role); err != nil {
-			return DenyPrincipalResponse{}, err
-		}
-	} else if err := checkAccessEntryChange(ctx, canonical, ""); err != nil {
+	}
+	current := existing.Role
+	if ok && current == "" {
+		current = model.DefaultAccessRole
+	}
+	if err := c.checkAccessChange(ctx, accessChange{entry: canonical, current: current, reason: reason,
+		confirmSelf: confirmSelfFromContext(ctx)}); err != nil {
 		return DenyPrincipalResponse{}, err
 	}
 	removedEntry, removed, err := c.Store.RemoveAllowedPrincipal(ctx, canonical)
@@ -378,7 +423,10 @@ func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrinci
 		return DenyPrincipalResponse{}, &NotFoundError{message: fmt.Sprintf("allowed principal %q is not on the allowlist", canonical)}
 	}
 	summary := "removed " + removedEntry
-	if reason := actingReasonFromContext(ctx); reason != "" {
+	if current != "" {
+		summary += " (was " + current + ")"
+	}
+	if reason != "" {
 		summary += " (" + reason + ")"
 	}
 	c.auditAccessChange(ctx, summary)
@@ -387,8 +435,8 @@ func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrinci
 
 // SetPrincipalRole gives an entry already on the allowlist another role.
 func (c *Client) SetPrincipalRole(ctx context.Context, rawEntry string, req SetPrincipalRoleRequest) (SetPrincipalRoleResponse, error) {
-	if isDelegatedRequest(ctx) {
-		return SetPrincipalRoleResponse{}, forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
+	if err := checkAccessWriteCaller(ctx); err != nil {
+		return SetPrincipalRoleResponse{}, err
 	}
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return SetPrincipalRoleResponse{}, err
@@ -404,7 +452,7 @@ func (c *Client) SetPrincipalRole(ctx context.Context, rawEntry string, req SetP
 	if owner := c.explicitDeploymentOwnerEmail(); owner != "" && canonical == "user:"+owner && role != model.DefaultAccessRole {
 		return SetPrincipalRoleResponse{}, validationErrorf("allowed principal %q is the deployment owner (-deployment-owner) and must keep role %s", canonical, model.DefaultAccessRole)
 	}
-	reason := strings.TrimSpace(req.Reason)
+	reason := cleanAccessReason(req.Reason)
 	if reason == "" {
 		reason = actingReasonFromContext(ctx)
 	}
@@ -426,7 +474,12 @@ func (c *Client) SetPrincipalRole(ctx context.Context, rawEntry string, req SetP
 	if !ok {
 		return SetPrincipalRoleResponse{}, &NotFoundError{message: fmt.Sprintf("allowed principal %q is not on the allowlist", canonical)}
 	}
-	if err := checkAccessRoleAssignment(ctx, canonical, role, existing.Role, reason); err != nil {
+	current := existing.Role
+	if current == "" {
+		current = model.DefaultAccessRole
+	}
+	if err := c.checkAccessChange(ctx, accessChange{entry: canonical, current: current, role: role, reason: reason,
+		confirmSelf: req.ConfirmSelf || confirmSelfFromContext(ctx)}); err != nil {
 		return SetPrincipalRoleResponse{}, err
 	}
 	if existing.Role == role {
@@ -461,74 +514,180 @@ func (c *Client) allowedPrincipalNamed(ctx context.Context, canonical string) (m
 	return model.AllowedPrincipal{}, false, nil
 }
 
-// checkAccessEntryChange refuses a change to entry (whose role is current,
-// "" for none) by a caller who may not make it: any agent, and a verified
-// session whose own role is narrower than current, or for which current is
-// a role only an access-code admin assigns or one that denies scopes
-// (docs/design/access-rbac.md §3).
-func checkAccessEntryChange(ctx context.Context, entry, current string) error {
+// accessChange is one change to the allowlist: entry going from role
+// current ("" for an entry not on it yet) to role ("" for removing it).
+type accessChange struct {
+	entry, current, role string
+	reason               string
+	// confirmSelf is the caller saying yes to narrowing an entry that is
+	// its own (docs/design/access-rbac.md §3).
+	confirmSelf bool
+}
+
+// sensitiveRole reports whether role holds a dangerous scope (a set only a
+// person may grant) or denies scopes: the roles a change to needs a reason
+// and, from a verified session, a person.
+func sensitiveRole(role string) bool {
+	if role == "" {
+		return false
+	}
+	if set, ok := model.APIScopeSetNamed(role); ok && set.Person {
+		return true
+	}
+	return len(roleDenies(role)) > 0
+}
+
+// accessRulesHint is what every refusal of a verified admin's change ends
+// with, so the person refused reads the rules they are held to.
+const accessRulesHint = "a signed-in admin changes another entry's role, dangerous or deny roles included, when it holds every scope of both the old and new role and gives a reason; it never widens or lifts a deny on an entry that matches itself, and never removes the last full admin (the access code can still do any of these)"
+
+func checkAccessWriteCaller(ctx context.Context) error {
 	if isDelegatedRequest(ctx) {
 		return forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
 	}
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
 		return &ForbiddenError{err: fmt.Errorf("agent %s may not change who signs in to this deployment: only a person changes the allowed users and groups list", p.ID)}
 	}
-	if strings.HasPrefix(entry, "delegate:") {
-		if p, ok := PrincipalFromContext(ctx); ok && p.Kind != model.PrincipalHuman {
-			return forbiddenCodeErrorf("requires_person", "%s may not change %s: only a person may change delegate: entries", p.ID, entry)
+	return nil
+}
+
+// checkAccessChange refuses ch to a caller who may not make it
+// (docs/design/access-rbac.md §3):
+//
+//   - delegated requests and agents never change the list;
+//   - the access code (and every caller grain trusts as itself) may make
+//     any change, with a reason when it assigns a dangerous role;
+//   - a verified session may make a change only within its own role: it
+//     holds every scope of the current role and of the new one (and every
+//     scope a deny role vetoes);
+//   - a change involving a dangerous or deny role needs a person and a
+//     reason;
+//   - an entry that matches the caller is never added, widened or given or
+//     freed of a deny, and narrowing it needs ch.confirmSelf;
+//   - the last entry holding a full role is never removed or narrowed.
+func (c *Client) checkAccessChange(ctx context.Context, ch accessChange) error {
+	if err := checkAccessWriteCaller(ctx); err != nil {
+		return err
+	}
+	var newSet model.ResolvedAPIScopeSet
+	if ch.role != "" {
+		set, ok := model.APIScopeSetNamed(ch.role)
+		if !ok {
+			return validationErrorf("role %q is no scope set in effect (Settings -> Scope sets, or a built-in such as %s or grain/viewer)", ch.role, model.DefaultAccessRole)
+		}
+		newSet = set
+	}
+	p, hasPrincipal := PrincipalFromContext(ctx)
+	if strings.HasPrefix(ch.entry, "delegate:") && hasPrincipal && p.Kind != model.PrincipalHuman {
+		return forbiddenCodeErrorf("requires_person", "%s may not change %s: only a person may change delegate: entries", p.ID, ch.entry)
+	}
+	reasonNeeded := newSet.Person
+	caller := accessRoleFromContext(ctx)
+	if caller != nil {
+		reasonNeeded = sensitiveRole(ch.current) || sensitiveRole(ch.role)
+		if reasonNeeded && (!hasPrincipal || p.Kind != model.PrincipalHuman) {
+			return &ForbiddenError{err: fmt.Errorf("%s may not change %s: a change involving a role that holds a dangerous scope or denies scopes is made only by a person (or with the access code)", caller.label(), ch.entry)}
 		}
 	}
-	caller := accessRoleFromContext(ctx)
-	if caller == nil || current == "" {
+	if reasonNeeded && cleanAccessReason(ch.reason) == "" {
+		return validationErrorf("%s: give a reason to %s (--reason, or the reason field)", ch.entry, describeAccessChange(ch))
+	}
+	if caller == nil {
 		return nil
 	}
-	set, ok := model.APIScopeSetNamed(current)
-	if !ok {
+	if err := checkSelfAccessChange(ctx, caller, ch); err != nil {
+		return err
+	}
+	for _, role := range []string{ch.current, ch.role} {
+		if role == "" {
+			continue
+		}
+		if err := caller.noWiderThan(resolveAccessRoles(ch.entry, []string{role})); err != nil {
+			return &ForbiddenError{err: fmt.Errorf("role %s is wider than %s's own: %v (%s)", role, caller.Who, err, accessRulesHint)}
+		}
+		for sc := range roleDenies(role) {
+			if !caller.has(sc) {
+				return &ForbiddenError{err: fmt.Errorf("role %s denies %s, which %s does not hold, so it may not add or lift that deny (%s)", role, sc, caller.label(), accessRulesHint)}
+			}
+		}
+	}
+	return c.checkLastFullAdmin(ctx, ch)
+}
+
+// describeAccessChange is ch in words, for a message.
+func describeAccessChange(ch accessChange) string {
+	switch {
+	case ch.role == "":
+		return "remove it (role " + ch.current + ")"
+	case ch.current == "":
+		return "give it role " + ch.role
+	default:
+		return "change its role " + ch.current + " -> " + ch.role
+	}
+}
+
+// checkSelfAccessChange refuses a change to an entry that admits the caller
+// when it would add or widen what the entry grants, or add or lift a deny on
+// it, and asks for confirmation before narrowing it. Adding a matching entry
+// is refused too so a caller admitted through a group cannot entrench a direct
+// user: entry or re-POST a matching entry wider after DELETE?confirmSelf=1.
+// A group whose membership cannot be looked up is taken to match.
+func checkSelfAccessChange(ctx context.Context, caller *accessRole, ch accessChange) error {
+	mine, err := caller.matchesEntry(ctx, ch.entry)
+	how := "matches you"
+	if err != nil {
+		mine, how = true, "may match you (its membership could not be checked)"
+	}
+	if !mine || ch.current == ch.role {
 		return nil
 	}
-	if set.Person {
-		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which holds a dangerous scope: only an access-code admin changes it or removes it", entry, current)}
+	if len(roleDenies(ch.current)) > 0 || len(roleDenies(ch.role)) > 0 {
+		return forbiddenCodeErrorf("self_access_change", "%s %s: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can", ch.entry, how)
 	}
-	if len(roleDenies(current)) > 0 {
-		// A deny is a veto over every other entry the same people match
-		// (docs/design/access-rbac.md §2): removing or re-roling it
-		// widens them -- the caller among them, perhaps -- past anything
-		// noWiderThan sees, since a deny grants nothing to compare.
-		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which denies scopes: only an access-code admin lifts a deny by changing it or removing it", entry, current)}
+	if ch.role != "" {
+		if ch.current == "" {
+			return forbiddenCodeErrorf("self_escalation", "%s %s: you may not add an entry that matches yourself (role %s); another admin, or the access code, can", ch.entry, how, ch.role)
+		}
+		if err := resolveAccessRoles(ch.entry, []string{ch.current}).noWiderThan(resolveAccessRoles(ch.entry, []string{ch.role})); err != nil {
+			return forbiddenCodeErrorf("self_escalation", "%s %s: you may not widen it from %s to %s (%v); another admin, or the access code, can", ch.entry, how, ch.current, ch.role, err)
+		}
 	}
-	if err := caller.noWiderThan(resolveAccessRoles(entry, []string{current})); err != nil {
-		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which is wider than %s's own (%v): only an access-code admin changes it", entry, current, caller.Who, err)}
+	if !ch.confirmSelf {
+		return forbiddenCodeErrorf("confirm_self", "%s %s: confirm that you want to %s, which narrows your own access (confirmSelf, or --confirm-self)", ch.entry, how, describeAccessChange(ch))
 	}
 	return nil
 }
 
-// checkAccessRoleAssignment refuses giving entry role (from current, ""
-// for a new entry) to a caller who may not, or without a reason a
-// dangerous role needs.
-func checkAccessRoleAssignment(ctx context.Context, entry, role, current, reason string) error {
-	set, ok := model.APIScopeSetNamed(role)
-	if !ok {
-		return validationErrorf("role %q is no scope set in effect (Settings -> Scope sets, or a built-in such as %s or grain/viewer)", role, model.DefaultAccessRole)
-	}
-	if err := checkAccessEntryChange(ctx, entry, current); err != nil {
-		return err
-	}
-	caller := accessRoleFromContext(ctx)
-	if set.Person {
-		if caller != nil {
-			return &ForbiddenError{err: fmt.Errorf("role %s holds a dangerous scope (or only a person may grant it): only an access-code admin assigns it, not %s", role, caller.label())}
-		}
-		if strings.TrimSpace(reason) == "" {
-			return validationErrorf("role %s holds a dangerous scope: give a reason to assign it to %s (--reason, or the reason field)", role, entry)
-		}
+// checkLastFullAdmin refuses removing or narrowing the only user: or
+// group: entry whose role holds every scope, so a verified session cannot
+// leave the deployment with nobody who can sign in as a full admin.
+func (c *Client) checkLastFullAdmin(ctx context.Context, ch accessChange) error {
+	if !fullAccessRole(ch.entry, ch.current) || fullAccessRole(ch.entry, ch.role) {
 		return nil
 	}
-	if caller != nil {
-		if err := caller.noWiderThan(resolveAccessRoles(entry, []string{role})); err != nil {
-			return &ForbiddenError{err: fmt.Errorf("role %s is wider than %s's own: %v", role, caller.Who, err)}
+	entries, err := c.Store.ListAllowedPrincipals(ctx)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		role := e.Role
+		if role == "" {
+			role = model.DefaultAccessRole
+		}
+		if e.Entry != ch.entry && fullAccessRole(e.Entry, role) {
+			return nil
 		}
 	}
-	return nil
+	return forbiddenCodeErrorf("last_admin", "%s is the last entry holding a full admin role (%s): refusing to %s, which would leave nobody to sign in as a full admin; give another entry %s first (the access code can still recover the deployment)", ch.entry, ch.current, describeAccessChange(ch), model.DefaultAccessRole)
+}
+
+// fullAccessRole reports whether a user: or group: entry with role holds
+// every scope on every repository.
+func fullAccessRole(entry, role string) bool {
+	if role == "" || !(strings.HasPrefix(entry, "user:") || strings.HasPrefix(entry, "group:")) {
+		return false
+	}
+	return resolveAccessRoles(entry, []string{role}).Full
 }
 
 func (c *Client) auditAccessChange(ctx context.Context, summary string) {
@@ -539,7 +698,7 @@ func (c *Client) auditAccessChange(ctx context.Context, summary string) {
 		At:         c.now(),
 		By:         by.Actor,
 		OnBehalfOf: by.OnBehalfOf,
-		Surface:    "access",
+		Surface:    accessAuditSurface,
 		Summary:    summary,
 	}); err != nil {
 		log.Printf("grain access: recording %q in config audit: %v", summary, err)
@@ -547,12 +706,90 @@ func (c *Client) auditAccessChange(ctx context.Context, summary string) {
 }
 
 func (s *Server) handleListAccessPrincipals(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.ListAllowedPrincipals(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
+	if list.Paged {
+		matched := filterList(out.Entries, func(p model.AllowedPrincipal) bool {
+			return list.matches(p.Entry, p.Role, p.Reason, p.AddedBy)
+		})
+		page := pageOf(matched, list)
+		out.Entries = page.Items
+		out.Roles = nil
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// accessHistoryLimit is how many access changes an unpaged GET
+// /api/access/history (the Access page's own read) returns, newest first.
+const accessHistoryLimit = 100
+
+// accessAuditSurface is the config_audit surface access changes are
+// recorded under.
+const accessAuditSurface = "access"
+
+// handleAccessHistory is GET /api/access/history: the config_audit rows of
+// surface "access", so Settings -> Access shows who changed which role,
+// when and why to a caller holding access:read without settings:read.
+func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	capLimit := accessHistoryLimit
+	if !isAgentListCaller(r) && !q.Has("cursor") && !q.Has("q") {
+		list.Paged = false
+		if q.Has("limit") {
+			if list.Limit == 0 {
+				capLimit = maxConfigAudit
+			} else {
+				capLimit = min(list.Limit, maxConfigAudit)
+			}
+		}
+	}
+	// The surface is narrowed in the query, not here: reading the newest
+	// maxConfigAudit changes of every surface and keeping the access
+	// ones answered nothing once that many settings or capability-server
+	// edits were newer than the last access change.
+	entries, err := s.tasks.Store.ConfigAuditOfSurface(r.Context(), accessAuditSurface, maxConfigAudit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	title := s.tasks.sessionTitles(r.Context())
+	out := []ConfigAuditView{}
+	for _, e := range entries {
+		view := ConfigAuditView{
+			ID:          e.ID,
+			At:          e.At,
+			Actor:       e.By.ID,
+			ActorKind:   string(e.By.Kind),
+			ActorSource: string(e.By.Source),
+			ActorLabel:  sessionLabel(e.By, e.OnBehalfOf, title),
+			Surface:     e.Surface,
+			Summary:     e.Summary,
+		}
+		if !list.matches(view.Actor, view.ActorLabel, view.Summary) {
+			continue
+		}
+		out = append(out, view)
+		if !list.Paged && len(out) == capLimit {
+			break
+		}
+	}
+	writeListBy(w, out, list, configAuditKey)
 }
 
 func (s *Server) handleAllowPrincipal(w http.ResponseWriter, r *http.Request) {
@@ -600,7 +837,12 @@ func (s *Server) handleDenyPrincipal(w http.ResponseWriter, r *http.Request) {
 			rawEntry = unescaped
 		}
 	}
-	ctx := withActingReason(r.Context(), r.Header.Get(ActingReasonHeader))
+	reason := r.Header.Get(ActingReasonHeader)
+	if q := cleanAccessReason(r.URL.Query().Get("reason")); q != "" {
+		reason = q
+	}
+	ctx := withActingReason(r.Context(), reason)
+	ctx = withConfirmSelf(ctx, confirmSelfQuery(r.URL.Query().Get("confirmSelf")))
 	out, err := s.tasks.DenyPrincipal(ctx, rawEntry)
 	if err != nil {
 		writeClientError(w, err)
@@ -609,11 +851,31 @@ func (s *Server) handleDenyPrincipal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// confirmSelfQuery reads ?confirmSelf=: 1, true or yes.
+func confirmSelfQuery(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
 // ListAllowedPrincipals is GET /api/access/principals.
 func (c *HTTPClient) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsResponse, error) {
 	var out AccessPrincipalsResponse
-	err := c.do(ctx, http.MethodGet, "/api/access/principals", nil, &out)
-	return out, err
+	if err := c.do(ctx, http.MethodGet, "/api/access/principals", nil, &out); err != nil {
+		return out, err
+	}
+	for out.Truncated && out.NextCursor != "" {
+		var page AccessPrincipalsResponse
+		if err := c.do(ctx, http.MethodGet, "/api/access/principals?cursor="+url.QueryEscape(out.NextCursor), nil, &page); err != nil {
+			return out, err
+		}
+		out.Entries = append(out.Entries, page.Entries...)
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
+	}
+	return out, nil
 }
 
 // AllowPrincipal is POST /api/access/principals.
@@ -632,7 +894,24 @@ func (c *HTTPClient) SetPrincipalRole(ctx context.Context, entry string, req Set
 
 // DenyPrincipal is DELETE /api/access/principals/{entry}.
 func (c *HTTPClient) DenyPrincipal(ctx context.Context, entry string) (DenyPrincipalResponse, error) {
+	return c.DenyPrincipalWith(ctx, entry, DenyPrincipalOptions{})
+}
+
+// DenyPrincipalWith is DELETE /api/access/principals/{entry} with a reason
+// and confirmation.
+func (c *HTTPClient) DenyPrincipalWith(ctx context.Context, entry string, opts DenyPrincipalOptions) (DenyPrincipalResponse, error) {
 	var out DenyPrincipalResponse
-	err := c.do(ctx, http.MethodDelete, "/api/access/principals/"+url.PathEscape(strings.TrimSpace(entry)), nil, &out)
+	q := url.Values{}
+	if r := strings.TrimSpace(opts.Reason); r != "" {
+		q.Set("reason", r)
+	}
+	if opts.ConfirmSelf {
+		q.Set("confirmSelf", "1")
+	}
+	path := "/api/access/principals/" + url.PathEscape(strings.TrimSpace(entry))
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	err := c.do(ctx, http.MethodDelete, path, nil, &out)
 	return out, err
 }

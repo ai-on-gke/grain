@@ -260,8 +260,8 @@ describe("CapabilityServersPanel", () => {
       expect.stringContaining("docs/capability-servers-ui.md"),
     );
     expect(
-      within(intro).getByRole("link", { name: "Legacy capabilities" }),
-    ).toHaveAttribute("href", "/settings/credentials");
+      within(intro).getByRole("link", { name: "Deployment credentials" }),
+    ).toHaveAttribute("href", "/settings/capabilities#credentials");
     const glossary = screen.getByTestId("capability-glossary");
     for (const term of [
       "built-in",
@@ -548,6 +548,48 @@ describe("CapabilityServersPanel", () => {
     ).toBeInTheDocument();
     expect(within(c).getByText("gcp-minter: missing")).toBeInTheDocument();
     expect(within(c).getByText("grain capability gcp")).toBeInTheDocument();
+  });
+
+  it("shows a server waiting on the host as waiting for it, not as needing configuring", async () => {
+    const corp = "https://example.com/caps/corp";
+    serve({
+      ...base,
+      "GET /api/capability-servers": [
+        {
+          id: corp,
+          builtin: { name: "corp", id: corp, summary: "corp lookups" },
+          config: { command: "grain", args: ["capability", "corp"] },
+          secrets: [],
+          status: {
+            id: corp,
+            state: "needs-config",
+            transport: "stdio",
+            builtin: "corp",
+            waiting: "a renewed host credential",
+            reason: `capability server ${corp}: configure: the host credential expired`,
+          },
+        },
+      ],
+    });
+    render(<CapabilityServersPanel showError={() => {}} />);
+    await waitFor(() => {
+      if (!rowOf(corp)) throw new Error("no row");
+    });
+    expect(
+      within(rowOf(corp)).getByTestId("capability-server-state"),
+    ).toHaveTextContent("waiting for a renewed host credential");
+    const c = await card(corp);
+    expect(within(c).getByTestId("capability-server-state")).toHaveTextContent(
+      "waiting for a renewed host credential",
+    );
+    expect(
+      within(c).getByTestId("capability-server-waiting"),
+    ).toHaveTextContent(
+      /tries it again every minute.*the host credential expired/,
+    );
+    expect(
+      within(c).queryByTestId("capability-server-needs-config"),
+    ).not.toBeInTheDocument();
   });
 
   it("reads a server with no status again only a few times, not forever", async () => {

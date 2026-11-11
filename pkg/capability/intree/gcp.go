@@ -289,7 +289,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 		}
 		setArg[protocol.PersonGrantedArgKey] = vals
 	}
-	desc := "Mint a per-attempt key for a service account of one of this deployment's GCP permission sets, deleted at release or past the attempt's deadline -- or, for a set over an existing service account with credential: token, short-lived access tokens for it by impersonation, and no key at all."
+	desc := "Mint per-attempt GCP credentials for one of this deployment's permission sets: short-lived access tokens by impersonation with no key at all (credential: token -- either on a grain-managed service account whose roles grain binds, or on an existing service_account), or a per-attempt service-account key deleted at release or past the attempt's deadline (credential: key)."
 	if report != "" {
 		desc += "\n\n" + report
 	}
@@ -362,10 +362,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 				script := "/home/debian/.gcp-key/" + attemptID + "/activate.sh"
 				resp.Placements = append(resp.Placements, protocol.Placement{
 					Path: script, Mode: "0700",
-					Content: "#!/bin/sh\nset -eu\n" +
-						"command -v gcloud >/dev/null 2>&1 || exit 0\n" +
-						"gcloud auth activate-service-account --key-file=" + shellQuote(keyPath) + " >/dev/null 2>&1\n" +
-						"gcloud config set project " + shellQuote(ps.Project) + " >/dev/null 2>&1\n",
+					Content: gcpKeyActivateScript(keyPath, ps.Project),
 				})
 				resp.Setup = script
 			}
@@ -381,8 +378,8 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 // gcpTokenResponse is a token-mode grant's placements: the
 // external_account config where a key would go, the per-attempt token it
 // presents, the .about file, an ID-token helper, the forward to this
-// server's listener, and -- for a primary grant -- gcloud signed in with
-// the config.
+// server's listener, and -- for a primary grant -- gcloud pointed at the
+// config (gcpTokenActivateScript).
 func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Lease, ps *gcpsets.PermissionSet, deadline time.Time, keyPath string, primary bool) (*protocol.MintResponse, error) {
 	secret, err := tokens.grant(attemptID, set, lease.Account, deadline)
 	if err != nil {
@@ -397,8 +394,19 @@ func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Le
 		"credential: short-lived access tokens by impersonation (no key exists); " + keyPath + " is an external_account config\n" +
 		"id_token: " + idScript + " AUDIENCE\n"
 	roles := ""
-	if len(ps.Roles) > 0 {
-		roles = " (listed roles " + strings.Join(ps.Roles, ", ") + "; the account's own permissions are what apply)"
+	promptAccount := "service account " + lease.Account + " in project " + ps.Project
+	if ps.Existing() {
+		promptAccount = "existing service account " + lease.Account + ", project " + ps.Project
+		if len(ps.Roles) > 0 {
+			roles = " (listed roles " + strings.Join(ps.Roles, ", ") + "; the account's own permissions are what apply)"
+		}
+	} else {
+		if len(ps.Roles) > 0 {
+			roles = ", roles " + strings.Join(ps.Roles, ", ")
+			if ps.ResourceScope != "" {
+				roles += " on " + ps.ResourceScope
+			}
+		}
 	}
 	resp := &protocol.MintResponse{
 		Status: protocol.StatusOK,
@@ -409,22 +417,150 @@ func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Le
 			{Path: idScript, Mode: "0700", Content: gcpIDTokenScript(port, attemptID, subject)},
 			{Path: aboutPath, Mode: "0644", Content: about},
 		},
-		PromptSection: fmt.Sprintf("GCP permission set %s: existing service account %s, project %s%s. %s is an external_account credential config, not a key: clients that read it get short-lived access tokens for that account, refreshed as they expire, until this attempt ends. `%s AUDIENCE` prints an ID token for it. %s names the set, the account and the project.",
-			set, lease.Account, ps.Project, roles, keyPath, idScript, aboutPath),
+		PromptSection: fmt.Sprintf("GCP permission set %s: %s%s. %s is an external_account credential config, not a key: clients that read it get short-lived access tokens for that account, refreshed as they expire, until this attempt ends. `%s AUDIENCE` prints an ID token for it. %s names the set, the account and the project.",
+			set, promptAccount, roles, keyPath, idScript, aboutPath),
 	}
 	if primary && keyPath == GCPKeyPath {
-		resp.PromptSection += " gcloud is logged in with it, the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find it there."
+		resp.PromptSection += " gcloud uses it (auth/credential_file_override) with the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find it there."
 		script := dir + "/activate.sh"
 		resp.Placements = append(resp.Placements, protocol.Placement{
 			Path: script, Mode: "0700",
-			Content: "#!/bin/sh\nset -eu\n" +
-				"command -v gcloud >/dev/null 2>&1 || exit 0\n" +
-				"gcloud auth login --cred-file=" + shellQuote(keyPath) + " --quiet >/dev/null 2>&1\n" +
-				"gcloud config set project " + shellQuote(ps.Project) + " >/dev/null 2>&1\n",
+			Content: gcpTokenActivateScript(keyPath, ps.Project, subject),
 		})
 		resp.Setup = script
 	}
 	return resp, nil
+}
+
+// gcpKeyActivateScript is a key-mode primary grant's setup script: gcloud
+// activates the service-account key (step "login") and selects the
+// project (step "project"); gcpActivateScript says what it prints.
+func gcpKeyActivateScript(keyPath, project string) string {
+	return gcpActivateScript("",
+		"step login gcloud auth activate-service-account --key-file="+shellQuote(keyPath)+" --quiet",
+		"step project gcloud config set project "+shellQuote(project)+" --quiet")
+}
+
+// gcpTokenActivateScript is a token-mode primary grant's setup script. It
+// points gcloud at the external_account config with
+// auth/credential_file_override rather than `gcloud auth login
+// --cred-file`: login introspects the access token it is handed against
+// sts.googleapis.com, and an iamcredentials-minted service-account token
+// (which is what the token endpoint exchanges the subject token for) is
+// not an STS-issued one, so STS answers {"active": false} and login exits
+// 1 -- failing every token-mode primary grant's setup. The override has
+// gcloud read the config for each command and refresh through the token
+// endpoint, with no introspection. Setting the override checks nothing,
+// so a last step ("token exchange") has gcloud exchange the subject token
+// once -- its token goes to /dev/null -- and a gcloud that cannot read an
+// external_account config, or a forward that does not reach the token
+// endpoint, fails setup with gcloud's reason instead of failing the
+// agent's first gcloud command. subjectPath, the per-attempt secret, is
+// redacted from everything the script prints.
+func gcpTokenActivateScript(keyPath, project, subjectPath string) string {
+	return gcpActivateScript(subjectPath,
+		"step login gcloud config set auth/credential_file_override "+shellQuote(keyPath)+" --quiet",
+		"step project gcloud config set project "+shellQuote(project)+" --quiet",
+		"step_quiet 'token exchange' gcloud auth print-access-token --quiet")
+}
+
+// gcpActivateScript is the setup script running steps, each a `step NAME
+// gcloud ...` line (or `step_quiet`, whose stdout is discarded rather than
+// logged: it is a token). It exits 0 when gcloud is absent. Everything
+// gcloud prints goes to activate.log beside the script, and nothing to
+// the script's own output while every step succeeds -- what setup prints
+// would be all the task is told of. A failing step prints, on stderr,
+// which step failed, `gcloud --version`, a hint when gcloud looks too old
+// for external_account credentials, and the last 40 lines of the log:
+// CapabilitySetupError's output tail, so the setup-failure comment says
+// why. Every line logged or printed passes through redact first: the
+// contents of secretFile (the token-mode subject token, empty for none;
+// missing or short secretFile fails closed), access tokens, JWTs, OAuth
+// token fields, and private keys (to their END line) become [redacted].
+func gcpActivateScript(secretFile string, steps ...string) string {
+	return `#!/bin/sh
+set -u
+command -v gcloud >/dev/null 2>&1 || exit 0
+secret_file=` + shellQuote(secretFile) + `
+if [ -n "$secret_file" ] && { [ ! -r "$secret_file" ] || [ ! -s "$secret_file" ]; }; then
+  printf 'gcp-key setup failed: subject token file %s is missing or empty\n' "$secret_file" >&2
+  exit 1
+fi
+dir=$(dirname "$0")
+log="$dir/activate.log"
+out=""
+trap '[ -n "$out" ] && rm -f "$out"' EXIT HUP INT TERM
+umask 077
+: >"$log" || exit 1
+redact() {
+  SECRET_FILE="$secret_file" awk 'BEGIN {
+    s = ""
+    f = ENVIRON["SECRET_FILE"]
+    if (f != "") {
+      if ((getline line < f) <= 0) exit 2
+      close(f)
+      sub(/\r$/, "", line)
+      if (length(line) < 8) exit 2
+      s = line
+    }
+  }
+  {
+    if (k) { if ($0 ~ /END [A-Z0-9 ]*PRIVATE KEY|["\047]/) k = 0; next }
+    if ($0 ~ /BEGIN [A-Z0-9 ]*PRIVATE KEY/) { print "[redacted]"; k = ($0 !~ /END [A-Z0-9 ]*PRIVATE KEY/ && $0 !~ /PRIVATE KEY[^"\047]*["\047]/); next }
+    if ($0 ~ /["\047]?private_key["\047]?[[:space:]]*[:=]/) { print "[redacted]"; next }
+    if (s != "") {
+      clean = ""
+      rest = $0
+      while ((i = index(rest, s)) > 0) {
+        clean = clean substr(rest, 1, i - 1) "[redacted]"
+        rest = substr(rest, i + length(s))
+      }
+      $0 = clean rest
+    }
+    gsub(/ya29\.[A-Za-z0-9._~+\/=-]+/, "[redacted]")
+    gsub(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9._-]*/, "[redacted]")
+    gsub(/[Bb]earer +[A-Za-z0-9._~+\/=-]+/, "Bearer [redacted]")
+    gsub(/"(access_token|refresh_token|id_token|client_secret|private_key_data)"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"[redacted]\"")
+    print
+  }'
+}
+if ! version=$(gcloud --version 2>&1 | head -n 3 | redact); then
+  version="[output omitted: redaction failed]"
+fi
+printf '%s\n' "$version" >>"$log"
+run() {
+  name=$1 quiet=$2
+  shift 2
+  printf '+ %s\n' "$*" >>"$log"
+  out=$(mktemp "$dir/.activate.XXXXXX") || exit 1
+  if [ "$quiet" = 1 ]; then
+    "$@" </dev/null >/dev/null 2>"$out"
+  else
+    "$@" </dev/null >"$out" 2>&1
+  fi
+  rc=$?
+  if ! said=$(redact <"$out"); then
+    said="[output omitted: redaction failed]"
+  fi
+  rm -f "$out"
+  out=""
+  [ -n "$said" ] && printf '%s\n' "$said" >>"$log"
+  [ "$rc" -eq 0 ] && return 0
+  {
+    printf 'gcp-key setup failed at step "%s" (exit %s): %s\n' "$name" "$rc" "$*"
+    echo "gcloud --version:"
+    printf '%s\n' "$version"
+    if printf '%s\n' "$said" | grep -qiE 'external_account|credential type|credential_file_override|has no property|unrecognized arguments'; then
+      echo "This gcloud may be too old to use an external_account credential config (auth/credential_file_override); install a current Google Cloud CLI in the sandbox image."
+    fi
+    echo "Last 40 lines of $log:"
+    tail -n 40 "$log"
+  } >&2
+  exit 1
+}
+step() { n=$1; shift; run "$n" 0 "$@"; }
+step_quiet() { n=$1; shift; run "$n" 1 "$@"; }
+` + strings.Join(steps, "\n") + "\n"
 }
 
 // NewGCP builds the gcp server configured by cfg.Fallback alone, with no
@@ -496,10 +632,21 @@ func init() {
 			var accounts listFlag
 			fs.Var(&accounts, "account", "deprecated: an old fixed pool, [name=]email[*count] (repeatable)")
 			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGCPTokenPort), "the loopback address of the data-plane listener token-mode permission sets' grants fetch access tokens from")
+			fake := fs.String("fake-cloud", "", "test only: connect to an in-memory GCP (gcpfake) built from this JSON fixture instead of Google")
 			if err := fs.Parse(args); err != nil {
 				return nil, err
 			}
 			cfg := GCPConfig{Log: logger, Env: env, Listen: listenAddr(env, *listen)}
+			if *fake != "" {
+				cloud, now, err := loadGCPFake(*fake)
+				if err != nil {
+					return nil, err
+				}
+				cfg.Connector, cfg.Now = cloud, now
+				if logger != nil {
+					logger.Printf("gcp: -fake-cloud %s: every admin connects to an in-memory fake GCP; nothing reaches Google", *fake)
+				}
+			}
 			var legacy []gcpsets.LegacyAccount
 			for _, v := range accounts {
 				a, err := parseGCPAccount(v)

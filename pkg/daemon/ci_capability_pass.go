@@ -112,11 +112,14 @@ func WithCICapabilityServers(service *ci.Service, servers func() orchestrator.Ca
 func ciCapabilityRefs(ids []string, event ci.Event, trustedSchedule, withholdEventGated bool) []model.Grant {
 	var out []model.Grant
 	for _, id := range ids {
-		c := model.CanonicalLegacyGrant(id)
+		// A bare or case-varied spelling of a method with a CI grant
+		// rule is the <ref>={} grant the repository's list records.
+		c := model.CanonicalCIGrant(id)
 		if rule, ok := model.CIGrantRuleFor(c); ok && ((rule.IsEventGated() && withholdEventGated) || !rule.Admits(string(event), trustedSchedule)) {
 			continue
 		}
-		if model.IsCapabilityRef(c) && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {
+		isAPIRef := model.IsAPIGrantRef(c) || model.CapabilityGrantRef(c) == model.APICapabilityServerID
+		if model.IsCapabilityRef(c) && !isAPIRef && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {
 			out = append(out, model.Grant{Capability: c, Via: model.GrantByDefault})
 		}
 	}

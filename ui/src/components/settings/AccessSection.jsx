@@ -32,6 +32,8 @@ import api from "../../api.js";
 import { accessRoleLabel, canAccess } from "../../access.js";
 import AppIcon from "../AppIcon.jsx";
 import SettingsCard from "./SettingsCard.jsx";
+import { formatDateTime } from "../../time.js";
+import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 // actorName is the server-reported actor (GET /api/config's actor) as a
 // person reads it, without its "user:" or "serviceAccount:" kind prefix.
@@ -62,7 +64,7 @@ export function verifiedUserEmail(config) {
 const SERVICE_ACCOUNT_DOMAIN = /\.gserviceaccount\.com$/;
 
 // isServiceAccountEntry reports whether entry is a `serviceAccount:` entry.
-export function isServiceAccountEntry(entry) {
+function isServiceAccountEntry(entry) {
   return (entry || "").startsWith("serviceAccount:");
 }
 
@@ -126,11 +128,12 @@ export function validatePrincipalEntry(raw) {
   return { canonical: `${prefix}:${value}`, error: "" };
 }
 
-function formatAddedAt(iso) {
+// formatAddedAt prints when an entry was added in the time zone this
+// browser chose under Settings → Preferences (the browser's own when it
+// chose none), like every other time a page prints -- not always in UTC.
+function formatAddedAt(iso, zone) {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  return formatDateTime(iso, zone) || iso;
 }
 
 function describeRemovalWarning(targetEntry, entriesCount, signedInEmail) {
@@ -188,8 +191,16 @@ export default function AccessSection({
   const [newReason, setNewReason] = useState("");
   const [validationError, setValidationError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(null);
+  // pending is a change waiting on this person: a reason for one that
+  // involves a dangerous or deny role, a confirmation before removing
+  // oneself or the last entry, or -- when the server answers confirm_self
+  // -- a confirmation before narrowing an entry that matches oneself.
+  // {kind: "remove"|"role", entry, current, role, warn, needsReason,
+  //  confirmSelf, error}
+  const [pending, setPending] = useState(null);
+  const [pendingReason, setPendingReason] = useState("");
   const [postRemoveWarning, setPostRemoveWarning] = useState("");
+  const [history, setHistory] = useState(null);
 
   const loadPrincipals = useCallback(async () => {
     try {
@@ -205,9 +216,26 @@ export default function AccessSection({
     }
   }, [showError]);
 
+  // loadHistory reads the access changes config_audit recorded. A daemon
+  // too old to have the route leaves the card out.
+  const loadHistory = useCallback(async () => {
+    try {
+      const data = await api("/api/access/history");
+      setHistory(Array.isArray(data) ? data : null);
+    } catch {
+      setHistory(null);
+    }
+  }, []);
+
   useEffect(() => {
     loadPrincipals();
-  }, [loadPrincipals]);
+    loadHistory();
+  }, [loadPrincipals, loadHistory]);
+
+  const reload = async () => {
+    await loadPrincipals();
+    await loadHistory();
+  };
 
   const people = entries.filter((e) => !isServiceAccountEntry(e.entry));
   const serviceAccounts = entries.filter((e) => isServiceAccountEntry(e.entry));
@@ -224,9 +252,9 @@ export default function AccessSection({
       setValidationError("Give a reason to admit a service account.");
       return;
     }
-    if (rolePerson(roles, newRole) && !reason) {
+    if (roleSensitive(roles, newRole) && !reason) {
       setValidationError(
-        `Give a reason: ${newRole} holds dangerous scopes, so assigning it is recorded with why.`,
+        `Give a reason: ${newRole} ${roleSensitiveWhy(roles, newRole)}, so assigning it is recorded with why.`,
       );
       return;
     }
@@ -242,7 +270,7 @@ export default function AccessSection({
       setNewEntry("");
       setNewReason("");
       setPostRemoveWarning("");
-      await loadPrincipals();
+      await reload();
     } catch (err) {
       showError?.(err);
     } finally {
@@ -250,55 +278,85 @@ export default function AccessSection({
     }
   };
 
-  const executeRemove = async (entry, warningAfter) => {
+  const openPending = (change) => {
+    setPendingReason("");
+    setPending(change);
+  };
+
+  // applyChange sends change: a PATCH for a role, a DELETE for a removal.
+  // A refusal is shown on the pending panel when there is one, so the
+  // person reads the rule beside what they asked; confirm_self turns the
+  // panel into the confirmation the server asked for.
+  const applyChange = async (change, reason, confirmSelf) => {
     setBusy(true);
     try {
-      await api(`/api/access/principals/${encodeURIComponent(entry)}`, {
-        method: "DELETE",
-      });
-      setConfirmRemove(null);
-      if (warningAfter) {
-        setPostRemoveWarning(warningAfter);
+      const path = `/api/access/principals/${encodeURIComponent(change.entry)}`;
+      if (change.kind === "remove") {
+        const q = new URLSearchParams();
+        if (reason) q.set("reason", reason);
+        if (confirmSelf) q.set("confirmSelf", "1");
+        const qs = q.toString();
+        await api(qs ? `${path}?${qs}` : path, { method: "DELETE" });
+        if (change.warn) setPostRemoveWarning(change.warn);
+      } else {
+        const body = { role: change.role };
+        if (reason) body.reason = reason;
+        if (confirmSelf) body.confirmSelf = true;
+        await api(path, { method: "PATCH", body: JSON.stringify(body) });
       }
-      await loadPrincipals();
+      setPending(null);
+      setPendingReason("");
+      await reload();
     } catch (err) {
-      showError?.(err);
+      if (err?.code === "confirm_self" && !confirmSelf) {
+        setPending({ ...change, confirmSelf: err.message || String(err) });
+      } else if (pending || change.needsReason || change.warn) {
+        setPending({ ...change, error: err?.message || String(err) });
+      } else {
+        showError?.(err);
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  const changeRole = async (entry, role) => {
-    let reason = "";
-    if (rolePerson(roles, role)) {
-      reason = (
-        window.prompt(
-          `${role} holds dangerous scopes. Why is ${entry} given it?`,
-        ) || ""
-      ).trim();
-      if (!reason) return;
-    }
-    setBusy(true);
-    try {
-      await api(`/api/access/principals/${encodeURIComponent(entry)}`, {
-        method: "PATCH",
-        body: JSON.stringify(reason ? { role, reason } : { role }),
-      });
-      await loadPrincipals();
-    } catch (err) {
-      showError?.(err);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRequestRemove = (entry) => {
-    const warn = describeRemovalWarning(entry, entries.length, email);
-    if (warn) {
-      setConfirmRemove({ entry, message: warn });
+  const changeRole = (entry, current, role) => {
+    if (role === current) return;
+    const change = { kind: "role", entry, current, role };
+    if (roleSensitive(roles, current) || roleSensitive(roles, role)) {
+      openPending({ ...change, needsReason: true });
       return;
     }
-    executeRemove(entry, "");
+    applyChange(change, "", false);
+  };
+
+  const handleRequestRemove = (entry, current) => {
+    const warn = describeRemovalWarning(entry, entries.length, email);
+    const change = {
+      kind: "remove",
+      entry,
+      current,
+      warn,
+      needsReason: roleSensitive(roles, current),
+    };
+    if (warn || change.needsReason) {
+      openPending(change);
+      return;
+    }
+    applyChange(change, "", false);
+  };
+
+  const submitPending = () => {
+    const reason = pendingReason.trim();
+    if (pending.needsReason && !reason) {
+      setPending({
+        ...pending,
+        error:
+          "Give a reason: this change is recorded in the access history with why.",
+      });
+      return;
+    }
+    applyChange(pending, reason, Boolean(pending.confirmSelf));
   };
 
   return (
@@ -383,9 +441,13 @@ export default function AccessSection({
           Each entry has a role, an API scope set: <code>grain/operator</code>{" "}
           (everything), <code>grain/contributor</code>,{" "}
           <code>grain/viewer</code> or one this deployment declares. Someone
-          matching several entries holds all their roles together. Roles with
-          dangerous scopes are assigned only with the access code, with a
-          reason.
+          matching several entries holds all their roles together. A change
+          involving a role with dangerous scopes, or one that denies scopes,
+          needs a reason and is kept in the access history. Signed in as a
+          person, you change only entries whose old and new roles are within
+          your own; you cannot widen or lift a deny on an entry that matches
+          you, narrowing one asks you to confirm, and the last full admin cannot
+          be removed. The access code can make any change.
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Users (<code>user:&lt;email&gt;</code>), groups (
@@ -412,30 +474,85 @@ export default function AccessSection({
           </Alert>
         )}
 
-        {confirmRemove && (
+        {pending && (
           <Alert
             severity="warning"
             sx={{ mt: 1.5 }}
-            data-testid="access-remove-warning"
+            data-testid={
+              pending.kind === "remove" && pending.warn
+                ? "access-remove-warning"
+                : "access-change-panel"
+            }
           >
-            <Box>{confirmRemove.message}</Box>
+            <Box data-testid="access-change-summary">
+              {pending.kind === "remove" ? (
+                <>
+                  Remove <code>{pending.entry}</code> (role{" "}
+                  <code>{pending.current}</code>).
+                </>
+              ) : (
+                <>
+                  Change <code>{pending.entry}</code> from{" "}
+                  <code>{pending.current}</code> to <code>{pending.role}</code>.
+                </>
+              )}
+              {pending.needsReason ? (
+                <>
+                  {" "}
+                  A dangerous or deny role is involved, so give a reason; it is
+                  recorded in the access history below.
+                </>
+              ) : null}
+            </Box>
+            {pending.warn ? <Box sx={{ mt: 1 }}>{pending.warn}</Box> : null}
+            {pending.confirmSelf ? (
+              <Box sx={{ mt: 1 }} data-testid="access-confirm-self">
+                {pending.confirmSelf}
+              </Box>
+            ) : null}
+            <TextField
+              size="small"
+              fullWidth
+              label="Reason"
+              placeholder="Why this change is made"
+              value={pendingReason}
+              onChange={(e) => setPendingReason(e.target.value)}
+              required={Boolean(pending.needsReason)}
+              disabled={busy}
+              inputProps={{ "data-testid": "access-change-reason" }}
+              sx={{ mt: 1.5, bgcolor: "background.paper" }}
+            />
+            {pending.error ? (
+              <Alert
+                severity="error"
+                sx={{ mt: 1 }}
+                data-testid="access-change-error"
+              >
+                {pending.error}
+              </Alert>
+            ) : null}
             <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
               <Button
                 color="warning"
                 variant="contained"
                 size="small"
                 disabled={busy}
-                onClick={() =>
-                  executeRemove(confirmRemove.entry, confirmRemove.message)
-                }
+                data-testid="access-change-apply"
+                onClick={submitPending}
               >
-                Remove anyway
+                {pending.confirmSelf
+                  ? "Yes, narrow my own access"
+                  : pending.kind === "remove"
+                    ? pending.warn
+                      ? "Remove anyway"
+                      : "Remove"
+                    : "Change role"}
               </Button>
               <Button
                 color="inherit"
                 size="small"
                 disabled={busy}
-                onClick={() => setConfirmRemove(null)}
+                onClick={() => setPending(null)}
               >
                 Cancel
               </Button>
@@ -443,7 +560,7 @@ export default function AccessSection({
           </Alert>
         )}
 
-        {!confirmRemove && postRemoveWarning && (
+        {!pending && postRemoveWarning && (
           <Alert
             severity="warning"
             sx={{ mt: 1.5 }}
@@ -539,8 +656,8 @@ export default function AccessSection({
                 onChange={(e) => setNewRole(e.target.value)}
                 disabled={busy}
                 helperText={
-                  rolePerson(roles, newRole)
-                    ? "Dangerous scopes: access code and reason needed."
+                  roleSensitive(roles, newRole)
+                    ? "Dangerous or deny role: a reason is needed."
                     : " "
                 }
                 inputProps={{ "data-testid": "access-role-input" }}
@@ -561,7 +678,8 @@ export default function AccessSection({
                   setNewReason(e.target.value);
                   if (validationError) setValidationError("");
                 }}
-                helperText="Required for service accounts and dangerous roles."
+                required={roleSensitive(roles, newRole)}
+                helperText="Required for service accounts and dangerous or deny roles."
                 disabled={busy}
                 inputProps={{ "data-testid": "access-reason-input" }}
                 sx={{ flex: 1 }}
@@ -588,14 +706,79 @@ export default function AccessSection({
           </Typography>
         )}
       </SettingsCard>
+
+      {history ? (
+        <SettingsCard title="Access history" anchor="access-history">
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Every change to this list, newest first: who made it, when, the old
+            and new role, and the reason given.
+          </Typography>
+          <AccessHistory rows={history} />
+        </SettingsCard>
+      ) : null}
     </>
   );
 }
 
-// rolePerson reports whether the role named name is one only an access-code
-// admin assigns (it holds a dangerous scope).
-function rolePerson(roles, name) {
-  return Boolean(roles.find((r) => r.name === name)?.person);
+// AccessHistory is the config_audit rows of surface "access".
+function AccessHistory({ rows }) {
+  const zone = useTimeZone();
+  if (rows.length === 0) {
+    return (
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ py: 1 }}
+        data-testid="access-history-empty"
+      >
+        No changes recorded yet.
+      </Typography>
+    );
+  }
+  return (
+    <Box sx={{ overflowX: "auto", mt: 1 }}>
+      <Table size="small" data-testid="access-history">
+        <TableHead>
+          <TableRow>
+            <TableCell>When</TableCell>
+            <TableCell>Who</TableCell>
+            <TableCell>Change</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={r.id} data-testid={`access-history-${r.id}`}>
+              <TableCell sx={{ whiteSpace: "nowrap" }}>
+                {formatAddedAt(r.at, zone)}
+              </TableCell>
+              <TableCell sx={{ wordBreak: "break-all" }}>
+                {r.actorLabel || r.actor || "—"}
+              </TableCell>
+              <TableCell
+                sx={{ fontFamily: "monospace", wordBreak: "break-word" }}
+              >
+                {r.summary}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Box>
+  );
+}
+
+// roleSensitive reports whether the role named name holds a dangerous
+// scope or denies scopes: a change involving it needs a reason, and from a
+// signed-in person a role of their own that holds all of it.
+function roleSensitive(roles, name) {
+  const r = roles.find((x) => x.name === name);
+  return Boolean(r?.person || r?.denies);
+}
+
+// roleSensitiveWhy is what makes the role named name sensitive, in words.
+function roleSensitiveWhy(roles, name) {
+  const r = roles.find((x) => x.name === name);
+  return r?.person ? "holds dangerous scopes" : "denies scopes";
 }
 
 // roleOptions are the roles a picker offers, with current kept even when
@@ -611,6 +794,7 @@ function roleOptions(roles, current) {
 function RoleChip({ role }) {
   return (
     <Chip
+      component="span"
       size="small"
       label={role}
       variant="outlined"
@@ -632,6 +816,7 @@ function PrincipalTable({
   showReason = false,
   testid,
 }) {
+  const zone = useTimeZone();
   return (
     <Table size="small" data-testid={testid}>
       <TableHead>
@@ -676,7 +861,13 @@ function PrincipalTable({
                   variant="standard"
                   value={item.role || "grain/operator"}
                   disabled={busy}
-                  onChange={(e) => onRole(item.entry, e.target.value)}
+                  onChange={(e) =>
+                    onRole(
+                      item.entry,
+                      item.role || "grain/operator",
+                      e.target.value,
+                    )
+                  }
                   inputProps={{ "aria-label": `Role of ${item.entry}` }}
                   sx={{ minWidth: 160, fontFamily: "monospace" }}
                 >
@@ -694,7 +885,7 @@ function PrincipalTable({
             </TableCell>
             <TableCell>{item.addedBy || "—"}</TableCell>
             <TableCell sx={{ whiteSpace: "nowrap" }}>
-              {formatAddedAt(item.addedAt)}
+              {formatAddedAt(item.addedAt, zone)}
             </TableCell>
             {canWrite ? (
               <TableCell align="right">
@@ -704,7 +895,9 @@ function PrincipalTable({
                   variant="outlined"
                   disabled={busy}
                   aria-label={`Remove ${item.entry}`}
-                  onClick={() => onRemove(item.entry)}
+                  onClick={() =>
+                    onRemove(item.entry, item.role || "grain/operator")
+                  }
                 >
                   Remove
                 </Button>

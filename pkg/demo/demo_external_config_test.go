@@ -50,3 +50,26 @@ func TestExternalConfigRepo(t *testing.T) {
 		t.Error("Tree succeeded with no working tree behind it")
 	}
 }
+
+// The demo names the external config repository in owner/name form
+// (ui.Config.StateRepoRef), as a daemon does: without it /api/config
+// carried no configRepo and the repository's own page offered Remove
+// (docs/test-runs/2026-11-08-repository-release-memory-ui.md, task 3613).
+func TestExternalConfigRepoRef(t *testing.T) {
+	for remote, want := range map[string]string{
+		"https://github.com/grain/config.git":   "grain/config",
+		"https://github.com/acme/grain-config/": "acme/grain-config",
+		"git@github.com:acme/cfg.git":           "acme/cfg",
+		"http://127.0.0.1:4300/acme/cfg":        "acme/cfg",
+	} {
+		got, ok := newExternalConfigRepo(remote, "").ref()
+		if !ok || got.String() != want {
+			t.Errorf("ref(%q) = %v, %v; want %s", remote, got, ok, want)
+		}
+	}
+	for _, remote := range []string{"https://github.com", "https://github.com/onlyowner", "not a remote"} {
+		if got, ok := newExternalConfigRepo(remote, "").ref(); ok {
+			t.Errorf("ref(%q) = %v, want none", remote, got)
+		}
+	}
+}

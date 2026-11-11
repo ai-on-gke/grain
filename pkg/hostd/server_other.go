@@ -45,6 +45,7 @@ type Server struct {
 	RenewInterval                      time.Duration
 	CurrentToken                       func() string
 	OnTokenRenewed                     func(token string, expiresAt time.Time)
+	RenewedAt                          time.Time
 
 	Builtins       []BuiltinEntry
 	BuiltinCommand string

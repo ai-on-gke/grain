@@ -91,6 +91,7 @@ export default function TaskTreeBoard({
             ordered: (narrowing?.sort || []).length > 0,
           })}
           onOpenTask={onOpenTask}
+          returnFocus="tree"
         />
       )}
     </Root>

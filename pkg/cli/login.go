@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/cli/skill"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -156,11 +157,12 @@ func expiredForContext(err error, name string) error {
 func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel selectedContext, args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	name := fs.String("name", "", "the context's name (default: from the server's host name)")
-	issue := fs.Bool("issue-token", false, "mint a scoped gma_ token for this workstation and keep it")
+	issue := fs.Bool("issue-token", false, "mint a scoped gma_ token for this workstation and keep it "+
+		"(the default when IAP or a credential source signs in a person; --issue-token=false declines)")
 	scopeSet := fs.String("scope-set", defaultLoginScopeSet, "the scope set --issue-token mints")
 	repos := fs.String("repos", "", "comma-separated repositories --issue-token limits the token to")
 	expires := fs.String("expires", "30d", "how long --issue-token's token lasts (30d, 12h, ...)")
-	tokenStdin := fs.Bool("token-stdin", false, "read a gma_ token (or, with --auth access-code, the access code) from stdin")
+	tokenStdin := fs.Bool("token-stdin", false, "read a gma_ token (or, with --auth access-code, the access code) from stdin and store it; not with --issue-token or --refresh")
 	refresh := fs.Bool("refresh", false, "re-mint the context's expired or expiring token")
 	auth := fs.String("auth", "", "how to sign in: access-code, or a credential source this build registers")
 	rest, err := parseArgs(fs, args)
@@ -196,6 +198,36 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return usageErrorf("grain login needs the deployment's URL (https://grain.example.com), not %q", server)
 	}
+	if *tokenStdin && *issue {
+		// --token-stdin stores what stdin holds as the credential, so an
+		// access code piped in alongside --issue-token would be kept as
+		// it is rather than spent on minting a gma_ token.
+		return &cliError{exit: exitUsage, code: "token_stdin_issue_token", fix: "grain -token CODE login " + server + " --issue-token",
+			err: fmt.Errorf("--token-stdin and --issue-token do not combine: --token-stdin stores the secret it reads; "+
+				"to mint a gma_ token with an access code, pass the code with -token: grain -token CODE login %s --issue-token", server)}
+	}
+	if *tokenStdin && *refresh {
+		// --token-stdin replaces the context's credential with what stdin
+		// holds; --refresh would have been silently ignored.
+		return &cliError{exit: exitUsage, code: "token_stdin_refresh", fix: "grain login --refresh",
+			err: fmt.Errorf("--token-stdin and --refresh do not combine: --refresh re-mints the context's own token, " +
+				"--token-stdin stores the one stdin holds; pass one of them")}
+	}
+	if !*issue {
+		// --scope-set, --repos and --expires shape the token --issue-token
+		// mints; without it (a --refresh rotation keeps the token's own)
+		// they would be silently ignored.
+		var stray []string
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "scope-set" || f.Name == "repos" || f.Name == "expires" {
+				stray = append(stray, "--"+f.Name)
+			}
+		})
+		if len(stray) > 0 {
+			return &cliError{exit: exitUsage, code: "needs_issue_token", fix: "grain login " + server + " --issue-token " + strings.Join(stray, " ") + " ...",
+				err: fmt.Errorf("%s only shape the token --issue-token mints; add --issue-token", strings.Join(stray, ", "))}
+		}
+	}
 	if *name == "" {
 		*name = contextSlug(u.Hostname())
 	}
@@ -217,6 +249,22 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	who, err := lc.AuthWhoami(ctx)
 	if err != nil {
 		return err
+	}
+	// Signed in as a person IAP or a trusted identity proxy vouched for,
+	// the workstation keeps a personal token of theirs afterwards, so the
+	// CLI needs neither the proxy's sign-in nor the access code day to
+	// day. --issue-token=false signs in through the proxy every time.
+	personal := false
+	viaIdentity := (*auth != "" && !builtinAuth[*auth]) ||
+		(*auth == "" && lc.Token == "" && tokenSource("") == "" && !ui.IsLoopbackURL(server))
+	if viaIdentity && !*tokenStdin && !*refresh && !flagWasSet(fs, "issue-token") &&
+		who.Authenticated && strings.HasPrefix(who.Principal, string(model.PrincipalHuman)+":") {
+		if who.ExternalAgentAPI {
+			*issue, personal = true, true
+		} else {
+			fmt.Fprintf(os.Stderr, "grain login: %s does not accept gma_ tokens (externalAgentApi is off in its Settings), "+
+				"so this context signs in through %s on every call rather than holding a personal token\n", server, loginVia(*auth))
+		}
 	}
 
 	store := newCredentialStore()
@@ -327,8 +375,24 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 		}{*name, *entry})
 		return nil
 	}
-	fmt.Printf("signed in to %s as context %s (%s)\n", server, *name, entry.Auth)
+	// Never echo a password typed into the URL (http://user:pass@host)
+	// back to a terminal or a log, as `grain skill install` never writes it.
+	fmt.Printf("signed in to %s as context %s (%s)\n", skill.ScrubServerURL(server), *name, entry.Auth)
+	if personal {
+		fmt.Printf("holding a personal token for %s (%s, %s); `grain logout` revokes it, "+
+			"and `grain login %s --issue-token=false` signs in through %s each time instead\n",
+			strings.TrimPrefix(who.Principal, string(model.PrincipalHuman)+":"), entry.TokenID, *scopeSet,
+			skill.ScrubServerURL(server), loginVia(*auth))
+	}
 	return nil
+}
+
+// loginVia names what a sign-in with --auth auth went through.
+func loginVia(auth string) string {
+	if auth != "" && !builtinAuth[auth] {
+		return "the " + auth + " credential source"
+	}
+	return "IAP (a Google ID token)"
 }
 
 func cmdLogout(ctx context.Context, base *ui.HTTPClient, out *printer, sel selectedContext, args []string) error {

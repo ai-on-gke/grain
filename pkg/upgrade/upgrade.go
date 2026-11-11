@@ -74,6 +74,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -121,12 +122,6 @@ type Status struct {
 	// restarting because the version on Branch was still the one this
 	// deployment already ran.
 	Unchanged bool `json:"unchanged,omitempty"`
-	// Source records which image source ("release-assets" or "registry") an
-	// image-pipeline upgrade actually used, including after any fallback.
-	Source string `json:"source,omitempty"`
-	// FallbackNote explains why an image upgrade fell back from its primary
-	// source (for example "release has no image assets; pulled from <registry>").
-	FallbackNote string `json:"fallbackNote,omitempty"`
 	// Steps is the whole sequence this upgrade runs, in order, each one
 	// carrying where it stands and what it last had to say (progress.go,
 	// grain/task-37). It is written the moment an upgrade starts, with
@@ -142,6 +137,13 @@ type Status struct {
 	// so a later one reading "running" can tell a live upgrade from one
 	// a restart cut short -- see Upgrader.Status.
 	Process string `json:"process,omitempty"`
+	// EditionSwitch is set on an upgrade the operator explicitly asked
+	// to cross editions ("switch edition" on the upgrade pane): which
+	// edition the deployment was on, which it moved to, the repository
+	// it pulled and who asked. It is the record that the cross-edition
+	// move was deliberate; nil on every ordinary upgrade, which may not
+	// cross editions at all (edition.go).
+	EditionSwitch *EditionSwitch `json:"editionSwitch,omitempty"`
 }
 
 // Running is where a deployment already is, which is a different
@@ -376,10 +378,6 @@ type Config struct {
 	// and older a preview leaves out. pkg/version's own stamp when nil;
 	// a test names one.
 	RunningRelease func() string
-	// RunningCommit returns the 40-character git commit SHA of the running
-	// daemon binary when known, allowing AlreadyRunning and stageImage to
-	// detect unchanged builds against images.json before any tarball download.
-	RunningCommit func() string
 	// Edition is the build edition this deployment runs (e.g. "google",
 	// or "" / "oss" for core). When empty, Targets uses the running
 	// image tag's edition or pkg/version's own Edition.
@@ -446,6 +444,11 @@ type Upgrader struct {
 	// pull instead of the branch's tag (override.go); "" for an ordinary
 	// one, and reset with done.
 	override string
+	// switching is the edition switch the operator asked the upgrade in
+	// flight to make (StartImageWith's SwitchEdition, edition.go); nil
+	// for an upgrade that must stay in this deployment's edition, and
+	// reset with done.
+	switching *EditionSwitch
 
 	// tags caches the registry's tag list for Targets.
 	tags tagCache
@@ -454,17 +457,6 @@ type Upgrader struct {
 	// notes, the recent previews by branch (releasenotes.go).
 	notesMu sync.Mutex
 	notes   map[string]releaseNotesEntry
-
-	// operatorReleaseAssets is the release repository, asset and checksum
-	// the daemon's own flags configured, before any operator override
-	// from the upgrade pane (SetImageSource) is laid over them: what an
-	// override that leaves a field empty goes back to, and a release
-	// repository an override may always name.
-	operatorReleaseAssets ReleaseAssetsConfig
-	// operatorFallback is the fallback image source the daemon's own
-	// flags set, which the upgrade pane may keep on a verifying
-	// deployment but not introduce (errReleaseAssetsNeedOperator).
-	operatorFallback ImageSource
 }
 
 // New builds an Upgrader. It does not validate cfg -- Start reports
@@ -472,16 +464,7 @@ type Upgrader struct {
 // the same as most of this package's callers.
 func New(cfg Config) *Upgrader {
 	u := &Upgrader{cfg: cfg}
-	if cfg.Image != nil {
-		u.operatorReleaseAssets = ReleaseAssetsConfig{
-			Repository:     cfg.Image.ReleaseAssets.Repository,
-			Asset:          cfg.Image.ReleaseAssets.Asset,
-			ChecksumAsset:  cfg.Image.ReleaseAssets.ChecksumAsset,
-			ChecksumSuffix: cfg.Image.ReleaseAssets.ChecksumSuffix,
-		}
-		u.operatorFallback, _ = ParseImageFallback(string(cfg.Image.Fallback))
-	}
-	u.loadImageSourceOverride()
+	u.migrateLegacyImageSource()
 	return u
 }
 
@@ -639,7 +622,10 @@ func ValidBranchName(branch string) (string, error) {
 // approved should store this.
 func (u *Upgrader) ValidateBranch(branch string) (string, error) {
 	branch = strings.TrimSpace(branch)
-	return branch, u.checkBranch(branch)
+	if err := u.checkBranch(branch); err != nil {
+		return branch, err
+	}
+	return branch, u.checkConfiguredEdition()
 }
 
 // Start validates branch and, if no upgrade started by this same
@@ -657,8 +643,15 @@ func (u *Upgrader) Start(branch string) error {
 		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
 		return err
 	}
+	// The repository an ordinary upgrade pulls from must carry this
+	// deployment's own edition: crossing editions is only ever done on
+	// purpose, through StartImageWith's SwitchEdition (edition.go).
+	if err := u.checkConfiguredEdition(); err != nil {
+		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
+		return err
+	}
 
-	return u.start(branch, "")
+	return u.start(branch, "", nil)
 }
 
 // Status reads the deployment's last (or current) upgrade attempt back
@@ -790,6 +783,7 @@ func (u *Upgrader) release() {
 	close(u.done)
 	u.done = nil
 	u.override = ""
+	u.switching = nil
 }
 
 // Mode reports which pipeline Start would run, without running it --
@@ -1135,13 +1129,15 @@ func (u *Upgrader) description() string {
 		return fmt.Sprintf("checking an image from %s and repointing deployment/%s at it",
 			u.EffectiveKubeRepository(), u.cfg.Kube.Deployment)
 	case ModeImage:
-		if u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
-			if repo := strings.TrimSpace(u.EffectiveReleaseAssets().Repository); repo != "" {
-				return fmt.Sprintf("loading release assets from %s and pointing %s at %s",
-					repo, u.cfg.Image.RefFile, u.EffectiveRepository())
-			}
+		// The repository actually pulled: an image named on the pane
+		// (StartImage) is pulled instead of the configured repository,
+		// and the line opening the log has to say so rather than name a
+		// repository this upgrade never touches (grain/task-4153).
+		repo := u.EffectiveRepository()
+		if override := u.overrideRef(); override != "" {
+			repo = repositoryOf(override)
 		}
-		return fmt.Sprintf("pulling from %s and pointing %s at it", u.EffectiveRepository(), u.cfg.Image.RefFile)
+		return fmt.Sprintf("pulling from %s and pointing %s at it", repo, u.cfg.Image.RefFile)
 	}
 	return fmt.Sprintf("building in %s and installing to %s", u.cfg.SrcDir, u.cfg.InstallPath)
 }
@@ -1163,9 +1159,9 @@ func (u *Upgrader) stage(ctx context.Context, p *progress, branch string) (strin
 	return u.stageBinary(ctx, p, branch)
 }
 
-// stageImage is the container path (image.go / release_assets.go): load from
-// release assets (or pull from an OCI registry), verify and health-check, and
-// only then point the deployment's ref file at the validated image.
+// stageImage is the container path (image.go): pull from an OCI registry,
+// verify and health-check, and only then point the deployment's ref file at
+// the validated image.
 func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (string, error) {
 	prevRef, _ := u.readImageRef()
 	var prevSandbox string
@@ -1189,59 +1185,19 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		}
 	}
 
-	primary := ImageSourceRegistry
-	if !(override != "" && strings.Contains(override, "@")) &&
-		u.EffectiveImageSource() == ImageSourceReleaseAssets &&
-		!u.shouldBypassDefaultReleaseAssets() {
-		primary = ImageSourceReleaseAssets
-	}
-
-	var fallbackReason string
-	if primary == ImageSourceReleaseAssets {
-		staged, unchanged, relErr := u.stageReleaseDaemon(ctx, p, branch, prevRef, tag)
-		if relErr == nil {
-			p.setSource(ImageSourceReleaseAssets)
-			return u.finishReleaseImageStage(ctx, p, branch, override, prevRef, prevSandbox, staged, unchanged, "")
-		}
-		ok, reason := u.shouldFallbackToRegistry(relErr)
-		if !ok {
-			p.setSource(ImageSourceReleaseAssets)
-			return "", fmt.Errorf("release-assets: %w", relErr)
-		}
-		fallbackReason = reason
-		p.logf("%s: %s", stepPull, fallbackReason)
-		p.setFallbackNote(fallbackReason)
-	}
-
-	p.setSource(ImageSourceRegistry)
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
 	var ref string
 	if pullErr == nil {
 		ref, pullErr = u.pinImage(ctx, p, stepPull, tag)
 	}
 	if pullErr != nil {
-		if primary == ImageSourceRegistry && override == "" && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
-			fbReason := fmt.Sprintf("registry pull failed (%v); loaded from release assets", pullErr)
-			p.logf("%s: %s", stepPull, fbReason)
-			staged, unchanged, relErr := u.stageReleaseDaemon(ctx, p, branch, prevRef, tag)
-			if relErr != nil {
-				return "", fmt.Errorf("pull: %w (release-assets fallback also failed: %v)", pullErr, relErr)
-			}
-			p.setSource(ImageSourceReleaseAssets)
-			p.setFallbackNote(fbReason)
-			return u.finishReleaseImageStage(ctx, p, branch, override, prevRef, prevSandbox, staged, unchanged, fbReason)
-		}
-		if hint := registryHint(tag, pullErr); hint != "" {
+		if hint := registryHint(tag, installtrack.DefaultRepository(u.cfg.Image.Track), pullErr); hint != "" {
 			return "", fmt.Errorf("pull: %w -- %s", pullErr, hint)
 		}
 		return "", fmt.Errorf("pull: %w", pullErr)
 	}
 
-	if fallbackReason != "" {
-		p.done(stepPull, fmt.Sprintf("%s (%s)", fallbackReason, ref))
-	} else {
-		p.done(stepPull, "pulled "+ref)
-	}
+	p.done(stepPull, "pulled "+ref)
 	// An image named outright is compared by digest alone: the branch it
 	// is recorded under need not say which build it is.
 	same := u.sameImageVersion(prevRef, branch, tag, ref)
@@ -1256,22 +1212,48 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" && override == "" {
 			return p.markUnchanged(msg), nil
 		}
-		unchangedMsg := fmt.Sprintf("the version on %s has not changed (already running %s)", branch, ref)
-		if fallbackReason != "" {
-			unchangedMsg = fallbackReason + "; " + unchangedMsg
-		}
-		return p.markUnchanged(unchangedMsg), nil
+		return p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, ref)), nil
 	}
 
 	// Who published it, before the health check below runs it: the pin
 	// says which bytes, and this says whose (verify.go).
-	if len(u.cfg.Image.VerifyCmd) > 0 {
+	// And which edition's build it is (edition.go): a deployment on one
+	// install track never cuts over to another edition's build unless
+	// this upgrade is an explicit edition switch.
+	_, checksEdition := u.deploymentEdition()
+	checksEdition = checksEdition && len(u.cfg.Image.EditionArgs) > 0
+	switch {
+	case len(u.cfg.Image.VerifyCmd) > 0 || u.cfg.Image.ReviewedMerge != nil || checksEdition:
 		p.start(stepVerify)
-		if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
+		var verified []string
+		if len(u.cfg.Image.VerifyCmd) > 0 {
+			if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
+				return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+			}
+			verified = append(verified, ref+" is signed")
+		} else if u.cfg.Image.ReviewedMerge == nil {
+			p.logf("%s: warning: %s", stepVerify, unverifiedNote)
+			verified = append(verified, unverifiedNote)
+		}
+		// And whether a reviewed commit went into it (reviewed.go): the
+		// signature says only that CI built it. With the check on and no
+		// signature verification, this refuses.
+		reviewed, err := u.checkImageReviewedMerge(ctx, p, stepVerify, ref)
+		if err != nil {
 			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 		}
-		p.done(stepVerify, ref+" is signed")
-	} else {
+		if reviewed != "" {
+			verified = append(verified, reviewed)
+		}
+		note, err := u.checkImageEdition(ctx, p, ref)
+		if err != nil {
+			return "", err
+		}
+		if note != "" {
+			verified = append(verified, note)
+		}
+		p.done(stepVerify, strings.Join(verified, "; "))
+	default:
 		p.logf("%s: warning: %s", stepVerify, unverifiedNote)
 		p.skip(stepVerify, unverifiedNote)
 	}
@@ -1290,9 +1272,6 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 	}
 
 	detail := "pulled " + ref
-	if fallbackReason != "" {
-		detail = fmt.Sprintf("%s (%s)", fallbackReason, ref)
-	}
 
 	// Whether the image that just proved it runs will accept the command
 	// line this host's unit starts it with. Never fatal -- see
@@ -1400,181 +1379,8 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		u.discardSchemaUpgrade()
 		return "", fmt.Errorf("recording %s: %w", u.cfg.Image.RefFile, err)
 	}
-	_ = u.writeReleaseMeta(nil)
 	u.cleanOldImages(ctx, p, ref, prevRef, sandbox, prevSandbox)
 	p.done(stepRecord, u.cfg.Image.RefFile+" now names "+ref)
-	return detail, nil
-}
-
-func (u *Upgrader) finishReleaseImageStage(
-	ctx context.Context,
-	p *progress,
-	branch, override, prevRef, prevSandbox string,
-	staged *stagedReleaseDaemon,
-	unchanged bool,
-	fallbackReason string,
-) (string, error) {
-	if !unchanged && override == "" && u.discardedRCUnchangedDetail(ctx, branch) != "" {
-		unchanged = true
-	}
-	if unchanged {
-		p.done(stepPull, fmt.Sprintf("release %s on %s/%s/%s unchanged (%s)",
-			staged.resolved.tag, staged.resolved.host, staged.resolved.owner, staged.resolved.repo, staged.imageID))
-		if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" && override == "" {
-			return p.markUnchanged(msg), nil
-		}
-		cur := prevRef
-		if cur == "" {
-			cur = staged.targetTag
-		}
-		return p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s, %s)",
-			branch, cur, staged.imageID)), nil
-	}
-
-	candidateRef := staged.stagedRef
-	pullSummary := fmt.Sprintf("loaded %s (%s) from %s/%s/%s release %s",
-		staged.assetName, staged.imageID,
-		staged.resolved.host, staged.resolved.owner, staged.resolved.repo, staged.resolved.tag)
-	if fallbackReason != "" {
-		pullSummary = fmt.Sprintf("%s (%s)", fallbackReason, pullSummary)
-	}
-	p.done(stepPull, pullSummary)
-
-	if len(u.cfg.Image.VerifyCmd) > 0 {
-		p.start(stepVerify)
-		if err := verifyLoaded(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, candidateRef, staged.imageID); err != nil {
-			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
-		}
-		p.done(stepVerify, candidateRef+" is verified")
-	} else {
-		p.logf("%s: warning: %s", stepVerify, unverifiedNote)
-		p.skip(stepVerify, unverifiedNote)
-	}
-
-	if len(u.cfg.HealthCheckArgs) > 0 {
-		p.start(stepHealthCheck)
-		if err := u.healthCheckImage(ctx, p, candidateRef); err != nil {
-			return "", fmt.Errorf("health check failed on the loaded image, leaving this deployment on the image it already runs: %w", err)
-		}
-		p.done(stepHealthCheck, "the loaded image runs")
-	} else {
-		p.skip(stepHealthCheck, "no health check configured")
-	}
-
-	detail := fmt.Sprintf("loaded %s (%s) from %s/%s/%s release %s",
-		staged.targetTag, staged.imageID,
-		staged.resolved.host, staged.resolved.owner, staged.resolved.repo, staged.resolved.tag)
-	if fallbackReason != "" {
-		detail = fmt.Sprintf("%s (%s)", fallbackReason, detail)
-	}
-
-	if len(u.cfg.Image.FlagNamesArgs) > 0 && len(u.cfg.Image.UnitFlags) > 0 {
-		p.start(stepFlags)
-		missing, err := u.checkImageFlags(ctx, p, candidateRef)
-		if note := reportFlags(p, candidateRef, u.cfg.Image.UnitFlags, imageFlagFix, missing, err); note != "" {
-			detail += "; " + note
-		}
-	} else {
-		p.skip(stepFlags, "this deployment's flags are not written down on the host it runs on")
-	}
-
-	var sandbox string
-	if len(u.cfg.Image.SandboxImageArgs) > 0 {
-		p.start(stepSandbox)
-		var why string
-		var err error
-		sandbox, why, err = u.sandboxImage(ctx, p, candidateRef)
-		if err != nil {
-			return "", fmt.Errorf("asking %s which sandbox image it expects, so nothing was loaded to keep in step and this deployment stays on the image it already runs: %w", candidateRef, err)
-		}
-		if sandbox == "" {
-			p.done(stepSandbox, candidateRef+" names no sandbox image -- "+why)
-		} else {
-			fromAssets, err := u.stageReleaseSandbox(ctx, p, staged.resolved, sandbox, candidateRef)
-			if err != nil {
-				return "", fmt.Errorf("loading the sandbox image %s that %s expects: %w", sandbox, candidateRef, err)
-			}
-			if len(u.cfg.Image.VerifyCmd) > 0 {
-				var verifyErr error
-				if fromAssets {
-					sbID, idErr := u.inspectImageID(ctx, p, stepSandbox, sandbox)
-					if idErr != nil {
-						verifyErr = idErr
-					} else {
-						verifyErr = verifyLoaded(ctx, p, stepSandbox, u.cfg.Image.VerifyCmd, sandbox, sbID)
-					}
-				} else {
-					pinned, pinErr := u.pinImage(ctx, p, stepSandbox, sandbox)
-					if pinErr != nil {
-						verifyErr = pinErr
-					} else {
-						verifyErr = verifyPinned(ctx, p, stepSandbox, u.cfg.Image.VerifyCmd, pinned)
-					}
-				}
-				if verifyErr != nil {
-					return "", fmt.Errorf("the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, candidateRef, verifyErr)
-				}
-			}
-			mirroredSandbox, err := u.mirrorSandboxImage(ctx, p, stepSandbox, sandbox)
-			if err != nil {
-				return "", fmt.Errorf("mirroring the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, candidateRef, err)
-			}
-			detail += " and its sandbox image " + sandbox
-			mirrorNote := ""
-			if mirroredSandbox != "" {
-				mirrorNote = " (mirrored to " + mirroredSandbox + ")"
-				detail += mirrorNote
-			}
-			verb := "pulled " + sandbox
-			if fromAssets {
-				verb = "loaded " + sandbox + " from release assets"
-			}
-			if unused := u.unusedSandboxNote(sandbox); unused != "" {
-				detail += unused
-				p.done(stepSandbox, verb+mirrorNote+unused)
-			} else {
-				p.done(stepSandbox, verb+mirrorNote)
-			}
-		}
-	} else {
-		p.skip(stepSandbox, "this deployment runs no sandbox containers")
-	}
-
-	migrating, err := u.schemaStep(ctx, p, branch, imageRunner{u: u, ref: candidateRef})
-	if err != nil {
-		return "", err
-	}
-	detail += migrating
-
-	p.start(stepRecord)
-	prevMeta, hadPrevMeta := u.readReleaseMeta()
-	previousAlias := repositoryOf(staged.targetTag) + ":previous"
-	if prevRef != "" && repositoryOf(prevRef) == repositoryOf(staged.targetTag) {
-		_ = u.tagImage(ctx, p, stepRecord, prevRef, previousAlias)
-	}
-	if err := u.tagImage(ctx, p, stepRecord, staged.imageID, staged.targetTag); err != nil {
-		u.discardSchemaUpgrade()
-		return "", fmt.Errorf("tagging %s as %s: %w", staged.imageID, staged.targetTag, err)
-	}
-	if err := u.writeImageRef(staged.targetTag); err != nil {
-		u.discardSchemaUpgrade()
-		return "", fmt.Errorf("recording %s: %w", u.cfg.Image.RefFile, err)
-	}
-	_ = u.writeReleaseMeta(&recordedReleaseImage{
-		Ref:        staged.targetTag,
-		LoadedRef:  staged.stagedRef,
-		ImageID:    staged.imageID,
-		Commit:     staged.commit,
-		AssetSHA:   staged.assetSHA,
-		ReleaseTag: staged.resolved.tag,
-		Repository: fmt.Sprintf("%s/%s/%s", staged.resolved.host, staged.resolved.owner, staged.resolved.repo),
-	})
-	extraKeep := []string{staged.stagedRef, staged.loadedRef, previousAlias}
-	if hadPrevMeta && prevMeta.LoadedRef != "" {
-		extraKeep = append(extraKeep, prevMeta.LoadedRef)
-	}
-	u.cleanOldImages(ctx, p, staged.targetTag, prevRef, sandbox, prevSandbox, extraKeep...)
-	p.done(stepRecord, fmt.Sprintf("%s now names %s (%s)", u.cfg.Image.RefFile, staged.targetTag, staged.imageID))
 	return detail, nil
 }
 

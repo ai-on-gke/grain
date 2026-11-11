@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -386,4 +387,106 @@ TimeoutStopSec=330
 	contains(t, string(logged), "gcloud compute images create")
 	contains(t, string(logged), "--family=grain-release")
 	contains(t, string(logged), "gcloud compute instances delete")
+}
+
+// A Secret Manager blip at boot must not cost the VM its daemon.env:
+// grain-instance-init.service runs once and grain-daemon.service starts after
+// it either way. 429/5xx reads of the database password are retried, a
+// persistent one still fails closed, and a 403 is not retried (task 3731).
+func TestGrainInstanceInitRetriesTransientSecretManagerErrors(t *testing.T) {
+	const secret = "projects/made-up-proj/secrets/grain-inst-walk1-db-password"
+	const password = "walk-password-0123"
+	cases := []struct {
+		name      string
+		failCode  int
+		failures  int // -1: every read fails
+		wantOK    bool
+		wantReads int
+	}{
+		{name: "503 twice then served", failCode: http.StatusServiceUnavailable, failures: 2, wantOK: true, wantReads: 3},
+		{name: "429 once then served", failCode: http.StatusTooManyRequests, failures: 1, wantOK: true, wantReads: 2},
+		{name: "503 on every attempt", failCode: http.StatusServiceUnavailable, failures: -1, wantOK: false, wantReads: 4},
+		{name: "403 is not retried", failCode: http.StatusForbidden, failures: -1, wantOK: false, wantReads: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			reads, failures := 0, tc.failures
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/computeMetadata/v1/instance/attributes/grain-config":
+					_ = json.NewEncoder(w).Encode(map[string]string{
+						"instance": "walk1", "deployment_owner": "alice@example.com",
+						"db_user": "gi_walk1", "db_name": "grain_walk1", "sql_private_ip": "10.0.0.5",
+						"db_password_secret": secret,
+					})
+				case "/computeMetadata/v1/instance/service-accounts/default/token":
+					_, _ = w.Write([]byte(`{"access_token":"vm-token"}`))
+				case "/v1/" + secret + "/versions/latest:access":
+					mu.Lock()
+					reads++
+					fail := failures != 0
+					if failures > 0 {
+						failures--
+					}
+					mu.Unlock()
+					if fail {
+						http.Error(w, `{"error":{"status":"UNAVAILABLE"}}`, tc.failCode)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"payload": map[string]string{
+						"data": base64.StdEncoding.EncodeToString([]byte(password)),
+					}})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			me, err := user.Current()
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			etcDir := filepath.Join(root, "etc")
+			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "grain-instance-init.sh"))
+			cmd.Env = append(os.Environ(),
+				"GRAIN_METADATA_URL="+srv.URL+"/computeMetadata/v1",
+				"GRAIN_SM_API_URL="+srv.URL,
+				"GRAIN_DATA_DIR="+filepath.Join(root, "data"),
+				"GRAIN_ETC_DIR="+etcDir,
+				"GRAIN_SECRETS_RUN_DIR="+filepath.Join(root, "run-secrets"),
+				"GRAIN_SKIP_TMPFS_MOUNT=1",
+				"GRAIN_SKIP_SYSTEMCTL=1",
+				"GRAIN_SM_ATTEMPTS=4",
+				"GRAIN_SM_RETRY_DELAY=0",
+				"GRAIN_USER="+me.Username,
+			)
+			out, err := cmd.CombinedOutput()
+			if strings.Contains(string(out), password) {
+				t.Fatalf("instance init printed the database password:\n%s", out)
+			}
+			env, readErr := os.ReadFile(filepath.Join(etcDir, "daemon.env"))
+			if tc.wantOK {
+				if err != nil || readErr != nil {
+					t.Fatalf("instance init: %v (daemon.env: %v)\n%s", err, readErr, out)
+				}
+				if !strings.Contains(string(env), "GRAIN_DB_DSN=postgres://gi_walk1:"+password+"@10.0.0.5:5432/grain_walk1?sslmode=require") {
+					t.Fatalf("daemon.env = %s, want the password DSN with sslmode=require", env)
+				}
+			} else {
+				if err == nil || readErr == nil {
+					t.Fatalf("instance init should fail closed without daemon.env: err=%v daemon.env err=%v\n%s", err, readErr, out)
+				}
+				if !strings.Contains(string(out), secret) {
+					t.Fatalf("failure output does not name the secret:\n%s", out)
+				}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if reads != tc.wantReads {
+				t.Fatalf("Secret Manager reads = %d, want %d\n%s", reads, tc.wantReads, out)
+			}
+		})
+	}
 }

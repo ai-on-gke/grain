@@ -15,6 +15,7 @@
 package intree
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -49,11 +50,20 @@ const DefaultGCPTokenPort = 4252
 // gcpTokenDir is where a token-mode grant's per-attempt files live.
 func gcpTokenDir(attemptID string) string { return "/home/debian/.gcp-token/" + attemptID }
 
+// mintedAccessToken records the SHA-256 digest and expiry of one access token
+// minted for a token-mode attempt so /runs/<attempt_id>/introspect can answer
+// gcloud's RFC 7662 token_info_url check locally without contacting STS.
+type mintedAccessToken struct {
+	digest  [32]byte
+	expires time.Time
+}
+
 // gcpTokenAttempt is one token-mode grant: the set, its account, the
 // per-attempt token the sandbox presents, and the grant's deadline.
 type gcpTokenAttempt struct {
 	set, account, secret string
 	deadline             time.Time
+	minted               []mintedAccessToken
 }
 
 // gcpTokens is the data-plane side of token-mode grants. Its attempts
@@ -120,7 +130,64 @@ func (t *gcpTokens) lookup(attemptID, presented string) (gcpTokenAttempt, bool) 
 	if a == nil || presented == "" || subtle.ConstantTimeCompare([]byte(a.secret), []byte(presented)) != 1 {
 		return gcpTokenAttempt{}, false
 	}
-	return *a, true
+	return gcpTokenAttempt{set: a.set, account: a.account, secret: a.secret, deadline: a.deadline}, true
+}
+
+const maxTrackedMintedTokens = 64
+
+// recordMinted remembers an access token minted for attemptID so local
+// RFC 7662 introspection (token_info_url) recognizes it until release or expiry.
+func (t *gcpTokens) recordMinted(attemptID, tok string, exp, now time.Time) {
+	if tok == "" {
+		return
+	}
+	sum := sha256.Sum256([]byte(tok))
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	a := t.attempts[attemptID]
+	if a == nil {
+		return
+	}
+	kept := a.minted[:0]
+	for _, m := range a.minted {
+		if now.Before(m.expires) {
+			kept = append(kept, m)
+		}
+	}
+	kept = append(kept, mintedAccessToken{digest: sum, expires: exp})
+	if len(kept) > maxTrackedMintedTokens {
+		kept = append([]mintedAccessToken(nil), kept[len(kept)-maxTrackedMintedTokens:]...)
+	}
+	a.minted = kept
+}
+
+// lookupMinted checks whether presented is an active, unexpired access token
+// minted for attemptID.
+func (t *gcpTokens) lookupMinted(attemptID, presented string, now time.Time) (account string, expires time.Time, ok bool) {
+	if presented == "" {
+		return "", time.Time{}, false
+	}
+	sum := sha256.Sum256([]byte(presented))
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	a := t.attempts[attemptID]
+	if a == nil {
+		return "", time.Time{}, false
+	}
+	for i := len(a.minted) - 1; i >= 0; i-- {
+		m := a.minted[i]
+		if subtle.ConstantTimeCompare(m.digest[:], sum[:]) == 1 {
+			exp := m.expires
+			if !a.deadline.IsZero() && a.deadline.Before(exp) {
+				exp = a.deadline
+			}
+			if !now.Before(exp) {
+				return "", time.Time{}, false
+			}
+			return a.account, exp, true
+		}
+	}
+	return "", time.Time{}, false
 }
 
 // stsError is an OAuth error body (RFC 6749 §5.2), which the client
@@ -173,6 +240,35 @@ func (t *gcpTokens) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t.idToken(w, r, attemptID, a, aud)
+	case "introspect":
+		if r.Method != http.MethodPost {
+			stsError(w, http.StatusMethodNotAllowed, "invalid_request", "POST the token introspection")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		if err := r.ParseForm(); err != nil {
+			stsError(w, http.StatusBadRequest, "invalid_request", "the token introspection is not a form")
+			return
+		}
+		m := t.manager(w)
+		if m == nil {
+			return
+		}
+		account, exp, ok := t.lookupMinted(attemptID, r.PostForm.Get("token"), m.Now())
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		if !ok {
+			// RFC 7662 §2.2: a token that is unknown, expired, released or
+			// another attempt's is answered {"active": false}, not an
+			// error, and the answer says nothing more about it.
+			json.NewEncoder(w).Encode(map[string]any{"active": false})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"active":   true,
+			"username": account,
+			"exp":      exp.Unix(),
+		})
 	default:
 		http.NotFound(w, r)
 	}
@@ -209,6 +305,7 @@ func (t *gcpTokens) accessToken(w http.ResponseWriter, r *http.Request, attemptI
 		t.failed(w, attemptID, a, "an access token", err)
 		return
 	}
+	t.recordMinted(attemptID, tok, exp, m.Now())
 	t.log.Printf("gcp: audit: attempt %s: permission set %s: minted an access token for %s, expiring %s", attemptID, a.set, a.account, exp.UTC().Format(time.RFC3339))
 	secs := max(int(exp.Sub(m.Now()).Seconds()), 1)
 	w.Header().Set("Content-Type", "application/json")
@@ -239,13 +336,20 @@ func (t *gcpTokens) idToken(w http.ResponseWriter, r *http.Request, attemptID st
 
 // gcpExternalAccount is the external_account config a token-mode grant
 // places where a key would go: its subject token is the per-attempt token
-// in subjectPath, exchanged at this server's forwarded listener.
+// in subjectPath, exchanged and introspected at this server's forwarded listener.
+// Setting token_info_url keeps gcloud's credential_file_override loader
+// (GetExternalAccountId) on the local listener instead of posting the
+// impersonated service-account access token to https://sts.googleapis.com/v1/introspect,
+// which fails in closed-network sandboxes and returns {"active": false} for
+// IAM-minted tokens on open networks.
 func gcpExternalAccount(port int, attemptID, set, subjectPath string) string {
+	base := "http://127.0.0.1:" + strconv.Itoa(port) + "/runs/" + attemptID
 	b, _ := json.MarshalIndent(map[string]any{
 		"type":               "external_account",
 		"audience":           "//grain.dev/capabilities/gcp/permission-sets/" + set,
 		"subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-		"token_url":          "http://127.0.0.1:" + strconv.Itoa(port) + "/runs/" + attemptID + "/token",
+		"token_url":          base + "/token",
+		"token_info_url":     base + "/introspect",
 		"credential_source":  map[string]any{"file": subjectPath},
 		"universe_domain":    "googleapis.com",
 	}, "", "  ")

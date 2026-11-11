@@ -66,13 +66,27 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	for _, name := range before {
 		to := retiredAs(name)
 		retired := len(to) != 1 || to[0] != name
-		if !retired && !slices.Contains(after, name) {
+		if !retired && !slices.Contains(after, canonical(name)) {
 			t.Errorf("%s: %q, which is not retired, was lost (%v -> %v)", what, name, before, after)
 		}
 		if retired && slices.Contains(after, name) {
 			t.Errorf("%s: retired %q survived the migration as itself rather than as %v", what, name, to)
 		}
 	}
+}
+
+// canonical is name as migration 132 stores it (model.CanonicalStoredGrant):
+// every migration test here runs the store up to model.SchemaVersion, so an
+// api:<what> a retirement wrote is read back as its reference.
+func canonical(name string) string {
+	out, _ := model.CanonicalStoredGrant(name)
+	return out
+}
+
+// canonicals is canonical over names, each kept once.
+func canonicals(names []string) []string {
+	out, _ := model.CanonicalStoredGrants(names)
+	return out
 }
 
 // rewindSchemaTo drops views and columns added past target so Postgres
@@ -135,15 +149,15 @@ var retiredGrants = []struct {
 	legacy  string
 	to      []string
 }{
-	{67, "team-broadcast", []string{"api:team-broadcast"}},
-	{68, "dispatch-control", []string{"api:dispatch-control"}},
-	{69, "pipeline-control", []string{"api:pipeline-control"}},
-	{71, "memory", []string{"api:memory"}},
-	{72, "release-notes", []string{"api:release-notes"}},
-	{75, "self-upgrade", []string{"api:self-upgrade"}},
-	{76, "test-quarantine", []string{"api:test-quarantine"}},
+	{67, "team-broadcast", canonicals([]string{"api:team-broadcast"})},
+	{68, "dispatch-control", canonicals([]string{"api:dispatch-control"})},
+	{69, "pipeline-control", canonicals([]string{"api:pipeline-control"})},
+	{71, "memory", canonicals([]string{"api:memory"})},
+	{72, "release-notes", canonicals([]string{"api:release-notes"})},
+	{75, "self-upgrade", canonicals([]string{"api:self-upgrade"})},
+	{76, "test-quarantine", canonicals([]string{"api:test-quarantine"})},
 	{80, "grain-log", []string{model.GrainJournalGrant}},
-	{81, "deployment-health", []string{"api:deployment:read", model.GrainHealthGrant}},
+	{81, "deployment-health", canonicals([]string{"api:deployment:read", model.GrainHealthGrant})},
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
@@ -158,7 +172,7 @@ var retiredGrants = []struct {
 	{101, "registry-push", []string{model.RegistryPushRef + "={}"}},
 	{101, "package-publish", []string{model.PackagePublishRef + "={}"}},
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
-	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
+	{115, "self-debug", canonicals([]string{"api:self-debug", model.GrainSourceGrant})},
 	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
 	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
 	{121, "read-issues", []string{model.GitHubReadIssuesGrant}},
@@ -237,7 +251,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 			sameGrantMeaning(t, table+" "+id, before, got[id])
 		}
 	}
-	wantSorted := slices.Clone(replacements)
+	wantSorted := canonicals(replacements)
 	sort.Strings(wantSorted)
 	if got := grantRows(t, ctx, db, "task_grant", "task_id")["2"]; !slices.Equal(got, wantSorted) {
 		t.Errorf("task 2, holding both spellings, holds %v after the migration, want %v once", got, wantSorted)
@@ -247,7 +261,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append(slices.Clone(replacements), "release-gate-read"); !slices.Equal(after.DefaultCapabilities, want) {
+	if want := canonicals(append(slices.Clone(replacements), "release-gate-read")); !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != len(cfg.ConsoleSessions) {
@@ -260,7 +274,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 		}
 		sameGrantMeaning(t, "console session "+s.ID, was.Capabilities, s.Capabilities)
 	}
-	if got, want := after.ConsoleSessions[1].Capabilities, replacements; !slices.Equal(got, want) {
+	if got, want := after.ConsoleSessions[1].Capabilities, canonicals(replacements); !slices.Equal(got, want) {
 		t.Errorf("steward capabilities = %v, want %v", got, want)
 	}
 
@@ -268,10 +282,10 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append([]string{"release-gate-read"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := canonicals(append([]string{"release-gate-read"}, replacements...)); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	if want := append([]string{"release-gate-read"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
+	if want := canonicals(append([]string{"release-gate-read"}, replacements...)); !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
 	sameGrantMeaning(t, "repo CI capabilities", []string{"release-gate-read", legacy}, repo.CICapabilities)
@@ -384,8 +398,8 @@ func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
 		if err != nil || got == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, got)
 		}
-		if !slices.Equal(got.CICapabilities, []string{"api:release-notes"}) {
-			t.Errorf("repo_config.ci_capabilities = %v, want [api:release-notes]", got.CICapabilities)
+		if !slices.Equal(got.CICapabilities, []string{canonical("api:release-notes")}) {
+			t.Errorf("repo_config.ci_capabilities = %v, want [%s]", got.CICapabilities, canonical("api:release-notes"))
 		}
 	})
 
@@ -400,8 +414,8 @@ func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
 		if err != nil || got == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, got)
 		}
-		if !slices.Equal(got.CICapabilities, []string{"api:release-notes"}) {
-			t.Errorf("repo_config.ci_capabilities after state-repo import = %v, want [api:release-notes]", got.CICapabilities)
+		if !slices.Equal(got.CICapabilities, []string{canonical("api:release-notes")}) {
+			t.Errorf("repo_config.ci_capabilities after state-repo import = %v, want [%s]", got.CICapabilities, canonical("api:release-notes"))
 		}
 	})
 }
@@ -849,13 +863,13 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 		if cat == nil {
 			t.Fatal("CapabilityPolicy.Catalogue nil")
 		}
-		if want := []string{"api:tasks:read", model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Task, want) {
+		if want := []string{canonical("api:tasks:read"), model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Task, want) {
 			t.Errorf("Catalogue.Defaults.Task = %v, want %v", cat.Defaults.Task, want)
 		}
 		if want := []string{model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.CI, want) {
 			t.Errorf("Catalogue.Defaults.CI = %v, want %v", cat.Defaults.CI, want)
 		}
-		if want := []string{model.GitHubSandboxRepoGrant, "api:tasks:read"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+		if want := []string{model.GitHubSandboxRepoGrant, canonical("api:tasks:read")}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 		}
 		if want := []string{"release-gate-read", model.GitHubSandboxRepoGrant}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, want) {
@@ -882,4 +896,145 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 		t.Fatalf("staterepo.Import of schema-123 export: %v", err)
 	}
 	assertPolicy(t, importedStore)
+}
+
+// A store from before the first conversion (schema 66), holding every
+// retired grant form at once -- in tasks, templates, schedules, the
+// deployment's default capabilities and standing session, and a
+// repository's default and CI capabilities -- upgrades to the current
+// schema in one pass on PostgreSQL too, with every one of them in its new
+// form, meaning what it meant, and nothing retired left over. The SQLite
+// twin is pkg/model/sqlite's test of the same name; this one runs every
+// migration from 67 on inside PostgreSQL's single migration transaction,
+// where one statement that SQLite tolerates but PostgreSQL rejects aborts
+// the whole upgrade.
+func TestAPreConversionStoreUpgradesEveryRetiredGrantAtOnce(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	first := retiredGrants[0].version
+	var legacy, replacements []string
+	for _, r := range retiredGrants {
+		first = min(first, r.version)
+		legacy = append(legacy, r.legacy)
+		for _, to := range r.to {
+			if !slices.Contains(replacements, to) {
+				replacements = append(replacements, to)
+			}
+		}
+	}
+	sortedReplacements := slices.Clone(replacements)
+	sort.Strings(sortedReplacements)
+
+	cfg := model.DefaultConfig()
+	cfg.DefaultCapabilities = slices.Clone(legacy)
+	cfg.ConsoleSessions = []model.ConsoleSession{{ID: "director", Title: "Director", Capabilities: slices.Clone(legacy)}}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: slices.Clone(legacy),
+		CICapabilities: slices.Clone(legacy)}); err != nil {
+		t.Fatal(err)
+	}
+	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
+	for table, owner := range owners {
+		for _, name := range legacy {
+			if _, err := db.ExecContext(ctx, "INSERT INTO `"+table+"` (`"+owner+"`, `capability`, `via`) VALUES ('old', ?, 'label')", name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	rewindSchemaTo(t, ctx, db, first-1)
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-%d store: %v", first-1, err)
+	}
+	var version int
+	if err := db.QueryRowContext(ctx, "SELECT `version` FROM `grain_schema` WHERE `id` = 1").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != model.SchemaVersion {
+		t.Errorf("schema version after the upgrade = %d, want %d", version, model.SchemaVersion)
+	}
+
+	noneRetired := func(what string, got []string) {
+		t.Helper()
+		for _, name := range legacy {
+			if slices.Contains(got, name) {
+				t.Errorf("%s still holds retired %q after the upgrade: %v", what, name, got)
+			}
+		}
+	}
+	for table, owner := range owners {
+		got := grantRows(t, ctx, db, table, owner)["old"]
+		sameGrantMeaning(t, table, legacy, got)
+		noneRetired(table, got)
+		if !slices.Equal(got, sortedReplacements) {
+			t.Errorf("%s holds %v after the upgrade, want every new form once: %v", table, got, sortedReplacements)
+		}
+	}
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.ConsoleSessions) != 1 {
+		t.Fatalf("console sessions after the upgrade = %+v, want the director alone", after.ConsoleSessions)
+	}
+	for what, got := range map[string][]string{
+		"default capabilities": after.DefaultCapabilities,
+		"director session":     after.ConsoleSessions[0].Capabilities,
+	} {
+		sameGrantMeaning(t, what, legacy, got)
+		noneRetired(what, got)
+	}
+	repo, err := store.GetRepoConfig(ctx, widgets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, got := range map[string][]string{
+		"repo default capabilities": repo.DefaultCapabilities,
+		"repo CI capabilities":      repo.CICapabilities,
+	} {
+		sameGrantMeaning(t, what, legacy, got)
+		noneRetired(what, got)
+	}
+}
+
+func TestMigrationRewritesRetiredGrantWaits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		from int
+	}{
+		{"from_123_rewriteLegacyGrantsMulti", 123},
+		{"from_128_migrateRetiredGrantWaits", 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, db, ctx := openStore(t)
+			if _, err := db.ExecContext(ctx,
+				"INSERT INTO `task_grant_wait` (`task_id`, `capability`, `resource`, `waiting_at`) VALUES ('w1', 'github-sandbox', 'GitHub App rate limit', ?), ('w2', 'console', 'slot', ?)",
+				time.Now().UTC(), time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			rewindSchemaTo(t, ctx, db, tc.from)
+			if err := model.New(db).Init(ctx); err != nil {
+				t.Fatalf("Init from %d: %v", tc.from, err)
+			}
+			var gotCap string
+			if err := db.QueryRowContext(ctx, "SELECT `capability` FROM `task_grant_wait` WHERE `task_id` = 'w1'").Scan(&gotCap); err != nil {
+				t.Fatalf("reading w1 grant wait: %v", err)
+			}
+			if gotCap != model.GitHubSandboxRepoGrant {
+				t.Errorf("w1 capability = %q, want %q", gotCap, model.GitHubSandboxRepoGrant)
+			}
+			var count int
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_grant_wait` WHERE `task_id` = 'w2'").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if tc.from == 128 && count != 0 {
+				t.Errorf("w2 console wait survived migration 129: count = %d", count)
+			}
+		})
+	}
 }

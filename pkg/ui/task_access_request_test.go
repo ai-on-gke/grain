@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -382,5 +383,137 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 	// judging in the task's own context must not admit it everywhere.
 	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "github-sandbox"}}); err == nil {
 		t.Fatal("ad-hoc task admitted session-restricted capability in CheckAccessRequest")
+	}
+}
+
+// grainCIItem is a request_access item for grain#ci, as task 3950's run
+// asked for it.
+func grainCIItem() model.AccessRequestItem {
+	return model.AccessRequestItem{Kind: model.AccessGrant, Capability: model.GrainCIRef}
+}
+
+// withoutCIReadDefault strips the default api:ci-read@<repo> a task on a
+// GitHub-CI repository is filed holding (model.DefaultCIReadGrant, task
+// 4364), leaving the task as one filed before that default existed, or
+// under its opt-out: the task a request for grain#ci comes from.
+func withoutCIReadDefault(t *testing.T, store *model.Store, ctx context.Context, id string) {
+	t.Helper()
+	if err := store.UpdateTask(ctx, id, func(tk *model.Task) error {
+		tk.Grants = model.GrantsBeyondCIReadDefault(*tk)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A request for grain#ci is judged by the same check the grants editor
+// makes, which refuses it: on a ci_mode: github repository the refusal
+// names api:ci-read@<repo> and the commands that need no grant, never the
+// CI Mode switch the repository deliberately does not use.
+func TestCheckAccessRequestRefusesGrainCIOnAGitHubModeRepo(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	withoutCIReadDefault(t, store, ctx, task.ID)
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []model.AccessRequestItem{grainCIItem(), {Kind: model.AccessGrant, Capability: model.GrainCICapability}} {
+		_, err := c.CheckAccessRequest(ctx, task.ID, []model.AccessRequestItem{item})
+		var invalid *ui.ValidationError
+		if !errors.As(err, &invalid) {
+			t.Fatalf("%s: CheckAccessRequest = %v, want a validation error", item.Capability, err)
+		}
+		for _, want := range []string{"requests[0]", "api#ci-read", `{repo: "acme/widgets"}`, "`grain ci wait`", "`grain pr open`"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: refusal %q does not name %q", item.Capability, err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "Set the CI Mode") {
+			t.Errorf("%s: refusal %q tells a ci_mode: github repo to switch to grain CI", item.Capability, err)
+		}
+	}
+	// What the refusal says to ask for instead is accepted.
+	capability, with := grainci.SubstituteRequest("acme/widgets")
+	if _, err := c.CheckAccessRequest(ctx, task.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: capability, With: with}}); err != nil {
+		t.Errorf("api#ci-read {repo: acme/widgets} was refused: %v", err)
+	}
+}
+
+// On a repository grain CI gates, the task holds grain#ci already, and a
+// request for it is refused as one for what it has.
+func TestCheckAccessRequestRefusesGrainCIOnAGrainCIRepoAsHeld(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, CIMode: model.CIModeGrain}); err != nil {
+		t.Fatal(err)
+	}
+	task := create(t, c, ctx)
+	_, err := c.CheckAccessRequest(ctx, task.ID, []model.AccessRequestItem{grainCIItem()})
+	var invalid *ui.ValidationError
+	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "holds this already") {
+		t.Fatalf("CheckAccessRequest = %v, want it refused as already held", err)
+	}
+}
+
+// The grants editor's own check says no to grain#ci in either spelling,
+// as attaching it does: request_access's check is that check.
+func TestCheckCapabilityGrantsRefusesGrainCI(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	checks, err := c.CheckCapabilityGrants(ctx, []ui.GrantRequest{{Capability: model.GrainCIRef}, {Capability: model.GrainCICapability}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range checks {
+		if check.Error == "" || check.Recorded != "" {
+			t.Errorf("check of %s = %+v, want it refused", check.Grant, check)
+		}
+	}
+}
+
+// A request parked on grain#ci before its check refused it -- task 3950's
+// -- shows why it cannot be granted and offers api:ci-read@<repo> in its
+// place, and Grant grants that rather than failing.
+func TestAParkedGrainCIRequestOffersCIReadAndGrantsIt(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	withoutCIReadDefault(t, store, ctx, task.ID)
+	parkOnAccess(t, c, ctx, task.ID, []model.AccessRequestItem{grainCIItem()})
+
+	detail, err := c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.PendingAccess == nil || len(detail.PendingAccess.Items) != 1 {
+		t.Fatalf("PendingAccess = %+v, want the one item", detail.PendingAccess)
+	}
+	item := detail.PendingAccess.Items[0]
+	want := grainci.SubstituteGrant("acme/widgets")
+	if item.Error == "" || item.Substitute == nil || item.SubstituteGrant != want {
+		t.Fatalf("item = %+v, want an error and the substitute %s", item, want)
+	}
+
+	if err := c.GrantAccessRequest(ctx, task.ID, ui.AccessGrantDecision{}); err != nil {
+		t.Fatalf("GrantAccessRequest: %v", err)
+	}
+	got, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(got.Grants, func(g model.Grant) bool { return g.Capability == want }) {
+		t.Errorf("grants = %v, want %s", got.Grants, want)
+	}
+	if grainci.Granted(got.Grants) {
+		t.Errorf("grants = %v, want no grain#ci", got.Grants)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.PendingAccess != nil || len(obs.AccessDecisions) != 1 ||
+		len(obs.AccessDecisions[0].Granted) != 1 || obs.AccessDecisions[0].Granted[0].Capability != model.APIRef("ci-read") {
+		t.Errorf("decisions = %+v, want api#ci-read recorded as granted", obs.AccessDecisions)
 	}
 }

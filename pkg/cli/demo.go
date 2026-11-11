@@ -80,11 +80,11 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	mergeRules := fs.Bool("merge-rules", false, "seed acme/widgets' merge rules (the docs/declarations.md example) and two deploy/** changes the merge queue classified under them")
 	mechanicalPort := fs.Bool("mechanical-port", false, "seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run")
 	qualification := fs.Bool("qualification", false, "seed a release candidate of -default-target-repo whose qualification run is waiting for approval")
-	legacyCapability := fs.Bool("legacy-capability", false, "register a made-up legacy capability with nothing to mint, as an edition would, so the Legacy capabilities pickers have a row (every legacy provider core shipped is retired)")
 	secretsStore := fs.Bool("secrets-store", false, "wire a real secrets store in the demo's throwaway directory, so secrets and release secrets can be set and removed")
 	humanReview := fs.Bool("human-review", false, "seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold")
 	reviewQuestions := fs.Bool("review-questions", false, "seed a change whose review left questions for its owner, held on their decision, and send it back to the queue once they reply, as a daemon would")
 	externalConfigRepo := fs.String("external-config-repo", "", "serve a deployment whose configuration is managed in this external config repository (a remote URL): every configuration write is refused with 409 and the exact edit to commit there instead (docs/external-config-repo.md)")
+	configChange := fs.Bool("config-change", false, "serve a real, throwaway grain/config exported from the demo's store, and seed two tasks parked on proposal branches of it (propose_config_change), so the config-change card's Approve & Apply merges into its main and Reject deletes the branch")
 	externalConfigBranch := fs.String("external-config-branch", "main", "with -external-config-repo, the branch of that repository configuration is read from")
 	sensitiveHold := fs.Bool("sensitive-hold", false, "seed a change held by a sensitive path trigger, and a failed trigger declaration read")
 	githubAPI := fs.String("github-api", "", "host:port of a GitHub API stub on loopback, spoken to over plain HTTP: the Settings → Git Test buttons, the New task pickers and filing's reach refusal all ask it what the deployment's credential can reach")
@@ -109,15 +109,19 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	uiIAPAudience := fs.String("ui-iap-audience", "", "as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it")
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "as on grain daemon: the issuer a signed assertion must carry (default "+ui.GoogleIAPIssuer+")")
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "as on grain daemon: where the assertions' signing keys are published (default "+ui.GoogleIAPCertURL+")")
-	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "as on grain daemon: the exact issuer URL a signed X-Grain-Registry-Assertion must carry")
-	uiRegistryAudience := fs.String("ui-registry-audience", "", "as on grain daemon: the single audience URL a signed X-Grain-Registry-Assertion must carry")
-	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "as on grain daemon: where the registry's ES256 signing keys are published as a JWK set")
+	uiHubIssuer := fs.String("ui-hub-issuer", "", "as on grain daemon: the exact issuer URL a signed X-Grain-Hub-Assertion must carry")
+	uiHubAudience := fs.String("ui-hub-audience", "", "as on grain daemon: the single audience URL a signed X-Grain-Hub-Assertion must carry")
+	uiHubKeysURL := fs.String("ui-hub-keys-url", "", "as on grain daemon: where the hub's ES256 signing keys are published as a JWK set")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience")
 	uiRequireVerifier := fs.String("ui-require-verifier", "", "as on grain daemon: require network callers to sign in through the named IdentityVerifier (-ui-require-iap is an alias for -ui-require-verifier=iap)")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "as on grain daemon: resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint)
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
+	renamed := defineRenamedFlags(fs, "ui-hub-issuer", "ui-hub-audience", "ui-hub-keys-url")
 	if err := fs.Parse(args); err != nil {
+		return demo.Options{}, err
+	}
+	if err := renamed.resolve(); err != nil {
 		return demo.Options{}, err
 	}
 	if err := noArgs(fs, fs.Args()); err != nil {
@@ -147,6 +151,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 			return demo.Options{}, errors.New("-external-config-branch only means something with -external-config-repo")
 		}
 	}
+	if *configChange && *externalConfigRepo != "" {
+		return demo.Options{}, errors.New("-config-change and -external-config-repo are mutually exclusive: an external config repository takes no proposals here")
+	}
 	if *githubAPI != "" && !demo.IsLoopbackHostPort(*githubAPI) {
 		return demo.Options{}, errors.New("-github-api must be a loopback host:port (it is spoken to over plain HTTP)")
 	}
@@ -167,9 +174,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		UiIAPAudience:       *uiIAPAudience,
 		UiIAPIssuer:         *uiIAPIssuer,
 		UiIAPKeysURL:        *uiIAPKeysURL,
-		UiRegistryIssuer:    *uiRegistryIssuer,
-		UiRegistryAudience:  *uiRegistryAudience,
-		UiRegistryKeysURL:   *uiRegistryKeysURL,
+		UiHubIssuer:         *uiHubIssuer,
+		UiHubAudience:       *uiHubAudience,
+		UiHubKeysURL:        *uiHubKeysURL,
 		UiRequireVerifier:   strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:        *uiRequireIAP,
 		UiAllowedPrincipals: ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
@@ -184,9 +191,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		IAPAudience:            *uiIAPAudience,
 		IAPIssuer:              *uiIAPIssuer,
 		IAPKeysURL:             *uiIAPKeysURL,
-		RegistryIssuer:         *uiRegistryIssuer,
-		RegistryAudience:       *uiRegistryAudience,
-		RegistryKeysURL:        *uiRegistryKeysURL,
+		HubIssuer:              *uiHubIssuer,
+		HubAudience:            *uiHubAudience,
+		HubKeysURL:             *uiHubKeysURL,
 		RequireVerifier:        iapCfg.UiRequireVerifier,
 		RequireIAP:             *uiRequireIAP,
 		AllowedPrincipals:      iapCfg.UiAllowedPrincipals,
@@ -214,11 +221,11 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		ReviewQuestions:        *reviewQuestions,
 		HumanReview:            *humanReview,
 		ExternalConfigRepo:     *externalConfigRepo,
+		ConfigChange:           *configChange,
 		ExternalConfigBranch:   *externalConfigBranch,
 		MechanicalPort:         *mechanicalPort,
 		Qualification:          *qualification,
 		SecretsStore:           *secretsStore,
-		LegacyCapability:       *legacyCapability,
 		GitHubAPI:              *githubAPI,
 		UpgradeImage:           *upgradeImage,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),

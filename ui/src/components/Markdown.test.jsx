@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import Markdown, { safeUrl } from "./Markdown.jsx";
 
 describe("Markdown", () => {
@@ -176,5 +176,29 @@ describe("Markdown", () => {
       "markdown",
       "timeline-comment-body",
     );
+  });
+
+  it("follows a link to a task or one of its comments in place", () => {
+    window.history.replaceState(null, "", "/tasks/30");
+    const pop = vi.fn();
+    window.addEventListener("popstate", pop);
+    try {
+      render(
+        <Markdown>{"See [the question](/tasks/31#comment=13)."}</Markdown>,
+      );
+      const link = screen.getByRole("link", { name: "the question" });
+      expect(link).toHaveAttribute("href", "/tasks/31#comment=13");
+      expect(link).not.toHaveAttribute("target");
+      // A modified click is the browser's to open where it likes.
+      fireEvent.click(link, { ctrlKey: true });
+      expect(pop).not.toHaveBeenCalled();
+      fireEvent.click(link);
+      expect(window.location.pathname).toBe("/tasks/31");
+      expect(window.location.hash).toBe("#comment=13");
+      expect(pop).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("popstate", pop);
+      window.history.replaceState(null, "", "/");
+    }
   });
 });

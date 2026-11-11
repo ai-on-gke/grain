@@ -20,6 +20,7 @@ import AccessSection, {
   validatePrincipalEntry,
 } from "./AccessSection.jsx";
 import api from "../../api.js";
+import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
@@ -141,6 +142,124 @@ describe("AccessSection", () => {
     ).toBeNull();
     expect(screen.getByTestId("allowed-principals-table")).toHaveTextContent(
       "grain/viewer",
+    );
+  });
+
+  it("asks a signed-in admin for a reason when a dangerous role is involved, confirms narrowing oneself, and shows the history", async () => {
+    const user = userEvent.setup();
+    const calls = [];
+    let refusedSelf = false;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/access/principals" && !opts?.method) {
+        return {
+          entries: [
+            { entry: "user:ops@example.com", role: "grain/operator" },
+            { entry: "user:other@example.com", role: "grain/operator" },
+            { entry: "group:eng@example.com", role: "grain/viewer" },
+          ],
+          roles: [
+            { name: "grain/operator", builtin: true, person: true },
+            { name: "grain/viewer", builtin: true, person: false },
+            { name: "grain/contributor", builtin: true, person: false },
+            { name: "contractors", person: false, denies: true },
+          ],
+        };
+      }
+      if (path === "/api/access/history") {
+        return [
+          {
+            id: 7,
+            at: "2026-11-09T10:00:00Z",
+            actor: "ops@example.com",
+            actorLabel: "ops@example.com",
+            surface: "access",
+            summary:
+              "role user:other@example.com grain/viewer -> grain/operator (on call)",
+          },
+        ];
+      }
+      calls.push({ path, ...opts });
+      if (opts?.method === "PATCH" && path.includes("ops%40") && !refusedSelf) {
+        refusedSelf = true;
+        const err = new Error(
+          "user:ops@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access",
+        );
+        err.code = "confirm_self";
+        err.status = 403;
+        throw err;
+      }
+      return {};
+    });
+    render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:ops@example.com",
+          authMethod: "iap",
+          access: {
+            role: "grain/operator",
+            roles: ["grain/operator"],
+            full: true,
+            scopes: ["access:read", "access:write"],
+          },
+        },
+      }),
+    );
+    await screen.findByText("user:other@example.com");
+    expect(await screen.findByTestId("access-history")).toHaveTextContent(
+      "grain/viewer -> grain/operator (on call)",
+    );
+
+    // Removing another admin opens the reason field, and needs one.
+    await user.click(
+      screen.getByRole("button", { name: "Remove user:other@example.com" }),
+    );
+    expect(screen.getByTestId("access-change-panel")).toHaveTextContent(
+      /give a reason/,
+    );
+    await user.click(screen.getByTestId("access-change-apply"));
+    expect(screen.getByTestId("access-change-error")).toHaveTextContent(
+      /Give a reason/,
+    );
+    expect(calls).toHaveLength(0);
+    await user.type(screen.getByTestId("access-change-reason"), "offboarded");
+    await user.click(screen.getByTestId("access-change-apply"));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].method).toBe("DELETE");
+    expect(calls[0].path).toBe(
+      "/api/access/principals/user%3Aother%40example.com?reason=offboarded",
+    );
+
+    // A non-sensitive change goes straight through, no reason field.
+    await user.click(screen.getByLabelText("Role of group:eng@example.com"));
+    await user.click(screen.getByRole("option", { name: "grain/contributor" }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(screen.queryByTestId("access-change-panel")).toBeNull();
+    expect(JSON.parse(calls[1].body)).toEqual({ role: "grain/contributor" });
+
+    // Narrowing one's own operator entry: a reason, then the server's
+    // confirm_self, then a confirmed resend.
+    await user.click(screen.getByLabelText("Role of user:ops@example.com"));
+    await user.click(screen.getByRole("option", { name: "grain/viewer" }));
+    await user.type(
+      await screen.findByTestId("access-change-reason"),
+      "stepping down",
+    );
+    await user.click(screen.getByTestId("access-change-apply"));
+    expect(await screen.findByTestId("access-confirm-self")).toHaveTextContent(
+      /narrows your own access/,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Yes, narrow my own access" }),
+    );
+    await waitFor(() => expect(calls).toHaveLength(4));
+    expect(JSON.parse(calls[3].body)).toEqual({
+      role: "grain/viewer",
+      reason: "stepping down",
+      confirmSelf: true,
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("access-change-panel")).toBeNull(),
     );
   });
 
@@ -294,6 +413,62 @@ describe("validatePrincipalEntry", () => {
     expect(validatePrincipalEntry("user:not-an-email").error).toMatch(
       /valid email/,
     );
+  });
+  // Allowed-principal and service-account rows printed addedAt in UTC
+  // regardless of the time zone chosen under Settings → Preferences, and
+  // RoleChip rendered a <div> inside the caller-role <p> (2026-11-08
+  // settings walkthrough).
+  it("prints added times in this browser's chosen time zone and keeps RoleChip inline", async () => {
+    const addedAt = "2026-11-06T08:01:00Z";
+    api.mockResolvedValue({
+      entries: [
+        {
+          entry: "user:alice@example.com",
+          role: "grain/operator",
+          addedBy: "bob@example.com",
+          addedAt,
+        },
+        {
+          entry: "serviceAccount:ci@proj.iam.gserviceaccount.com",
+          role: "grain/viewer",
+          reason: "CI reader",
+          addedBy: "bob@example.com",
+          addedAt,
+        },
+      ],
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        <TimeZoneProvider zone="Asia/Tokyo">
+          {section({
+            config: {
+              authenticated: true,
+              actor: "user:dana@example.com",
+              authMethod: "iap",
+              access: { role: "grain/viewer", full: false, scopes: [] },
+            },
+          })}
+        </TimeZoneProvider>,
+      );
+      const inTokyo = new Date(addedAt).toLocaleString(undefined, {
+        timeZone: "Asia/Tokyo",
+      });
+      const userRow = await screen.findByTestId(
+        "principal-row-user:alice@example.com",
+      );
+      expect(userRow).toHaveTextContent(inTokyo);
+      const saRow = screen.getByTestId(
+        "principal-row-serviceAccount:ci@proj.iam.gserviceaccount.com",
+      );
+      expect(saRow).toHaveTextContent(inTokyo);
+
+      const ownRole = screen.getByTestId("access-own-role");
+      expect(ownRole.querySelector("div")).toBeNull();
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 

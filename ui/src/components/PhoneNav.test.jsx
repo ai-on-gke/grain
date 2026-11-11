@@ -307,4 +307,42 @@ describe("PhoneNav", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("rail")).toBeNull();
   });
+
+  it("says on the bar that the task list is stale, and retries on a tap", () => {
+    // 2026-11-07 walkthrough, F7: the rail's "not refreshing" note is in
+    // the drawer on a phone, so the bar has to say it.
+    const onRetryTasks = vi.fn();
+    const { rerender } = render(
+      <PhoneNav config={{}} running={false} onOpenSettings={() => {}}>
+        <div>rail</div>
+      </PhoneNav>,
+    );
+    expect(screen.queryByTestId("phone-tasks-stale")).toBeNull();
+    rerender(
+      <PhoneNav
+        config={{}}
+        running={false}
+        onOpenSettings={() => {}}
+        tasksStale="HTTP 502"
+        onRetryTasks={onRetryTasks}
+      >
+        <div>rail</div>
+      </PhoneNav>,
+    );
+    const chip = screen.getByTestId("phone-tasks-stale");
+    expect(chip.textContent).toContain("Task list not refreshing");
+    expect(chip.getAttribute("title")).toContain("HTTP 502");
+    // On the bar, after its controls -- a row of its own, so it never
+    // takes room from them.
+    expect(chip.closest("header")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Settings" })
+        .compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(chip);
+    expect(onRetryTasks).toHaveBeenCalledTimes(1);
+    // The drawer stays shut: a retry is not navigation.
+    expect(screen.queryByText("rail")).toBeNull();
+  });
 });

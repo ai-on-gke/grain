@@ -479,6 +479,9 @@ type Config struct {
 	// Settings reaches the next run dispatched rather than the next
 	// restart.
 	PromptExtension string
+	// Skills is this deployment's default repository skill discovery
+	// configuration (model.Config.Skills), refreshed from grain_config each cycle.
+	Skills *model.SkillsConfig
 	// TimeZone is this deployment's own clock, model.Config.TimeZone --
 	// "" for one that never set it. It is the zone a run's prompt tells
 	// the time in for a task that names none of its own (RunDispatch);
@@ -533,6 +536,11 @@ type Config struct {
 	// deployment that really wants a longer one sets it explicitly
 	// instead of switching this off.
 	MaxRunRuntime time.Duration
+	// AutoCompactBytes is the assembled-prompt size past which a durable
+	// task's run is asked to compact its context before anything else
+	// (context_compaction.go, design/design/durable-tasks.design.md#DT-15).
+	// Zero uses DefaultAutoCompactBytes.
+	AutoCompactBytes int
 	// MaxDurableRuns is how many runs of durable tasks (model.Task.IsDurable,
 	// design/design/durable-tasks.design.md#DT-1) may be live at once. They are
 	// admitted outside every worker and merger count, as every task with
@@ -1136,17 +1144,6 @@ type TranscriptSink interface {
 	// RestoreRaw populates destPath from the object store if a previous
 	// instance flushed runID's live stream before detaching or being replaced.
 	RestoreRaw(ctx context.Context, runID, destPath string) error
-}
-
-// NarrativeRedactor is what a TranscriptSink that redacts more than the
-// run's own sandbox environment implements (pkg/daemon's
-// TranscriptObjectStore redacts every value in the deployment's secret
-// store before uploading). When FlushRunEnd could not store the
-// narrative, the copy kept in model.Store instead goes through the same
-// redaction, so a bucket outage never leaves a less-redacted transcript
-// behind than a healthy bucket would have.
-type NarrativeRedactor interface {
-	RedactNarrative(narrative string) (string, error)
 }
 
 // HostSandboxes hands out one directory per run, on the host this process

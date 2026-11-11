@@ -38,6 +38,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
@@ -45,12 +46,12 @@ import (
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
-	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/usage"
 )
 
 // LocalAuditPath is where a deployment keeps its local audit log of
@@ -385,6 +386,10 @@ func Run(ctx context.Context, cfg Config) error {
 			"it, the sync loop retries every %s, and the UI's State pane says so until one works. "+
 			"The load reported: %v", stateRepo.Dir(), stateSyncInterval, loadErr)
 	}
+	// The hub's name for this deployment, applied once the state
+	// repository's grain_config is in, so a name set there (or in
+	// Settings) is the one that is kept.
+	adoptDefaultEnvironmentName(ctx, store, cfg.DefaultEnvironmentName)
 	// The encrypted-secrets backup is refused to every sandbox. The set is
 	// live so changing that backup through the UI takes effect immediately.
 	forbidden := gitproxy.NewForbiddenSet()
@@ -397,12 +402,17 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	MoveLooseCredentialsIntoStore(cfg, secretStore)
+	if os.Getenv(gitproxy.CredentialsInFilesEnv) != "files" {
+		cfg.caSecrets = secretStore
+	}
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
 	// the UI's own open of the secrets (ui_server.go), never to this one,
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
+	retrySecretsKey(ctx, secretStore)
 	// A dispatch condition's text (DispatchConditions) is served to
 	// every queued task's reason, which an agent reads from its sandbox,
 	// so it is redacted with the same list the journal is read through
@@ -838,6 +848,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
 	}
+	// Also before the capability servers start, so each starts with the
+	// $secret: references its typed-in credentials became.
+	if err := migrateLiteralCredentials(ctx, store, secretStore); err != nil {
+		log.Printf("daemon: moving typed-in capability server credentials into the secrets store: %v", err)
+	}
 	// transcriptDir is where a run's own agent.Framework may mirror its
 	// transcript-in-progress live, and where the UI server below reads one
 	// back from for a still-running attempt -- the two sides of
@@ -891,7 +906,7 @@ func Run(ctx context.Context, cfg Config) error {
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
 		WithCapabilityServers(capabilityServers).
 		withHostdCapabilityServers(hostdCapabilityServers)
-	registryMgr := NewRegistryManager(RegistryManagerOptions{
+	registryMgr := NewHubManager(HubManagerOptions{
 		Store:      store,
 		Secrets:    secretStore,
 		LiveConfig: live.Current,
@@ -907,7 +922,7 @@ func Run(ctx context.Context, cfg Config) error {
 			return api.HealthOK, ""
 		},
 	})
-	live.WithRegistry(registryMgr)
+	live.WithHub(registryMgr)
 	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}
@@ -1062,7 +1077,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// nil on a deployment configured for neither pipeline, which both
 	// halves already have to handle: the UI hides the pane and the
 	// reconciler applies nothing.
-	upgrader := newUpgrader(cfg, db, store, githubCredentials)
+	upgrader := newUpgrader(cfg, db, store)
 
 	// Which filesystems this deployment's own state sits on, resolved once
 	// for the two halves that read them: the host status pane's disk rows
@@ -1325,6 +1340,15 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			log.Printf("grain daemon: restored %d usage-limit pause(s) from before this restart", n)
 		}
 		cancelRestore()
+		// Token accounting learns a window's capacity from the usage it
+		// had consumed when its provider refused it (usage.LearnFromPause).
+		agentPause.SetOnOpen(func(p model.UsageLimitPause, at time.Time) {
+			learnCtx, cancelLearn := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancelLearn()
+			if err := usage.LearnFromPause(learnCtx, store, p, at); err != nil {
+				log.Printf("grain daemon: learning %s/%s's budget from its usage-limit pause: %v", p.Connection, p.Model, err)
+			}
+		})
 	}
 	buildFramework := pool.Build
 	// Bounded rather than given ctx itself: this probe exists to log a
@@ -1859,9 +1883,13 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		TeamHasAgentBackend: teamHasAgentBackend(cfg, store),
 		MaxWorkers:          cfg.MaxWorkers,
 		MaxMergers:          cfg.MaxMergers,
-		Budget:              cfg.Budget(),
-		AgentShape:          cfg.AgentShape(),
-		Ledger:              cfg.Ledger,
+		// The automatic worker cap from the remaining provider budget,
+		// which only lowers MaxWorkers when the operator opted in
+		// (usage mode "auto", docs/connections-and-models.md).
+		UsageCap:   usageCapFor(store),
+		Budget:     cfg.Budget(),
+		AgentShape: cfg.AgentShape(),
+		Ledger:     cfg.Ledger,
 		// And the one part of that budget a startup reading cannot give:
 		// what the volume has left right now. Called once a cycle, so a
 		// dispatch onto a filling disk is deferred on the tick the disk
@@ -2093,4 +2121,12 @@ func sandboxGrainBinary() string {
 		exe = resolved
 	}
 	return orchestrator.SandboxGrainBinaryBeside(exe)
+}
+
+// usageCapFor is orchestrator.Deps.UsageCap for store: nil without one.
+func usageCapFor(store *model.Store) func(context.Context, time.Time, int) int {
+	if store == nil {
+		return nil
+	}
+	return (&usage.Cap{Store: store}).Workers
 }

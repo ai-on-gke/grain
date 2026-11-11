@@ -168,13 +168,11 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 	// X-Grain-Acting-Task on a token's request is ignored rather than let
 	// widen the token's scopes to a task's grants.
 	if tok := externalTokenFromContext(ctx); tok != nil {
-		_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		held, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 		if err != nil {
 			return mcpCallerAccess{role: role, externalToken: tok}, err
 		}
-		if role != nil && !role.Full {
-			set = set.Intersect(role.set).Without(role.deny)
-		}
+		_, set = narrowExternalGrants(held, set, role)
 		return mcpCallerAccess{
 			role:          role,
 			externalToken: tok,
@@ -265,10 +263,34 @@ func (a mcpCallerAccess) authorizedRoutes() []APIRoute {
 	out := make([]APIRoute, 0, len(all))
 	for _, rt := range all {
 		if a.allowsRoute(rt) {
-			out = append(out, rt)
+			out = append(out, a.reachedAs(rt))
 		}
 	}
 	return out
+}
+
+// reachedAs is rt labelled with the scope this caller actually reaches it
+// through. A route reached only through a narrower scope's carve-out --
+// capabilities:detach on the capabilities:admin routes
+// (capabilitiesDetachAllowsRoute), tasks:admin's priority patch
+// (tasksAdminAllowsTaskPatch) -- is listed under that scope, so
+// grain_explore_scope does not tell a credential holding only the
+// non-dangerous capabilities:detach that it holds the dangerous
+// capabilities:admin (docs/test-runs/2026-11-07-director-agent-api.md,
+// finding 3). Only the label changes: the gate still authorizes the call
+// against routeScopes and the carve-out's own body rules.
+func (a mcpCallerAccess) reachedAs(rt APIRoute) APIRoute {
+	if a.fullAccess || a.grantSet.Has(rt.Scope) ||
+		(a.role != nil && a.role.Full && a.externalToken == nil && a.actingTaskID == "") {
+		return rt
+	}
+	switch {
+	case capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern):
+		rt.Scope = "capabilities:detach"
+	case tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern):
+		rt.Scope = "tasks:admin"
+	}
+	return rt
 }
 
 func scopeDomainGroup(scope APIScope) string {
@@ -296,7 +318,7 @@ var domainGuidance = map[string]string{
 	"connections":  "Git connections and model backend definitions.",
 	"sessions":     "Interactive console sessions and standing Director/chat sessions.",
 	"caches":       "CI, package, and GitHub Actions cache inspection and flushing.",
-	"dispatch":     "Queue/pipeline pause controls and immediate task dispatch (run-now).",
+	"dispatch":     "Queue/pipeline pause controls, immediate task dispatch (run-now), and what a durable task's next dispatch carries (context compaction, current brief, and rollover to a successor).",
 	"memory":       "Deployment and per-repository standing agent memory documents.",
 }
 
@@ -694,7 +716,7 @@ func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, q exploreQ
 				routes = append(routes, exploredRouteSchema{
 					Tool: rt.Tool, Method: rt.Method, Path: rt.Path, Scope: rt.Scope,
 					NeedsReason: rt.NeedsReason, AliasOf: rt.AliasOf,
-					Description: rt.Description, InputSchema: rt.inputSchema(),
+					Description: rt.Summary, InputSchema: rt.inputSchema(),
 				})
 			}
 			p["routes"] = routes
@@ -1269,6 +1291,11 @@ func (s *Server) submitTaskTool() mcp.Tool {
 					"items":       map[string]any{"type": "string"},
 					"description": "Explicit capability IDs for the task (omit to use deployment defaults).",
 				},
+				"grants": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{},
+					"description": "Unified grants, each a grant string or a {capability, with} object, as POST /api/tasks takes them (repo#target, repo#read and repo#write included). A request that also names the same kind the old way -- capabilities, reads, writes, or repo/base/no_repo beside repo#target -- is refused.",
+				},
 				"depends_on": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
@@ -1361,6 +1388,12 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				if caps, ok := stringSliceArg(rawCaps); ok {
 					body["capabilities"] = caps
 				}
+			}
+			// grants is forwarded as sent, so POST /api/tasks decodes it --
+			// and refuses a mixed request -- exactly as it would from REST
+			// or grain_invoke, rather than the task being filed without it.
+			if rawGrants, exists := args["grants"]; exists && rawGrants != nil {
+				body["grants"] = rawGrants
 			}
 			if rawDeps, exists := args["depends_on"]; exists && rawDeps != nil {
 				if deps, ok := stringSliceArg(rawDeps); ok {

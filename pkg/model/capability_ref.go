@@ -189,6 +189,14 @@ func CheckCapabilityGrantArgsOffline(s string) error {
 	if _, err := protocol.ParseRef(spec.Capability); err != nil {
 		return err
 	}
+	if spec.Capability == APICapabilityServerID {
+		return fmt.Errorf("capability reference %q must name a #<scope> method", spec.Capability)
+	}
+	if IsAPIGrantRef(spec.Capability) {
+		if _, ok := LegacyGrantString(CanonicalGrant(s)); !ok {
+			return fmt.Errorf("capability grant %q: with may carry only a valid \"repo\" (owner/name)", s)
+		}
+	}
 	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
 		return err
 	}
@@ -220,7 +228,17 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 	out := make([]string, 0, len(names))
 	seen := map[string]bool{}
 	for _, name := range names {
-		if IsCapabilityRef(name) {
+		written, isAPI, err := canonicalWrittenGrant(name)
+		if err != nil {
+			if isAPI && lookup != nil && IsCapabilityRef(strings.TrimSpace(name)) {
+				if _, nerr := normalizeCapabilityRef(name, lookup); nerr != nil {
+					return nil, nerr
+				}
+			}
+			return nil, err
+		}
+		name = written
+		if !isAPI && IsCapabilityRef(name) {
 			recorded, err := normalizeCapabilityRef(name, lookup)
 			if err != nil {
 				return nil, err
@@ -237,6 +255,41 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 		return nil, err
 	}
 	return out, nil
+}
+
+// canonicalWrittenGrant rewrites legacy api: / repo-read: / repo-write:
+// strings and https://grain.dev/capabilities/api#... references into their
+// canonical EncodeCapabilityGrant form (unified-grants §1, §3), refusing an
+// api grant that names nothing of docs/agent-api.md; every other string is
+// returned unchanged.
+func canonicalWrittenGrant(s string) (written string, isAPI bool, err error) {
+	trimmed := strings.TrimSpace(s)
+	_, refIsAPI := apiMethodOf(CapabilityGrantRef(trimmed))
+	if strings.HasPrefix(trimmed, APIGrantPrefix) || refIsAPI {
+		_, ok, err := ParseAPIGrant(trimmed)
+		if err != nil {
+			return "", true, err
+		}
+		if !ok {
+			return "", true, fmt.Errorf("unknown API grant %q (see docs/agent-api.md)", s)
+		}
+		return CanonicalGrant(trimmed).Key(), true, nil
+	}
+	if repo, ok := strings.CutPrefix(trimmed, RepoReadCapabilityPrefix); ok {
+		r, err := ParseRepo(repo)
+		if err != nil {
+			return "", false, fmt.Errorf("invalid %s capability %q: %w", RepoReadCapabilityPrefix, s, err)
+		}
+		return RepoReadGrant(r), false, nil
+	}
+	if repo, ok := strings.CutPrefix(trimmed, RepoWriteCapabilityPrefix); ok {
+		r, err := ParseRepo(repo)
+		if err != nil {
+			return "", false, fmt.Errorf("invalid %s capability %q: %w", RepoWriteCapabilityPrefix, s, err)
+		}
+		return RepoWriteGrant(r), false, nil
+	}
+	return s, false, nil
 }
 
 func normalizeCapabilityRef(s string, lookup protocol.Lookup) (string, error) {
@@ -270,7 +323,15 @@ func NormalizeCapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]Grant,
 	out := make([]Grant, 0, len(grants))
 	seen := map[string]bool{}
 	for _, g := range grants {
-		if IsCapabilityRef(g.Capability) {
+		if g.With != nil {
+			g.Capability, g.With = g.Key(), nil
+		}
+		written, isAPI, err := canonicalWrittenGrant(g.Capability)
+		if err != nil {
+			return nil, err
+		}
+		g.Capability = written
+		if !isAPI && IsCapabilityRef(g.Capability) {
 			recorded, err := normalizeCapabilityRef(g.Capability, lookup)
 			if err != nil {
 				return nil, err
@@ -300,6 +361,11 @@ func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant,
 	var specs []protocol.GrantSpec
 	for _, g := range grants {
 		if !IsCapabilityRef(g.Capability) {
+			continue
+		}
+		// An api reference mints nothing: it is api:<scope>, served as
+		// the run's api_* tools (ResolveGrants reads it as that).
+		if _, isAPI := apiMethodOf(CapabilityGrantRef(g.Capability)); isAPI {
 			continue
 		}
 		spec, err := CapabilityGrantSpec(g.Capability)
@@ -335,10 +401,12 @@ func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant,
 	return normalized, nil
 }
 
-// HasCapabilityRef reports whether any of grants is a reference.
+// HasCapabilityRef reports whether any of grants is a pass-minting capability
+// reference (excluding https://grain.dev/capabilities/api#..., which mints
+// nothing and is served as the run's api_* tools).
 func HasCapabilityRef(grants []Grant) bool {
 	for _, g := range grants {
-		if IsCapabilityRef(g.Capability) {
+		if IsCapabilityRef(g.Capability) && !IsAPIGrantRef(g.Capability) {
 			return true
 		}
 	}
@@ -427,6 +495,11 @@ func capabilityEntry(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	if !IsCapabilityRef(spec.Capability) {
+		if len(spec.With) == 0 {
+			// {capability: <name>} with no with: at all: the refusal
+			// below would blame arguments the entry never sent.
+			return "", fmt.Errorf("capability grant %q: a name that is not a capability reference (https://...) is written as a plain string, %q, not as a {capability, with} object", spec.Capability, spec.Capability)
+		}
 		return "", fmt.Errorf("capability grant %q: only a capability reference (https://...) takes with: arguments", spec.Capability)
 	}
 	return EncodeCapabilityGrant(spec)
@@ -570,6 +643,12 @@ type CapabilitySubject struct {
 	// TrustedSchedule is a CI run grain itself fired from a workflow's
 	// cron (ci.Request.TrustedSchedule), which a CIGrantRule may admit.
 	TrustedSchedule bool
+	// AnyEvent is a CI job whose trigger event is not known yet: the
+	// picker for a repository's CI capabilities, which grants to every
+	// job the repository runs. An event-gated CIGrantRule admits some of
+	// those, so it is not judged here; it still is at the job, which
+	// never sets this.
+	AnyEvent bool
 }
 
 // Validate reports a rule that can never match as written.
@@ -608,6 +687,13 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 	// that reference: the rule is the whole of when it may be held.
 	if _, ok := CIGrantRuleFor(g); ok {
 		g = CanonicalLegacyGrant(g)
+	}
+	// api:<scope>[@repo], repo-read:<repo> and repo-write:<repo> are
+	// judged as the reference they stand for (CanonicalGrant,
+	// design/design/unified-grants.design.md §2), so a rule naming
+	// https://grain.dev/capabilities/api#merge:force matches either spelling.
+	if !IsCapabilityRef(g) {
+		g = CanonicalGrantKey(g)
 	}
 	if !IsCapabilityRef(g) {
 		return nil
@@ -660,6 +746,38 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 		return fmt.Errorf("capability %s is not granted to runs triggered by untrusted input (a pull request from a fork or from an author without write access); a capability policy rule must opt it in with allowUntrusted", ref)
 	case named:
 		return fmt.Errorf("the capability policy does not admit %s for this %s", ref, s.describe())
+	}
+	return nil
+}
+
+// PermitsTaskRepoGrant reports why a task's own repository access --
+// one of TaskRepoGrants' …/repo#read {repo} (a Reads entry) or
+// …/repo#write {repo, base} (a Writes entry) -- may not be held by s, or
+// nil when it may.
+//
+// It is Permits without the CI-only refusal: a #read {repo} in a task's
+// capabilities (task_grant) is a CI job's grant pasted onto a task, and
+// Permits still refuses that, but the same shape projected from Reads is
+// the task's own fetch access, which mayRead and UngrantedReads already
+// decided. For the same reason only deny rules apply here: who may read
+// or push a repository is the repository rules' to grant, so a policy may
+// narrow a task's repository access but never has to admit it, and an
+// allow rule written for CI jobs' {repo} grants refuses no task.
+// Anything else -- a {repo}-only #write, a #write widening refs, a
+// non-repository grant -- is refused as not a task's repository access.
+func (p CapabilityPolicy) PermitsTaskRepoGrant(g Grant, s CapabilitySubject, servers ...map[string]protocol.ServerConfig) error {
+	reads, writes, rest := TaskRepoAccessOf([]Grant{g})
+	if len(rest) != 0 || len(reads)+len(writes) != 1 {
+		return fmt.Errorf("%s is not a task's repository access (…/repo#read {repo} or …/repo#write {repo, base})", g.Key())
+	}
+	ref := CapabilityGrantRef(CanonicalGrant(g.Key()).Capability)
+	for i, r := range p.Rules {
+		if !r.Deny || !r.namesAny(equivalentCapabilityRefs(ref, servers)) {
+			continue
+		}
+		if r.covers(s) {
+			return fmt.Errorf("the capability policy denies %s to this %s (rule %d: deny %s)", ref, s.describe(), i+1, r.Capability)
+		}
 	}
 	return nil
 }
@@ -1034,7 +1152,7 @@ func APIWithGrantNames(with map[string]any) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("api capability: with.repo: %v", err)
 		}
-		repo = "@" + ref.String()
+		repo = ref.String()
 	}
 	for key, v := range with {
 		switch key {
@@ -1051,7 +1169,7 @@ func APIWithGrantNames(with map[string]any) ([]string, error) {
 						return nil, fmt.Errorf("api capability: %q is no scope set (docs/agent-api.md)", set)
 					}
 				}
-				names = append(names, APIGrantPrefix+set+repo)
+				names = append(names, APIGrantString(set, repo))
 			}
 		case "scopes", "scope":
 			patterns, err := strs(key, v)
@@ -1064,7 +1182,7 @@ func APIWithGrantNames(with map[string]any) ([]string, error) {
 					return nil, fmt.Errorf("api capability: %w", err)
 				}
 				for _, sc := range scopes {
-					names = append(names, APIGrantPrefix+string(sc)+repo)
+					names = append(names, APIGrantString(string(sc), repo))
 				}
 			}
 		default:

@@ -1,0 +1,119 @@
+c1=29b2f80e5ac3b5e527e7eca86a3b5d2f82fbc69f c2=9dcf31219d78d8f0894a87ed1a4d1b725778df74 side=b27f0fb538b078f9c396167acd1b6f267bcf38ab
+=== 1A. package + publish sha-<c1> and channel-main ===
+PASS: package c1
+grain-image.tar.gz
+grain-image.tar.gz.sha256
+guest-image.tar.gz
+guest-image.tar.gz.sha256
+images.json
+k8s-sandbox-image.tar.gz
+k8s-sandbox-image.tar.gz.sha256
+release-assets.sh: /tmp/s5-item1/assets-29b2f80e5ac3/images.json meets release-asset contract v2
+PASS: validate c1 assets
+release-assets.sh: created release sha-29b2f80e5ac3
+release-assets.sh: uploaded grain-image.tar.gz
+release-assets.sh: uploaded grain-image.tar.gz.sha256
+release-assets.sh: uploaded guest-image.tar.gz
+release-assets.sh: uploaded guest-image.tar.gz.sha256
+release-assets.sh: uploaded k8s-sandbox-image.tar.gz
+release-assets.sh: uploaded k8s-sandbox-image.tar.gz.sha256
+release-assets.sh: uploaded images.json
+release-assets.sh: published sha-29b2f80e5ac3: 29b2f80e5ac3 (sha-29b2f80e5ac3)
+release-assets.sh: channel-main: holds no manifest yet; publishing 29b2f80e5ac3
+release-assets.sh: created release channel-main
+release-assets.sh: uploaded images.json.next
+release-assets.sh: published channel-main: 29b2f80e5ac3 (sha-29b2f80e5ac3)
+PASS: sha-29b2f80e5ac3 holds 3 tarballs + 3 sidecars + images.json
+PASS: channel-main holds images.json alone (contract v2)
+PASS: channel-main names c1
+PASS: sha-c1: images.json uploaded after every tarball/sidecar
+=== 1B. CLI archives: build-cli.sh + cli-validate + cli-publish onto v3.2.0 ===
+PASS: build-cli.sh
+checksums.txt
+grain-darwin-amd64
+grain-darwin-amd64.tar.gz
+grain-darwin-arm64
+grain-darwin-arm64.tar.gz
+grain-linux-amd64
+grain-linux-amd64.tar.gz
+grain-linux-arm64
+grain-linux-arm64.tar.gz
+release-assets.sh: /tmp/s5-item1/cli holds the grain CLI: grain-linux-amd64.tar.gz grain-linux-arm64.tar.gz grain-darwin-amd64.tar.gz grain-darwin-arm64.tar.gz checksums.txt
+PASS: cli-validate
+release-assets.sh: promoting sha-29b2f80e5ac3 as v3.2.0
+release-assets.sh: using the 29b2f80e5ac3 assets already in /tmp/s5-item1/assets-29b2f80e5ac3
+release-assets.sh: created release v3.2.0, marked GitHub's latest release
+release-assets.sh: uploaded grain-image.tar.gz
+release-assets.sh: uploaded grain-image.tar.gz.sha256
+release-assets.sh: uploaded guest-image.tar.gz
+release-assets.sh: uploaded guest-image.tar.gz.sha256
+release-assets.sh: uploaded k8s-sandbox-image.tar.gz
+release-assets.sh: uploaded k8s-sandbox-image.tar.gz.sha256
+release-assets.sh: uploaded images.json
+release-assets.sh: published v3.2.0: 29b2f80e5ac3 (v3.2.0)
+PASS: promote (no arg) published v3.2.0 as GitHub's latest
+release-assets.sh: uploaded grain-linux-amd64.tar.gz
+release-assets.sh: uploaded grain-linux-arm64.tar.gz
+release-assets.sh: uploaded grain-darwin-amd64.tar.gz
+release-assets.sh: uploaded grain-darwin-arm64.tar.gz
+release-assets.sh: uploaded checksums.txt
+release-assets.sh: published the grain CLI on v3.2.0: grain-linux-amd64.tar.gz grain-linux-arm64.tar.gz grain-darwin-amd64.tar.gz grain-darwin-arm64.tar.gz checksums.txt
+checksums.txt grain-darwin-amd64.tar.gz grain-darwin-arm64.tar.gz grain-image.tar.gz grain-image.tar.gz.sha256 grain-linux-amd64.tar.gz grain-linux-arm64.tar.gz guest-image.tar.gz guest-image.tar.gz.sha256 images.json k8s-sandbox-image.tar.gz k8s-sandbox-image.tar.gz.sha256 PASS: v3.2.0 carries the 4 CLI archives + checksums.txt
+PASS: cli-publish again leaves an existing checksums.txt alone
+=== 1C. channel-main backward / non-ancestor move is refused ===
+release-assets.sh: channel-main: holds 29b2f80e5ac3, which is not an ancestor of b27f0fb538b0 (or cannot be told); leaving it where it is
+PASS: channel-main still names c1 after a non-ancestor publish (rc=0)
+PASS: refusal says why
+PASS: backward publish made no write
+--- latest is never a release name
+PASS: publish latest refused: release-assets.sh: there is no release named latest: the latest channel is GitHub's latest-release marker on a vX.Y.Z (contract v2)
+=== 1D. channel-main forward onto sha-<c2>: images.json swap order ===
+release-assets.sh: created release sha-9dcf31219d78
+release-assets.sh: uploaded grain-image.tar.gz
+release-assets.sh: uploaded grain-image.tar.gz.sha256
+release-assets.sh: uploaded guest-image.tar.gz
+release-assets.sh: uploaded guest-image.tar.gz.sha256
+release-assets.sh: uploaded k8s-sandbox-image.tar.gz
+release-assets.sh: uploaded k8s-sandbox-image.tar.gz.sha256
+release-assets.sh: uploaded images.json
+release-assets.sh: published sha-9dcf31219d78: 9dcf31219d78 (sha-9dcf31219d78)
+release-assets.sh: channel-main: 29b2f80e5ac3 is an ancestor of 9dcf31219d78; moving forward
+release-assets.sh: uploaded images.json.next
+release-assets.sh: published channel-main: 9dcf31219d78 (sha-9dcf31219d78)
+PASS: channel-main advanced to c2
+PASS: channel-main still holds images.json alone
+3:POST /api/uploads/repos/ai-on-gke/grain/releases/1032/assets?name=grain-image.tar.gz
+4:POST /api/uploads/repos/ai-on-gke/grain/releases/1032/assets?name=grain-image.tar.gz.sha256
+5:POST /api/uploads/repos/ai-on-gke/grain/releases/1032/assets?name=guest-image.tar.gz
+6:POST /api/uploads/repos/ai-on-gke/grain/releases/1032/assets?name=guest-image.tar.gz.sha256
+7:POST /api/uploads/repos/ai-on-gke/grain/releases/1032/assets?name=k8s-sandbox-image.tar.gz
+8:POST /api/uploads/repos/ai-on-gke/grain/releases/1032/assets?name=k8s-sandbox-image.tar.gz.sha256
+9:POST /api/uploads/repos/ai-on-gke/grain/releases/1032/assets?name=images.json
+16:PATCH /api/v3/repos/ai-on-gke/grain/git/refs/tags/channel-main {"sha":"9dcf31219d78d8f0894a87ed1a4d1b725778df74","force":true}
+17:POST /api/uploads/repos/ai-on-gke/grain/releases/1009/assets?name=images.json.next
+18:DELETE /api/v3/repos/ai-on-gke/grain/releases/assets/1010
+19:PATCH /api/v3/repos/ai-on-gke/grain/releases/assets/1040 {"name":"images.json"}
+last tarball/sidecar upload=8 holder images.json=9 channel .next upload=17 delete old=18 rename=19
+PASS: sha-c2's images.json uploaded after its tarballs
+PASS: channel-main: tarballs exist on sha-c2 first, then images.json.next up, old images.json deleted, .next renamed into place last
+PASS: channel-main git tag moved to c2
+--- v3.2.1 at c2 (git tag latest still names c1) is not marked latest
+PASS: promote v3.2.1 published it without moving GitHub's latest off v3.2.0
+PASS: promote-version follows the git tag latest (v3.2.0)
+=== 1E. a live grain daemon's release-asset upgrade prober reads it ===
+{"targets":[{"name":"latest","kind":"channel","allowed":true},{"name":"candidate","kind":"channel","allowed":false},{"name":"main","kind":"channel","allowed":true},{"name":"v3.2.1","kind":"version","allowed":true},{"name":"v3.2.0","kind":"version","allowed":true}],"allowedBranches":["latest","main","v[0-9]*.[0-9]*.[0-9]*"]}
+
+PASS: upgrade targets list the main channel
+--- daemon requests
+GET /api/v3/repos/ai-on-gke/grain/releases
+--- POST /api/upgrade {branch: main} (verifies images.json + sidecars, then docker loads)
+{"enabled":true,"mode":"image","running":{"image":"grain/grain:sha-29b2f80e5ac3"},"branch":"main","phase":"running","detail":"","startedAt":"2026-11-08T22:59:32.688304469Z","inFlightRuns":0,"imageRepo":"grain/grain","defaultImageRepo":"docker.io/grainai/grain","imageSource":{"source":"release-assets","sourceDefault":false,"locked":true,"releaseRepository":"127.0.0.1:4380/ai-on-gke/grain","manifestAsset":"images.json","checksumSuffix":".sha256"}}
+
+{"enabled":true,"mode":"image","running":{"image":"grain/grain:main"},"channel":"main","branch":"main","phase":"ok","source":"release-assets","detail":"loaded grain/grain:main (sha256:7b76445fc708f9a611d233fe7d3210cbb37a7dd7e6b9f29524cafbc93d100489) from 127.0.0.1:4380/ai-on-gke/grain release channel-main; restarting","steps":[{"name":"pull image","state":"done","detail":"loaded grain-image.tar.gz (sha256:7b76445fc708f9a611d233fe7d3210cbb37a7dd7e6b9f29524cafbc93d100489) from 127.0.0.1:4380/ai-on-gke/grain release channel-main","startedAt":"2026-11-08T22:59:32.689107463Z","finishedAt":"2026-11-08T22:59:32.802963162Z"},{"name":"signature","state":"skipped","detail":"no signature verification configured (-upgrade-verify-cmd): running whatever the registry serves for this tag, whoever published it"},{"name":"health check","state":"done","detail":"the loaded image runs","startedAt":"2026-11-08T22:59:32.803086614Z","finishedAt":"2026-11-08T22:59:34.29264105Z"},{"name":"unit flags","state":"done","detail":"grain/grain:sha-9dcf31219d78 accepts all 14 flags this deployment was started with","startedAt":"2026-11-08T22:59:34.292718276Z","finishedAt":"2026-11-08T22:59:35.875266403Z"},{"name":"sandbox image","state":"skipped","detail":"this deployment runs no sandbox containers"},{"name":"schema","state":"done","detail":"unchanged: both builds are at schema 128","startedAt":"2026-11-08T22:59:35.875418499Z","finishedAt":"2026-11-08T22:59:37.262971319Z"},{"name":"record image","state":"done","detail":"/tmp/s5-item1/daemon/image.env now names grain/grain:main (sha256:7b76445fc708f9a611d233fe7d3210cbb37a7dd7e6b9f29524cafbc93d100489)","startedAt":"2026-11-08T22:59:37.263091362Z","finishedAt":"2026-11-08T22:59:37.810669357Z"},{"name":"restart","state":"done","startedAt":"2026-11-08T22:59:37.810778342Z","finishedAt":"2026-11-08T22:59:37.812713179Z"}],"startedAt":"2026-11-08T22:59:32.688304469Z","finishedAt":"2026-11-08T22:59:37.810809252Z","inFlightRuns":0,"database":{"driver":"sqlite"
+0
+GRAIN_IMAGE=grain/grain:main
+PASS: upgrade to main: every step done (pull, health check, unit flags, schema, record, restart)
+PASS: image.env (GRAIN_IMAGE=grain/grain:main) now names c2's grain image sha256:7b76445fc708f9a611d233fe7d3210cbb37a7dd7e6b9f29524cafbc93d100489
+PASS: the image was loaded from release channel-main's images.json + sha- holder
+PASS: checkout .git/config unchanged
+item1: 27 passed, 0 failed

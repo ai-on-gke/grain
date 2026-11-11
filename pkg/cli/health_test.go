@@ -20,10 +20,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
-	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -87,22 +88,22 @@ func TestGrainHealthShowsRegisteredCountersUntilUnregistered(t *testing.T) {
 	}
 }
 
-func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
+func TestGrainHealthSurfacesHubFailuresAndScopeConflicts(t *testing.T) {
 	const code = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
 	store, _ := sqlitetest.Open(t)
 	srv := ui.NewServer(ui.Config{
 		Actor:         ui.DefaultActor("operator@example.com"),
 		LocalAPIToken: code,
-		RegistryStatus: func(_ context.Context) (model.RegistrySnapshot, error) {
-			return model.RegistrySnapshot{
+		HubStatus: func(_ context.Context) (model.HubSnapshot, error) {
+			return model.HubSnapshot{
 				Enabled: true,
-				State:   model.RegistryStateError,
-				Config: model.RegistryConfig{
-					URL:   "https://registry.example.com",
+				State:   model.HubStateError,
+				Config: model.HubConfig{
+					URL:   "https://hub.example.com",
 					Entry: "grain-west",
 				},
 				ConsecutiveFailures: 3,
-				LastError:           "registry API PUT /api/entries/grain-west/heartbeat returned 503: upstream unavailable",
+				LastError:           "hub API 503: upstream unavailable",
 				ScopeConflicts: []api.ScopeConflict{
 					{Repo: "acme/widgets", PathPrefix: "pkg/autoscaler", ConflictingEntry: "grain-east", ConflictingOwner: "east@example.com"},
 				},
@@ -117,8 +118,8 @@ func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
 		t.Fatalf("grain health: %v", err)
 	}
 	for _, want := range []string{
-		"registry (grain-west @ https://registry.example.com): error",
-		"last error (3 failure(s)): registry API PUT /api/entries/grain-west/heartbeat returned 503",
+		"hub (grain-west @ https://hub.example.com): error",
+		"last error (3 failure(s)): hub API 503: upstream unavailable",
 		"scope conflict on acme/widgets/pkg/autoscaler: claimed by grain-east (east@example.com)",
 	} {
 		if !strings.Contains(out, want) {
@@ -136,12 +137,14 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 		(&printer{}).health(ui.SandboxHealthResponse{CapabilityServers: []ui.CapabilityServerDown{
 			{ID: "https://walk.example/caps/cm", State: "failed", Reason: "initialize: mcp: capability server closed its output: EOF"},
 			{ID: "https://grain.dev/capabilities/gcp", State: "needs-config", ConfigRefused: true, Reason: "gcp: permission set org: roles/owner is not grantable"},
+			{ID: "https://walk.example/caps/corp", State: "needs-config", Waiting: "a renewed host credential", Reason: "configure: the host credential expired"},
 		}})
 	})
 	for _, want := range []string{
 		"FAILING: capability servers out of use",
 		"https://walk.example/caps/cm (failed): initialize: mcp: capability server closed its output: EOF",
 		"https://grain.dev/capabilities/gcp (refused its saved config): gcp: permission set org: roles/owner is not grantable",
+		"https://walk.example/caps/corp (waiting for a renewed host credential, retried every minute): configure: the host credential expired",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("grain health output missing %q:\n%s", want, out)
@@ -149,5 +152,52 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 	}
 	if strings.Contains(out, "no counters") {
 		t.Errorf("grain health says there is nothing to report with a server down:\n%s", out)
+	}
+}
+
+func TestGrainHealthListsTargetRepoHostWarnings(t *testing.T) {
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{
+			TargetRepoHostWarnings: []ui.TargetRepoHostMismatch{{
+				Repo:       "experimental/grain",
+				ResolvesTo: "github.com",
+				Candidates: []string{"git.forge.example/experimental/grain"},
+				Message:    "this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+			}},
+		})
+	})
+	for _, want := range []string{
+		"WARNING: target repositories missing their git host:",
+		"experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report when target repo host warnings exist:\n%s", out)
+	}
+}
+
+func TestGrainHealthNamesSchedulesThatStoppedRunning(t *testing.T) {
+	last := time.Date(2026, 10, 28, 7, 37, 0, 0, time.UTC)
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{StaleSchedules: []model.StaleSchedule{{
+			ID: "repo:acme/widgets:workflow.live-agent", Repo: model.RepoRef{Owner: "acme", Name: "widgets"},
+			Workflow: "live-agent", Cadence: 24 * time.Hour, LastRunAt: &last,
+			Reason: "this repository uses github CI mode, so .grain/workflows/live-agent.yml's cron is dropped at every firing",
+		}}})
+	})
+	for _, want := range []string{
+		"FAILING: schedules with no run in more than twice their cadence",
+		"repo:acme/widgets:workflow.live-agent (workflow live-agent) on acme/widgets: every 24h0m0s, last ran 2026-10-28T07:37:00Z",
+		"why: this repository uses github CI mode",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report with a schedule gone quiet:\n%s", out)
 	}
 }

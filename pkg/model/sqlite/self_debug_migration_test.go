@@ -27,7 +27,6 @@ import (
 func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
-	disabled := false
 	cfg := testConfig()
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Catalogue: &model.CapabilityCatalogue{
@@ -38,7 +37,9 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 					"acme/tools": {Task: []string{"self-debug", "api:self-debug"}},
 				},
 			},
-			InProcess: map[string]model.CatalogueInProcess{"self-debug": {Enabled: &disabled}},
+			InProcess: map[string]model.CatalogueInProcess{
+				"self-debug": {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/*"}}},
+			},
 		},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
@@ -58,7 +59,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 	if cat == nil {
 		t.Fatal("the catalogue was dropped")
 	}
-	became := model.SelfDebugGrants()
+	became := []string{model.APIRef("self-debug"), model.GrainSourceGrant}
 	if want := append([]string{"release-gate-read"}, became...); !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
@@ -71,9 +72,10 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 	if _, kept := cat.InProcess["self-debug"]; !kept {
 		t.Fatal("in_process.self-debug was dropped")
 	}
+	otherRepo := &model.RepoRef{Owner: "other", Name: "repo"}
 	for _, g := range became {
-		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{g}}); err == nil {
-			t.Errorf("a disabled in_process.self-debug did not bind %s", g)
+		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Repo: otherRepo, Grants: []string{g}}); err == nil {
+			t.Errorf("in_process.self-debug restriction did not bind %s", g)
 		}
 	}
 }
@@ -85,7 +87,6 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
-	disabled := false
 	cfg := testConfig()
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -97,7 +98,9 @@ func TestMigration118RewritesBootstrapPlaybooksDenyWithoutWideningAllowUntrusted
 				Task: []string{"release-gate-read", "bootstrap-playbooks"},
 				CI:   []string{"bootstrap-playbooks"},
 			},
-			InProcess: map[string]model.CatalogueInProcess{"bootstrap-playbooks": {Enabled: &disabled}},
+			InProcess: map[string]model.CatalogueInProcess{
+				"bootstrap-playbooks": {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/*"}}},
+			},
 		},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {

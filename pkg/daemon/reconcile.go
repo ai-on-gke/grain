@@ -60,13 +60,14 @@ func ReapBoundary(ctx context.Context, store *model.Store, now time.Time) (time.
 // boundary timestamp. Providers return partial deletion errors alongside
 // successes; both are logged so cleanup cannot silently remove nothing.
 func ReapCapabilitiesBefore(ctx context.Context, registry *model.CapabilityRegistry, creds model.CredentialResolver, before time.Time) {
-	if registry == nil {
-		return
+	var providers []model.CapabilityProvider
+	if registry != nil {
+		providers = registry.Providers()
 	}
 	// github#sandbox-repo's provider is no longer in the registry (schema
 	// migration 124), so leaked grain-sandbox-* repositories are swept
-	// through githubsandbox.Current().
-	providers := registry.Providers()
+	// through githubsandbox.Current() -- with or without a registry, since
+	// the method mints whether or not one was built.
 	if _, has := registry.Lookup(model.LegacyGitHubSandboxCapability); !has && creds != nil {
 		providers = append(providers, githubsandbox.Current())
 	}
@@ -91,9 +92,8 @@ func ReapCapabilitiesBefore(ctx context.Context, registry *model.CapabilityRegis
 // from all live agent and CI work. A census failure fails closed and skips the
 // whole sweep.
 func reapCapabilities(ctx context.Context, store *model.Store, registry *model.CapabilityRegistry, creds model.CredentialResolver, now time.Time) {
-	if registry == nil {
-		return
-	}
+	// No early return on a nil registry: github#sandbox-repo's repositories
+	// are reaped outside it (ReapCapabilitiesBefore).
 	before, err := ReapBoundary(ctx, store, now)
 	if err != nil {
 		log.Printf("grain daemon: computing capability reap boundary: %v", err)

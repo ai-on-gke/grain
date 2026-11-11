@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -354,12 +355,20 @@ func (s *Server) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	releases, err := s.tasks.ListReleases(r.Context(), repo)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, releases)
+	releases = filterList(releases, func(rel Release) bool {
+		return list.matches(rel.Name, rel.LatestBranch, rel.ProdBranch)
+	})
+	writeListBy(w, releases, list, func(rel Release) string { return rel.Repo + "\x00" + rel.Name })
 }
 
 func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
@@ -446,6 +455,11 @@ func (s *Server) handleRequestReleaseMerge(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleListCandidates(w http.ResponseWriter, r *http.Request) {
+	page, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	repo, err := s.parseRepoPath(r)
 	if err != nil {
 		writeClientError(w, err)
@@ -461,7 +475,10 @@ func (s *Server) handleListCandidates(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, candidates)
+	candidates = filterList(candidates, func(c Candidate) bool {
+		return page.matches(c.Branch, c.Status, c.Release)
+	})
+	writeListBy(w, candidates, page, func(c Candidate) string { return strconv.FormatInt(c.ID, 10) })
 }
 
 func (s *Server) handleCutCandidate(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -246,11 +247,12 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 }
 
 // canonicalizeDeclaredGrants rewrites retired bare capability names (such as
-// bootstrap-playbooks or self-debug) on declared templates and schedules to
-// the canonical grant(s) they became, and maps a declared grain#ci / grain-ci
-// grant to repo-scoped api:ci-read@<repo> so applyGrainCIGrant does not strip
-// it on a ci_mode: github repository, deduplicating by capability so primary
-// keys on template_grant and schedule_grant never collide.
+// bootstrap-playbooks or self-debug) and legacy api:/repo-read:/repo-write:
+// spellings on declared templates and schedules to their canonical stored
+// references, and maps a declared grain#ci / grain-ci grant to repo-scoped
+// api#ci-read {repo} so applyGrainCIGrant does not strip it on a ci_mode:
+// github repository, deduplicating by capability so primary keys on
+// template_grant and schedule_grant never collide.
 func canonicalizeDeclaredGrants(repo RepoRef, grants []Grant) []Grant {
 	if len(grants) == 0 {
 		return nil
@@ -263,8 +265,9 @@ func canonicalizeDeclaredGrants(repo RepoRef, grants []Grant) []Grant {
 				continue
 			}
 			if IsGrainCIGrant(cap) && !repo.IsZero() {
-				cap = APIGrantPrefix + "ci-read@" + repo.String()
+				cap = APIGrantString("ci-read", repo.String())
 			}
+			cap, _ = CanonicalStoredGrant(cap)
 			if seen[cap] {
 				continue
 			}
@@ -307,6 +310,7 @@ func deleteDeclared(ctx context.Context, tx *sql.Tx, row RepoDeclaration) error 
 			cfg.DeclaredSetupCommand = ""
 			cfg.DeclaredPortBranches = nil
 			cfg.DeclaredPortTypes = nil
+			cfg.DeclaredSkills = nil
 			if err := putRepoConfig(ctx, tx, *cfg); err != nil {
 				return err
 			}
@@ -551,21 +555,16 @@ func (s *Store) ForgetRepoDeclarations(ctx context.Context, repo RepoRef) error 
 }
 
 // ForgetRepo removes every record grain stores specifically for repo:
-// its repo_config row, its repo_workflow rows, its base_branch_* rows,
-// and its declared templates, suites, schedules and sync record.
+// the rows of every table ForgottenRepoTables names, and its declared
+// templates, suites, schedules, path triggers and sync record.
+//
+// What it leaves is the repository's history and the work filed against
+// it: tasks and their runs, merge and release history, and its memory
+// (pkg/model/sqlite's TestForgetRepoClearsEveryRepoKeyedTableItShould
+// holds every repo-keyed table to one side of that line or the other).
 func (s *Store) ForgetRepo(ctx context.Context, repo RepoRef) error {
 	return s.write(ctx, "forget repo "+repo.String(), func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM `repo_config` WHERE `owner` = ? AND `name` = ?",
-			repo.StoredOwner(), repo.Name); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM `repo_workflow` WHERE `owner` = ? AND `name` = ?",
-			repo.StoredOwner(), repo.Name); err != nil {
-			return err
-		}
-		for _, table := range []string{"base_branch_ci", "base_branch_release", "base_branch_dispatch"} {
+		for _, table := range forgottenRepoTables {
 			if _, err := tx.ExecContext(ctx,
 				"DELETE FROM `"+table+"` WHERE `owner` = ? AND `name` = ?",
 				repo.StoredOwner(), repo.Name); err != nil {
@@ -590,6 +589,39 @@ func (s *Store) ForgetRepo(ctx context.Context, repo RepoRef) error {
 		return err
 	})
 }
+
+// forgottenRepoTables is every table ForgetRepo clears by (owner, name)
+// outright: the repository's configuration, and the standing state that
+// only exists to run work in it.
+//
+// The qualification rows and scheduled_workflow_run were left behind
+// until grain/task-4288. A re-added repository inherited its old
+// release-qualification items and approval rule, the bug class
+// grain/task-4249 fixed for release secrets. A workflow schedule's
+// pending firing outlived its schedule, so the reconciler kept starting
+// and polling a CI run for a repository the deployment no longer works
+// in.
+//
+// Every table is matched on StoredOwner. The qualification tables and
+// scheduled_workflow_run write a bare Owner even for another host's
+// repository, so a removal there leaves their rows. Matching on Owner
+// instead would take the default host's same-named repository's rows
+// too, and leaving rows is the safer mistake.
+var forgottenRepoTables = []string{
+	"repo_config",
+	"repo_workflow",
+	"base_branch_ci",
+	"base_branch_release",
+	"base_branch_dispatch",
+	"qualification_item_depends_on",
+	"qualification_item",
+	"qualification_config",
+	"scheduled_workflow_run",
+}
+
+// ForgottenRepoTables is every table ForgetRepo clears outright, for the
+// test that holds every repo-keyed table to a decision about it.
+func ForgottenRepoTables() []string { return slices.Clone(forgottenRepoTables) }
 
 // DeclaringRepos returns every repository whose declarations grain has
 // rows for, whether or not it is still configured to read them -- the

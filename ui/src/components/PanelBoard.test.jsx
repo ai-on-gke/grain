@@ -878,6 +878,47 @@ describe("PanelBoard", () => {
       );
     });
 
+    it("moves focus to the destination slot even when two panels share identical stored rows", async () => {
+      function MovableTwins() {
+        const [row, setRow] = useState(() =>
+          board([
+            { kind: "list", orderKey: 1 },
+            { kind: "list", orderKey: 2 },
+          ]),
+        );
+        return (
+          <PanelBoard
+            board={row}
+            tasks={tasks}
+            config={config}
+            onOpenTask={() => {}}
+            now={NOW}
+            onMovePanel={(b, key, beforeKey) =>
+              setRow(
+                normalizeBoard({
+                  ...b,
+                  panels: panelMove(b.panels, key, beforeKey),
+                }),
+              )
+            }
+          />
+        );
+      }
+      const user = userEvent.setup();
+      render(<MovableTwins />);
+      screen.getByRole("button", { name: "Move panel 2, “Task list”" }).focus();
+      await user.keyboard("{Enter}");
+      screen
+        .getByRole("button", { name: "Move here, above panel 1, “Task list”" })
+        .focus();
+      await user.keyboard("{Enter}");
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Move panel 1, “Task list”" }),
+        ).toHaveFocus(),
+      );
+    });
+
     it("disables the handle on the only panel there is", () => {
       draw({
         board: board([{ kind: "list", title: "Live work" }]),
@@ -1117,6 +1158,94 @@ describe("PanelBoard", () => {
       );
       expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
       expect(screen.getByText("Fix the flake")).toBeInTheDocument();
+    });
+  });
+
+  // 2026-11-08 saved-boards walkthrough (task 3612).
+  describe("Keep and viewer gating", () => {
+    it("offers no Keep on a throughput panel when the narrowing leaves its report unchanged", () => {
+      api.mockResolvedValue({
+        throughput: { tasksFiled: 5, tasksCompleted: 3, buckets: [] },
+      });
+      const scoped = board(
+        [
+          { kind: "list", title: "Queue" },
+          { kind: "metrics", title: "Throughput 7d", range: "7d" },
+        ],
+        { query: "f=repo:any:acme/widgets" },
+      );
+      const draw = (narrowing) => (
+        <PanelBoard
+          board={scoped}
+          tasks={tasks}
+          config={config}
+          narrowing={narrowing}
+          onOpenTask={() => {}}
+          onKeepPanelQuery={() => {}}
+          now={NOW}
+        />
+      );
+      const { rerender } = render(
+        draw({
+          search: "flake",
+          sort: [],
+          filters: [{ attr: "repo", op: "any", values: ["acme/widgets"] }],
+        }),
+      );
+      expect(
+        screen.getByRole("button", { name: "Keep this narrowing on “Queue”" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", {
+          name: "Keep this narrowing on “Throughput 7d”",
+        }),
+      ).toBeNull();
+
+      rerender(
+        draw({
+          search: "",
+          sort: [],
+          filters: [
+            { attr: "repo", op: "any", values: ["acme/widgets"] },
+            { attr: "author", op: "any", values: ["ada"] },
+          ],
+        }),
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Keep this narrowing on “Throughput 7d”",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it("disables Add panel and Keep for a role without tasks:write", () => {
+      const viewerConfig = {
+        ...config,
+        access: {
+          role: "grain/viewer",
+          roles: ["grain/viewer"],
+          full: false,
+          scopes: ["boards:read", "tasks:read", "ci:read"],
+        },
+      };
+      const onAddPanel = vi.fn();
+      const onKeepPanelQuery = vi.fn();
+      render(
+        <PanelBoard
+          board={board([{ kind: "list", title: "Queue" }])}
+          tasks={tasks}
+          config={viewerConfig}
+          narrowing={{ search: "flake", sort: [], filters: [] }}
+          onOpenTask={() => {}}
+          onAddPanel={onAddPanel}
+          onKeepPanelQuery={onKeepPanelQuery}
+          now={NOW}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Add panel" })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Keep this narrowing on “Queue”" }),
+      ).toBeDisabled();
     });
   });
 });

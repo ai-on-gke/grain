@@ -991,7 +991,7 @@ func continueSessionTurns(
 			break
 		}
 		if latestTask, err := store.GetTask(daemonCtx, task.ID); err == nil && latestTask != nil {
-			if !slices.Equal(latestTask.Grants, task.Grants) ||
+			if !slices.EqualFunc(latestTask.Grants, task.Grants, model.Grant.Equal) ||
 				!slices.Equal(latestTask.Reads, task.Reads) ||
 				!slices.Equal(latestTask.Writes, task.Writes) ||
 				latestTask.Model != task.Model ||

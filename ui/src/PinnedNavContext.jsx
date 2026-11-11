@@ -58,30 +58,37 @@ export function PinnedNavProvider({ children }) {
   };
 
   const addPinnedItem = (item) => {
-    if (pinnedItems.some((it) => samePin(it, item))) {
-      return;
-    }
-    const next = [...pinnedItems, item];
-    setPinnedItems(next);
+    setPinnedItemsState((prev) => {
+      if (prev.some((it) => samePin(it, item))) {
+        return prev;
+      }
+      const next = [...prev, item];
+      savePinnedItems(next);
+      return next;
+    });
   };
 
   const removePinnedItem = (indexOrItem) => {
-    let next;
-    if (typeof indexOrItem === "number") {
-      next = pinnedItems.filter((_, idx) => idx !== indexOrItem);
-    } else {
-      next = pinnedItems.filter((it) => !samePin(it, indexOrItem));
-    }
-    setPinnedItems(next);
+    setPinnedItemsState((prev) => {
+      const next =
+        typeof indexOrItem === "number"
+          ? prev.filter((_, idx) => idx !== indexOrItem)
+          : prev.filter((it) => !samePin(it, indexOrItem));
+      savePinnedItems(next);
+      return next;
+    });
   };
 
   const movePinnedItem = (fromIndex, toIndex) => {
-    if (fromIndex < 0 || fromIndex >= pinnedItems.length) return;
-    if (toIndex < 0 || toIndex >= pinnedItems.length) return;
-    const next = [...pinnedItems];
-    const [moved] = next.splice(fromIndex, 1);
-    next.splice(toIndex, 0, moved);
-    setPinnedItems(next);
+    setPinnedItemsState((prev) => {
+      if (fromIndex < 0 || fromIndex >= prev.length) return prev;
+      if (toIndex < 0 || toIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      savePinnedItems(next);
+      return next;
+    });
   };
 
   const resetToDefault = () => {

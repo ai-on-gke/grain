@@ -151,6 +151,9 @@ type rawTemplate struct {
 	// Hosting is model.Template.Hosting: "unattended" or "console"
 	// (empty for unset).
 	Hosting string `yaml:"hosting"`
+	// Skills is model.Template.Skills: optional per-task skill discovery
+	// override for tasks filed from this template.
+	Skills *rawSkills `yaml:"skills"`
 	// Priority is model.Template.Priority: optional default priority for
 	// tasks filed from this template.
 	Priority *int `yaml:"priority"`
@@ -162,6 +165,10 @@ type rawTemplate struct {
 	// template carries, and only that: `repo-read:<owner>/<repo>` and
 	// `repo-write:<owner>/<repo>` (parseRepoAccess).
 	Capabilities model.CapabilityList `yaml:"capabilities"`
+	// Grants is the unified spelling of Capabilities
+	// (design/design/unified-grants.design.md §3): the same entries, held
+	// to the same rule, read as one list with it (declaredGrants).
+	Grants model.CapabilityList `yaml:"grants"`
 	// Push is the refs beyond their own branch that the runs of tasks
 	// filed from this template may update in this repository
 	// (model.RefPush, grain/task-2536; parsePush).
@@ -284,7 +291,11 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	if err != nil {
 		return model.Template{}, raw, fmt.Errorf("%s: %w", f.path, err)
 	}
-	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, raw.Capabilities)
+	skills, err := parseRawSkills(f.path, raw.Skills)
+	if err != nil {
+		return model.Template{}, raw, err
+	}
+	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, declaredGrants(raw.Capabilities, raw.Grants))
 	if err != nil {
 		return model.Template{}, raw, err
 	}
@@ -323,6 +334,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		KeepRunning:         raw.KeepRunning,
 		Admission:           admission,
 		Hosting:             hosting,
+		Skills:              skills,
 		Priority:            priority,
 		NothingNeededAction: nothingNeeded,
 	}
@@ -386,7 +398,32 @@ func parsePush(f file, raw []rawPush) (model.RefPushSet, error) {
 	return out, nil
 }
 
-// parseCapabilities parses a declared template's or schedule's `capabilities:`.
+// declaredGrants is a declaration's `capabilities:` and `grants:` read as
+// one list: `grants:` is the unified spelling of the same key
+// (design/design/unified-grants.design.md §3), so an entry both name, in
+// either spelling (model.CanonicalGrantKey), is held once.
+func declaredGrants(capabilities, grants []string) []string {
+	if len(grants) == 0 {
+		return capabilities
+	}
+	out := slices.Clone(capabilities)
+	seen := make(map[string]bool, len(out)+len(grants))
+	for _, c := range out {
+		seen[model.CanonicalGrantKey(strings.TrimSpace(c))] = true
+	}
+	for _, g := range grants {
+		k := model.CanonicalGrantKey(strings.TrimSpace(g))
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, g)
+	}
+	return out
+}
+
+// parseCapabilities parses a declared template's or schedule's
+// `capabilities:` and `grants:` (declaredGrants).
 //
 // Each `repo-read:<owner>/<repo>` becomes one of the filed task's Reads
 // and each `repo-write:<owner>/<repo>` one of its Writes, landing on that
@@ -405,6 +442,17 @@ func parsePush(f file, raw []rawPush) (model.RefPushSet, error) {
 // (gitproxy.LocalRepository) and so has no team token in front of it to say no.
 // Naming the declaring repository itself in repo-read/repo-write is allowed
 // and adds nothing -- a task may already read and push its own target.
+//
+// Task-target projections (repo#target, and repo#read / repo#write carrying a
+// `base`) exist only to spell a task request's repo, base, reads and writes
+// fields in an API `grants:` list (model.SplitRequestGrants); CreateTask
+// refuses them as capability grants. They are refused here too: a declaration's
+// tasks always target the declaring repository (with `base:` naming its branch),
+// and extra repository writes always land on that repository's default branch.
+// A repository whose default branch already declares one fails Load on its next
+// sync, keeping its previously synced declarations live and recording the
+// refusal in `repo_declaration_sync.last_error` rather than leaving an
+// un-filable template in the store.
 func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoRef, []model.WriteTarget, []model.Grant, model.Admission, model.Hosting, error) {
 	var reads []model.RepoRef
 	var writes []model.WriteTarget
@@ -474,9 +522,10 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 					continue
 				}
 			}
-			ciRead := model.APIGrantPrefix + "ci-read@" + repo.String()
-			if !seenGrants[ciRead] {
-				seenGrants[ciRead] = true
+			ciRead := model.APIGrantString("ci-read", repo.String())
+			ciReadKey := model.CanonicalGrantKey(ciRead)
+			if !seenGrants[ciReadKey] {
+				seenGrants[ciReadKey] = true
 				grants = append(grants, model.Grant{Capability: ciRead, Via: model.GrantSource(f.path)})
 			}
 			continue
@@ -490,13 +539,30 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				continue
 			}
 			ref := model.CapabilityGrantRef(c)
+			if ref == model.RepoTargetRef {
+				errs = append(errs, fmt.Errorf("%s: capabilities: %q: a declaration's tasks always target "+
+					"the declaring repository (%s), and its base is `base:`", f.path, c, repo))
+				continue
+			}
 			if ref == model.RepoReadRef || (ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(c)) {
+				if _, _, hasBase, err := model.RepoGrantArgs(model.CanonicalGrant(c)); err == nil && hasBase {
+					if ref == model.RepoReadRef {
+						errs = append(errs, fmt.Errorf("%s: capabilities: %q: %s takes only `repo: <owner>/<repo>`, not `base`",
+							f.path, c, model.RepoReadRef))
+					} else {
+						errs = append(errs, fmt.Errorf("%s: capabilities: %q: a declared write to another repository "+
+							"always lands on its default branch -- pass only `repo: <owner>/<repo>`, and set this "+
+							"repository's own branch with `base:`", f.path, c))
+					}
+					continue
+				}
 				errs = append(errs, fmt.Errorf("%s: capabilities: %q does not name a repository -- "+
 					"pass repo: <owner>/<repo> (or refs/force for branch push)", f.path, c))
 				continue
 			}
-			if !seenGrants[c] {
-				seenGrants[c] = true
+			key := model.CanonicalGrantKey(c)
+			if !seenGrants[key] {
+				seenGrants[key] = true
 				grants = append(grants, model.Grant{Capability: c, Via: model.GrantSource(f.path)})
 			}
 			continue
@@ -513,8 +579,9 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 					continue
 				}
 			}
-			if !seenGrants[c] {
-				seenGrants[c] = true
+			key := model.CanonicalGrantKey(c)
+			if !seenGrants[key] {
+				seenGrants[key] = true
 				grants = append(grants, model.Grant{
 					Capability: c,
 					Via:        model.GrantSource(f.path),
@@ -692,17 +759,122 @@ type rawSchedule struct {
 	TimeZone             string               `yaml:"timezone"`
 	AutoApproveProposals *bool                `yaml:"auto-approve-proposals"`
 	Capabilities         model.CapabilityList `yaml:"capabilities"`
+	Grants               model.CapabilityList `yaml:"grants"`
 	Every                *rawEvery            `yaml:"every"`
 	Daily                *rawAt               `yaml:"daily"`
 	Weekly               *rawWeekly           `yaml:"weekly"`
 	Monthly              *rawDayAt            `yaml:"monthly"`
 	Trigger              *rawScheduleTrigger  `yaml:"trigger"`
-	Overlap              string               `yaml:"overlap"`
+	Overlap              rawOverlap           `yaml:"overlap"`
+	OverlapGroup         string               `yaml:"overlap-group"`
 	Review               string               `yaml:"review"`
+	GrainCI              *bool                `yaml:"grain-ci"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
 	Hosting              string               `yaml:"hosting"`
+}
+
+// rawOverlap is a schedule file's `overlap:`, in either of its forms: the
+// plain string (`skip` or `allow`), or the mapping
+// `{skip: true, group: <name>}` that also names an overlap group shared
+// with the repository's other schedules (model.Schedule.OverlapGroup,
+// grain/task-3895).
+type rawOverlap struct {
+	Scalar   string
+	Mapping  bool
+	Skip     *bool
+	HasGroup bool
+	Group    string
+}
+
+func (o *rawOverlap) UnmarshalYAML(value *yaml.Node) error {
+	const shape = "overlap is \"skip\", \"allow\", or {skip: true, group: <name>}"
+	switch value.Kind {
+	case yaml.ScalarNode:
+		if value.Tag == "!!null" {
+			*o = rawOverlap{}
+			return nil
+		}
+		if value.Tag != "!!str" {
+			return fmt.Errorf("%s", shape)
+		}
+		*o = rawOverlap{Scalar: value.Value}
+		return nil
+	case yaml.MappingNode:
+		out := rawOverlap{Mapping: true}
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			k, v := value.Content[i].Value, value.Content[i+1]
+			switch k {
+			case "skip":
+				if v.Kind != yaml.ScalarNode || v.Tag != "!!bool" {
+					return fmt.Errorf("overlap.skip is true or false")
+				}
+				var b bool
+				if err := v.Decode(&b); err != nil {
+					return err
+				}
+				out.Skip = &b
+			case "group":
+				if v.Kind != yaml.ScalarNode || v.Tag != "!!str" {
+					return fmt.Errorf("overlap.group is a name")
+				}
+				out.HasGroup, out.Group = true, v.Value
+			default:
+				return fmt.Errorf("overlap: unknown key %q -- the mapping form takes `skip` and `group`", k)
+			}
+		}
+		*o = out
+		return nil
+	default:
+		return fmt.Errorf("%s", shape)
+	}
+}
+
+// scheduleOverlap resolves a schedule file's `overlap:` and
+// `overlap-group:` into the policy and group they say. A group holds
+// firings while another schedule in it runs, so it is a skip by
+// definition: `overlap: allow` (or `skip: false`) beside one is refused
+// rather than one of the two being ignored.
+func scheduleOverlap(f file, raw rawOverlap, topGroup string) (model.OverlapPolicy, string, error) {
+	var policy model.OverlapPolicy
+	var group string
+	if raw.Mapping {
+		policy = model.OverlapSkip
+		if raw.Skip != nil && !*raw.Skip {
+			policy = model.OverlapAllow
+		}
+		if raw.HasGroup {
+			if group = strings.TrimSpace(raw.Group); group == "" {
+				return "", "", fmt.Errorf("%s: `overlap.group` is empty", f.path)
+			}
+		}
+	} else {
+		switch p := model.OverlapPolicy(strings.TrimSpace(raw.Scalar)); p {
+		case "", model.OverlapSkip, model.OverlapAllow:
+			policy = p
+		default:
+			return "", "", fmt.Errorf("%s: overlap is \"skip\" or \"allow\", got %q", f.path, string(p))
+		}
+	}
+	if tg := strings.TrimSpace(topGroup); tg != "" {
+		if group != "" {
+			return "", "", fmt.Errorf("%s: the overlap group is named twice -- write `overlap.group` or "+
+				"`overlap-group`, not both", f.path)
+		}
+		group = tg
+	}
+	if group == "" {
+		return policy, "", nil
+	}
+	if policy == model.OverlapAllow {
+		return "", "", fmt.Errorf("%s: an overlap group holds a firing while another schedule in it is "+
+			"running, so it cannot be combined with `overlap: allow` (or `skip: false`)", f.path)
+	}
+	if err := model.ValidateOverlapGroup(group); err != nil {
+		return "", "", fmt.Errorf("%s: %w", f.path, err)
+	}
+	return model.OverlapSkip, group, nil
 }
 
 type rawScheduleTrigger struct {
@@ -857,12 +1029,11 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		return model.Schedule{}, err
 	}
 	sched.Recurrence = recurrence
-	switch overlap := model.OverlapPolicy(strings.TrimSpace(raw.Overlap)); overlap {
-	case "", model.OverlapSkip, model.OverlapAllow:
-		sched.Overlap = overlap
-	default:
-		return model.Schedule{}, fmt.Errorf("%s: overlap is \"skip\" or \"allow\", got %q", f.path, string(overlap))
+	overlap, overlapGroup, err := scheduleOverlap(f, raw.Overlap, raw.OverlapGroup)
+	if err != nil {
+		return model.Schedule{}, err
 	}
+	sched.Overlap, sched.OverlapGroup = overlap, overlapGroup
 	if workflow != "" || (sched.Recurrence.Kind == model.RecurrenceGitHubWorkflowRun && template == "" && suite == "") {
 		// A workflow firing is unfinished until its run has ended and its
 		// review has been filed, and grain keeps one record of that per
@@ -886,6 +1057,17 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 	if sched.WorkflowReview != "" && workflow == "" && sched.Recurrence.Kind != model.RecurrenceGitHubWorkflowRun {
 		return model.Schedule{}, fmt.Errorf("%s: `review:` says when the run of a scheduled workflow is "+
 			"reviewed, and this schedule runs no `workflow:`", f.path)
+	}
+	// Whether the run is on grain CI even when this repository's
+	// ci_mode is github (model.Schedule.GrainCI): a setting of a schedule
+	// that runs one of its own `.grain/workflows`, and of nothing else --
+	// a GitHub Actions run is GitHub's to start.
+	if raw.GrainCI != nil {
+		if workflow == "" {
+			return model.Schedule{}, fmt.Errorf("%s: `grain-ci:` says the run of a scheduled workflow is on "+
+				"grain CI even on a ci_mode: github repository, and this schedule runs no `workflow:`", f.path)
+		}
+		sched.GrainCI = *raw.GrainCI
 	}
 	if raw.AutoApproveProposals != nil {
 		sched.AutoApproveProposals = *raw.AutoApproveProposals
@@ -911,7 +1093,7 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 		return model.Schedule{}, fmt.Errorf("%s: %w", f.path, err)
 	}
 
-	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, raw.Capabilities)
+	reads, writes, grants, capAdm, capHost, err := parseCapabilities(f, repo, declaredGrants(raw.Capabilities, raw.Grants))
 	if err != nil {
 		return model.Schedule{}, err
 	}
@@ -1024,10 +1206,15 @@ func parseRecurrence(f file, raw rawSchedule) (model.Recurrence, error) {
 			// grain/config is read off grain's own disk with no credential
 			// in front of it, and no repository's file may reach it
 			// (parseCapabilities): not even to learn where its refs are.
-			if watched, err := model.ParseRepo(cp.Repo); err == nil && model.IsConfigRepo(watched) {
-				return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s, which is grain's own "+
-					"configuration; no repository's file may reach it -- a schedule that watches it is "+
-					"declared in grain's own settings", f.path, watched)
+			if watched, err := model.ParseRepo(cp.Repo); err == nil {
+				if model.IsConfigRepo(watched) {
+					return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s, which is grain's own "+
+						"configuration; no repository's file may reach it -- a schedule that watches it is "+
+						"declared in grain's own settings", f.path, watched)
+				}
+				if model.IsRetiredConfigRepo(watched) {
+					return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s: %s", f.path, watched, model.RetiredConfigRepoReason(watched))
+				}
 			}
 			r = model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &cp, TimeZone: tz}
 		case gh != nil:

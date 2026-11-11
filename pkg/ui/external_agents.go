@@ -63,6 +63,14 @@ type ExternalAgentTokenView struct {
 	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
 	Active     bool       `json:"active"`
+
+	// ResolvedScopeCount and ResolvedScopesTruncated say how many resolved
+	// scopes there were when a paged list left ResolvedScopes out: a
+	// credential's resolved scopes are its scope set's (or scopes') scopes
+	// times its repositories, which grows with both, and ScopeSet, Scopes
+	// and Repos already say the same thing.
+	ResolvedScopeCount      int  `json:"resolvedScopeCount,omitempty"`
+	ResolvedScopesTruncated bool `json:"resolvedScopesTruncated,omitempty"`
 }
 
 // CreateExternalAgentTokenRequest is the request body of POST /api/external-agents/tokens.
@@ -75,13 +83,15 @@ type CreateExternalAgentTokenRequest struct {
 	RateLimit     int        `json:"rateLimit,omitempty"`
 	MaxConcurrent int        `json:"maxConcurrent,omitempty"`
 	// Owner is the person the credential acts on behalf of
-	// (model.ExternalAgentToken.Owner). Left out, it is whoever issues
-	// it: the signed-in person, or the deployment's own actor when that
-	// is a person (externalAgentTokenOwner says who may name another).
+	// (model.ExternalAgentToken.Owner). Left out, it is the verified
+	// person issuing it, and nobody for an issuer no verifier established
+	// -- the access code never makes the deployment's own actor an owner
+	// (externalAgentTokenOwner says who may name another).
 	Owner string `json:"owner,omitempty"`
 	// SelfService marks a credential a person mints for their own
-	// workstation (`grain login --issue-token`): its Owner is the caller
-	// and nobody else, whatever Owner says.
+	// workstation (`grain login --issue-token`): its Owner is the
+	// verified caller and nobody else, whatever Owner says -- and nobody
+	// at all when the caller only presented the access code.
 	SelfService bool `json:"selfService,omitempty"`
 }
 
@@ -157,52 +167,86 @@ func (c *Client) canIssuePersonExternalAgentToken(_ context.Context, actor model
 }
 
 // externalAgentTokenOwner is the owner a credential req asks to issue is
-// recorded with (design/spec/external-cli/external-cli.spec.md#XC-14).
-// The owner is who the credential's calls are attributed to and whose
-// owner-trust policy its filings are measured against, so naming one is
-// held to who is asking:
+// recorded with (design/spec/external-cli/external-cli.spec.md#XC-14),
+// and the source that owner is recorded with
+// (model.ExternalAgentToken.OwnerSource). The owner is who the
+// credential's calls are attributed to and whose owner-trust policy its
+// filings are measured against, so naming one is held to who is asking:
 //
 //   - an agent -- an external agent credential, or a task acting through
-//     its grants -- may only pass on the owner it acts for itself, so a
-//     credential cannot be minted on behalf of somebody more trusted;
-//   - a person minting for themselves (SelfService) owns it, and may
-//     name nobody else;
+//     its grants -- may only pass on the owner it acts for itself, with
+//     the source it was recorded with, so a credential cannot be minted
+//     on behalf of somebody more trusted;
+//   - a verified person minting for themselves (SelfService) owns it,
+//     and may name nobody else;
 //   - anybody else -- a signed-in person or the operator issuing one for
-//     somebody -- may name its owner, which defaults to themselves.
-func (c *Client) externalAgentTokenOwner(ctx context.Context, req CreateExternalAgentTokenRequest) (string, error) {
+//     somebody -- may name its owner. Left out, it defaults to the
+//     verified person issuing it, and to nobody when no verifier
+//     established who that is.
+//
+// The shared access code, break-glass loopback and the in-process CLI
+// establish nobody in particular (operator-attribution spec §6.3), so
+// they never become an owner by default -- a credential they mint acts
+// on behalf of nobody, self-service ones included -- and an owner they
+// name is recorded with their own, unverified, source rather than as a
+// verified on-behalf-of.
+func (c *Client) externalAgentTokenOwner(ctx context.Context, req CreateExternalAgentTokenRequest) (string, model.AuthSource, error) {
 	asked := strings.TrimSpace(req.Owner)
 	for _, r := range asked {
 		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return "", validationErrorf("owner %q may not contain whitespace or control characters", asked)
+			return "", "", validationErrorf("owner %q may not contain whitespace or control characters", asked)
 		}
 	}
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
 		if req.SelfService {
-			return "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
+			return "", "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
 		}
-		own := ""
+		own, src := "", model.AuthSource("")
 		if tok := externalTokenFromContext(ctx); tok != nil {
-			own = strings.TrimSpace(tok.Owner)
+			own, src = strings.TrimSpace(tok.Owner), tok.OwnerSource
 		}
 		if asked != "" && !strings.EqualFold(asked, own) {
-			return "", forbiddenErrorf("an agent cannot issue a credential on behalf of %q", asked)
+			return "", "", forbiddenErrorf("an agent cannot issue a credential on behalf of %q", asked)
 		}
-		return own, nil
+		if own == "" {
+			src = ""
+		}
+		return own, src, nil
 	}
-	caller := c.requestPersonOrOperator(ctx)
+	// caller is the verified person issuing the credential, if any; src
+	// is the source its owner is recorded with -- the verifier that
+	// established caller, or the unverified source (the access code,
+	// loopback, in-process) of an issuer nobody verified.
+	issuer := c.requestActor(ctx).Actor
+	caller, src := "", issuer.Source
+	if issuer.Verified() {
+		caller = requestPerson(ctx)
+	}
+	if caller == "" && (src == "" || issuer.Verified()) {
+		src = model.SourceInProcess
+	}
 	if req.SelfService {
 		if caller == "" {
-			return "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
+			// The access code may still mint a workstation credential
+			// (`grain login --issue-token` is what login points it at
+			// instead of storing the code), but it is nobody's.
+			if asked != "" {
+				return "", "", forbiddenErrorf("a self-service credential minted without a verified sign-in acts for nobody, not %q", asked)
+			}
+			return "", "", nil
 		}
 		if asked != "" && !strings.EqualFold(asked, caller) {
-			return "", forbiddenErrorf("a self-service credential belongs to %s, not %q", caller, asked)
+			return "", "", forbiddenErrorf("a self-service credential belongs to %s, not %q", caller, asked)
 		}
-		return caller, nil
+		return caller, src, nil
 	}
 	if asked != "" {
-		return asked, nil
+		return asked, src, nil
 	}
-	return caller, nil
+	if caller == "" {
+		return "", "", nil
+	}
+	return caller, src, nil
 }
 
 // selfServiceLimits is what a person minting a credential for their own
@@ -253,7 +297,7 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 			name,
 		)
 	}
-	owner, err := c.externalAgentTokenOwner(ctx, req)
+	owner, ownerSource, err := c.externalAgentTokenOwner(ctx, req)
 	if err != nil {
 		return IssuedExternalAgentToken{}, err
 	}
@@ -309,6 +353,7 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 		MaxConcurrent: req.MaxConcurrent,
 		CreatedBy:     createdBy,
 		Owner:         owner,
+		OwnerSource:   ownerSource,
 		CreatedAt:     now,
 		ExpiresAt:     expiresAt,
 	})
@@ -594,6 +639,10 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 		writeTokenExpired(w, *tok.ExpiresAt)
 		return nil, nil, false
 	}
+	if status, err := s.externalTokenOwnerCap(r.Context(), tok); err != nil {
+		writeError(w, status, err)
+		return nil, nil, false
+	}
 	release, wait, err := s.externalLimiter.acquire(tok, now)
 	if err != nil {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(wait.Seconds())))))
@@ -615,12 +664,28 @@ func tokenWriter(r *http.Request) string {
 }
 
 func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	tokens, err := s.tasks.ListExternalAgentTokens(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tokens)
+	tokens = filterList(tokens, func(t ExternalAgentTokenView) bool {
+		return list.matches(t.ID, t.Name, t.Owner, t.ScopeSet)
+	})
+	if list.Paged {
+		for i := range tokens {
+			if n := len(tokens[i].ResolvedScopes); n > 0 {
+				tokens[i].ResolvedScopes = nil
+				tokens[i].ResolvedScopeCount, tokens[i].ResolvedScopesTruncated = n, true
+			}
+		}
+	}
+	writeListBy(w, tokens, list, func(t ExternalAgentTokenView) string { return t.ID })
 }
 
 func (s *Server) handleCreateExternalAgentToken(w http.ResponseWriter, r *http.Request) {

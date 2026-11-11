@@ -160,16 +160,11 @@ func TestADefaultOnCapabilityNeedingSandboxEgressKeepsTheDirectorOpen(t *testing
 				SandboxEgress: true,
 			})
 		},
-		"provider": func() func() {
-			return capability.RegisterProvider(capability.Registration{
-				ID: "zz-egress", Name: "ZZ", DefaultOn: true, SandboxEgress: true,
-				New: func() model.CapabilityProvider { return &capabilitytest.Provider{} },
-			})
-		},
 		"egress without DefaultOn": func() func() {
-			return capability.RegisterProvider(capability.Registration{
-				ID: "zz-egress-off", Name: "ZZ", SandboxEgress: true,
-				New: func() model.CapabilityProvider { return &capabilitytest.Provider{} },
+			return capability.Register(capability.Method{
+				Server:        capabilitytest.MethodServer,
+				Spec:          capabilitytest.MethodSpec("egress-off"),
+				SandboxEgress: true,
 			})
 		},
 	} {

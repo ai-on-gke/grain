@@ -1,0 +1,106 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Multi-stage build for the grain-hub container image (the Grain Hub,
+# formerly the Grain Registry).
+#
+# Build:  make image-hub                      (tags grain-hub:dev)
+#         make image-hub IMAGE_HUB=my/grain-hub:tag
+# Run:    docker run --rm -p 8080:8080 -p 8081:8081 -p 8082:8082 \
+#           grain-hub:dev -config /etc/grain/hub.yaml
+#
+# The image installs the binary as /usr/local/bin/grain-hub and, for one
+# release, also as /usr/local/bin/grain-registry (a symlink), so a
+# manifest whose command still names grain-registry keeps working.
+
+ARG GO_VERSION=1.26.10
+ARG GO_IMAGE=golang
+ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
+ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+
+FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS build
+
+ENV GOTOOLCHAIN=local
+
+# ui-hub/ is React+Vite and must be built into pkg/hub/server/static
+# before `go build` embeds it.
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# A build inside a grain sandbox reaches the network through grain's
+# TLS-intercepting proxy, so the build stage trusts the deployment's CA
+# when one is staged. Only this stage: the runtime stage below installs
+# its own ca-certificates and must never carry that CA, or every
+# published image would trust whoever holds the deployment's key.
+COPY Dockerfile.hub .grain-ca.cr[t] /tmp/
+RUN if [ -f /tmp/.grain-ca.crt ]; then \
+        cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt && \
+        update-ca-certificates; \
+    fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile.hub
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
+WORKDIR /src
+COPY . .
+
+RUN git config --global --add safe.directory /src
+ARG BUILDVCS=auto
+ARG RELEASE=
+ARG EDITION=
+# MAIN_GRAIN_HUB is the main package to build; MAIN_GRAIN_REGISTRY is its
+# pre-rename name, still honoured for a release when MAIN_GRAIN_HUB is
+# not given.
+ARG MAIN_GRAIN_REGISTRY=
+ARG MAIN_GRAIN_HUB=
+RUN set -eu; \
+    find pkg/hub/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' -not -name 'placeholder.html' -delete; \
+    (cd ui-hub && npm ci --omit=dev && npm run build); \
+    vcs="$(./scripts/buildvcs.sh "${BUILDVCS}")"; \
+    ldflags="-s -w"; \
+    if [ -n "${RELEASE}" ]; then \
+        ldflags="$ldflags -X github.com/ai-on-gke/grain/pkg/version.Release=${RELEASE}"; \
+    fi; \
+    if [ -n "${EDITION}" ]; then \
+        ldflags="$ldflags -X github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}"; \
+    fi; \
+    CGO_ENABLED=0 go build -buildvcs="$vcs" -ldflags="$ldflags" -o /out/grain-hub "${MAIN_GRAIN_HUB:-${MAIN_GRAIN_REGISTRY:-./cmd/grain-hub}}"
+
+FROM ${RUNTIME_IMAGE}
+
+LABEL org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
+      org.opencontainers.image.title="grain-hub" \
+      org.opencontainers.image.description="The Grain Hub: grain's multi-instance directory and tunnel router."
+
+RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && \
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
+        ca-certificates \
+        tini && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1000 grain && \
+    useradd --uid 1000 --gid 1000 --create-home --home-dir /var/lib/grain --shell /bin/bash grain
+
+COPY --from=build /out/grain-hub /usr/local/bin/grain-hub
+RUN ln -s grain-hub /usr/local/bin/grain-registry
+
+ARG GIT_REVISION=
+ARG RELEASE=
+LABEL org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.version="${RELEASE}"
+
+USER grain
+WORKDIR /var/lib/grain
+
+EXPOSE 8080 8081 8082
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/grain-hub"]

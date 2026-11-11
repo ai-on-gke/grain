@@ -36,7 +36,11 @@ Phase 1  qualification verdict:
                        pipeline.rc-failed:vX.Y.0-rc.N and keeps grain/rc-hold on
                        the commit while [rc-blocker vX.Y.0-rc.N] tasks are open;
                        once completed, Phase 2 cuts vX.Y.0-rc.(N+1)
-           PASS    ──▶ (RELEASE_MIN_INTERVAL_MINUTES since the last release, else wait)
+           (the day in RELEASE_DAY_TZ has already released, or the rc was cut on
+            an earlier day ──▶ tag vX.Y.0-rc.N-discarded, Discard-Reason:
+            daily-cap / held-over; not red, nothing holds the next cut)
+           PASS    ──▶ (RELEASE_MIN_INTERVAL_MINUTES since the last release, else wait;
+                        only on a day that may release more than once)
                        tag vX.Y.0 on the rc's commit, move latest onto it; on that tag
                        publish-release.yml verifies it, promotes the images and writes
                        the GitHub Release
@@ -93,10 +97,13 @@ release just staged or promoted, so a new rc is always newer than the last.
   the same combination the merge gate reads. So a recheck that turns one job
   green turns the suite green. `nightly.yml` runs on the rc after it is cut,
   as Stage 1 of qualification (section 4).
-- **Minimum interval and commit types before `rc.1`.** At least
-  `RELEASE_MIN_INTERVAL_MINUTES` (default 120; `FORCE=true` skips it) must
-  have passed since the newest promoted or pending release was tagged, and
-  `<floor>..<lkg>` must contain at least one `feat:` or `fix:` commit:
+- **The daily cap, and commit types before `rc.1`.** Nothing is cut once
+  the day (`RELEASE_DAY_TZ`, default `America/Los_Angeles`) has had
+  `RELEASE_MAX_PER_DAY` (default 1) releases (`day_done=<day>`); the first
+  run after midnight there cuts again (playbook §7). Only on a day that may
+  release more than once, `RELEASE_MIN_INTERVAL_MINUTES` (default 0;
+  `FORCE=true` skips it) must have passed since the newest promoted or
+  pending release was tagged. `<floor>..<lkg>` must contain at least one `feat:` or `fix:` commit:
   `docs:`, `chore:`, `test:`, `ci:`, `style:` and `build:` alone wait
   (`release_waits=<lkg>`).
 - **Advisory** (`CANDIDATE_GATE_ADVISORY`): `gcp-smoke`, `live-*` and
@@ -158,21 +165,29 @@ qualification, or that a person rejects, is dropped and a later run cuts
   (`success`), when the triage window elapses with no blocker (`neutral`), or if
   superseded (`neutral`). Before cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
   `commits/<floor>/check-runs?check_name=grain%2Frc-hold&filter=all` (or
-  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` is unset
-  it refuses rather than trust another app's check run, and if the newest check
+  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` (the
+  environment, else `scripts/release.conf`) is unset it refuses rather than
+  trust another app's check run; if it is explicitly `none` no check run is
+  trusted, so nothing holds; and if the newest check
   run from `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
   `phase 2: vX.Y.0-rc.(N+1) is held by grain/rc-hold on <floor>: <summary>`,
   emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run from
-  `RELEASE_QUALIFICATION_APP` means no hold.
-- **Converging `rc.3` on `release/vX.Y.0`.** After `rc.2` is dropped, Phase 2
-  creates the short-lived `release/vX.Y.0` branch from `rc.2`'s commit and
-  cuts `rc.3` from cherry-picked `fix:` commits (`Backported-from: <sha>`) on
-  that branch once `release.yml` is green and `grain/rc-hold` is completed.
-  Approving `vX.Y.0` deletes `release/vX.Y.0`.
-- **Bounded attempts.** After `RELEASE_MAX_RC_ATTEMPTS` (3) dropped candidates
-  of one version, the reconciler raises `pipeline.release-escalated:vX.Y.0`
-  and the train cuts no more of that version (`escalated_version=vX.Y.0`,
-  exiting 1) until a person resets or advances it.
+  `RELEASE_QUALIFICATION_APP` means no hold, except in the run whose Phase 1
+  dropped `rc.N` itself: grain has not read the red verdict yet, so that run
+  logs `phase 2: vX.Y.0-rc.(N+1) waits for the next run: ...`, emits
+  `rc_held=vX.Y.0-rc.(N+1)` and cuts nothing, and the next run reads the hold
+  (or, with grain down and still no hold, cuts). Stage 1 is watched as well as
+  Stage 2 (`pkg/orchestrator/releasestage1.go`): a `nightly.yml` job that
+  fails its one retry raises `pipeline.rc-failed` and posts the same hold.
+- **Every rc from `main` (since 2026-11-09).** There is no `rc.3`
+  convergence branch any more: each `rc.(N+1)` is cut from `main`'s newest
+  known-good commit on the run after `rc.N` is dropped, so a day that has
+  not released keeps cutting until one qualifies (playbook §5). Approving a
+  release cut from a `release/vX.Y.0` a person made still deletes it.
+- **Escalation, not a stop.** After `RELEASE_MAX_RC_ATTEMPTS` (3) dropped
+  candidates of one version, the reconciler raises
+  `pipeline.release-escalated:vX.Y.0` and the train emits
+  `escalated_version=vX.Y.0` as it cuts the next one, and goes on cutting.
 
 A minor number is consumed only by a promoted
 release. While a release is pending, the train counts it as the newest
@@ -202,7 +217,13 @@ which case it is dropped without qualifying):
    `.grain/suites/release-qualification.yml` against the rc and posts check
    run `grain/release-qualification` on its commit. Only a check run created
    by `RELEASE_QUALIFICATION_APP` (grain's own GitHub App) counts; same-named
-   check runs from any other app are ignored.
+   check runs from any other app are ignored, and with no
+   `RELEASE_QUALIFICATION_APP` configured none is trusted and the rc never
+   passes. With `RELEASE_QUALIFICATION_APP` set explicitly to `none` (in the
+   environment or `scripts/release.conf`), as for a forge connection that is a
+   personal access token rather than a GitHub App (which cannot post check
+   runs), Stage 2 is skipped (`SKIPPED grain/release-qualification`) and Stage
+   1 alone qualifies the rc. It is never `none` by default.
 
 A first product failure of any Stage 1 job or Stage 2 item gets one retry on
 the same rc (`flake`); cancelled, timed-out or capacity-starved runs are
@@ -238,9 +259,13 @@ that make the train stage it for a person applies), then
 - its commit is on neither `main` nor `release/vX.Y.0`.
 
 `RELEASE_NEVER_PROMOTE` drops a named rc and skips a named version, so neither
-is ever released or staged. A qualified rc inside `RELEASE_MIN_INTERVAL_MINUTES`
-of the last release waits (`promotion_waits=` in the output), and a later
-tick releases it. To stop all automatic releases at once, set
+is ever released or staged. Once the day has released, a qualified rc is
+dropped (`Discard-Reason: daily-cap`), not held for the next day, and an rc
+cut on an earlier day is never released (`Discard-Reason: held-over`);
+a person's approve goes past the cap and says so (`day_cap_bypassed=`).
+On a day that may release more than once, a qualified rc inside
+`RELEASE_MIN_INTERVAL_MINUTES` of the last release waits
+(`promotion_waits=` in the output), and a later tick releases it. To stop all automatic releases at once, set
 `RELEASE_AUTO_PROMOTE=false` (a person's Submit, like every `release.conf`
 change); to undo one, roll it back (section 6 and the playbook's §11).
 
@@ -376,7 +401,7 @@ only re-stamp the daemon images with the release name and retag.
 
 - **Daemon and sandbox images** are published to Docker Hub under `docker.io/grainai/*`
   (`grain`, `sandbox`, `sandbox-base`, `sandbox-k8s`, `sandbox-k8s-base`, with
-  and `docker.io/grainai/registry`, the `grain-registry` image, which `promote`
+  and `docker.io/grainai/hub`, the `grain-hub` image (also published as its pre-rename `docker.io/grainai/registry` for one release), which `promote`
   and `rc` rebuild and stamp alongside `grain`).
   `docker.io/grainai/grain` is the core build (`./cmd/grain`, the
   `oss` install track). A wrapper distribution's
@@ -385,6 +410,11 @@ only re-stamp the daemon images with the release name and retag.
 - **What the tags mean:** `latest` is the last promoted release and never
   `main`'s head. `main` is the head of `main`. `candidate`/`rc` is the
   current rc. `vX.Y.Z` is one release, kept forever by `cmd/ghcr-prune`.
+  A staged `vX.Y.Z-pending` build is kept whatever its age until the same
+  version also carries `vX.Y.Z-rejected` (`discard-pending`); approving it
+  retags it `vX.Y.Z`, which is kept from then on. `latest`, `vX.Y.Z`,
+  `sha-<short>` and signature tags are kept the same way on the base
+  packages (`sandbox-base`, `guest-base`) as on every other image.
 - **`latest` follows the git tag.** `.grain/workflows/promote.yml`
   (`scripts/release-images.sh promote`) publishes the release the git
   `latest` tag names, as `vX.Y.Z` and `latest`. It runs on every `release`
@@ -623,6 +653,18 @@ schedules are gone.
   `live-secrets-repo`, `post-reset-e2e`) on their own crons. The first two
   decide the LKG (section 2), `nightly.yml` also runs on every rc as Stage 1
   of its qualification (section 4), and the rest are advisory.
+- **Live real-model suites** (`.github/workflows/live-agent.yml`,
+  `live-frameworks.yml`): advisory, with a freshness policy. Every LKG
+  selection (`scripts/candidate-gate.sh select-lkg`) records each suite's
+  newest verdict and newest pass on `main`, and prints a `WARNING live`
+  line when the newest verdict is not a pass, or when no pass is newer than
+  `CANDIDATE_GATE_LIVE_MAX_AGE_DAYS` (3 days). The policy is to warn and
+  not refuse. A provider outage or an exhausted key must not stall the
+  train. But a release cut under a warning was cut without a fresh
+  live-model verdict, and the train's report says so. v3.5.0 shipped a
+  tool schema Gemini refuses because these suites had stopped running for
+  two weeks and nothing said so. The warning and `grain health`'s stale
+  schedules (`docs/github-actions-ci.md`) are how that is seen now.
 - **No staging soak.** There is no persistent staging sandbox, no
   `staging-ui-exploration` or `staging-state-cleanup` schedule and no
   24-hour wait: an rc is qualified by Stage 1 and Stage 2 (section 4), and

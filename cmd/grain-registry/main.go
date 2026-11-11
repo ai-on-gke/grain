@@ -12,15 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Command grain-registry is cmd/grain-hub under its name from before the
+// Grain Registry was renamed the Grain Hub, kept for one release so a
+// build or deployment that still names ./cmd/grain-registry keeps working.
+// It is the same program, and says once on stderr that it was renamed.
 package main
 
 import (
-	"github.com/ai-on-gke/grain/pkg/registry"
-	_ "github.com/ai-on-gke/grain/pkg/registry/providers/gcp"
-	_ "github.com/ai-on-gke/grain/pkg/registry/providers/github"
-	_ "github.com/ai-on-gke/grain/pkg/registry/reconcile"
+	"fmt"
+	"os"
+
+	"github.com/ai-on-gke/grain/pkg/hub"
+	_ "github.com/ai-on-gke/grain/pkg/hub/providers/gcp"
+	_ "github.com/ai-on-gke/grain/pkg/hub/providers/github"
+	_ "github.com/ai-on-gke/grain/pkg/hub/reconcile"
 )
 
 func main() {
-	registry.Main()
+	fmt.Fprintln(os.Stderr, "grain-registry: deprecated: this command is now grain-hub (./cmd/grain-hub); grain-registry will be removed in a future release")
+	hub.Main()
 }

@@ -436,3 +436,27 @@ func TestCLIGitLoginModesAndReplacement(t *testing.T) {
 		t.Fatalf("expected 2 connections (github.com + %s), got %d", host, len(conns))
 	}
 }
+
+// git-login's closing line names the signature the GitHub client will
+// actually sign with (the recorded Author), never the commit identity: a
+// token whose owner the host reports no human name for (a [bot]) signs
+// nothing, and must not be described as signing as this host's git
+// user.name (docs/test-runs/2026-11-08-cli-install-skill-mcp.md).
+func TestGitLoginSummaryNeverSignsAsTheCommitIdentity(t *testing.T) {
+	conns := []ui.TeamGitConnectionView{
+		{Host: "github.com", Scope: "acme/widgets", Status: ui.GitCredentialStatus{CommitName: "Daemon Operator"}},
+		{Host: "github.com", Scope: "acme/owned", Status: ui.GitCredentialStatus{Author: "Dana Owner", CommitName: "dana"}},
+	}
+	author, commit := gitLoginSignature(conns, "github.com", "acme/widgets")
+	if author != "" || commit != "Daemon Operator" {
+		t.Fatalf("gitLoginSignature(acme/widgets) = %q, %q; want no author, commit identity Daemon Operator", author, commit)
+	}
+	got := gitLoginSummary("github.com", author, commit)
+	if strings.Contains(got, "Signed by") || !strings.Contains(got, "not signed") || !strings.Contains(got, "commits authored as Daemon Operator") {
+		t.Fatalf("summary for an unsigned connection = %q", got)
+	}
+	author, _ = gitLoginSignature(conns, "github.com", "acme/owned")
+	if got := gitLoginSummary("github.com", author, ""); !strings.Contains(got, `"Signed by Dana Owner (via Grain)"`) {
+		t.Fatalf("summary for an owned connection = %q", got)
+	}
+}

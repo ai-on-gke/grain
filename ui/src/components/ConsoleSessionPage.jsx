@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isLegacyApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
-import { isCapabilityRef } from "../capabilityArgs.js";
+import { isStaleEdit } from "./StaleEdit.jsx";
 import { useEffect, useState } from "react";
 import { PageHeaderActions, useInPageHeader } from "./PageHeader.jsx";
 import {
@@ -39,10 +39,9 @@ import {
   taskBadgeModifier,
   taskBadgeState,
 } from "../state.js";
-import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
-import WriteReposField from "./WriteReposField.jsx";
+import CommentDeepLink from "./CommentDeepLink.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import ModelPicker from "./ModelPicker.jsx";
 import WorkTree from "./detail/WorkTree.jsx";
@@ -112,7 +111,7 @@ const TITLED_BUTTON_SX = { minWidth: 0, overflowWrap: "anywhere" };
 // onto the task row, never into a run already going. So the pane notes
 // which run was live when something was saved, and says, for as long as
 // that run lasts, that it does not have the change.
-export function liveRunKey(task) {
+function liveRunKey(task) {
   if (!isAgentRunning(task)) return "";
   const open = [...(task.attempts || [])].reverse().find((a) => !a.finishedAt);
   return open ? `attempt-${open.number}` : "live";
@@ -121,7 +120,29 @@ export function liveRunKey(task) {
 // RUN_FIXED is every session field a run takes on when it starts and
 // keeps for its whole life; the rest of the pane (the Google Chat space,
 // whether its tasks are filed approved) is read as it is needed.
-const RUN_FIXED = ["capabilities", "reads", "writes", "networkAccess", "model"];
+const RUN_FIXED = [
+  "capabilities",
+  "adoptShippedDefaults",
+  "reads",
+  "writes",
+  "networkAccess",
+  "model",
+];
+
+// replacing is the edit a picker that hands back a whole slice of the
+// held list makes -- GrantsPicker's api:* grants, or its capability
+// server methods: what it took out of the slice it was shown, and what
+// it put in. Applied as that difference rather than as the slice, so an
+// entry somebody else added to the same slice since the pane read it is
+// kept when the save is retried on what the session holds now.
+function replacing(shown, next) {
+  const removed = shown.filter((c) => !next.includes(c));
+  const added = next.filter((c) => !shown.includes(c));
+  return (current) => [
+    ...current.filter((c) => !removed.includes(c) && !added.includes(c)),
+    ...added,
+  ];
+}
 
 export default function ConsoleSessionPage({
   session,
@@ -136,6 +157,7 @@ export default function ConsoleSessionPage({
   onDraftConsumed,
   onSaved,
   onDeleted,
+  onLoadEarlier = null,
   showError,
 }) {
   // saving is the id of the capability whose box was just clicked, so
@@ -195,36 +217,84 @@ export default function ConsoleSessionPage({
     }
   };
 
-  // methodGrants saves the session's capability server grants as
-  // GrantsPicker changes them, keeping everything else it holds.
+  // saveCapabilities saves a change to what the session holds, which the
+  // PUT takes as the whole list. edit turns a held list into the list to
+  // save, and the list it was given goes along as expectCapabilities:
+  // the server refuses the save as stale (409 "stale") if the session no
+  // longer holds exactly that -- another tab, or the agent API, changed
+  // its grants after this pane read them -- rather than letting this
+  // pane's old copy put the old set back over theirs (2026-11-07
+  // director agent API walkthrough, finding 4). On that refusal the pane
+  // reads the session again and makes the same edit to what it holds
+  // now, once; a second refusal is shown.
+  const saveCapabilities = async (edit, key) => {
+    setSaving(key);
+    const keyAtSave = runKey;
+    const put = (current) =>
+      api(`/api/console-sessions/${session.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          capabilities: edit(current),
+          expectCapabilities: current,
+        }),
+      });
+    try {
+      try {
+        await put(session.capabilities || []);
+      } catch (err) {
+        if (!isStaleEdit(err)) throw err;
+        const fresh = await api("/api/console-sessions");
+        const row = (fresh?.sessions || []).find((s) => s.id === session.id);
+        if (!row) throw err;
+        await put(row.capabilities || []);
+      }
+      if (keyAtSave) {
+        setStaleRuns((prev) => ({ ...prev, [session.id]: keyAtSave }));
+      }
+      await onSaved();
+    } catch (err) {
+      showError(err);
+      if (isStaleEdit(err)) await onSaved();
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const legacyBoxes = withoutApiRows(
+    configuredCapabilities(capabilities, session?.capabilities),
+  );
+  // methodGrants saves the session's capability server grants (and any
+  // bare capability id not offered as a checkbox above) as GrantsPicker
+  // changes them, keeping everything else it holds.
+  const isPickerNonApi = (id) =>
+    !isLegacyApiGrant(id) && !legacyBoxes.some((c) => c.id === id);
   const methodGrants = localGrantHandlers(
-    (session?.capabilities || []).filter(isCapabilityRef),
+    (session?.capabilities || []).filter(isPickerNonApi),
     (refs) =>
-      save(
-        {
-          capabilities: [
-            ...(session.capabilities || []).filter((c) => !isCapabilityRef(c)),
-            ...refs,
-          ],
-        },
+      saveCapabilities(
+        replacing((session.capabilities || []).filter(isPickerNonApi), refs),
         "methods",
       ),
   );
 
+  // toggle is a tick box: what the click means -- on, or off -- is
+  // decided by the box as it was drawn, and applied to whatever the
+  // session holds when the save lands.
   const toggle = async (id) => {
-    const next = held.has(id)
-      ? (session.capabilities || []).filter((c) => c !== id)
-      : [...(session.capabilities || []), id];
-    await save({ capabilities: next }, id);
+    const on = !held.has(id);
+    await saveCapabilities((current) => {
+      const rest = current.filter((c) => c !== id);
+      return on ? [...rest, id] : rest;
+    }, id);
   };
 
+  // Adopt shipped defaults names no list at all: the server adds the
+  // missing shipped defaults to what the session holds when the request
+  // is served (UpdateConsoleSessionRequest.AdoptShippedDefaults), so a
+  // grant made in another tab since this one read the session stays.
   const missingShipped = session?.missingShippedDefaults || [];
   const adoptShippedDefaults = async () => {
-    const next = [...(session.capabilities || [])];
-    for (const id of missingShipped) {
-      if (!next.includes(id)) next.push(id);
-    }
-    await save({ capabilities: next }, "adoptShippedDefaults");
+    await save({ adoptShippedDefaults: true }, "adoptShippedDefaults");
   };
 
   const restart = async (carryHandover = false) => {
@@ -418,9 +488,7 @@ export default function ConsoleSessionPage({
         ticking it is not an offer, and one already ticked has to
         stay so it can be turned off (configuredCapabilities,
         state.js). */}
-        {withoutApiRows(
-          configuredCapabilities(capabilities, session.capabilities),
-        ).map((c) => (
+        {legacyBoxes.map((c) => (
           <FormControlLabel
             key={c.id}
             control={
@@ -456,15 +524,15 @@ export default function ConsoleSessionPage({
         is saved as it is made, like the boxes above. */}
         <GrantsPicker
           config={{ ...config, capabilities }}
-          grants={session.capabilities || []}
+          grants={(session.capabilities || []).filter(
+            (id) => !legacyBoxes.some((c) => c.id === id),
+          )}
           onApiChange={(next) =>
-            save(
-              {
-                capabilities: [
-                  ...(session.capabilities || []).filter((c) => !isApiGrant(c)),
-                  ...next,
-                ],
-              },
+            saveCapabilities(
+              replacing(
+                (session.capabilities || []).filter(isLegacyApiGrant),
+                next,
+              ),
               "api",
             )
           }
@@ -472,61 +540,44 @@ export default function ConsoleSessionPage({
           onRemove={methodGrants.onRemove}
           disabled={saving === "api" || saving === "methods"}
           idPrefix={`session-${session.id}`}
+          // The repositories it may read and write are grants in the
+          // same list (unified-grants slice 5), each saved as its whole
+          // reads or writes set as it is changed. A session has no
+          // target of its own, so there is no #target line.
+          repos={{
+            reads: (session.reads || []).filter(
+              (r) => !(session.autoReads || []).includes(r),
+            ),
+            writes,
+            readOptions: knownRepos(config, tasks),
+            writeOptions: targetableRepos(config, tasks),
+            onReadsChange: (next) => save({ reads: next }, "reads"),
+            onWritesChange: setWrites,
+            onWritesCommit: (next) => save({ writes: next }, "writes"),
+          }}
         />
-      </Box>
-
-      <Box sx={{ mt: 2 }}>
-        <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>
-          Repositories it may read
-        </Typography>
         <Typography
           variant="caption"
           color="text.secondary"
           component="p"
-          sx={{ mb: 1 }}
+          sx={{ mt: 1, overflowWrap: "anywhere" }}
+          data-testid="session-reads-all"
         >
           {session.readsAll === false
-            ? "Repositories this session may clone or fetch. It does not read the rest of this deployment's repositories (readsAll is off)."
-            : "Repositories this session may clone or fetch, besides every repository this deployment works in, which every session reads by default."}
+            ? "It does not read the rest of this deployment's repositories (readsAll is off)."
+            : "Besides the repositories it is granted, every session reads every repository this deployment works in."}
         </Typography>
-        <ReadOnlyReposField
-          options={knownRepos(config, tasks)}
-          value={(session.reads || []).filter(
-            (r) => !(session.autoReads || []).includes(r),
-          )}
-          onChange={(next) => save({ reads: next }, "reads")}
-        />
         {(session.autoReads || []).length > 0 && (
           <Typography
             variant="caption"
             color="text.secondary"
             component="p"
-            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            sx={{ mt: 0.5, overflowWrap: "anywhere" }}
             data-testid="session-auto-reads"
           >
             Also reads, by default: {session.autoReads.join(", ")}
           </Typography>
         )}
-      </Box>
-
-      <Box sx={{ mt: 2 }}>
-        <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>
-          Repositories it may write
-        </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          component="p"
-          sx={{ mb: 1 }}
-        >
-          Repositories this session may push commits to.
-        </Typography>
-        <WriteReposField
-          options={targetableRepos(config, tasks)}
-          value={writes}
-          onChange={setWrites}
-          onCommit={(next) => save({ writes: next }, "writes")}
-        />
       </Box>
 
       {/* The other half of "what it may reach", and the half that was
@@ -571,6 +622,22 @@ export default function ConsoleSessionPage({
             </option>
           ))}
         </TextField>
+        {session.effectiveNetworkAccess &&
+          session.effectiveNetworkAccess !==
+            (session.networkAccess || "open") && (
+            <Alert
+              severity="warning"
+              data-testid="session-network-not-isolated"
+              sx={{
+                mt: 1,
+                "& .MuiAlert-message": { overflowWrap: "anywhere" },
+              }}
+            >
+              This deployment&apos;s sandboxes cannot withhold a run&apos;s
+              network, so this session&apos;s runs are given egress (outbound
+              internet) whatever is chosen here.
+            </Alert>
+          )}
       </Box>
 
       {/* Which model the session's agent runs on (model.ConsoleSession.
@@ -754,6 +821,13 @@ export default function ConsoleSessionPage({
       </PageHeaderActions>
 
       <div className="console-session-body">
+        {task && (
+          <CommentDeepLink
+            key={`deep-link-${task.id}`}
+            t={task}
+            onLoadEarlier={onLoadEarlier}
+          />
+        )}
         {task ? (
           <TaskChat
             // Keyed by task so switching sessions remounts the composer:
@@ -763,6 +837,7 @@ export default function ConsoleSessionPage({
             t={task}
             act={act}
             onStop={cancelTurn}
+            onLoadEarlier={onLoadEarlier}
             draftRequest={draftRequest}
             onDraftConsumed={onDraftConsumed}
             actions={

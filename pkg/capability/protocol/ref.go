@@ -22,15 +22,22 @@ import (
 	"strings"
 )
 
-// methodPattern is the grammar of a method name (§2.1.3), and of an MCP
-// server name an mcp_endpoint reports (§5.2.3).
-var methodPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+// methodPattern is the grammar of a method name (§2.1.3). It admits ":"
+// and slash- or dot-separated segments so that grain's in-process api
+// server can name each agent API scope and scope set as itself
+// (https://grain.dev/capabilities/api#ci:write, …/api#ops/triage,
+// design/design/unified-grants.design.md §1).
+var methodPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]*(/[a-z0-9][a-z0-9._:-]*)*$`)
+
+// serverNamePattern is the grammar of an MCP server name an mcp_endpoint
+// reports (§5.2.3): a method name without ":", "." or "/".
+var serverNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
 // attemptIDPattern is the grammar of an attempt_id (§1.2).
 var attemptIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 // ValidMethod reports whether name is a conforming <method> (§2.1.3).
-func ValidMethod(name string) bool { return methodPattern.MatchString(name) }
+func ValidMethod(name string) bool { return len(name) <= 63 && methodPattern.MatchString(name) }
 
 // ValidAttemptID reports whether id is a conforming attempt_id (§1.2).
 func ValidAttemptID(id string) bool { return attemptIDPattern.MatchString(id) }

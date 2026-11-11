@@ -1,0 +1,14 @@
+== task 18 filed by the person with https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"ext-logs"} and approved at 02:33:05
+== 02:33:17 task 18: awaiting_reply succeeded 
+== 02:33:20 the run's container is gone: 
+== attempt 1's capability audit
+{
+    "records": []
+}
+== the gcp server's audit lines since 2026/11/08 02:33:05
+2026/11/08 02:33:07 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-18-1-0: permission set ext-logs: granted access tokens for log-reader@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:18:07Z
+2026/11/08 02:33:11 orchestrator: capability https://grain.dev/capabilities/gcp#gcp-key (grain-18-1-0): setup /home/debian/.gcp-token/grain-18-1-0/activate.sh succeeded, 0 bytes of output
+2026/11/08 02:33:17 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-19-1-0: permission set ext-logs: granted access tokens for log-reader@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:18:17Z
+== proposals task 18 filed
+{"id": "19", "title": "walk: pass gcp set ext-logs on", "state": "running", "approved": true, "approvedBy": "auto-submit", "capabilities": ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"ext-logs\",\"primary\":true}"], "reason": {"reason": "running/live_run", "class": "driven", "resource": "the run in flight", "driver": "ProcessResult", "control": "Cancel"}}
+{"id": "20", "title": "walk: control, no grant", "state": "queued", "approved": true, "approvedBy": "auto-submit", "capabilities": [], "reason": {"reason": "queued/ready", "class": "driven", "resource": "a worker slot (max_workers) and a sandbox", "driver": "reconcileDispatch", "control": "Run now"}}

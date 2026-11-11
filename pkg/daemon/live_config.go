@@ -156,9 +156,9 @@ type LiveConfig struct {
 	// pinned task's run is routed to; Refresh hands it each mcp_servers
 	// too. Nil beside a nil capabilityServers.
 	hostdCapabilityServers *hostdCapabilityServers
-	// registry is the background grain registry manager (registry.go);
+	// registry is the background grain hub manager (registry.go);
 	// Refresh notifies it whenever grain_config.registry or target_repos changes.
-	registry *RegistryManager
+	hub *HubManager
 
 	Mu      sync.Mutex
 	Applied Config
@@ -209,19 +209,19 @@ func (l *LiveConfig) WithCapabilityServers(r *servers.Registry) *LiveConfig {
 	return l
 }
 
-// WithRegistry hands Refresh the background registry manager to wake whenever
+// WithHub hands Refresh the background registry manager to wake whenever
 // grain_config.registry or target_repos changes.
-func (l *LiveConfig) WithRegistry(r *RegistryManager) *LiveConfig {
-	l.registry = r
+func (l *LiveConfig) WithHub(r *HubManager) *LiveConfig {
+	l.hub = r
 	return l
 }
 
 // Registry returns the background registry manager attached to l, or nil.
-func (l *LiveConfig) Registry() *RegistryManager {
+func (l *LiveConfig) Hub() *HubManager {
 	if l == nil {
 		return nil
 	}
-	return l.registry
+	return l.hub
 }
 
 // withHostdCapabilityServers hands Refresh the hostds' registries of run:
@@ -374,40 +374,6 @@ func (l *LiveConfig) modelListingConfig(ctx context.Context) Config {
 	return DispatchConfig(ctx, l.store, l.Current())
 }
 
-// storedConfig is grain_config as it stands right now, resolved into the
-// same shape current() answers in -- what this process *would* be
-// running with if it applied the row this instant, as against what it
-// has actually applied.
-//
-// The one caller is a credential check that found no provider
-// registered and has to say why (capabilityCheckAdapter.unregistered):
-// everything else in a running daemon reads current(), which is the
-// honest answer to what this deployment is doing, and reading the store
-// per request is not something this type invites. false means there was
-// nothing to compare against -- no store wired up (the tests below), a
-// database that would not answer, or a deployment with no configuration
-// row yet -- and leaves the caller with only what it already knew.
-//
-// Built on the same withLiveModelConfig refresh applies, so the two
-// cannot disagree about which fields a running process adopts: whatever
-// the next tick would put into applied is what this returns now.
-func (l *LiveConfig) storedConfig(ctx context.Context) (Config, bool) {
-	if l.store == nil {
-		return Config{}, false
-	}
-	stored, err := l.store.GetConfig(ctx)
-	if err != nil {
-		log.Printf("grain daemon: re-reading stored configuration: %v", err)
-		return Config{}, false
-	}
-	if stored == nil {
-		return Config{}, false
-	}
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	return l.Applied.withLiveModelConfig(*stored), true
-}
-
 // modelConfig is current() in the shape pkg/ui compares the stored row
 // against (ui.Config.RunningConfig).
 func (l *LiveConfig) ModelConfig() model.Config { return l.Current().ToModelConfig() }
@@ -482,8 +448,8 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 		l.capabilityServers.Update(deploymentCapabilityServers(configured))
 		l.hostdCapabilityServers.update(configured)
 	}
-	if l.registry != nil {
-		l.registry.NotifyStoreConfig(stored.Registry, stored.TargetRepos)
+	if l.hub != nil {
+		l.hub.NotifyStoreConfig(stored.Hub, stored.TargetRepos)
 	}
 
 	wasCPUOvercommit, wasMemOvercommit := was.overcommitRatios()

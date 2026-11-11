@@ -403,7 +403,7 @@ requires defaulting everyone to `open`. A build `DefaultOn` capability
 that needs egress from the sandbox (rather than from the controller)
 MUST say so in its registration, and the director's default then MUST
 remain `open` on that build. The registration field is
-`capability.Registration.SandboxEgress` / `capability.Method.SandboxEgress`,
+`capability.Method.SandboxEgress`,
 which registers the grant through
 `model.RegisterDefaultConsoleSessionEgressCapability`. While one is
 registered, `DefaultConsoleSessions` ships `NetworkOpen`.

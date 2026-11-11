@@ -1,0 +1,22 @@
+=== Case 1 (malformed git_ref in settings/schedules.yml) ===
+err=<nil>
+schema:  124, which is what this build of grain knows
+loaded:  4 rows across 4 tables
+  grain_config                 1
+  grain_instance               1
+  grain_schema                 1
+  schedule                     1
+ok: grain can load this
+
+=== Case 2 (enabled retired grain/config-default git_ref in settings/schedules.yml) ===
+err=<nil>
+schema:  124, which is what this build of grain knows
+loaded:  4 rows across 4 tables
+  grain_config                 1
+  grain_instance               1
+  grain_schema                 1
+  schedule                     1
+ok: grain can load this
+
+=== Case 3 (retired grain/config-default in .grain/schedules/watch.yml) ===
+err=<nil>

@@ -1,0 +1,5 @@
+name: Mixed template
+title: "repo#target under capabilities, no base"
+body: §2 item 3 shape.
+capabilities:
+  - 'https://grain.dev/capabilities/repo#target={"repo":"acme/widgets","base":"main"}'

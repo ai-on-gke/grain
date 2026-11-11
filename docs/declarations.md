@@ -63,9 +63,16 @@ custom-fields:                     # optional; this deployment's declared fields
   team: security
 ```
 
+This review is the one attached to a task, and it is stacked on the task's
+branch to fix what it finds. The reviews a gating path trigger files work
+differently: one per pull request head and review template however many
+triggers match, posting findings rather than pushing fixes unless asked to,
+and re-reading only what a new push changed. See "Gating reviews" under
+`.grain/triggers/<name>.yml`.
+
 ### `.grain/settings.yml`
 
-A repository can declare four of its own settings, in `.grain/settings.yml`
+A repository can declare five of its own settings, in `.grain/settings.yml`
 (or `.grain/config.yml`):
 
 ```yaml
@@ -74,6 +81,9 @@ setup-command: "make init"         # setup shell, run after the operator's
 port-branches: [main, candidate]   # paired branches; unioned with the operator's
 port-types:                        # per direction, the commit types that are ported
   main->candidate: [fix, revert]
+skills:                            # repo skill folders scanned on base branch at run start
+  folders: [".claude/skills", ".gemini/skills"]
+  enabled: true
 ```
 
 `port-branches` names the branches that are kept in step: when the merge
@@ -95,8 +105,18 @@ for a pair the repository declared itself in `port-branches`. On a pair
 the operator configured, a declared list only adds types to an
 operator's own `port_types`.
 
-Four, out of the eighteen fields of a repository's settings row, and which
-four is a decision with a rule behind it (grain/task-340). The rule is
+`skills` selects which folders relative to the repository root Grain scans one
+level deep for `*/SKILL.md` on the base branch at run start (defaulting to
+`.claude/skills`, `.agents/skills`, `.codex/skills`, `.gemini/skills`, and
+`skills`; `folders: []` or `enabled: false` disables discovery). Each discovered
+skill's name, description and sandbox path are merged into the run's prompt
+index inside `<repo-skills>` without copying files or inlining `SKILL.md`
+bodies; a template in `.grain/templates/*.yml` may also set `skills:` to
+override the folder list for tasks filed from that template
+([capabilities.md](capabilities.md#repository-skill-discovery-skillmd-folders)).
+
+Five, out of the settings row's fields, and which
+five is a decision with a rule behind it (grain/task-340). The rule is
 **authority, not behaviour**:
 
 > A setting is declarable when it changes what a repository's own work
@@ -319,7 +339,16 @@ capabilities:                      # optional; capabilities and repository acces
   - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
                                    #   capabilities bounded by the filing team
                                    #   (formerly gcp-key, retired in schema migration 97)
+grants:                            # optional; the unified spelling of capabilities:,
+  - capability: https://grain.dev/capabilities/repo#read
+    with: {repo: acme/upstream}    #   held to the same rule and read as one list with it
 ```
+
+`grants:` (design/design/unified-grants.design.md §3) is accepted beside
+`capabilities:` on templates and schedules indefinitely: each entry is a
+string or a `{capability, with}` mapping, the two keys are read as one list,
+and an entry both name (in either spelling) is held once. Everything this
+section says about `capabilities:` holds for `grants:` as well.
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
@@ -354,6 +383,13 @@ requesting unauthorized capabilities:
 - Grain's configuration repository (`grain/config`) is refused in
   declarations. There is no other: a `grain/config-<team>` name is an
   ordinary repository name, which nothing serves.
+- Request-field projections under `https://grain.dev/capabilities/repo` are
+  refused at parse time: `repo#target` (a declaration's tasks always target
+  the declaring repository, and its branch is `base:`), and `repo#read` or
+  `repo#write` carrying `base` (extra repository writes always land on that
+  repository's default branch). A repository that already declares one keeps
+  its previously synced declarations on the next sync and records the refusal
+  in `repo_declaration_sync.last_error`.
 
 **Schedules.** Schedules may also declare capabilities in `capabilities:` (for example,
 capabilities needed specifically when firing this schedule). In a schedule firing,
@@ -490,7 +526,12 @@ enabled: true                      # optional; default true
 overlap: skip                      # optional; "skip" (default) or "allow"; "skip" only with workflow:
                                    # "skip" holds a firing that overlaps the last one and fires it once
                                    # when that closes; every skip is recorded (see "Skipped firings")
+# overlap: {skip: true, group: sync-oss-release}
+                                   # optional; also holds a firing while any other schedule in this
+                                   # repository naming the same group is running (see "Overlap groups");
+                                   # `overlap-group: sync-oss-release` beside `overlap: skip` says the same
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
+grain-ci: true                     # optional, workflow: only; run on grain CI even when ci_mode is github
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
 admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
 hosting: console                   # optional; raises the template's own to console; refused with suite:
@@ -540,6 +581,55 @@ per recorded skip, for example `schedule repo:schedule:… skipped at
 (awaiting_submit); … is held`. The schedules page shows the newest skip
 on the row and the history in the schedule's pane (`ui.Schedule.skips`).
 
+#### Overlap groups
+
+grain/task-3895. `overlap: skip` looks only at the schedule's own previous
+firing, so two schedule files that fire the same work -- a release sync
+and the safety net that re-runs it if the sync is missed -- can still run
+at once. Naming a group makes them wait for each other:
+
+```yaml
+# .grain/schedules/sync-oss-release.yml
+template: sync-oss-release
+daily: {at: "02:00"}
+overlap: {skip: true, group: sync-oss-release}
+```
+
+```yaml
+# .grain/schedules/sync-oss-release-safety-net.yml
+template: sync-oss-release
+every: {hours: 6}
+overlap-group: sync-oss-release    # the same as the mapping form above
+```
+
+A firing is then held while *any* schedule in the same repository and
+group has an unfinished firing: an open task it filed, a suite run that
+has not finished, or a workflow run not yet settled (or its review still
+inside its hold). A held firing behaves exactly as an `overlap: skip`
+hold does -- the next run stays where it was and fires once when the
+holder closes -- and its skip record and the schedules page name the
+schedule holding it, for example `skipped at 2026-11-10 02:00 UTC: #4120
+from schedule "Sync" (repo:schedule:acme/widgets:sync-oss-release) in
+overlap group "sync-oss-release" is still open (running)`.
+
+- **Per repository.** A group is the repository's own: it is matched on
+  the repository the firing goes into, so another repository's schedule
+  naming the same group neither holds nor is held by these.
+- **Tagged tasks.** Every task a grouped schedule files carries
+  `schedule-group:<owner>/<name>:<group>` beside its own `schedule:<id>`
+  tag, so a task keeps holding the group after the schedule that filed
+  it is renamed or withdrawn.
+- **Names.** Letters, digits, `.`, `_` and `-`, starting with a letter or
+  digit, at most 128 characters.
+- **Refused combinations.** A group is a skip by definition, so
+  `overlap: allow` (or `skip: false`) beside a group is refused, as is
+  naming the group both in the mapping and as `overlap-group:`. The plain
+  `overlap: skip` and `overlap: allow` strings parse as they always did.
+
+A settings-owned schedule row carries the same `overlap-group:` key
+(`settings/schedules.yml`, `overlapGroup` on `POST`/`PATCH
+/api/schedules`).
+
 ### `.grain/triggers/<name>.yml`
 
 grain/task-1712. Run a template on every merge, or every pull request,
@@ -556,6 +646,7 @@ per: change                # change (default): one task per merge range / per pu
                            #         directly under the matched path's literal prefix
 gate: false                # pull_request only: hold the change's merge until the task is done
 human: on-findings         # gate only: required | on-findings (default) | no
+fixes: false               # gate only: let the review push fixes (see "Reviews post findings")
 auto-approve: false        # whether the filed task lands approved, with no human
 ```
 
@@ -595,12 +686,9 @@ finds its head at a commit it has not judged, against the pull request's
 files (its diff from the merge base). Variables: `{{trigger}}`,
 `{{paths}}`, `{{group}}`, `{{pr}}`, `{{head_sha}}` and `{{base_sha}}`
 (the base commit the rule was read at). Without `gate`, the task is an
-ordinary one in the repository. With `gate: true` it is a review stacked
-on the change's branch (with a branch and pull request of its own that
-merge back into the change's -- unlike grain's own trust-boundary security
-review, which pushes its fixes to the change's branch directly), the
-change's auto-merge is withdrawn, and the
-change and its pull request say which trigger demanded what. The hold is
+ordinary one in the repository. With `gate: true` it is a review of the
+change (see "Gating reviews" below), the change's auto-merge is withdrawn,
+and the change and its pull request say which trigger demanded what. The hold is
 released the way the security hold is: `on-findings` once every gating
 task has finished with no findings and any fixes it pushed have merged
 back into the change's branch, `no` once every one has finished whatever
@@ -612,8 +700,64 @@ does with what it finds"). Several gating triggers matching one change
 all have to finish, under the strictest `human` among them. A change whose
 file list cannot be read in full is held by every gating trigger.
 
+#### Gating reviews
+
+grain/task-4093. What a pull request's gating triggers file is one review
+per (pull request, head, kind), where the kind is the review template a
+trigger names (`sensitive: true` with no `template:` is grain's security
+review):
+
+- **One review for every trigger that names it.** Triggers that match the
+  same head and name the same template file a single review, never one
+  each. Its body lists the union of what they matched, by trigger, and it
+  is held under the strictest of their settings: the strictest `human`,
+  `sensitive` if any is, approved automatically only if every one says
+  `auto-approve`, and allowed to fix only if every one says `fixes`. Each
+  sensitive `human: required` trigger still asks its own approvers.
+  Triggers naming different templates file one review each. `per: folder`
+  does not split a gating review.
+- **The trust-boundary review counts.** When grain's security hold has
+  already filed its security review of the same head and that review covers
+  every path a security-review kind matched, no second one is filed.
+- **Idempotent.** The review carries a `path-trigger-review:<pr>:<kind>`
+  tag and a `path-trigger-head:<sha>` tag; judging a head that already has
+  its review files nothing.
+
+**Reviews post findings.** A gating review posts what it finds on the
+pull request (`add_review_comment`, which also puts it to the reviewed
+task's owner) and on the reviewed task, and its run never opens a pull
+request -- grain refuses to open one for it, and anything it pushes is
+left where it is. Two exceptions fix what they find: grain's security
+review, whose own instructions ask for fixes and which works on the
+change's own branch (so a fix lands in the change's pull request, never a
+second one), and a review whose triggers all say `fixes: true`, which is
+stacked on the change's branch with a pull request of its own merged back
+into it before the change can land.
+
+**Incremental, debounced re-review.** When the head moves, the review of
+each kind is filed again for the new head:
+
+- If the last review of that kind finished -- clean, or with findings the
+  push may have addressed -- or is still running, the new one is
+  *incremental*: it reads `git diff <last reviewed head> <new head>`,
+  lists the change's files those commits touch, and re-checks that the
+  earlier review's findings were addressed.
+- It is a *full* review instead when the new head does not descend from
+  the old one (a rebase or force-push), when commits from the base brought
+  in a file the kind's triggers watch, or when more than 20 of the
+  change's own files moved since the last review
+  (`incrementalReviewMaxFiles`).
+- A re-review is filed deferred for three minutes (`reviewDebounce`). A
+  push in that window supersedes it, so a burst of pushes gets one review,
+  of the head that stayed put. The first review of a change is filed when
+  its run finishes and is not deferred.
+- A review for an older head that has not been dispatched yet is
+  superseded by the new one, which keeps its incremental base; one already
+  running is waited on.
+
 **One runnable task per key.** A key is (repository, branch, trigger,
-group) for a merge and (pull request, trigger, group) for a pull request.
+group) for a merge and (pull request, trigger, group) for a pull request
+-- (pull request, review kind) for a gating review.
 A new firing for a key whose task has never been dispatched supersedes it
 (a merge keeps the earliest `from_sha` and every file since); one whose
 task is running, parked or has a pull request open is filed depending on
@@ -651,12 +795,14 @@ approvers: [team:payments, alice] # optional; default: the deployment's owner
   the change: a person has to press Submit. Whoever holds the access code
   is the deployment's owner ([access-code.md](access-code.md)), and a
   single-tenant grain has no accounts or team members, so a person's
-  Submit approves every outstanding trigger, whoever its `approvers`
-  name; `approvers` records who the repository meant. Auto-merge comes
-  back once none is left. A Submit, or an edit turning auto-merge on,
-  from an agent -- a run's token, a sandbox -- is refused with a 403.
-  Approvals are tied to the head they were given at: a push that moves
-  the head re-judges the change and clears them.
+  Submit records human approval for every outstanding trigger, whoever its
+  `approvers` name; `approvers` records who the repository meant. Submit
+  satisfies the human approval gate only and never skips or cancels a
+  gating trigger's review: auto-merge comes back once both the person's
+  approval and every gating review have passed cleanly. A Submit, or an
+  edit turning auto-merge on, from an agent -- a run's token, a sandbox --
+  is refused with a 403. Approvals are tied to the head they were given at:
+  a push that moves the head re-judges the change and clears them.
 - **Checked at sync.** Every `team:` approver has to be a team this
   deployment has (the default one, by id or name), and every template
   has to exist. Otherwise the sync is refused like any other bad
@@ -1078,6 +1224,41 @@ per schedule and reviews one run at a time. A `base:` that does not carry
 the workflow file is a run with nothing in it, reported as such by the
 review. `auto-approve-proposals` defaults to true, as a cron's does.
 
+#### Running on grain CI in a `ci_mode: github` repository: `grain-ci:`
+
+grain/task-3878. A repository whose `ci_mode` is `github` has said GitHub
+Actions is its CI, so grain drops a `workflow:` firing there rather than
+start a grain CI run. A schedule file can make an exception for itself:
+
+```yaml
+# .grain/schedules/release-lag.yml
+workflow: release-lag      # .grain/workflows/release-lag.yml, with an `on: schedule` of its own
+grain-ci: true
+every:
+  hours: 6
+```
+
+The firing then runs exactly as it would on a `ci_mode: grain`
+repository: a trusted schedule run of the workflow on `base:` (or the
+default branch), no task while it runs, and a review task only when the run
+does not pass (or every run, with `review: always`). That makes it the way
+to run a repository script on a cadence with no agent: a job that runs the
+script exits 0 on a quiet night and costs no agent run (and, on repositories
+the deployment offers grain's API to in CI -- `ai-on-gke/grain` and
+whatever the deployment's `ci_api_repos` setting adds to it, see
+`docs/agent-api.md` § "CI jobs" -- can hold `api:tasks:read` to look at
+what is open and `api:tasks:from-template` to file one of the repository's
+own templates when there is work to do).
+
+The exception is this schedule's and nothing else's. The run is a schedule
+event, so it is no pull request's check and posts no commit status; pull
+requests are still judged by GitHub Actions, and the repository's other
+`.grain/workflows` still run on none of its pushes. `ci_mode: none` still
+drops the firing, since that mode says no CI runs here at all. The key is
+refused on a schedule that runs a template or a suite, and a workflow's own
+`on: schedule` cron cannot say it -- a schedule file that names the workflow
+can. A settings-owned schedule row may carry the same `grain-ci:` key.
+
 A schedule carries no title or body of its own: a schedule is a cadence
 and a template is the work, so a file that tries to be both is refused.
 Unknown keys are refused too, naming the key -- a misspelt `auto_merge`
@@ -1160,10 +1341,11 @@ and when** -- never what that work may touch:
   "Repository access" above). Those are fetched and pushed with the
   team's own GitHub credential, so they reach no further than that
   credential does. Nothing else reaches past the declaring repository.
-- **No `grants:`, and no capability past the team's.** Capabilities
+- **No capability past the team's.** Capabilities
   are the deployment's to hand out (`Config.DefaultCapabilities`,
   `RepoConfig.DefaultCapabilities`, each capability's `AuthorizedTeams`).
-  A template's or schedule's `capabilities:` may ask for one, and the
+  A template's or schedule's `capabilities:` (or `grants:`, its unified
+  spelling) may ask for one, and the
   filing team bounds what it gets (e8041e94c, "Capabilities and repository
   access" above): an unauthorized one is stripped when the task is filed,
   with a note on its thread. A schedule's `capabilities:` refuses

@@ -1170,7 +1170,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 		t.Fatalf("len(listed.Sessions) = %d, want 1", len(listed.Sessions))
 	}
 	dir := listed.Sessions[0]
-	for _, wantCap := range []string{model.GitHubReadIssuesGrant, "api:tasks:admin", "api:release-manager"} {
+	for _, wantCap := range []string{model.GitHubReadIssuesGrant, model.APIRef("tasks:admin"), model.APIRef("release-manager")} {
 		if !slices.Contains(dir.Capabilities, wantCap) {
 			t.Errorf("GET /api/console-sessions Capabilities = %v, missing %q", dir.Capabilities, wantCap)
 		}
@@ -1206,7 +1206,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 	if putResp.Sessions[0].Model != "claude-sonnet-4" || putResp.Sessions[0].NetworkAccess != "open" || !putResp.Sessions[0].TasksApproved {
 		t.Errorf("PUT /api/console-sessions/director response = %+v", putResp.Sessions[0])
 	}
-	if !slices.Contains(putResp.Sessions[0].Capabilities, model.GrainHostExecGrant) || !slices.Contains(putResp.Sessions[0].Capabilities, "api:tasks:admin") {
+	if !slices.Contains(putResp.Sessions[0].Capabilities, model.GrainHostExecGrant) || !slices.Contains(putResp.Sessions[0].Capabilities, model.APIRef("tasks:admin")) {
 		t.Errorf("PUT /api/console-sessions/director Capabilities = %v", putResp.Sessions[0].Capabilities)
 	}
 }
@@ -1252,6 +1252,11 @@ func TestConsoleSessionsOnShapedUnisolatedBackendResolveNetworkNoneToOpen(t *tes
 	}
 	if len(listed) != 1 || listed[0].NetworkAccess != string(model.NetworkNone) {
 		t.Fatalf("ListConsoleSessions NetworkAccess = %q, want %q (not the fallback open)", listed[0].NetworkAccess, model.NetworkNone)
+	}
+	// ...and says what runs actually get, so the pane can warn rather than
+	// show "none" over a run that has egress (2026-11-07 §4 walkthrough).
+	if listed[0].EffectiveNetworkAccess != string(model.NetworkOpen) {
+		t.Errorf("ListConsoleSessions EffectiveNetworkAccess = %q, want %q", listed[0].EffectiveNetworkAccess, model.NetworkOpen)
 	}
 
 	none := string(model.NetworkNone)
@@ -1345,6 +1350,11 @@ func TestConsoleSessionsOnIsolatedUnshapedBackendKeepNetworkNone(t *testing.T) {
 	if updatedTask.NetworkAccess != model.NetworkNone {
 		t.Errorf("task NetworkAccess after UpdateConsoleSession(none) = %q, want %q (must not widen to open)", updatedTask.NetworkAccess, model.NetworkNone)
 	}
+	if listed, err := client.ListConsoleSessions(ctx); err != nil {
+		t.Fatal(err)
+	} else if listed[0].EffectiveNetworkAccess != "" {
+		t.Errorf("ListConsoleSessions EffectiveNetworkAccess = %q on an isolating backend, want \"\"", listed[0].EffectiveNetworkAccess)
+	}
 
 	restarted, err := client.RestartConsoleSession(ctx, model.DirectorSessionID, ui.RestartConsoleSessionRequest{})
 	if err != nil {
@@ -1429,16 +1439,16 @@ func TestSavedDirectorRowKeepsOperatorRemovalsAndOffersShippedDefaults(t *testin
 		t.Fatalf("saved director Capabilities = %v, want preserved %v", listed[0].Capabilities, savedCaps)
 	}
 	for _, wantMissing := range []string{
-		"api:task-admin",
-		"api:capabilities:read",
-		"api:capabilities:detach",
-		"api:settings:read",
-		"api:repos:read",
-		"api:releases:read",
-		"api:schedules:read",
-		"api:templates:read",
-		"api:suites:read",
-		"api:dispatch:read",
+		model.APIRef("task-admin"),
+		model.APIRef("capabilities:read"),
+		model.APIRef("capabilities:detach"),
+		model.APIRef("settings:read"),
+		model.APIRef("repos:read"),
+		model.APIRef("releases:read"),
+		model.APIRef("schedules:read"),
+		model.APIRef("templates:read"),
+		model.APIRef("suites:read"),
+		model.APIRef("dispatch:read"),
 	} {
 		if !slices.Contains(listed[0].MissingShippedDefaults, wantMissing) {
 			t.Errorf("MissingShippedDefaults = %v, missing %q", listed[0].MissingShippedDefaults, wantMissing)
@@ -1459,7 +1469,7 @@ func TestSavedDirectorRowKeepsOperatorRemovalsAndOffersShippedDefaults(t *testin
 	if len(afterAdopt[0].MissingShippedDefaults) != 0 {
 		t.Errorf("after adopting defaults, MissingShippedDefaults = %v, want empty", afterAdopt[0].MissingShippedDefaults)
 	}
-	if !slices.Contains(afterAdopt[0].Capabilities, "api:tasks:admin") || !slices.Contains(afterAdopt[0].Capabilities, "api:task-admin") {
+	if !slices.Contains(afterAdopt[0].Capabilities, model.APIRef("tasks:admin")) || !slices.Contains(afterAdopt[0].Capabilities, model.APIRef("task-admin")) {
 		t.Errorf("after adopting defaults, Capabilities = %v, want both Tier 2 grant and Tier 1 defaults", afterAdopt[0].Capabilities)
 	}
 }

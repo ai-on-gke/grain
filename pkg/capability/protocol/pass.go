@@ -364,8 +364,8 @@ func AssignServerNames(reported []string) ([]string, error) {
 		if name == "" {
 			continue
 		}
-		if !methodPattern.MatchString(name) || name == "grain-sandbox" || name == "grain-controller" {
-			return nil, fmt.Errorf("mcp_endpoint of grant %d reports server name %q, which must match %s and not be grain-sandbox or grain-controller", i, name, methodPattern)
+		if !serverNamePattern.MatchString(name) || name == "grain-sandbox" || name == "grain-controller" {
+			return nil, fmt.Errorf("mcp_endpoint of grant %d reports server name %q, which must match %s and not be grain-sandbox or grain-controller", i, name, serverNamePattern)
 		}
 		taken[name] = true
 	}

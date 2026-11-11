@@ -27,9 +27,13 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -54,6 +58,38 @@ type HostdView struct {
 	// list is "none" -- not "not connected", or "too old to say".
 	Logins      []string `json:"logins,omitempty"`
 	LoginsKnown bool     `json:"loginsKnown,omitempty"`
+	// Features are the host contract features the connected hostd reported
+	// (or this build's for local).
+	Features []hostd.Feature `json:"features,omitempty"`
+	// AllowlistSnippet is a ready-to-paste clis: snippet for this host,
+	// using env: ["*"] and ~/-relative paths only when the host advertises
+	// FeatureEnvOpen.
+	AllowlistSnippet string `json:"allowlistSnippet,omitempty"`
+}
+
+// HostCLISnippet renders a clis: allowlist entry snippet in Settings for
+// framework on a host whose hello is peer. Hosts advertising FeatureEnvOpen
+// get env: ["*"] (or [HOME, "*"] for agy) and ~/-relative stage paths; older
+// hosts get the closed env list and absolute paths.
+func HostCLISnippet(framework string, peer hostd.Hello) string {
+	var name, bin string
+	var closedEnv []string
+	switch model.NormalizeAgentFrameworkName(framework) {
+	case model.AgentFrameworkClaude:
+		name, bin, closedEnv = "claude", "/usr/local/bin/claude", claude.HostdEnv()
+	case model.AgentFrameworkCodex:
+		name, bin, closedEnv = "codex", "/usr/local/bin/codex", codex.HostdEnv()
+	default:
+		name, bin, closedEnv = "agy", "/usr/local/bin/agy", antigravity.HostdEnv()
+	}
+	roots := []string{"/var/lib/grain"}
+	home := ""
+	if peer.Has(hostd.FeatureEnvOpen) {
+		home = "/home/you"
+		bin = "/home/you/.local/bin/" + name
+		roots = []string{"/home/you/.grain/hostd-stage"}
+	}
+	return hostd.CLIEntryYAML(name, bin, home, roots, closedEnv, hostd.ProxyVars, peer)
 }
 
 // CreateHostdRequest is POST /api/hostds.
@@ -144,10 +180,16 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 			v.Connection = &st
 			if st.Connected {
 				v.Logins, v.LoginsKnown = st.Logins, st.LoginsKnown
+				v.Features = slices.Clone(st.Features)
+				v.AllowlistSnippet = HostCLISnippet(model.AgentFrameworkClaude, st.Hello())
 			}
 		}
-		if h.Name == model.LocalHostd && !h.Revoked() && c.Config.LocalHostdLogins != nil {
-			v.Logins, v.LoginsKnown = c.Config.LocalHostdLogins(ctx)
+		if h.Name == model.LocalHostd && !h.Revoked() {
+			if c.Config.LocalHostdLogins != nil {
+				v.Logins, v.LoginsKnown = c.Config.LocalHostdLogins(ctx)
+			}
+			v.Features = slices.Clone(hostd.Features)
+			v.AllowlistSnippet = HostCLISnippet(model.AgentFrameworkClaude, hostd.ThisHello(""))
 		}
 		v.State = hostdState(h, v.Connection)
 		out = append(out, v)
@@ -165,6 +207,8 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 			v.Connection = &st
 			if st.Connected {
 				v.Logins, v.LoginsKnown = st.Logins, st.LoginsKnown
+				v.Features = slices.Clone(st.Features)
+				v.AllowlistSnippet = HostCLISnippet(model.AgentFrameworkClaude, st.Hello())
 			}
 		}
 		v.State = hostdState(v.Hostd, v.Connection)
@@ -328,12 +372,20 @@ func (c *Client) dropSessionNotOwnedBy(name, owner string) {
 }
 
 func (s *Server) handleListHostds(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.ListHostds(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	out = filterList(out, func(h HostdView) bool {
+		return list.matches(h.Name, h.Owner)
+	})
+	writeListBy(w, out, list, func(h HostdView) string { return h.Name })
 }
 
 func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {
@@ -444,9 +496,7 @@ func (c *Client) auditHostd(ctx context.Context, name, summary string) {
 
 // ListHostds is GET /api/hostds.
 func (c *HTTPClient) ListHostds(ctx context.Context) ([]HostdView, error) {
-	var out []HostdView
-	err := c.do(ctx, http.MethodGet, "/api/hostds", nil, &out)
-	return out, err
+	return doList[HostdView](c, ctx, "/api/hostds")
 }
 
 // CreateHostd is POST /api/hostds: the new hostd and its token, shown

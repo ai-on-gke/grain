@@ -24,6 +24,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -119,7 +120,7 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if model.IsDangerousGrant(grainserver.SourceGrant) {
 		t.Fatalf("SourceGrant should not be dangerous: it is read-only, as self-debug was")
 	}
-	wantSelfDebug := []string{"api:self-debug", grainserver.SourceGrant}
+	wantSelfDebug := []string{model.APIRef("self-debug"), grainserver.SourceGrant}
 	if got := model.CanonicalLegacyGrants(grainserver.LegacySelfDebug); !slices.Equal(got, wantSelfDebug) {
 		t.Fatalf("CanonicalLegacyGrants(self-debug) = %v, want %v", got, wantSelfDebug)
 	}
@@ -213,8 +214,24 @@ func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {
 	pass.Release(context.Background())
 
 	st := grainserver.RepoStatus()
-	if want := []string{grainserver.RepoCredentialMethod, grainserver.RepoReadMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
+	if want := []string{grainserver.RepoCredentialMethod, grainserver.RepoReadMethod, grainserver.RepoTargetMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
 		t.Fatalf("RepoStatus() = %+v, want %s with %v", st, grainserver.RepoID, want)
+	}
+
+	// The UI offers repo#write's variants by their titles.
+	var titles []string
+	for _, md := range st.MethodDetails {
+		if md.Name != grainserver.RepoWriteMethod {
+			continue
+		}
+		variants, _ := md.Args["oneOf"].([]any)
+		for _, v := range variants {
+			title, _ := v.(map[string]any)["title"].(string)
+			titles = append(titles, title)
+		}
+	}
+	if want := []string{"CI push to another repo", "Write target (repo + base)", "Push any branch/tag (refs + force)"}; !slices.Equal(titles, want) {
+		t.Fatalf("repo#write variant titles = %q, want %q", titles, want)
 	}
 }
 
@@ -394,5 +411,93 @@ func TestRepoServerCredentialValidatesConfiguredNamesAndConflicts(t *testing.T) 
 	prompts := pass.PromptSections([]string{want})
 	if !strings.Contains(prompts, `"release-bot"`) {
 		t.Errorf("PromptSections = %q, want prompt naming release-bot", prompts)
+	}
+}
+
+// TestAPIServerListsEveryScopeAndPreset is unified-grants §1's in-process
+// https://grain.dev/capabilities/api: one method per scope and preset of
+// docs/agent-api.md, each taking an optional {repo}, normalizing like any
+// server's.
+func TestAPIServerListsEveryScopeAndPreset(t *testing.T) {
+	st := grainserver.APIStatus()
+	if st.ID != grainserver.APIID || st.Transport != "in-process" {
+		t.Fatalf("APIStatus() = %+v", st)
+	}
+	var want []string
+	for _, s := range model.APIScopes() {
+		want = append(want, string(s.Scope))
+	}
+	for _, p := range model.APIPresets() {
+		want = append(want, p.Name)
+	}
+	for _, set := range model.APIScopeSetsInEffect() {
+		if !slices.Contains(want, set.Name) {
+			want = append(want, set.Name)
+		}
+	}
+	for _, name := range want {
+		if !slices.Contains(st.Methods, name) {
+			t.Errorf("api server lists no #%s (methods %v)", name, st.Methods)
+		}
+	}
+	if len(st.Methods) != len(want) {
+		t.Errorf("api server lists %d methods, want %d", len(st.Methods), len(want))
+	}
+	if !slices.ContainsFunc(grainserver.Statuses(), func(s servers.Status) bool { return s.ID == grainserver.APIID }) {
+		t.Errorf("Statuses() leaves out %s", grainserver.APIID)
+	}
+	if !grainserver.IsInProcessID(grainserver.APIID) {
+		t.Errorf("IsInProcessID(%s) = false", grainserver.APIID)
+	}
+
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{{Name: "ops/triage", Scopes: []string{"ci:read", "tasks:read"}}}); err != nil {
+		t.Fatalf("InstallAPIScopeSets: %v", err)
+	}
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+
+	lookup := grainserver.Lookup(nil)
+	for _, tc := range []struct {
+		spec protocol.GrantSpec
+		want string
+	}{
+		{protocol.GrantSpec{Capability: model.APIRef("ci:write")}, model.APIRef("ci:write") + "={}"},
+		{protocol.GrantSpec{Capability: model.APIRef("ci:write"), With: map[string]any{"repo": "acme/widgets"}},
+			model.APIRef("ci:write") + `={"repo":"acme/widgets"}`},
+		{protocol.GrantSpec{Capability: model.APIRef("task-admin")}, model.APIRef("task-admin") + "={}"},
+		{protocol.GrantSpec{Capability: model.APIRef("ops/triage"), With: map[string]any{"repo": "acme/widgets"}},
+			model.APIRef("ops/triage") + `={"repo":"acme/widgets"}`},
+	} {
+		grants, err := protocol.Normalize([]protocol.GrantSpec{tc.spec}, lookup)
+		if err != nil {
+			t.Fatalf("Normalize(%+v): %v", tc.spec, err)
+		}
+		if got := model.RecordedCapabilityGrant(grants[0]); got != tc.want {
+			t.Errorf("Normalize(%+v) = %s, want %s", tc.spec, got, tc.want)
+		}
+	}
+	if _, err := protocol.Normalize([]protocol.GrantSpec{{Capability: model.APIRef("ci:write"),
+		With: map[string]any{"bogus": true}}}, lookup); err == nil {
+		t.Errorf("Normalize accepted an api grant with an argument other than repo")
+	}
+}
+
+// TestRepoServerListsTaskRepoAccess is the repo server's task-level
+// methods: #target {repo, base}, and #write's {repo, base} write target
+// beside a CI job's {repo}.
+func TestRepoServerListsTaskRepoAccess(t *testing.T) {
+	lookup := grainserver.Lookup(nil)
+	for _, spec := range []protocol.GrantSpec{
+		{Capability: model.RepoTargetRef, With: map[string]any{"repo": "acme/widgets", "base": ""}},
+		{Capability: model.RepoWriteRef, With: map[string]any{"repo": "acme/widgets", "base": "release/v1"}},
+		{Capability: model.RepoWriteRef, With: map[string]any{"repo": "acme/widgets"}},
+		{Capability: model.RepoReadRef, With: map[string]any{"repo": "acme/widgets"}},
+	} {
+		if _, err := protocol.Normalize([]protocol.GrantSpec{spec}, lookup); err != nil {
+			t.Errorf("Normalize(%+v): %v", spec, err)
+		}
+	}
+	if _, err := protocol.Normalize([]protocol.GrantSpec{{Capability: model.RepoTargetRef,
+		With: map[string]any{"repo": "acme/widgets"}}}, lookup); err == nil {
+		t.Errorf("Normalize accepted a #target without a base")
 	}
 }

@@ -163,6 +163,25 @@ check "select-lkg: advisory suites are reported and never block" 0 "LKG $c5" \
   "advisory live-agent.yml: infra at ${c4:0:12} (does not block)" \
   "advisory post-reset-e2e.yml: failure at ${c5:0:12}"
 
+# The live real-model suites' freshness policy: warns, never blocks.
+lacks "select-lkg: a live suite with a verdict is not reported as having none" "WARNING live live-agent.yml: no verdict"
+check "select-lkg: a live suite that only errored is warned about" 0 "LKG $c5" \
+  "WARNING live live-agent.yml: newest is infra at ${c4:0:12} and it has never passed here (does not block)." \
+  "WARNING live live-frameworks.yml: no verdict on any commit of this ref"
+
+old_pass=$((now - 5 * 86400))
+f="$(runs_file live-fresh "${r[@]}" "$(run_json "$c3" live-agent success "$old_pass")" "$(run_json "$c4" live-agent failure)" \
+  "$(run_json "$c3" live-frameworks success "$old_pass")" "$(run_json "$c5" live-frameworks success)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg: a live suite whose newest run is red names its newest pass, and a fresh pass is reported" 0 "LKG $c5" \
+  "WARNING live live-agent.yml: newest is failure at ${c4:0:12}; newest pass at ${c3:0:12}, 119h old (does not block)." \
+  "live live-frameworks.yml: passed at ${c5:0:12}, 0h old."
+
+f="$(runs_file live-stale "${r[@]}" "$(run_json "$c3" live-agent success "$old_pass")" "$(run_json "$c5" live-frameworks success)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg: a live suite with no pass in CANDIDATE_GATE_LIVE_MAX_AGE_DAYS is warned about" 0 "LKG $c5" \
+  "WARNING live live-agent.yml: newest pass at ${c3:0:12} is 119h old, past 3d -- is its schedule still firing? (does not block)."
+
 f="$(runs_file pending "$(run_json "$c5" tests "")" "$(run_json "$c5" release success)" "$(run_json "$c5" nightly success)")"
 run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
 check "select-lkg: a suite still running is not green" 1 "tests.yml pending"
@@ -214,9 +233,9 @@ tag=v3.1.0-rc.1
 stage1_names=("go, shuffled and repeated (1)" "go, shuffled and repeated (2)" "state repository soak" "sustained load"
   "metadata and model scalability" "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation"
   "postgres concurrency and stress" "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "ui e2e, repeated (2)"
-  "installer trixie and hostmode" "govulncheck" "pkg/cli stress under load" "upgrade from previous versions")
+  "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" "pkg/cli stress under load" "upgrade from previous versions")
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
-  tunnel-stress ui-e2e-long installer-variants vulns cmd-grain-stress upgrade-test)
+  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test)
 
 # gh_job <name> <conclusion|in_progress> [<run-id>] [<attempt>] [<created-epoch>] [<sha>]: one
 # job, as GET /repos/{owner}/{repo}/actions/runs/{id}/jobs?filter=all lists it.
@@ -430,9 +449,30 @@ check "check-qualification: CHECK_QUALIFICATION_APP may name the app by id" 0 \
 CHECK_QUALIFICATION_APP=42 qualify "$green1" "$(checks_file q-c-numslug 42:success)"
 check "check-qualification: an app id is never matched against another app's slug" 2 \
   "IGNORED grain/release-qualification: 1 from 42, not 42" "Qualification: PENDING"
+# With no app configured (empty or unset) no check run is trusted, and the
+# gate fails closed rather than qualify on Stage 1 alone.
 CHECK_QUALIFICATION_APP='' qualify "$green1" "$(checks_file q-c-noapp success)"
 check "check-qualification: with no app configured no check run is trusted" 64 "CHECK_QUALIFICATION_APP is unset"
 lacks "check-qualification: an unconfigured gate never passes" "Qualification: PASS"
+lacks "check-qualification: an unconfigured gate never skips Stage 2" "SKIPPED grain/release-qualification"
+unset CHECK_QUALIFICATION_APP
+qualify "$green1" "$(checks_file q-c-unset success)"
+export CHECK_QUALIFICATION_APP=grain-test
+check "check-qualification: an unset CHECK_QUALIFICATION_APP trusts no check run" 64 "CHECK_QUALIFICATION_APP is unset"
+lacks "check-qualification: an unset gate never passes" "Qualification: PASS"
+# With CHECK_QUALIFICATION_APP=none, set explicitly (a forge connection that
+# is no GitHub App posts no check run), Stage 2 is skipped and no check run --
+# grain's-looking, foreign or app-less -- is read: Stage 1 qualifies alone.
+CHECK_QUALIFICATION_APP=none qualify "$green1" "$(checks_file q-c-none failure actions:success noapp:success)"
+check "check-qualification: CHECK_QUALIFICATION_APP=none skips Stage 2" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)" "Qualification: PASS $tag."
+lacks "check-qualification: CHECK_QUALIFICATION_APP=none judges no check run" "grain/release-qualification: failed"
+CHECK_QUALIFICATION_APP=none qualify "$green1"
+check "check-qualification: CHECK_QUALIFICATION_APP=none needs no check run listing" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none" "Qualification: PASS $tag."
+mapfile -t red < <(stage1_run success 100 1 "$recent" "state repository soak=failure")
+CHECK_QUALIFICATION_APP=none qualify "$(jobs_file q-none-red "${red[@]}" "$(gh_job "state repository soak" failure 101 1 $((recent + 600)))")"
+check "check-qualification: CHECK_QUALIFICATION_APP=none still needs Stage 1" 1 "Qualification: FAIL"
 
 RELEASE_NEVER_PROMOTE="v1.14.0 v3.1.0" qualify "$green1" "$(checks_file q-never success)"
 check "check-qualification: RELEASE_NEVER_PROMOTE fails an otherwise green RC" 1 "FAIL never: RELEASE_NEVER_PROMOTE (v1.14.0 v3.1.0) names v3.1.0"

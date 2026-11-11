@@ -15,13 +15,18 @@
 package orchestrator_test
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 var adoptOperator = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"}}
@@ -31,6 +36,7 @@ func (f *takeoverFixture) adopt(in model.AdoptPullRequestInput, now time.Time) m
 	in.PR = model.PullRequestRef{Repo: f.repo, Number: f.pr}
 	if in.Requester.Actor.ID == "" {
 		in.Requester = adoptOperator
+		in.AllowAutoMerge = true
 	}
 	got, err := orchestrator.AdoptPullRequest(f.ctx, f.deps, in, now)
 	if err != nil {
@@ -259,5 +265,279 @@ func TestPullRequestReviewDesignAndStatusThreads(t *testing.T) {
 	}
 	if report.MergeQueue != "held: review" {
 		t.Errorf("merge queue = %q, want held: review", report.MergeQueue)
+	}
+}
+
+// A pull request GitHub has no record of is the caller's mistake, not
+// grain failing: adopt and status say not-found (the routes answer 404)
+// rather than a 500 (docs/test-runs/2026-11-08-cli-install-skill-mcp.md).
+func TestAdoptPullRequestOfAMissingPullRequestIsNotFound(t *testing.T) {
+	t.Parallel()
+	f := newTakeoverFixture(t, "alice")
+	missing := model.PullRequestRef{Repo: f.repo, Number: f.pr + 1000}
+	_, err := orchestrator.AdoptPullRequest(f.ctx, f.deps, model.AdoptPullRequestInput{PR: missing, Requester: adoptOperator, Approved: true}, baseTime)
+	if !errors.Is(err, model.ErrPullRequestNotFound) {
+		t.Fatalf("AdoptPullRequest(%s) = %v, want ErrPullRequestNotFound", missing, err)
+	}
+	if _, err := orchestrator.PullRequestStatusOf(f.ctx, f.deps, missing, false); !errors.Is(err, model.ErrPullRequestNotFound) {
+		t.Fatalf("PullRequestStatusOf(%s) = %v, want ErrPullRequestNotFound", missing, err)
+	}
+}
+
+func TestAdoptPullRequestByAnAgentOrLimitedRoleNeverTurnsOnAutoMerge(t *testing.T) {
+	t.Parallel()
+	owner := model.Principal{Kind: model.PrincipalHuman, ID: "jane@example.com"}
+
+	// Limited human role (AllowAutoMerge == false): queued, never auto-merge.
+	fLimited := newTakeoverFixture(t, "alice")
+	got := fLimited.adopt(model.AdoptPullRequestInput{
+		Requester:      model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "wade@example.com"}},
+		Approved:       true,
+		AllowAutoMerge: false,
+	}, baseTime)
+	if got.State != string(model.StateQueued) || got.AutoMerge || fLimited.shepherd().AutoMerge {
+		t.Fatalf("limited-role collaborator adoption = %+v (task AutoMerge=%v), want queued with AutoMerge=false",
+			got, fLimited.shepherd().AutoMerge)
+	}
+
+	// Agent principal: never auto-merge even if AllowAutoMerge were set true.
+	fAgent := newTakeoverFixture(t, "alice")
+	got = fAgent.adopt(model.AdoptPullRequestInput{
+		Mode:           model.TakeoverFinish,
+		Requester:      model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "external:bot"}, OnBehalfOf: &owner},
+		Approved:       true,
+		AllowAutoMerge: true,
+	}, baseTime)
+	if got.State != string(model.StateQueued) || got.AutoMerge || fAgent.shepherd().AutoMerge {
+		t.Fatalf("agent collaborator adoption = %+v (task AutoMerge=%v), want queued with AutoMerge=false",
+			got, fAgent.shepherd().AutoMerge)
+	}
+
+	// Owner-trust approval records OwnerTrustPrincipal on new filings and never auto-merges.
+	fTrusted := newTakeoverFixture(t, "alice")
+	otApproval := model.Attribution{Actor: model.OwnerTrustPrincipal, OnBehalfOf: &owner}
+	got = fTrusted.adopt(model.AdoptPullRequestInput{
+		Requester: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "external:trusted"}, OnBehalfOf: &owner},
+		Approval:  &otApproval,
+		Approved:  true,
+	}, baseTime)
+	sh := fTrusted.shepherd()
+	if got.AutoMerge || sh.AutoMerge || sh.Approval == nil || sh.Approval.Actor != model.OwnerTrustPrincipal {
+		t.Fatalf("owner-trust adoption = %+v, approval = %+v, want AutoMerge=false and OwnerTrustPrincipal", got, sh.Approval)
+	}
+
+	// Upgrading an auto-merge review-only shepherd to finish requires an unlimited human.
+	fUpgrade := newTakeoverFixture(t, "alice")
+	fUpgrade.adopt(model.AdoptPullRequestInput{Approved: true}, baseTime)
+	if !fUpgrade.shepherd().AutoMerge {
+		t.Fatal("unlimited operator review-only adoption of collaborator PR should have AutoMerge=true")
+	}
+	for _, caller := range []model.AdoptPullRequestInput{
+		{
+			PR:        model.PullRequestRef{Repo: fUpgrade.repo, Number: fUpgrade.pr},
+			Mode:      model.TakeoverFinish,
+			Requester: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "wade@example.com"}},
+			Approved:  true,
+		},
+		{
+			PR:             model.PullRequestRef{Repo: fUpgrade.repo, Number: fUpgrade.pr},
+			Mode:           model.TakeoverFinish,
+			Requester:      model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "external:bot"}},
+			Approved:       true,
+			AllowAutoMerge: true,
+		},
+	} {
+		if _, err := orchestrator.AdoptPullRequest(fUpgrade.ctx, fUpgrade.deps, caller, baseTime.Add(time.Minute)); !errors.Is(err, model.ErrPullRequestForbidden) {
+			t.Errorf("upgrading auto-merge shepherd as %+v = %v, want ErrPullRequestForbidden", caller.Requester.Actor, err)
+		}
+		if hasLink(fUpgrade.shepherd(), model.LinkTakeoverMode, string(model.TakeoverFinish)) {
+			t.Fatalf("refused upgrade modified shepherd links: %+v", fUpgrade.shepherd().Links)
+		}
+	}
+}
+
+type realOrchestratorAdopter struct {
+	deps orchestrator.Deps
+	now  time.Time
+}
+
+func (a realOrchestratorAdopter) OpenForTask(context.Context, string) (ui.PullRequestStatus, error) {
+	return ui.PullRequestStatus{}, nil
+}
+
+func (a realOrchestratorAdopter) AdoptPullRequest(ctx context.Context, in model.AdoptPullRequestInput) (model.PullRequestAdoption, error) {
+	return orchestrator.AdoptPullRequest(ctx, a.deps, in, a.now)
+}
+
+func (a realOrchestratorAdopter) ReviewPullRequest(ctx context.Context, in model.ReviewPullRequestInput) (model.PullRequestReviewFiling, error) {
+	return orchestrator.ReviewPullRequest(ctx, a.deps, in, a.now)
+}
+
+func (a realOrchestratorAdopter) PullRequestStatus(ctx context.Context, ref model.PullRequestRef, threads bool) (model.PullRequestReport, error) {
+	return orchestrator.PullRequestStatusOf(ctx, a.deps, ref, threads)
+}
+
+func TestAdoptPullRequestEndToEndExternalAndUnapprovedShepherdRails(t *testing.T) {
+	t.Parallel()
+	newServer := func(t *testing.T) (*takeoverFixture, *ui.Server, *ui.Client) {
+		t.Helper()
+		f := newTakeoverFixture(t, "alice")
+		client := ui.NewClient(ui.Config{
+			Actor:         ui.DefaultActor("operator@example.com"),
+			DefaultTarget: &f.repo,
+			Capabilities:  ui.OfferedCapabilities(),
+			PullRequests:  realOrchestratorAdopter{deps: f.deps, now: baseTime},
+		}, f.store)
+		client.Now = func() time.Time { return baseTime }
+		cfg, err := f.store.GetConfig(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg == nil {
+			d := model.DefaultConfig()
+			cfg = &d
+		}
+		cfg.ExternalAgentAPI = true
+		cfg.OwnerTrust = []model.OwnerTrustRule{{Owner: "jane@example.com", Repo: f.repo.String()}}
+		if err := f.store.PutConfig(f.ctx, *cfg); err != nil {
+			t.Fatal(err)
+		}
+		return f, ui.NewServerWithClient(client), client
+	}
+	mint := func(t *testing.T, client *ui.Client, name, owner string, scopes ...string) string {
+		t.Helper()
+		issued, err := client.CreateExternalAgentToken(context.Background(), ui.CreateExternalAgentTokenRequest{
+			Name: name, Owner: owner, Scopes: scopes, Repos: []string{"acme/widgets"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued.Token
+	}
+	postAdopt := func(srv *ui.Server, token, body, reason string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/pull-requests/adopt", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		if reason != "" {
+			req.Header.Set(ui.ActingReasonHeader, reason)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// 1. External tasks:admin token on collaborator PR: queued, AutoMerge=false.
+	{
+		f, srv, client := newServer(t)
+		prRef := model.PullRequestRef{Repo: f.repo, Number: f.pr}.String()
+		adminTok := mint(t, client, "admin", "alice@example.com", "merge:write", "tasks:write", "tasks:admin")
+		rec := postAdopt(srv, adminTok, `{"pr":"`+prRef+`","mode":"finish"}`, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("tasks:admin adopt new collaborator PR: %d %s", rec.Code, rec.Body)
+		}
+		var out model.PullRequestAdoption
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		sh := f.shepherd()
+		if out.State != string(model.StateQueued) || out.AutoMerge || sh.AutoMerge {
+			t.Fatalf("tasks:admin adoption = %+v (task AutoMerge=%v), want queued with AutoMerge=false", out, sh.AutoMerge)
+		}
+	}
+
+	// 2. Owner-trusted external token on collaborator PR: queued under OwnerTrustPrincipal, AutoMerge=false.
+	{
+		f, srv, client := newServer(t)
+		prRef := model.PullRequestRef{Repo: f.repo, Number: f.pr}.String()
+		trustedTok := mint(t, client, "trusted", "jane@example.com", "merge:write", "tasks:write")
+		rec := postAdopt(srv, trustedTok, `{"pr":"`+prRef+`","mode":"finish"}`, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("owner-trusted adopt new collaborator PR: %d %s", rec.Code, rec.Body)
+		}
+		sh := f.shepherd()
+		if sh.AutoMerge || sh.Approval == nil || sh.Approval.Actor != model.OwnerTrustPrincipal {
+			t.Fatalf("owner-trusted shepherd AutoMerge=%v Approval=%+v, want AutoMerge=false and OwnerTrustPrincipal",
+				sh.AutoMerge, sh.Approval)
+		}
+	}
+
+	// 3. Existing unapproved shepherd: refuses owner-trust without tasks:admin, missing reason, self-filed, and person-held;
+	// allows another credential with tasks:admin + X-Grain-Acting-Reason on a plain proposed shepherd.
+	{
+		f, srv, client := newServer(t)
+		prRef := model.PullRequestRef{Repo: f.repo, Number: f.pr}.String()
+		proposerTok := mint(t, client, "proposer", "bob@example.com", "merge:write", "tasks:write")
+		trustedTok := mint(t, client, "trusted", "jane@example.com", "merge:write", "tasks:write")
+		adminTok := mint(t, client, "admin", "alice@example.com", "merge:write", "tasks:write", "tasks:admin")
+
+		// Proposer files an unapproved review-only shepherd.
+		rec := postAdopt(srv, proposerTok, `{"pr":"`+prRef+`"}`, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("proposer adopt: %d %s", rec.Code, rec.Body)
+		}
+		sh := f.shepherd()
+		if sh.Approval != nil {
+			t.Fatalf("proposer shepherd should be unapproved, got %+v", sh.Approval)
+		}
+
+		// Owner-trust without tasks:admin is refused 403 and does not upgrade or approve.
+		if rec = postAdopt(srv, trustedTok, `{"pr":"`+prRef+`","mode":"finish"}`, "owner-trust try"); rec.Code != http.StatusForbidden {
+			t.Fatalf("owner-trusted adopt existing proposed shepherd: %d %s, want 403", rec.Code, rec.Body)
+		}
+		// tasks:admin without X-Grain-Acting-Reason is refused 403 and does not upgrade or approve.
+		if rec = postAdopt(srv, adminTok, `{"pr":"`+prRef+`","mode":"finish"}`, ""); rec.Code != http.StatusForbidden ||
+			!strings.Contains(rec.Body.String(), ui.ActingReasonHeader) {
+			t.Fatalf("tasks:admin adopt existing without reason: %d %s, want 403 naming %s", rec.Code, rec.Body, ui.ActingReasonHeader)
+		}
+		if sh = f.shepherd(); sh.Approval != nil || hasLink(sh, model.LinkTakeoverMode, string(model.TakeoverFinish)) {
+			t.Fatalf("refused adopt mutated shepherd: approval=%+v links=%+v", sh.Approval, sh.Links)
+		}
+
+		// Self-approval rail: if external:admin filed the proposed shepherd itself, it is refused 403 even with reason.
+		if err := f.store.UpdateTask(f.ctx, sh.ID, func(tk *model.Task) error {
+			tk.Origin.Attribution.Actor = model.Principal{
+				Kind: model.PrincipalAgent, ID: "external:admin", Source: model.SourceExternalToken,
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if rec = postAdopt(srv, adminTok, `{"pr":"`+prRef+`","mode":"finish"}`, "self approve try"); rec.Code != http.StatusForbidden ||
+			!strings.Contains(rec.Body.String(), "it filed it") {
+			t.Fatalf("self-approval on adopt: %d %s, want 403 naming 'it filed it'", rec.Code, rec.Body)
+		}
+
+		// Person-hold rail: restore proposer origin, set AutoMerge=true on stored proposed task -> refused 403.
+		if err := f.store.UpdateTask(f.ctx, sh.ID, func(tk *model.Task) error {
+			tk.Origin.Attribution.Actor = model.Principal{
+				Kind: model.PrincipalAgent, ID: "external:proposer", Source: model.SourceExternalToken,
+			}
+			tk.AutoMerge = true
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if rec = postAdopt(srv, adminTok, `{"pr":"`+prRef+`"}`, "person hold try"); rec.Code != http.StatusForbidden ||
+			!strings.Contains(rec.Body.String(), "auto-merge") {
+			t.Fatalf("person-held adopt: %d %s, want 403 naming auto-merge", rec.Code, rec.Body)
+		}
+
+		// Clear AutoMerge: tasks:admin with X-Grain-Acting-Reason approves and upgrades in place without AutoMerge.
+		if err := f.store.UpdateTask(f.ctx, sh.ID, func(tk *model.Task) error {
+			tk.AutoMerge = false
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		rec = postAdopt(srv, adminTok, `{"pr":"`+prRef+`","mode":"finish"}`, "approving proposer's shepherd")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("valid tasks:admin adopt of existing shepherd: %d %s", rec.Code, rec.Body)
+		}
+		sh = f.shepherd()
+		if sh.Approval == nil || sh.AutoMerge || !hasLink(sh, model.LinkTakeoverMode, string(model.TakeoverFinish)) {
+			t.Fatalf("approved shepherd = %+v (links=%+v), want approved finish shepherd with AutoMerge=false", sh, sh.Links)
+		}
 	}
 }

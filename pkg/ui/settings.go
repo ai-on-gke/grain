@@ -35,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/granule"
+	"github.com/ai-on-gke/grain/pkg/hubenv"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -198,7 +199,14 @@ type Settings struct {
 	// reads as the figure in effect. The controller's live ratios, recent
 	// adjustments and OOM kills are SandboxCommitment.Budget.Overcommit.
 	SandboxOvercommit model.OvercommitSettings `json:"sandboxOvercommit"`
-	ExternalAgentAPI  bool                     `json:"externalAgentApi"`
+	// SandboxShapeLimits is model.Config.SandboxShapeLimits as stored: the
+	// deployment-wide maximum on a task's own sandbox shape and the
+	// per-role ceilings beneath it. SandboxShapeMax is the maximum in
+	// effect, grain's defaults filled into whatever the stored one leaves
+	// at zero.
+	SandboxShapeLimits model.SandboxShapeLimits `json:"sandboxShapeLimits"`
+	SandboxShapeMax    model.SandboxShape       `json:"sandboxShapeMax"`
+	ExternalAgentAPI   bool                     `json:"externalAgentApi"`
 	// SessionSandboxIdleTTL is model.Config.SessionSandboxIdleTTL: how long
 	// an interactive chat/session task's sandbox (and in-process agent run)
 	// stays warm awaiting a reply after a turn ends before being released,
@@ -544,8 +552,9 @@ type Settings struct {
 	// settings it already has, so text cleared back to nothing has to
 	// arrive as present-and-empty rather than as an absent key leaving
 	// the old value on screen.
-	PromptExtension  string `json:"promptExtension"`
-	RepairTemplateID string `json:"repairTemplateID"`
+	PromptExtension  string              `json:"promptExtension"`
+	Skills           *model.SkillsConfig `json:"skills,omitempty"`
+	RepairTemplateID string              `json:"repairTemplateID"`
 	// TaskBranchTemplate controls names assigned to newly created tasks.
 	TaskBranchTemplate string `json:"taskBranchTemplate"`
 	// DeploymentID is model.Config's own: the id {deployment} expands to
@@ -647,6 +656,11 @@ type Settings struct {
 	// vocabulary, in a picker's order.
 	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
 	AutoUpgradeModes []string `json:"autoUpgradeModes"`
+	// AutoUpgradeMinIntervalHours is model.Config.AutoUpgradeMinIntervalHours:
+	// the minimum interval in hours between two completed automatic upgrades
+	// in release mode (0 = off; default AutoUpgradeMinIntervalHoursDefault).
+	AutoUpgradeMinIntervalHours        int `json:"autoUpgradeMinIntervalHours"`
+	AutoUpgradeMinIntervalHoursDefault int `json:"autoUpgradeMinIntervalHoursDefault"`
 	// OwnerTrust is the owner-trust proposal policy
 	// (model.Config.OwnerTrust): the (owner, repo) pairs -- repo "*" for
 	// every repository -- whose external agent credentials' unapproved
@@ -688,8 +702,7 @@ type Settings struct {
 	CodexAuthJSONSet    bool `json:"codexAuthJSONSet"`
 	// AgentKeyChecksEnabled is whether this deployment can go and ask the
 	// vendor whether one of those credentials still works
-	// (Config.AgentKeyChecks, POST /api/agent-keys/{framework}/check) --
-	// CapabilityStatus.Checkable's own role for the Capabilities tab,
+	// (Config.AgentKeyChecks, POST /api/agent-keys/{framework}/check),
 	// reported once here because the answer is the same for all three
 	// frameworks. False means no pane should offer a button that could
 	// only ever 404.
@@ -759,12 +772,19 @@ type Settings struct {
 	// settings are locked in the UI and REST API in favour of config
 	// repository pull requests. False by default.
 	SettingsLocked bool `json:"settingsLocked"`
-	// Registry holds the deployment's connected-entry grain registry
+	// Registry holds the deployment's connected-entry grain hub
 	// settings (model.Config.Registry). RegistryTokenSet reports whether
 	// the registration credential secret ("registry-registration-token") is
 	// populated in pkg/secrets.
-	Registry         model.RegistryConfig `json:"registry"`
-	RegistryTokenSet bool                 `json:"registryTokenSet"`
+	//
+	// Hub and HubTokenSet are the same two under the names the Grain Hub
+	// has had since it stopped being the Grain Registry. Both spellings are
+	// served for a release, so a UI or script written against either reads
+	// what it expects; registry and registryTokenSet then go.
+	Registry         model.HubConfig `json:"registry"`
+	RegistryTokenSet bool            `json:"registryTokenSet"`
+	Hub              model.HubConfig `json:"hub"`
+	HubTokenSet      bool            `json:"hubTokenSet"`
 	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
 	// whether the API refuses its non-bootstrap writes in favour of a
 	// config pull request. Unlike SettingsLocked it is false without a
@@ -1161,6 +1181,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxDiskOvercommitDefault:       model.DefaultDiskOvercommit,
 		SandboxMemoryReserveMBDefault:      c.sandboxMemoryReserveDefault(),
 		SandboxOvercommit:                  cfg.SandboxOvercommit.Resolved(),
+		SandboxShapeLimits:                 cfg.SandboxShapeLimits,
+		SandboxShapeMax:                    cfg.SandboxShapeLimits.ResolvedMax(),
 		ExternalAgentAPI:                   cfg.ExternalAgentAPI,
 		SessionSandboxIdleTTL:              durationSetting(cfg.SessionSandboxIdleTTL),
 		SessionSandboxIdleTTLDefault:       model.DefaultSessionSandboxIdleTTL.String(),
@@ -1181,6 +1203,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		ConfigRepoOnly:                     c.rowConfigRepoOnly(ctx, cfg),
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
+		Skills:                             cfg.Skills.Clone(),
 		RepairTemplateID:                   cfg.RepairTemplateID,
 		TaskBranchTemplate:                 cfg.TaskBranchTemplate,
 		DeploymentID:                       cfg.DeploymentID,
@@ -1195,6 +1218,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
 		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
 		AutoUpgradeModes:                   model.AutoUpgradeModes(),
+		AutoUpgradeMinIntervalHours:        cfg.AutoUpgradeMinIntervalHours,
+		AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
 		AutoGrantContextReads:              stringsOrEmpty(cfg.AutoGrantContextReads),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
@@ -1210,8 +1235,10 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		RestartRequired:                    restartRequiredKeys(),
 		PendingRestart:                     c.pendingRestart(cfg, sandboxImgDefault, granuleImgDefault),
 		Unrunnable:                         unrunnable,
-		Registry:                           cfg.Registry,
-		RegistryTokenSet:                   c.registryTokenSet(),
+		Registry:                           cfg.Hub,
+		RegistryTokenSet:                   c.hubTokenSet(),
+		Hub:                                cfg.Hub,
+		HubTokenSet:                        c.hubTokenSet(),
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
 	out.K8sGranuleImageEffective = effectiveGranule
@@ -1394,6 +1421,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SandboxDiskOvercommit:          def.SandboxDiskOvercommit,
 			SandboxDiskOvercommitDefault:   model.DefaultDiskOvercommit,
 			SandboxOvercommit:              def.SandboxOvercommit.Resolved(),
+			SandboxShapeLimits:             def.SandboxShapeLimits,
+			SandboxShapeMax:                def.SandboxShapeLimits.ResolvedMax(),
 			ExternalAgentAPI:               def.ExternalAgentAPI,
 			SessionSandboxIdleTTL:          durationSetting(def.SessionSandboxIdleTTL),
 			SessionSandboxIdleTTLDefault:   model.DefaultSessionSandboxIdleTTL.String(),
@@ -1477,6 +1506,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
 			AutoUpgradeOn:                      def.AutoUpgradeMode(),
 			AutoUpgradeModes:                   model.AutoUpgradeModes(),
+			AutoUpgradeMinIntervalHours:        def.AutoUpgradeMinIntervalHours,
+			AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
 			AutoGrantContextReads:              stringsOrEmpty(def.AutoGrantContextReads),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
@@ -1485,8 +1516,10 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			DefaultAdmission:                   string(model.NormalizeAdmission(def.DefaultAdmission)),
 			DefaultHosting:                     string(model.NormalizeHosting(def.DefaultHosting)),
 			SettingsLocked:                     def.SettingsLocked,
-			Registry:                           def.Registry,
-			RegistryTokenSet:                   c.registryTokenSet(),
+			Registry:                           def.Hub,
+			RegistryTokenSet:                   c.hubTokenSet(),
+			Hub:                                def.Hub,
+			HubTokenSet:                        c.hubTokenSet(),
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1528,7 +1561,11 @@ type UpdateSettingsRequest struct {
 	SandboxDiskOvercommit   *float64 `json:"sandboxDiskOvercommit"`
 	// SandboxOvercommit replaces the whole overcommit mode and its bounds
 	// (model.OvercommitSettings); zero bounds are grain's defaults.
-	SandboxOvercommit      *model.OvercommitSettings `json:"sandboxOvercommit"`
+	SandboxOvercommit *model.OvercommitSettings `json:"sandboxOvercommit"`
+	// SandboxShapeLimits replaces the whole deployment maximum and the
+	// per-role ceilings on a task's own sandbox shape
+	// (model.SandboxShapeLimits); a zero dimension is grain's default.
+	SandboxShapeLimits     *model.SandboxShapeLimits `json:"sandboxShapeLimits"`
 	ExternalAgentAPI       *bool                     `json:"externalAgentApi"`
 	SessionSandboxIdleTTL  *string                   `json:"sessionSandboxIdleTtl"`
 	SandboxMemoryReserveMB *int                      `json:"sandboxMemoryReserveMb"`
@@ -1591,6 +1628,9 @@ type UpdateSettingsRequest struct {
 	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
 	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
 	AutoUpgradeOn *string `json:"autoUpgradeOn"`
+	// AutoUpgradeMinIntervalHours is the minimum interval in hours between
+	// completed automatic upgrades in release mode (0 = off).
+	AutoUpgradeMinIntervalHours *int `json:"autoUpgradeMinIntervalHours"`
 	// OwnerTrust replaces the owner-trust proposal policy
 	// (Settings.OwnerTrust); an empty list turns it off.
 	OwnerTrust *[]model.OwnerTrustRule `json:"ownerTrust"`
@@ -1600,12 +1640,17 @@ type UpdateSettingsRequest struct {
 	AgentBackends         *[]model.AgentBackend `json:"agentBackends"`
 	DefaultModel          *string               `json:"defaultModel"`
 	PromptExtension       *string               `json:"promptExtension"`
+	Skills                *model.SkillsConfig   `json:"skills"`
 	RepairTemplateID      *string               `json:"repairTemplateID"`
 	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
 	SettingsLocked        *bool                 `json:"settingsLocked"`
-	Registry              *model.RegistryConfig `json:"registry"`
+	// Hub is the Grain Hub connection, sent as "hub" -- or, for a release,
+	// as "registry", its name before the Grain Registry was renamed the
+	// Grain Hub. "hub" wins when a request carries both, and "registry"
+	// alone logs a one-time deprecation warning.
+	Hub *model.HubConfig `json:"hub"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -1615,6 +1660,16 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = UpdateSettingsRequest(p)
+	var legacy struct {
+		Registry *model.HubConfig `json:"registry"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	if r.Hub == nil && legacy.Registry != nil {
+		r.Hub = legacy.Registry
+		hubenv.Warn(`settings key "registry"`, `"hub"`)
+	}
 	var snake struct {
 		SettingsLocked        *bool     `json:"settings_locked"`
 		DefaultCapabilities   *[]string `json:"default_capabilities"`
@@ -1654,7 +1709,7 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		}
 		return Settings{}, err
 	}
-	if err := c.checkRegistryAuthTargetWrite(ctx, current, cfg); err != nil {
+	if err := c.checkHubAuthTargetWrite(ctx, current, cfg); err != nil {
 		return Settings{}, err
 	}
 	// A request changing only the Models and Sandboxes settings writes
@@ -1673,12 +1728,12 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
 			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
 		}
-		if req.Registry != nil {
-			c.auditRegistryChanges(ctx, current, cfg)
+		if req.Hub != nil {
+			c.auditHubChanges(ctx, current, cfg)
 		}
 	}
 	c.triggerIAPSync()
-	c.triggerRegistrySync()
+	c.triggerHubSync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
 		if current != nil {
@@ -1924,6 +1979,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("sandboxOvercommit: %v", err)
 		}
 		cfg.SandboxOvercommit = *req.SandboxOvercommit
+	}
+	if req.SandboxShapeLimits != nil {
+		if err := req.SandboxShapeLimits.Validate(); err != nil {
+			return model.Config{}, validationErrorf("sandboxShapeLimits: %v", err)
+		}
+		cfg.SandboxShapeLimits = *req.SandboxShapeLimits
 	}
 	if req.ExternalAgentAPI != nil {
 		cfg.ExternalAgentAPI = *req.ExternalAgentAPI
@@ -2268,12 +2329,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.SettingsLocked != nil {
 		cfg.SettingsLocked = *req.SettingsLocked
 	}
-	if req.Registry != nil {
-		normReg, err := model.NormalizeRegistryConfig(*req.Registry, c.Config.RegistryAllowInsecureHTTP)
+	if req.Hub != nil {
+		normReg, err := model.NormalizeHubConfig(*req.Hub, c.Config.HubAllowInsecureHTTP)
 		if err != nil {
 			return model.Config{}, validationErrorf("%v", err)
 		}
-		cfg.Registry = normReg
+		cfg.Hub = normReg
 	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)
@@ -2304,6 +2365,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 	if req.PromptExtension != nil {
 		cfg.PromptExtension = strings.TrimSpace(*req.PromptExtension)
+	}
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return model.Config{}, validationErrorf("skills: %v", err)
+		}
+		cfg.Skills = norm
 	}
 	if req.RepairTemplateID != nil {
 		cfg.RepairTemplateID = strings.TrimSpace(*req.RepairTemplateID)
@@ -2372,6 +2440,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("autoUpgradeOn: %v", err)
 		}
 		cfg.AutoUpgradeOn = on
+	}
+	if req.AutoUpgradeMinIntervalHours != nil {
+		if *req.AutoUpgradeMinIntervalHours < 0 {
+			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at least 0")
+		}
+		cfg.AutoUpgradeMinIntervalHours = *req.AutoUpgradeMinIntervalHours
 	}
 	if req.OwnerTrust != nil {
 		rules, err := model.NormalizeOwnerTrust(*req.OwnerTrust)

@@ -81,6 +81,15 @@ type ExternalAgentToken struct {
 	// "" for a credential issued before owners existed, which acts on
 	// behalf of nobody.
 	Owner string `json:"owner,omitempty"`
+	// OwnerSource is how the issuer who set Owner was established: the
+	// verifier that vouched for the person minting it ("iap", a
+	// registered verifier's name), or the unverified source of an issuer
+	// who only named the owner (SourceAccessCode, SourceLoopback,
+	// SourceInProcess) -- the shared access code may name an owner, but
+	// its word is not a verifier's (operator-attribution spec §6.3). An
+	// agent minting a credential passes on its own credential's. "" for a
+	// credential with no Owner, or one issued before this was recorded.
+	OwnerSource AuthSource `json:"ownerSource,omitempty"`
 }
 
 // PrincipalID returns the external principal identifier ("external:<name>")
@@ -95,15 +104,22 @@ func (t ExternalAgentToken) Principal() Principal {
 }
 
 // OwnerPrincipal is the person this credential acts on behalf of, or nil
-// for a credential with no Owner. Its source is SourceToken: the owner
-// was vouched for when a person issued the credential, not by the agent
-// presenting it.
+// for a credential with no Owner. Its source is SourceToken when a
+// verified person issued the credential (or for a row from before
+// OwnerSource was recorded): the owner was vouched for then, not by the
+// agent presenting it. When an unverified issuer -- the shared access
+// code, break-glass loopback, the in-process CLI -- named the owner, its
+// source is that issuer's, so the owner never reads as Verified().
 func (t ExternalAgentToken) OwnerPrincipal() *Principal {
 	owner := strings.TrimSpace(t.Owner)
 	if owner == "" {
 		return nil
 	}
-	return &Principal{Kind: PrincipalHuman, ID: owner, Source: SourceToken}
+	p := &Principal{Kind: PrincipalHuman, ID: owner, Source: SourceToken}
+	if src := t.OwnerSource; src != "" && !(Principal{Kind: PrincipalHuman, Source: src}).Verified() {
+		p.Source = src
+	}
+	return p
 }
 
 // Active reports whether the credential is neither revoked nor expired at now.
@@ -249,7 +265,7 @@ func ResolveExternalAgentGrants(scopeSet string, scopes, repos []string) ([]stri
 	var dangerous bool
 	addTarget := func(target, explicitRepo string) error {
 		if explicitRepo != "" {
-			g := APIGrantPrefix + target + "@" + explicitRepo
+			g := APIGrantString(target, explicitRepo)
 			parsed, ok, err := ParseAPIGrant(g)
 			if !ok || err != nil {
 				return err
@@ -261,7 +277,7 @@ func ResolveExternalAgentGrants(scopeSet string, scopes, repos []string) ([]stri
 			return nil
 		}
 		if len(cleanRepos) == 0 {
-			g := APIGrantPrefix + target
+			g := APIRef(target)
 			parsed, ok, err := ParseAPIGrant(g)
 			if !ok || err != nil {
 				return err
@@ -273,7 +289,7 @@ func ResolveExternalAgentGrants(scopeSet string, scopes, repos []string) ([]stri
 			return nil
 		}
 		for _, repo := range cleanRepos {
-			g := APIGrantPrefix + target + "@" + repo
+			g := APIGrantString(target, repo)
 			parsed, ok, err := ParseAPIGrant(g)
 			if !ok || err != nil {
 				return err
@@ -380,7 +396,7 @@ func IsExternalAgentToken(raw string) bool {
 	return strings.HasPrefix(strings.TrimSpace(raw), ExternalAgentTokenPrefix)
 }
 
-const externalAgentTokenColumns = "`id`, `name`, `token_hash`, `prefix`, `scope_set`, `scopes`, `repos`, `rate_limit`, `max_concurrent`, `created_at`, `expires_at`, `revoked_at`, `last_used_at`, `created_by`, `owner`"
+const externalAgentTokenColumns = "`id`, `name`, `token_hash`, `prefix`, `scope_set`, `scopes`, `repos`, `rate_limit`, `max_concurrent`, `created_at`, `expires_at`, `revoked_at`, `last_used_at`, `created_by`, `owner`, `owner_source`"
 
 func scanExternalAgentToken(scan func(dest ...any) error) (ExternalAgentToken, error) {
 	var t ExternalAgentToken
@@ -390,7 +406,7 @@ func scanExternalAgentToken(scan func(dest ...any) error) (ExternalAgentToken, e
 		&t.ID, &t.Name, &t.TokenHash, &t.Prefix,
 		&t.ScopeSet, &scopes, &repos,
 		&t.RateLimit, &t.MaxConcurrent,
-		&t.CreatedAt, &expiresAt, &revokedAt, &lastUsedAt, &t.CreatedBy, &t.Owner,
+		&t.CreatedAt, &expiresAt, &revokedAt, &lastUsedAt, &t.CreatedBy, &t.Owner, &t.OwnerSource,
 	); err != nil {
 		return ExternalAgentToken{}, err
 	}
@@ -433,6 +449,10 @@ func (s *Store) CreateExternalAgentToken(ctx context.Context, t ExternalAgentTok
 			t.ID = strconv.FormatInt(seq, 10)
 		}
 		var expiresAt, revokedAt, lastUsedAt sql.NullTime
+		ownerSource := t.OwnerSource
+		if strings.TrimSpace(t.Owner) == "" {
+			ownerSource = ""
+		}
 		if t.ExpiresAt != nil {
 			expiresAt = sql.NullTime{Time: t.ExpiresAt.UTC(), Valid: true}
 		}
@@ -443,11 +463,11 @@ func (s *Store) CreateExternalAgentToken(ctx context.Context, t ExternalAgentTok
 			lastUsedAt = sql.NullTime{Time: t.LastUsedAt.UTC(), Valid: true}
 		}
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO `external_agent_token` ("+externalAgentTokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO `external_agent_token` ("+externalAgentTokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			t.ID, t.Name, t.TokenHash, t.Prefix,
 			t.ScopeSet, joinCSV(t.Scopes), joinCSV(t.Repos),
 			t.RateLimit, t.MaxConcurrent,
-			t.CreatedAt, expiresAt, revokedAt, lastUsedAt, t.CreatedBy, strings.TrimSpace(t.Owner),
+			t.CreatedAt, expiresAt, revokedAt, lastUsedAt, t.CreatedBy, strings.TrimSpace(t.Owner), ownerSource,
 		)
 		return err
 	})

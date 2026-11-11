@@ -41,6 +41,21 @@ test("a scope set is created, edited and removed from the card", async ({
     await expect(row.getByText("ci:read @ acme/widgets")).toBeVisible();
     await expect(row.getByText("tasks:read @ acme/widgets")).toBeVisible();
 
+    // Without reloading the page, + New task -> Add grant… immediately offers
+    // the newly declared scope set (2026-11-09 connections walkthrough).
+    await page.getByRole("button", { name: "+ New task" }).click();
+    await page
+      .getByTestId("new-task-grants")
+      .getByRole("button", { name: "Add grant…" })
+      .click();
+    await expect(
+      page
+        .getByRole("menu", { name: "Grants to add" })
+        .getByText(NAME, { exact: false }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Close" }).click();
+
     await row.getByRole("button", { name: "Edit" }).click();
     await form.getByLabel("Description").fill("walkthrough readers");
     await form.getByLabel("Scopes").fill("tasks:read");
@@ -57,6 +72,22 @@ test("a scope set is created, edited and removed from the card", async ({
     await expect(dialog).toContainText(`Nothing grants api:${NAME}.`);
     await dialog.getByRole("button", { name: "Remove" }).click();
     await expect(row).toHaveCount(0);
+
+    // Without reloading the page, the removed scope set is no longer offered
+    // in + New task -> Add grant….
+    await page.getByRole("button", { name: "+ New task" }).click();
+    await page
+      .getByTestId("new-task-grants")
+      .getByRole("button", { name: "Add grant…" })
+      .click();
+    await expect(
+      page
+        .getByRole("menu", { name: "Grants to add" })
+        .getByText(NAME, { exact: false }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Close" }).click();
+
     await page.reload();
     await expect(page.getByTestId("api-scope-set-ops/triage")).toBeVisible();
     await expect(row).toHaveCount(0);
@@ -122,7 +153,9 @@ test("removing a scope set a task holds asks first, and Cancel keeps it", async 
       );
       await expect(
         dialog.locator(`[data-holder="task:${taskID}"]`),
-      ).toContainText(`api:${HELD}@acme/widgets`);
+      ).toContainText(
+        `https://grain.dev/capabilities/api#${HELD}={"repo":"acme/widgets"}`,
+      );
 
       // The dialog and both of its buttons fit the viewport.
       const box = await dialog.boundingBox();

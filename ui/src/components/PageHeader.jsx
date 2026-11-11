@@ -34,7 +34,7 @@ import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 // 1.6 line-height, 600 weight). Set in full on each crumb rather than
 // inherited from the rail, since a Typography with no variant brings
 // body1's own size.
-export const crumbSx = {
+const crumbSx = {
   fontFamily: (theme) => theme.typography.fontFamily,
   fontSize: "1rem",
   lineHeight: 1.6,

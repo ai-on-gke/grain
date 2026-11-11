@@ -19,6 +19,7 @@ import {
   MovingBar,
   usePickup,
 } from "./ReorderPickup.jsx";
+import { boardLabels } from "../boards.js";
 import { boardPlaces, boardSections, placeKey } from "../boardOrder.js";
 
 // BoardList is the boards, in their folders, as something you can move a
@@ -124,6 +125,8 @@ export default function BoardList({
   };
 
   const sections = boardSections(boards);
+  const labels = boardLabels(boards);
+  const boardLabel = (board) => labels.get(board.id) || board.name;
   // Where the picked-up board is allowed to land, as the keys the slots
   // below are looked up by. Its own place is not among them: a slot that
   // promises a move and writes nothing reads as a broken button.
@@ -190,13 +193,14 @@ export default function BoardList({
             ) : null}
             {section.boards.map((board) => {
               const id = board.id;
+              const qualified = boardLabel(board, folder);
               const handle =
                 enabled && handles ? (
                   <MoveHandle
                     label={
                       pickedId === id
-                        ? `Stop moving ${board.name}`
-                        : `Move ${board.name}`
+                        ? `Stop moving ${qualified}`
+                        : `Move ${qualified}`
                     }
                     picked={pickedId === id}
                     landed={landedId === id}
@@ -211,7 +215,7 @@ export default function BoardList({
                 <Fragment key={id}>
                   {slot(
                     { folder, beforeId: id },
-                    `Move here, above ${board.name}`,
+                    `Move here, above ${qualified}`,
                   )}
                   <li
                     className={overClass(`board:${id}`)}
@@ -227,6 +231,7 @@ export default function BoardList({
                       handle,
                       dragging: dragId === id,
                       picked: pickedId === id,
+                      label: qualified,
                     })}
                   </li>
                 </Fragment>

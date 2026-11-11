@@ -264,7 +264,7 @@ func TestCheckCapabilitiesJudgesTemplateGrants(t *testing.T) {
 	err := checkCapabilities(dir)
 	// A retired self-debug is read as what it became (schema migration
 	// 115), and in_process.self-debug still binds both halves.
-	if err == nil || !strings.Contains(err.Error(), "template template-1 grants api:self-debug") ||
+	if err == nil || !strings.Contains(err.Error(), "template template-1 grants "+model.APIRef("self-debug")) ||
 		!strings.Contains(err.Error(), "template template-1 grants https://grain.dev/capabilities/grain#source={}") ||
 		!strings.Contains(err.Error(), "in_process.self-debug") {
 		t.Fatalf("checkCapabilities = %v", err)

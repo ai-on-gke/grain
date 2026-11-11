@@ -20,12 +20,14 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // rcTasks is every task filed for rcTag, by template, oldest first.
@@ -329,8 +331,13 @@ func TestTheLastRedAttemptEscalatesTheVersion(t *testing.T) {
 	failItemTwice(t, ctx, store, forge, repo, "v1.4.0-rc.3", "qualification-mergequeue", baseTime)
 
 	n := openNotification(t, ctx, store, model.FamilyRCFailed, "v1.4.0-rc.3")
-	if n == nil || !strings.Contains(n.Body, "last attempt") || strings.Contains(n.Body, "holds v1.4.0-rc.4") {
-		t.Fatalf("rc-failed is %+v, want it to say rc.3 was the last attempt", n)
+	if n == nil || !strings.Contains(n.Body, "has used RELEASE_MAX_RC_ATTEMPTS") || !strings.Contains(n.Body, "holds v1.4.0-rc.4") {
+		t.Fatalf("rc-failed is %+v, want it to say v1.4.0 escalated and hold rc.4", n)
+	}
+	// The threshold is not a stop: the train cuts rc.4 after it, so rc.3's
+	// hold is posted like any other red candidate's.
+	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold == nil || hold.Status != "in_progress" {
+		t.Fatalf("hold on rc.3 is %+v, want triage pending", hold)
 	}
 	e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0")
 	if e == nil {
@@ -338,6 +345,9 @@ func TestTheLastRedAttemptEscalatesTheVersion(t *testing.T) {
 	}
 	if e.Severity != model.NotificationCritical {
 		t.Errorf("escalation is %s, want critical", e.Severity)
+	}
+	if !strings.Contains(e.Title, "the train keeps cutting it from main") || strings.Contains(e.Body, "cuts no more") {
+		t.Errorf("escalation says the train stops: %q\n%s", e.Title, e.Body)
 	}
 	for _, want := range []string{"### v1.4.0-rc.2", "rc.2 broke the merge queue", "### v1.4.0-rc.3",
 		"qualification-mergequeue: fail"} {
@@ -349,13 +359,96 @@ func TestTheLastRedAttemptEscalatesTheVersion(t *testing.T) {
 		t.Errorf("escalation lists the candidates out of order:\n%s", e.Body)
 	}
 
-	// A person cuts rc.4 by hand: the train is moving again.
+	// The train cuts rc.4 by itself: the escalation is raised once, and
+	// stands while the version keeps failing.
 	forge.tags = append(forge.tags,
 		github.Tag{Name: "v1.4.0-rc.3-discarded", SHA: rqSHA},
 		github.Tag{Name: "v1.4.0-rc.4", SHA: strings.Repeat("5", 40)})
 	syncQualification(t, ctx, store, forge, baseTime.Add(time.Minute))
+	if again := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); again == nil || again.ID != e.ID {
+		t.Fatalf("escalation after rc.4 was cut is %+v, want %d still open", again, e.ID)
+	}
+
+	// v1.4.0 releases: the escalation is over.
+	forge.tags = append(forge.tags, github.Tag{Name: "v1.4.0", SHA: strings.Repeat("5", 40)})
+	syncQualification(t, ctx, store, forge, baseTime.Add(2*time.Minute))
 	if e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); e != nil {
-		t.Fatalf("escalation still open after rc.4 was cut: %+v", e)
+		t.Fatalf("escalation still open after v1.4.0 was released: %+v", e)
+	}
+}
+
+// Past RELEASE_MAX_RC_ATTEMPTS a red candidate's open [rc-blocker] tasks
+// still hold the next cut: the train cuts rc.5 after a red rc.4.
+func TestARedCandidatePastTheThresholdIsStillHeld(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newStage1Repo(t)
+	rc4 := "v1.4.0-rc.4"
+	forge.tags = []github.Tag{{Name: "v1.3.0", SHA: strings.Repeat("3", 40)}}
+	for i := 1; i <= 3; i++ {
+		sha := strings.Repeat(fmt.Sprint(i), 40)
+		forge.tags = append(forge.tags, github.Tag{Name: fmt.Sprintf("v1.4.0-rc.%d", i), SHA: sha},
+			github.Tag{Name: fmt.Sprintf("v1.4.0-rc.%d-discarded", i), SHA: sha})
+	}
+	forge.tags = append(forge.tags, github.Tag{Name: rc4, SHA: rqSHA})
+	forge.nightly = "failure"
+	forge.jobs[rqSHA] = []github.ActionsRunJob{
+		nightlyJob(rqSHA, "sustained load", 1, "failure"),
+		nightlyJob(rqSHA, "sustained load", 2, "failure"),
+	}
+	syncStage1(t, ctx, store, forge, baseTime)
+	if n := openNotification(t, ctx, store, model.FamilyRCFailed, rc4); n == nil || !strings.Contains(n.Body, "holds v1.4.0-rc.5") {
+		t.Fatalf("rc-failed for rc.4 is %+v, want it to hold rc.5", n)
+	}
+	if e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); e == nil {
+		t.Fatal("no pipeline.release-escalated:v1.4.0 for a red rc.4")
+	}
+	blocker, err := store.NewTaskID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID: blocker, Title: model.RCBlockerMarker(rc4) + " revert the load regression", Body: "revert", Target: &repo,
+		CreatedAt: &baseTime,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	syncStage1(t, ctx, store, forge, baseTime.Add(2*time.Hour))
+	hold := forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold == nil || hold.Status != "in_progress" || !strings.Contains(hold.Output, "v1.4.0-rc.5 is held until these blockers") {
+		t.Fatalf("hold past the threshold is %+v, want rc.5 held on the open blocker", hold)
+	}
+}
+
+// A candidate the daily cap dropped (`Discard-Reason: daily-cap` or
+// `held-over`, playbook §7) is not red, even when its Stage 1 run failed:
+// it raises no pipeline.rc-failed, posts no hold, and counts toward no
+// escalation.
+func TestADailyCapDropIsNotARedCandidate(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{"daily-cap", "held-over"} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			store, ctx, repo, forge := newQualificationRepo(t)
+			forge.nightly = "failure"
+			forge.tags = append(forge.tags, github.Tag{Name: rqTag + "-discarded", SHA: rqSHA})
+			forge.messages = map[string]string{
+				rqTag + "-discarded": "Release candidate " + rqTag + " dropped: the day has released\n\nDiscard-Reason: " + reason + "\n",
+			}
+			syncQualification(t, ctx, store, forge, baseTime)
+			if n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); n != nil {
+				t.Fatalf("a %s drop raised %+v", reason, n)
+			}
+			if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold != nil {
+				t.Fatalf("a %s drop posted hold %+v", reason, hold)
+			}
+			failed, err := store.ListNotifications(ctx, model.NotificationFilter{Family: model.FamilyRCFailed, Limit: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(failed) != 0 {
+				t.Fatalf("a %s drop left rc-failed notifications %+v for %s", reason, failed, repo)
+			}
+		})
 	}
 }
 
@@ -570,5 +663,256 @@ func TestTwoFlakeRetriesOfOneItemInADaySpendItsFlakeBudget(t *testing.T) {
 	}
 	if !strings.Contains(n.Body, "retried 2 times") || n.ClearsWhen == nil || n.ClearsWhen.Kind != model.ClearsOnTTL {
 		t.Fatalf("flake-budget is %+v, want it to count two retries and clear on a TTL", n)
+	}
+}
+
+// stage1Forge is fakeQualificationForge that can also read Stage 1 job by
+// job: jobs is every attempt of every nightly job, by commit.
+type stage1Forge struct {
+	*fakeQualificationForge
+	jobs map[string][]github.ActionsRunJob
+}
+
+func (f *stage1Forge) WorkflowRunsOnCommit(owner, repo, sha string) ([]github.WorkflowRun, error) {
+	if len(f.jobs[sha]) == 0 {
+		return nil, nil
+	}
+	return []github.WorkflowRun{{ID: 900, Name: model.ReleaseQualificationStage1Workflow, HeadSHA: sha}}, nil
+}
+
+func (f *stage1Forge) ListActionsJobAttempts(owner, repo string, runID int64) ([]github.ActionsRunJob, error) {
+	var out []github.ActionsRunJob
+	for _, jobs := range f.jobs {
+		for _, j := range jobs {
+			if j.RunID == runID {
+				out = append(out, j)
+			}
+		}
+	}
+	return out, nil
+}
+
+// nightlyJob is one attempt of a nightly job on sha.
+func nightlyJob(sha, name string, attempt int, conclusion string) github.ActionsRunJob {
+	return github.ActionsRunJob{RunID: 900, RunAttempt: attempt, Name: name, WorkflowName: "nightly",
+		HeadSHA: sha, Status: "completed", Conclusion: conclusion}
+}
+
+func newStage1Repo(t *testing.T) (*model.Store, context.Context, model.RepoRef, *stage1Forge) {
+	t.Helper()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	return store, ctx, repo, &stage1Forge{fakeQualificationForge: forge, jobs: map[string][]github.ActionsRunJob{}}
+}
+
+func syncStage1(t *testing.T, ctx context.Context, store *model.Store, forge *stage1Forge, at time.Time) {
+	t.Helper()
+	if err := orchestrator.SyncReleaseQualification(ctx, store, forge, at); err != nil {
+		t.Fatalf("SyncReleaseQualification: %v", err)
+	}
+}
+
+// A candidate red in Stage 1 -- a nightly job that failed its one retry --
+// raises pipeline.rc-failed and holds rc.(N+1) on its commit, exactly as a
+// Stage 2 failure does, without Stage 2 ever starting.
+func TestARedStage1RaisesRCFailedAndHoldsTheNext(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newStage1Repo(t)
+	forge.nightly = "failure"
+	forge.jobs[rqSHA] = []github.ActionsRunJob{
+		nightlyJob(rqSHA, "go, shuffled and repeated (3)", 1, "failure"),
+		nightlyJob(rqSHA, "go, shuffled and repeated (1)", 1, "success"),
+		nightlyJob(rqSHA, "sustained load", 1, "success"),
+		nightlyJob(rqSHA, "stage 1 qualification verdict", 1, "failure"),
+	}
+	syncStage1(t, ctx, store, forge, baseTime)
+	if n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); n != nil {
+		t.Fatalf("raised %+v on a first failure, which still has its flake retry", n)
+	}
+
+	forge.jobs[rqSHA] = append(forge.jobs[rqSHA],
+		nightlyJob(rqSHA, "go, shuffled and repeated (3)", 2, "failure"),
+		nightlyJob(rqSHA, "stage 1 qualification verdict", 2, "failure"))
+	syncStage1(t, ctx, store, forge, baseTime.Add(time.Minute))
+	n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag)
+	if n == nil {
+		t.Fatalf("no pipeline.rc-failed:%s raised for a red Stage 1", rqTag)
+	}
+	floor := strings.Repeat("3", 40)
+	for _, want := range []string{
+		"failed Stage 1 qualification (nightly): attempt 2 of RELEASE_MAX_RC_ATTEMPTS (3)",
+		"`" + floor + ".." + rqSHA + "` (everything since v1.3.0)",
+		"Stage 1 (nightly):",
+		"go, shuffled and repeated: failed again on its retry (failure,failure): confirmed red",
+		model.RCBlockerMarker(rqTag),
+	} {
+		if !strings.Contains(n.Body, want) {
+			t.Errorf("rc-failed body does not say %q:\n%s", want, n.Body)
+		}
+	}
+	if strings.Contains(n.Body, "stage 1 qualification verdict") {
+		t.Errorf("rc-failed names nightly's roll-up job, which carries no verdict:\n%s", n.Body)
+	}
+	hold := forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold == nil || hold.Status != "in_progress" || forge.heads[hold.ID] != rqSHA {
+		t.Fatalf("hold is %+v, want triage pending in progress on %s", hold, rqSHA)
+	}
+	if forge.checkNamed(model.ReleaseQualificationCheckName) != nil || len(rcTasks(t, ctx, store, repo, rqTag)) != 0 {
+		t.Fatalf("Stage 2 started on a red Stage 1: checks %+v", forge.checks)
+	}
+	if e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); e != nil {
+		t.Fatalf("rc.2 escalated %+v; only the last attempt does", e)
+	}
+
+	// Cleared by the steward, it is not raised again by the same red run.
+	if _, err := store.ClearNotification(ctx, n.Subject, "test"); err != nil {
+		t.Fatal(err)
+	}
+	syncStage1(t, ctx, store, forge, baseTime.Add(2*time.Minute))
+	if again := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); again != nil {
+		t.Fatalf("raised %+v again after it was cleared", again)
+	}
+}
+
+// The version's RELEASE_MAX_RC_ATTEMPTS-th candidate red in Stage 1
+// escalates the version, and is held like any other: the train cuts rc.4.
+func TestARedStage1OnTheLastAttemptEscalates(t *testing.T) {
+	t.Parallel()
+	store, ctx, _, forge := newStage1Repo(t)
+	rc2 := strings.Repeat("2", 40)
+	forge.tags = []github.Tag{
+		{Name: "v1.4.0-rc.1", SHA: strings.Repeat("1", 40)},
+		{Name: "v1.4.0-rc.1-discarded", SHA: strings.Repeat("1", 40)},
+		{Name: "v1.4.0-rc.2", SHA: rc2},
+		{Name: "v1.4.0-rc.2-discarded", SHA: rc2},
+		{Name: "v1.4.0-rc.3", SHA: rqSHA},
+		{Name: "v1.3.0", SHA: strings.Repeat("3", 40)},
+	}
+	forge.nightly = "failure"
+	forge.jobs[rqSHA] = []github.ActionsRunJob{
+		nightlyJob(rqSHA, "sustained load", 1, "failure"),
+		nightlyJob(rqSHA, "sustained load", 2, "failure"),
+	}
+	syncStage1(t, ctx, store, forge, baseTime)
+	if n := openNotification(t, ctx, store, model.FamilyRCFailed, "v1.4.0-rc.3"); n == nil ||
+		!strings.Contains(n.Body, "v1.4.0 has used RELEASE_MAX_RC_ATTEMPTS") {
+		t.Fatalf("rc-failed for rc.3 is %+v, want it to say the version escalated", n)
+	}
+	e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0")
+	if e == nil || e.Severity != model.NotificationCritical {
+		t.Fatalf("release-escalated is %+v, want critical", e)
+	}
+	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold == nil || hold.Status != "in_progress" {
+		t.Fatalf("hold on rc.3 is %+v, want triage pending: the train cuts rc.4 after it", hold)
+	}
+}
+
+// A Stage 1 job that spends its flake retry on two candidates in a day
+// raises pipeline.flake-budget for that job; each candidate's retry counts
+// once however many cycles read it.
+func TestAStage1FlakeRetrySpendsTheFlakeBudget(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newStage1Repo(t)
+	forge.nightly = "success"
+	forge.anySHA = true
+	flake := func(sha string) []github.ActionsRunJob {
+		return []github.ActionsRunJob{
+			nightlyJob(sha, "go, shuffled and repeated (3)", 1, "failure"),
+			nightlyJob(sha, "go, shuffled and repeated (3)", 2, "success"),
+		}
+	}
+	forge.jobs[rqSHA] = flake(rqSHA)
+	subject := "acme/widgets:go, shuffled and repeated"
+	for i := range 3 {
+		syncStage1(t, ctx, store, forge, baseTime.Add(time.Duration(i)*time.Minute))
+	}
+	if n := openNotification(t, ctx, store, model.FamilyFlakeBudget, subject); n != nil {
+		t.Fatalf("one candidate's flake retry raised %+v, want the budget to hold", n)
+	}
+	if len(rcTasks(t, ctx, store, repo, rqTag)) == 0 {
+		t.Fatalf("a Stage 1 that passed on its flake retry did not start Stage 2")
+	}
+
+	rc3 := strings.Repeat("4", 40)
+	forge.tags = append(forge.tags, github.Tag{Name: "v1.4.0-rc.3", SHA: rc3})
+	forge.jobs[rc3] = flake(rc3)
+	syncStage1(t, ctx, store, forge, baseTime.Add(time.Hour))
+	n := openNotification(t, ctx, store, model.FamilyFlakeBudget, subject)
+	if n == nil {
+		t.Fatalf("no pipeline.flake-budget:%s after two candidates' flake retries", subject)
+	}
+	if !strings.Contains(n.Body, "retried 2 times") || !strings.Contains(n.Body, "Stage 1 (nightly)") ||
+		!strings.Contains(n.Body, "v1.4.0-rc.3") {
+		t.Errorf("flake-budget body is %q", n.Body)
+	}
+}
+
+// A Stage 1 job starved of capacity three attempts in a row stalls the
+// candidate on infrastructure, never red.
+func TestAStage1InfraStallRaisesReleaseInfraStalled(t *testing.T) {
+	t.Parallel()
+	store, ctx, _, forge := newStage1Repo(t)
+	forge.nightly = "cancelled"
+	for i := 1; i <= 3; i++ {
+		forge.jobs[rqSHA] = append(forge.jobs[rqSHA], nightlyJob(rqSHA, "real KVM sandboxes", i, "cancelled"))
+	}
+	syncStage1(t, ctx, store, forge, baseTime)
+	n := openNotification(t, ctx, store, model.FamilyReleaseInfraStalled, rqTag)
+	if n == nil || !strings.Contains(n.Body, "real KVM sandboxes was cancelled, timed out or starved of capacity 3 attempts in a row") {
+		t.Fatalf("infra-stalled is %+v, want it raised for the stalled Stage 1 job", n)
+	}
+	if f := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); f != nil {
+		t.Fatalf("an infrastructure stall raised %+v", f)
+	}
+	forge.jobs[rqSHA] = append(forge.jobs[rqSHA], nightlyJob(rqSHA, "real KVM sandboxes", 4, "success"))
+	forge.nightly = "success"
+	syncStage1(t, ctx, store, forge, baseTime.Add(time.Minute))
+	if n := openNotification(t, ctx, store, model.FamilyReleaseInfraStalled, rqTag); n != nil {
+		t.Fatalf("infra-stalled %+v still open once Stage 1 is green", n)
+	}
+}
+
+// A candidate the train dropped on a red Stage 1 before grain judged it --
+// or on a forge whose jobs grain cannot read -- still raises
+// pipeline.rc-failed and the hold, from its -discarded tag.
+func TestADiscardedStage1FailureRaisesRCFailedFromTheTag(t *testing.T) {
+	t.Parallel()
+	store, ctx, _, forge := newQualificationRepo(t)
+	forge.nightly = "failure"
+	forge.tags = append(forge.tags, github.Tag{Name: rqTag + "-discarded", SHA: rqSHA})
+	syncQualification(t, ctx, store, forge, baseTime)
+	n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag)
+	if n == nil || !strings.Contains(n.Body, "failed Stage 1 qualification (nightly)") ||
+		!strings.Contains(n.Body, "the train dropped "+rqTag+" ("+rqTag+"-discarded)") {
+		t.Fatalf("rc-failed is %+v, want it raised from the -discarded tag", n)
+	}
+	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold == nil || hold.Status != "in_progress" {
+		t.Fatalf("hold is %+v, want triage pending", hold)
+	}
+	// rc.1, dropped too but superseded by rc.2, is not raised.
+	if old := openNotification(t, ctx, store, model.FamilyRCFailed, "v1.4.0-rc.1"); old != nil {
+		t.Fatalf("raised %+v for a superseded candidate", old)
+	}
+}
+
+// A forge connection grain cannot name an App for (a PAT) posts no check
+// run, but a red Stage 1 still raises pipeline.rc-failed in grain.
+func TestARedStage1RaisesRCFailedWithoutAGitHubApp(t *testing.T) {
+	t.Parallel()
+	store, ctx, _, forge := newStage1Repo(t)
+	forge.app = ""
+	forge.nightly = "failure"
+	forge.jobs[rqSHA] = []github.ActionsRunJob{
+		nightlyJob(rqSHA, "sustained load", 1, "failure"),
+		nightlyJob(rqSHA, "sustained load", 2, "failure"),
+	}
+	if err := orchestrator.SyncReleaseQualification(ctx, store, forge, baseTime); err == nil ||
+		!strings.Contains(err.Error(), "not a GitHub App") {
+		t.Fatalf("SyncReleaseQualification = %v, want Stage 2 still refused", err)
+	}
+	if n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); n == nil {
+		t.Fatalf("no pipeline.rc-failed:%s without a GitHub App", rqTag)
+	}
+	if len(forge.checks) != 0 {
+		t.Fatalf("posted %+v without a GitHub App, want no check run", forge.checks)
 	}
 }

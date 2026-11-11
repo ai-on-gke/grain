@@ -20,6 +20,8 @@ package repodecl_test
 
 import (
 	"github.com/ai-on-gke/grain/pkg/declschema"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -140,7 +142,6 @@ func TestADeclarationMayNotWidenWhatItsWorkTouches(t *testing.T) {
 		"target: somebody/else",
 		"reads: [somebody/else]",
 		"writes: [somebody/else]",
-		"grants: [gcp-key]",
 	} {
 		msg := loadErr(t, map[string]string{
 			".grain/templates/nightly.yml": "title: Bump dependencies\n" + field + "\n",
@@ -267,6 +268,43 @@ func TestAScheduleAcceptsCapabilities(t *testing.T) {
 	}
 	if sched.Grants[1].Capability != "package-publish" || sched.Grants[1].Via != ".grain/schedules/it.yml" {
 		t.Errorf("Grants[1] = %+v, want package-publish via .grain/schedules/it.yml", sched.Grants[1])
+	}
+}
+
+// `grants:` is `capabilities:`' unified spelling (unified-grants §3): the
+// same entries, under the same rule, and an entry both keys name -- in
+// either spelling -- is held once.
+func TestGrantsIsCapabilitiesUnifiedSpelling(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/nightly.yml": "title: Bump dependencies\n" +
+			"capabilities: [\"repo-read:acme/docs\"]\n" +
+			"grants:\n" +
+			"  - capability: https://grain.dev/capabilities/repo#read\n    with: {repo: acme/docs}\n" +
+			"  - capability: https://grain.dev/capabilities/repo#write\n    with: {repo: acme/site}\n",
+		".grain/schedules/it.yml": "template: nightly\ncapabilities: [\"package-publish\", \"grain-ci\", \"api:tasks:read\", \"https://grain.dev/capabilities/api#tasks:read\"]\n" +
+			"grants: [\"package-publish\", \"api:ci-read@" + repo.String() + "\", \"gcp-key:deploy\"]\nevery:\n  hours: 6\n",
+	})
+	tmpl := declared.Templates[0].Template
+	if want := []model.RepoRef{{Owner: "acme", Name: "docs"}}; !slices.EqualFunc(tmpl.Reads, want, model.RepoRef.Same) {
+		t.Errorf("Reads = %v, want %v once", tmpl.Reads, want)
+	}
+	if want := []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "site"}}}; !reflect.DeepEqual(tmpl.Writes, want) {
+		t.Errorf("Writes = %v, want %v", tmpl.Writes, want)
+	}
+	sched := declared.Schedules[0].Schedule
+	var got []string
+	for _, g := range sched.Grants {
+		got = append(got, g.Capability)
+	}
+	if want := []string{"package-publish", model.APIGrantString("ci-read", repo.String()), "api:tasks:read", "gcp-key:deploy"}; !slices.Equal(got, want) {
+		t.Errorf("schedule Grants = %v, want %v", got, want)
+	}
+
+	msg := loadErr(t, map[string]string{
+		".grain/templates/nightly.yml": "title: Bump dependencies\ngrants: [\"https://grain.dev/capabilities/repo#target={\\\"repo\\\":\\\"acme/x\\\",\\\"base\\\":\\\"\\\"}\"]\n",
+	})
+	if !strings.Contains(msg, "always target the declaring repository") {
+		t.Errorf("a #target under grants: error = %q, want capabilities:' refusal", msg)
 	}
 }
 
@@ -731,9 +769,9 @@ func TestADeclarationDoesNotWriteWhatGrainKeeps(t *testing.T) {
 // capabilities has made one mistake.
 func TestRefusalsAreGroupedByReason(t *testing.T) {
 	msg := loadErr(t, map[string]string{
-		".grain/templates/nightly.yml": "title: Bump dependencies\nreads: [somebody/else]\ngrants: [gcp-key]\nid: template-7\n",
+		".grain/templates/nightly.yml": "title: Bump dependencies\nreads: [somebody/else]\nwrites: [somebody/else]\nid: template-7\n",
 	})
-	if !strings.Contains(msg, "grants, reads:") {
+	if !strings.Contains(msg, "reads, writes:") {
 		t.Errorf("error = %q, want both reach keys named in one sentence", msg)
 	}
 	if strings.Count(msg, "never what that work may touch") != 1 {
@@ -847,6 +885,12 @@ trigger:
 	if msg := loadErr(t, files); !strings.Contains(msg, "grain's own configuration") {
 		t.Fatalf("watching grain/config: error = %q", msg)
 	}
+	// A retired per-team alias is refused too, as POST /api/schedules
+	// refuses it (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F5).
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    repo: grain/config-alpha\n    ref: refs/heads/main\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "grain/config-alpha not found: only grain/config exists") {
+		t.Fatalf("watching retired grain/config-alpha: error = %q", msg)
+	}
 	files[".grain/schedules/sync.yml"] = "trigger:\n  git_ref:\n    repo: upstream/core\n    ref: refs/tags/latest\n"
 	if msg := loadErr(t, files); !strings.Contains(msg, "needs a `template:`") {
 		t.Fatalf("no template: error = %q", msg)
@@ -948,7 +992,7 @@ func TestDeclaredHostingAndLegacyCapabilityAlias(t *testing.T) {
 // repository: grain#ci itself is stripped by applyGrainCIGrant on a
 // ci_mode: github repository and refused by CreateTask.
 func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
-	want := model.APIGrantPrefix + "ci-read@" + repo.String()
+	want := model.APIGrantString("ci-read", repo.String())
 	for _, entry := range []string{"grain-ci", model.GrainCIRef, model.GrainCIGrant} {
 		declared := load(t, map[string]string{
 			".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - '" + entry + "'\n",
@@ -969,5 +1013,51 @@ func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
 		".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - 'https://grain.dev/capabilities/grain#ci={bad'\n",
 	}); msg == "" {
 		t.Fatal("malformed grain#ci capability ref loaded without error")
+	}
+}
+
+// repo#target (and repo#read / repo#write carrying a base) are task-request
+// projections rather than capability grants: CreateTask refuses them, so a
+// declaration naming one could never file a task. Refusing them here moves
+// that verdict to `grain declarations check` and the declaration sync
+// (docs/test-runs/2026-11-09-store-upgrades-128-129.md, O3).
+func TestDeclaredCapabilitiesRefuseRepoTargetAndRequestFieldShapes(t *testing.T) {
+	targetMessage := "always target the declaring repository (" + repo.String() + "), and its base is `base:`"
+	for _, entry := range []string{
+		"  - '" + model.RepoTargetRef + `={"repo":"acme/widgets","base":"main"}'` + "\n",
+		"  - '" + model.RepoTargetRef + "'\n",
+		"  - capability: " + model.RepoTargetRef + "\n    with:\n      repo: acme/widgets\n      base: main\n",
+	} {
+		for _, baseLine := range []string{"", "base: main\n"} {
+			msg := loadErr(t, map[string]string{
+				".grain/templates/t.yml": "title: Mixed\n" + baseLine + "capabilities:\n" + entry,
+			})
+			if !strings.Contains(msg, model.RepoTargetRef) || !strings.Contains(msg, targetMessage) {
+				t.Errorf("template(%s%s): error = %q, want %s and %q", baseLine, entry, msg, model.RepoTargetRef, targetMessage)
+			}
+		}
+		schedMsg := loadErr(t, map[string]string{
+			".grain/templates/t.yml": "title: Plain\n",
+			".grain/schedules/s.yml": "template: t\nevery:\n  hours: 6\ncapabilities:\n" + entry,
+		})
+		if !strings.Contains(schedMsg, model.RepoTargetRef) || !strings.Contains(schedMsg, targetMessage) {
+			t.Errorf("schedule(%s): error = %q, want %s and %q", entry, schedMsg, model.RepoTargetRef, targetMessage)
+		}
+	}
+
+	for _, tc := range []struct {
+		entry string
+		want  string
+	}{
+		{model.RepoWriteRef + `={"repo":"acme/other","base":"release"}`, "always lands on its default branch"},
+		{model.RepoWriteRef + `={"repo":"acme/other","base":""}`, "always lands on its default branch"},
+		{model.RepoReadRef + `={"repo":"acme/other","base":"main"}`, "takes only `repo: <owner>/<repo>`, not `base`"},
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/t.yml": "title: Mixed\ncapabilities:\n  - '" + tc.entry + "'\n",
+		})
+		if !strings.Contains(msg, tc.want) {
+			t.Errorf("template(%q): error = %q, want %q", tc.entry, msg, tc.want)
+		}
 	}
 }

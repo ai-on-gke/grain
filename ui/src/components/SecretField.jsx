@@ -157,7 +157,7 @@ export default function SecretField({ secret, showError, onChanged }) {
 }
 
 // SecretFields is every secret one capability resolves, under a heading
-// that says what they are for -- rendered by CapabilitiesPanel, and
+// that says what they are for -- rendered by the retired Legacy capabilities list until task 2876, and
 // nothing at all for a capability that needs none (self-debug) or for a
 // UI with no secrets store to write to, which reports none.
 export function SecretFields({ secrets, showError, onChanged }) {

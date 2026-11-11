@@ -44,6 +44,7 @@
 package hostd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -114,6 +115,13 @@ type Allowlist struct {
 	// the registry's labels for the hostd, which an admin sets, and not
 	// what the hostd says about itself.
 	Labels map[string]string `yaml:"labels"`
+	// Logins maps CLI login names to the files on this host that hold
+	// them (a leading "~/" is hostd's home). hostd reports which exist by
+	// name in Hello.Logins and allows StageSymlink to target only the
+	// regular files named here. Nil (key absent) falls back to the
+	// built-in login table so existing allowlists keep working; an empty
+	// map ("logins: {}") lends none.
+	Logins map[string]string `yaml:"logins"`
 }
 
 // DefaultDrainCap is the allowlist's drain_cap when it sets none.
@@ -152,12 +160,15 @@ type Entry struct {
 	// under. Empty means the daemon may not choose one; the process starts
 	// in "/".
 	CwdUnder []string `yaml:"cwd_under"`
-	// Env are the variable names the daemon may set, exactly or as a
-	// "PREFIX_*" pattern. Any other name in a request refuses it, and so
-	// does a name set_env or pass_env already supplies. PATH, HOME, the
-	// other identity variables and LD_* are admitted only by their exact
-	// name, never by a pattern; listing one hands the daemon what the child
-	// runs, loads or reads its config from (design/design/cli-run-location.design.md).
+	// Env are the variable names the daemon may set, exactly, as a
+	// "PREFIX_*" pattern, or "*" for any variable outside the contract's
+	// frozen deny set (EnvDeny: identityEnv, LD_*, and injectionEnv). Any
+	// other name in a request refuses it, and so does a name set_env or
+	// pass_env already supplies. Denied names are admitted only by their
+	// exact name, never by "*" or a pattern; listing one hands the daemon
+	// what the child runs, loads or reads its config from
+	// (design/design/cli-run-location.design.md,
+	// design/design/agentd-stable-contract.design.md).
 	// A value that looks like a path must sit under PathsUnder.
 	Env []string `yaml:"env"`
 	// PassEnv are names copied from hostd's own environment -- the corp
@@ -188,8 +199,12 @@ func LoadAllowlist(path string, owners []uint32) (*Allowlist, error) {
 
 // ParseAllowlist parses and validates an allowlist.
 func ParseAllowlist(data []byte) (*Allowlist, error) {
+	cleaned, err := stripAllowlistXKeys(data)
+	if err != nil {
+		return nil, fmt.Errorf("hostd allowlist: %w", err)
+	}
 	var a Allowlist
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec := yaml.NewDecoder(bytes.NewReader(cleaned))
 	dec.KnownFields(true)
 	// An empty file is an empty allowlist, which refuses everything.
 	if err := dec.Decode(&a); err != nil && !errors.Is(err, io.EOF) {
@@ -201,6 +216,14 @@ func ParseAllowlist(data []byte) (*Allowlist, error) {
 	for k, v := range a.Labels {
 		if k == "" || strings.ContainsAny(k+v, ",= ") {
 			return nil, fmt.Errorf("hostd allowlist: label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
+		}
+	}
+	for name, p := range a.Logins {
+		if !validName(name) {
+			return nil, fmt.Errorf("hostd allowlist: login %q: names are letters, digits, '-', '_' and '.'", name)
+		}
+		if !validLoginPath(p) {
+			return nil, fmt.Errorf("hostd allowlist: login %q: %q must be a clean absolute or ~/ path", name, p)
 		}
 	}
 	for name, e := range a.CLIs {
@@ -216,6 +239,110 @@ func ParseAllowlist(data []byte) (*Allowlist, error) {
 	return &a, nil
 }
 
+// stripAllowlistXKeys removes top-level and entry-level keys starting "x-"
+// (annotations) while leaving every other key in place for KnownFields(true).
+func stripAllowlistXKeys(data []byte) ([]byte, error) {
+	var doc yaml.Node
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&doc); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !stripXKeysFromDoc(&doc) {
+		return data, nil
+	}
+	kept := map[*yaml.Node]bool{}
+	collectNodes(&doc, kept)
+	resolveStrippedAliases(&doc, kept, map[*yaml.Node]bool{})
+	return yaml.Marshal(&doc)
+}
+
+func stripXKeysFromDoc(doc *yaml.Node) bool {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return false
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return false
+	}
+	stripped := false
+	out := make([]*yaml.Node, 0, len(root.Content))
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		k, v := root.Content[i], root.Content[i+1]
+		if k.Kind == yaml.ScalarNode && strings.HasPrefix(k.Value, "x-") {
+			stripped = true
+			continue
+		}
+		if k.Kind == yaml.ScalarNode && (k.Value == "clis" || k.Value == "capabilities") && v.Kind == yaml.MappingNode {
+			for j := 0; j+1 < len(v.Content); j += 2 {
+				ev := v.Content[j+1]
+				if ev.Kind == yaml.MappingNode && stripXKeysFromMapping(ev) {
+					stripped = true
+				}
+			}
+		}
+		out = append(out, k, v)
+	}
+	root.Content = out
+	return stripped
+}
+
+func stripXKeysFromMapping(m *yaml.Node) bool {
+	stripped := false
+	out := make([]*yaml.Node, 0, len(m.Content))
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k, v := m.Content[i], m.Content[i+1]
+		if k.Kind == yaml.ScalarNode && strings.HasPrefix(k.Value, "x-") {
+			stripped = true
+			continue
+		}
+		out = append(out, k, v)
+	}
+	m.Content = out
+	return stripped
+}
+
+func collectNodes(n *yaml.Node, seen map[*yaml.Node]bool) {
+	if n == nil || seen[n] {
+		return
+	}
+	seen[n] = true
+	for _, c := range n.Content {
+		collectNodes(c, seen)
+	}
+}
+
+func resolveStrippedAliases(n *yaml.Node, kept, visiting map[*yaml.Node]bool) {
+	if n == nil {
+		return
+	}
+	if n.Kind == yaml.AliasNode && n.Alias != nil && !kept[n.Alias] && !visiting[n.Alias] {
+		visiting[n.Alias] = true
+		clone := cloneYAMLNode(n.Alias, kept, visiting)
+		delete(visiting, n.Alias)
+		*n = *clone
+		return
+	}
+	for _, c := range n.Content {
+		resolveStrippedAliases(c, kept, visiting)
+	}
+}
+
+func cloneYAMLNode(src *yaml.Node, kept, visiting map[*yaml.Node]bool) *yaml.Node {
+	cp := *src
+	cp.Anchor = ""
+	if len(src.Content) > 0 {
+		cp.Content = make([]*yaml.Node, len(src.Content))
+		for i, c := range src.Content {
+			cp.Content[i] = cloneYAMLNode(c, kept, visiting)
+			resolveStrippedAliases(cp.Content[i], kept, visiting)
+		}
+	}
+	return &cp
+}
+
 func (e *Entry) validate(kind Kind, name string) error {
 	where := fmt.Sprintf("hostd allowlist: %s %q", kind, name)
 	if e == nil {
@@ -224,30 +351,41 @@ func (e *Entry) validate(kind Kind, name string) error {
 	if !validName(name) {
 		return fmt.Errorf("%s: names are letters, digits, '-', '_' and '.'", where)
 	}
-	bin := e.binary(kind)
 	switch kind {
 	case KindCLI:
 		if e.Command != "" {
 			return fmt.Errorf("%s: a cli names its binary as path:, not command:", where)
 		}
+		expanded, ok := expandAllowlistPath(e.Path, false)
+		if !ok {
+			return fmt.Errorf("%s: the binary must be a clean absolute or ~/-relative path, got %q", where, e.Path)
+		}
+		e.Path = expanded
 	case KindCapability:
 		if e.Path != "" {
 			return fmt.Errorf("%s: a capability names its binary as command:, not path:", where)
 		}
-	}
-	if bin == "" || !filepath.IsAbs(bin) || filepath.Clean(bin) != bin {
-		return fmt.Errorf("%s: the binary must be a clean absolute path, got %q", where, bin)
+		if e.Command == "" || !filepath.IsAbs(e.Command) || filepath.Clean(e.Command) != e.Command {
+			return fmt.Errorf("%s: the binary must be a clean absolute path, got %q", where, e.Command)
+		}
+	default:
+		bin := e.binary(kind)
+		if bin == "" || !filepath.IsAbs(bin) || filepath.Clean(bin) != bin {
+			return fmt.Errorf("%s: the binary must be a clean absolute path, got %q", where, bin)
+		}
 	}
 	for _, list := range [][]string{e.PathsUnder, e.CwdUnder} {
-		for _, d := range list {
-			if !filepath.IsAbs(d) || filepath.Clean(d) != d || d == "/" {
-				return fmt.Errorf("%s: %q must be a clean absolute directory other than /", where, d)
+		for i, d := range list {
+			expanded, ok := expandAllowlistPath(d, true)
+			if !ok || expanded == "/" {
+				return fmt.Errorf("%s: %q must be a clean absolute or ~/-relative directory other than /", where, d)
 			}
+			list[i] = expanded
 		}
 	}
 	for _, n := range e.Env {
 		if !validEnvPattern(n) {
-			return fmt.Errorf("%s: env %q is not a variable name or NAME_* pattern", where, n)
+			return fmt.Errorf("%s: env %q is not a variable name, NAME_* pattern or *", where, n)
 		}
 	}
 	for _, n := range e.PassEnv {
@@ -355,7 +493,11 @@ func IsDraining(err error) bool {
 	return errors.As(err, &r) && r.Draining
 }
 
-func (e *RefusedError) Error() string { return "hostd refused: " + e.Reason }
+// refusedPrefix starts a RefusedError's text, which reaches a task's
+// failure line: the user-facing name, not hostd's.
+const refusedPrefix = "the host agent refused: "
+
+func (e *RefusedError) Error() string { return refusedPrefix + e.Reason }
 
 func refused(format string, args ...any) error {
 	return &RefusedError{Reason: fmt.Sprintf(format, args...)}
@@ -410,6 +552,33 @@ func (a *Allowlist) Check(req *Request, hostEnv []string) (*Spec, error) {
 // where to find binaries and who the process is, none of which is a
 // credential.
 var identityEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "TZ"}
+
+// injectionEnv are shell and interpreter startup or module-loading
+// variables refused under env: ["*"] and wildcard patterns alongside
+// identityEnv and LD_*: only an exact name in env admits one
+// (design/design/agentd-stable-contract.design.md, "Allowlist stability").
+var injectionEnv = []string{
+	"BASH_ENV",
+	"ENV",
+	"NODE_OPTIONS",
+	"PYTHONSTARTUP",
+	"PYTHONPATH",
+	"PERL5OPT",
+	"RUBYOPT",
+}
+
+// envDenyPatterns is the frozen deny set for env: ["*"] (FeatureEnvOpen).
+func envDenyPatterns() []string {
+	out := make([]string, 0, len(identityEnv)+1+len(injectionEnv))
+	out = append(out, identityEnv...)
+	out = append(out, "LD_*")
+	out = append(out, injectionEnv...)
+	return out
+}
+
+func envDeniedByPattern(name string) bool {
+	return slices.Contains(identityEnv, name) || strings.HasPrefix(name, "LD_") || slices.Contains(injectionEnv, name)
+}
 
 // ProbeEnv is the variable the daemon sets to "1" when it starts a stdio
 // capability server only to probe it (Settings' Test); protocol.ProbeEnv
@@ -486,15 +655,16 @@ func redactEnv(kv string) string {
 }
 
 // acceptsEnv reports whether the daemon may set name. hostd's identity
-// variables and the dynamic loader's LD_* change what the child is and
-// what it loads, so only an exact entry in env admits one: a NAME_*
-// pattern never does. agy's per-run HOME is the case that needs this.
-// A capability entry also accepts ProbeEnv.
+// variables, the dynamic loader's LD_* and interpreter/shell injection
+// variables change what the child is and what it loads, so only an exact
+// entry in env admits one: neither "*" nor a NAME_* pattern ever does.
+// agy's per-run HOME is the case that needs this. A capability entry also
+// accepts ProbeEnv.
 func (e *Entry) acceptsEnv(kind Kind, name string) bool {
 	if kind == KindCapability && name == ProbeEnv {
 		return true
 	}
-	if slices.Contains(identityEnv, name) || strings.HasPrefix(name, "LD_") {
+	if envDeniedByPattern(name) {
 		return slices.Contains(e.Env, name)
 	}
 	return matchesAny(name, e.Env)
@@ -673,6 +843,13 @@ func validName(s string) bool {
 	return true
 }
 
+func validLoginPath(p string) bool {
+	if p == "" || p == "/" || filepath.Clean(p) != p {
+		return false
+	}
+	return filepath.IsAbs(p) || strings.HasPrefix(p, "~/")
+}
+
 func validEnvName(s string) bool {
 	if s == "" {
 		return false
@@ -686,8 +863,117 @@ func validEnvName(s string) bool {
 }
 
 func validEnvPattern(s string) bool {
+	if s == "*" {
+		return true
+	}
 	if p, ok := strings.CutSuffix(s, "*"); ok {
 		return validEnvName(p)
 	}
 	return validEnvName(s)
+}
+
+// expandHome turns a leading "~/" into hostd's home.
+func expandHome(path string) string {
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, rest)
+		}
+	}
+	return path
+}
+
+// CLIEntryEnv returns the env: patterns to write in an allowlist snippet for a
+// CLI whose closed variable list is closedEnv, targeting a host that reported
+// peer in its hello. Only a host advertising FeatureEnvOpen gets "*", keeping
+// any exact denied name closedEnv requires (such as agy's HOME); older hosts
+// get closedEnv unchanged, since they refuse "*".
+func CLIEntryEnv(closedEnv []string, peer Hello) []string {
+	if !peer.Has(FeatureEnvOpen) {
+		return slices.Clone(closedEnv)
+	}
+	var out []string
+	for _, v := range closedEnv {
+		if envDeniedByPattern(v) && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return append(out, "*")
+}
+
+// FormatEnvList formats env patterns as a YAML flow sequence (`["*"]`,
+// `[HOME, "*"]`, `[HOME, GEMINI_API_KEY]`), quoting "*".
+func FormatEnvList(env []string) string {
+	parts := make([]string, len(env))
+	for i, v := range env {
+		if v == "*" {
+			parts[i] = `"*"`
+		} else {
+			parts[i] = v
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// CLIEntryYAML renders one clis: allowlist entry for peer, using env: ["*"]
+// (plus any exact denied variable in closedEnv) and ~/-shortened paths under
+// home only when peer advertises FeatureEnvOpen.
+func CLIEntryYAML(name, binPath, home string, roots, closedEnv, passEnv []string, peer Hello) string {
+	shorten := func(p string) string {
+		if !peer.Has(FeatureEnvOpen) || home == "" || home == "/" {
+			return p
+		}
+		cleanHome := filepath.Clean(home)
+		if p == cleanHome {
+			return "~/"
+		}
+		if rest, ok := strings.CutPrefix(p, cleanHome+string(filepath.Separator)); ok && rest != "" {
+			return "~/" + filepath.ToSlash(rest)
+		}
+		return p
+	}
+	fmtRoots := make([]string, len(roots))
+	for i, r := range roots {
+		fmtRoots[i] = shorten(r)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "  %s:\n", name)
+	fmt.Fprintf(&b, "    path: %s\n", shorten(binPath))
+	if len(fmtRoots) > 0 {
+		joined := strings.Join(fmtRoots, ", ")
+		fmt.Fprintf(&b, "    paths_under: [%s]\n", joined)
+		fmt.Fprintf(&b, "    cwd_under: [%s]\n", joined)
+	}
+	if env := CLIEntryEnv(closedEnv, peer); len(env) > 0 {
+		fmt.Fprintf(&b, "    env: %s\n", FormatEnvList(env))
+	}
+	if len(passEnv) > 0 {
+		fmt.Fprintf(&b, "    pass_env: [%s]\n", strings.Join(passEnv, ", "))
+	}
+	return b.String()
+}
+
+// expandAllowlistPath resolves a clean absolute or "~/"-relative path in an
+// allowlist entry, refusing "..", uncleaned segments, or a missing/root home.
+func expandAllowlistPath(p string, allowHomeRoot bool) (string, bool) {
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		if rest == "" {
+			if !allowHomeRoot {
+				return "", false
+			}
+		} else if filepath.Clean("/"+rest) != "/"+rest {
+			return "", false
+		}
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" || !filepath.IsAbs(home) || filepath.Clean(home) != home || home == "/" {
+			return "", false
+		}
+		if rest == "" {
+			return home, true
+		}
+		return filepath.Join(home, rest), true
+	}
+	if p == "" || !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return "", false
+	}
+	return p, true
 }

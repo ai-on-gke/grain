@@ -554,6 +554,13 @@ func TestSandboxCLIOnANoRepoTask(t *testing.T) {
 		!strings.Contains(out, "(acme/widgets main") || !strings.Contains(out, "(acme/library grain/dep/task-7") {
 		t.Errorf("ci test-history on a no-repo task: %d %q %s", code, out, errOut)
 	}
+	out, errOut, code = run("ci", "test-history", "TestThing", "--repo", "acme/widgets", "--provider", "grain")
+	if code != 0 || !strings.Contains(out, "(repo: acme/widgets)") || !strings.Contains(out, "Grain CI: 1 run(s)") {
+		t.Errorf("ci test-history --provider grain on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "test-history", "TestThing", "--repo", "acme/widgets", "--provider", "jenkins"); code == 0 {
+		t.Errorf("ci test-history --provider jenkins was answered: %q %s", out, errOut)
+	}
 	if out, errOut, code := run("ci", "log", "run-l", "--job", "test", "--step", "Unit"); code != 0 || !strings.Contains(out, "TestThing") {
 		t.Errorf("ci log <run-id> on a no-repo task: %d %q %s", code, out, errOut)
 	}

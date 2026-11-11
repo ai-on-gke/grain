@@ -17,7 +17,7 @@ Every normative requirement below is derived from the implementation on `main` a
 - [5. `-ui-require-verifier` (`-ui-require-iap`) and Loopback Break-Glass](#5--ui-require-verifier--ui-require-iap-and-loopback-break-glass)
 - [6. Cross-Origin and CSRF Protection](#6-cross-origin-and-csrf-protection)
 - [7. Refusal Responses and Browser Pages](#7-refusal-responses-and-browser-pages)
-- [8. `grain hostd` Connection Identity and Owner Matching](#8-grain-hostd-connection-identity-and-owner-matching)
+- [8. `grain host` Connection Identity and Owner Matching](#8-grain-host-connection-identity-and-owner-matching)
 - [9. Diagnostic Logging of Refused Assertions and Principals](#9-diagnostic-logging-of-refused-assertions-and-principals)
 - [10. Plaintext Identity Headers and Sandbox Isolation](#10-plaintext-identity-headers-and-sandbox-isolation)
 - [11. Delegated (On-Behalf-Of) Identity via the Registry](#11-delegated-on-behalf-of-identity-via-the-registry)
@@ -92,16 +92,17 @@ Every normative requirement below is derived from the implementation on `main` a
 - `pkg/ui/mutating_routes_test.go`: `TestEveryMutatingRouteIsAttributed`
 - `pkg/ui/request_actor_source_test.go`: `TestNothingOutsideRequestActorReadsTheActor`
 
-### 2.4 `registry` `IdentityVerifier` (`X-Grain-Registry-Assertion`) {#AU-5B}
+### 2.4 `registry` `IdentityVerifier` (`X-Grain-Hub-Assertion` / `X-Grain-Registry-Assertion`) {#AU-5B}
 
-1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/registry.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-registry-issuer` (`$GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience` (`$GRAIN_REGISTRY_AUDIENCE`), and `-ui-registry-keys-url` (`$GRAIN_REGISTRY_KEYS_URL`) are all configured (`daemon.CheckUIRegistryVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`), reports `Name() == "registry"` (`ui.AuthMethodRegistry`, `model.SourceRegistry`), and sets `AccessCodeWins() == false`.
+1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/hub.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-hub-issuer` (`$GRAIN_HUB_ISSUER`), `-ui-hub-audience` (`$GRAIN_HUB_AUDIENCE`), and `-ui-hub-keys-url` (`$GRAIN_HUB_KEYS_URL`) (or their deprecated `-ui-registry-*` / `$GRAIN_REGISTRY_*` aliases) are all configured (`daemon.CheckUIHubVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Hub-Assertion` (`ui.HubAssertionHeader`) and `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`) (`Headers() == webauth.HubAssertionHeaders`), refuses requests carrying conflicting values across the two headers or multiple distinct values on either header, reports `Name() == "registry"` (`ui.AuthMethodHub`, `model.SourceHub`), and sets `AccessCodeWins() == false`.
 2. Signature verification MUST fetch RFC 7517 JWKS keys via `pkg/jwks` (cached for `1h`, refetched on unknown `kid` at most once per `1m`, retaining stale cached keys on refresh failure, and returning a `VerifierUnavailableError` (`503` with `Retry-After: 5`) when the initial JWKS fetch fails before any keys are cached) and MUST pin the algorithm to `ES256` on an ECDSA P-256 key (`RS256`, `HS256`, and `none` rejected).
-3. The verifier MUST enforce exact `iss` equality against `-ui-registry-issuer`, single-audience equality (`len(aud) == 1 && aud[0] == -ui-registry-audience`), require `exp` and `iat` with `30s` clock-skew tolerance on `exp`, `nbf`, and `iat` and `0 < exp - iat <= 5m`, reject any token carrying the reserved `act` claim (`401`) until delegated-identity support is enabled, and normalize/classify `sub`/`email`/`kind` into `model.Principal{Kind: kind, ID: email, Source: "registry"}`.
+3. The verifier MUST enforce exact `iss` equality against `-ui-hub-issuer`, single-audience equality (`len(aud) == 1 && aud[0] == -ui-hub-audience`), require `exp` and `iat` with `30s` clock-skew tolerance on `exp`, `nbf`, and `iat` and `0 < exp - iat <= 5m`, reject any token carrying the reserved `act` claim (`401`) until delegated-identity support is enabled, and normalize/classify `sub`/`email`/`kind` into `model.Principal{Kind: kind, ID: email, Source: "registry"}`.
 
 **Pinned by:**
-- `pkg/webauth/webauth_test.go`: `TestRegistryVerifier`
-- `pkg/ui/registry_verifier_test.go`: `TestRegistryIdentityVerifierEndToEnd`
-- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRegistryVerifierFlagsAndEnv`
+- `pkg/webauth/webauth_test.go`: `TestHubVerifier`
+- `pkg/webauth/hub_rename_test.go`: `TestHubVerifierRefusesConflictingHubAndRegistryAssertions`
+- `pkg/ui/hub_verifier_test.go`: `TestHubIdentityVerifierEndToEnd`
+- `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigHubVerifierFlagsAndEnv`
 
 ---
 
@@ -113,7 +114,7 @@ Every normative requirement below is derived from the implementation on `main` a
 2. Each stored entry MUST normalize via `model.NormalizeAllowedPrincipalEntry` to `<prefix>:<email>` with case-sensitive prefix `user` or `group` and a lower-cased valid email address that MUST NOT end in `.gserviceaccount.com`.
 3. When `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is non-empty on startup, `Client.MigrateAllowedPrincipals` MUST import supported `user:` and `group:` entries (excluding `*.gserviceaccount.com` and `gcp-key` pool emails) at most once when `allowed_principal` is empty and `allowed_principal_migration` has no record, recording dropped entries in `allowed_principal_migration.dropped` (`droppedFlagEntries`) and ignoring the deprecated flag with a warning on subsequent starts (`daemon.CheckUIAllowedPrincipals` still validates syntax and rejects `gcp-key` pool accounts at startup).
 4. For agent callers, `GET /api/access/principals` MUST require `api:access:read`, and `POST`, `PATCH` and `DELETE /api/access/principals` MUST be refused to every agent, console session and external agent token whatever it holds (docs/design/access-rbac.md §3).
-5. Every entry MUST carry a `role` naming an API scope set, defaulting to `grain/operator` (every scope; schema 110 gives it to every earlier entry). A verified session MUST be held, on every route, to the union of its matching entries' roles less any scope one of their sets denies (`pkg/ui/access_roles.go`). A role holding a dangerous scope MUST be assigned only by an access-code admin with a reason, and a verified session holding `access:write` MUST assign or change only roles no wider than its own.
+5. Every entry MUST carry a `role` naming an API scope set, defaulting to `grain/operator` (every scope; schema 110 gives it to every earlier entry). A verified session MUST be held, on every route, to the union of its matching entries' roles less any scope one of their sets denies (`pkg/ui/access_roles.go`). A change involving a role that holds a dangerous scope or denies scopes MUST carry a reason. A verified session holding `access:write` MUST change an entry only when its own role holds every scope of the entry's current and new role (and every scope a deny role vetoes); such a change involving a dangerous or deny role MUST come from a person. It MUST NOT widen, or add or lift a deny on, an entry that matches itself, MUST confirm (`confirmSelf`) narrowing one, and MUST NOT remove or narrow the last `user:`/`group:` entry with a full role (`docs/design/access-rbac.md` §3).
 
 **Pinned by:**
 - `pkg/ui/access_roles_test.go`: `TestViewerRoleReadsButIsRefusedWrites`, `TestRepoLimitedRoleIsRefusedOtherRepositories`, `TestRolesOfEveryMatchingEntryAreUnioned`, `TestADenyInAnyMatchingRoleWithholdsTheScope`, `TestEntriesFromBeforeRolesKeepFullAccess`, `TestRoleAssignmentRules`
@@ -241,7 +242,7 @@ Every normative requirement below is derived from the implementation on `main` a
 2. On API requests (`/api/` or `/api/*`) and non-`GET`/`HEAD` methods, the response body MUST be JSON naming the verified email and how to admit it (`Settings → Access` or `grain access allow`), plus any underlying lookup error.
 3. On browser navigations (`GET` or `HEAD` outside `/api/`), `writePrincipalRefusedPage` MUST return `text/html; charset=utf-8` titled `"Not allowed on this grain"` containing:
    - the HTML-escaped verified email and verifier name (and any underlying lookup error);
-   - remediation prose from the callback registered via `RegisterPrincipalAdvice`, or by default `Settings → Access` and `grain access allow 'user:<email>'` for human callers (or `grain hostds register --owner '<email>'` for service accounts);
+   - remediation prose from the callback registered via `RegisterPrincipalAdvice`, or by default `Settings → Access` and `grain access allow 'user:<email>'` for human callers (or `grain host register --owner '<email>'` for service accounts);
    - an `"Owner: sign in with the access code"` section that renders `<form method="post" action="/api/auth/access-code">` if and only if the deciding verifier has `AccessCodeWins() == true`, and otherwise explains that the verifier's identity takes precedence over the access code.
 
 **Pinned by:**
@@ -261,7 +262,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ---
 
-## 8. `grain hostd` Connection Identity and Owner Matching
+## 8. `grain host` Connection Identity and Owner Matching
 
 ### 8.1 Local vs remote `hostd` classification and allowlist gate {#AU-17}
 
@@ -277,7 +278,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ### 8.2 Hostd token authentication and remote owner matching {#AU-18}
 
-1. `grain hostd` dialling `GET /api/hostd/connect` MUST present its hostd credential (`ghd_…` registry token from `/api/hostds` or the deprecated shared `-hostd-token-file` secret) in `X-Grain-Hostd-Token` (falling back to `Authorization: Bearer` on the server only when `X-Grain-Hostd-Token` is empty), leaving `Authorization: Bearer <id-token>` available for OIDC ID tokens minted by `hostd.IAPTokenProvider` when `-iap-audience` / `$GRAIN_IAP_AUDIENCE` is set (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`, `pkg/hostd/iap_auth.go`).
+1. `grain host` dialling `GET /api/hostd/connect` MUST present its hostd credential (`ghd_…` registry token from `/api/hostds` or the deprecated shared `-hostd-token-file` secret) in `X-Grain-Hostd-Token` (falling back to `Authorization: Bearer` on the server only when `X-Grain-Hostd-Token` is empty), leaving `Authorization: Bearer <id-token>` available for OIDC ID tokens minted by `hostd.IAPTokenProvider` when `-iap-audience` / `$GRAIN_IAP_AUDIENCE` is set (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`, `pkg/hostd/iap_auth.go`).
 2. `hostd.Remote.ServeHTTP` MUST validate the hostd token first (`401` on missing/unknown token, `403` if `X-Grain-Hostd-Name` disagrees with the token's registered name).
 3. Whenever `ConnectIdentity.Remote` is `true`, `ownerRefusal` (`pkg/hostd/connect_identity.go`, `pkg/hostd/remote.go`) MUST:
    - refuse with `401 Unauthorized` when `ConnectIdentity.Principal` is empty;
@@ -338,7 +339,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ## 11. Delegated (On-Behalf-Of) Identity via the Registry
 
-Design: [`authentication.design.md`](../../design/authentication.design.md) §6 and [`registry.design.md`](../../design/registry.design.md) *Delegated identity*.
+Design: [`authentication.design.md`](../../design/authentication.design.md) §6 and [`hub.design.md`](../../design/hub.design.md) *Delegated identity*.
 
 ### 11.1 `act` claim parsing and `VerifiedIdentity.Via` {#AU-22}
 
@@ -350,9 +351,9 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
    - `act` contains no nested `act`; and
    - the top-level `kind == "human"`, with a top-level `sub`/`email` that classifies as `model.PrincipalHuman`.
 3. Any other present `act` MUST fail verification with `401` (`writeAssertionRefused`), with no fallback to the access code, a `gma_…` token, a session cookie or an open route (`AU-2`).
-4. All other `registry` verifier checks MUST be unchanged for delegated assertions: `iss`, a single `aud` equal to `-ui-registry-audience`, `ES256`, `exp - iat <= 5 min` and 30 s skew.
+4. All other `registry` verifier checks MUST be unchanged for delegated assertions: `iss`, a single `aud` equal to `-ui-hub-audience`, `ES256`, `exp - iat <= 5 min` and 30 s skew.
 
-**Pinned by:** `pkg/ui/registry_verifier_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`.
+**Pinned by:** `pkg/ui/hub_verifier_test.go`: `TestHubVerifierExposesPersonAndDelegatingApp`, `TestHubVerifierRefusesMalformedOrNestedAct`.
 
 ### 11.2 `delegate:` allowlist entries {#AU-23}
 
@@ -415,7 +416,7 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
 3. Unproxied-loopback break-glass (`AU-13`) and the mandatory tunnel-ingress gate on `connected` grains MUST be unchanged. The latter requires a valid assertion on every tunnelled request and never accepts access codes over the tunnel.
 4. A `registry` assertion with `kind: "service"` and no `act` MUST be admitted only by an explicit `serviceAccount:` entry (`AU-6`, `AU-7`), and MUST be attributed to the service principal alone with no `OnBehalfOf`.
 
-**Pinned by:** `pkg/ui/delegation_test.go`: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry`.
+**Pinned by:** `pkg/ui/delegation_test.go`: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainHubServicePrincipalNeedsServiceAccountEntry`.
 
 ---
 
@@ -444,18 +445,18 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
 | `AU-19` | Bounded deduplicated logging of refused assertions and principals | Implemented | `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`, `TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience`, `TestRefusedPrincipalsAreLoggedOnce` (*64-cap saturation, unconfigured-audience warning, and `logRefusedVerifierHeader` untested*) |
 | `AU-20` | Plaintext identity headers never trusted | Implemented | `TestExtractPrincipalNamesNobodyFromAnIdentityHeader`, `TestPlaintextIdentityHeadersIgnoredFromUntrustedSource`, `TestIAPModeIgnoresPlaintextIdentityHeaders`, `TestASingleTenantDaemonRefusesWhoeverAProxyNames` (*`logIgnoredIdentityHeader` dedup untested*) |
 | `AU-21` | In-sandbox listeners isolated from proxy assertions | Implemented | `TestGitProxyScopesEachSandboxToItsOwnRepositories`, `TestSandboxGrainLogReadIsAuditedAsItsTask`, `TestSandboxTokenMintedAfterGitProxyStartsAuthenticates` |
-| `AU-22` | Registry `act` claim parsing and `VerifiedIdentity.Via` | Implemented | `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct` |
+| `AU-22` | Registry `act` claim parsing and `VerifiedIdentity.Via` | Implemented | `TestHubVerifierExposesPersonAndDelegatingApp`, `TestHubVerifierRefusesMalformedOrNestedAct` |
 | `AU-23` | `delegate:` allowlist entries (reason, person-only, no dangerous scopes) | Implemented | `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`, `TestAccessAllowDelegateCLI` |
 | `AU-24` | Dual admission (person and `delegate:` entry) and refusals | Implemented | `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp` |
 | `AU-25` | Person ∩ delegate role intersection, read-only grants, person-only operations, `hostd` refusal | Implemented | `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`, `TestDelegatedIdentityNeverOwnsAHostd` |
 | `AU-26` | `Actor` = app, `OnBehalfOf` = person, `(via <app>)` label, trailers, request log | Implemented | `TestPrincipalLabelRendersPersonViaApp`, `TestDelegatedWriteRecordsAppAndPerson`, `TestDelegatedTaskTrailersNameThePerson` |
-| `AU-27` | CSRF, access-code, break-glass, and plain-service rules unchanged under delegation | Implemented | `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry` |
+| `AU-27` | CSRF, access-code, break-glass, and plain-service rules unchanged under delegation | Implemented | `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainHubServicePrincipalNeedsServiceAccountEntry` |
 
 ---
 
 ## 13. Sources
 
-- Design document: [`design/design/authentication.design.md`](../../design/authentication.design.md) (§6 for `AU-22`–`AU-27`, with [`design/design/registry.design.md`](../../design/registry.design.md) *Delegated identity*)
-- Companion designs & specs: [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md), [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`design/design/registry.design.md`](../../design/registry.design.md), [`design/design/simple-config.design.md`](../../design/simple-config.design.md), [`docs/access-code.md`](../../../docs/access-code.md)
+- Design document: [`design/design/authentication.design.md`](../../design/authentication.design.md) (§6 for `AU-22`–`AU-27`, with [`design/design/hub.design.md`](../../design/hub.design.md) *Delegated identity*)
+- Companion designs & specs: [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md), [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`design/design/hub.design.md`](../../design/hub.design.md), [`design/design/simple-config.design.md`](../../design/simple-config.design.md), [`docs/access-code.md`](../../../docs/access-code.md)
 - Walkthrough evidence: [`docs/test-runs/2026-11-02-verified-identity.md`](../../../docs/test-runs/2026-11-02-verified-identity.md), [`docs/test-runs/2026-11-02-iap-end-to-end.md`](../../../docs/test-runs/2026-11-02-iap-end-to-end.md), [`docs/test-runs/2026-11-03-iap-deployment.md`](../../../docs/test-runs/2026-11-03-iap-deployment.md)
 - Implementation packages: `pkg/ui` (`verifier.go`, `principal.go`, `assertion_diagnostics.go`, `allowlist.go`, `accesscode.go`, `csrf.go`, `principalrefusal.go`, `auth.go`, `server.go`, `request_actor.go`, `principal_label.go`, `external_agents.go`, `httpclient.go`, `hostd_connect.go`, `hostds.go`), `pkg/model/task.go`, `pkg/hostd` (`connect_identity.go`, `remote.go`, `dialout.go`, `iap_auth.go`), `pkg/daemon/ui_server.go`, `pkg/cli` (`daemon.go`, `cliconn.go`, `accesscode.go`, `hostd.go`, `hostds.go`)

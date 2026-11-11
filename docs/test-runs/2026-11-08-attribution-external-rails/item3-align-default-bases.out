@@ -1,0 +1,20 @@
+PASS	0.1	ghsim reports trunk as acme/widgets' default branch	{"default_branch":"trunk"}
+PASS	0.2	parents stored with explicit bases and auto-merge	trunk|1 release/v1|1
+trunk parent's propose_task: Proposed task #4 is visible now: /tasks/4. It is filed approved -- your own task's permission covers it -- so it is queued already and dispatched in its turn without anybody approving it.
+PASS	1.1	trunk child queued automatically	queued
+PASS	1.2	trunk child inherits auto_merge	true
+PASS	1.3	trunk child keeps its stored base ""	|
+PASS	1.4	trunk child approved by grain (not a person)	automation:auto-submit
+release/v1 parent's propose_task: Proposed task #5 is visible now: /tasks/5. It is filed unapproved because your permission does not cover it: it is not work of the shape your task may queue unreviewed: the same branch your task lands on, holding no capability your task lacks. It waits until a human approves it.
+PASS	2.1	release/v1 child held unapproved	proposed
+PASS	2.2	release/v1 child does not inherit auto_merge	false
+PASS	2.3	the [grain] note names release/v1 and the default branch	no branch given  ---  grain: task 3, which proposed this, may queue the work it splits out without review, but only work landing on `release/v1` in `acme/widgets`. This task lands on the default branch of `acme/widgets` instead, so it was filed for a person to
+release/v1 child's description and comments:
+no branch given
+
+---
+
+grain: task 3, which proposed this, may queue the work it splits out without review, but only work landing on `release/v1` in `acme/widgets`. This task lands on the default branch of `acme/widgets` instead, so it was filed for a person to approve. Approve it if it belongs there.
+PASS	2.4	the agent was told it is held for its branch	Proposed task #5 is visible now: /tasks/5. It is filed unapproved because your permission does not cover it: it is not work of the shape your task may queue unreviewed: the same branch your task lands on, holding no capability your task lacks. It waits until a
+PT=2 PR=3 CT=4 CR=5
+FAILS=0

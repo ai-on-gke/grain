@@ -98,6 +98,8 @@ func TestDecideStopBackground(t *testing.T) {
 		{"request_secret", []ToolCall{{Name: "request_secret"}}, false},
 		{"wait_for_task park", []ToolCall{{Name: "wait_for_task", Arguments: map[string]any{"park": true}}}, false},
 		{"wait_for_task resume_at", []ToolCall{{Name: "wait_for_task", Arguments: map[string]any{"resume_at": "1h"}}}, false},
+		{"resume_later accepted", []ToolCall{{Name: "resume_later", Arguments: map[string]any{"reason": "waiting"}}}, false},
+		{"resume_later refused", []ToolCall{{Name: "resume_later", Arguments: map[string]any{"reason": "dirty"}, IsError: true}}, true},
 		{"errored closing tool still counts", []ToolCall{{Name: "ask_question", IsError: true}}, false},
 	}
 	for _, c := range cases {
@@ -109,7 +111,7 @@ func TestDecideStopBackground(t *testing.T) {
 			t.Errorf("%s: Reason = %q", c.name, d.Reason)
 		}
 	}
-	for _, tool := range []string{"comment_on_issue", "ask_question", "nothing_needed", "request_secret", "wait_for_task", "push"} {
+	for _, tool := range []string{"comment_on_issue", "ask_question", "nothing_needed", "request_secret", "wait_for_task", "resume_later", "push"} {
 		if !strings.Contains(BackgroundContinueReason, tool) {
 			t.Errorf("BackgroundContinueReason does not name %s", tool)
 		}

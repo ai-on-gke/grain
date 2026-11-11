@@ -86,7 +86,7 @@ func skipUnlessLiveRequired(t *testing.T, reason string) {
 // the 2026-09-08 agy-retry hand run, write down the new schedule,
 // and reconsider DefaultModelRetryCutoff and the private-diagnostic dependency
 // in the light of it before changing this line.
-const measuredAgyVersion = "1.4.12"
+const measuredAgyVersion = "1.5.3"
 
 // refusalProbeRuntime is a guard, well past the 2m30s 1.4.9 took to give
 // up on its own, and deliberately longer than DefaultModelRetryCutoff: the
@@ -100,7 +100,7 @@ const refusalProbeRuntime = 7 * time.Minute
 // binary a deployment really runs.
 //
 // The Dockerfile's ARG is the single source of the version everywhere it
-// matters: the image installs it, .grain/workflows/live-agent.yml derives
+// matters: the image installs it, .github/workflows/live-agent.yml derives
 // the agy the probes below measure from the same line and asserts the
 // installed binary reports it, and Dockerfile.k8s-sandbox is held equal
 // to it by tests/deploy. So the pin moving off measuredAgyVersion means
@@ -113,7 +113,7 @@ const refusalProbeRuntime = 7 * time.Minute
 func TestMeasuredAgyIsTheAgyTheImagePins(t *testing.T) {
 	if pin := pinnedAgyVersion(t); pin != measuredAgyVersion {
 		t.Errorf("the image pins agy %s and the live retry probes in %s assert agy %s's behaviour "+
-			"(at least ten provider requests across %s, no refusal text on the stream, every 503 in the "+
+			"(at least nine provider requests across %s, no refusal text on the stream while retrying, every 503 in the "+
 			"private diagnostic). Re-measure against the pinned release -- "+
 			"the 2026-09-08 agy-retry hand run says how -- then move measuredAgyVersion and whatever "+
 			"the new schedule changes about DefaultModelRetryCutoff, rather than leaving the nightly to report "+
@@ -146,13 +146,14 @@ func requireMeasuredAgy(t *testing.T) {
 //
 // Two facts, both load-bearing in this package:
 //
-//   - agy keeps retrying past DefaultModelRetryCutoff, after at least ten
-//     provider requests, before it gives up on its own. 1.4.9 made eight
-//     main-model attempts with backoff capped near thirty seconds and
-//     returned after about 2m30s (1.2.2 was still retrying at seven
-//     minutes). That ladder is what turnDeadline exists to bound; a binary
-//     that gives up before the cutoff makes the bound moot and should make
-//     this probe ask to be re-measured again.
+//   - agy keeps retrying past DefaultModelRetryCutoff, after at least nine
+//     provider requests, before it gives up on its own. 1.5.3 made nine
+//     main-model attempts (initial request plus eight retries with backoff
+//     capped near thirty seconds, without 1.4.9's three extra startup
+//     requests) and returned after about 2m15s (1.2.2 was still retrying at
+//     seven minutes). That ladder is what turnDeadline exists to bound; a
+//     binary that gives up before the cutoff makes the bound moot and should
+//     make this probe ask to be re-measured again.
 //   - what reaches the stream once agy does give up.
 //     TestLiveAgyLosesTheProvidersRefusalText below reads that off the
 //     same exec rather than launching the ladder a second time.
@@ -183,14 +184,14 @@ func TestLiveAgyRetriesARefusedTurnItself(t *testing.T) {
 	if probe.runErr == nil {
 		t.Fatalf("the exec succeeded against a provider that refuses every request: %s", probe.stdout)
 	}
-	if probe.requests < 10 {
-		t.Fatalf("agy made only %d request(s); %s made at least ten before this guard, so its retry "+
+	if probe.requests < 9 {
+		t.Fatalf("agy made only %d request(s); %s made at least nine before this guard, so its retry "+
 			"schedule changed and should be re-measured rather than silently weakening the bound.\nstream:\n%s",
 			probe.requests, measuredAgyVersion, probe.stdout)
 	}
 	if !probe.guardExpired && probe.elapsed <= DefaultModelRetryCutoff {
 		t.Errorf("agy gave up on its own after %s, inside the %s model-turn deadline; %s retried for "+
-			"about 2m30s, so its schedule changed: re-measure it and reconsider DefaultModelRetryCutoff",
+			"about 2m15s, so its schedule changed: re-measure it and reconsider DefaultModelRetryCutoff",
 			probe.elapsed.Round(time.Millisecond), DefaultModelRetryCutoff, measuredAgyVersion)
 	}
 }
@@ -438,7 +439,7 @@ func liveAgyPath(t *testing.T) string {
 // behaviour was seen on.
 //
 // It is the first line only, which is how both Dockerfiles and
-// .grain/workflows/live-agent.yml check an installed agy against the pin
+// .github/workflows/live-agent.yml check an installed agy against the pin
 // (`agy --version | head -n1`); requireMeasuredAgy compares against the
 // same pin, so it has to read the version the same way.
 func agyVersion(t *testing.T) string {

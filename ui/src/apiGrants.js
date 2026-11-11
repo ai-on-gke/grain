@@ -23,12 +23,73 @@
 // pickers keep them out of their own lists.
 
 export const API_GRANT_PREFIX = "api:";
+export const API_CAPABILITY_SERVER = "https://grain.dev/capabilities/api";
+export const API_REF_PREFIX = `${API_CAPABILITY_SERVER}#`;
+
+// API_ARGS_SCHEMA is the with: schema every method on
+// https://grain.dev/capabilities/api declares (grainserver.buildAPIServer):
+// one optional repo limit, so GrantsPicker can render the inline repo field
+// before /api/capability-methods finishes loading (or in offline unit tests).
+export const API_ARGS_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    repo: {
+      type: "string",
+      pattern: "^([A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+      description:
+        "Limit the grant to this repository, owner/name; omit for every repository.",
+    },
+  },
+};
+
+function validRepoLimit(repo) {
+  return (
+    typeof repo === "string" &&
+    repo.length > 0 &&
+    !/\s/.test(repo) &&
+    repo.indexOf("/") > 0 &&
+    !repo.endsWith("/")
+  );
+}
 
 // isApiGrant reports whether id is an agent API grant name at all,
-// valid or not: a picker leaves every one of them to ApiGrantPicker,
+// valid or not, in either its canonical
+// https://grain.dev/capabilities/api#<name>[={"repo":...}] spelling (what
+// slice 3 writes) or the legacy api:<name>[@repo] one (unmigrated store
+// rows, .grain/ declarations and GET /api/config's metadata rows): a
+// picker leaves every one of them to ApiGrantPicker / GrantsPicker,
 // which can also remove one that no longer parses.
 export function isApiGrant(id) {
-  return typeof id === "string" && id.startsWith(API_GRANT_PREFIX);
+  if (typeof id !== "string") return false;
+  const s = id.trim();
+  return s.startsWith(API_GRANT_PREFIX) || s.startsWith(API_REF_PREFIX);
+}
+
+// isLegacyApiGrant reports whether id is an api grant in the legacy
+// api:<name>[@repo] spelling only. GrantsPicker edits canonical
+// https://grain.dev/capabilities/api#<name> grants among the capability
+// server methods (with their {repo} argument), so the forms that feed it
+// split a grant list on this rather than on isApiGrant: a canonical api
+// grant goes with the method refs, and only a legacy one with the api ids.
+export function isLegacyApiGrant(id) {
+  return isApiGrant(id) && !isApiCapabilityRef(id);
+}
+
+// isApiCapabilityRef reports whether id is a canonical
+// https://grain.dev/capabilities/api#<what>[=<json>] grant string.
+export function isApiCapabilityRef(id) {
+  if (typeof id !== "string") return false;
+  const trimmed = id.trim();
+  const eq = trimmed.indexOf("=");
+  const ref = eq < 0 ? trimmed : trimmed.slice(0, eq);
+  return ref.startsWith(API_REF_PREFIX);
+}
+
+// apiRef is the canonical capability reference for shortName ("ci:write" ->
+// "https://grain.dev/capabilities/api#ci:write").
+export function apiRef(shortName) {
+  return `${API_REF_PREFIX}${shortName}`;
 }
 
 // withoutApiRows is a capability listing with the api rows taken out,
@@ -37,29 +98,74 @@ export function withoutApiRows(rows) {
   return (rows || []).filter((c) => !isApiGrant(c.id));
 }
 
-// splitApiGrant reads a grant name into the offered row it is spelled
-// from and the repository it is limited to ("" for every one):
-// "api:ci:write@acme/widgets" is ["api:ci:write", "acme/widgets"].
+// splitApiGrant reads a grant name in either spelling into the offered
+// api:<name> row it stands for and the repository it is limited to (""
+// for every one): both "api:ci:write@acme/widgets" and
+// 'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}'
+// are ["api:ci:write", "acme/widgets"]. A reference whose arguments do
+// not map to an optional {repo} keeps its own trimmed text as [s, ""]
+// so no offered row matches it and the picker flags it for removal.
 export function splitApiGrant(id) {
-  const at = id.indexOf("@");
-  return at < 0 ? [id, ""] : [id.slice(0, at), id.slice(at + 1)];
+  const s = typeof id === "string" ? id.trim() : "";
+  if (s.startsWith(API_REF_PREFIX)) {
+    const rest = s.slice(API_REF_PREFIX.length);
+    const eq = rest.indexOf("=");
+    const what = eq < 0 ? rest : rest.slice(0, eq);
+    if (!what) return [s, ""];
+    if (eq < 0) return [`${API_GRANT_PREFIX}${what}`, ""];
+    let parsed;
+    try {
+      parsed = JSON.parse(rest.slice(eq + 1));
+    } catch {
+      return [s, ""];
+    }
+    if (parsed === null) return [`${API_GRANT_PREFIX}${what}`, ""];
+    if (typeof parsed !== "object" || Array.isArray(parsed)) return [s, ""];
+    const keys = Object.keys(parsed);
+    if (keys.length === 0) return [`${API_GRANT_PREFIX}${what}`, ""];
+    if (keys.length === 1 && keys[0] === "repo") {
+      const repo = typeof parsed.repo === "string" ? parsed.repo.trim() : "";
+      if (validRepoLimit(repo)) {
+        return [`${API_GRANT_PREFIX}${what}`, repo];
+      }
+    }
+    return [s, ""];
+  }
+  const at = s.indexOf("@");
+  return at < 0 ? [s, ""] : [s.slice(0, at), s.slice(at + 1)];
 }
 
 // apiGrantId is the name to write for an offered row limited to repo,
 // or not limited at all for an empty repo.
 export function apiGrantId(rowId, repo) {
-  return repo ? `${rowId}@${repo}` : rowId;
+  const [base] = splitApiGrant(rowId);
+  return repo ? `${base}@${repo}` : base;
+}
+
+// storedApiGrant is model.StoredGrantSpelling for an api grant: the
+// api:<name>[@repo] spelling slice 2 stores, or id trimmed when its
+// arguments do not map to one. Two spellings of the same api grant
+// return the same string.
+export function storedApiGrant(id) {
+  const [base, repo] = splitApiGrant(id);
+  return base.startsWith(API_GRANT_PREFIX) ? apiGrantId(base, repo) : base;
 }
 
 // apiShortName is the scope or preset a grant name names, without its
-// prefix or repository: "api:ci:write@acme/widgets" is "ci:write".
+// prefix or repository: both "api:ci:write@acme/widgets" and
+// 'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}'
+// are "ci:write".
 export function apiShortName(id) {
-  return splitApiGrant(id)[0].slice(API_GRANT_PREFIX.length);
+  const [head] = splitApiGrant(id);
+  if (head.startsWith(API_REF_PREFIX)) return head.slice(API_REF_PREFIX.length);
+  if (head.startsWith(API_GRANT_PREFIX))
+    return head.slice(API_GRANT_PREFIX.length);
+  return head;
 }
 
 // apiArea is a scope's area -- "tasks" for tasks:write -- which is what
 // the picker groups scopes under.
-export function apiArea(row) {
+function apiArea(row) {
   const scope = apiShortName(row.id);
   const colon = scope.indexOf(":");
   return colon < 0 ? scope : scope.slice(0, colon);

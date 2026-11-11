@@ -35,12 +35,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -279,6 +282,7 @@ func configureGitHubSimDemoWith(dir string, cfg ui.Config, repo model.RepoRef, s
 	})
 	cfg.GitHubBranches = client
 	cfg.GitHubForkPullRequests = client
+	cfg.GitHubDefaultBranches = client
 	prReader := demoPullRequests{repo: repo, client: client}
 	if prev, ok := cfg.GitHubPullRequests.(demoPullRequests); ok {
 		prReader.store = prev.store
@@ -505,8 +509,10 @@ func demoGitStdin(gitDir, stdin string, args ...string) (string, error) {
 // As a test-only, loopback-only extension that Sim.Request itself refuses,
 // POST .../actions/runs appends a githubsim.WorkflowRun under the sim's
 // mutex and, when ?webhook=1 or {"webhook":true} is set, enqueues a
-// matching workflow_run webhook for the demo's event source. Everything
-// else goes to app.
+// matching workflow_run webhook for the demo's event source; POST
+// .../actions/runs/{id}/complete finishes a queued run -- such as the one
+// a workflow_dispatch started -- with a chosen conclusion and job logs
+// (githubsim.Sim.CompleteWorkflowRun). Everything else goes to app.
 func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
 	const prefix = "/api/e2e/github-sim/repos/"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -551,6 +557,10 @@ func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
 			handleGitHubSimAddWorkflowRun(w, r, sim, st, body)
 			return
 		}
+		if m := simCompleteRunPath.FindStringSubmatch(path); r.Method == http.MethodPost && m != nil {
+			handleGitHubSimCompleteWorkflowRun(w, sim, m[1], body)
+			return
+		}
 		if r.URL.RawQuery != "" {
 			path += "?" + r.URL.RawQuery
 		}
@@ -562,6 +572,67 @@ func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.Status)
 		_, _ = w.Write(resp.Body)
+	})
+}
+
+var simCompleteRunPath = regexp.MustCompile(`^/repos/[^/]+/[^/]+/actions/runs/([0-9]+)/complete$`)
+
+// handleGitHubSimCompleteWorkflowRun answers POST .../actions/runs/{id}/complete
+// with {"conclusion": "failure", "jobs": [{"name": ..., "log": ...}]}: 200
+// and the run as the sim now serves it, 404 for a run it does not have,
+// 409 for one already completed.
+func handleGitHubSimCompleteWorkflowRun(w http.ResponseWriter, sim *githubsim.Sim, rawID string, body []byte) {
+	var req struct {
+		Conclusion string                  `json:"conclusion"`
+		Jobs       []simWorkflowJobPayload `json:"jobs"`
+	}
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jobs := make([]githubsim.WorkflowJob, len(req.Jobs))
+	for i, j := range req.Jobs {
+		jobs[i] = githubsim.WorkflowJob{
+			Name:          j.Name,
+			Conclusion:    j.Conclusion,
+			Log:           j.Log,
+			NeverStarted:  j.NeverStarted || j.NeverStartedAlt,
+			FailureReason: firstSimString(j.FailureReason, j.FailureReasonAlt),
+			FailingStep:   firstSimString(j.FailingStep, j.FailingStepAlt),
+		}
+	}
+	run, err := sim.CompleteWorkflowRun(id, strings.TrimSpace(req.Conclusion), jobs)
+	switch {
+	case errors.Is(err, githubsim.ErrWorkflowRunNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case errors.Is(err, githubsim.ErrWorkflowRunCompleted):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id":          run.ID,
+		"name":        run.Name,
+		"path":        run.Path,
+		"head_branch": run.HeadBranch,
+		"head_sha":    run.HeadSHA,
+		"event":       run.Event,
+		"status":      run.Status,
+		"conclusion":  run.Conclusion,
+		"run_attempt": run.RunAttempt,
+		"html_url":    run.HTMLURL,
+		"updated_at":  run.UpdatedAt.Format(time.RFC3339),
 	})
 }
 

@@ -1,0 +1,207 @@
+== initialize -> {"capabilities": {"tools": {}}, "protocolVersion": "2024-11-05", "serverInfo": {"name": "grain", "version": "0.1.0"}}
+== tools/list (13): adopt_pull_request, ci_log, ci_runs, comment_on_task, fs_grep, fs_read, grain_inbox, list_grain_tasks, merge_queue, propose_task, read_grain_task, reply_to_task, wait_for_task
+== unknown tool -> {"jsonrpc": "2.0", "id": 3, "error": {"code": -32602, "message": "unknown tool api_force_merge"}}
+== unknown method -> {"jsonrpc": "2.0", "id": 4, "error": {"code": -32601, "message": "unknown method no/such/method"}}
+
+== propose_task / read_grain_task / list_grain_tasks
+### propose in scope  [PASS]
+    call propose_task {"title": "MCP walkthrough T1", "body": "filed over stdio", "repo": "acme/widgets"}
+    -> isError=False {   "id": "23",   "title": "MCP walkthrough T1",   "description": "filed over stdio",   "author": "external:cli-debuerreotype-demo-to7hfa",   "authorKind": "agent",   "authorSource": "external-token",   "authorLabel": "external agent cli-debuerreotype-demo-to7hfa",   "state": "proposed",   "repo": "acme/widgets",   "branch": "grain/task-23",   "priority": 5,   "autoMerge": false,   "autoApproveProposals": false,   "interactive": false,   "admission": "standard",   "hosting": "unattended",   "owner": "debian",   "creator": "debian",   "capabilities": [     "api:self-debug",     "https://grain.d…
+### propose to the out-of-scope repo  [PASS]
+    call propose_task {"title": "MCP walkthrough leak", "body": "x", "repo": "acme/secret"}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds tasks:write, but not on acme/secret
+### propose with no title  [PASS]
+    call propose_task {"body": "x"}
+    -> isError=True propose_task: title is required
+### propose T2 depending on T1  [PASS]
+    call propose_task {"title": "MCP walkthrough T2", "body": "after T1", "repo": "acme/widgets", "depends_on": ["23"]}
+    -> isError=False {   "id": "24",   "title": "MCP walkthrough T2",   "description": "after T1",   "author": "external:cli-debuerreotype-demo-to7hfa",   "authorKind": "agent",   "authorSource": "external-token",   "authorLabel": "external agent cli-debuerreotype-demo-to7hfa",   "state": "proposed",   "repo": "acme/widgets",   "branch": "grain/task-24",   "priority": 5,   "autoMerge": false,   "autoApproveProposals": false,   "interactive": false,   "admission": "standard",   "hosting": "unattended",   "owner": "debian",   "creator": "debian",   "capabilities": [     "api:self-debug",     "https://grain.dev/capab…
+    T1=23 T2=24
+### read T1  [PASS]
+    call read_grain_task {"id": "23"}
+    -> isError=False {   "id": "23",   "title": "MCP walkthrough T1",   "description": "filed over stdio",   "author": "external:cli-debuerreotype-demo-to7hfa",   "authorKind": "agent",   "authorSource": "external-token",   "authorLabel": "external agent cli-debuerreotype-demo-to7hfa",   "state": "proposed",   "repo": "acme/widgets",   "branch": "grain/task-23",   "priority": 5,   "autoMerge": false,   "autoApproveProposals": false,   "interactive": false,   "admission": "standard",   "hosting": "unattended",   "owner": "debian",   "creator": "debian",   "capabilities": [     "api:self-debug",     "https://grain.d…
+### read unknown  [PASS]
+    call read_grain_task {"id": "999999"}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds tasks:read only for acme/widgets, and GET /api/tasks/{id} does not name a repository it reaches
+### list (repo)  [PASS]
+    call list_grain_tasks {"repo": "acme/widgets", "limit": 5}
+    -> isError=False [   {     "id": "1",     "title": "Add a dark mode toggle",     "description": "Settings page needs a theme switch; several people have asked for it.",     "author": "debian",     "authorKind": "human",     "authorSource": "in-process",     "authorLabel": "operator (local)",     "state": "proposed",     "repo": "acme/widgets",     "branch": "grain/task-1",     "priority": 5,     "autoMerge": false,     "autoApproveProposals": false,     "interactive": false,     "admission": "standard",     "hosting": "unattended",     "owner": "debian",     "creator": "debian",     "capabilities": [       "ap…
+### list (other repo)  [PASS]
+    call list_grain_tasks {"repo": "acme/secret", "limit": 5}
+    -> isError=False []
+### list search  [PASS]
+    call list_grain_tasks {"search": "MCP walkthrough", "limit": 5}
+    -> isError=False [   {     "id": "22",     "title": "MCP walkthrough T2",     "description": "after T1",     "author": "external:cli-debuerreotype-demo-to7hfa",     "authorKind": "agent",     "authorSource": "external-token",     "authorLabel": "external agent cli-debuerreotype-demo-to7hfa",     "state": "proposed",     "repo": "acme/widgets",     "branch": "grain/task-22",     "priority": 5,     "autoMerge": false,     "autoApproveProposals": false,     "interactive": false,     "admission": "standard",     "hosting": "unattended",     "owner": "debian",     "creator": "debian",     "capabilities": [       "a…
+
+== wait_for_task across sliced intervals (operator closes T1 during slice 3)
+    operator approve T1 -> 200
+### wait slice 1 (+2.0s)  [PASS]
+    call wait_for_task {"task_id": "23", "until": "closed", "timeout_seconds": 2}
+    -> isError=False {   "status": "waiting",   "met": false,   "tasks": [     {       "id": "23",       "title": "MCP walkthrough T1",       "state": "queued",       "closed": false,       "merged": false,       "revision": "63d32f243a6c72d1"     }   ],   "revision": "a2447cc5101cb972",   "resume": true,   "resumeHint": "call wait_for_task again with task_ids=[23], until=\"closed\", since=\"a2447cc5101cb972\" to continue waiting" }
+### wait slice 2 (+4.0s)  [PASS]
+    call wait_for_task {"task_id": "23", "until": "closed", "timeout_seconds": 2}
+    -> isError=False {   "status": "waiting",   "met": false,   "tasks": [     {       "id": "23",       "title": "MCP walkthrough T1",       "state": "queued",       "closed": false,       "merged": false,       "revision": "63d32f243a6c72d1"     }   ],   "revision": "a2447cc5101cb972",   "resume": true,   "resumeHint": "call wait_for_task again with task_ids=[23], until=\"closed\", since=\"a2447cc5101cb972\" to continue waiting" }
+    [operator closed T1 at +5s -> 200]
+### wait slice 3 (+5.0s)  [PASS]
+    call wait_for_task {"task_id": "23", "until": "closed", "timeout_seconds": 2}
+    -> isError=False {   "status": "met",   "met": true,   "condition": "closed",   "tasks": [     {       "id": "23",       "title": "MCP walkthrough T1",       "state": "closed",       "closed": true,       "merged": false,       "outcome": "cancelled",       "revision": "7be9011abb0e7f32"     }   ],   "revision": "08c74e50a5fcfda2",   "resume": false }
+### wait on unknown task  [PASS]
+    call wait_for_task {"task_id": "999999", "timeout_seconds": 2}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds tasks:read only for acme/widgets, and GET /api/tasks/wait does not name a repository it reaches
+
+== reply_to_task / comment_on_task attachments (workspace /tmp/grain-mcp-ws-76s6575q)
+### comment, no attachment  [PASS]
+    call comment_on_task {"id": "24", "body": "plain comment"}
+    -> isError=False {   "id": "24",   "title": "MCP walkthrough T2",   "description": "after T1",   "author": "external:cli-debuerreotype-demo-to7hfa",   "authorKind": "agent",   "authorSource": "external-token",   "authorLabel": "external agent cli-debuerreotype-demo-to7hfa",   "state": "proposed",   "repo": "acme/widgets",   "branch": "grain/task-24",   "priority": 5,   "autoMerge": false,   "autoApproveProposals": false,   "interactive": false,   "admission": "standard",   "hosting": "unattended",   "owner": "debian",   "creator": "debian",   "capabilities": [     "api:self-debug",     "https://grain.dev/capab…
+### comment, workspace file  [PASS]
+    call comment_on_task {"id": "24", "body": "with notes", "attachments": ["notes.txt"]}
+    -> isError=False {   "id": "24",   "title": "MCP walkthrough T2",   "description": "after T1",   "author": "external:cli-debuerreotype-demo-to7hfa",   "authorKind": "agent",   "authorSource": "external-token",   "authorLabel": "external agent cli-debuerreotype-demo-to7hfa",   "state": "proposed",   "repo": "acme/widgets",   "branch": "grain/task-24",   "priority": 5,   "autoMerge": false,   "autoApproveProposals": false,   "interactive": false,   "admission": "standard",   "hosting": "unattended",   "owner": "debian",   "creator": "debian",   "capabilities": [     "api:self-debug",     "https://grain.dev/capab…
+### comment, nested workspace file (absolute)  [PASS]
+    call comment_on_task {"id": "24", "body": "with design", "attachments": ["/tmp/grain-mcp-ws-76s6575q/docs/design.md"]}
+    -> isError=False {   "id": "24",   "title": "MCP walkthrough T2",   "description": "after T1",   "author": "external:cli-debuerreotype-demo-to7hfa",   "authorKind": "agent",   "authorSource": "external-token",   "authorLabel": "external agent cli-debuerreotype-demo-to7hfa",   "state": "proposed",   "repo": "acme/widgets",   "branch": "grain/task-24",   "priority": 5,   "autoMerge": false,   "autoApproveProposals": false,   "interactive": false,   "admission": "standard",   "hosting": "unattended",   "owner": "debian",   "creator": "debian",   "capabilities": [     "api:self-debug",     "https://grain.dev/capab…
+### comment, symlink escaping the workspace  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["link-out.txt"]}
+    -> isError=True refusing attachment link-out.txt outside workspace /tmp/grain-mcp-ws-76s6575q: safepath: /tmp/grain-mcp-ws-76s6575q/link-out.txt: path is outside its root
+### comment, file under a symlinked dir  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["linkdir/secret.txt"]}
+    -> isError=True refusing attachment linkdir/secret.txt outside workspace /tmp/grain-mcp-ws-76s6575q: safepath: /tmp/grain-mcp-ws-76s6575q/linkdir/secret.txt: path is outside its root
+### comment, ../ traversal  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["../grain-mcp-outside-cmltz_5a/secret.txt"]}
+    -> isError=True refusing attachment ../grain-mcp-outside-cmltz_5a/secret.txt outside workspace /tmp/grain-mcp-ws-76s6575q: safepath: /tmp/grain-mcp-outside-cmltz_5a/secret.txt: path is outside its root
+### comment, absolute outside path  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["/tmp/grain-mcp-outside-cmltz_5a/secret.txt"]}
+    -> isError=True refusing attachment /tmp/grain-mcp-outside-cmltz_5a/secret.txt outside workspace /tmp/grain-mcp-ws-76s6575q: safepath: /tmp/grain-mcp-outside-cmltz_5a/secret.txt: path is outside its root
+### comment, .env  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": [".env"]}
+    -> isError=True refusing sensitive attachment path .env
+### comment, .env.local  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": [".env.local"]}
+    -> isError=True refusing sensitive attachment path .env.local
+### comment, nested .env.production  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["sub/.env.production"]}
+    -> isError=True refusing sensitive attachment path sub/.env.production
+### comment, .ssh key  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": [".ssh/id_ed25519"]}
+    -> isError=True refusing sensitive attachment path .ssh/id_ed25519
+### comment, .git/config  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": [".git/config"]}
+    -> isError=True refusing sensitive attachment path .git/config
+### comment, .aws/credentials  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": [".aws/credentials"]}
+    -> isError=True refusing sensitive attachment path .aws/credentials
+### comment, .gnupg  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": [".gnupg/x"]}
+    -> isError=True refusing sensitive attachment path .gnupg/x
+### comment, $XDG_CONFIG_HOME/grain credential (absolute)  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["/tmp/mcpx/home/.config/grain/credentials/demo"]}
+    -> isError=True refusing attachment /tmp/mcpx/home/.config/grain/credentials/demo inside grain config directory
+### comment, $XDG_CONFIG_HOME/grain via an in-workspace symlink  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["grain-config/credentials/demo"]}
+    -> isError=True refusing attachment grain-config/credentials/demo inside grain config directory
+### comment, /etc/passwd  [PASS]
+    call comment_on_task {"id": "24", "body": "should be refused", "attachments": ["/etc/passwd"]}
+    -> isError=True refusing attachment /etc/passwd outside workspace /tmp/grain-mcp-ws-76s6575q: safepath: /etc/passwd: path is outside its root
+### reply, workspace file (task not parked)  [PASS]
+    call reply_to_task {"id": "24", "body": "reply", "attachments": ["notes.txt"]}
+    -> isError=True grain server: task 24 is not parked on a question, so there is nothing to reply to: use grain comment 24 for a general note (409 Conflict)
+### reply, .ssh key  [PASS]
+    call reply_to_task {"id": "24", "body": "reply", "attachments": [".ssh/id_ed25519"]}
+    -> isError=True refusing sensitive attachment path .ssh/id_ed25519
+### reply, symlink escaping  [PASS]
+    call reply_to_task {"id": "24", "body": "reply", "attachments": ["link-out.txt"]}
+    -> isError=True refusing attachment link-out.txt outside workspace /tmp/grain-mcp-ws-76s6575q: safepath: /tmp/grain-mcp-ws-76s6575q/link-out.txt: path is outside its root
+
+== grain_inbox / ci_runs / ci_log / merge_queue
+### inbox  [PASS]
+    call grain_inbox {}
+    -> isError=False {   "items": [     {       "kind": "question",       "task": "7",       "title": "Why did last week's nightly suite slow down?",       "repo": "acme/widgets",       "summary": "reply to run it again, or acknowledge to close it",       "path": "/tasks/7",       "at": "2026-11-08T19:59:56.423968967Z"     },     {       "kind": "question",       "task": "4",       "title": "Investigate the merge queue stall",       "repo": "acme/widgets",       "summary": "Fix both lint-stuck PRs, or only unblock the merge queue?",       "path": "/tasks/4"     },     {       "kind": "notification",       "task": …
+### inbox other repo  [PASS]
+    call grain_inbox {"repo": "acme/secret"}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds tasks:read, but not on acme/secret
+### ci_runs  [PASS]
+    call ci_runs {"repo": "acme/widgets", "limit": 3}
+    -> isError=False {   "enabled": true,   "runs": [     {       "id": "demo-recheck-1",       "key": "",       "repo": "acme/widgets",       "ref": "grain-merge-queue/4e6254a8/recheck/5/main",       "commit": "abcdef0123456789abcdef0123456789abcdef01",       "event": "pull_request",       "requestedBy": "merge-recheck:acme/widgets:main",       "startedAt": "2026-11-08T22:54:56.423968967Z",       "provider": "grain",       "jobs": [         {           "workflow": "",           "workflowPath": ".grain/workflows/ci.yml",           "jobId": ".grain/workflows/ci.yml:test",           "name": "test",           "key": …
+### ci_runs other repo  [PASS]
+    call ci_runs {"repo": "acme/secret", "limit": 3}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds ci:read, but not on acme/secret
+### ci_log demo-recheck-1  [PASS]
+    call ci_log {"run_id": "demo-recheck-1", "tail": 5}
+    -> isError=False {   "commit": "abcdef0123456789abcdef0123456789abcdef01",   "conclusion": "",   "id": "demo-recheck-1",   "jobs": [     {       "id": ".grain/workflows/ci.yml:test",       "name": "test"     }   ],   "ref": "grain-merge-queue/4e6254a8/recheck/5/main",   "repo": "acme/widgets" }
+### ci_log traversal: run_id ../ with repo  [PASS]
+    call ci_log {"repo": "acme/widgets", "run_id": "../../etc/passwd"}
+    -> isError=True ci_log: invalid run_id or job segment
+### ci_log traversal: run_id with / and repo  [PASS]
+    call ci_log {"repo": "acme/widgets", "run_id": "1/../../2"}
+    -> isError=True ci_log: invalid run_id or job segment
+### ci_log traversal: job ../ with repo  [PASS]
+    call ci_log {"repo": "acme/widgets", "run_id": "424242", "job": "../../../etc/passwd"}
+    -> isError=True ci_log: invalid run_id or job segment
+### ci_log traversal: job with / and repo  [PASS]
+    call ci_log {"repo": "acme/widgets", "run_id": "424242", "job": "test/../../log"}
+    -> isError=True ci_log: invalid run_id or job segment
+### ci_log traversal: run_id .. with repo  [PASS]
+    call ci_log {"repo": "acme/widgets", "run_id": ".."}
+    -> isError=True ci_log: invalid run_id or job segment
+### ci_log traversal: repo ../  [PASS]
+    call ci_log {"repo": "../acme", "run_id": "1"}
+    -> isError=True ci_log repo: repo must be owner/name, got "../acme" (one on another git host is host/owner/name)
+### ci_log traversal: run_id ../ without repo  [PASS]
+    call ci_log {"run_id": "../../etc/passwd"}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds ci:read only for acme/widgets, and GET /api/ci/runs/{id} does not name a repository it reaches
+### ci_log traversal: url-encoded traversal  [PASS]
+    call ci_log {"repo": "acme/widgets", "run_id": "%2e%2e%2fsecret"}
+    -> isError=True ci_log: invalid run_id or job segment
+### ci_log job filter ../ on a readable run (name filter: no match)  [PASS]
+    call ci_log {"run_id": "demo-recheck-1", "job": "../../../etc/passwd"}
+    -> isError=False {   "commit": "abcdef0123456789abcdef0123456789abcdef01",   "conclusion": "",   "id": "demo-recheck-1",   "jobs": null,   "ref": "grain-merge-queue/4e6254a8/recheck/5/main",   "repo": "acme/widgets" }
+### merge_queue  [PASS]
+    call merge_queue {"repo": "acme/widgets"}
+    -> isError=False {   "repo": "acme/widgets",   "batches": [     {       "repo": "acme/widgets",       "branch": "main",       "ref": "grain-merge-queue/4e6254a8/recheck/5/main",       "baseCommit": "1234567890abcdef1234567890abcdef12345678",       "commit": "abcdef0123456789abcdef0123456789abcdef01",       "runId": "demo-recheck-1",       "queuedAt": "2026-11-08T22:54:56.423968967Z",       "members": [         {           "taskId": "5",           "number": 101,           "title": "Rotate the Gemini signing key"         }       ]     }   ],   "queuedPrs": [     {       "taskId": "5",       "title": "Rotate the …
+    (rate limited; retrying in 20s)
+### merge_queue other repo (narrowed to nothing)  [PASS]
+    call merge_queue {"repo": "acme/secret"}
+    -> isError=False {   "repo": "acme/secret" }
+
+== fs_read / fs_grep
+### fs_read task record  [PASS]
+    call fs_read {"uri": "task://24/record.md", "lines": 15}
+    -> isError=False   2026-11-08T23:04:48Z  proposed by external agent cli-debuerreotype-demo-to7hfa on behalf of debian  Conversation (6):   [2026-11-08T23:04:53Z] external agent cli-debuerreotype-demo-to7hfa (agent):   plain comment   [2026-11-08T23:04:53Z] grain on behalf of external:cli-debuerreotype-demo-to7hfa (automation):   External agent `cli-debuerreotype-demo-to7hfa` (`external:cli-debuerreotype-demo-to7hfa`) called `POST /api/tasks/{id}/comments` through the agent API (scope `tasks:write`).   [2026-11-08T23:04:53Z] external agent cli-debuerreotype-demo-to7hfa (agent):   with notes   [2026-11-08T23:04:…
+### fs_read task list  [PASS]
+    call fs_read {"uri": "task://24", "list": true}
+    -> isError=False {"entries":[{"name":"conversation.md","type":"file","size":1160},{"name":"handover.md","type":"file"},{"name":"prompt.md","type":"file"},{"name":"record.md","type":"file","size":1667},{"name":"summary.md","type":"file","size":676}],"path":"24","scheme":"task"}
+### fs_grep task record  [PASS]
+    call fs_grep {"uri": "task://24", "pattern": "MCP walkthrough"}
+    -> isError=False {   "uri": "task://24",   "output": "record.md:1:Task 24: MCP walkthrough T2\nsummary.md:1:Task 24: MCP walkthrough T2\n",   "matches": "2" }
+### fs_read local file:// path  [PASS]
+    call fs_read {"uri": "file:///etc/passwd"}
+    -> isError=True no such API endpoint: GET /api/fs/file/etc/passwd
+### fs_read bare local path  [PASS]
+    call fs_read {"uri": "/etc/passwd"}
+    -> isError=True "/etc/passwd" is not a namespace URI (ci://, src://, task://, config://, memory://, deploy://)
+### fs_read config:// (deployment-wide)  [PASS]
+    call fs_read {"uri": "config://"}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds no api grant for scope settings:read, which GET /api/fs/config/{path...} needs
+### fs_read task:// traversal  [PASS]
+    call fs_read {"uri": "task://24/../../etc/passwd"}
+    -> isError=True no such API endpoint: GET /api/fs/etc/passwd
+
+== adopt_pull_request
+### adopt acme/widgets#4242  [PASS]
+    call adopt_pull_request {"pr": "acme/widgets#4242"}
+    -> isError=True pull request not found: GitHub has no acme/widgets#4242 that this deployment's credential can see: GitHub API error 404: "{}"
+### adopt again (same answer)  [PASS]
+    call adopt_pull_request {"pr": "acme/widgets#4242"}
+    -> isError=True pull request not found: GitHub has no acme/widgets#4242 that this deployment's credential can see: GitHub API error 404: "{}"
+### adopt a pull request a grain task already owns  [PASS]
+    call adopt_pull_request {"pr": "acme/widgets#102"}
+    -> isError=True grain server: pull request conflict: acme/widgets#102 is grain task 6's own pull request; there is nothing to adopt (409 Conflict)
+### adopt out-of-scope PR  [PASS]
+    call adopt_pull_request {"pr": "acme/secret#1"}
+    -> isError=True external:cli-debuerreotype-demo-to7hfa holds merge:write, but not on acme/secret
+### adopt malformed  [PASS]
+    call adopt_pull_request {"pr": "not-a-pr"}
+    -> isError=True adopt_pull_request: pull request ref must be owner/name#number, got "not-a-pr"
+
+== stdin closed -> grain mcp exit=0 stderr=''
+
+== 64 checks, 0 unexpected: []

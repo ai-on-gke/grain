@@ -1402,6 +1402,93 @@ func TestProcessResultQueuesProposalFromAutoApproveProposalsTaskWithoutAutoMerge
 	}
 }
 
+// A parent filed with an explicit `base: main` holds a write target of
+// {acme/widgets, main}; a propose_task call naming no base files its
+// proposal with Base "" -- the repository's default branch, which is
+// main. The two are one branch, so the proposal is queued on the
+// parent's permission and inherits its auto-merge, and is still filed
+// with no base of its own (found by task 3411's live walk, where it sat
+// proposed/unapproved with no word on why).
+func TestProcessResultQueuesANoBaseProposalFromAParentFiledOnTheDefaultBranch(t *testing.T) {
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	for _, tc := range []struct {
+		name                 string
+		autoMerge, autoQueue bool
+	}{
+		{"auto-approve-proposals", false, true},
+		{"auto-merge", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "t-" + strings.ReplaceAll(tc.name, "-", "")
+			task := filedTask(t, ctx, store, id, repo)
+			task.Base = "main"
+			task.AutoMerge = tc.autoMerge
+			task.AutoApproveProposals = tc.autoQueue
+			if err := store.PutTask(ctx, task); err != nil {
+				t.Fatal(err)
+			}
+			result := toolResult(agent.ToolCall{Name: "propose_task",
+				Arguments: map[string]any{"title": "follow-up " + tc.name, "body": "b"}})
+			if err := orchestrator.ProcessResult(ctx, store, client, task, result, id+"-1", baseTime); err != nil {
+				t.Fatalf("ProcessResult: %v", err)
+			}
+			proposal, ok := proposalsByTitle(t, ctx, store, task.ID)["follow-up "+tc.name]
+			if !ok {
+				t.Fatal("the proposed task was never filed")
+			}
+			if proposal.Base != "" {
+				t.Errorf("Base = %q, want \"\" -- the proposal is filed with the base its call gave it", proposal.Base)
+			}
+			if proposal.Approval == nil || proposal.Approval.Actor != model.AutoSubmitPrincipal {
+				t.Errorf("approval = %+v, want AutoSubmitPrincipal; body %q", proposal.Approval, proposal.Body)
+			}
+			if proposal.AutoMerge != tc.autoMerge {
+				t.Errorf("AutoMerge = %v, want %v", proposal.AutoMerge, tc.autoMerge)
+			}
+			if strings.Contains(proposal.Body, "grain: task") {
+				t.Errorf("body carries a grain note on a proposal that landed where granted: %q", proposal.Body)
+			}
+		})
+	}
+}
+
+// The default branch is resolved, not assumed: a parent filed on a
+// branch that is not the repository's default does not reach a
+// proposal that named no base, which lands on the default instead. It
+// is filed for a person -- and, since nothing else on it explains why,
+// with a note naming both branches.
+func TestProcessResultNotesANoBaseProposalFromAParentOnAnotherBranch(t *testing.T) {
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+	task.Base = "release/1.0"
+	task.AutoApproveProposals = true
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	result := toolResult(agent.ToolCall{Name: "propose_task",
+		Arguments: map[string]any{"title": "follow-up", "body": "b"}})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	proposal, ok := proposalsByTitle(t, ctx, store, task.ID)["follow-up"]
+	if !ok {
+		t.Fatal("the proposed task was never filed")
+	}
+	if proposal.Approval != nil {
+		t.Errorf("approval = %+v, want none -- the proposal lands on the default branch, not release/1.0", proposal.Approval)
+	}
+	for _, want := range []string{"may queue the work it splits out without review",
+		"`release/1.0` in `acme/widgets`", "filed for a person to approve"} {
+		if !strings.Contains(proposal.Body, want) {
+			t.Errorf("body = %q, want it to contain %q", proposal.Body, want)
+		}
+	}
+}
+
 // The permission is not the whole of it: a proposal inside it still has
 // to be inside the bounds on how far it may propagate
 // (model.AutoSubmitLimits). Two levels of self-approved work below the
@@ -2001,8 +2088,13 @@ func TestProcessResultDoesNotExplainAutoMergeAProposalOptedOutOf(t *testing.T) {
 	if !model.AutoMergeDeclined(proposal) {
 		t.Error("the run's explicit auto_merge: false was not made sticky (model.DeclineAutoMerge)")
 	}
-	if proposal.Body != "unrelated, review it" {
-		t.Errorf("proposal body = %q, want the run's own words alone", proposal.Body)
+	// No word on auto-merge: the run declined it, so there is nothing
+	// for grain to explain. The proposal is still told why it was not
+	// queued (otherBranchQueueNote) -- landing off the parent's branch is
+	// a question about approval, which auto_merge: false says nothing of.
+	if !strings.HasPrefix(proposal.Body, "unrelated, review it") ||
+		strings.Contains(proposal.Body, "did not inherit") {
+		t.Errorf("proposal body = %q, want the run's own words and no auto-merge note", proposal.Body)
 	}
 }
 

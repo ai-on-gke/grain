@@ -23,10 +23,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App, { POLL_INTERVAL_MS } from "./App.jsx";
+import App, { CONFIG_POLL_TIMEOUT_MS, POLL_INTERVAL_MS } from "./App.jsx";
 import api from "./api.js";
 import { initialTasks, resetAppTestState, setupApi } from "./appTestHarness.js";
 import { runTimers } from "./testClock.js";
+import { formatTime } from "./time.js";
 
 // A pass-through: only the default fetch wrapper is faked, so
 // isUnreachable/unreachableReason -- which App.jsx's poll calls on
@@ -106,6 +107,138 @@ describe("App resilience", () => {
     // grown past POLL_INTERVAL_MS by now, and recovery is only as fast
     // as the next tick it actually lets through.
     await runTimers(POLL_INTERVAL_MS * 10);
+    expect(screen.queryByText(/cannot be reached/i)).toBeNull();
+  });
+
+  // grain/task-3619: a daemon that accepts the connection and then never
+  // answers (stopped, deadlocked, a proxy holding the socket) left the
+  // poll waiting on its first unanswered request forever, so the banner
+  // never came up. The poll's /api/config goes through the real api()
+  // here, over a fetch that never answers, so its own timeout is what
+  // ends the wait.
+  it("says grain is out of reach when it stops answering, and clears when it answers", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { default: realApi } = await vi.importActual("./api.js");
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let hung = false;
+    const silent = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_path, init) =>
+          new Promise((_resolve, reject) => {
+            silent.push({ init, at: Date.now() });
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      ),
+    );
+    api.mockImplementation((p, opts) =>
+      hung && p === "/api/config" ? realApi(p, opts) : base(p, opts),
+    );
+    render(<App />);
+    await runTimers();
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
+
+    hung = true;
+    // The first unanswered tick, past its timeout: one slow answer is
+    // not an outage.
+    await runTimers(POLL_INTERVAL_MS + CONFIG_POLL_TIMEOUT_MS);
+    expect(silent.length).toBeGreaterThan(0);
+    expect(silent.every(({ init }) => init.signal)).toBe(true);
+    expect(screen.queryByText(/cannot be reached/i)).toBeNull();
+    // The second is.
+    await runTimers(POLL_INTERVAL_MS + CONFIG_POLL_TIMEOUT_MS);
+    expect(
+      screen.getByText(/accepted the connection but sent no answer/i),
+    ).toBeInTheDocument();
+    // "Since" is when the first unanswered request was asked, not when
+    // the wait for it ran out.
+    expect(screen.getByTestId("disconnected-banner")).toHaveTextContent(
+      `since ${formatTime(new Date(silent[0].at))}`,
+    );
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
+
+    hung = false;
+    await runTimers(POLL_INTERVAL_MS * 12);
+    expect(screen.queryByText(/cannot be reached/i)).toBeNull();
+  });
+
+  // docs/test-runs/2026-11-09-shell-liveness.md, finding 1: only the
+  // tick's config read had a timeout, so the tick's other reads stayed
+  // open on a silent daemon, a new set every tick. Over HTTP/1.1 a
+  // browser holds six connections to a host, and once those reads held
+  // them all the config read queued behind them, so a proxy answering
+  // new requests again never took the banner down. A failed tick now
+  // gives up on its own reads, and the background polls' are bounded.
+  it("gives up on the rest of a tick's reads when grain stops answering", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { default: realApi } = await vi.importActual("./api.js");
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let hung = false;
+    const silent = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (path, init) =>
+          new Promise((_resolve, reject) => {
+            silent.push({ path, init });
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      ),
+    );
+    const held = [
+      "/api/tasks",
+      "/api/config",
+      "/api/ci/runs",
+      "/api/console-sessions",
+      "/api/persistent-sandboxes",
+      "/api/base-branch-gates",
+      "/api/notifications",
+    ];
+    // The poll's own list read, not closedTasks.js's one-off closed-task
+    // query on the same path.
+    const isHeld = (path, h) =>
+      h === "/api/tasks" ? path === h : path.startsWith(h);
+    api.mockImplementation((p, opts) =>
+      hung && held.some((h) => isHeld(p, h)) ? realApi(p, opts) : base(p, opts),
+    );
+    render(<App />);
+    await runTimers();
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
+
+    hung = true;
+    // Long enough for the banner, the backoff, and the slower polls'
+    // (staging every 15 s, notifications every 30 s, gates every 60 s)
+    // own reads to have been asked more than once.
+    await runTimers(90_000);
+    expect(
+      screen.getByText(/accepted the connection but sent no answer/i),
+    ).toBeInTheDocument();
+    const open = (prefix) =>
+      silent.filter(
+        ({ path, init }) => isHeld(path, prefix) && !init.signal?.aborted,
+      );
+    for (const prefix of held) {
+      expect(
+        silent.filter(({ path }) => isHeld(path, prefix)).length,
+      ).toBeGreaterThan(0);
+      // Every one asked was either given up on or is the one in flight.
+      expect(open(prefix).length, prefix).toBeLessThanOrEqual(1);
+    }
+    // Given up on is not an error of its own: the tasks pane says what
+    // the banner says, not "aborted".
+    expect(screen.queryByText(/aborted/i)).toBeNull();
+
+    hung = false;
+    await runTimers(POLL_INTERVAL_MS * 12);
     expect(screen.queryByText(/cannot be reached/i)).toBeNull();
   });
 
@@ -409,5 +542,53 @@ describe("App resilience", () => {
     await runTimers(POLL_INTERVAL_MS * 4);
     expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
     expect(screen.getByText("Fix bug")).toBeInTheDocument();
+  });
+
+  it("reports a failed /api/console-sessions load on /sessions instead of claiming no sessions exist, then recovers on Retry", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    window.history.replaceState(null, "", "/sessions");
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let failSessions = true;
+    api.mockImplementation((p, opts) => {
+      if (p === "/api/console-sessions") {
+        if (failSessions) {
+          const err = new Error("console session manager is still starting");
+          err.status = 503;
+          err.explained = true;
+          return Promise.reject(err);
+        }
+        return Promise.resolve({
+          sessions: [{ id: "director", title: "Director", taskId: "1" }],
+          capabilities: [],
+          networkAccessOptions: ["open", "none"],
+        });
+      }
+      return base(p, opts);
+    });
+
+    render(<App />);
+    await runTimers();
+
+    // Advance past the 5-second transient error snackbar: /sessions must still
+    // explain that sessions failed to load rather than claiming 0 sessions.
+    await runTimers(6000);
+    expect(document.querySelector(".error-banner")).toBeNull();
+    expect(screen.queryByText("No interactive sessions yet.")).toBeNull();
+    expect(
+      screen.getByText(
+        "The sessions could not be loaded (console session manager is still starting).",
+      ),
+    ).toBeInTheDocument();
+
+    failSessions = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await runTimers();
+
+    expect(screen.queryByText(/The sessions could not be loaded/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Open session Director" }),
+    ).toBeInTheDocument();
   });
 });

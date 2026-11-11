@@ -20,7 +20,12 @@
 //     narrowed to the new text, and the end of the short list scrolled
 //     into view -- every search read 200 unrelated rows);
 //   - emptying the box must not leave the search's deep hits drawn below
-//     the newest-closed pages, after a gap of every task closed between.
+//     the newest-closed pages, after a gap of every task closed between;
+//   - a single `owner:any:<v>` or `externalRef:any:<v>` condition over
+//     closed work is asked of the server (?owner=, ?externalRef=) rather
+//     than answered by paging through every closed page until the match
+//     turns up (finding F6 of the same walkthrough: 15 pages and ~10 s
+//     against 3,000 closed tasks).
 //
 // GET /api/tasks?state=closed is answered here with three synthetic
 // pages of 200 and a search that finds one task from far below them, so
@@ -31,6 +36,7 @@ import { test, expect } from "./fixtures.js";
 const PAGE = 200;
 const PAGES = 3;
 const DEEP_ID = "990001";
+const DEEP_OWNER = "deepowner@example.com";
 const base = Date.parse("2026-11-01T00:00:00Z");
 
 // template is a real closed row from the demo, so the synthetic ones
@@ -55,6 +61,7 @@ const deepTask = () => ({
   id: DEEP_ID,
   title: "walk closed zephyrquill needle",
   externalRef: "CA-9012",
+  owner: DEEP_OWNER,
 });
 
 async function routeClosed(page) {
@@ -72,9 +79,22 @@ async function routeClosed(page) {
     const url = new URL(route.request().url());
     const search = url.searchParams.get("search") || "";
     const cursor = url.searchParams.get("cursor") || "";
-    asked.push({ search, cursor });
+    const owner = url.searchParams.get("owner") || "";
+    const externalRef = url.searchParams.get("externalRef") || "";
+    asked.push({ search, cursor, owner, externalRef });
     let body;
-    if (search) {
+    if (owner || externalRef) {
+      // pkg/ui's taskListQuery: an owner case-insensitively, an external
+      // reference exactly.
+      const hit =
+        (!owner || owner.toLowerCase() === DEEP_OWNER) &&
+        (!externalRef || externalRef === "CA-9012");
+      body = {
+        tasks: hit ? [deepTask()] : [],
+        nextCursor: "",
+        total: hit ? 1 : 0,
+      };
+    } else if (search) {
       const hit = "zephyrquill needle".includes(search) || search === "ca-9012";
       body = {
         tasks: hit ? [deepTask()] : [],
@@ -152,4 +172,42 @@ for (const viewport of [
     ).toEqual([]);
     await expect(rows).toHaveCount(PAGE);
   });
+
+  for (const [condition, param, value] of [
+    ["externalRef:any:CA-9012", "externalRef", "CA-9012"],
+    [`owner:any:${DEEP_OWNER}`, "owner", DEEP_OWNER],
+  ]) {
+    test(`one ${param} condition over closed work asks the server, not every page (${viewport.width}px)`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      const asked = await routeClosed(page);
+      await page.goto(
+        `/?f=state:any:closed&f=${encodeURIComponent(condition)}`,
+      );
+      const rows = page.locator(".task-row");
+      await expect(rows.filter({ hasText: "zephyrquill" })).toHaveCount(1);
+      // Long enough for an observer-driven pager to have walked the pages.
+      await page.waitForTimeout(1200);
+      expect(
+        asked.filter((a) => a[param] === value),
+        `the ${param} condition was not asked of the server`,
+      ).not.toEqual([]);
+      expect(
+        asked.filter(
+          (a) => !a.search && !a.owner && !a.externalRef && a.cursor,
+        ),
+        "the condition paged through the newest-closed list",
+      ).toEqual([]);
+      // At most the newest page (the rail's counts) beside the filtered ask.
+      expect(asked.length).toBeLessThanOrEqual(3);
+      await expect(rows).toHaveCount(1);
+
+      // Dropping the condition hands the pager back to the newest-closed
+      // list, and the deep task is not drawn below its first page.
+      await page.goto("/?f=state:any:closed");
+      await expect(rows.filter({ hasText: "walk closed 0000" })).toHaveCount(1);
+      await expect(rows.filter({ hasText: "zephyrquill" })).toHaveCount(0);
+    });
+  }
 }

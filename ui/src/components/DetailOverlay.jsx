@@ -12,8 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import api from "../api.js";
+import {
+  mergeFreshDetail,
+  prependEarlierPage,
+  taskEarlierPath,
+} from "../taskDetailPages.js";
 import AppIcon, { ExternalLinkIcon } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
@@ -61,6 +73,7 @@ import Overlay, { DISCARD_PROMPT } from "./Overlay.jsx";
 import PromptOverlay from "./PromptOverlay.jsx";
 import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
+import CommentDeepLink from "./CommentDeepLink.jsx";
 import Actions from "./detail/Actions.jsx";
 import CapabilityToggles from "./detail/CapabilityToggles.jsx";
 import CommittedContext from "./detail/CommittedContext.jsx";
@@ -75,15 +88,18 @@ import PendingSecret from "./detail/PendingSecret.jsx";
 import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import PendingAccess from "./detail/PendingAccess.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
-import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
 import GoalSection from "./detail/GoalSection.jsx";
+import {
+  BriefSection,
+  ContextSection,
+  useTaskContext,
+} from "./detail/TaskContext.jsx";
 import Target from "./detail/Target.jsx";
 import MergePolicy from "./detail/MergePolicy.jsx";
 import TaskLink from "./detail/TaskLink.jsx";
 import Timeline from "./detail/Timeline.jsx";
 import WorkTree from "./detail/WorkTree.jsx";
-import WriteRepos from "./detail/WriteRepos.jsx";
 import AccessGate from "./AccessGate.jsx";
 
 // useBranchPushed reports whether branch is really on repo's remote --
@@ -166,7 +182,7 @@ function SuiteRunLink({ origin, onOpenSuiteRun }) {
 }
 
 export default function DetailOverlay({
-  task: t,
+  task: propTask,
   tasks,
   config,
   templates,
@@ -185,15 +201,61 @@ export default function DetailOverlay({
   onFilterExternalRef: rawFilterExternalRef,
   act,
   showError,
+  onLoadEarlier = null,
   // animate: false when this pane takes the place of one already on
   // screen (Overlay's own note), so the swap does not fade.
   animate = true,
 }) {
+  const [localTask, setLocalTask] = useState(null);
+  useEffect(() => {
+    setLocalTask((prev) => {
+      if (!prev || String(prev.id) !== String(propTask?.id)) return null;
+      return mergeFreshDetail(prev, propTask);
+    });
+  }, [propTask]);
+  const t = !onLoadEarlier && localTask ? localTask : propTask;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const effectiveLoadEarlier = useCallback(
+    async (opts = {}) => {
+      if (onLoadEarlier) return onLoadEarlier(opts);
+      const cur = tRef.current;
+      const path = taskEarlierPath(cur, opts);
+      if (!path) return null;
+      const wantComments =
+        (cur.olderComments || 0) > 0 &&
+        Array.isArray(cur.comments) &&
+        cur.comments.length > 0;
+      const wantAttempts =
+        !opts.commentsOnly &&
+        (cur.olderAttempts || 0) > 0 &&
+        Array.isArray(cur.attempts) &&
+        cur.attempts.length > 0;
+      try {
+        const earlier = await api(path);
+        if (!earlier) return null;
+        setLocalTask((prev) =>
+          prependEarlierPage(prev || propTask, earlier, {
+            loadedComments: wantComments,
+            loadedAttempts: wantAttempts,
+          }),
+        );
+        return earlier;
+      } catch (err) {
+        if (showError) showError(err);
+        return null;
+      }
+    },
+    [onLoadEarlier, propTask, showError],
+  );
   const byId = useMemo(
     () => new Map((tasks || []).map((other) => [other.id, other])),
     [tasks],
   );
   const phase = completionPhase(t);
+  // A durable task's compaction cursor, handover age and current brief
+  // (design/design/durable-tasks.design.md#DT-15); null on any other task.
+  const [taskContext, setTaskContext] = useTaskContext(t);
   // And grain's verdict that this task's merge-queue wait has stopped
   // being one (state.js's mergeQueueStall) -- the same chip the row in
   // the list carries, so the page somebody opens because of it says the
@@ -643,11 +705,22 @@ export default function DetailOverlay({
                   so it stays a plain string -- only a real description
                   (often an agent's own markdown, for a task another run
                   proposed) goes through the renderer. */}
-              {t.description ? (
-                <Markdown className="description">{t.description}</Markdown>
-              ) : (
-                <div className="description">(no description)</div>
-              )}
+              {/* On a durable task with a current brief, the brief stands
+                  where the description does, since it is what prompts
+                  carry; the description is kept under it (DT-15). */}
+              <BriefSection
+                t={t}
+                context={taskContext}
+                setContext={setTaskContext}
+                act={act}
+                description={
+                  t.description ? (
+                    <Markdown className="description">{t.description}</Markdown>
+                  ) : (
+                    <div className="description">(no description)</div>
+                  )
+                }
+              />
               <AttachmentLinks taskId={t.id} attachments={t.attachments} />
             </>
           )}
@@ -711,25 +784,32 @@ export default function DetailOverlay({
               reply actually did (grain/task-414). Every other task is
               unchanged: the timeline is the whole of its conversation
               and is not hidden behind anything. */}
+          {/* A /tasks/<id>#comment=<id> link scrolls to its comment,
+              wherever on this pane that is drawn (commentLinks.js). */}
+          <CommentDeepLink t={t} onLoadEarlier={effectiveLoadEarlier} />
           {t.interactive ? (
             <>
-              <TaskChat t={t} act={act} />
+              <TaskChat t={t} act={act} onLoadEarlier={effectiveLoadEarlier} />
               <details className="task-chat-history">
                 <summary>Task history</summary>
                 <Timeline
                   t={t}
+                  context={taskContext}
                   act={act}
                   showError={showError}
                   onOpenTask={onOpenTask}
+                  onLoadEarlier={effectiveLoadEarlier}
                 />
               </details>
             </>
           ) : (
             <Timeline
               t={t}
+              context={taskContext}
               act={act}
               showError={showError}
               onOpenTask={onOpenTask}
+              onLoadEarlier={effectiveLoadEarlier}
             />
           )}
         </div>
@@ -897,26 +977,19 @@ export default function DetailOverlay({
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
           <GoalSection t={t} act={act} config={config} tasks={tasks} />
-          {/* The repos this task may change, in one section
-              (grain/task-202): the one it is filed against, then the
-              others under it, rather than a "Target" pane and a second
-              pane elsewhere in the column for the rest. */}
-          <Target
+          {/* What a durable task's next prompt starts from, and Compact
+              (design/design/durable-tasks.design.md#DT-15). */}
+          <ContextSection
             t={t}
-            tasks={tasks}
-            config={config}
+            context={taskContext}
+            setContext={setTaskContext}
             act={act}
-            showError={showError}
-          >
-            <WriteRepos
-              t={t}
-              tasks={tasks}
-              config={config}
-              act={act}
-              showError={showError}
-            />
-          </Target>
-          <ReadOnlyRepos
+          />
+          {/* The repo this task is filed against and its base branch.
+              The other repos it reads and writes are grants, in Access
+              below (unified-grants slice 5), where its target shows
+              too as the one line that cannot be removed. */}
+          <Target
             t={t}
             tasks={tasks}
             config={config}
@@ -981,7 +1054,13 @@ export default function DetailOverlay({
             onNewTaskFrom={onNewTaskFrom}
             unsavedRef={customFieldsUnsavedRef}
           />
-          <CapabilityToggles t={t} config={config} act={act} />
+          <CapabilityToggles
+            t={t}
+            config={config}
+            act={act}
+            tasks={tasks}
+            showError={showError}
+          />
           <SuspendedSession t={t} />
           <Dependencies t={t} tasks={tasks} act={act} onOpenTask={onOpenTask} />
         </div>

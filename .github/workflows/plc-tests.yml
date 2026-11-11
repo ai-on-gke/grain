@@ -19,16 +19,16 @@ on:
     branches: [main]
     paths:
       - "grain-plc/**"
-      - "pkg/registry/api/**"
-      - "pkg/registry/independence_test.go"
+      - "pkg/hub/api/**"
+      - "pkg/hub/independence_test.go"
       - "pkg/tunnel/**"
       - "pkg/apierror/**"
       - ".github/workflows/plc-tests.yml"
   pull_request:
     paths:
       - "grain-plc/**"
-      - "pkg/registry/api/**"
-      - "pkg/registry/independence_test.go"
+      - "pkg/hub/api/**"
+      - "pkg/hub/independence_test.go"
       - "pkg/tunnel/**"
       - "pkg/apierror/**"
       - ".github/workflows/plc-tests.yml"
@@ -95,4 +95,4 @@ jobs:
         run: go test -race ./...
 
       - name: Verify one-way import boundary
-        run: go test -race -run 'Test.*GrainPLC|Test.*RegistryAPI' ./pkg/registry
+        run: go test -race -run 'Test.*GrainPLC|Test.*RegistryAPI' ./pkg/hub

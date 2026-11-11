@@ -285,7 +285,7 @@ func TestAccessCodeNotesAServerThatRequiresVerifier(t *testing.T) {
 	}
 }
 
-func TestCheckConfigRegistryVerifierFlagsAndEnv(t *testing.T) {
+func TestCheckConfigHubVerifierFlagsAndEnv(t *testing.T) {
 	t.Setenv("GRAIN_REGISTRY_ISSUER", "")
 	t.Setenv("GRAIN_REGISTRY_AUDIENCE", "")
 	t.Setenv("GRAIN_REGISTRY_KEYS_URL", "")
@@ -296,25 +296,25 @@ func TestCheckConfigRegistryVerifierFlagsAndEnv(t *testing.T) {
 
 	cfg, _, _, err := parseDaemonArgs([]string{
 		"-data-dir=/var/lib/grain/data",
-		"-ui-registry-issuer=https://grain.example.com",
-		"-ui-registry-audience=https://my-grain.grain.example.com",
-		"-ui-registry-keys-url=https://grain.example.com/.well-known/jwks.json",
+		"-ui-hub-issuer=https://grain.example.com",
+		"-ui-hub-audience=https://my-grain.grain.example.com",
+		"-ui-hub-keys-url=https://grain.example.com/.well-known/jwks.json",
 		"-ui-require-verifier=registry",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UiRegistryIssuer != "https://grain.example.com" ||
-		cfg.UiRegistryAudience != "https://my-grain.grain.example.com" ||
-		cfg.UiRegistryKeysURL != "https://grain.example.com/.well-known/jwks.json" {
-		t.Fatalf("parsed registry flags = (%q, %q, %q)", cfg.UiRegistryIssuer, cfg.UiRegistryAudience, cfg.UiRegistryKeysURL)
+	if cfg.UiHubIssuer != "https://grain.example.com" ||
+		cfg.UiHubAudience != "https://my-grain.grain.example.com" ||
+		cfg.UiHubKeysURL != "https://grain.example.com/.well-known/jwks.json" {
+		t.Fatalf("parsed registry flags = (%q, %q, %q)", cfg.UiHubIssuer, cfg.UiHubAudience, cfg.UiHubKeysURL)
 	}
 
 	// All three configured -> -ui-require-verifier=registry passes without registering a stub verifier.
 	start := startable()
-	start.UiRegistryIssuer = cfg.UiRegistryIssuer
-	start.UiRegistryAudience = cfg.UiRegistryAudience
-	start.UiRegistryKeysURL = cfg.UiRegistryKeysURL
+	start.UiHubIssuer = cfg.UiHubIssuer
+	start.UiHubAudience = cfg.UiHubAudience
+	start.UiHubKeysURL = cfg.UiHubKeysURL
 	start.UiRequireVerifier = "registry"
 	if err := checkConfig(start); err != nil {
 		t.Fatalf("checkConfig(valid registry verifier): %v", err)
@@ -322,15 +322,15 @@ func TestCheckConfigRegistryVerifierFlagsAndEnv(t *testing.T) {
 
 	// Incomplete registry configuration is rejected.
 	partial := startable()
-	partial.UiRegistryIssuer = "https://grain.example.com"
-	partial.UiRegistryAudience = "https://my-grain.grain.example.com"
+	partial.UiHubIssuer = "https://grain.example.com"
+	partial.UiHubAudience = "https://my-grain.grain.example.com"
 	if err := checkConfig(partial); err == nil || !strings.Contains(err.Error(), "incomplete registry verifier configuration") {
 		t.Fatalf("checkConfig(missing keys URL) = %v, want incomplete registry verifier configuration error", err)
 	}
 
 	// Comma-separated audience or issuer is rejected (registry audience is a single URL).
 	multiAud := start
-	multiAud.UiRegistryAudience = "https://a.example.com,https://b.example.com"
+	multiAud.UiHubAudience = "https://a.example.com,https://b.example.com"
 	if err := checkConfig(multiAud); err == nil || !strings.Contains(err.Error(), "single URL") {
 		t.Fatalf("checkConfig(comma-separated registry audience) = %v, want single URL error", err)
 	}
@@ -345,22 +345,22 @@ func TestCheckConfigRegistryVerifierFlagsAndEnv(t *testing.T) {
 		t.Fatalf("checkConfig(registry env vars): %v", err)
 	}
 
-	// grain demo also accepts -ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url with -ui-require-verifier=registry.
+	// grain demo also accepts -ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url with -ui-require-verifier=registry.
 	t.Setenv("GRAIN_REGISTRY_ISSUER", "")
 	t.Setenv("GRAIN_REGISTRY_AUDIENCE", "")
 	t.Setenv("GRAIN_REGISTRY_KEYS_URL", "")
 	demoOpts, err := parseDemoFlags([]string{
-		"-ui-registry-issuer=https://grain.example.com",
-		"-ui-registry-audience=https://my-grain.grain.example.com",
-		"-ui-registry-keys-url=https://grain.example.com/.well-known/jwks.json",
+		"-ui-hub-issuer=https://grain.example.com",
+		"-ui-hub-audience=https://my-grain.grain.example.com",
+		"-ui-hub-keys-url=https://grain.example.com/.well-known/jwks.json",
 		"-ui-require-verifier=registry",
 	})
 	if err != nil {
 		t.Fatalf("parseDemoFlags(registry verifier): %v", err)
 	}
-	if demoOpts.RegistryIssuer != "https://grain.example.com" ||
-		demoOpts.RegistryAudience != "https://my-grain.grain.example.com" ||
-		demoOpts.RegistryKeysURL != "https://grain.example.com/.well-known/jwks.json" ||
+	if demoOpts.HubIssuer != "https://grain.example.com" ||
+		demoOpts.HubAudience != "https://my-grain.grain.example.com" ||
+		demoOpts.HubKeysURL != "https://grain.example.com/.well-known/jwks.json" ||
 		demoOpts.RequireVerifier != "registry" {
 		t.Fatalf("parseDemoFlags = %+v", demoOpts)
 	}

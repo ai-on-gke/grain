@@ -45,7 +45,9 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 	}
 	held := make([]string, 0, len(acting.Grants))
 	for _, g := range acting.Grants {
-		held = append(held, CanonicalLegacyGrants(g.Capability)...)
+		for _, c := range CanonicalLegacyGrants(g.Capability) {
+			held = append(held, CanonicalGrantKey(c))
+		}
 	}
 	for _, g := range tmpl.Grants {
 		if IsPersonOnlyGrant(g.Capability) {
@@ -55,7 +57,7 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 			if IsPersonOnlyGrant(needed) {
 				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 			}
-			if !slices.Contains(held, needed) {
+			if !slices.Contains(held, CanonicalGrantKey(needed)) {
 				return fmt.Errorf("template %s grants %s, which the agent's own task does not hold", tmpl.ID, g.Capability)
 			}
 		}
@@ -108,7 +110,7 @@ func ReviewTemplateRefusedNote(proposer, asked, fallback string, why error) stri
 // dangerous capability (db-write, self-repair), or a capability-server reference whose
 // method or arguments require a person (protocol.GrantByPerson).
 func IsDangerousGrant(name string) bool {
-	s := strings.TrimSpace(name)
+	s := strings.TrimSpace(StoredGrantSpelling(name))
 	if s == "db-write" || s == "self-repair" {
 		return true
 	}
@@ -144,7 +146,10 @@ func IsDangerousGrant(name string) bool {
 // been edited since. Dropped names are returned beside the rest.
 func ReviewGrants(grants []Grant, reviewed Task) (kept []Grant, dropped []string) {
 	for _, g := range grants {
-		if IsPersonOnlyGrant(g.Capability) && !slices.ContainsFunc(reviewed.Grants, func(h Grant) bool { return h.Capability == g.Capability }) {
+		key := CanonicalGrantKey(g.Capability)
+		if IsPersonOnlyGrant(g.Capability) && !slices.ContainsFunc(reviewed.Grants, func(h Grant) bool {
+			return CanonicalGrantKey(h.Capability) == key
+		}) {
 			dropped = append(dropped, g.Capability)
 			continue
 		}
@@ -167,4 +172,78 @@ func ReviewAdmission(tmplAdmission Admission, reviewed Task) (Admission, bool) {
 		return want, false
 	}
 	return held, true
+}
+
+// declaredHeldServers are the capability servers whose grants hand a task
+// credentials or code that runs outside its sandbox: a GCP key, a script
+// on a host, a GitHub credential. Each is an operator's to give, so one
+// arriving in a repository's own declaration is held for a person
+// (DeclaredGrantNeedsPerson) even where its server would let an agent
+// pass it on.
+var declaredHeldServers = map[string]bool{"gcp": true, "host-script": true, "github-credential": true}
+
+// DeclaredGrantNeedsPerson reports whether a grant written in a
+// repository's own `.grain/` declaration needs a person to accept it
+// before the work it files runs (task 3965): anybody who can merge to
+// the repository writes those files, with no grain access of their own,
+// so a declaration is not a person's grant. A dangerous or person-only
+// grant (IsDangerousGrant, IsPersonOnlyGrant) needs one, as does any
+// grant of a server in declaredHeldServers.
+func DeclaredGrantNeedsPerson(name string) bool {
+	s := strings.TrimSpace(StoredGrantSpelling(name))
+	if s == "" {
+		return false
+	}
+	if IsDangerousGrant(s) || IsPersonOnlyGrant(s) {
+		return true
+	}
+	for _, c := range append([]string{s}, CanonicalLegacyGrants(s)...) {
+		if declaredHeldServers[grantServerID(c)] {
+			return true
+		}
+	}
+	return false
+}
+
+// grantServerID is the capability server a server#method grant names, in
+// either its short ("gcp#gcp-key") or its canonical reference
+// ("https://.../gcp#gcp-key") spelling, and "" for any other grant.
+func grantServerID(grant string) string {
+	base, _, ok := strings.Cut(CapabilityGrantRef(grant), "#")
+	if !ok {
+		return ""
+	}
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	return base
+}
+
+// DeclaredFiringHold is why a firing of sched (through tmpl, nil for none)
+// composed as comp must wait for a person rather than land approved:
+// what a repository's own declaration put there that only a person may
+// accept (DeclaredCompositionHold). A schedule or template an operator
+// wrote holds nothing here -- it is a person's standing approval already
+// -- so only a repo-declared one is asked about. Whether a person has
+// accepted the set is DeclarationAcceptance's question
+// (composeScheduleTask).
+func DeclaredFiringHold(sched Schedule, tmpl *Template, comp Composition) []string {
+	if ScheduleDeclarationID(sched, tmpl) == "" {
+		return nil
+	}
+	return DeclaredCompositionHold(comp)
+}
+
+// ScheduleDeclarationID is the declaration a firing of sched (through
+// tmpl) is accepted under (DeclarationAcceptance): the schedule's own id
+// when a repository declared it, else its template's when one did, and
+// "" for a firing nothing declared.
+func ScheduleDeclarationID(sched Schedule, tmpl *Template) string {
+	if IsRepoDeclaredID(sched.ID) {
+		return sched.ID
+	}
+	if tmpl != nil && IsRepoDeclaredID(tmpl.ID) {
+		return tmpl.ID
+	}
+	return ""
 }

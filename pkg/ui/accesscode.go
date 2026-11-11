@@ -35,6 +35,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The access code is a single-tenant daemon's one
@@ -60,6 +62,13 @@ const (
 	// AccessCodeHeader carries the access code when Authorization is
 	// already occupied by an upstream IAP or OIDC proxy's bearer token.
 	AccessCodeHeader = "X-Grain-Access-Code"
+	// AccessNameHeader names who is presenting the access code as a
+	// bearer token or in AccessCodeHeader -- the host CLI sends
+	// $GRAIN_OWNER, else its local account -- so the request is recorded
+	// as access-code:<name> rather than as nobody. It counts only beside
+	// the code: anybody who holds the code is the owner already, so the
+	// name attributes, it does not authorize.
+	AccessNameHeader = "X-Grain-Access-Name"
 	// DefaultAccessSessionLifetime is how long an access session lasts
 	// without being used (Config.AccessSessionLifetime).
 	DefaultAccessSessionLifetime = 90 * 24 * time.Hour
@@ -253,43 +262,103 @@ func accessSessionMAC(code, payload string) []byte {
 }
 
 // accessSessionToken is the session cookie's value for a session issued
-// at issued: "v1.<unix seconds>.<HMAC>", the HMAC keyed by the code.
+// at issued that names nobody: "v1.<unix seconds>.<HMAC>", the HMAC keyed
+// by the code. Only tests and sessions signed before names existed carry
+// one; a sign-in now names its person (accessSessionTokenFor).
 func accessSessionToken(code string, issued time.Time) string {
+	return accessSessionTokenFor(code, "", issued)
+}
+
+// accessSessionTokenFor is the session cookie's value for name's session
+// issued at issued: "v2.<unix seconds>.<name, base64url>.<HMAC>", the HMAC
+// over everything before it, so the name is as unforgeable as the time.
+// An empty name is a v1 token.
+func accessSessionTokenFor(code, name string, issued time.Time) string {
 	payload := "v1." + strconv.FormatInt(issued.Unix(), 10)
+	if name != "" {
+		payload = "v2." + strconv.FormatInt(issued.Unix(), 10) + "." + base64.RawURLEncoding.EncodeToString([]byte(name))
+	}
 	return payload + "." + base64.RawURLEncoding.EncodeToString(accessSessionMAC(code, payload))
 }
 
+// accessSession is a verified access session cookie: when it was issued
+// and who signed in with it, "" for a v1 session that names nobody.
+type accessSession struct {
+	Issued time.Time
+	Name   string
+}
+
 // verifyAccessSession reports whether token is an access session the
-// current code signed, issued no longer than lifetime ago, and when.
-func verifyAccessSession(token, code string, lifetime time.Duration, now time.Time) (time.Time, bool) {
+// current code signed, issued no longer than lifetime ago, and when and
+// for whom.
+func verifyAccessSession(token, code string, lifetime time.Duration, now time.Time) (accessSession, bool) {
 	if canonicalAccessCode(code) == "" || token == "" {
-		return time.Time{}, false
+		return accessSession{}, false
 	}
 	i := strings.LastIndexByte(token, '.')
 	if i < 0 {
-		return time.Time{}, false
+		return accessSession{}, false
 	}
 	payload, sig := token[:i], token[i+1:]
 	got, err := base64.RawURLEncoding.DecodeString(sig)
 	if err != nil || !hmac.Equal(got, accessSessionMAC(code, payload)) {
-		return time.Time{}, false
+		return accessSession{}, false
 	}
-	secs, ok := strings.CutPrefix(payload, "v1.")
-	if !ok {
-		return time.Time{}, false
+	var secs, name string
+	if rest, ok := strings.CutPrefix(payload, "v1."); ok {
+		secs = rest
+	} else if rest, ok := strings.CutPrefix(payload, "v2."); ok {
+		var enc string
+		secs, enc, ok = strings.Cut(rest, ".")
+		if !ok {
+			return accessSession{}, false
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(enc)
+		if err != nil {
+			return accessSession{}, false
+		}
+		if name, ok = cleanAccessName(string(raw)); !ok || name == "" {
+			return accessSession{}, false
+		}
+	} else {
+		return accessSession{}, false
 	}
 	n, err := strconv.ParseInt(secs, 10, 64)
 	if err != nil {
-		return time.Time{}, false
+		return accessSession{}, false
 	}
 	issued := time.Unix(n, 0)
 	if lifetime <= 0 {
 		lifetime = DefaultAccessSessionLifetime
 	}
 	if issued.After(now.Add(5*time.Minute)) || now.Sub(issued) > lifetime {
-		return time.Time{}, false
+		return accessSession{}, false
 	}
-	return issued, true
+	return accessSession{Issued: issued, Name: name}, true
+}
+
+// maxAccessNameLen is the longest name an access-code session may carry.
+const maxAccessNameLen = 128
+
+// cleanAccessName is name as an access-code session records it: trimmed,
+// and refused (false) if it is longer than maxAccessNameLen or holds
+// anything but letters, digits and "@._+-" -- an email address or a
+// "user@host" account, never something that could pass for another
+// principal's syntax or break a log line. "" is no name, and fine.
+func cleanAccessName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if len(name) > maxAccessNameLen {
+		return "", false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("@._+-", r):
+		default:
+			return "", false
+		}
+	}
+	return name, true
 }
 
 // accessLifetime is cfg's access session lifetime, defaulted.
@@ -382,14 +451,35 @@ func accessCodeCandidate(r *http.Request, code string) bool {
 // accessSessionIssued is when r's access session cookie was issued, if
 // it carries one the current code signed and it has not expired.
 func accessSessionIssued(r *http.Request, cfg IAPConfig) (time.Time, bool) {
+	sess, ok := accessSessionOf(r, cfg)
+	return sess.Issued, ok
+}
+
+// accessSessionOf is r's access session, if it carries one the current
+// code signed and it has not expired.
+func accessSessionOf(r *http.Request, cfg IAPConfig) (accessSession, bool) {
 	if !accessCodeAccepted(r, cfg) {
-		return time.Time{}, false
+		return accessSession{}, false
 	}
 	c, err := r.Cookie(AccessCookieName)
 	if err != nil || c == nil {
-		return time.Time{}, false
+		return accessSession{}, false
 	}
 	return verifyAccessSession(c.Value, cfg.LocalAPIToken, accessLifetime(cfg), time.Now())
+}
+
+// accessCodeName is who r's access code is presented by: the name in
+// AccessNameHeader beside a bearer or header code, or the one its session
+// was signed in with; "" when it names nobody (or carries no code).
+func accessCodeName(r *http.Request, cfg IAPConfig) string {
+	if presentsAccessCode(r, cfg) {
+		name, _ := cleanAccessName(r.Header.Get(AccessNameHeader))
+		return name
+	}
+	if sess, ok := accessSessionOf(r, cfg); ok {
+		return sess.Name
+	}
+	return ""
 }
 
 // singleTenantTrusted reports whether r came from somewhere this daemon
@@ -587,10 +677,12 @@ func couldBeAccessCode(got, code string) bool {
 	return true
 }
 
-func setAccessCookie(w http.ResponseWriter, r *http.Request, code string, lifetime time.Duration) {
+// setAccessCookie signs name in with the access code: a fresh session
+// cookie naming them ("" for a renewed session that named nobody).
+func setAccessCookie(w http.ResponseWriter, r *http.Request, code, name string, lifetime time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     AccessCookieName,
-		Value:    accessSessionToken(code, time.Now()),
+		Value:    accessSessionTokenFor(code, name, time.Now()),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   requestIsHTTPS(r),
@@ -615,7 +707,8 @@ func clearAccessCookie(w http.ResponseWriter, r *http.Request) {
 // The routes a single-tenant daemon serves to a caller without the code:
 // the login page's own, logging out, and a grain hostd dialing in
 // (hostdConnectRoute), which authenticates in its own protocol, with the
-// script that installs one (hostdInstallRoute).
+// script that installs one (hostdInstallRoute), and the script that
+// installs the grain CLI (cliInstallRoute).
 const (
 	accessCodePath       = "/api/auth/access-code"
 	accessCodeScriptPath = "/api/auth/access-code/login.js"
@@ -626,7 +719,7 @@ func singleTenantOpenRoute(r *http.Request) bool {
 	case accessCodePath, accessCodeScriptPath, "/api/auth/logout", "/api/auth/whoami":
 		return true
 	}
-	return hostdConnectRoute(r) || hostdInstallRoute(r) || hostdEnrollOpenRoute(r)
+	return hostdConnectRoute(r) || hostdInstallRoute(r) || hostdEnrollOpenRoute(r) || cliInstallRoute(r)
 }
 
 const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows its access code: " +
@@ -643,6 +736,15 @@ func errVerifierRequired(verifier string) string {
 	}
 	return fmt.Sprintf("this daemon requires %s (-ui-require-verifier=%s): the access code is not accepted over the network, "+
 		"so sign in through %s; the code still works from the daemon's own host over loopback", verifier, verifier, verifier)
+}
+
+// errAccessCodeBehindVerifier is POST /api/auth/access-code's refusal
+// for a caller a verifier has already identified, whose verifier does not
+// declare AccessCodePrecedence: the identity's role applies, not the code's.
+func errAccessCodeBehindVerifier(cv callerVerification) string {
+	return fmt.Sprintf("you are signed in as %s through %s, and that sign-in decides your role here (Settings -> Access): "+
+		"the access code does not change it, so it was not used. Ask an operator for a wider role, "+
+		"or use the code from the daemon's own host over loopback", cv.id.Email, cv.method)
 }
 
 const errAccessCodeLimited = "too many wrong access codes: wait a minute and try again"
@@ -681,9 +783,9 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 				}
 				return true
 			}
-			if issued, ok := accessSessionIssued(r, cfg); ok {
-				if time.Since(issued) > accessSessionRenewAfter {
-					setAccessCookie(w, r, cfg.LocalAPIToken, accessLifetime(cfg))
+			if sess, ok := accessSessionOf(r, cfg); ok {
+				if time.Since(sess.Issued) > accessSessionRenewAfter {
+					setAccessCookie(w, r, cfg.LocalAPIToken, sess.Name, accessLifetime(cfg))
 				}
 				return true
 			}
@@ -730,8 +832,8 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		}
 	}
 	if singleTenantTrusted(r) {
-		if issued, ok := accessSessionIssued(r, cfg); ok && time.Since(issued) > accessSessionRenewAfter {
-			setAccessCookie(w, r, cfg.LocalAPIToken, accessLifetime(cfg))
+		if sess, ok := accessSessionOf(r, cfg); ok && time.Since(sess.Issued) > accessSessionRenewAfter {
+			setAccessCookie(w, r, cfg.LocalAPIToken, sess.Name, accessLifetime(cfg))
 		}
 		return true
 	}
@@ -763,8 +865,15 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 
 // AccessCodeRequest is POST /api/auth/access-code's JSON body; a form
 // post's "code" field says the same.
+//
+// Name is who is signing in -- an email address the allowlist admits
+// when it names anybody (accessNameAllowed) -- and is what the session
+// records every request it makes as (access-code:<name>). A caller a
+// verifier has identified beside the code signs in as that identity
+// instead.
 type AccessCodeRequest struct {
 	Code string `json:"code"`
+	Name string `json:"name,omitempty"`
 }
 
 // handleAccessCodeStatus is GET /api/auth/access-code: whether this
@@ -797,6 +906,7 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, errors.New(errVerifierRequired(requiredVerifier(cfg))))
 		return
 	}
+	mode := s.accessCodeModeNow()
 	isJSON := strings.HasPrefix(strings.TrimSpace(r.Header.Get("Content-Type")), "application/json")
 	fail := func(status int, msg string) {
 		if isJSON {
@@ -805,12 +915,22 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		writeAccessCodePage(w, status, msg, r.PostForm.Get(accessReturnField))
 	}
+	if cv := cachedOrVerifyCaller(r); cv.present && cv.err == nil && !cv.accessCodeWins {
+		// The verified identity, not the code, decides every request this
+		// browser sends through the proxy (singleTenantGate), so a cookie
+		// set here would be accepted and then never used
+		// (docs/test-runs/2026-11-07-rbac-roles.md F1). Say so instead.
+		// The code is not looked at, so this tells nobody whether it was
+		// right.
+		fail(http.StatusForbidden, errAccessCodeBehindVerifier(cv))
+		return
+	}
 	source := accessSource(r)
 	if !accessLimitExempt(r) && s.access.sourceLimited(source, time.Now()) {
 		fail(http.StatusTooManyRequests, errAccessCodeLimited)
 		return
 	}
-	var code string
+	var code, name string
 	r.Body = http.MaxBytesReader(w, r.Body, 4096+3*maxAccessReturnPath)
 	if isJSON {
 		var req AccessCodeRequest
@@ -818,14 +938,29 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 			fail(http.StatusBadRequest, "the request body is not an access code")
 			return
 		}
-		code = req.Code
+		code, name = req.Code, req.Name
 	} else {
 		if err := r.ParseForm(); err != nil {
 			fail(http.StatusBadRequest, "the request body is not an access code")
 			return
 		}
-		code = r.PostForm.Get("code")
+		code, name = r.PostForm.Get("code"), r.PostForm.Get("name")
 	}
+	if mode == AccessCodeOff {
+		// Said before the code is compared, and the same whether it was
+		// right, so this tells nobody anything about it.
+		fail(http.StatusForbidden, errAccessCodeOff)
+		return
+	}
+	verifiedName := false
+	if cv := cachedOrVerifyCaller(r); cv.present && cv.err == nil && cv.id.Email != "" {
+		// A verifier that lets the code win (AccessCodeWins) still says
+		// who this is: the session is theirs, not whatever was typed --
+		// even when the allowlist refuses them, which is what the code is
+		// break-glass for.
+		name, verifiedName = cv.id.Email, true
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
 	if !matchesAccessCode(code, cfg.LocalAPIToken) {
 		if couldBeAccessCode(code, cfg.LocalAPIToken) && s.access.failed(source, time.Now()) {
 			fail(http.StatusTooManyRequests, errAccessCodeLimited)
@@ -834,7 +969,28 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusUnauthorized, "That access code was not accepted.")
 		return
 	}
-	setAccessCookie(w, r, cfg.LocalAPIToken, accessLifetime(cfg))
+	// The name is judged only once the code is right, so a wrong code is
+	// told nothing about who is on the allowlist.
+	clean, ok := cleanAccessName(name)
+	if !ok {
+		fail(http.StatusBadRequest, "that name is not an email address")
+		return
+	}
+	if verifiedName && clean == "" {
+		fail(http.StatusBadRequest, "that name is not an email address")
+		return
+	}
+	if err := s.accessNameAllowed(r.Context(), clean); err != nil && !verifiedName {
+		fail(http.StatusForbidden, err.Error())
+		return
+	}
+	recovery := s.accessCodeRestricted(r.Context(), cfg)
+	ctx := withAccessCodeName(withRequestSource(r.Context(), model.SourceAccessCode), clean)
+	if s.tasks != nil {
+		ctx = s.tasks.withOperatorActor(ctx)
+	}
+	s.recordAccessCodeUse(ctx, accessCodeUse{Name: clean, Source: accessSource(r), Method: r.Method, Path: r.URL.Path}, recovery)
+	setAccessCookie(w, r, cfg.LocalAPIToken, clean, accessLifetime(cfg))
 	if isJSON {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
 		return
@@ -934,10 +1090,13 @@ p { color: #444; font-size: .9rem; }
 <h1>Enter access code</h1>
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 <input type="hidden" name="` + accessReturnField + `" value="{{.Next}}">
+<label for="name">Your email</label>
+<input id="name" name="name" type="email" autocomplete="username" autofocus required>
 <label for="code">Access code</label>
-<input id="code" name="code" type="password" autocomplete="current-password" autofocus required>
+<input id="code" name="code" type="password" autocomplete="current-password" required>
 <button type="submit">Continue</button>
-<p>Run <code>grain access-code</code> on the machine grain is installed on to see it.</p>
+<p>Run <code>grain access-code</code> on the machine grain is installed on to see it.
+What you do is recorded as you; use the email you are on the allowlist under.</p>
 </form>
 </body>
 </html>

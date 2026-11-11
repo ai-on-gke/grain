@@ -1,0 +1,1 @@
+{"error":"CSRF check refused POST /api/tasks: state-changing cookie-authenticated request must carry Sec-Fetch-Site: same-origin or a matching Origin"}

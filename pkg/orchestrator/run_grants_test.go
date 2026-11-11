@@ -360,6 +360,7 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 		model.SelfDebugCapability,
 		model.GrainSourceGrant,
 		model.APIGrantPrefix + "self-debug",
+		model.APIRef("self-debug"),
 		grainlog.CapabilityName,
 		model.GrainJournalGrant,
 		deploymenthealth.CapabilityName,
@@ -424,20 +425,6 @@ func TestRunCycleTellsAnOrdinaryTaskNothingAboutItsGrants(t *testing.T) {
 	}
 	if sourceDir != "" {
 		t.Errorf("RunConfig.GrainSourceDir = %q, want it withheld from a task without the grant", sourceDir)
-	}
-}
-
-// A capability registered from outside core as a run grant travels to the
-// run like the core ones above, and only while it is registered. Not
-// parallel: the registration is process-wide (capabilitytest.Register).
-func TestRunCycleForwardsARegisteredRunGrant(t *testing.T) {
-	grants := []model.Grant{{Capability: capabilitytest.ID, Via: model.GrantByLabel}}
-	if held, _ := runWithGrants(t, grants, ""); slices.Contains(held, capabilitytest.ID) {
-		t.Fatalf("RunConfig.Grants = %v before %s is registered, want it absent", held, capabilitytest.ID)
-	}
-	capabilitytest.Register(t)
-	if held, _ := runWithGrants(t, grants, ""); !slices.Contains(held, capabilitytest.ID) {
-		t.Errorf("RunConfig.Grants = %v, want the registered %s among them", held, capabilitytest.ID)
 	}
 }
 

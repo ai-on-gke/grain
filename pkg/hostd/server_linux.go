@@ -59,6 +59,9 @@ type Server struct {
 	Logf func(format string, args ...any)
 	// Build is this hostd's version, for Hello.
 	Build string
+	// AgentsOnly says, in Hello, that this host agent runs agent CLIs
+	// only (grain-agentd).
+	AgentsOnly bool
 	// CurrentLink is the installer's current link hostd was started
 	// through (CurrentLinkFor), for Hello's Running and Current; "" for
 	// none.
@@ -85,6 +88,13 @@ type Server struct {
 	RenewInterval  time.Duration
 	CurrentToken   func() string
 	OnTokenRenewed func(token string, expiresAt time.Time)
+	// RenewedAt is when the credential CurrentToken returns was issued --
+	// its token file's modification time -- so that a restarted host
+	// agent renews on its credential's schedule rather than RenewInterval
+	// after it started. Zero counts from the first connection. Either
+	// way the schedule outlives a reconnect: a host whose connection drops
+	// more often than RenewInterval still renews (renewDue).
+	RenewedAt time.Time
 	// StageRoot is where OpStage may write on this machine, for a run a
 	// daemon reaches over Remote: "~/.grain/hostd-stage" under hostd's
 	// home when empty (stageRoot). It should be a directory nothing else
@@ -107,6 +117,11 @@ type Server struct {
 
 	uid uint32
 	wg  sync.WaitGroup
+
+	// renewMu guards renewedAt: when this host's credential was last
+	// issued or renewed, across every connection this Server makes.
+	renewMu   sync.Mutex
+	renewedAt time.Time
 
 	mu    sync.Mutex
 	procs map[string]*proc
@@ -308,15 +323,27 @@ func (s *Server) signalChanged() {
 // spool and its exit record on disk, and the next hostd lists it again
 // (loadSpools), so a daemon that was not attached loses nothing.
 func (s *Server) Drain() {
+	if s.refuseStarts() {
+		s.mu.Lock()
+		s.startDrainLocked()
+		s.mu.Unlock()
+	}
+}
+
+// refuseStarts is the first half of Drain: from its return every new CLI
+// start is refused, but the drain loop that exits hostd has not been
+// woken. It reports whether this call began the drain, in which case the
+// caller must go on to startDrainLocked.
+func (s *Server) refuseStarts() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining {
-		return
+		return false
 	}
 	s.draining = true
-	s.startDrainLocked()
 	s.logf("hostd: draining for an upgrade: refusing new starts; %d process(es) still running", s.runningLocked())
+	return true
 }
 
 // Cutover is the drain an upgrade to a build speaking this one's protocol
@@ -579,9 +606,10 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		h.Cutover = !h.Draining && s.CuttingOver()
 		h.Capacity, h.Labels = a.Capacity, a.Labels
 		describeCopies(ctx, &h, s.CurrentLink)
-		h.Logins = ambientLogins()
+		h.Logins = a.ambientLogins()
+		h.AgentsOnly = s.AgentsOnly
 		if sessionMux(ctx) != nil {
-			s.describeRemote(&h)
+			s.describeRemote(&h, a)
 		}
 		if req.Hello != nil {
 			if err := Compatible(h, *req.Hello); err != nil {
@@ -606,12 +634,24 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpDrain:
+		// Answered before the drain loop starts: with nothing running, it
+		// exits the process at once, and an answer written after it raced
+		// that exit -- a daemon then read EOF for a drain that had in fact
+		// happened (tests/agentdcompat). But starts are refused before the
+		// answer, so a daemon that has been told the drain began never
+		// sees a start it makes next taken.
 		if req.Idle {
+			_ = writeFrame(conn, frameOK, nil)
 			s.Cutover()
-		} else {
-			s.Drain()
+			return
 		}
+		began := s.refuseStarts()
 		_ = writeFrame(conn, frameOK, nil)
+		if began {
+			s.mu.Lock()
+			s.startDrainLocked()
+			s.mu.Unlock()
+		}
 		return
 	case OpSocketOwner:
 		_ = writeJSON(conn, frameSocketOwner, SocketOwner{PID: s.socketOwner(req.Inode)})
@@ -621,7 +661,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			s.refuse(conn, "stage is served only over a session hostd dialed out on (grain hostd -server)")
 			return
 		}
-		_ = writeJSON(conn, frameStaged, s.stage(req.Stage))
+		_ = writeJSON(conn, frameStaged, s.stageWithAllowlist(req.Stage, a))
 		return
 	case OpListen:
 		m := sessionMux(ctx)
@@ -686,7 +726,7 @@ func (s *Server) env() []string {
 }
 
 func (s *Server) refuse(conn net.Conn, reason string) {
-	reason = strings.TrimPrefix(reason, "hostd refused: ")
+	reason = strings.TrimPrefix(reason, refusedPrefix)
 	s.logf("hostd: refused: %s", reason)
 	_ = writeJSON(conn, frameRefused, Refusal{Reason: reason})
 }

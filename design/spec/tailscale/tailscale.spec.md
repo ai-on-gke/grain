@@ -25,7 +25,7 @@ The key words "MUST", "MUST NOT", "SHOULD", "SHOULD NOT" and "MAY" are to be rea
 
 **TS-1. Server.** The capability server is the in-tree `grain capability tailscale`, registered as a built-in under the canonical ID `https://grain.dev/capabilities/tailscale`. It is in `needs-config` until it attaches with a host policy present (TS-10).
 
-**TS-2. Host only.** The server MUST run `run: host` through grain hostd, from the allowlist entry `grain-tailscale` (`<grain> capability tailscale`, no `extra_args`, no `env`). That entry is added to `intree.HostdBuiltins`, so `grain-hostd-allowlist.service` and hostd's own offers provide it. A container-run entry MUST fail to attach with `tailscale runs on the host only (run: host)`. The node it manages is the node of the host where that hostd runs.
+**TS-2. Host only.** The server MUST run `run: host` through grain host, from the allowlist entry `grain-tailscale` (`<grain> capability tailscale`, no `extra_args`, no `env`). That entry is added to `intree.HostdBuiltins`, so `grain-hostd-allowlist.service` and hostd's own offers provide it. A container-run entry MUST fail to attach with `tailscale runs on the host only (run: host)`. The node it manages is the node of the host where that hostd runs.
 
 **TS-3. Root helper.** Every action that reads or changes Tailscale or apt state is done by `grain tailscale-helper`, a root process run as `grain-tailscale-helper.service`. That service is socket-activated by `grain-tailscale-helper.socket` on `/run/grain-tailscale/helper.sock` (`SocketUser=<GRAIN_USER>`, `SocketMode=0600`). The server MUST NOT execute `tailscale`, `tailscaled`, `apt-get`, `apt-mark`, `dpkg`, `gpg` or `systemctl` itself.
 

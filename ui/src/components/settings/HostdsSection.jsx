@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -31,10 +31,12 @@ import {
 import api from "../../api.js";
 import CopyButton from "../CopyButton.jsx";
 import SettingsCard from "./SettingsCard.jsx";
+import { formatDateTime } from "../../time.js";
+import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 // formatLabels is a host's labels as the label field takes them:
 // "k=v,k2=v2", sorted.
-export function formatLabels(labels) {
+function formatLabels(labels) {
   return Object.keys(labels || {})
     .sort()
     .map((k) => `${k}=${labels[k]}`)
@@ -56,11 +58,26 @@ export function parseLabels(text) {
 }
 
 // parsePrincipals splits a comma-separated list of allowed principal rules.
-export function parsePrincipals(text) {
+function parsePrincipals(text) {
   return (text || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// parseNonNegativeInt reads a whole number >= 0, returning emptyVal when
+// blank or throwing saying what is wrong with it.
+export function parseNonNegativeInt(text, label, emptyVal = undefined) {
+  const s = String(text ?? "").trim();
+  if (!s) return emptyVal;
+  if (!/^\d+$/.test(s)) {
+    throw new Error(`${label} "${s}" must be a non-negative whole number`);
+  }
+  const n = Number(s);
+  if (!Number.isSafeInteger(n)) {
+    throw new Error(`${label} "${s}" is out of range`);
+  }
+  return n;
 }
 
 // installCommand is the legacy per-host token installer line from this
@@ -187,12 +204,28 @@ export function deletedLines(deleted) {
 // HostdsSection is Settings → Hosts: shared --join enrollment codes ("Invite
 // hosts"), pending join requests ("Pending"), the host registry
 // ("Hosts"), and legacy per-host token registration.
-export default function HostdsSection({ showError }) {
+export default function HostdsSection({ showError, dismissError }) {
+  const zone = useTimeZone();
   const [hostds, setHostds] = useState(null);
   const [codes, setCodes] = useState([]);
   const [selectedCodeName, setSelectedCodeName] = useState("");
   const [pending, setPending] = useState([]);
   const [ownerAccess, setOwnerAccess] = useState(true);
+
+  const raisedRef = useRef(null);
+  const raise = useCallback(
+    (err) => {
+      const message = err?.message || String(err);
+      raisedRef.current = String(message);
+      showError?.(err);
+    },
+    [showError],
+  );
+  const settle = useCallback(() => {
+    if (raisedRef.current === null) return;
+    dismissError?.(raisedRef.current);
+    raisedRef.current = null;
+  }, [dismissError]);
 
   // New enrollment code form state.
   const [showNewCode, setShowNewCode] = useState(false);
@@ -261,9 +294,10 @@ export default function HostdsSection({ showError }) {
     setBusy(true);
     try {
       await fn();
+      settle();
       await load();
     } catch (err) {
-      showError?.(err);
+      raise(err);
     } finally {
       setBusy(false);
     }
@@ -284,10 +318,15 @@ export default function HostdsSection({ showError }) {
         default_labels: parseLabels(codeLabels),
         allowed_principals: parsePrincipals(codePrincipals),
       };
+      const maxUses = parseNonNegativeInt(codeMaxUses, "max uses");
+      const defaultCapacity = parseNonNegativeInt(
+        codeCapacity,
+        "default capacity",
+      );
       if (codeExpiresIn.trim()) body.expires_in = codeExpiresIn.trim();
-      if (codeMaxUses.trim()) body.max_uses = Number(codeMaxUses.trim());
-      if (codeCapacity.trim())
-        body.default_capacity = Number(codeCapacity.trim());
+      if (maxUses !== undefined) body.max_uses = maxUses;
+      if (defaultCapacity !== undefined)
+        body.default_capacity = defaultCapacity;
       const created = await api("/api/hostds/enrollment-codes", {
         method: "POST",
         body: JSON.stringify(body),
@@ -302,21 +341,41 @@ export default function HostdsSection({ showError }) {
       setShowNewCode(false);
     });
 
-  const rotateCode = (c) =>
+  // Rotating or revoking a code, rotating or revoking a host's token and
+  // rejecting a join request each took effect on one click: the
+  // 2026-11-11 walkthrough revoked a host by accident, with no way back
+  // but registering it again. Each now says what it breaks and asks.
+  const rotateCode = (c) => {
+    if (
+      !window.confirm(
+        `Rotate enrollment code ${c.name}? Its invite command stops working at once, so hosts not yet joined with it need the new one. Hosts already joined keep their credentials.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(
         `/api/hostds/enrollment-codes/${encodeURIComponent(c.name)}/rotate`,
         { method: "POST" },
       );
     });
+  };
 
-  const revokeCode = (c) =>
+  const revokeCode = (c) => {
+    if (
+      !window.confirm(
+        `Revoke enrollment code ${c.name}? Its invite command stops working for good and the code cannot be restored. Hosts already joined keep their credentials.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(
         `/api/hostds/enrollment-codes/${encodeURIComponent(c.name)}/revoke`,
         { method: "POST" },
       );
     });
+  };
 
   const draftFor = (p) =>
     pendingDrafts[p.id] || {
@@ -336,22 +395,28 @@ export default function HostdsSection({ showError }) {
       const body = {
         name: d.name.trim(),
         labels: parseLabels(d.labels),
+        capacity: parseNonNegativeInt(d.capacity, "host capacity", 0),
       };
-      if (String(d.capacity).trim() !== "") {
-        body.capacity = Number(String(d.capacity).trim());
-      }
       await api(`/api/hostds/pending/${encodeURIComponent(p.id)}/accept`, {
         method: "POST",
         body: JSON.stringify(body),
       });
     });
 
-  const rejectPending = (p) =>
+  const rejectPending = (p) => {
+    if (
+      !window.confirm(
+        `Reject the join request from ${p.hostname}? It is discarded, and that host has to run its join command again to ask once more.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(`/api/hostds/pending/${encodeURIComponent(p.id)}/reject`, {
         method: "POST",
       });
     });
+  };
 
   const create = () =>
     act(async () => {
@@ -371,7 +436,14 @@ export default function HostdsSection({ showError }) {
       setLabels("");
     });
 
-  const rotate = (h) =>
+  const rotate = (h) => {
+    if (
+      !window.confirm(
+        `Rotate host ${h.name}'s token? Its current token stops working at once, so the host is disconnected until the new token is installed on it.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       setShown(null);
       setIssued(
@@ -380,19 +452,28 @@ export default function HostdsSection({ showError }) {
         }),
       );
     });
+  };
 
   const showInstall = async (h) => {
     try {
       const install = await api(
         `/api/hostds/${encodeURIComponent(h.name)}/install`,
       );
+      settle();
       setShown({ name: h.name, install });
     } catch (err) {
-      showError?.(err);
+      raise(err);
     }
   };
 
-  const revoke = (h) =>
+  const revoke = (h) => {
+    if (
+      !window.confirm(
+        `Revoke host ${h.name}? It is disconnected at once and cannot be restored: using that machine again means enrolling it anew. A revoked host can then be deleted.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(`/api/hostds/${encodeURIComponent(h.name)}/revoke`, {
         method: "POST",
@@ -400,6 +481,7 @@ export default function HostdsSection({ showError }) {
       if (issued?.hostd?.name === h.name) setIssued(null);
       if (shown?.name === h.name) setShown(null);
     });
+  };
   // remove deletes a revoked hostd from the registry, with its tokens
   // (DELETE /api/hostds/{name}). The daemon refuses one a model
   // connection or capability server still names, listing them.
@@ -454,11 +536,8 @@ export default function HostdsSection({ showError }) {
         owner: editing.owner.trim(),
         labels: parseLabels(editing.labels),
       };
-      if (
-        editing.capacity !== undefined &&
-        String(editing.capacity).trim() !== ""
-      ) {
-        body.capacity = Number(String(editing.capacity).trim());
+      if (editing.capacity !== undefined) {
+        body.capacity = parseNonNegativeInt(editing.capacity, "capacity", 0);
       }
       await api(`/api/hostds/${encodeURIComponent(editing.name)}`, {
         method: "PATCH",
@@ -525,7 +604,10 @@ export default function HostdsSection({ showError }) {
                   ))}
                   <Button
                     size="small"
-                    onClick={() => setShowNewCode((v) => !v)}
+                    onClick={() => {
+                      if (showNewCode) settle();
+                      setShowNewCode((v) => !v);
+                    }}
                   >
                     {showNewCode ? "Cancel new code" : "New code"}
                   </Button>
@@ -535,7 +617,10 @@ export default function HostdsSection({ showError }) {
                   <Button
                     size="small"
                     variant="outlined"
-                    onClick={() => setShowNewCode((v) => !v)}
+                    onClick={() => {
+                      if (showNewCode) settle();
+                      setShowNewCode((v) => !v);
+                    }}
                   >
                     {showNewCode ? "Cancel new code" : "New enrollment code"}
                   </Button>
@@ -999,7 +1084,10 @@ export default function HostdsSection({ showError }) {
                           </Button>
                           <Button
                             size="small"
-                            onClick={() => setRenaming(null)}
+                            onClick={() => {
+                              settle();
+                              setRenaming(null);
+                            }}
                           >
                             Cancel
                           </Button>
@@ -1087,11 +1175,7 @@ export default function HostdsSection({ showError }) {
                       <Box>{connectionText(h)}</Box>
                       {h.last_seen_at ? (
                         <Typography variant="caption" color="text.secondary">
-                          Last check-in{" "}
-                          {new Date(h.last_seen_at)
-                            .toISOString()
-                            .replace("T", " ")
-                            .slice(0, 16)}
+                          Last check-in {formatDateTime(h.last_seen_at, zone)}
                         </Typography>
                       ) : null}
                     </TableCell>
@@ -1132,7 +1216,13 @@ export default function HostdsSection({ showError }) {
                           <Button size="small" disabled={busy} onClick={save}>
                             Save
                           </Button>
-                          <Button size="small" onClick={() => setEditing(null)}>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              settle();
+                              setEditing(null);
+                            }}
+                          >
                             Cancel
                           </Button>
                         </>

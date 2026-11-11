@@ -64,6 +64,13 @@ func (ic *InstanceClient) PollEvents(ctx context.Context, filter EventsFilter) (
 	if err != nil {
 		return nil, err
 	}
+	kept := page.Events[:0]
+	for _, ev := range page.Events {
+		if matchesClientFilter(filter, ev) {
+			kept = append(kept, ev)
+		}
+	}
+	page.Events = kept
 	return &page, nil
 }
 
@@ -99,7 +106,12 @@ func (ic *InstanceClient) StreamEvents(ctx context.Context, filter EventsFilter,
 		}
 	}
 
-	return parseSSEStream(ctx, resp.Body, ic.perf, handler)
+	return parseSSEStream(ctx, resp.Body, ic.perf, func(ev IntegrationEvent) error {
+		if !matchesClientFilter(filter, ev) {
+			return nil
+		}
+		return handler(ev)
+	})
 }
 
 func parseSSEStream(ctx context.Context, r io.Reader, recorder interface{ RecordCacheHit(string) }, handler func(IntegrationEvent) error) error {

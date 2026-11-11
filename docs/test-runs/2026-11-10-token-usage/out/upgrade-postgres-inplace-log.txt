@@ -1,0 +1,3 @@
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+grain: migrated the store in place from schema 129 to 133
+grain: the config repository's dump was rewritten at schema 133 from the database it was imported into; the prior dump is the preceding commit in /home/debian/walk/up-postgres/inplace/state-repo

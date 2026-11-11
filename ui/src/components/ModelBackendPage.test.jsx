@@ -592,4 +592,37 @@ describe("ModelBackendPage leaving with unsaved changes", () => {
     unmount();
     expect(onDiscard).toHaveBeenCalledWith("backend-unfinished-1");
   });
+
+  it("closes and deletes an unfinished connection when Escape is pressed right after Continue", async () => {
+    const user = userEvent.setup();
+    api.mockResolvedValue({ models: [] });
+    const onBack = vi.fn();
+    const onDiscard = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <StatefulModelBackendPage
+        initialBackend={{
+          id: "backend-unfinished-esc",
+          name: "",
+          framework: "",
+          models: [],
+        }}
+        isNew
+        onBack={onBack}
+        onDiscard={onDiscard}
+      />,
+    );
+
+    await user.click(screen.getByLabelText("Agent type"));
+    await user.click(screen.getByRole("option", { name: "Claude" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByLabelText("Authentication method");
+
+    await user.keyboard("{Escape}");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onDiscard).toHaveBeenCalledWith("backend-unfinished-esc");
+    expect(onBack).toHaveBeenCalledTimes(1);
+    confirm.mockRestore();
+  });
 });

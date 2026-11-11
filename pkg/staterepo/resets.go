@@ -404,6 +404,12 @@ func applySettings(ctx context.Context, r *Repo, db *sql.DB, head, marker string
 }
 
 func applySettingsFromDirs(ctx context.Context, r *Repo, db *sql.DB, head, base, baseDir, dir string) error {
+	// POST/PATCH /api/schedules and `grain state check` refuse an enabled
+	// git_ref schedule watching a forbidden repository (#744); a merged
+	// settings change is the third way in and is held to the same rule.
+	if err := forbiddenGitRefImport(baseDir, dir, r.DataDir()); err != nil {
+		return refuseApply(err)
+	}
 	tables := append(append([]string{}, SettingsTables...), memoryTables...)
 	plan, err := planMerge(ctx, db, base, baseDir, dir, tables)
 	if err != nil {

@@ -44,6 +44,25 @@ func HeldForApproval(t Task) bool {
 	return slices.Contains(t.Tags, HeldForApprovalTag)
 }
 
+// HoldRequestedTag marks a proposal whose propose_task call asked for
+// hold_for_approval, whether or not its proposer's permission would have
+// queued it. HeldForApprovalTag is deliberately narrower -- it says a
+// choice was made, so a proposal from a run whose permission covered
+// nothing does not carry it -- but the request is the proposer saying
+// "a person decides this", and that is what the agent approval rail
+// (ui.agentApprovalRail) has to honour: without this tag an agent holding
+// api:tasks:admin or dispatch:write could approve such a proposal for the
+// person it was left for (docs/test-runs/2026-11-07-director-agent-api.md,
+// finding 2). Per call and never inherited, like HeldForApprovalTag.
+const HoldRequestedTag = "hold-requested"
+
+// HoldRequested reports whether t's proposer asked for it to wait for a
+// person (propose_task's hold_for_approval): t carries HoldRequestedTag,
+// or HeldForApprovalTag from before HoldRequestedTag was recorded.
+func HoldRequested(t Task) bool {
+	return HeldForApproval(t) || slices.Contains(t.Tags, HoldRequestedTag)
+}
+
 // HeldForApprovalNote is the line appended to a held proposal's body, in
 // the voice of AutoSubmitLimitNote and for its reason: the person
 // approving it should know a decision was made, and by whom. "" for a
@@ -83,10 +102,25 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *Propos
 	}
 	if escalated, _ := ProposalEscalations(child, parent, sessionQueues, seeding); len(escalated) > 0 {
 		asked, seeded := SeededEscalations(child, escalated)
+		// A grant only a person may give is escalated whether or not
+		// parent holds it (CapabilityEscalationNote), so it is not said
+		// to be one parent lacks.
+		var lacked, personal []string
+		for _, c := range asked {
+			if IsPersonOnlyGrant(c) {
+				personal = append(personal, c)
+			} else {
+				lacked = append(lacked, c)
+			}
+		}
 		var why []string
-		if len(asked) > 0 {
+		if len(lacked) > 0 {
 			why = append(why, fmt.Sprintf("it asks for %s, which your task does not hold",
-				"`"+strings.Join(asked, "`, `")+"`"))
+				"`"+strings.Join(lacked, "`, `")+"`"))
+		}
+		if len(personal) > 0 {
+			why = append(why, fmt.Sprintf("it asks for %s, which only a person may grant, "+
+				"whether or not your task holds it", "`"+strings.Join(personal, "`, `")+"`"))
 		}
 		if len(seeded) > 0 {
 			why = append(why, fmt.Sprintf("it is seeded with this deployment's default capability %s, "+
@@ -203,6 +237,9 @@ func PersonOnlyProposalSettings(child, parent Task) string {
 		why = append(why, fmt.Sprintf("it asks for priority %d, above the %d its proposer may give it "+
 			"(the higher of its proposer's own priority and the default), which would dispatch it ahead "+
 			"of work a person queued", child.Priority, ceiling))
+	}
+	if shape := ProposalSandboxShapeAbove(child, parent); shape != "" {
+		why = append(why, shape)
 	}
 	return strings.Join(why, "; and ")
 }

@@ -1,0 +1,21 @@
+## a repo-scoped credential asking for another repository's events
+GET /api/events?repo=acme/other: HTTP 403
+## phase 1: both subscribers connected
+restricted subscriber disconnected after id 17
+## phase 2: while the restricted subscriber is away
+## phase 3: reconnect with Last-Event-ID: 17
+
+## results (A=2 acme/app, B=3 acme/other, Director=1)
+operator      18 events: 4:task.state:2:acme/app:proposed 5:task.state:3:acme/other:proposed 6:task.state:2:acme/app:queued 7:task.state:3:acme/other:queued 8:task.comment:2:acme/app:queued 9:task.comment:3:acme/other:queued 10:task.comment:1:-:awaiting_reply 11:task.state:1:-:queued 12:task.state:1:-:running 13:task.state:2:acme/app:running 14:task.state:3:acme/other:running 15:task.state:1:-:queued 16:task.state:3:acme/other:queued 17:task.state:2:acme/app:queued 18:task.comment:2:acme/app:queued 19:task.state:3:acme/other:closed 20:task.state:2:acme/app:deferred 21:task.state:2:acme/app:closed 
+restricted-1   5 events: 4:task.state:2:acme/app:proposed 6:task.state:2:acme/app:queued 8:task.comment:2:acme/app:queued 13:task.state:2:acme/app:running 17:task.state:2:acme/app:queued 
+restricted-2   3 events: 18:task.comment:2:acme/app:queued 20:task.state:2:acme/app:deferred 21:task.state:2:acme/app:closed 
+ordering operator: strictly increasing
+ordering restricted-1: strictly increasing
+ordering restricted-2: strictly increasing
+restricted events outside acme/app: 0
+operator's acme/app ids:      4 6 8 13 17 18 20 21 
+restricted ids (both conns):  4 6 8 13 17 18 20 21 
+replay: identical -- nothing missed, nothing duplicated
+restricted ready-frame cursors: : ready cursor=0 : ready cursor=17 
+## JSON paging with the restricted credential from cursor 17
+{"ids":["18","20"],"cursor":"20","hasMore":true}

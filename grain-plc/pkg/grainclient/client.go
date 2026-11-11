@@ -28,7 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/grain-plc/pkg/perf"
 	"github.com/ai-on-gke/grain/grain-plc/pkg/plcseams"
-	registryapi "github.com/ai-on-gke/grain/pkg/registry/api"
+	registryapi "github.com/ai-on-gke/grain/pkg/hub/api"
 )
 
 // DefaultDirectoryCacheTTL matches the 30 s replica cache decision.
@@ -50,17 +50,22 @@ func (e *APIError) Error() string {
 
 // Config configures a Client talking to the Grain Registry and one or more Grain daemons.
 type Config struct {
-	RegistryURL       string
-	GrainURL          string
-	ClientName        string
-	BearerToken       string
+	RegistryURL string
+	GrainURL    string
+	ClientName  string
+	BearerToken string
+	// GrainToken is sent as the bearer token only on requests to
+	// GrainURL's own origin, never to the registry or to an instance the
+	// registry names: it is that one daemon's access code or
+	// external-agent token, and another host has no business seeing it.
+	GrainToken        string
 	RegistryAssertion string
 	DirectoryCacheTTL time.Duration
 	HTTPClient        *http.Client
 	Perf              *perf.Recorder
 }
 
-// Client wraps pkg/registry/api.Client and provides InstanceClient handles for
+// Client wraps pkg/hub/api.Client and provides InstanceClient handles for
 // Grain daemons discovered via the registry or configured directly.
 type Client struct {
 	cfg        Config
@@ -100,6 +105,8 @@ func New(cfg Config) *Client {
 		base:              baseTransport,
 		clientName:        cfg.ClientName,
 		bearerToken:       cfg.BearerToken,
+		grainToken:        cfg.GrainToken,
+		grainOrigin:       originOf(cfg.GrainURL),
 		registryAssertion: cfg.RegistryAssertion,
 	}
 
@@ -128,13 +135,28 @@ type delegatingTransport struct {
 	base              http.RoundTripper
 	clientName        string
 	bearerToken       string
+	grainToken        string
+	grainOrigin       string
 	registryAssertion string
+}
+
+// originOf is rawURL's scheme://host, or "" when it has none.
+func originOf(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
 }
 
 func (t *delegatingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	if clone.Header.Get(plcseams.HeaderClient) == "" && t.clientName != "" {
 		clone.Header.Set(plcseams.HeaderClient, t.clientName)
+	}
+	if clone.Header.Get("Authorization") == "" && t.grainToken != "" && t.grainOrigin != "" &&
+		originOf(clone.URL.String()) == t.grainOrigin {
+		clone.Header.Set("Authorization", "Bearer "+t.grainToken)
 	}
 	if clone.Header.Get("Authorization") == "" && t.bearerToken != "" {
 		clone.Header.Set("Authorization", "Bearer "+t.bearerToken)

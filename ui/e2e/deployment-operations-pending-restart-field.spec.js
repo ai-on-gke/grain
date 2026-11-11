@@ -19,7 +19,8 @@ import { test, expect } from "./fixtures.js";
 // the real demo server and built frontend: System → Health's "Saved, not
 // applied until restart" row linked each setting to the top of its
 // Settings card (settingLocation's card anchor). GitHub host sits near
-// the foot of Legacy capabilities, a screen and more below that card's
+// the foot of Deployment credentials (then the Legacy capabilities tab, now
+// a card on Settings → Capabilities), a screen and more below that card's
 // top, so following its link opened Settings with the field it named out
 // of sight and unfocused.
 test("Health's pending-restart link lands on the setting's own field", async ({
@@ -45,18 +46,27 @@ test("Health's pending-restart link lands on the setting's own field", async ({
   const link = row.getByRole("link", { name: "GitHub host" });
   await expect(link).toHaveAttribute(
     "href",
-    "/settings/credentials#githubHost",
+    "/settings/capabilities#githubHost",
   );
   await link.click();
 
-  await expect(page).toHaveURL(/\/settings\/credentials#githubHost$/);
+  await expect(page).toHaveURL(/\/settings\/capabilities#githubHost$/);
   const field = page.locator('[data-setting-id="githubHost"]');
   await expect(field).toBeInViewport();
   await expect(
     field.getByRole("textbox", { name: "GitHub host" }),
   ).toBeFocused();
 
-  // The same address, opened cold, lands in the same place.
-  await page.goto("/settings/credentials#githubHost");
-  await expect(page.locator('[data-setting-id="githubHost"]')).toBeInViewport();
+  // The same address, opened cold, lands in the same place -- and so does
+  // the retired tab's old address, rewritten onto Capabilities.
+  for (const address of [
+    "/settings/capabilities#githubHost",
+    "/settings/credentials#githubHost",
+  ]) {
+    await page.goto(address);
+    await expect(page).toHaveURL(/\/settings\/capabilities#githubHost$/);
+    await expect(
+      page.locator('[data-setting-id="githubHost"]'),
+    ).toBeInViewport();
+  }
 });

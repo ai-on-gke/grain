@@ -46,14 +46,11 @@ import {
 // (grain/task-53). Settings says as much and shows what is declared.
 
 // declaredFields (the config's fields, always an array), fieldLabel
-// (what one is called on screen) and the three that read a declaration
-// against a value it is holding (valueList, isOffered, legacyValues)
+// (what one is called on screen) and valueList (a held value as a list)
 // are taskAttributes.js's, where a declaration is also what a filter
-// and a sort are built out of (grain/task-64, grain/task-201 --
-// "is a legacy value" is a comparison in the narrowing bar, so the
-// predicate behind it cannot live in a view). Re-exported here because
-// this is the file everything about a custom field is reached through.
-export { declaredFields, fieldLabel, isOffered, legacyValues, valueList };
+// and a sort are built out of (grain/task-64, grain/task-201). Re-exported
+// here because this is the file custom-field callers reach them through.
+export { declaredFields, fieldLabel, valueList };
 
 // initialFieldValues is what a form's inputs start holding: the values
 // the thing being edited carries (a task, a template, a schedule) or

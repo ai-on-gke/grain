@@ -365,10 +365,10 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil {
 		return call, err
 	}
-	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && call.repo == "" && set.Has(scope) {
-		// A namespace read or event stream naming no repository is narrowed
-		// to the ones the grant reaches by fsScope / eventsReadable, not
-		// refused for naming none.
+	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && call.repo == "" && set.Has(scope) {
+		// A namespace read, event stream or reachable-repos listing naming no
+		// repository is narrowed to the ones the grant reaches by fsScope /
+		// eventsReadable / reposReadable, not refused for naming none.
 		capAllowed = true
 	}
 	if isRepoNarrowedTasksRead(pattern, r) && call.repo == "" && set.Has(scope) {
@@ -410,6 +410,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 			return call, err
 		}
 	}
+	if err := agentRouteAdminScope("task "+taskID, set, pattern); err != nil {
+		return call, err
+	}
 	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
 		if !set.Allows("capabilities:admin", call.repo) {
 			return call, fmt.Errorf("task %s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
@@ -423,6 +426,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
 	if err := s.agentRails(ctx, acting, pattern, method, scope, call.targetTask, r.PathValue("id")); err != nil {
+		return call, err
+	}
+	if err := s.agentStandingDeclaredPush(ctx, pattern, r.PathValue("id")); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
@@ -440,6 +446,34 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		}
 	}
 	return call, nil
+}
+
+// agentRouteAdminScopes are routes whose routeScopes entry is not all an
+// agent needs to call them: the call must also be allowed the scope named
+// here, on the whole deployment.
+//
+// POST /api/state-repo/remote is settings:write in routeScopes, but
+// repointing the config repository hands everything it grants -- host
+// scripts, scope sets, secrets bindings -- to whoever can push there, and
+// the same body turns require_verified off or accepts a held commit
+// (docs/external-config-repo.md). A person needs an unlimited role for it
+// (operatorOnlyRoutes, task 3965); an agent, in-grain or external, needs
+// capabilities:admin as well as settings:write (task 4007).
+var agentRouteAdminScopes = map[string]APIScope{
+	"POST /api/state-repo/remote": "capabilities:admin",
+}
+
+// agentRouteAdminScope refuses who's call to pattern when the route is in
+// agentRouteAdminScopes and set does not allow its scope deployment-wide.
+func agentRouteAdminScope(who string, set APIGrantSet, pattern string) error {
+	need, ok := agentRouteAdminScopes[pattern]
+	if !ok || set.Allows(need, "") {
+		return nil
+	}
+	return fmt.Errorf("%s holds no api grant for scope %s, which %s needs as well as %s: "+
+		"it repoints or re-verifies the config repository, which is an administrator's call -- "+
+		"ask a person to make it, or to grant api:%s (docs/external-config-repo.md)",
+		who, need, pattern, routeScopes[pattern], need)
 }
 
 // agentCapabilityAllowsRoute reports whether releases:read lets a release
@@ -627,8 +661,14 @@ var agentRepoDefaultRoutes = map[string]bool{
 	"GET /api/ci/runs":                 true,
 	"GET /api/ci/workflows":            true,
 	"GET /api/merge-batches":           true,
+	"GET /api/base-branch-gates":       true,
 	"GET /api/pipeline/changes":        true,
+	"GET /api/memory":                  true,
 	"GET /api/memory/documents/{name}": true,
+	"GET /api/memory/documents":        true,
+	"GET /api/templates":               true,
+	"GET /api/suite-runs":              true,
+	"GET /api/ci/faults":               true,
 }
 
 // sandboxChannelGuard enforces the additional restrictions required when an
@@ -697,6 +737,9 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 				!(pattern == taskNotesRoute && related(acting, t)) {
 				return fmt.Errorf("task %s is the standing session %q, which task %s does not own", target, session, acting.ID)
 			}
+		}
+		if err := s.agentCrossTaskRail(ctx, acting, pattern, target); err != nil {
+			return err
 		}
 		if pattern == "POST /api/tasks/{id}/run-now" || pattern == "POST /api/tasks/{id}/pause" || pattern == "POST /api/tasks/{id}/resume" {
 			me := model.Principal{Kind: model.PrincipalAgent, ID: acting.ID}
@@ -800,7 +843,7 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 		return nil
 	}
 	me := model.NormalizeTaskID(acting.ID)
-	proposer, chain, err := s.proposalLineage(ctx, *task, me)
+	proposer, chain, err := s.tasks.proposalLineage(ctx, *task, me)
 	if err != nil {
 		return err
 	}
@@ -813,7 +856,7 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 			"directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them "+
 			"(docs/agent-api.md)", me, task.ID, how)
 	}
-	if holds, err := s.proposalPersonHolds(ctx, *task, proposer, acting); err != nil {
+	if holds, err := s.tasks.proposalPersonHolds(ctx, *task, proposer, acting); err != nil {
 		return err
 	} else if len(holds) > 0 {
 		return fmt.Errorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
@@ -823,12 +866,291 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 	return nil
 }
 
+// externalApprovalRail is agentApprovalRail for an external agent
+// credential (principal "external:<name>"): the same G8 rail, asked of a
+// caller that has no task of its own. An owned credential is its owner's
+// delegate, not its owner, so it never stands in for the person a hold
+// is waiting for (docs/agent-api.md, "Routes without calling-task
+// context"). It refuses approving target -- over POST
+// /api/tasks/{id}/approve, or POST /api/tasks/{id}/run-now on an
+// unapproved task -- when:
+//
+//   - target is in the credential's own lineage: the credential filed it,
+//     or filed a task whose LinkProposedBy chain proposed it
+//     (Client.externalApprovalRefusal);
+//   - target is held for a person (proposalPersonHolds, with no acting
+//     task): hold_for_approval, grain/config, a person-held change
+//     target, a declared push set, auto-merge, a requires_person or
+//     person-only grant, keep_running or admission above standard, or an
+//     escalation past its in-grain proposer;
+//   - on run-now, the credential holds dispatch:write but not tasks:admin
+//     on the task's repository -- or, for a task with no repository, not
+//     tasks:admin on every repository: run-now's implicit approval is an
+//     approval, so it asks for exactly the scope the approve route's own
+//     scope check does (set.Allows("tasks:admin", repo)), and the two
+//     routes agree on every unapproved task. tasks:admin held only for
+//     some repositories never approves a task that names none;
+//   - on run-now, the call gives no reason (X-Grain-Acting-Reason):
+//     approve is destructive under tasks:admin and refused without one,
+//     so the implicit approval asks for it too.
+//
+// An already-approved target passes run-now straight through, as it does
+// for a task's run, so dispatch:write still jumps queued work ahead.
+func (s *Server) externalApprovalRail(ctx context.Context, principal string, set APIGrantSet, repo, target, reason string, onlyIfUnapproved bool) error {
+	id := model.NormalizeTaskID(target)
+	task, err := s.tasks.Store.GetTask(ctx, id)
+	if err != nil {
+		return fmt.Errorf("reading task %s: %w", id, err)
+	}
+	if task == nil || (onlyIfUnapproved && task.Approval != nil) {
+		return nil
+	}
+	if onlyIfUnapproved && !set.Allows("tasks:admin", repo) {
+		return fmt.Errorf("%s cannot run task %s now: it is not approved, and run-now would approve it first, which "+
+			"an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person "+
+			"approves it (docs/agent-api.md)", principal, task.ID)
+	}
+	if onlyIfUnapproved && reason == "" {
+		return fmt.Errorf("%s cannot run task %s now without a reason: it is not approved, and run-now would approve it "+
+			"first, which is destructive (scope tasks:admin) as POST /api/tasks/{id}/approve is: give a reason "+
+			"(X-Grain-Acting-Reason, grain_invoke's reason, grain run-now -reason)", principal, task.ID)
+	}
+	return s.tasks.externalApprovalRefusal(ctx, principal, *task)
+}
+
+// externalApprovalRefusal is the half of externalApprovalRail that reads
+// only the task: its lineage and its person holds. Client.Approve and
+// Client.RunNow ask it again of an external caller, so the rail holds
+// whichever route reaches them (REST, POST /mcp, POST /api/mcp's
+// grain_invoke), and the two routes give the same answer.
+func (c *Client) externalApprovalRefusal(ctx context.Context, principal string, task model.Task) error {
+	filed, chain, proposer, err := c.externalProposalLineage(ctx, task, principal)
+	if err != nil {
+		return err
+	}
+	if filed {
+		how := "it filed it"
+		if len(chain) > 0 {
+			how = "it filed task " + chain[0] + ", which is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
+		}
+		return forbiddenErrorf("%s cannot approve task %s: %s, and an external agent credential never approves its own "+
+			"filings, directly or through the tasks they proposed, even under api:tasks:admin or dispatch:write -- a "+
+			"person approves them (docs/agent-api.md)", principal, task.ID, how)
+	}
+	holds, err := c.proposalPersonHolds(ctx, task, proposer, nil)
+	if err != nil {
+		return err
+	}
+	if len(holds) > 0 {
+		return forbiddenErrorf("%s cannot approve task %s: it is held for a person (%s), and an external agent "+
+			"credential, even one a person owns, never approves a task held for a person, even under api:tasks:admin "+
+			"or dispatch:write (docs/agent-api.md)", principal, task.ID, strings.Join(holds, "; "))
+	}
+	return c.externalApprovalWithin(ctx, principal, task)
+}
+
+// externalApprovalWithin refuses an external agent credential approving
+// task unless the credential could have filed it itself over
+// POST /api/tasks: every grant task holds is one the credential holds
+// (agentGrantRefusal), it may push to every repository in task.Writes
+// (tasks:write) and read every one in task.Reads (tasks:read), its
+// networkAccess does not widen past this deployment's default, it does not
+// approve its own proposals (autoApproveProposals), and its review template is one externalTemplateWithin lets the credential name.
+// It is roleApprovalWithin's ceiling for a gma_ credential: without it, a
+// credential held to one repository could approve stored work reaching
+// any other, or carrying grants it was never given. The credential is the
+// one on ctx (narrowed to any limited session it is presented in); when
+// there is none to read, the approval is refused rather than let through
+// on grants nobody can see.
+func (c *Client) externalApprovalWithin(ctx context.Context, principal string, task model.Task) error {
+	tok, held, set, err := externalCredentialGrants(ctx)
+	if err != nil {
+		return forbiddenErrorf("%s cannot approve task %s: %v", principal, task.ID, err)
+	}
+	if tok == nil {
+		return forbiddenErrorf("%s cannot approve task %s: the external agent credential's grants could not be read",
+			principal, task.ID)
+	}
+	var normalize func(string) (string, error)
+	if c.Store != nil {
+		normalize = c.normalizeCapabilityID
+	}
+	refuse := func(field, why string) error {
+		return forbiddenErrorf("%s cannot approve task %s (%s): %s, and an external agent credential approves only "+
+			"work it could have filed itself (docs/agent-api.md)", principal, task.ID, field, why)
+	}
+	for _, g := range task.Grants {
+		// The default read of the task's own repository's CI is one the
+		// credential's own filing would have carried as well
+		// (model.DefaultCIReadGrant), so it is not a grant it is asked
+		// to make.
+		if task.Target != nil && model.IsDefaultCIReadGrant(g, *task.Target) {
+			continue
+		}
+		if err := agentGrantRefusal(held, g.Capability, normalize); err != nil {
+			return refuse("capabilities", fmt.Sprintf("it holds %s, which the credential cannot grant", strings.TrimSpace(g.Capability)))
+		}
+	}
+	for _, w := range task.Writes {
+		if !set.Allows("tasks:write", w.Repo.String()) {
+			return refuse("writes", fmt.Sprintf("it may push to %s, which the credential does not hold tasks:write on", w.Repo))
+		}
+	}
+	for _, rd := range task.Reads {
+		if !set.Allows("tasks:read", rd.String()) {
+			return refuse("reads", fmt.Sprintf("it reads %s, which the credential does not hold tasks:read on", rd))
+		}
+	}
+	if c.networkAccessWidens(ctx, "", string(task.NetworkAccess)) {
+		return refuse("networkAccess", "it widens networkAccess past this deployment's default")
+	}
+	if task.AutoApproveProposals {
+		return refuse("autoApproveProposals", "it approves its own proposals, which an external agent credential never turns on")
+	}
+	if id := strings.TrimSpace(task.ReviewTemplateID); id != "" &&
+		!(task.Target != nil && id == model.DefaultReviewTemplateID(*task.Target)) {
+		if tmpl := c.gateTemplate(ctx, id); tmpl != nil &&
+			!(task.Target != nil && tmpl.ID == model.DefaultReviewTemplateID(*task.Target)) {
+			allowed := func(r string) bool { return strings.TrimSpace(r) == "" || set.Allows("tasks:write", r) }
+			if err := externalTemplateWithin(tok, held, *tmpl, allowed); err != nil {
+				return refuse("reviewTemplateId", err.Error())
+			}
+		}
+	}
+	return nil
+}
+
+// externalCredentialGrants is the external agent credential on ctx and the
+// grants it holds for this request: its own (model.ResolveExternalAgentGrants),
+// narrowed to the role of any limited verified session it was presented in
+// (narrowExternalGrants). tok is nil when ctx carries no credential.
+func externalCredentialGrants(ctx context.Context) (*model.ExternalAgentToken, []string, APIGrantSet, error) {
+	tok := externalTokenFromContext(ctx)
+	if call, ok := agentCallFromContext(ctx); ok && call.external != nil {
+		tok = call.external
+	}
+	if tok == nil {
+		return nil, nil, APIGrantSet{}, nil
+	}
+	held, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+	if err != nil {
+		return tok, nil, APIGrantSet{}, fmt.Errorf("external agent %q has invalid grants: %w", tok.Name, err)
+	}
+	held, set = narrowExternalGrants(held, set, accessRoleFromContext(ctx))
+	return tok, held, set, nil
+}
+
+// narrowExternalGrants holds an external agent credential's grants -- held,
+// the grant strings, and set, the scopes they reach -- to role when the
+// credential is presented inside a limited verified session: a token never
+// reaches past the session carrying it. Both are narrowed, so a check
+// reading held (agentGrantRefusal, externalTemplateWithin) sees no more than
+// one reading set does. An api grant only partly within role is replaced by
+// the scope-and-repository grants of it role allows; any other grant is
+// kept only when role could grant it itself.
+func narrowExternalGrants(held []string, set APIGrantSet, role *accessRole) ([]string, APIGrantSet) {
+	if role == nil || role.Full {
+		return held, set
+	}
+	set = set.Intersect(role.set).Without(role.deny)
+	var out []string
+	add := func(g string) {
+		if !slices.Contains(out, g) {
+			out = append(out, g)
+		}
+	}
+	for _, h := range held {
+		g, ok, err := ParseAPIGrant(h)
+		if !ok {
+			if agentGrantRefusal(role.grants, h, nil) == nil {
+				add(h)
+			}
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		whole := true
+		for _, sc := range g.Scopes {
+			for _, r := range g.ReposOf(sc) {
+				if !set.Allows(sc, r) {
+					whole = false
+				}
+			}
+		}
+		if whole {
+			add(h)
+			continue
+		}
+		for _, sc := range g.Scopes {
+			for _, r := range g.ReposOf(sc) {
+				switch {
+				case set.Allows(sc, r):
+					add(model.APIGrantString(string(sc), r))
+				case r == "":
+					for _, within := range set.Repos(sc) {
+						add(model.APIGrantString(string(sc), within))
+					}
+				}
+			}
+		}
+	}
+	return out, set
+}
+
+// externalProposalLineage walks task's proposal chain upwards, as
+// proposalLineage does, looking for a task the external credential
+// principal filed. filed is true when principal filed task itself or any
+// task up its chain; chain is then the in-grain chain from principal's
+// filing down to task's proposer, nearest last (empty when principal
+// filed task itself). proposer is task's own in-grain proposer, nil when
+// it has none.
+func (c *Client) externalProposalLineage(ctx context.Context, task model.Task, principal string) (bool, []string, *model.Task, error) {
+	var proposer *model.Task
+	var chain []string
+	seen := map[string]bool{task.ID: true}
+	cur := task
+	for range maxProposalLineageDepth + 1 {
+		if filedByExternal(cur, principal) {
+			slices.Reverse(chain)
+			return true, chain, proposer, nil
+		}
+		up := proposedByOf(cur)
+		if up == "" || seen[up] {
+			return false, nil, proposer, nil
+		}
+		seen[up] = true
+		next, err := c.Store.GetTask(ctx, up)
+		if err != nil {
+			return false, nil, nil, fmt.Errorf("reading task %s, which proposed %s: %w", up, cur.ID, err)
+		}
+		if next == nil {
+			return false, nil, proposer, nil
+		}
+		if proposer == nil {
+			proposer = next
+		}
+		chain = append(chain, up)
+		cur = *next
+	}
+	return false, nil, nil, fmt.Errorf("task %s's LinkProposedBy chain exceeds %d hops, so its proposal lineage cannot be verified",
+		task.ID, maxProposalLineageDepth)
+}
+
+// filedByExternal says whether the external agent credential principal
+// ("external:<name>") filed t: t's origin names it as the actor, whoever
+// it acted on behalf of.
+func filedByExternal(t model.Task, principal string) bool {
+	a := t.Origin.Attribution.Actor
+	return principal != "" && a.Kind == model.PrincipalAgent && strings.TrimSpace(a.ID) == principal
+}
+
 // proposalLineage walks task's LinkProposedBy chain upwards. It returns
 // task's own proposer (nil when it has none, or it is no longer stored)
 // and, when actor is somewhere on that chain, the chain from actor down
 // to task's proposer, nearest last -- empty when actor proposed none of
 // it.
-func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor string) (*model.Task, []string, error) {
+func (c *Client) proposalLineage(ctx context.Context, task model.Task, actor string) (*model.Task, []string, error) {
 	var proposer *model.Task
 	var chain []string
 	seen := map[string]bool{task.ID: true}
@@ -844,7 +1166,7 @@ func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor str
 			slices.Reverse(chain)
 			return proposer, chain, nil
 		}
-		next, err := s.tasks.Store.GetTask(ctx, up)
+		next, err := c.Store.GetTask(ctx, up)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading task %s, which proposed %s: %w", up, cur.ID, err)
 		}
@@ -897,7 +1219,8 @@ func inGrainAgentTaskID(p model.Principal) string {
 // for (ui.CreateTask, orchestrator.relayProposedTasks, Client.agentMayApprove),
 // asked again of the task as it stands now:
 //
-//   - hold_for_approval (model.HeldForApprovalTag);
+//   - hold_for_approval (model.HoldRequested: HoldRequestedTag, or
+//     HeldForApprovalTag on a proposal filed before it was recorded);
 //   - targeting or writing this deployment's configuration repository
 //     (model.ConfigRepoProposalHold);
 //   - targeting a change target that requires a person's approval
@@ -915,9 +1238,9 @@ func inGrainAgentTaskID(p model.Principal) string {
 //     (model.EscalatedCapabilities, UngrantedWrites, UngrantedReads), and
 //     keep_running or a priority above its own
 //     (model.PersonOnlyProposalSettings).
-func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, proposer, acting *model.Task) ([]string, error) {
+func (c *Client) proposalPersonHolds(ctx context.Context, task model.Task, proposer, acting *model.Task) ([]string, error) {
 	var holds []string
-	if model.HeldForApproval(task) {
+	if model.HoldRequested(task) {
 		holds = append(holds, "it was filed with hold_for_approval")
 	}
 	if why := model.ConfigRepoProposalHold(task); why != "" {
@@ -926,7 +1249,7 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 	if needs, why := model.ChangeTargetNeedsPersonApproval(task.ChangeTarget); needs {
 		holds = append(holds, why)
 	}
-	needsPerson, err := s.tasks.catalogueRequiresPerson(ctx, task)
+	needsPerson, err := c.catalogueRequiresPerson(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("reading the capability catalogue: %w", err)
 	}
@@ -944,7 +1267,7 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 		holds = append(holds, fmt.Sprintf("it holds %s, which only a person may grant", strings.Join(personOnly, ", ")))
 	}
 	if task.TemplateID != "" {
-		decl, err := s.tasks.Store.GetRepoDeclaration(ctx, task.TemplateID)
+		decl, err := c.Store.GetRepoDeclaration(ctx, task.TemplateID)
 		if err != nil {
 			return nil, fmt.Errorf("reading declaration %s: %w", task.TemplateID, err)
 		}
@@ -1117,10 +1440,23 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 	if name == model.DurableCapability {
 		return fmt.Errorf("%s lets a task jump the queue and run with no deadline: only a person may grant it", name)
 	}
-	notHeld := fmt.Errorf("an agent cannot grant %s, which its own task does not hold", name)
+	if !agentHoldsGrant(held, name, normalize) {
+		return fmt.Errorf("an agent cannot grant %s, which its own task does not hold", name)
+	}
+	return nil
+}
+
+// agentHoldsGrant reports whether a task holding held already holds name
+// (canonical: legacy aliases already resolved by the caller): an api:*
+// grant every scope of which held allows on every repository name gives
+// it, a capability reference held's own references cover, or a plain
+// grant held names exactly. It is the subset half of agentGrantRefusal,
+// without that function's dangerous-grant refusals, so agentCoversGrant
+// can ask it of grants a task already carries.
+func agentHoldsGrant(held []string, name string, normalize func(string) (string, error)) bool {
 	if g, ok, err := ParseAPIGrant(name); ok {
 		if err != nil {
-			return notHeld
+			return false
 		}
 		// A scope set limited to some repositories grants each scope on
 		// those alone, so that is what the agent must hold: read through
@@ -1130,11 +1466,11 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 		for _, scope := range g.Scopes {
 			for _, repo := range g.ReposOf(scope) {
 				if !set.Allows(scope, repo) {
-					return notHeld
+					return false
 				}
 			}
 		}
-		return nil
+		return true
 	}
 	if model.IsCapabilityRef(name) {
 		if normalize != nil {
@@ -1146,15 +1482,9 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 		for i, h := range held {
 			parent[i] = model.Grant{Capability: h}
 		}
-		if len(model.UncoveredCapabilityRefs([]model.Grant{{Capability: name}}, parent)) > 0 {
-			return notHeld
-		}
-		return nil
+		return len(model.UncoveredCapabilityRefs([]model.Grant{{Capability: name}}, parent)) == 0
 	}
-	if !slices.Contains(held, name) {
-		return notHeld
-	}
-	return nil
+	return slices.Contains(held, name)
 }
 
 // grantBodies are the routes whose bodies name a grant under keys of
@@ -1504,10 +1834,12 @@ func grantAlreadyStored(existing []string, name string, normalize func(string) (
 		return true
 	}
 	// A retired name is held by a row storing what it became (the
-	// release server's methods, schema migration 101), and the reverse.
+	// release server's methods, schema migration 101, and
+	// github#sandbox-repo, 124), and the reverse; so is a bare or
+	// case-varied spelling of the <ref>={} a row records.
 	if _, ok := model.CIGrantRuleFor(name); ok {
-		canonical := model.CanonicalLegacyGrant(name)
-		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalLegacyGrant(e) == canonical })
+		canonical := model.CanonicalCIGrant(name)
+		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalCIGrant(e) == canonical })
 	}
 	if model.IsCapabilityRef(name) && normalize != nil {
 		if recorded, err := normalize(name); err == nil && slices.Contains(existing, recorded) {
@@ -1559,9 +1891,17 @@ func grantNamesIn(raw json.RawMessage) []string {
 // none, and may not ask for "open" -- nor, on a deployment whose default is
 // open, for "". A config that cannot be read is taken as none.
 func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
+	if s.tasks == nil {
+		return (limit == "" || limit == model.NetworkNone) &&
+			strings.TrimSpace(access) != "" && model.NormalizeNetworkAccess(model.NetworkAccess(access)) != model.NetworkNone
+	}
+	return s.tasks.networkAccessWidens(ctx, limit, access)
+}
+
+func (c *Client) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
 	deployment := model.NetworkNone
-	if s.tasks != nil && s.tasks.Store != nil {
-		if cfg, err := s.tasks.Store.GetConfig(ctx); err == nil && cfg != nil {
+	if c != nil && c.Store != nil {
+		if cfg, err := c.Store.GetConfig(ctx); err == nil && cfg != nil {
 			deployment = model.NormalizeNetworkAccess(cfg.NetworkAccess)
 		}
 	}
@@ -1587,6 +1927,20 @@ type filingEscalationOpts struct {
 }
 
 func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
+	if s.tasks != nil {
+		return s.tasks.gateTemplate(ctx, id)
+	}
+	id = strings.TrimSpace(id)
+	if model.IsSystemTemplateID(id) {
+		if tmpl := model.FileableSystemTemplate(id); tmpl != nil {
+			return tmpl
+		}
+		return model.SystemTemplate(id, model.RepoRef{})
+	}
+	return nil
+}
+
+func (c *Client) gateTemplate(ctx context.Context, id string) *model.Template {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil
@@ -1597,10 +1951,10 @@ func (s *Server) gateTemplate(ctx context.Context, id string) *model.Template {
 		}
 		return model.SystemTemplate(id, model.RepoRef{})
 	}
-	if s.tasks == nil || s.tasks.Store == nil {
+	if c == nil || c.Store == nil {
 		return nil
 	}
-	tmpl, err := s.tasks.Store.GetTemplate(ctx, id)
+	tmpl, err := c.Store.GetTemplate(ctx, id)
 	if err != nil {
 		return nil
 	}
@@ -1646,7 +2000,7 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 	allowedRepo func(APIScope, string) bool, pattern string, scope APIScope, repo string,
 	body []byte, opts filingEscalationOpts) error {
 	if opts.role == nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return errAgentAutoMerge
 		}
 		if personOnlyChangeReview[pattern] {
@@ -1667,6 +2021,23 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			for _, name := range grantNamesFromField(pattern, f, opts.stored, opts.normalize) {
 				if err := roleGrantRefusal(opts.role, key, name, opts.normalize); err != nil {
 					return err
+				}
+			}
+		}
+		if shape := sandboxShapeOfField(key, raw); !shape.IsZero() {
+			switch {
+			case opts.role != nil:
+				if err := s.roleSandboxShapeRefusal(ctx, opts.role, shape, "set "+key); err != nil {
+					return err
+				}
+			case opts.external != nil:
+				// Held to the deployment's maximum, which the handler asks
+				// of every caller (refuseSandboxShapeAboveMax).
+			case opts.acting != nil:
+				if above := shape.Above(model.EffectiveSandboxShape(*opts.acting)); len(above) > 0 {
+					return fmt.Errorf("an agent cannot ask for a larger sandbox than its own task %s runs in (%s); "+
+						"propose the work with propose_task instead, which files it for a person to approve",
+						opts.acting.ID, strings.Join(above, ", "))
 				}
 			}
 		}
@@ -1888,6 +2259,8 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 					return err
 				}
+			} else if err := s.checkDeclaredPushID(ctx, fullID, key, opts); err != nil {
+				return err
 			}
 		case "templateid":
 			var id string
@@ -1896,15 +2269,15 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			}
 			tmpl := s.gateTemplate(ctx, id)
 			if tmpl == nil {
+				if err := s.checkDeclaredPushID(ctx, id, key, opts); err != nil {
+					return err
+				}
 				continue // the handler says it is not there
 			}
 			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 				return err
 			}
 		case "templateids":
-			if opts.role == nil && opts.external == nil {
-				continue
-			}
 			var ids []string
 			if json.Unmarshal(raw, &ids) != nil {
 				continue
@@ -1914,10 +2287,12 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 						return err
 					}
+				} else if err := s.checkDeclaredPushID(ctx, id, key, opts); err != nil {
+					return err
 				}
 			}
 		case "suiteid":
-			if opts.role == nil || s.tasks == nil || s.tasks.Store == nil {
+			if s.tasks == nil || s.tasks.Store == nil {
 				continue
 			}
 			var id string
@@ -1925,11 +2300,26 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				continue
 			}
 			suite, err := s.tasks.Store.GetSuite(ctx, strings.TrimSpace(id))
-			if err != nil || suite == nil {
+			if err != nil {
+				return err
+			}
+			if suite == nil {
 				continue
 			}
-			if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
-				return err
+			if opts.role != nil {
+				if err := s.checkRoleSuite(ctx, *suite, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, it := range suite.Items {
+				if tmpl := s.gateTemplate(ctx, it.TemplateID); tmpl != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
+						return err
+					}
+				} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, opts); err != nil {
+					return err
+				}
 			}
 		case "reviewtemplateid":
 			// The template a task's review is filed from once its work
@@ -1991,14 +2381,75 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		}
 	}
 	if opts.role != nil {
-		if pattern == "POST /api/tasks/{id}/submit" {
+		if submitRoutes[pattern] {
 			return fmt.Errorf("%s cannot submit work (autoMerge): letting a change merge unreviewed requires an unlimited role (grain/operator)", opts.role.label())
+		}
+		if pattern == "POST /api/tasks/{id}/human-review/release" {
+			return fmt.Errorf("%s cannot release human-review hold: releasing a human-review hold requires an unlimited role (grain/operator)", opts.role.label())
+		}
+		if pattern == "POST /api/tasks/{id}/force-merge" {
+			return fmt.Errorf("%s cannot force-merge work: forcing a merge requires an unlimited role (grain/operator)", opts.role.label())
 		}
 		if pattern == "POST /api/suites" && !bodyExplicitlyDisablesAutoMerge(fields) {
 			return fmt.Errorf("%s cannot set autoMerge: suites default autoMerge to true, which requires an unlimited role (pass \"autoMerge\": false)", opts.role.label())
 		}
+		if pattern == "POST /api/tasks" || pattern == "POST /api/schedules" {
+			if err := roleApprovedTargetRefusal(opts.role, pattern, repo, fields); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func roleApprovedTargetRefusal(role *accessRole, pattern, repo string, fields []jsonField) error {
+	approves := pattern == "POST /api/schedules"
+	var probe model.Task
+	if r, err := model.ParseRepo(strings.TrimSpace(repo)); err == nil {
+		probe.Target = &r
+	}
+	for _, f := range fields {
+		switch gateKey(f.key) {
+		case "approved", "interactive":
+			var on bool
+			if json.Unmarshal(f.raw, &on) == nil && on {
+				approves = true
+			}
+		case "writes":
+			var targets []WriteTarget
+			if json.Unmarshal(f.raw, &targets) == nil {
+				for _, t := range targets {
+					if r, err := model.ParseRepo(strings.TrimSpace(t.Repo)); err == nil {
+						probe.Writes = append(probe.Writes, model.WriteTarget{Repo: r, Base: t.Base})
+					}
+				}
+			}
+		case "changetarget", "change_target":
+			var ct model.ChangeTarget
+			if json.Unmarshal(f.raw, &ct) == nil && ct.Kind != "" {
+				probe.ChangeTarget = &ct
+			}
+		}
+	}
+	if !approves {
+		return nil
+	}
+	if why := model.ConfigRepoProposalHold(probe); why != "" {
+		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
+	}
+	if needs, why := model.ChangeTargetNeedsPersonApproval(probe.ChangeTarget); needs {
+		return fmt.Errorf("%s cannot file approved work on %s: %s, which requires an unlimited role (grain/operator)", role.label(), pattern, why)
+	}
+	return nil
+}
+
+// submitRoutes are the two spellings of a person's Submit: a task's, and
+// `grain pr submit`'s by its pull request. Each records the approval a
+// change waits on (and, with overrideGates, forces its merge), so neither
+// is an agent's or a limited role's to call, whichever one is used.
+var submitRoutes = map[string]bool{
+	"POST /api/tasks/{id}/submit":    true,
+	"POST /api/pull-requests/submit": true,
 }
 
 func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
@@ -2017,8 +2468,101 @@ func bodyExplicitlyDisablesAutoMerge(fields []jsonField) bool {
 	return disabled
 }
 
+var errAgentDeclaredPush = errors.New("an agent cannot file, schedule, or modify a template that carries a declared push set")
+
+func (s *Server) checkDeclaredPushID(ctx context.Context, templateID, key string, opts filingEscalationOpts) error {
+	id := strings.TrimSpace(templateID)
+	push, err := s.templateDeclaredPush(ctx, id)
+	if err != nil {
+		return err
+	}
+	if push == nil {
+		return nil
+	}
+	if opts.role != nil {
+		return fmt.Errorf("%s cannot set %s: template %s carries a declared push set (%s), which requires an unlimited role (grain/operator)",
+			opts.role.label(), key, id, push.Path)
+	}
+	return fmt.Errorf("template %s carries a declared push set (%s): %w", id, push.Path, errAgentDeclaredPush)
+}
+
+func (s *Server) agentStandingDeclaredPush(ctx context.Context, pattern, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" || s.tasks == nil || s.tasks.Store == nil {
+		return nil
+	}
+	switch pattern {
+	case "PATCH /api/templates/{id}":
+		push, err := s.templateDeclaredPush(ctx, id)
+		if err != nil {
+			return err
+		}
+		if push != nil {
+			return fmt.Errorf("template %s carries a declared push set (%s): %w", id, push.Path, errAgentDeclaredPush)
+		}
+	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
+		sched, err := s.tasks.Store.GetSchedule(ctx, id)
+		if err != nil {
+			return fmt.Errorf("reading schedule %s: %w", id, err)
+		}
+		if sched == nil {
+			return nil
+		}
+		if sched.TemplateID != nil && strings.TrimSpace(*sched.TemplateID) != "" {
+			tid := strings.TrimSpace(*sched.TemplateID)
+			push, err := s.templateDeclaredPush(ctx, tid)
+			if err != nil {
+				return err
+			}
+			if push != nil {
+				return fmt.Errorf("schedule %s fires template %s, which carries a declared push set (%s): %w",
+					sched.ID, tid, push.Path, errAgentDeclaredPush)
+			}
+		}
+		if sched.SuiteID != nil && strings.TrimSpace(*sched.SuiteID) != "" {
+			suite, err := s.tasks.Store.GetSuite(ctx, strings.TrimSpace(*sched.SuiteID))
+			if err != nil {
+				return fmt.Errorf("reading suite %s: %w", strings.TrimSpace(*sched.SuiteID), err)
+			}
+			if suite != nil {
+				for _, it := range suite.Items {
+					push, err := s.templateDeclaredPush(ctx, it.TemplateID)
+					if err != nil {
+						return err
+					}
+					if push != nil {
+						return fmt.Errorf("schedule %s runs suite %s containing template %s, which carries a declared push set (%s): %w",
+							sched.ID, suite.ID, it.TemplateID, push.Path, errAgentDeclaredPush)
+					}
+				}
+			}
+		}
+	case "PATCH /api/suites/{id}":
+		suite, err := s.tasks.Store.GetSuite(ctx, id)
+		if err != nil {
+			return fmt.Errorf("reading suite %s: %w", id, err)
+		}
+		if suite != nil {
+			for _, it := range suite.Items {
+				push, err := s.templateDeclaredPush(ctx, it.TemplateID)
+				if err != nil {
+					return err
+				}
+				if push != nil {
+					return fmt.Errorf("suite %s contains template %s, which carries a declared push set (%s): %w",
+						suite.ID, it.TemplateID, push.Path, errAgentDeclaredPush)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, key string, held []string, set APIGrantSet,
 	allowedRepo func(APIScope, string) bool, scope APIScope, repo string, opts filingEscalationOpts) error {
+	if err := s.checkDeclaredPushID(ctx, tmpl.ID, key, opts); err != nil {
+		return err
+	}
 	switch {
 	case opts.role != nil:
 		if err := roleTemplateWithin(opts.role, key, tmpl, allowedRepo, opts.normalize); err != nil {
@@ -2094,6 +2638,8 @@ func (s *Server) checkRoleSuite(ctx context.Context, suite model.Suite, key stri
 			if err := s.checkFilingTemplate(ctx, *tmpl, key, held, set, allowedRepo, scope, repo, opts); err != nil {
 				return err
 			}
+		} else if err := s.checkDeclaredPushID(ctx, it.TemplateID, key, opts); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2594,6 +3140,13 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if err != nil {
 		return call, fmt.Errorf("external agent %q has invalid grants: %w", tok.Name, err)
 	}
+	// A token presented inside a verified session never reaches past
+	// that session's role (resolveMCPCallerAccess narrows it the same
+	// way), so the multi-scope checks below -- externalApprovalRail's
+	// tasks:admin, a task PATCH's capabilities:admin, tasks:admin and
+	// capabilities:detach -- and the grant checks reading held read the
+	// narrower of the two.
+	held, set = narrowExternalGrants(held, set, accessRoleFromContext(ctx))
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
 	detach := capabilitiesDetachAllowsRoute(set, pattern)
@@ -2606,7 +3159,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	// templates:read even when the credential is narrowed to specific
 	// repositories.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events" || pattern == "GET /api/deployment/reachable-repos") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
 		(pattern == "GET /api/config" && (set.Has(scope) || set.Has("deployment:read"))) ||
 		(pattern == "GET /api/templates" && set.Has(scope))
 	if !set.Has(scope) && !adminPatch && !fsAllowed && !detach {
@@ -2668,6 +3221,9 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		}
 		return call, fmt.Errorf("%s holds %s, but not on %s", principal, missingScope, call.repo)
 	}
+	if err := agentRouteAdminScope(principal, set, pattern); err != nil {
+		return call, err
+	}
 	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
 		if !set.Allows("capabilities:admin", call.repo) {
 			return call, fmt.Errorf("%s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
@@ -2680,7 +3236,10 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
-	if err := s.externalAgentRails(ctx, tok, pattern, method, scope, call.targetTask, body); err != nil {
+	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, call.reason, body); err != nil {
+		return call, err
+	}
+	if err := s.agentStandingDeclaredPush(ctx, pattern, r.PathValue("id")); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
@@ -2823,25 +3382,25 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	}); ok {
 		return repo, nil, err
 	}
-	// If the credential is restricted to a single repository and calls a
-	// read-only collection endpoint that accepts ?repo=, default the filter
-	// to that repository so listing works without repeating the repo parameter.
-	if r.Method == http.MethodGet && len(tok.Repos) == 1 && !isRepoNarrowedTasksRead(pattern, r) {
-		switch pattern {
-		case "GET /api/tasks", "GET /api/ci/runs", "GET /api/ci/workflows",
-			"GET /api/merge-batches", "GET /api/pipeline/changes", "GET /api/memory/documents/{name}":
+	// If the credential is restricted to a single repository for this scope and
+	// calls a read-only collection endpoint that accepts ?repo= (other than
+	// GET /api/templates, which serves both bound and deployment-wide unbound
+	// templates via templateAllowedForGrants), default the filter to that
+	// repository so listing works whether narrowed via tok.Repos or @repo.
+	if r.Method == http.MethodGet && agentRepoDefaultRoutes[pattern] && pattern != "GET /api/templates" && !isRepoNarrowedTasksRead(pattern, r) && !set.Allows(scope, "") {
+		if repos := set.Repos(scope); len(repos) == 1 {
 			q := r.URL.Query()
 			if q.Get("repo") == "" {
-				q.Set("repo", tok.Repos[0])
+				q.Set("repo", repos[0])
 				r.URL.RawQuery = q.Encode()
 			}
-			return tok.Repos[0], nil, nil
+			return repos[0], nil, nil
 		}
 	}
 	return "", nil, nil
 }
 
-func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, pattern, method string, scope APIScope, target string, body []byte) error {
+func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, set APIGrantSet, repo, pattern, method string, scope APIScope, target, reason string, body []byte) error {
 	if method == http.MethodGet {
 		return nil
 	}
@@ -2858,6 +3417,11 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 				return fmt.Errorf("task %s is paused by %s %s; only they may lift or override that pause",
 					target, p.PausedBy.Kind, principalName(p.PausedBy))
 			}
+		}
+	}
+	if (pattern == approveTaskRoute || pattern == runNowTaskRoute) && target != "" {
+		if err := s.externalApprovalRail(ctx, principal, set, repo, target, reason, pattern == runNowTaskRoute); err != nil {
+			return err
 		}
 	}
 	// External agents have no calling task from which to inherit a repository,
@@ -2927,12 +3491,23 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 // holds, never a grant only a person may give, and push or read access only
 // to repositories the credential covers.
 func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl model.Template, allowedRepo func(string) bool) error {
+	heldKeys := make([]string, 0, len(held))
+	for _, h := range held {
+		for _, c := range model.CanonicalLegacyGrants(h) {
+			heldKeys = append(heldKeys, model.CanonicalGrantKey(c))
+		}
+	}
 	for _, g := range tmpl.Grants {
 		if model.IsPersonOnlyGrant(g.Capability) {
 			return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 		}
-		if !slices.Contains(held, g.Capability) {
-			return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
+		for _, needed := range model.CanonicalLegacyGrants(g.Capability) {
+			if model.IsPersonOnlyGrant(needed) {
+				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
+			}
+			if !slices.Contains(heldKeys, model.CanonicalGrantKey(needed)) {
+				return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
+			}
 		}
 	}
 	for _, w := range tmpl.Writes {
@@ -3066,7 +3641,11 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/withdraw-approval":       taskRespSingle,
 	"POST /api/tasks/{id}/park-until":              taskRespNone,
 	"POST /api/pull-requests/review":               taskRespNone,
+	"POST /api/pull-requests/submit":               taskRespNone,
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
+	"POST /api/tasks/{id}/compact":                 taskRespNone,
+	"POST /api/tasks/{id}/brief":                   taskRespNone,
+	"POST /api/tasks/{id}/rollover":                taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
 	"POST /api/tasks/{id}/submit":                  taskRespSingle,
@@ -3315,6 +3894,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.NoPort != nil, "noPort")
 	add(req.FixesBaseBranch != nil, "fixesBaseBranch")
 	add(req.PromptExtension != nil, "promptExtension")
+	add(req.Skills != nil, "skills")
 	add(req.ReviewTemplateID != nil, "reviewTemplateId")
 	add(req.Reads != nil, "reads")
 	add(req.Writes != nil, "writes")

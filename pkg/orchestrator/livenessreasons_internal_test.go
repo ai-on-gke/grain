@@ -166,7 +166,7 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 	wake := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
 	given := wake.Add(-time.Hour)
 	tasks := []model.Task{{ID: "1"}, {ID: "1", DeferredUntil: &wake}, {ID: "1", Interactive: true}}
-	askedFacts := []model.ReplyFacts{{}, {Question: true}, {Access: true}, {Stopped: true}}
+	askedFacts := []model.ReplyFacts{{}, {Question: true}, {Access: true}, {Stopped: true}, {UnansweredComment: true}}
 	for _, kind := range model.GoalKinds() {
 		tasks = append(tasks, model.Task{ID: "1", GoalKind: kind})
 	}
@@ -177,7 +177,7 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		for _, task := range tasks {
 			for _, obs := range observations {
 				for _, deps := range [][]string{nil, {"2"}} {
-					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdDispatchBlocked} {
+					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdSuspension, holdDispatchBlocked} {
 						for _, asked := range askedFacts {
 							reason := taskReasonOf(task, model.State(state), obs, deps, hold, asked)
 							if _, ok := taskReasons[reason]; !ok || reasonState(reason) != state {
@@ -207,6 +207,8 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		{model.StateQueued, model.Task{}, nil, nil, holdNone, taskReasonReady},
 		{model.StateQueued, model.Task{}, nil, nil, holdUsagePaused, taskReasonUsagePaused},
 		{model.StateQueued, model.Task{}, nil, nil, holdLocalPolicy, taskReasonLocalPolicy},
+		{model.StateQueued, model.Task{}, nil, nil, holdSuspension, taskReasonHeldBySuspension},
+		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdSuspension, taskReasonBlocked},
 		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdUsagePaused, taskReasonBlocked},
 		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdLocalPolicy, taskReasonBlocked},
 		{model.StateQueued, model.Task{}, nil, nil, holdDispatchBlocked, taskReasonDispatchBlocked},
@@ -255,6 +257,9 @@ func TestAwaitingReplyReasonNamesTheAsk(t *testing.T) {
 		{chat, model.ReplyFacts{Question: true}, taskReasonYourMessage, "Reply"},
 		{chat, model.ReplyFacts{Access: true}, taskReasonAccessRequest, "Grant"},
 		{chat, model.ReplyFacts{Stopped: true}, taskReasonStopped, "Reply"},
+		{plain, model.ReplyFacts{UnansweredComment: true}, taskReasonUnansweredComment, "Run now"},
+		{chat, model.ReplyFacts{UnansweredComment: true}, taskReasonUnansweredComment, "Run now"},
+		{plain, model.ReplyFacts{UnansweredComment: true, Stopped: true}, taskReasonStopped, "Reply"},
 	} {
 		got := TaskReason(c.task, model.StateAwaitingReply, nil, nil, nil, c.asked, "", "")
 		if got.Reason != c.want || got.Control != c.label || got.Class != string(livenessAwaitingPerson) {

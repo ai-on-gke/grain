@@ -78,4 +78,39 @@ for (const [name, viewport] of [
     ).toBeDisabled();
     expect(errors).toEqual([]);
   });
+
+  // docs/test-runs/2026-11-08-repository-release-memory-ui.md (task
+  // 3613), bug 2: the demo wired the external config repo without its
+  // owner/name (ui.Config.StateRepoRef), so /api/config named no
+  // configRepo and grain/config's own Advanced tab read "not one of this
+  // deployment's target repos" instead of refusing to remove it.
+  test(`the external config repo is named and refuses removal on a ${name} screen`, async ({
+    page,
+  }) => {
+    const errors = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    await page.setViewportSize(viewport);
+
+    const config = await (await page.request.get("/api/config")).json();
+    expect(config.configRepo).toBe("grain/config");
+    const deployment = await (await page.request.get("/api/deployment")).json();
+    expect(deployment.configRepo).toBe("grain/config");
+
+    await page.goto("/repos/grain/config/settings/advanced");
+    const panel = page.locator("#repo-tabpanel-advanced");
+    await expect(
+      panel.getByText(
+        "This is the deployment's own configuration repository and cannot be removed here.",
+      ),
+    ).toBeVisible();
+    await expect(
+      panel.getByRole("button", { name: "Remove", exact: true }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    expect(errors).toEqual([]);
+  });
 }

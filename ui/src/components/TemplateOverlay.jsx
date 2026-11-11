@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -22,25 +22,20 @@ import {
   Box,
   Button,
   Checkbox,
-  FormControl,
   FormControlLabel,
-  FormHelperText,
   MenuItem,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
 import api from "../api.js";
-import { useHeldIds } from "../useHeldIds.js";
 import { CustomFieldInputs, initialFieldValues } from "./CustomFields.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
-import SearchSelect from "./SearchSelect.jsx";
 import ModelPicker from "./ModelPicker.jsx";
 import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
 import { StaleEditNotice, isStaleEdit, withReload } from "./StaleEdit.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
-import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import {
   TemplateFieldsEditor,
   templateFieldsPayload,
@@ -48,15 +43,10 @@ import {
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
 import { taskPriority, wholeNumber } from "../wholeNumber.js";
-import WriteReposField from "./WriteReposField.jsx";
-import {
-  configuredCapabilities,
-  LEGACY_CAPABILITIES_HINT,
-  NO_CAPABILITIES_HINT,
-  targetableRepos,
-} from "../state.js";
+import { targetableRepos } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
 import AdmissionField from "./AdmissionField.jsx";
+import HostingField from "./HostingField.jsx";
 
 // TemplateOverlay is a template's own sub page (bwsalmon/agents#545):
 // "+ New" on the Processes page (ProcessesList) opens this blank, and clicking
@@ -107,27 +97,24 @@ function TemplateOverlay({
   const [capabilities, setCapabilities] = useState(
     template?.capabilities || [],
   );
-  // What this deployment has configured, plus whatever this template
-  // already names: an unconfigured capability is not a choice worth
-  // offering here, and one already on the template needs its row to be
-  // unticked from (configuredCapabilities, state.js).
-  // Capability server grants, with their with: arguments, and the agent
-  // API's grants (apiGrants.js) share the list and are edited together
-  // by GrantsPicker rather than the legacy checklist.
-  const capabilityIds = capabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
-  const apiIds = capabilities.filter(isApiGrant);
+  // Capability server grants, with their with: arguments, the agent API's
+  // grants (apiGrants.js), and any held bare capability id share the list
+  // and are shown together by GrantsPicker.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capabilityIds = capabilities.filter(isBareGrant);
+  const apiIds = capabilities.filter(isLegacyApiGrant);
   const capabilityRefs = capabilities.filter(isCapabilityRef);
-  const heldCapabilityIds = useHeldIds(capabilityIds);
-  const capabilityOptions = withoutApiRows(
-    configuredCapabilities(config?.capabilities, heldCapabilityIds),
-  );
-  const methodGrants = localGrantHandlers(capabilityRefs, (refs) =>
-    setCapabilities([...capabilityIds, ...apiIds, ...refs]),
+  const methodGrants = localGrantHandlers(
+    [...capabilityIds, ...capabilityRefs],
+    (rest) =>
+      setCapabilities([
+        ...rest.filter(isBareGrant),
+        ...apiIds,
+        ...rest.filter(isCapabilityRef),
+      ]),
   );
   // reads is state for the reason capabilities is: its picker
-  // (ReadOnlyReposField) is a search box, not a form field submit could
+  // (the Grants list's repo#read lines, RepoGrants.jsx) is a search box, not a form field submit could
   // read the answer off.
   const [reads, setReads] = useState(template?.reads || []);
   // writes is the extra writeable repos ({repo, base} objects,
@@ -163,6 +150,9 @@ function TemplateOverlay({
   // The admission every task this template files starts at
   // (model.Template.Admission); "" on the wire is standard.
   const [admission, setAdmission] = useState(template?.admission || "standard");
+  // How every task this template files is hosted (model.Template.Hosting);
+  // "" on the wire is unattended.
+  const [hosting, setHosting] = useState(template?.hosting || "unattended");
 
   // Whether leaving now would lose an edit: the text boxes are read off
   // the form, and the pickers above keep their answers in state.
@@ -174,6 +164,7 @@ function TemplateOverlay({
     fields,
     chosenModel,
     admission,
+    hosting,
   });
   const [stale, setStale] = useState(null);
   // Held from when the pane opened, ScheduleOverlay's openedRevision.
@@ -221,6 +212,9 @@ function TemplateOverlay({
       ...(admission !== (template?.admission || "standard")
         ? { admission }
         : {}),
+      // Only when it changed, as admission: absent leaves the saved
+      // hosting alone (ui.UpdateTemplateRequest.Hosting).
+      ...(hosting !== (template?.hosting || "unattended") ? { hosting } : {}),
       reads,
       writes,
       reviewers: (data.get("reviewers") || "")
@@ -386,23 +380,7 @@ function TemplateOverlay({
               repo={repo}
               warnMissing="tasks filed from this template fail until it is cut"
             />
-            <WriteReposField
-              options={repoOptions}
-              value={writes}
-              onChange={setWrites}
-            />
           </Box>
-          <ReadOnlyReposField
-            options={repoOptions}
-            value={reads}
-            onChange={setReads}
-            // The saved binding: a bound template's firings all target
-            // that repo, so reading it says nothing there. An unbound
-            // template passes "" and is offered everything -- which repo
-            // its firings target is not decided here, so no read of them
-            // can be redundant yet.
-            target={template?.repo || ""}
-          />
           <TextField
             name="reviewers"
             label="Reviewers"
@@ -473,6 +451,7 @@ function TemplateOverlay({
             onChange={setAdmission}
             noun="template"
           />
+          <HostingField value={hosting} onChange={setHosting} noun="template" />
           <TextField
             select
             name="networkAccess"
@@ -512,36 +491,30 @@ function TemplateOverlay({
             onChange={setChosenModel}
             helperText="the model every task this template files asks for. A task filed from it can still choose its own."
           />
-          <FormControl fullWidth margin="normal" size="small">
-            <SearchSelect
-              multiple
-              label="Legacy capabilities"
-              value={capabilityIds}
-              onChange={(next) =>
-                setCapabilities([...next, ...apiIds, ...capabilityRefs])
-              }
-              noOptionsText={
-                capabilityOptions.length === 0
-                  ? NO_CAPABILITIES_HINT
-                  : "No matches"
-              }
-              options={capabilityOptions.map((c) => ({
-                value: c.id,
-                label: c.name,
-                title: c.description,
-              }))}
-            />
-            <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-          </FormControl>
           <GrantsPicker
             config={config}
             grants={capabilities}
+            disabled={locked}
             onApiChange={(next) =>
               setCapabilities([...capabilityIds, ...next, ...capabilityRefs])
             }
             onSubmit={methodGrants.onSubmit}
             onRemove={methodGrants.onRemove}
             idPrefix="template"
+            // The repos its tasks read and write are grants here too
+            // (unified-grants slice 5). An unbound template has no target
+            // line: which repo its firings target is not decided here.
+            repos={{
+              target: repo,
+              base: template?.base || "",
+              targetNote: "the template's bound repo -- change it above",
+              reads,
+              writes,
+              readOptions: repoOptions,
+              writeOptions: repoOptions,
+              onReadsChange: setReads,
+              onWritesChange: setWrites,
+            }}
             policyRepo={repo}
           />
           {/* Renders nothing at all on a deployment that declares no
@@ -559,7 +532,7 @@ function TemplateOverlay({
           direction="row"
           justifyContent={isNew ? "flex-end" : "space-between"}
           alignItems="center"
-          sx={{ mt: 2 }}
+          sx={{ mt: 2, flexWrap: "wrap", gap: 1 }}
         >
           {!isNew && (
             <AccessGate scope="templates:write" repo={repo}>
@@ -568,10 +541,18 @@ function TemplateOverlay({
               </Button>
             </AccessGate>
           )}
-          <Stack direction="row" spacing={1}>
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{ ml: "auto", flexWrap: "wrap", rowGap: 1 }}
+          >
             {!isNew && onNewTask && (
               <AccessGate scope="tasks:write" repo={repo}>
-                <Button onClick={() => onNewTask(template)}>
+                <Button
+                  onClick={() => onNewTask(template)}
+                  sx={{ whiteSpace: "nowrap" }}
+                >
                   New task from this template
                 </Button>
               </AccessGate>

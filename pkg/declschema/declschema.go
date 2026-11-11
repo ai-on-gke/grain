@@ -597,6 +597,7 @@ func templateSchema() Schema {
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
 			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
 			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
+			{Model: "Skills", Keys: carried("skills"), Columns: []string{"skills"}},
 			// `hostd`, which a template once carried (schema 94 to 110):
 			// which grain hostd host work runs on is a model connection's
 			// or a capability server's, never what a template files, so
@@ -635,7 +636,13 @@ func templateSchema() Schema {
 			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
-			{Model: "Grants", Keys: []Key{settingsOnly("grants", Reach)}, Table: "template_grant"},
+			// `grants:` is the unified spelling of a grant list
+			// (design/design/unified-grants.design.md §3). In grain's
+			// settings it is the template_grant rows; in a repository it
+			// is a synonym for `capabilities:` below, held to exactly the
+			// same rule (repository access only, pkg/repodecl's
+			// parseCapabilities), and accepted beside it indefinitely.
+			{Model: "Grants", Keys: []Key{{Name: "grants", In: Everywhere}}, Table: "template_grant"},
 			// The one exception to the refusals above (grain/task-1780),
 			// and the same rule a `.grain/workflows` job's `capabilities:`
 			// already follows (grain/task-1654): a template may declare
@@ -794,6 +801,14 @@ func scheduleSchema() Schema {
 				},
 			},
 			{Model: "Overlap", Keys: carried("overlap"), Columns: []string{"overlap"}},
+			// An overlap group shared by this repository's schedules
+			// (model.Schedule.OverlapGroup, grain/task-3895). Written
+			// `overlap-group:` in either context, or inside the mapping form
+			// `overlap: {skip: true, group: <name>}` (repodecl's rawOverlap,
+			// staterepo's decodeOverlapMapping). Carried: a group can only
+			// hold this repository's own schedules, because it is scoped to
+			// the repository the firing goes into.
+			{Model: "OverlapGroup", Keys: carried("overlap-group"), Columns: []string{"overlap_group"}},
 			{Model: "TimeZone", Keys: carried("timezone"), Columns: []string{"time_zone"}},
 			{Model: "Enabled", Keys: carried("enabled"), Columns: []string{"enabled"}},
 			{Model: "Base", Keys: carried("base"), Columns: []string{"base"}},
@@ -802,6 +817,12 @@ func scheduleSchema() Schema {
 			// or "on-failure". A cadence setting rather than content, so
 			// a declared schedule may say it.
 			{Model: "WorkflowReview", Keys: carried("review"), Columns: []string{"workflow_review"}},
+			// Whether that run is on grain CI even on a ci_mode: github
+			// repository (model.Schedule.GrainCI, grain/task-3878). Not
+			// authority: it starts the repository's own workflow, which a
+			// ci_mode: grain repository's schedule already may, and the run
+			// judges no pull request.
+			{Model: "GrainCI", Keys: carried("grain-ci"), Columns: []string{"grain_ci"}},
 			// Carried for the reason a suite's is (suiteSchema has it);
 			// and the team checked and kept nowhere, as on a template.
 			{Model: "AutoApproveProposals", Keys: carried("auto-approve-proposals"), Columns: []string{"auto_approve_proposals"}},
@@ -850,7 +871,9 @@ func scheduleSchema() Schema {
 			// its template or suite declares.
 			{
 				Model: "Grants",
-				Keys:  []Key{settingsOnly("grants", Reach), {Name: "capabilities", In: Repo}},
+				// `grants:` in a repository is a synonym for `capabilities:`
+				// (unified-grants §3), accepted beside it indefinitely.
+				Keys:  []Key{{Name: "grants", In: Everywhere}, {Name: "capabilities", In: Repo}},
 				Table: "schedule_grant",
 			},
 
@@ -943,6 +966,11 @@ func RepoSettingsSchema() Schema {
 				Model: "PortTypes", Declared: "DeclaredPortTypes", Compose: Append,
 				Keys:    carried("port-types"),
 				Columns: []string{"port_types", "declared_port_types"},
+			},
+			{
+				Model: "Skills", Declared: "DeclaredSkills", Compose: Union,
+				Keys:    carried("skills"),
+				Columns: []string{"skills", "declared_skills"},
 			},
 
 			// The grants of authority. Each of these would be perfectly

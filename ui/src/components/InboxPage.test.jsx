@@ -15,7 +15,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import InboxPage from "./InboxPage.jsx";
+import InboxPage, { inboxActionScope } from "./InboxPage.jsx";
+import { viewerConfig } from "../accessTestConfigs.js";
 import { inboxTasks } from "../state.js";
 import api from "../api.js";
 
@@ -119,6 +120,60 @@ describe("InboxPage", () => {
     expect(container.querySelectorAll(".inbox-item")).toHaveLength(
       inboxTasks(tasks).length,
     );
+  });
+
+  // GET /api/inbox gives a question the path of the comment it is parked
+  // on, and so does this page: the row's title links there, a plain
+  // click goes there in place (CommentDeepLink scrolls to it), and a
+  // modified click is left to open it in a new tab.
+  it("links a parked question's row to the comment it is parked on", async () => {
+    const onOpenTask = vi.fn();
+    const pushState = vi.spyOn(window.history, "pushState");
+    const user = userEvent.setup();
+    const asked = task({
+      id: "4",
+      title: "Investigate the stall",
+      state: "awaiting_reply",
+      questionSummary: "Retry or give up?",
+      questionCommentId: 37,
+    });
+    window.history.replaceState({}, "", "/inbox");
+    renderInbox({ tasks: [asked], onOpenTask });
+
+    const link = screen.getByRole("link", { name: "Investigate the stall" });
+    expect(link).toHaveAttribute("href", "/tasks/4#comment=37");
+
+    // A modified click is the browser's: nothing in the page follows it.
+    link.addEventListener("click", (e) => e.preventDefault());
+    await user.keyboard("{Control>}");
+    await user.click(link);
+    await user.keyboard("{/Control}");
+    expect(pushState).not.toHaveBeenCalled();
+    expect(onOpenTask).not.toHaveBeenCalled();
+
+    await user.click(link);
+    // The pushed entry keeps the inbox as the page behind the pane, so
+    // its "← Back" (and a Back then Forward onto it) returns there.
+    expect(pushState).toHaveBeenCalledWith(
+      { behind: "/inbox" },
+      "",
+      "/tasks/4#comment=37",
+    );
+    expect(window.location.hash).toBe("#comment=37");
+    expect(onOpenTask).not.toHaveBeenCalled();
+    window.history.replaceState({}, "", "/");
+  });
+
+  // A row with no comment to land on -- an older daemon's list, or a
+  // group that is not about a question -- opens the task as it always has.
+  it("opens a parked task with no question comment id at the top", async () => {
+    const onOpenTask = vi.fn();
+    const user = userEvent.setup();
+    renderInbox({ onOpenTask });
+    const link = screen.getByRole("link", { name: "Investigate the stall" });
+    expect(link).toHaveAttribute("href", "/tasks/4");
+    await user.click(link);
+    expect(onOpenTask).toHaveBeenCalledWith("4");
   });
 
   // A queued task with a stall note is the one row here whose badge is
@@ -304,6 +359,13 @@ describe("InboxPage", () => {
   // grain/task-372: the inbox has a figure of its own now -- the tray --
   // and this heading carries it at heading size, the way every other
   // page carries the figure of the rail entry that opened it.
+  it("links to the new Inbox", () => {
+    renderInbox();
+    expect(
+      screen.getByRole("link", { name: "Try the new Inbox" }),
+    ).toHaveAttribute("href", "/next/inbox");
+  });
+
   it("heads the pane with the inbox figure", () => {
     const { container } = renderInbox({ tasks });
     expect(
@@ -766,11 +828,22 @@ describe("InboxPage", () => {
       within(held).getByRole("button", { name: "Reply" }),
     ).toBeInTheDocument();
     expect(
-      within(held).getByRole("button", { name: "Ship as is" }),
+      within(held).getByRole("button", { name: "Approve" }),
     ).toBeInTheDocument();
+    expect(
+      within(held).getByRole("button", {
+        name: "Merge without the code review",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(held).queryByRole("button", { name: "Ship as is" }),
+    ).not.toBeInTheDocument();
     expect(
       within(held).queryByRole("button", { name: "Submit" }),
     ).not.toBeInTheDocument();
+    expect(within(held).getByTestId("inbox-gate-review")).toHaveTextContent(
+      "Code review: findings",
+    );
     expect(
       await within(held).findByText(/Should the core build publish/),
     ).toBeInTheDocument();
@@ -960,7 +1033,7 @@ describe("InboxPage", () => {
   describe("replying to a parked question", () => {
     it("shows only the question's summary on the row, and the whole question on expanding it", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1015,7 +1088,7 @@ describe("InboxPage", () => {
 
     it("expands and collapses the question from the keyboard", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1048,7 +1121,7 @@ describe("InboxPage", () => {
 
     it("falls back to the task's derived questionSummary for a question asked without a comment summary", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1077,7 +1150,7 @@ describe("InboxPage", () => {
 
     it("renders a closing report whole without QuestionDisclosure when no question summary is present", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1126,7 +1199,7 @@ describe("InboxPage", () => {
 
     it("shows the question and posts the answer as a comment", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1437,10 +1510,9 @@ describe("InboxPage", () => {
     });
   });
 
-  it("shows a waiting base-branch repair item with reason and Submit / Force merge buttons", async () => {
+  it("shows a waiting base-branch repair item with pending gates, Submit (merges when the reviews pass), and explicit gate override dialog", async () => {
     const user = userEvent.setup();
     const onAct = vi.fn((fn) => fn());
-    vi.spyOn(window, "prompt").mockReturnValue("unblock main");
 
     const repairTask = task({
       id: "323",
@@ -1462,16 +1534,41 @@ describe("InboxPage", () => {
     expect(item.querySelector(".inbox-note")).toHaveTextContent(
       "main is red — repair #323 is on security hold (trust-boundary/v4) for security review #376 — waiting for Submit",
     );
+    expect(
+      within(item).getByTestId("inbox-gate-security-review"),
+    ).toHaveTextContent("Security review: running");
+    expect(within(item).getByTestId("inbox-gate-approval")).toHaveTextContent(
+      "Approval: needed",
+    );
 
-    await user.click(within(item).getByRole("button", { name: "Submit" }));
+    await user.click(
+      within(item).getByRole("button", {
+        name: "Submit (merges when the reviews pass)",
+      }),
+    );
     expect(api).toHaveBeenCalledWith("/api/tasks/323/submit", {
       method: "POST",
     });
 
-    await user.click(within(item).getByRole("button", { name: "Force merge" }));
+    await user.click(
+      within(item).getByRole("button", {
+        name: "Merge without the security review",
+      }),
+    );
+    const dialog = screen.getByTestId("gate-override-dialog");
+    expect(within(dialog).getByTestId("confirm-gate-override")).toBeDisabled();
+    await user.type(within(dialog).getByTestId("override-pr-input"), "#4495");
+    await user.type(
+      within(dialog).getByTestId("override-reason-input"),
+      "unblock main",
+    );
+    await user.click(within(dialog).getByTestId("confirm-gate-override"));
     expect(api).toHaveBeenCalledWith("/api/tasks/323/force-merge", {
       method: "POST",
-      body: JSON.stringify({ reason: "unblock main" }),
+      body: JSON.stringify({
+        reason: "unblock main",
+        overrideGates: ["security-review"],
+      }),
     });
   });
 
@@ -1637,5 +1734,239 @@ describe("InboxPage", () => {
         screen.queryByText("Add a dark mode toggle"),
       ).not.toBeInTheDocument();
     });
+  });
+});
+
+// A role without the scope a row's answer needs is shown that answer
+// disabled, with the reason, instead of a button whose click ends in a 403
+// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
+describe("InboxPage for a limited role", () => {
+  const contributorConfig = {
+    access: {
+      role: "grain/contributor",
+      roles: ["grain/contributor"],
+      full: false,
+      scopes: ["tasks:read", "tasks:write", "ci:read", "ci:write"],
+    },
+  };
+  const proposals = [
+    task({ id: "1", title: "Add a dark mode toggle", state: "proposed" }),
+    task({ id: "2", title: "Fix flaky retry test", state: "proposed" }),
+    task({ id: "4", title: "Investigate the stall", state: "awaiting_reply" }),
+  ];
+
+  afterEach(() => vi.clearAllMocks());
+
+  it("names the scope every answer's request needs", () => {
+    expect(inboxActionScope({ post: "/approve" })).toBe("tasks:admin");
+    expect(inboxActionScope({ post: "/defer" })).toBe("tasks:write");
+    expect(inboxActionScope({ post: "/run-now" })).toBe("dispatch:write");
+    expect(inboxActionScope({ post: "/retry-merge" })).toBe("merge:write");
+    expect(inboxActionScope({ forceMerge: true })).toBe("merge:force");
+    expect(inboxActionScope({ open: true })).toBeNull();
+    expect(inboxActionScope({ href: () => "x" })).toBeNull();
+  });
+
+  it("disables every write for a viewer and sends nothing", async () => {
+    const onAct = vi.fn();
+    render(
+      <InboxPage
+        {...baseProps}
+        config={viewerConfig}
+        onAct={onAct}
+        tasks={proposals}
+      />,
+    );
+    for (const name of ["Approve", "Defer", "Decline", "Reply"]) {
+      for (const b of screen.getAllByRole("button", { name, exact: true })) {
+        expect(b).toBeDisabled();
+      }
+    }
+    expect(screen.getByRole("button", { name: /^Approve all/ })).toBeDisabled();
+    expect(onAct).not.toHaveBeenCalled();
+  });
+
+  it("leaves a contributor Defer and Reply but not Approve", async () => {
+    render(
+      <InboxPage {...baseProps} config={contributorConfig} tasks={proposals} />,
+    );
+    for (const b of screen.getAllByRole("button", {
+      name: "Approve",
+      exact: true,
+    })) {
+      expect(b).toBeDisabled();
+    }
+    for (const b of screen.getAllByRole("button", {
+      name: "Defer",
+      exact: true,
+    })) {
+      expect(b).toBeEnabled();
+    }
+    expect(screen.getByRole("button", { name: "Reply" })).toBeEnabled();
+  });
+
+  it("changes nothing for an unlimited caller", () => {
+    renderInbox();
+    expect(
+      screen.getByRole("button", { name: "Approve", exact: true }),
+    ).toBeEnabled();
+  });
+});
+
+describe("InboxPage pending releases under Asked", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    api.mockReset();
+  });
+
+  const pendingV320 = {
+    id: 41,
+    subject: "release.pending:v3.2.0",
+    family: "release.pending",
+    severity: "warning",
+    title: "v3.2.0 is ready to promote",
+    body:
+      "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain and waits for a person.\n\n" +
+      "Qualification: PASS",
+    repo: "ai-on-gke/grain",
+    raisedAt: "2026-11-09T07:00:00Z",
+    raiseCount: 1,
+    actions: ["approve-release", "reject-release"],
+  };
+
+  const otherNotification = {
+    id: 42,
+    subject: "pipeline.merge-stalled:11",
+    family: "pipeline.merge-stalled",
+    severity: "warning",
+    title: "The merge of task 11 has stalled",
+    body: "acme/widgets#15 has been in `merging` past its patience.",
+    taskId: "11",
+    raisedAt: "2026-11-09T06:00:00Z",
+    raiseCount: 1,
+    actions: ["retry-merge", "open-task"],
+  };
+
+  it("lists pending releases expanded under Asked, separate from collapsed Notifications, with allow-breaking and short-soak options", async () => {
+    const user = userEvent.setup();
+    const onNotificationsChanged = vi.fn();
+    api.mockImplementation((path) =>
+      path === "/api/local-script-approvals"
+        ? Promise.resolve([])
+        : Promise.resolve({}),
+    );
+
+    renderInbox({
+      tasks: [],
+      notifications: [pendingV320, otherNotification],
+      onNotificationsChanged,
+    });
+
+    const askedSection = screen.getByTestId("inbox-pending-releases");
+    expect(
+      within(askedSection).getByRole("heading", {
+        name: "Asked: approve a release",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(askedSection).getByRole("button", {
+        name: /Asked: approve a release/i,
+      }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    const item = within(askedSection).getByTestId("inbox-pending-release");
+    expect(
+      within(item).getByText("v3.2.0 is ready to promote"),
+    ).toBeInTheDocument();
+    expect(
+      within(item).queryByRole("button", { name: "Acknowledge" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(item).queryByRole("button", { name: "Investigate" }),
+    ).not.toBeInTheDocument();
+
+    // Notifications holds only non-release operator notifications and stays collapsed.
+    const notifSection = screen.getByTestId("inbox-notifications");
+    const notifToggle = within(notifSection).getByRole("button", {
+      name: /Notifications/i,
+    });
+    expect(within(notifToggle).getByText("1")).toHaveClass("count");
+    await user.click(notifToggle);
+    expect(
+      within(notifSection).queryByText("v3.2.0 is ready to promote"),
+    ).not.toBeInTheDocument();
+
+    // Checking Allow breaking changes posts allow_breaking: true to the person-only route.
+    const allowBreaking = within(item).getByRole("checkbox", {
+      name: /Allow breaking changes/i,
+    });
+    expect(allowBreaking).not.toBeChecked();
+    await user.click(allowBreaking);
+    expect(allowBreaking).toBeChecked();
+
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    await user.click(
+      within(item).getByRole("button", { name: "Approve breaking" }),
+    );
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+        {
+          method: "POST",
+          body: JSON.stringify({ allow_breaking: true }),
+        },
+      );
+    });
+    expect(onNotificationsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a failed promote-release.yml dispatch against the item and fetches GET /api/release-approval-key", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation((path) => {
+      if (path === "/api/local-script-approvals") return Promise.resolve([]);
+      if (path === "/api/release-approval-key") {
+        return Promise.resolve({
+          variable: "GRAIN_RELEASE_APPROVAL_KEY",
+          publicKey:
+            "-----BEGIN PUBLIC KEY-----\nMkwEwYHKoZIzj0CAQ...\n-----END PUBLIC KEY-----",
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    const failedItem = {
+      ...pendingV320,
+      severity: "critical",
+      title: "v3.2.0 is ready to promote (approve dispatch failed)",
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42577215514): verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set\n" +
+        "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on ai-on-gke/grain to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n" +
+        "Run URL: https://github.com/ai-on-gke/grain/actions/runs/42577215514\n\n" +
+        "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain.\n\n" +
+        "Release notes (docs/releases/v3.2.0.md):\n\n# v3.2.0\n\n## Breaking changes\n\n- feat!: drop v1 protocol",
+    };
+
+    renderInbox({ tasks: [], notifications: [failedItem] });
+
+    const failureAlert = screen.getByTestId("inbox-release-dispatch-failure");
+    expect(failureAlert).toHaveTextContent("gha:ai-on-gke:grain:42577215514");
+    expect(failureAlert).toHaveTextContent(
+      "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
+    );
+    expect(failureAlert).toHaveTextContent("GET /api/release-approval-key");
+
+    // Breaking changes detected from release notes pre-selects Allow breaking changes.
+    expect(
+      screen.getByRole("checkbox", { name: /Allow breaking changes/i }),
+    ).toBeChecked();
+
+    await user.click(
+      within(failureAlert).getByRole("button", { name: "Show approval key" }),
+    );
+    expect(
+      await within(failureAlert).findByText(/BEGIN PUBLIC KEY/),
+    ).toBeInTheDocument();
+    expect(api).toHaveBeenCalledWith("/api/release-approval-key");
   });
 });

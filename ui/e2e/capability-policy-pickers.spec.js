@@ -43,6 +43,15 @@ const VIEWPORTS = [
 // one snapshot: read one round trip apart on a slow runner, the menu was
 // measured at one scale and the item at a larger one, and a row that fits
 // read as 1.6px wider than its menu.
+// expectRowInside is a menu row that fits within its menu's width.
+async function expectRowInside(menu, row) {
+  await row.scrollIntoViewIfNeeded();
+  const m = await menu.boundingBox();
+  const r = await row.boundingBox();
+  expect(r.x).toBeGreaterThanOrEqual(m.x - 1);
+  expect(r.x + r.width).toBeLessThanOrEqual(m.x + m.width + 1);
+}
+
 async function expectInside(menu, item) {
   await item.scrollIntoViewIfNeeded();
   await menu.evaluate((el) =>
@@ -176,11 +185,11 @@ test("judges a held grant, a repo-conditional rule and a repo's CI grants by the
 
 // repo#read is refused every task and process by grain's own CI-only
 // rule, before the policy's rules are looked at: the listing says
-// ci_only, not denied, and the pickers say CI only and point at how a
-// CI job declares it (its workflow's capabilities:), not at a policy with
-// no rule to change nor at the repository's CI capabilities list, which
-// does not grant it.
-test("words repo#read as CI-only, not as denied by the capability policy", async ({
+// ci_only, not denied. A task's own read access is its reads list, so
+// the task pickers do not offer the CI job's method at all: "Add grant…"
+// offers "Read a repository" instead (unified-grants slice 5), which
+// adds a repo#read line the task files as a read.
+test("lists repo#read as CI-only, and offers task pickers a read of their own", async ({
   page,
   request,
 }, testInfo) => {
@@ -218,7 +227,6 @@ test("words repo#read as CI-only, not as denied by the capability policy", async
       await page.emulateMedia({ colorScheme: theme });
       await page.setViewportSize(viewport);
 
-      // A new template names no repo: the row points at the docs.
       await page.goto("/processes");
       await page.getByRole("button", { name: "+ New", exact: true }).click();
       await page
@@ -226,37 +234,27 @@ test("words repo#read as CI-only, not as denied by the capability policy", async
         .getByRole("menuitem", { name: "Template" })
         .click();
       let menu = await openGrantMenu(page, page.getByTestId("template-grants"));
-      let row = menu.locator(`[data-method="${REPO_READ}"]`);
-      await expect(row).toHaveAttribute("aria-disabled", "true");
-      await expect(row).toHaveAttribute("data-policy-verdict", "ci_only");
-      await expect(row).toContainText("CI only: not a grant for agent tasks");
-      await expect(row).not.toContainText("capability policy");
-      await expect(row).toContainText("declares it in its workflow");
-      await expect(
-        row.getByRole("link", { name: "Repository access docs" }),
-      ).toHaveAttribute("href", /docs\/ci-capabilities\.md#repository-access/);
-      await expectInside(menu, row);
+      await expect(menu.locator(`[data-method="${REPO_READ}"]`)).toHaveCount(0);
+      let row = menu.locator('[data-repo-grant="read"]');
+      await expect(row).toContainText("Read a repository");
+      await expectRowInside(menu, row);
       await page.screenshot({
         path: testInfo.outputPath(`template-repo-read-${label}.png`),
       });
       await page.keyboard.press("Escape");
 
-      // A task on acme/widgets: the same, since no repo's CI tab grants it.
       await page.goto(`/tasks/${taskID}`);
       menu = await openGrantMenu(
         page,
         page.getByTestId(`task-${taskID}-grants`),
       );
-      row = menu.locator(`[data-method="${REPO_READ}"]`);
-      await expect(row).toHaveAttribute("aria-disabled", "true");
-      await expect(row).not.toContainText("capability policy");
-      await expect(
-        row.getByRole("link", { name: "Repository access docs" }),
-      ).toHaveAttribute("href", /docs\/ci-capabilities\.md#repository-access/);
+      await expect(menu.locator(`[data-method="${REPO_READ}"]`)).toHaveCount(0);
+      row = menu.locator('[data-repo-grant="read"]');
+      await expect(row).toContainText("Read a repository");
       await page.screenshot({
         path: testInfo.outputPath(`task-repo-read-${label}.png`),
       });
-      await expectInside(menu, row);
+      await expectRowInside(menu, row);
       await page.keyboard.press("Escape");
     }
   } finally {
@@ -332,14 +330,15 @@ test("removing a scope set lists the task, template, schedule and workflow job h
       await expect(dialog).toContainText(
         `4 grants hold ${GRANT}, and will grant nothing once it is removed:`,
       );
-      for (const holder of [
-        `task:${made.task}`,
-        `template:${made.template}`,
-        `schedule:${made.schedule}`,
-        "workflow:acme/widgets:.grain/workflows/e2e-holders.yml#lint",
+      const canonicalGrant = `https://grain.dev/capabilities/api#${SET}`;
+      for (const [holder, expectedGrant] of [
+        [`task:${made.task}`, canonicalGrant],
+        [`template:${made.template}`, canonicalGrant],
+        [`schedule:${made.schedule}`, canonicalGrant],
+        ["workflow:acme/widgets:.grain/workflows/e2e-holders.yml#lint", GRANT],
       ]) {
         await expect(dialog.locator(`[data-holder="${holder}"]`)).toContainText(
-          GRANT,
+          expectedGrant,
         );
       }
       const box = await dialog.boundingBox();

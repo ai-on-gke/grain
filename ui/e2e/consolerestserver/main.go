@@ -52,7 +52,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -69,6 +68,11 @@ type scriptedMCPCall struct {
 type scriptedTurn struct {
 	MCPCalls  []scriptedMCPCall `json:"mcpCalls"`
 	FinalText string            `json:"finalText"`
+	// DelayMsBeforeExit holds the turn open this long after its last MCP
+	// call, as a real agent process lingers after ask_question before it
+	// exits: the window in which a parked task's attempt is still live
+	// (the park-settled `grain wait --until awaiting-reply` race, #888).
+	DelayMsBeforeExit int `json:"delayMsBeforeExit,omitempty"`
 }
 
 type recordedToolCall struct {
@@ -277,6 +281,13 @@ func (s *scriptedSession) runScriptedTurn(ctx context.Context, cfg agent.RunConf
 	}
 	_ = stdin.Close()
 	_ = cmd.Wait()
+	if turn.DelayMsBeforeExit > 0 {
+		select {
+		case <-time.After(time.Duration(turn.DelayMsBeforeExit) * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 
 	var reads, writes []string
 	grants := append([]string(nil), cfg.Grants...)
@@ -433,7 +444,9 @@ func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.
 		}
 	}
 	if maxID > 0 {
-		_ = s.store.AdvanceDelivered(ctx, cfg.TaskID, maxID, time.Now().UTC())
+		if err := s.store.AdvanceDelivered(ctx, cfg.TaskID, maxID, time.Now().UTC()); err != nil {
+			return nil, err
+		}
 	}
 
 	s.mu.Lock()
@@ -643,7 +656,7 @@ func run() error {
 	// api grants resolve as on every grain daemon
 	// (ui.AgentAPIDynamicProvider): every console session holds
 	// model.ConsoleSessionCIReadGrant by default.
-	registry := model.NewCapabilityRegistry(admincaps.Providers()...)
+	registry := model.NewCapabilityRegistry()
 	registry.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store:     store,

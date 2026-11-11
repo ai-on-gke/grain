@@ -7,13 +7,13 @@ This walkthrough covers [`docs/test-plans/2026-11-07.md`](../test-plans/2026-11-
 | # | Finding | Severity | Status |
 |---|---|---|---|
 | F1 | **Split-brain writes after the PostgreSQL single-writer lease is lost.** Daemon A kept committing for up to one keep-alive interval (5 s) after daemon B took the lease. In the before-fix run that was 43 writes. | High | **Fixed:** `postgres.FenceWrites` + `pkg/daemon/run.go` |
-| F2 | **Deployment secret stored and served in the clear when `-object-store` uploads fail.** The fallback copy of the narrative in `task_run.transcript` was redacted only of the sandbox environment, never of the secret store. | High | **Fixed:** `orchestrator.NarrativeRedactor` + `TranscriptObjectStore.RedactNarrative` |
+| F2 | **Deployment secret stored and served in the clear when `-object-store` uploads fail.** The fallback copy of the narrative in `task_run.transcript` was redacted only of the sandbox environment, never of the secret store. | High | **Fixed on `main`** by a separate change: with a `TranscriptSink` the narrative is no longer copied into the DB at all. This branch's own fix was removed when main was merged in. |
 | F3 | **`grain secrets` (Secret Manager backend) started a new, empty SQLite catalogue next to a PostgreSQL daemon.** The secret went to Secret Manager but was catalogued where the daemon never looks. | Medium | **Fixed:** `refuseUnrecordedCatalogue` in `pkg/cli/secrets.go` |
 | F4 | **`grain connections import` ignored `GRAIN_SECRETS_BACKEND=secretmanager`.** It wrote model keys to `<data-dir>/secrets`, so runs failed with "this connection has no Claude Code OAuth token". | Medium | **Fixed:** `connectionSecretStore` in `pkg/cli/connections.go` |
 | F5 | **`grain backup -gcs-bucket` could not be pointed at a GCS emulator.** It had no endpoint seam, so §2 item 1's backup round trip could not run without real GCS. | Low (testability) | **Fixed:** `GRAIN_BACKUP_GCS_ENDPOINT` in `pkg/backup` |
 | F6 | **The registry's `grain-config` metadata does not match what `grain-instance-init.sh` reads.** The registry writes `GRAIN_ENTRY_NAME`, `GRAIN_SECRET_PREFIX`, … and no owner. The script reads `instance`, `sm_prefix`, … and requires `deployment_owner`. A registry-provisioned VM stops at `missing required field deployment_owner`. | High (managed instances) | Follow-up task (`pkg/registry`, §1's area) |
-| F7 | One secret deleted from Secret Manager outside grain makes every transcript upload fail closed. `KnownValues` fails as a whole, and since F2 the DB fallback is dropped too. The catalogue still lists the missing secret until `grain secrets delete`. | Medium | Follow-up task |
-| O1 | A run's raw `.jsonl` stream is not retried after a failed run-end upload. The narrative falls back to the DB (now redacted, F2), but the raw stream never reaches the bucket. | Low | Noted in the F7 follow-up |
+| F7 | One secret deleted from Secret Manager outside grain makes every transcript upload fail closed. `KnownValues` fails as a whole, and since F2 the DB fallback is dropped too. The catalogue still lists the missing secret until `grain secrets delete`. | Medium | Follow-up task; since addressed on `main` by task 3577 (`grain secrets list` marks keys gone from Secret Manager, and redaction leaves them out instead of failing) |
+| O1 | A run's raw `.jsonl` stream is not retried after a failed run-end upload. The narrative is no longer kept in the DB either (F2 on `main`), and the raw stream never reaches the bucket. | Low | Noted in the F7 follow-up |
 | O2 | `POST /api/settings` accepts `autoUpgradeOn=daily` on a `-disable-self-upgrade` deployment. The setting has no effect (no `auto_upgrade_run`, no hold) and the UI hides the fields. | Cosmetic | Noted |
 | O3 | Sanitized DSNs show the password as `%2A%2A%2A%2A%2A%2A`, which is URL-escaped `******` (Settings → Upgrade Database Backend card, high-water messages). `sanitized_dsn_test.go` pins this format, and `store-highwater.json` compares it, so it was left alone. | Cosmetic | Noted |
 
@@ -125,7 +125,9 @@ after:  task 4 narrative via the API (kept in the database instead): … DEPLOY_
         secret in any task_run row: 0
 ```
 
-A sink that redacts more than the sandbox environment now implements `orchestrator.NarrativeRedactor`, which `TranscriptObjectStore` does through `RedactNarrative`. The fallback goes through that redaction. If the redaction itself fails (secret store unreadable), the narrative is **not** kept, consistent with the object store's fail-closed design. Deployments without `-object-store` are unchanged. Tests: `TestFallbackNarrativeUsesTheSinksRedaction` (orchestrator) and new `RedactNarrative` assertions in `TestTranscriptObjectStoreRedactsJSONLAndNarrativeAndFailsClosed`. (The `4f … missing` lines in `out/item4-before-fix.out` are a harness artifact: the stub still held objects from an earlier run, so `FlushLocal`'s `Stat` skipped the upload. `gcsstub.go`'s `/_reset` fixed that before the final run.)
+A sink that redacts more than the sandbox environment now implements `orchestrator.NarrativeRedactor`, which `TranscriptObjectStore` does through `RedactNarrative`. The fallback goes through that redaction. If the redaction itself fails (secret store unreadable), the narrative is **not** kept, consistent with the object store's fail-closed design. Deployments without `-object-store` are unchanged. Tests: `TestFallbackNarrativeUsesTheSinksRedaction` (orchestrator) and new `RedactNarrative` assertions in `TestTranscriptObjectStoreRedactsJSONLAndNarrativeAndFailsClosed`.
+
+**Update (attempt 3, merge of `main`):** `main` fixed the same bug a different way while this branch was open. When `cfg.TranscriptSink` is set, `pkg/orchestrator/run.go` no longer falls back to `store.SetRunTranscript` at all, so no less-redacted copy can reach the database. That change makes `NarrativeRedactor`, `fallbackNarrative`, `RedactNarrative` and their tests dead code, so the merge removed them and took `main`'s version. (The `4f … missing` lines in `out/item4-before-fix.out` are a harness artifact: the stub still held objects from an earlier run, so `FlushLocal`'s `Stat` skipped the upload. `gcsstub.go`'s `/_reset` fixed that before the final run.)
 
 ## Item 4b: `-secrets-backend=secretmanager` over a local Secret Manager stub
 
@@ -177,12 +179,10 @@ Script: [`item5-instance-init.sh`](2026-11-07-instance-runtime-stores/item5-inst
 |---|---|
 | `pkg/model/postgres/write_fence.go` (new), `adapter.go` | `FenceWrites` / `ErrWriteFenced`: a read-write transaction confirms the single-writer lease under the writer lock (F1) |
 | `pkg/daemon/run.go` | Fences the store's pool with the daemon's `WriterLock` (F1) |
-| `pkg/orchestrator/orchestrator.go`, `run.go` | `NarrativeRedactor` and `fallbackNarrative` (F2) |
-| `pkg/daemon/transcripts.go` | `TranscriptObjectStore.RedactNarrative` (F2) |
 | `pkg/cli/secrets.go` | `refuseUnrecordedCatalogue` (F3) |
 | `pkg/cli/connections.go` | `connectionSecretStore` plus a usage note (F4) |
 | `pkg/backup/google_cloud_storage.go` | `GRAIN_BACKUP_GCS_ENDPOINT` (F5) |
-| Tests | `write_fence_test.go`, `transcript_fallback_test.go`, `objectstore_test.go` (extended), `secrets_sm_test.go` (+2), `google_cloud_storage_test.go` (+1) |
+| Tests | `write_fence_test.go`, `secrets_sm_test.go` (+2), `google_cloud_storage_test.go` (+1) |
 
 Local verification: `go test ./pkg/model/postgres/... ./pkg/backup/... ./pkg/objectstore/... ./pkg/orchestrator/... ./pkg/cli/... ./pkg/daemon/... ./tests/deploy/... ./tests/hygiene/...` all `ok`. The PostgreSQL tests ran against the scratch cluster through `GRAIN_POSTGRES_TEST_URL`. `GRAIN_UPDATE_CLI_SPEC=1 go test ./pkg/cli ./pkg/sandboxcli -run CLISpec` reported no spec drift.
 

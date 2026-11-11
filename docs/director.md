@@ -57,7 +57,7 @@ the chat is in:
 | `Capabilities` | `api:self-debug` and `https://grain.dev/capabilities/grain#source` (formerly `self-debug`), `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`), `api:deployment:read` and `…/grain#health` (formerly `deployment-health`), `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`), `api:task-admin`, `api:capabilities:read`, `api:capabilities:detach`, `api:settings:read`, `api:repos:read`, `api:releases:read`, `api:schedules:read`, `api:templates:read`, `api:suites:read`, `api:dispatch:read` (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
 | `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
 | `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
-| `NetworkAccess` | none (`model.DefaultConsoleSessions`, `director-capabilities.spec.md` §3.1.6). On a backend that cannot isolate a sandbox's network (host directory, container, plain Kubernetes pods), `model.ConsoleSessionNetworkAccess` files the director open instead, since that backend would refuse every exchange. A build that registers a default-on capability needing egress from the sandbox itself (`capability.Registration.SandboxEgress`) ships it open | whether its sandbox reaches the internet. The director's state-repository checkout, its `ReadsAll` clones and the in-sandbox `grain` CLI all go through the git proxy, and its `api_*` tools run on grain's side, so closing its network takes away nothing it uses |
+| `NetworkAccess` | none (`model.DefaultConsoleSessions`, `director-capabilities.spec.md` §3.1.6). On a backend that cannot isolate a sandbox's network (host directory, container, plain Kubernetes pods), `model.ConsoleSessionNetworkAccess` files the director open instead, since that backend would refuse every exchange. A build that registers a default-on capability method needing egress from the sandbox itself (`capability.Method.SandboxEgress`) ships it open | whether its sandbox reaches the internet. The director's state-repository checkout, its `ReadsAll` clones and the in-sandbox `grain` CLI all go through the git proxy, and its `api_*` tools run on grain's side, so closing its network takes away nothing it uses |
 | `Writes` | `grain/config` (the director; other sessions none) | where it may push: for the director, candidate `grain/config/<task-id>/*` branches for `propose_config_change` |
 | `TasksApproved` | true (the director, `director-capabilities.spec.md` §3.1.5; other sessions false) | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
@@ -100,9 +100,16 @@ that can break the deployment it is talking about, and **`api:memory`**
 (formerly `memory`), which writes the standing instructions every later run is
 given.
 
-A wrapper distribution can register further capabilities as on by default
-for the director (`pkg/capability.Registration.DefaultOn`); each shows in
-the director's pane like any other, and can be unticked there.
+A wrapper distribution can register further capability methods as on by default
+for the director (`pkg/capability.Method.DefaultOn`); each shows in
+the director's pane like any other, and can be unticked there. A deployment
+that already saved its `director` row before newer shipped default
+capabilities existed keeps its saved list rather than having new grants
+added silently; the director's pane offers **Adopt shipped defaults**
+(`adoptShippedDefaults: true` on `PUT /api/console-sessions/director`),
+which adds missing shipped defaults while keeping custom grants
+(`expectCapabilities` guards capability saves against concurrent edits with
+`409` `code: "stale"`).
 
 ## What every session reads by default
 

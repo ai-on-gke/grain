@@ -905,17 +905,135 @@ test("Saved Director row offers one-click Adopt shipped defaults cleanly on desk
   expect(director).toBeTruthy();
   expect(director.missingShippedDefaults || []).toEqual([]);
   for (const grant of [
-    "api:task-admin",
-    "api:capabilities:read",
-    "api:capabilities:detach",
-    "api:settings:read",
-    "api:repos:read",
-    "api:releases:read",
-    "api:schedules:read",
-    "api:templates:read",
-    "api:suites:read",
-    "api:dispatch:read",
+    "https://grain.dev/capabilities/api#task-admin",
+    "https://grain.dev/capabilities/api#capabilities:read",
+    "https://grain.dev/capabilities/api#capabilities:detach",
+    "https://grain.dev/capabilities/api#settings:read",
+    "https://grain.dev/capabilities/api#repos:read",
+    "https://grain.dev/capabilities/api#releases:read",
+    "https://grain.dev/capabilities/api#schedules:read",
+    "https://grain.dev/capabilities/api#templates:read",
+    "https://grain.dev/capabilities/api#suites:read",
+    "https://grain.dev/capabilities/api#dispatch:read",
   ]) {
     expect(director.capabilities).toContain(grant);
+  }
+});
+
+// The 2026-11-07 director agent API walkthrough, finding 4: a pane that
+// read the director before another tab granted it something used to
+// save its old list plus the missing defaults on Adopt, dropping that
+// grant. The pane now sends only {adoptShippedDefaults: true}, which the
+// server resolves against what the session holds when it lands; a tick
+// box sends the list it read as expectCapabilities, and retries on a
+// fresh read when the server says that list is stale.
+test("Adopt shipped defaults and grant edits keep a grant another tab made since", async ({
+  page,
+}) => {
+  const read = async () => {
+    const res = await page.request.get("/api/console-sessions");
+    expect(res.ok()).toBeTruthy();
+    return (await res.json()).sessions.find((s) => s.id === "director");
+  };
+  const before = (await read()).capabilities;
+  try {
+    // Tab A reads the director while it lacks the Tier 1 grants.
+    const seeded = [
+      "https://grain.dev/capabilities/api#self-debug",
+      "https://grain.dev/capabilities/api#deployment:read",
+    ];
+    expect(
+      (
+        await page.request.put("/api/console-sessions/director", {
+          data: { capabilities: seeded },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/session/director");
+    await page
+      .getByRole("button", { name: "Edit Director capabilities" })
+      .click();
+    const banner = page.getByTestId("adopt-shipped-defaults-banner");
+    await expect(banner).toBeVisible();
+
+    // Tab B grants .../api#tasks:read.
+    expect(
+      (
+        await page.request.put("/api/console-sessions/director", {
+          data: {
+            capabilities: [
+              ...seeded,
+              "https://grain.dev/capabilities/api#tasks:read",
+            ],
+            expectCapabilities: seeded,
+          },
+        })
+      ).ok(),
+    ).toBeTruthy();
+
+    // Tab A adopts: the request names no list, and tab B's grant stays.
+    const adoptPut = page.waitForRequest(
+      (req) =>
+        req.method() === "PUT" &&
+        req.url().endsWith("/api/console-sessions/director"),
+    );
+    await banner
+      .getByRole("button", { name: "Adopt shipped defaults" })
+      .click();
+    expect((await adoptPut).postDataJSON()).toEqual({
+      adoptShippedDefaults: true,
+    });
+    await expect(banner).toHaveCount(0);
+    const adopted = await read();
+    expect(adopted.missingShippedDefaults || []).toEqual([]);
+    expect(adopted.capabilities).toContain(
+      "https://grain.dev/capabilities/api#tasks:read",
+    );
+    expect(adopted.capabilities).toContain(
+      "https://grain.dev/capabilities/api#task-admin",
+    );
+
+    // Removing a grant in the pane carries the list it was computed
+    // from, and a grant tab B makes meanwhile survives it.
+    expect(
+      (
+        await page.request.put("/api/console-sessions/director", {
+          data: {
+            capabilities: [
+              ...adopted.capabilities,
+              "https://grain.dev/capabilities/api#tasks:admin",
+            ],
+            expectCapabilities: adopted.capabilities,
+          },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    const removePut = page.waitForRequest(
+      (req) =>
+        req.method() === "PUT" &&
+        req.url().endsWith("/api/console-sessions/director"),
+    );
+    await page
+      .getByTestId("session-director-grants")
+      .getByRole("button", { name: /^Remove api:deployment:read/ })
+      .click();
+    const removal = (await removePut).postDataJSON();
+    expect(removal.expectCapabilities).toContain(
+      "https://grain.dev/capabilities/api#deployment:read",
+    );
+    expect(removal.capabilities).not.toContain(
+      "https://grain.dev/capabilities/api#deployment:read",
+    );
+    await expect
+      .poll(async () => (await read()).capabilities)
+      .not.toContain("https://grain.dev/capabilities/api#deployment:read");
+    const after = (await read()).capabilities;
+    expect(after).toContain("https://grain.dev/capabilities/api#tasks:admin");
+    expect(after).toContain("https://grain.dev/capabilities/api#tasks:read");
+  } finally {
+    await page.request.put("/api/console-sessions/director", {
+      data: { capabilities: before },
+    });
   }
 });

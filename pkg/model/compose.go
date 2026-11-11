@@ -233,6 +233,9 @@ type Composition struct {
 	// default branch.
 	Base string
 
+	// Reads is the read-only repos, already minus any naming this task's own
+	// target -- ReadsBesides, applied here for the same reason WritesBesides
+	// is applied to Writes.
 	Reads []RepoRef
 	// Writes is the extra write targets, already minus any naming this
 	// task's own target -- WritesBesides, applied here so that what a
@@ -275,6 +278,8 @@ type Composition struct {
 	// Hosting is the resolved hosting setting for the task (empty means
 	// neither template nor schedule set one, so Task defaults to unattended).
 	Hosting Hosting
+	// Skills is the optional per-task skill discovery override from the template.
+	Skills *SkillsConfig
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -285,6 +290,13 @@ type Composition struct {
 	// which is how its runs find the template's declared push set.
 	TemplateID   string
 	TemplateName string
+
+	// DeclarationHold is, for work a repository's own declaration
+	// files, what it asks for that only a person may accept and whether
+	// a person has (DeclarationAcceptance); nil for anything else. A
+	// firing records it (noteDeclarationHold) so Settings → Capabilities
+	// can show the set awaiting acceptance; a preview only shows it.
+	DeclarationHold *DeclarationHold
 
 	Sources CompositionSources
 }
@@ -330,6 +342,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		KeepRunning:          c.KeepRunning,
 		Admission:            NormalizeAdmission(c.Admission),
 		Hosting:              NormalizeHosting(c.Hosting),
+		Skills:               c.Skills.Clone(),
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -436,7 +449,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		ChangeTarget:         changeTarget,
 		Reviewers:            slices.Clone(tmpl.Reviewers),
 		Base:                 branch,
-		Reads:                tmpl.Reads,
+		Reads:                ReadsBesides(tmpl.Reads, repo),
 		Writes:               WritesBesides(tmpl.Writes, repo, branch),
 		Grants:               grants,
 		GrantSources:         repeatLayer(LayerTemplate, len(grants)),
@@ -451,6 +464,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		KeepRunning:          tmpl.KeepRunning,
 		Admission:            tmpl.Admission,
 		Hosting:              tmpl.Hosting,
+		Skills:               tmpl.Skills.Clone(),
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
@@ -554,7 +568,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		Body:                 sched.Body,
 		Target:               targetPointer(sched.Target),
 		Base:                 sched.Base,
-		Reads:                sched.Reads,
+		Reads:                ReadsBesides(sched.Reads, sched.Target),
 		Writes:               WritesBesides(sched.Writes, sched.Target, sched.Base),
 		Grants:               sched.Grants,
 		GrantSources:         repeatLayer(LayerSchedule, len(sched.Grants)),
@@ -755,7 +769,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 		}
 		if !APIGrantsOf(names).Allows("ci:read", repo) {
 			filteredGrants = append(filteredGrants, Grant{
-				Capability: APIGrantPrefix + "ci-read@" + repo,
+				Capability: APIGrantString("ci-read", repo),
 				Via:        GrantByGrain,
 			})
 			filteredSources = append(filteredSources, requestedFrom)
@@ -817,7 +831,7 @@ func applyWorkflowReviewCIReadGrant(comp *Composition, from CompositionLayer) {
 	}
 	hadGrants := len(comp.Grants) > 0
 	comp.Grants = append(slices.Clip(comp.Grants), Grant{
-		Capability: APIGrantPrefix + "ci-read@" + repo,
+		Capability: APIGrantString("ci-read", repo),
 		Via:        GrantByGrain,
 	})
 	comp.GrantSources = append(sources, from)
@@ -858,16 +872,33 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 	}
 	comp.CustomFields = fields
 	if comp.Target != nil {
-		usesGrainCI, err := querierRepoUsesGrainCI(ctx, s.db, *comp.Target)
+		ciDefaults, err := querierRepoCIDefaults(ctx, s.db, *comp.Target)
 		if err != nil {
 			return Composition{}, nil, err
 		}
-		applyGrainCIGrant(&comp, usesGrainCI)
-		if !usesGrainCI {
+		applyRepoCIGrants(&comp, ciDefaults)
+		if !ciDefaults.GrainCI {
 			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
 				applyWorkflowReviewCIReadGrant(&comp, from)
 			}
 		}
+	}
+	// A repository's own declaration is written by whoever can merge
+	// there, not by a person granting anything: a firing carrying a grant
+	// only a person may accept lands for one to approve (task 3965),
+	// unless a person has accepted the declaration's set and it has not
+	// widened since (task 3971).
+	if held := DeclaredFiringHold(sched, tmpl, comp); len(held) > 0 {
+		id := ScheduleDeclarationID(sched, tmpl)
+		kind := DeclaredSchedule
+		if id != sched.ID {
+			kind = DeclaredTemplate
+		}
+		hold, prior, err := declarationHoldFor(ctx, s.db, id, kind, held)
+		if err != nil {
+			return Composition{}, nil, err
+		}
+		applyDeclarationHold(&comp, hold, prior)
 	}
 	return comp, tmpl, nil
 }
@@ -876,7 +907,11 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 // item order -- fireSuitePass files exactly these, and
 // ui.Client.SuiteComposition shows exactly these. Every pass of a run
 // composes the same way, so one pass is the whole answer for the run.
-func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templates map[string]Template,
+//
+// suiteID is the suite's own id: a suite a repository declared that files
+// its tasks approved (`require_approval: false`) has their grants held as
+// a declared schedule's are (applySuiteDeclarationHold).
+func composeSuitePass(ctx context.Context, q querier, suiteID string, items []SuiteItem, templates map[string]Template,
 	target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool, opts SuiteRunOptions) ([]Composition, error) {
 
 	// Read at most once for the whole pass, and not at all for a suite
@@ -894,15 +929,63 @@ func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templat
 		}
 		comp.CustomFields = fields
 		if comp.Target != nil {
-			usesGrainCI, err := querierRepoUsesGrainCI(ctx, q, *comp.Target)
+			ciDefaults, err := querierRepoCIDefaults(ctx, q, *comp.Target)
 			if err != nil {
 				return nil, err
 			}
-			applyGrainCIGrant(&comp, usesGrainCI)
+			applyRepoCIGrants(&comp, ciDefaults)
 		}
 		out = append(out, comp)
 	}
+	if !requireApproval {
+		if err := applySuiteDeclarationHold(ctx, q, suiteID, out); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
+}
+
+// applySuiteDeclarationHold is DeclaredFiringHold for one pass of a suite
+// that files its tasks approved. A suite a repository declared is
+// accepted as a whole: what every item asks for (DeclaredCompositionHold),
+// plus the suite's own `require_approval: false`, since that is what
+// lets those grants run with nobody looking. An item from a declared
+// template in a suite an operator wrote is accepted under its template,
+// as a schedule firing one is. Anything not accepted files unapproved.
+func applySuiteDeclarationHold(ctx context.Context, q querier, suiteID string, comps []Composition) error {
+	if IsRepoDeclaredID(suiteID) {
+		var held []string
+		for _, comp := range comps {
+			for _, it := range DeclaredCompositionHold(comp) {
+				if !slices.Contains(held, it) {
+					held = append(held, it)
+				}
+			}
+		}
+		if len(held) == 0 {
+			return nil
+		}
+		held = append(held, DeclaredAutoApprovedSuiteItem)
+		hold, prior, err := declarationHoldFor(ctx, q, suiteID, DeclaredSuite, held)
+		if err != nil {
+			return err
+		}
+		for i := range comps {
+			applyDeclarationHold(&comps[i], hold, prior)
+		}
+		return nil
+	}
+	for i := range comps {
+		if !IsRepoDeclaredID(comps[i].TemplateID) {
+			continue
+		}
+		hold, prior, err := declarationHoldFor(ctx, q, comps[i].TemplateID, DeclaredTemplate, DeclaredCompositionHold(comps[i]))
+		if err != nil {
+			return err
+		}
+		applyDeclarationHold(&comps[i], hold, prior)
+	}
+	return nil
 }
 
 // ScheduleComposition is every task sched's next firing files, composed
@@ -946,7 +1029,7 @@ func (s *Store) SuiteComposition(ctx context.Context, suite Suite, target RepoRe
 	if err != nil {
 		return nil, err
 	}
-	return composeSuitePass(ctx, s.db, suite.Items, templates, target, base,
+	return composeSuitePass(ctx, s.db, suite.ID, suite.Items, templates, target, base,
 		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, SuiteRunOptions{})
 }
 
@@ -965,11 +1048,11 @@ func (s *Store) TemplateComposition(ctx context.Context, tmpl Template, values m
 	}
 	comp.CustomFields = fields
 	if comp.Target != nil {
-		usesGrainCI, err := querierRepoUsesGrainCI(ctx, s.db, *comp.Target)
+		ciDefaults, err := querierRepoCIDefaults(ctx, s.db, *comp.Target)
 		if err != nil {
 			return Composition{}, err
 		}
-		applyGrainCIGrant(&comp, usesGrainCI)
+		applyRepoCIGrants(&comp, ciDefaults)
 	}
 	return comp, nil
 }

@@ -18,9 +18,8 @@
 # (design/playbook/releases.playbook.md, which supersedes the staging soak
 # of design/design/release-from-trunk.design.md). There is no
 # stabilization branch, no back-merge and no port: every tag it makes is
-# on a main commit -- except an rc.3, which is cut from a short-lived
-# release/vX.Y.Z convergence branch -- and refs/heads/candidate is only
-# ever a pointer it force-moves onto the newest release candidate.
+# on a main commit, and refs/heads/candidate is only ever a pointer it
+# force-moves onto the newest release candidate.
 # .github/workflows/release-train.yml runs it (.grain/workflows/release-train.yml
 # by dispatch); by hand it is
 #
@@ -95,9 +94,7 @@
 #            RELEASE_IMAGES=off and .github/workflows/publish-release.yml
 #            does it on the tag push, with the GitHub Release) and the
 #            release-notes task filed (from the newest release neither
-#            RELEASE_NEVER_PROMOTE names nor is retracted). Not while
-#            RELEASE_MIN_INTERVAL_MINUTES has not passed since the newest
-#            release (the run waits, and a later one promotes). It is
+#            RELEASE_NEVER_PROMOTE names nor is retracted). It is
 #            staged for a person instead -- vM.Y.Z-pending tagged and
 #            pushed, its images published as :vM.Y.Z-pending
 #            (release-images.sh pending), the notes task filed and an
@@ -112,6 +109,21 @@
 #            fails never costs a version number.
 #   An rc RELEASE_NEVER_PROMOTE names is dropped without qualifying.
 #
+#   The daily cap (playbook section 7, operator 2026-11-09): the release
+#   day is the calendar day in RELEASE_DAY_TZ, and it releases at most
+#   RELEASE_MAX_PER_DAY (1) -- promoted vX.Y.Z tags dated that day, or one
+#   staged as -pending -- so an rc is dropped without being judged, tagged
+#   -discarded with "Discard-Reason: daily-cap", when the day has already
+#   released, and with "Discard-Reason: held-over" when it was cut on an
+#   earlier day: the train never releases an rc held over from a day
+#   before, and the new day starts with a fresh cut. Neither is red, so the
+#   cut after it may be on the same commit and nothing holds it. An rc
+#   RELEASE_DAY_CAP_EXEMPT names is spared both. A person's approve goes
+#   past the cap, and says so on the release tag (day_cap_bypassed=).
+#   RELEASE_MAX_PER_DAY=0 is no cap. Where the day may release again,
+#   RELEASE_MIN_INTERVAL_MINUTES since the newest release holds a
+#   qualified rc (promotion_waits=; a later run promotes it).
+#
 #   While a release is pending, the train keeps going but never past it:
 #   the pending release counts as the newest release for choosing the next
 #   version, and an rc after it that qualifies waits -- it is never staged
@@ -125,23 +137,31 @@
 # Before an rc.(N+1) (next_n > 1), the grain/rc-hold check run on the
 # dropped rc's commit (the floor) must be completed or absent: while open
 # `[rc-blocker vM.Y.Z-rc.N]` tasks keep it in progress, the train cuts
-# nothing (rc_held= in RELEASE_TRAIN_OUTPUT).
+# nothing (rc_held= in RELEASE_TRAIN_OUTPUT). Absent counts as no hold only
+# on a later run than the one that dropped the rc: a run whose Phase 1 has
+# just dropped it, with no grain/rc-hold posted on it yet, cuts nothing
+# (rc_held= too), so grain -- which posts the triage-pending hold for a red
+# Stage 1 or Stage 2 alike -- is never raced to it.
 # No new known-good commit cuts nothing: main red for a week ships
-# nothing and `latest` stands. Before an rc.1:
-#   - at least RELEASE_MIN_INTERVAL_MINUTES must have passed since the
-#     newest release (promoted or pending) was tagged; FORCE=true skips it;
+# nothing and `latest` stands. Once the day has released (the daily cap
+# above), nothing is cut until the next day starts in RELEASE_DAY_TZ
+# (day_done=); until then a dropped rc's successor is cut at once, with no
+# interval. Before an rc.1:
+#   - on a day that may release again (RELEASE_MAX_PER_DAY 0, or above 1,
+#     and already released), at least RELEASE_MIN_INTERVAL_MINUTES must have
+#     passed since the newest release (promoted or pending) was tagged;
+#     FORCE=true skips it. The day's first rc.1 never waits for it;
 #   - the commits since the newest release decide whether there is anything
 #     to release (playbook section 7): every trunk release is the next
 #     minor, vM.(P+1).0, whether it carries features or fixes alone --
 #     patches (vM.P.Z, Z >= 1) stay scripts/release-patch.sh's cherry-picked
 #     hotfixes on release/vM.P.Z -- while docs:, chore:, test:, ci:, style:
 #     and build: alone release nothing and wait for a fix or a feature.
-# rc.3 converges (playbook section 5): after rc.2 is dropped, the train
-# makes release/vM.Y.Z from rc.2's commit and cuts rc.3 from that branch
-# (on release.yml alone, which runs on release/v*) once fixes cherry-picked
-# onto it from main are green. After RELEASE_MAX_RC_ATTEMPTS dropped rcs
-# the train cuts nothing more of that version and exits 1, so a person
-# decides (escalated_version= in RELEASE_TRAIN_OUTPUT).
+# Every rc is cut from main (playbook section 5); there is no convergence
+# branch. Past RELEASE_MAX_RC_ATTEMPTS dropped rcs of one version the
+# train escalates it to a person (escalated_version= in
+# RELEASE_TRAIN_OUTPUT, as the first rc past it is cut) and keeps cutting
+# from main's newest known-good commit: a red rc never stops the day.
 #
 # CI verdicts come from wherever the gate runs (RELEASE_CI_SOURCE). With
 # "grain" they are grain CI's runs, GET /api/ci/runs, read through the
@@ -157,8 +177,10 @@
 #
 # Settings (environment):
 #   RELEASE_REMOTE           the remote (origin)
-#   RELEASE_NOW              the time, in seconds (now)
+#   RELEASE_NOW              the time, in seconds (now); set, the tags the run
+#                            makes are dated at it
 #   FORCE                    true cuts an rc.1 inside RELEASE_MIN_INTERVAL_MINUTES
+#                            (never past the daily cap)
 #   RELEASE_SHORT_SOAK_OK    approve only, for a -pending tag from the soak
 #                            era: true promotes one whose recorded soak is
 #                            under RELEASE_SOAK_HOURS (24) less
@@ -182,9 +204,14 @@
 #                            grain/release-qualification and grain/rc-hold as:
 #                            only its check runs qualify an rc or lift a hold,
 #                            never same-named ones from an Actions workflow or
-#                            another app; unset, neither check run is trusted
-#                            and the train stops (candidate-gate.sh's
-#                            CHECK_QUALIFICATION_APP)
+#                            another app. "none", set explicitly here or in
+#                            scripts/release.conf (a forge connection that
+#                            is no GitHub App posts no check run), trusts
+#                            neither: Stage 1 alone qualifies an rc and no
+#                            grain/rc-hold holds the next. Empty here falls
+#                            back to scripts/release.conf; unset in both, no
+#                            check run is trusted and the train fails closed
+#                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -213,7 +240,9 @@
 #                            GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL are
 #                            unset; never written to the checkout's config
 #   RELEASE_MAJOR, RELEASE_FLOOR_MINOR, RELEASE_NEVER_PROMOTE,
-#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE
+#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE,
+#   RELEASE_MAX_PER_DAY, RELEASE_DAY_TZ, RELEASE_DAY_CAP_EXEMPT,
+#   RELEASE_QUALIFICATION_APP
 #                            override scripts/release.conf as main has it
 set -euo pipefail
 
@@ -254,6 +283,9 @@ esac
 scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 remote="${RELEASE_REMOTE:-origin}"
 now="${RELEASE_NOW:-$(date +%s)}"
+# A run told the time dates its tags at it, so the day they count for is
+# the day it was told.
+[ -z "${RELEASE_NOW:-}" ] || export GIT_COMMITTER_DATE="@$now +0000"
 FORCE="${FORCE:-false}"
 short_soak_ok="${RELEASE_SHORT_SOAK_OK:-false}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -321,7 +353,12 @@ never="${RELEASE_NEVER_PROMOTE-$(conf_value RELEASE_NEVER_PROMOTE)}"
 floor_minor="${RELEASE_FLOOR_MINOR-$(conf_value RELEASE_FLOOR_MINOR)}"
 floor_minor="${floor_minor:-0}"
 min_interval="${RELEASE_MIN_INTERVAL_MINUTES-$(conf_value RELEASE_MIN_INTERVAL_MINUTES)}"
-min_interval="${min_interval:-120}"
+min_interval="${min_interval:-0}"
+max_per_day="${RELEASE_MAX_PER_DAY-$(conf_value RELEASE_MAX_PER_DAY)}"
+max_per_day="${max_per_day:-1}"
+day_tz="${RELEASE_DAY_TZ-$(conf_value RELEASE_DAY_TZ)}"
+day_tz="${day_tz:-America/Los_Angeles}"
+cap_exempt="${RELEASE_DAY_CAP_EXEMPT-$(conf_value RELEASE_DAY_CAP_EXEMPT)}"
 max_attempts="${RELEASE_MAX_RC_ATTEMPTS-$(conf_value RELEASE_MAX_RC_ATTEMPTS)}"
 max_attempts="${max_attempts:-3}"
 auto_promote="${RELEASE_AUTO_PROMOTE-$(conf_value RELEASE_AUTO_PROMOTE)}"
@@ -333,6 +370,15 @@ major="${major:-${highest_major:-0}}"
 [[ "$floor_minor" =~ ^[0-9]+$ ]] || die "RELEASE_FLOOR_MINOR is \"$floor_minor\", which is not a number; nothing was done"
 [[ "$min_interval" =~ ^[0-9]+$ ]] || die "RELEASE_MIN_INTERVAL_MINUTES is \"$min_interval\", which is not a number; nothing was done"
 [[ "$max_attempts" =~ ^[1-9][0-9]*$ ]] || die "RELEASE_MAX_RC_ATTEMPTS is \"$max_attempts\", which is not a positive number; nothing was done"
+[[ "$max_per_day" =~ ^[0-9]+$ ]] || die "RELEASE_MAX_PER_DAY is \"$max_per_day\", which is not a number; nothing was done"
+# A zone date(1) does not know is read as UTC without a word, which would
+# move the day boundary by hours: the train refuses one rather than guess.
+# The person's modes only log the cap, so they carry on with UTC.
+if [ "$day_tz" != UTC ] && { [[ "$day_tz" == *..* ]] || [ ! -f "${TZDIR:-/usr/share/zoneinfo}/$day_tz" ]; }; then
+  [ "$mode" != train ] || die "RELEASE_DAY_TZ is \"$day_tz\", which is no time zone in ${TZDIR:-/usr/share/zoneinfo}; nothing was done"
+  echo "release-from-trunk: WARNING: RELEASE_DAY_TZ \"$day_tz\" is no time zone here; counting the day in UTC" >&2
+  day_tz=UTC
+fi
 case "$auto_promote" in
   true | false) ;;
   *) die "RELEASE_AUTO_PROMOTE is \"$auto_promote\", not true or false; nothing was done" ;;
@@ -375,6 +421,40 @@ version_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | 
 
 rc_tags() { # rc_tags <version>: its rc tags, highest N last
   git tag -l "$1-rc.*" | grep -E "^${1//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n || true
+}
+
+# The release day (playbook section 7): a calendar day in RELEASE_DAY_TZ,
+# not a rolling 24h, so the day's release never drifts later day by day.
+day_of() { TZ="$day_tz" date -d "@$1" +%F; } # day_of <unix seconds>: YYYY-MM-DD
+# tag_day <tag>: the day it was tagged (a lightweight tag: its commit's).
+tag_day() { day_of "$(git for-each-ref --format='%(creatordate:unix)' "refs/tags/$1")"; }
+# releases_on <day> [promoted]: the releases (vX.Y.Z, promoted by the
+# train or a person, retracted or not) tagged that day, and those staged
+# for a person (vX.Y.Z-pending, still pending) unless "promoted" is asked,
+# space-separated; a placeholder RELEASE_NEVER_PROMOTE names was never a
+# release.
+releases_on() {
+  local t ts
+  git for-each-ref --format='%(refname:strip=2) %(creatordate:unix)' 'refs/tags/v*' | while read -r t ts; do
+    if [[ "$t" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+)-pending$ ]] && [ "${2:-}" != promoted ]; then
+      ! commit_of "${BASH_REMATCH[1]}" >/dev/null || continue
+    elif [[ ! "$t" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      continue
+    fi
+    never_promotes "${t%-pending}" && continue
+    [ "$(day_of "$ts")" != "$1" ] || printf '%s\n' "$t"
+  done | sort -V | paste -sd' ' -
+}
+cap_exempts() { case " $cap_exempt " in *" $1 "*) return 0 ;; esac; return 1; } # cap_exempts <rc>
+today="$(day_of "$now")"
+# count_day [promoted]: sets day_releases, day_count and day_full -- what
+# today has released (releases_on), and whether that is
+# RELEASE_MAX_PER_DAY's worth (0 is no cap).
+count_day() {
+  day_releases="$(releases_on "$today" "${1:-}")"
+  day_count=$(($(printf '%s' "$day_releases" | wc -w)))
+  day_full=false
+  [ "$max_per_day" = 0 ] || [ "$day_count" -lt "$max_per_day" ] || day_full=true
 }
 
 # target_release: sets released (the newest promoted release; empty if
@@ -601,6 +681,12 @@ esac
 github_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 github_api="${RELEASE_GITHUB_API_URL:-${GITHUB_API_URL:-https://api.github.com}}"
 github_repo="${RELEASE_GITHUB_REPO:-${GITHUB_REPOSITORY:-${GRAIN_CI_REPO:-ai-on-gke/grain}}}"
+# The App trusted for grain/release-qualification and grain/rc-hold, from
+# the environment or else scripts/release.conf as main has it. "none" --
+# only ever an explicit setting, never a default -- trusts no check run:
+# Stage 1 alone qualifies, and nothing holds. Empty in both trusts nothing
+# and fails closed, so an unconfigured deployment never promotes on Stage 1.
+qualification_app="${RELEASE_QUALIFICATION_APP:-$(conf_value RELEASE_QUALIFICATION_APP)}"
 github_get() { # github_get <path> <out>
   curl -fsS --max-time 60 -H "Authorization: Bearer $github_token" -H "Accept: application/vnd.github+json" \
     "${github_api%/}/repos/$github_repo/$1" -o "$2"
@@ -639,7 +725,7 @@ github_runs() { # github_runs <out> <branch>
 qual_checks=""
 qualification_json() {
   local id app_id=""
-  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
+  [[ ! "$qualification_app" =~ ^[0-9]+$ ]] || app_id="&app_id=$qualification_app"
   if [ -n "${RELEASE_QUALIFICATION_RUNS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_RUNS_JSON "" "$work/qual-runs.json"
   elif [ "$ci_source" = github ]; then
@@ -656,7 +742,9 @@ qualification_json() {
   else
     gate_json RELEASE_QUALIFICATION_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=$1&limit=200" "$work/qual-runs.json"
   fi
-  if [ -n "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
+  if [ "$qualification_app" = none ]; then
+    say "RELEASE_QUALIFICATION_APP=none, so no grain/release-qualification check run is read for $1: Stage 1 alone qualifies it"
+  elif [ -n "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_CHECKS_JSON "" "$work/qual-checks.json"
     qual_checks="$work/qual-checks.json"
   elif [ -n "$github_token" ]; then
@@ -672,19 +760,28 @@ qualification_json() {
 
 # rc_hold_summary <floor_sha>: if the newest grain/rc-hold check run on
 # floor_sha from RELEASE_QUALIFICATION_APP is not completed, prints its
-# summary; otherwise prints nothing. No check at all means no hold; an unset
-# RELEASE_QUALIFICATION_APP refuses rather than trust another app's check run.
+# summary; otherwise prints nothing. No check at all means no hold, and so
+# does an explicit RELEASE_QUALIFICATION_APP=none: no app is trusted to post
+# one. An empty one refuses rather than trust another app's check run.
+# When the listing was read and grain's app has posted no grain/rc-hold on
+# floor_sha at all, it leaves $work/hold-absent behind (it runs in a
+# command substitution, so a file is how Phase 2 learns that).
 rc_hold_summary() {
-  local app_id="" hold_checks="" pages page n flooded=false
-  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
+  local app_id="" hold_checks="" pages page n flooded=false result
+  rm -f "$work/hold-absent"
+  if [ "$qualification_app" = none ]; then
+    say "RELEASE_QUALIFICATION_APP=none, so no grain/rc-hold check run on ${1:0:12} is trusted; not waiting on one" >&2
+    return 0
+  fi
+  [[ ! "$qualification_app" =~ ^[0-9]+$ ]] || app_id="&app_id=$qualification_app"
   if [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
-    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
-      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    [ -n "$qualification_app" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
     gate_json RELEASE_HOLD_CHECKS_JSON "" "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
   elif [ -n "$github_token" ]; then
-    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
-      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    [ -n "$qualification_app" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
     pages="${RELEASE_GITHUB_PAGES:-3}"
     : > "$work/hold-checks.jsonl"
     flooded=true
@@ -706,7 +803,7 @@ rc_hold_summary() {
     return 0
   fi
   # shellcheck disable=SC2016 # jq, not shell
-  jq -r --arg sha "${1,,}" --arg app "${RELEASE_QUALIFICATION_APP:-}" --argjson flooded "$flooded" '
+  result="$(jq -r --arg sha "${1,,}" --arg app "$qualification_app" --argjson flooded "$flooded" '
     def epoch:
       if . == null or . == "" then 0
       else sub("\\.[0-9]+"; "")
@@ -727,12 +824,19 @@ rc_hold_summary() {
         | select(from_app) ]
     | if length == 0 and $flooded then error("all fetched grain/rc-hold pages were from other apps") else . end
     | sort_by([(.id // 0), ((.started_at // .startedAt) | epoch)])
-    | last // empty
-    | select((.status // "") != "completed")
-    | ([.output.summary, .output.title, .status]
-        | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
-        | first // "in_progress")
-  ' "$hold_checks" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
+    | if length == 0 then "@absent" else
+        last
+        | select((.status // "") != "completed")
+        | ([.output.summary, .output.title, .status]
+            | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
+            | first // "in_progress")
+      end
+  ' "$hold_checks")" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
+  if [ "$result" = "@absent" ]; then
+    : > "$work/hold-absent"
+  elif [ -n "$result" ]; then
+    printf '%s\n' "$result"
+  fi
 }
 
 # File the release-notes task for a promotion, through the gate's one
@@ -889,7 +993,7 @@ if [ "$mode" = verify ]; then
   fi
   qualification_json "$from_rc" "$sha"
   q_status=0
-  q_out="$(CHECK_QUALIFICATION_APP="${RELEASE_QUALIFICATION_APP:-}" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$from_rc" --rc-sha "$sha" \
+  q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$from_rc" --rc-sha "$sha" \
     --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
   printf '%s\n' "$q_out" | sed 's/^/  /'
   [ "$q_status" = 0 ] || die "verify: $from_rc does not pass qualification now (check-qualification exited $q_status); $version is not published"
@@ -1030,6 +1134,14 @@ if [ "$mode" != train ]; then
       [ "${RELEASE_ALLOW_BREAKING:-}" != "$version" ] || ! printf '%s\n' "$breaking_out" | grep -q 'RELEASE_ALLOW_BREAKING=.* overrides' ||
         override="$override; breaking changes since $notes_base accepted with RELEASE_ALLOW_BREAKING=$version"
     fi
+    # The daily cap is the train's (playbook section 7): a person's approval
+    # goes past it, and says so, here and on the release tag.
+    count_day promoted
+    if [ "$day_full" = true ]; then
+      override="$override; released past RELEASE_MAX_PER_DAY ($max_per_day): $today ($day_tz) had already released $day_releases"
+      say "approve: $today ($day_tz) has already released $day_releases, RELEASE_MAX_PER_DAY ($max_per_day); $by's approval bypasses the cap"
+      emit day_cap_bypassed "$version"
+    fi
     say "approve: $by approved $version (${from_rc:-?}, ${pending_sha:0:12}${said:+, $said}); promoting it to $version and latest"
     git tag -a "$version" "$pending_sha" -m "Release $version" -m "Promoted from ${from_rc:-$version-pending}, approved by $by$override"
     git tag -fa latest "$pending_sha" -m "Latest release $version"
@@ -1088,13 +1200,37 @@ fi
 
 floor=""
 next_n=1
+dropped_rc=""
+count_day
+if [ "$max_per_day" = 0 ]; then
+  say "the release day is $today ($day_tz); RELEASE_MAX_PER_DAY is 0, so there is no daily cap"
+else
+  say "the release day is $today ($day_tz): ${day_releases:-nothing} released so far, of RELEASE_MAX_PER_DAY ($max_per_day)"
+fi
+
+# drop_unreleased <rc> <sha> <kind> <why>: an rc the daily cap will not let
+# release -- not a red one: its commit stays eligible for the next cut.
+drop_unreleased() {
+  say "phase 1: dropping $1 (${2:0:12}): $4"
+  git tag -fa "$1-discarded" "$2" -m "Release candidate $1 dropped: $4" -m "Discard-Reason: $3"
+  push "refs/tags/$1-discarded" || die "could not push $1-discarded"
+  images discard-rc "$1" || die "could not mark $1's images discarded (its -discarded tag is pushed)"
+  emit discarded_rc "$1"
+  emit discard_reason "$3"
+}
+# unreleased_drop <rc>: whether <rc> was dropped by the daily cap rather
+# than for failing (or by RELEASE_NEVER_PROMOTE).
+unreleased_drop() { git for-each-ref --format='%(contents)' "refs/tags/$1-discarded" | grep -qE '^Discard-Reason: (daily-cap|held-over)$'; }
+
 rc="$(rc_tags "$target" | tail -n 1)"
 if [ -n "$rc" ]; then
   rc_sha="$(commit_of "$rc")"
   n="${rc##*.}"
+  rc_day="$(tag_day "$rc")"
   if commit_of "$rc-discarded" >/dev/null; then
     say "phase 1: $rc (${rc_sha:0:12}) was dropped; the next rc of $target is rc.$((n + 1))"
-    floor="$rc_sha"
+    # One the cap dropped was not red: the next may be cut on its commit.
+    unreleased_drop "$rc" || floor="$rc_sha"
     next_n=$((n + 1))
   elif never_promotes "$rc"; then
     say "phase 1: RELEASE_NEVER_PROMOTE names $rc; dropping it without qualifying it"
@@ -1104,11 +1240,20 @@ if [ -n "$rc" ]; then
     emit discarded_rc "$rc"
     floor="$rc_sha"
     next_n=$((n + 1))
+  elif [ "$max_per_day" != 0 ] && [[ "$rc_day" < "$today" ]] && ! cap_exempts "$rc"; then
+    # Never a release from a day before (operator, 2026-11-09): the new
+    # day starts from main's newest known-good commit instead.
+    drop_unreleased "$rc" "$rc_sha" held-over "it was cut on $rc_day ($day_tz), and the train releases only an rc cut on the day it releases; $today starts with a fresh cut from main"
+    next_n=$((n + 1))
+  elif [ "$day_full" = true ] && ! cap_exempts "$rc"; then
+    # It could only release tomorrow, held over, which the train never does.
+    drop_unreleased "$rc" "$rc_sha" daily-cap "$today ($day_tz) has already released $day_releases, RELEASE_MAX_PER_DAY ($max_per_day); tomorrow starts with a fresh cut from main"
+    next_n=$((n + 1))
   else
     say "phase 1: $rc (${rc_sha:0:12}) is in qualification; asking the qualification gate"
     qualification_json "$rc" "$rc_sha"
     q_status=0
-    q_out="$(CHECK_QUALIFICATION_APP="${RELEASE_QUALIFICATION_APP:-}" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
+    q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
       --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
     printf '%s\n' "$q_out" | sed 's/^/  /'
     case "$q_status" in
@@ -1118,10 +1263,14 @@ if [ -n "$rc" ]; then
           exit 0
         fi
         blocker="$(auto_promote_blocker "$target" "$rc" "$rc_sha")"
+        if [ "$day_full" = true ]; then
+          say "phase 1: $today has already released $day_releases, RELEASE_MAX_PER_DAY ($max_per_day), but RELEASE_DAY_CAP_EXEMPT names $rc; the cap does not hold it"
+        fi
         if [ -z "$blocker" ]; then
           # A minimum interval between releases (playbook section 7): the
-          # rc stays qualified, and a later run releases it.
-          if [ -n "$released" ] && [ "$min_interval" -gt 0 ]; then
+          # rc stays qualified, and a later run releases it. The day's
+          # first release never waits for it.
+          if [ -n "$released" ] && [ "$min_interval" -gt 0 ] && { [ "$max_per_day" = 0 ] || [ "$day_count" -gt 0 ]; }; then
             last_ts="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$released")"
             [ -n "$last_ts" ] || last_ts="$(git log -1 --format=%ct "$(commit_of "$released")")"
             if [ $((now - last_ts)) -lt $((min_interval * 60)) ]; then
@@ -1145,9 +1294,13 @@ if [ -n "$rc" ]; then
           file_release_notes "$target" "$notes_from"
           raise_pending "$target" "$rc" "$(pending_body "$target" "$rc" PASS "$notes_task")"
         fi
+        # A release, or one staged for a person, is the day's.
+        day_releases="${day_releases:+$day_releases }$target"
+        day_count=$((day_count + 1))
         floor="$rc_sha"
         next_n=1
         target_release
+        [ "$max_per_day" = 0 ] || [ "$day_count" -lt "$max_per_day" ] || day_full=true
         ;;
       2 | 3)
         reruns="$(printf '%s\n' "$q_out" | sed -nE 's/^RERUN ([^ ]+) (.+) (flake|infra)$/\1:\2:\3/p' | paste -sd, -)"
@@ -1170,6 +1323,7 @@ if [ -n "$rc" ]; then
         images discard-rc "$rc" || die "could not mark $rc's images discarded (its -discarded tag is pushed)"
         emit discarded_rc "$rc"
         emit qualification fail
+        dropped_rc="$rc"
         floor="$rc_sha"
         next_n=$((n + 1))
         ;;
@@ -1179,6 +1333,10 @@ if [ -n "$rc" ]; then
     esac
   fi
 fi
+# Whether the floor is a red rc's commit (which grain/rc-hold may hold),
+# rather than the newest release's.
+floor_rc=false
+[ -z "$floor" ] || [ "$next_n" = 1 ] || floor_rc=true
 if [ -z "$floor" ]; then
   if [ -n "$pending" ]; then
     floor="$(commit_of "$pending-pending")"
@@ -1193,33 +1351,26 @@ fi
 
 # --- Phase 2 ---
 
-# Bounded attempts (playbook section 5): past the last, a person decides.
-if [ "$next_n" -gt "$max_attempts" ]; then
-  emit escalated_version "$target"
-  die "$target has had $((next_n - 1)) release candidates dropped, RELEASE_MAX_RC_ATTEMPTS ($max_attempts); the train cuts no more of it until a person resets or advances it"
+# The day's work is done once it has released (playbook section 7): no rc
+# is cut until the first run of the next day in RELEASE_DAY_TZ, which cuts
+# rc.1 of the next version from main's newest known-good commit.
+if [ "$day_full" = true ]; then
+  say "phase 2: $today ($day_tz) has released $day_releases, RELEASE_MAX_PER_DAY ($max_per_day); nothing is cut until the next day starts in $day_tz"
+  emit day_done "$today"
+  exit 0
 fi
 
-# Where the rc is cut from: main, or -- for rc.3 and after -- the
-# release/vX.Y.Z convergence branch made from the rc before it.
+# Every rc is cut from main (playbook section 5): a day with no release yet
+# keeps cutting the next one from main's newest known-good commit, however
+# many of the version have been dropped. Past RELEASE_MAX_RC_ATTEMPTS the
+# version is escalated to a person -- once, as the first rc past it is cut --
+# but the train does not stop for it.
 cut_ref="$main_ref"
 cut_branch=main
 required="${CANDIDATE_GATE_REQUIRED-tests release}"
-if [ "$next_n" -ge 3 ]; then
-  cut_branch="release/$target"
-  required="${RELEASE_BRANCH_REQUIRED-release}"
-  if remote_branch "$cut_branch"; then
-    git fetch -q --force "$remote" "+refs/heads/$cut_branch:refs/remotes/$remote/$cut_branch" || die "could not fetch $cut_branch from $remote"
-    cut_ref="refs/remotes/$remote/$cut_branch"
-    say "phase 2: rc.$next_n of $target converges on $cut_branch (${floor:0:12} and the fixes cherry-picked onto it)"
-  else
-    say "phase 2: rc.$((next_n - 1)) of $target failed too; making $cut_branch from it (${floor:0:12}): cherry-pick fix: commits onto it from main (Backported-from: <sha>), and rc.$next_n is cut from it once release.yml is green there"
-    push "$floor:refs/heads/$cut_branch" || die "could not make $cut_branch"
-    emit convergence_branch "$cut_branch"
-    exit 0
-  fi
-elif [ -n "$floor" ] && [ "$next_n" = 1 ] && ! git merge-base --is-ancestor "$floor" "$main_ref"; then
-  # The newest release was cut from a convergence branch: main carries
-  # its fixes, so the next rc is after where the branch left main.
+if [ -n "$floor" ] && [ "$floor_rc" = false ] && ! git merge-base --is-ancestor "$floor" "$main_ref"; then
+  # The newest release was cut off main (a release/vX.Y.Z branch): main
+  # carries its fixes, so the next rc is after where the branch left main.
   floor="$(git merge-base "$floor" "$main_ref" || true)"
   say "phase 2: the newest release is off main's history; the next rc must be after where it left main (${floor:0:12})"
 fi
@@ -1228,8 +1379,9 @@ fi
 # task is open, grain/rc-hold on the dropped rc's commit stays in progress.
 # It reads next_n before the re-tag skip below: a hand-cut rc.1 must not
 # make the next rc.1 (whose floor is a release, not a dropped rc) look like
-# an rc.2, here or at the rc.1 gates after it.
-if [ -n "$floor" ] && [ "$next_n" -gt 1 ]; then
+# an rc.2, here or at the rc.1 gates after it. An rc the daily cap dropped
+# was not red, so nothing holds the cut after it.
+if [ "$floor_rc" = true ]; then
   hold_summary="$(rc_hold_summary "$floor")"
   if [ -n "$hold_summary" ]; then
     held_n="$next_n"
@@ -1239,10 +1391,26 @@ if [ -n "$floor" ] && [ "$next_n" -gt 1 ]; then
     emit rc_held "$new_rc"
     exit 0
   fi
+  # Phase 1 dropped the rc in this very run, and grain has not posted its
+  # hold yet: grain posts grain/rc-hold (triage pending) within a minute of
+  # reading the red verdict -- Stage 1's or Stage 2's -- so rather than cut
+  # rc.(N+1) seconds after the drop, before the pipeline steward has heard
+  # of it, this run waits and the next one reads the hold. A hold that never
+  # comes (grain down) delays the cut by one run, not for ever.
+  if [ -n "$dropped_rc" ] && [ -e "$work/hold-absent" ]; then
+    held_n="$next_n"
+    while commit_of "$target-rc.$held_n" >/dev/null; do held_n=$((held_n + 1)); done
+    new_rc="$target-rc.$held_n"
+    say "phase 2: $new_rc waits for the next run: $dropped_rc was dropped just now and grain has posted no grain/rc-hold on ${floor:0:12} yet, so its triage is not skipped"
+    emit rc_held "$new_rc"
+    exit 0
+  fi
 fi
 
-# A minimum interval between releases (playbook section 7).
-if [ "$next_n" = 1 ] && [ "$FORCE" != true ] && [ "$min_interval" -gt 0 ]; then
+# A minimum interval between releases (playbook section 7), for a day that
+# may release more than once (RELEASE_MAX_PER_DAY 0, or above 1): the
+# day's first release never waits for it, and neither does an rc.(N+1).
+if [ "$next_n" = 1 ] && [ "$FORCE" != true ] && [ "$min_interval" -gt 0 ] && { [ "$max_per_day" = 0 ] || [ "$day_count" -gt 0 ]; }; then
   last="${pending:+$pending-pending}"
   last="${last:-$released}"
   if [ -n "$last" ]; then
@@ -1290,10 +1458,18 @@ while commit_of "$new_rc" >/dev/null; do
   next_n=$((next_n + 1))
   new_rc="$target-rc.$next_n"
 done
+if [ "$next_n" -gt "$max_attempts" ]; then
+  say "phase 2: $target has had $((next_n - 1)) release candidates dropped, past RELEASE_MAX_RC_ATTEMPTS ($max_attempts): a person is told, and the train keeps cutting from main"
+  [ "$next_n" != $((max_attempts + 1)) ] || emit escalated_version "$target"
+fi
 say "phase 2: cutting $new_rc on ${lkg:0:12}"
 git tag -a "$new_rc" "$lkg" -m "Release candidate $new_rc" ${cut_branch:+-m "Cut from $cut_branch."}
 push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved"
 push --force "$lkg:refs/heads/candidate" || die "pushed $new_rc, but could not move candidate onto it"
 emit rc_tag "$new_rc"
 images rc "$new_rc" || die "cut $new_rc and moved candidate, but could not publish its images: run \`release-images.sh rc $new_rc\`"
-say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+if [ "$qualification_app" = none ]; then
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)"
+else
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+fi

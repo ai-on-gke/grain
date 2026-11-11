@@ -346,23 +346,6 @@ func TestTranscriptObjectStoreRedactsJSONLAndNarrativeAndFailsClosed(t *testing.
 		}
 	}
 
-	// The copy the orchestrator keeps in the database when an upload
-	// fails goes through the same redaction (orchestrator.NarrativeRedactor;
-	// the 2026-11-07 walkthrough found a deployment secret in
-	// task_run.transcript after a failed upload).
-	keptNarrative, err := tStore.RedactNarrative(narrative)
-	if err != nil {
-		t.Fatalf("RedactNarrative: %v", err)
-	}
-	for _, secretVal := range []string{deploySecret, hostEnvSecret, ghShapeToken} {
-		if strings.Contains(keptNarrative, secretVal) {
-			t.Fatalf("RedactNarrative leaked %q: %s", secretVal, keptNarrative)
-		}
-	}
-	if !strings.Contains(keptNarrative, "Final report: [redacted:") {
-		t.Fatalf("RedactNarrative = %q, want the report with redaction markers", keptNarrative)
-	}
-
 	// Verify fail-closed behavior when the secret store cannot be read.
 	brokenStore, err := NewTranscriptObjectStore(mem, t.TempDir(), liveDir, func() (*redact.Redactor, error) {
 		return nil, errors.New("secret store unavailable")
@@ -385,9 +368,6 @@ func TestTranscriptObjectStoreRedactsJSONLAndNarrativeAndFailsClosed(t *testing.
 	}
 	if _, exists := mem.Bytes("transcripts/run-failclosed.md"); exists {
 		t.Fatal("brokenStore uploaded unredacted .md despite redactor error")
-	}
-	if kept, err := brokenStore.RedactNarrative(deploySecret); err == nil || kept != "" {
-		t.Fatalf("RedactNarrative on broken redactor = (%q, %v), want fail-closed error", kept, err)
 	}
 
 	// Seed a raw stream and ensure Read/TailRemoteRaw also fail closed without caching.

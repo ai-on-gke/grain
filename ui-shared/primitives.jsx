@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React, { useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { useThemeMode } from "./ThemeModeContext.jsx";
 
 export function formatRelativeAge(secondsOrIso) {
@@ -233,22 +233,73 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }) {
+  const titleId = useId();
+  const dialogRef = useRef(null);
+  const cancelRef = useRef(null);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  // A modal confirmation owns the keyboard while it is open: focus moves to
+  // Cancel (the safe choice for a destructive action), Tab stays inside the
+  // dialog, Escape cancels, and closing hands focus back to whatever opened it.
+  useEffect(() => {
+    if (!open) return undefined;
+    const opener = document.activeElement;
+    cancelRef.current?.focus();
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancelRef.current?.();
+        return;
+      }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const inside = dialogRef.current.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (opener && typeof opener.focus === "function" && opener.isConnected) {
+        opener.focus();
+      }
+    };
+  }, [open]);
   if (!open) return null;
   return (
     <div className="gs-dialog-backdrop" role="presentation" onClick={onCancel}>
       <div
+        ref={dialogRef}
         className="gs-dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="gs-dialog-title"
+        aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 id="gs-dialog-title" className="gs-dialog-title">
+        <h2 id={titleId} className="gs-dialog-title">
           {title}
         </h2>
         <div className="gs-dialog-body">{children}</div>
         <div className="gs-dialog-actions">
-          <button type="button" className="gs-btn" onClick={onCancel}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="gs-btn"
+            onClick={onCancel}
+          >
             {cancelLabel}
           </button>
           <button

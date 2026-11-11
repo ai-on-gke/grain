@@ -40,7 +40,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -116,104 +115,19 @@ type Capability struct {
 	Summary   string   `json:"summary,omitempty"`
 }
 
-// OfferedCapabilities is every capability a human can attach to a task,
-// and -- because grantsFor and SetCapability reject an id with no row
-// here as "unknown capability" before a model.Grant is ever written --
-// the only route by which any capability is ever granted at all. It
-// started as labels.py's _STYLES table, human-toggled rows only; it is
-// now kept in step with the set of providers grain ships instead, which
-// is what capabilityCatalog (capability_status.go) enumerates and what
-// TestOfferedCapabilitiesCoversEveryShippedCapability holds to.
+// OfferedCapabilities is the bare in-process capabilities a human can
+// attach to a task, the rows Config.Capabilities starts from before the
+// api presets (APICapabilities) are added to it.
 //
-// That drift is why this comment is longer than the table. gcp-key and
-// github-sandbox both had providers pkg/cli/daemon.go registered and
-// no row here, so no task on any deployment, however configured, could
-// ask for either: gcp-key's symptom was that no sandbox ever got
-// gcpkey.SandboxKeyPath, with nothing refused, logged or failed
-// anywhere, because model.ResolveGrants was never reached (an
-// ungrantable capability is rejected a step earlier than a
-// misconfigured one). The reverse drift was here too: "scratch-repo" is
-// v1's label name for what v2's provider calls github-sandbox, so
-// ticking it wrote a grant no provider answers to and
-// prepareCapabilities failed the dispatch outright. The row below
-// carries the provider's own id.
-//
-// The name is Offered, not Default, because this is what a picker may
-// show, not what a task starts with: the second question -- gcp-key,
-// which v1 minted for every sandbox unconditionally
-// (grain/automation/gcp_keys.py) -- is model.Config.DefaultCapabilities,
-// a per-deployment subset of these ids that (*Client).CreateTask seeds
-// every new task's Grants from, plus model.RepoConfig.
-// DefaultCapabilities, the same thing per repo. A row here is what makes
-// an id eligible for either set (UpdateSettings and
-// SetRepoDefaultCapabilities both validate against this listing), so
-// this stays the one gate every grant passes through.
-//
-// What this listing is *not* is every capability grain ships: the
-// CI-only ones (model.CapabilitySpec.CIOnly -- registry-push and
-// package-publish) are deliberately absent, which is why the drift test
-// above compares against the catalog minus those. They were offered
-// here once, with a description ending "Grain CI makes it available
-// only to post-merge release workflows" -- a hint to whoever read the
-// row, and no kind of guard against ticking it. Ticking it was worth
-// nothing at best and a live package-write token in a task's sandbox at
-// worst, since the release gate that sentence describes is applied on
-// the CI path and nowhere else (grain/task-382). A capability that can
-// only be honoured for a CI job is granted where CI capabilities are
-// granted -- per repository, on the repos page -- and not from a
-// picker whose every other row attaches to a task.
-//
-// Seeding at creation rather than granting at dispatch is what settles
-// the failure mode v1 needed a local `except` for. v1 minted per
-// dispatch and swallowed the failure, so a broken minter degraded one
-// sandbox silently; prepareCapabilities (pkg/orchestrator/run.go) treats
-// a refused resolve or a failed materialize as no dispatch at all, and
-// an always-grant set read at dispatch would have turned an expired
-// minter credential into a standing veto on every task in the
-// deployment. A seeded grant needs no separate policy for that: it is an
-// ordinary grant on an ordinary task, so it fails that one task loudly
-// -- and it can be taken off the task, or out of the default set, by
-// whoever is looking at the failure.
+// It is empty: every legacy in-process provider grain shipped was
+// retired onto a capability server method, an api preset or a task
+// setting (docs/capabilities.md), and the seam an edition used to
+// contribute one, capability.RegisterProvider, went with them (task
+// 2876). Capability-server methods are offered from the servers'
+// catalogues instead. It stays so that every caller building a
+// Config keeps one place to start from.
 func OfferedCapabilities() []Capability {
-	offered := []Capability{
-		// No gemini-key row: it was retired onto the gcp server's
-		// gcp#gemini-key (schema migration 103), which is offered with
-		// the other capability-server methods.
-		// No self-debug row: it was retired onto the api:self-debug
-		// preset and the grain server's grain#source method (schema
-		// migration 115), which are offered with the other api presets
-		// and capability-server methods.
-	}
-	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) come first, where the
-	// deployment-level ones begin.
-	for _, r := range capability.Registered() {
-		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
-	}
-	offered = append(offered, []Capability{
-		// No priority-dispatch or durable rows: both were retired onto the
-		// task's admission setting (schema migration 122). No console row:
-		// it was retired onto the task's hosting setting (schema migration
-		// 123). No bootstrap-playbooks row: it was retired onto the
-		// config-map server's config-map {"config_maps":["bootstrap"]}
-		// (schema migration 118), which is offered with the other
-		// capability-server methods. No github-sandbox row: retired onto
-		// the in-process github server's sandbox-repo method (schema
-		// migration 124), offered with the other capability-server methods.
-		// Not grain#ci: nobody attaches it by hand. A repository's CI
-		// Mode is the switch, and grain grants grain#ci to that
-		// repository's tasks itself (pkg/capability/grainci's package
-		// doc). Every place a capability is chosen refuses it with
-		// grainci.Refusal, by way of capabilityRefusal.
-		// Not read-issues: retired onto the in-process github server's
-		// read-issues method (schema migration 121), offered with the
-		// other capability-server methods.
-	}...)
-	// No row for the model proxies: claude-proxy, openai-proxy and
-	// gemini-proxy were retired onto the in-process model-proxy server's
-	// model-proxy {vendor} (schema migration 100), which is offered with the
-	// other capability-server methods.
-	return offered
+	return []Capability{}
 }
 
 // Config is what a Client needs to know about the deployment it fronts.
@@ -384,32 +298,22 @@ type Config struct {
 	// filed with one as its branch is resolved to that pull request
 	// (forkhead.go). nil refuses such a task with a message saying so.
 	GitHubForkPullRequests ForkPullRequests
+	// GitHubDefaultBranches is that client asked which branch a
+	// repository's default is, so a proposal filed live with no base and
+	// a proposer filed with an explicit `base: main` read as landing on
+	// the one branch they do (model.AlignDefaultBases). nil, or a
+	// repository it cannot answer for, compares bases as written -- the
+	// proposal is filed for a person rather than queued.
+	GitHubDefaultBranches DefaultBranchReader
 	// GitHubCredentialAvailable answers through that client's own token source,
 	// including a deployment-wide posting credential when one is configured.
 	GitHubCredentialAvailable func(owner, repo string) bool
-	// CapabilityChecks, when set, is what POST /api/capabilities/{id}/
-	// check calls to test one capability's standing credential -- cmd/
-	// grain/daemon.go's own adapter over the same providers a dispatch
-	// resolves through. It is what turns Settings' **Ready** badge from
-	// "this deployment is configured for that" into something a human
-	// can hold against the far end, which is the only thing that knows
-	// whether the key inside a set secret still works (see
-	// Client.CheckCapability).
-	//
-	// nil means this UI was not handed one (`grain demo`'s throwaway UI,
-	// or any UI not colocated with a daemon holding the credentials),
-	// and the route answers 404 while CapabilityStatus.Checkable reports
-	// false so no pane offers a button that could not work -- the same
-	// nil-means-unavailable contract Secrets, Reboot and Credentials
-	// above already give.
-	CapabilityChecks CapabilityChecker
 	// AgentKeyChecks, when set, is what POST /api/agent-keys/{framework}/
 	// check calls to test one agent framework's own credential against
 	// the vendor that issued it -- pkg/cli/daemon.go's own adapter over
 	// the same secrets store and key files a dispatch reads a credential
-	// from. It is to the "set"/"not set" chip on Settings' Agents tab
-	// what CapabilityChecks above is to **Ready**: presence is the whole
-	// of what a pane reading grain's own store can see, and a key revoked
+	// from. The "set"/"not set" chip on Settings' Agents tab is the
+	// whole of what a pane reading grain's own store can see, and a key revoked
 	// at the far end leaves every stored fact unchanged (see
 	// Client.CheckAgentKey).
 	//
@@ -432,8 +336,8 @@ type Config struct {
 	// nil means this UI was not handed one (`grain demo`'s throwaway UI,
 	// or any UI not colocated with a daemon that has the binary), and
 	// the route answers "not available" while the field stays free text
-	// -- the same nil-means-unavailable contract Secrets, Reboot,
-	// Credentials and CapabilityChecks above already give. A lister that
+	// -- the same nil-means-unavailable contract Secrets, Reboot and
+	// Credentials above already give. A lister that
 	// is wired but fails is a different answer, reported rather than
 	// hidden; see agentModelsResponse.
 	AgentModels AgentModelLister
@@ -823,19 +727,19 @@ type Config struct {
 	// TriggerIAPSync requests an immediate IAP IAM synchronization cycle when team
 	// memberships or admin access lists are modified.
 	TriggerIAPSync func()
-	// RegistryStatus, when set, returns the live RegistrySnapshot from the
-	// daemon's RegistryManager; nil falls back to reading stored settings and
+	// HubStatus, when set, returns the live HubSnapshot from the
+	// daemon's HubManager; nil falls back to reading stored settings and
 	// repo configurations directly.
-	RegistryStatus func(ctx context.Context) (model.RegistrySnapshot, error)
-	// TriggerRegistryHeartbeat, when set, runs an immediate registry
+	HubStatus func(ctx context.Context) (model.HubSnapshot, error)
+	// TriggerHubHeartbeat, when set, runs an immediate registry
 	// registration/heartbeat step and returns the updated snapshot.
-	TriggerRegistryHeartbeat func(ctx context.Context) (model.RegistrySnapshot, error)
-	// TriggerRegistrySync wakes the daemon's RegistryManager after settings,
+	TriggerHubHeartbeat func(ctx context.Context) (model.HubSnapshot, error)
+	// TriggerHubSync wakes the daemon's HubManager after settings,
 	// secrets, or repository configurations change.
-	TriggerRegistrySync func()
-	// RegistryAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
+	TriggerHubSync func()
+	// HubAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
 	// in test setups.
-	RegistryAllowInsecureHTTP bool
+	HubAllowInsecureHTTP bool
 	// SandboxBackends names the backend methods this daemon has enough
 	// startup configuration to build. SandboxBackendOptions lists every backend
 	// in model.SandboxBackends() with Available and Reason so Settings never
@@ -1184,19 +1088,19 @@ type Config struct {
 	// IAPKeysURL is where the assertion's signing keys are published (a
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
-	// RegistryIssuer is the expected iss claim for verifying grain-registry
-	// JWT assertions (X-Grain-Registry-Assertion) (-ui-registry-issuer /
-	// $GRAIN_REGISTRY_ISSUER). All three of RegistryIssuer,
-	// RegistryAudience, and RegistryKeysURL must be set to enable the
+	// HubIssuer is the expected iss claim for verifying grain-registry
+	// JWT assertions (X-Grain-Registry-Assertion) (-ui-hub-issuer /
+	// $GRAIN_HUB_ISSUER). All three of HubIssuer,
+	// HubAudience, and HubKeysURL must be set to enable the
 	// built-in "registry" IdentityVerifier.
-	RegistryIssuer string
-	// RegistryAudience is the single expected aud URL for verifying
-	// grain-registry JWT assertions (-ui-registry-audience /
-	// $GRAIN_REGISTRY_AUDIENCE).
-	RegistryAudience string
-	// RegistryKeysURL is the JWKS endpoint URL publishing grain-registry's
-	// ES256 public keys (-ui-registry-keys-url / $GRAIN_REGISTRY_KEYS_URL).
-	RegistryKeysURL string
+	HubIssuer string
+	// HubAudience is the single expected aud URL for verifying
+	// grain-registry JWT assertions (-ui-hub-audience /
+	// $GRAIN_HUB_AUDIENCE).
+	HubAudience string
+	// HubKeysURL is the JWKS endpoint URL publishing grain-registry's
+	// ES256 public keys (-ui-hub-keys-url / $GRAIN_HUB_KEYS_URL).
+	HubKeysURL string
 	// AllowedPrincipals, when non-empty, is the allowlist of user:,
 	// serviceAccount:, group:, and domain: entries admitted when a request
 	// authenticates through IAP or another registered IdentityVerifier
@@ -1244,6 +1148,9 @@ type Config struct {
 	// session lasts without being used before its access code has to be
 	// entered again; zero is DefaultAccessSessionLifetime.
 	AccessSessionLifetime time.Duration
+	// AccessCodeMode is the access code's mode where the daemon names no
+	// LocalAPITokenFile to keep it beside (access_code_mode.go); "" is on.
+	AccessCodeMode AccessCodeMode
 	// InstallTrackProbe, when set, supplies the host and daemon-flag inputs
 	// that GET /api/config combines with the store's live configuration to
 	// classify this deployment as a Google install ("google") or an

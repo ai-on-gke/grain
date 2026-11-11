@@ -184,6 +184,24 @@ func TestHelloCarriesTheAllowlistsCapacityAndLabels(t *testing.T) {
 	if h.Capacity != 2 || h.Labels["os"] != "linux" {
 		t.Errorf("hello = %+v, want capacity 2 and os=linux", h)
 	}
+	if h.AgentsOnly {
+		t.Errorf("hello = %+v, says agents-only for a hostd not started so", h)
+	}
+}
+
+// A host agent started as agents-only (grain-agentd) says so in its
+// hello, for the placement check refusing a run: host server there.
+func TestHelloSaysAnAgentsOnlyHostAgentIsOne(t *testing.T) {
+	ts := startServer(t, "", func(s *Server) { s.AgentsOnly = true })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	h, err := ts.client.Hello(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.AgentsOnly {
+		t.Errorf("hello = %+v, want agents_only", h)
+	}
 }
 
 // Disconnecting a revoked hostd closes its live session at once while

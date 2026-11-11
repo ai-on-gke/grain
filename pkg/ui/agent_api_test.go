@@ -241,7 +241,11 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range task.Grants {
-		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", model.GCPKeySandboxAgentGrant}, g.Capability) {
+		if !slices.Contains([]string{
+			model.APIRef("tasks:read"),
+			model.APIGrantString("tasks:read", "acme/widgets"),
+			model.GCPKeySandboxAgentGrant,
+		}, g.Capability) {
 			t.Errorf("task 2 was granted %s by an agent", g.Capability)
 		}
 	}
@@ -319,6 +323,7 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 		{http.MethodPatch, "/api/tasks/2", `{"autoApproveProposals":true}`},
 		{http.MethodPatch, "/api/tasks/2", `{"auto_approve_proposals":true}`},
 		{http.MethodPost, "/api/tasks/2/submit", `{}`},
+		{http.MethodPost, "/api/pull-requests/submit", `{"pr":"acme/widgets#2"}`},
 		// Mailing a CL and publishing its replies are a person's.
 		{http.MethodPost, "/api/tasks/2/change-mail", `{"reviewers":["alice"]}`},
 		{http.MethodPost, "/api/tasks/2/change-publish", `{}`},
@@ -345,6 +350,83 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 	if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks",
 		`{"title":"follow-up","repo":"acme/widgets","autoMerge":false,"approved":false}`, "testing"); code >= 300 {
 		t.Errorf("filing a task within the acting task's own grants was refused: %d %s", code, resp)
+	}
+}
+
+// TestAgentGrantsListIsHeldToTheWritesRule: since unified grants slice 2
+// (#927) a filing may spell its repositories as grants: references
+// (…/repo#write, #read, #target), which SplitRequestGrants turns into the
+// task's Writes, Reads and Repo. An agent must not get past the
+// proposal gate that way: wherever the writes: / reads: / repo: spelling
+// of a repository is refused, the grants: spelling is refused too, and an
+// …/api#merge:force reference is a dangerous api grant under grants: as
+// under capabilities:. Today the grants: spelling is refused by a
+// different rule (the acting task's held-grant coverage,
+// UncoveredCapabilityRefs) than writes: (allowedRepo), so this pins the
+// outcome rather than the rule. Finding 1 of the 2026-11-08 second
+// security review of main (task 3584).
+func TestAgentGrantsListIsHeldToTheWritesRule(t *testing.T) {
+	srv, client := testServer(t)
+	// Ids past the ones the tasks it files are given (Store.NewTaskID).
+	seedAPITask(t, client, "101", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "103", "acme/widgets", "api:tasks:write@acme/widgets")
+
+	const repoRef = "https://grain.dev/capabilities/repo#"
+	pairs := []struct {
+		name, legacy, grants, mention string
+		actors                        []string
+	}{
+		{"push access to another repository",
+			`{"title":"x","repo":"acme/widgets","writes":[{"repo":"acme/gadgets","base":"main"}]}`,
+			`{"title":"x","repo":"acme/widgets","grants":[{"capability":"` + repoRef + `write","with":{"repo":"acme/gadgets","base":"main"}}]}`,
+			"acme/gadgets", []string{"101", "103"}},
+		{"read access to another repository",
+			`{"title":"x","repo":"acme/widgets","reads":["acme/secret"]}`,
+			`{"title":"x","repo":"acme/widgets","grants":[{"capability":"` + repoRef + `read","with":{"repo":"acme/secret"}}]}`,
+			"acme/secret", []string{"101", "103"}},
+		// repo: acme/secret is refused only to a repo-limited grant (a
+		// whole tasks:write may file a proposal anywhere), so the target
+		// pair is held to that actor.
+		{"a target outside a repo-limited grant",
+			`{"title":"x","repo":"acme/secret"}`,
+			`{"title":"x","grants":[{"capability":"` + repoRef + `target","with":{"repo":"acme/secret"}}]}`,
+			"", []string{"103"}},
+	}
+	for _, p := range pairs {
+		for _, actor := range p.actors {
+			code, resp := asAgent(t, srv, actor, http.MethodPost, "/api/tasks", p.legacy, "testing")
+			if code != http.StatusForbidden {
+				t.Fatalf("%s: task %s filing %s answered %d, want 403 -- the legacy spelling this test compares against is no longer refused: %s",
+					p.name, actor, p.legacy, code, resp)
+			}
+			code, resp = asAgent(t, srv, actor, http.MethodPost, "/api/tasks", p.grants, "testing")
+			if code != http.StatusForbidden || !strings.Contains(resp, p.mention) {
+				t.Errorf("%s: task %s filing %s answered %d, want 403 as for %s: %s",
+					p.name, actor, p.grants, code, p.legacy, resp)
+			}
+		}
+	}
+
+	const forceMerge = `[{"capability":"https://grain.dev/capabilities/api#merge:force"}]`
+	for _, field := range []string{"grants", "capabilities"} {
+		body := `{"title":"x","repo":"acme/widgets","` + field + `":` + forceMerge + `}`
+		for _, actor := range []string{"101", "103"} {
+			if code, resp := asAgent(t, srv, actor, http.MethodPost, "/api/tasks", body, "testing"); code != http.StatusForbidden ||
+				!strings.Contains(resp, "dangerous api grant") {
+				t.Errorf("task %s filing %s answered %d, want 403 as a dangerous api grant: %s", actor, body, code, resp)
+			}
+		}
+	}
+
+	// None of it was filed.
+	tasks, err := client.Store.ListTasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.ID != "101" && task.ID != "103" {
+			t.Errorf("a refused filing left task %s (%s) behind", task.ID, task.Title)
+		}
 	}
 }
 
@@ -453,7 +535,11 @@ func TestAgentAPIChildNotesItsDirector(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(comments, func(c model.Comment) bool {
-		return c.Body == "finished the check" && c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
+		// The director holds grants its child does not, so the note
+		// arrives marked as untrusted agent input (agentCrossTaskRail).
+		return strings.HasSuffix(c.Body, "finished the check") &&
+			strings.HasPrefix(c.Body, "[Untrusted agent input: task 101 ") &&
+			c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
 	}) {
 		t.Errorf("director comments = %+v, want the child's note", comments)
 	}

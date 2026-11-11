@@ -1,36 +1,71 @@
 name: Prune GHCR packages
-title: Prune superseded Docker Hub image tags with package-publish capability
+title: Audit Docker Hub image retention and release.yml's prune step
 base: main
 auto-merge: true
+nothing-needed: close
+capabilities: ["api:ci-read@ai-on-gke/grain"]
 body: |
-  Run `cmd/ghcr-prune` using the `package-publish` capability to clean up old,
-  superseded container image tags in Docker Hub (`docker.io/grainai/*`) that
-  deployments and CI workflows have stopped needing.
+  Audit the Docker Hub image retention policy for `docker.io/grainai/*` and
+  check that the pruning `release.yml` already does is actually deleting.
 
-  ## 1. Verify credentials and capability environment
+  This task does **not** delete anything itself. Deleting needs a Docker Hub
+  token with Delete permission, which only CI holds: the `package-publish`
+  capability is CI-only and is never placed in a task sandbox, so
+  `/home/debian/.package-publish-token`, `DOCKER_PAT` and
+  `PACKAGE_PUBLISH_TOKEN` are all absent here and `-apply=true` fails with
+  `DOCKER_PAT (or PACKAGE_PUBLISH_TOKEN) is empty`. Do not run `-apply`.
+  The real `-apply=true` run is the `Prune old package versions` step of
+  the `images` job in `.github/workflows/release.yml` (with
+  `secrets.DOCKER_PAT`, behind `continue-on-error: true`), and of
+  `.grain/workflows/release.yml` where grain CI is active.
 
-  - Ensure the `package-publish` capability (or a Docker Hub access token with Delete permission)
-    is available:
-    - Check for credentials placed at `/home/debian/.package-publish-token`
-      or in `DOCKER_PAT` / `PACKAGE_PUBLISH_TOKEN` environment variables.
-    - If required credentials are missing, note that `package-publish` capability
-      must be granted to this repository/task in deployment settings.
+  ## 1. Dry-run the plan against the live registry
 
-  ## 2. Execute Docker Hub package pruning
+  - Run `go run ./cmd/ghcr-prune > /tmp/plan.txt 2>&1` (dry run is the
+    default; listing public Docker Hub tags needs no token).
+  - Check the policy invariants in the plan:
+    - every package's `latest` and `vX.Y.Z` versions -- `sandbox-base`
+      included -- are under `keep`, never `delete`;
+    - the newest build of `main` and of every live branch, the newest
+      `-keep-commits` `sha-` builds and the newest guest `inputs-` /
+      base caches are kept;
+    - nothing written inside the 48h `-keep-for` window is deleted.
+    Any invariant broken is a `cmd/ghcr-prune` bug: say so in the report
+    and propose a fix task against `ai-on-gke/grain`.
+  - Count the versions planned for deletion and how far past 48h the
+    oldest of them are. A handful a few hours past the window is the
+    normal gap between release runs; dozens a day or more past it means
+    the CI prune step is not deleting.
 
-  - First run `go run ./cmd/ghcr-prune` in dry-run mode to inspect the deletion plan:
-    - Review the count of package versions to be kept, deleted, and deferred.
-    - Confirm that active branch tags, latest tags, recent rollback commits, and
-      pinned guest caches will be preserved according to policy.
-  - Execute the pruning operation with `-apply`:
-    ```bash
-    go run ./cmd/ghcr-prune -apply=true
-    ```
-  - Monitor the output for any deletion errors, rate limits, or warnings.
+  ## 2. Inspect release.yml's prune step
 
-  ## 3. Review and report results
+  - List recent release runs with `grain ci list` (GitHub Actions runs
+    show up as `gha:ai-on-gke:grain:<run>`), and for the most recent few
+    on `main` read the step with
+    `grain ci log <run-id> --job images --step "Prune old package versions" --tail 200`.
+  - Look for:
+    - HTTP 401/403 refusals or a `refused` count -- `secrets.DOCKER_PAT`
+      lacks Docker Hub `Delete` permission (or `vars.DOCKERHUB_USERNAME`
+      does not own the token);
+    - `DOCKER_PAT (or PACKAGE_PUBLISH_TOKEN) is empty` -- the secret is
+      unset for that workflow;
+    - a non-zero `Deferred` count across consecutive runs -- the
+      `-max-deletes` cap is not keeping up;
+    - the step skipped (`inputs.commit` set) or never reached because an
+      earlier step failed.
+    `continue-on-error: true` keeps these failures from turning the
+    release red, so the log is the only place they show.
 
-  - Review the summary of deleted, refused, kept, and deferred package versions.
-  - If any unexpected refusals or high deferred counts remain across consecutive runs,
-    document findings in the task report.
-  - Conclude the run with a clear summary of pruned packages and current registry status.
+  ## 3. Report
+
+  - Summarize the dry-run counts (kept, deleted, deferred), whether every
+    invariant held, and what the prune step's logs say.
+  - If the step is refused or the token is missing, that is an operator
+    fix to the `DOCKER_PAT` repository secret (a Docker Hub access token
+    with Read, Write, Delete on `grainai`), not a code change: raise an
+    Inbox notification with
+    `grain notify --subject prune-packages --severity warning --title "Docker Hub prune step needs DOCKER_PAT repair" --body "<summary>"`
+    for a person to act on.
+  - Finish with `nothing_needed` (never `comment_on_issue`, which parks a
+    branchless task in `awaiting_reply` and holds the weekly `overlap: skip`
+    schedule) passing the dry-run counts and findings as its `reason`.

@@ -1,0 +1,35 @@
+# Confirmed false positives for the weekly dead-code scan
+# (.grain/templates/weekly-dead-code.yml). One per line:
+#   <path>:<symbol>  # why it is not dead
+# Match on the symbol, not a line number. Delete a line once its symbol is gone.
+
+# Exported seams the Google edition calls (core may not name it; see the template).
+pkg/capability/intree/intree.go:Register  # the edition registers its in-tree capability servers
+pkg/capability/intree/intree.go:NewServer  # the edition's in-tree capability servers are built on it
+pkg/capability/intree/intree.go:ListenAddr  # used by the edition's in-tree capability flags
+pkg/capability/intree/intree.go:NewFlags  # used by the edition's in-tree capability flags
+pkg/change/change.go:CallControl  # the edition's change provider calls the daemon's Control through it
+pkg/daemon/clirun.go:RegisterDetachedCaveat  # the edition registers a detached-run caveat at init
+pkg/gitproxy/ambient.go:AmbientAccount  # the edition's git host helper names the ambient account
+pkg/installtrack/installtrack.go:Facts.HasDir  # the edition's install track probes a directory
+pkg/ui/principal.go:GetIAPAudience  # the edition's UI trust verifiers read it
+pkg/webauth/iap.go:WithIAPVerifierHTTPClient  # the edition's hub delegation passes its HTTP client
+
+# Reached through an interface, which deadcode does not see as a use.
+pkg/lifecycle/lifecycle.go:Registry.Refresh  # satisfies ui.Lifecycles
+
+# Run from build files and CI, not imported.
+ui/e2e/screenshot.mjs  # make ui-screenshots
+ui/scripts/summarize-trace-network.mjs  # the ui e2e job in .github/workflows/tests.yml and .grain/workflows/tests.yml
+
+# UI exports knip reports that are kept on purpose.
+ui/src/brand/grain-mark.js:DEFAULTS  # vendored verbatim from the grain-mark design pack; ui/scripts/export-mark-sheets.mjs inlines the module and reads it
+ui/src/brand/grain-mark.js:fieldVal  # vendored verbatim from the grain-mark design pack (its public API)
+ui/src/brand/grain-mark.js:overlayLines  # vendored verbatim from the grain-mark design pack (its public API)
+ui/src/brand/grain-mark.js:renderStatic  # vendored design pack; ui/scripts/export-mark-sheets.mjs inlines the module and calls it
+ui/src/components/AttachmentPicker.jsx:getPastedImages  # deliberate alias of getPastedFiles; TaskChat, Timeline and PendingQuestion import it
+ui/src/components/AttachmentPicker.jsx:handleImagePaste  # deliberate alias of handleFilePaste, kept beside getPastedImages and tested
+
+# Historical records: scripts kept beside the test run that used them.
+docs/test-runs/2026-11-03-sandbox-cli-edges/task-sandbox-grepwalk.sh  # test-run record
+docs/test-runs/2026-11-09-hosted-instance-credentials/hosted-vm-walk.sh  # test-run record

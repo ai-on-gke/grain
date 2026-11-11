@@ -14,10 +14,6 @@
 
 import { expect, test } from "./fixtures.js";
 
-// -legacy-capability registers example-legacy, a made-up provider with
-// nothing to mint, so the Legacy capabilities pickers have a row: every
-// legacy provider core shipped has been retired onto a server method.
-test.use({ demoArgs: ["-legacy-capability"] });
 import { chooseOption } from "./searchSelect.js";
 
 // The grain API half of the task pane's Grants picker (GrantsPicker.jsx)
@@ -54,9 +50,9 @@ test("lists the API presets before every scope, with what each preset grants", a
   const task = await fileTask(request, ["api:ci:read"]);
   await page.goto(`/tasks/${task.id}`);
   const { grants, menu } = await openMenu(page, task.id);
-  await expect(grants.locator('[data-grant="api:ci:read"]')).toContainText(
-    "api:ci:read",
-  );
+  await expect(
+    grants.locator('[data-grant="https://grain.dev/capabilities/api#ci:read"]'),
+  ).toContainText("api:ci:read");
 
   const kinds = await menu
     .locator(".api-grant-row")
@@ -105,28 +101,29 @@ test("lists the API presets before every scope, with what each preset grants", a
     menu.locator('[data-api-grant="api:tasks:read"] .api-dangerous'),
   ).toHaveCount(0);
 
-  // The search narrows every kind at once.
+  // The search narrows every kind at once, and GET /api/capability-methods'
+  // https://grain.dev/capabilities/api#* entries are owned by the Grain API
+  // groups rather than duplicated under Capability server methods.
   await page.getByLabel("Search grants").fill("merge:force");
   await expect(menu.locator(".api-grant-row")).toHaveCount(1);
+  await expect(menu.locator(".method-grant-row")).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  // The legacy Capabilities list no longer carries them.
-  await page.getByRole("combobox", { name: "Legacy capabilities" }).click();
-  await expect(page.getByRole("option").first()).toBeVisible();
-  await expect(page.getByRole("option", { name: /^API/ })).toHaveCount(0);
-  await page.keyboard.press("Escape");
+  // There is no legacy Capabilities list to carry them.
+  await expect(
+    page.getByRole("combobox", { name: "Legacy capabilities" }),
+  ).toHaveCount(0);
 });
 
-test("grants a scope limited to one repository", async ({ page, request }) => {
+test("grants a scope limited to one repository via with: {repo}", async ({
+  page,
+  request,
+}) => {
   const task = await fileTask(request, []);
   await page.goto(`/tasks/${task.id}`);
   const { grants, menu } = await openMenu(page, task.id);
 
-  await page.getByLabel("Grain API grants apply to").click();
-  await page.getByRole("option", { name: "acme/widgets" }).click();
-  await expect(page.getByRole("listbox")).toHaveCount(0);
-  // The pick is written to the task and read back, so the mark follows
-  // the server rather than flipping at once.
+  // Pick ci:write from the menu, then set its inline repo argument to acme/widgets.
   const ciWrite = menu.getByRole("menuitemcheckbox", {
     name: "ci:write",
     exact: true,
@@ -135,15 +132,26 @@ test("grants a scope limited to one repository", async ({ page, request }) => {
   await expect(ciWrite).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
 
-  await expect(grants.locator(".grants-held")).toContainText(
-    "ci:write on acme/widgets",
+  const section = grants.locator(
+    '[data-method="https://grain.dev/capabilities/api#ci:write"] .grant-section',
   );
+  const repoInput = section.getByLabel(/^repo/);
+  await repoInput.fill("acme/widgets");
+  await repoInput.blur();
+
+  await expect(
+    grants.locator(
+      '[data-grant=\'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}\']',
+    ),
+  ).toHaveCount(1);
   await expect
     .poll(async () => {
       const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
       return detail.capabilities;
     })
-    .toContain("api:ci:write@acme/widgets");
+    .toContain(
+      'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}',
+    );
 });
 
 test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, ScheduleOverlay, and TemplateOverlay, plus self-debug alias", async ({
@@ -242,7 +250,9 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   await expect(sessionSelfDebug).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(
-    sessionGroup.locator('.grants-held [data-grant="api:self-debug"]'),
+    sessionGroup.locator(
+      '.grants-held [data-grant="https://grain.dev/capabilities/api#self-debug"]',
+    ),
   ).toHaveCount(1);
   await expect
     .poll(async () => {
@@ -251,9 +261,9 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
       ).json();
       return sessions.find((s) => s.id === "director").capabilities;
     })
-    .toContain("api:self-debug");
+    .toContain("https://grain.dev/capabilities/api#self-debug");
 
-  // 4. ScheduleOverlay on /processes: select api:self-debug + api:ci:write@acme/widgets, save, reload, verify
+  // 4. ScheduleOverlay on /processes: select .../api#self-debug + .../api#ci:write={"repo":"acme/widgets"}, save, reload, verify
   await page.goto("/processes");
   const schedTitle = `API grant schedule ${Date.now()}`;
   await page.getByRole("button", { name: "+ New", exact: true }).click();
@@ -276,8 +286,8 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   const savedSched = schedules.find((s) => s.title === schedTitle);
   expect(savedSched).toBeTruthy();
   expect([...savedSched.capabilities].sort()).toEqual([
-    "api:ci:write@acme/widgets",
-    "api:self-debug",
+    'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}',
+    "https://grain.dev/capabilities/api#self-debug",
   ]);
 
   await page.reload();
@@ -287,7 +297,7 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   await expectSelfDebugAndRepoCIWrite(page.getByTestId("schedule-grants"));
   await page.goto("/processes");
 
-  // 5. TemplateOverlay on /processes: select api:self-debug + api:ci:write@acme/widgets, save, reload, verify
+  // 5. TemplateOverlay on /processes: select .../api#self-debug + .../api#ci:write={"repo":"acme/widgets"}, save, reload, verify
   const tmplName = `api-grant-tmpl-${Date.now()}`;
   await page.getByRole("button", { name: "+ New", exact: true }).click();
   await menu.getByRole("menuitem", { name: "Template" }).click();
@@ -307,8 +317,8 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   const savedTmpl = templates.find((t) => t.name === tmplName);
   expect(savedTmpl).toBeTruthy();
   expect([...savedTmpl.capabilities].sort()).toEqual([
-    "api:ci:write@acme/widgets",
-    "api:self-debug",
+    'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}',
+    "https://grain.dev/capabilities/api#self-debug",
   ]);
 
   await page.reload();
@@ -373,9 +383,9 @@ test("Escape in Add grant… closes only the popover in template and schedule pa
   await expect(page).toHaveURL(/\/processes$/);
   expect(dialogs).toEqual([]);
 
-  // 2. Edited schedule pane (/processes/schedules/sched-2): Escape closes an
-  // open repo listbox first, then the Add grant… popover without asking to
-  // discard, and only asks DISCARD_PROMPT on the next Escape.
+  // 2. Edited schedule pane (/processes/schedules/sched-2): Escape closes the
+  // Add grant… popover without asking to discard, and only asks DISCARD_PROMPT
+  // on the next Escape.
   await page.goto("/processes/schedules/sched-2");
   await expect(
     page.getByRole("heading", { name: "Edit schedule" }),
@@ -387,14 +397,6 @@ test("Escape in Add grant… closes only the popover in template and schedule pa
   const schedAddBtn = schedGrants.getByRole("button", { name: "Add grant…" });
   await schedAddBtn.click();
   await expect(menu).toBeVisible();
-
-  await page.getByLabel("Grain API grants apply to").click();
-  await expect(page.getByRole("listbox")).toBeVisible();
-
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("listbox")).toHaveCount(0);
-  await expect(menu).toBeVisible();
-  expect(dialogs).toEqual([]);
 
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
@@ -425,8 +427,8 @@ test("Escape in Add grant… closes only the popover in template and schedule pa
   ).toBeVisible();
 });
 
-// Ticks api:self-debug for every repo and api:ci:write limited to
-// acme/widgets from a Grants section's "Add grant…" menu.
+// Ticks .../api#self-debug for every repo and .../api#ci:write limited to
+// acme/widgets via its inline repo field.
 async function grantSelfDebugAndRepoCIWrite(page, grants) {
   await grants.getByRole("button", { name: "Add grant…" }).click();
   const menu = page.getByRole("menu", { name: "Grants to add" });
@@ -437,9 +439,6 @@ async function grantSelfDebugAndRepoCIWrite(page, grants) {
   });
   await selfDebug.click();
   await expect(selfDebug).toHaveAttribute("aria-checked", "true");
-  await page.getByLabel("Grain API grants apply to").click();
-  await page.getByRole("option", { name: "acme/widgets" }).click();
-  await expect(page.getByRole("listbox")).toHaveCount(0);
   const ciWrite = menu.getByRole("menuitemcheckbox", {
     name: "ci:write",
     exact: true,
@@ -447,12 +446,31 @@ async function grantSelfDebugAndRepoCIWrite(page, grants) {
   await ciWrite.click();
   await expect(ciWrite).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
+
+  const ciSection = grants.locator(
+    '[data-method="https://grain.dev/capabilities/api#ci:write"] .grant-section',
+  );
+  const repoInput = ciSection.getByLabel(/^repo/);
+  await repoInput.fill("acme/widgets");
+  await repoInput.blur();
   await expectSelfDebugAndRepoCIWrite(grants);
 }
 
 async function expectSelfDebugAndRepoCIWrite(grants) {
   const held = grants.locator(".grants-held");
-  await expect(held.locator("[data-grant]")).toHaveCount(2);
-  await expect(held).toContainText("self-debug");
-  await expect(held).toContainText("ci:write on acme/widgets");
+  // Not counting the repository lines (the #target and any reads and
+  // writes, unified-grants slice 5).
+  await expect(
+    held.locator('[data-grant]:not([data-grant-kind^="repo"])'),
+  ).toHaveCount(2);
+  await expect(
+    held.locator(
+      '[data-grant="https://grain.dev/capabilities/api#self-debug"]',
+    ),
+  ).toHaveCount(1);
+  await expect(
+    held.locator(
+      '[data-grant=\'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}\']',
+    ),
+  ).toHaveCount(1);
 }

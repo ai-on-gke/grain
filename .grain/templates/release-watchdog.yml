@@ -2,7 +2,12 @@ name: Release watchdog
 title: Verify latest base branch release status and health
 base: main
 auto-merge: true
-capabilities: ["api:ci-read@ai-on-gke/grain"]
+nothing-needed: close
+capabilities:
+  - "api:ci-read@ai-on-gke/grain"
+  - "api:self-debug"
+  - "api:suites:read@ai-on-gke/grain"
+  - "api:releases:read@ai-on-gke/grain"
 body: |
   Inspect the release pipeline status for base branches (particularly `main`), verifying that
   the latest base-branch release succeeded and is not lagging behind `main` or stalled.
@@ -52,17 +57,28 @@ body: |
     (`git log --oneline <latest>..origin/main`), the train is not cutting: check
     the newest `release-train.yml` runs and say what they reported
     (`release_waits=`, `rc_held=`, no LKG commit).
+  - **A starved train tick.** A release-train task (tagged
+    `schedule:<the release-train schedule's id>`) that has been `queued` for
+    more than 1 hour without ever starting holds every tick after it
+    (`overlap: skip`), so the train stops for as long as it waits. Report the
+    task, how long it has waited and its priority. Check that grain raised
+    `pipeline.schedule-starved:<schedule id>` for it and raised its
+    priority (`docs/schedules.md`). If it has not, raise a warning yourself
+    with
+    `grain notify --severity warning --subject release-train-starved --title "Release train tick #<id> queued <duration> without starting"`.
   - **A red rc.** For each `vX.Y.0-rc.N-discarded` in the last 24 hours, report
     the attempt number and whether `pipeline.rc-failed:<rc tag>` triage or
-    `[rc-blocker <rc tag>]` tasks exist; three failed attempts on one version
+    `[rc-blocker <rc tag>]` tasks exist (`grain task list` / `grain task read`,
+    `grain api GET /api/notifications`); three failed attempts on one version
     should already have raised `pipeline.release-escalated:<version>`. The
     pipeline steward owns red rcs (`docs/pipeline-steward.md`): report, do not
     file fixes for them here.
   - **Flake retries.** Count the rc qualification jobs and items that failed once
     and passed on their one retry in the last 24 hours (Stage 1 jobs with a second
-    attempt, Stage 2 items run twice). Two or more is over the flake budget
-    (playbook section 3): name them, and check that `pipeline.flake-budget` has
-    been raised for each and that a de-flake or quarantine task is open.
+    attempt, Stage 2 items run twice in `grain api GET /api/suite-runs`). Two or
+    more is over the flake budget (playbook section 3): name them, and check that
+    `pipeline.flake-budget` has been raised for each and that a de-flake or
+    quarantine task is open.
   - **A new release** (`vX.Y.0` in the last 24 hours): check that
     `publish-release.yml` ran on its tag and succeeded (images promoted, GitHub
     Release written). A train-made `vX.Y.0` with no published release is a fault.
@@ -79,16 +95,21 @@ body: |
   `release.yml` are green, and `nightly.yml` is the first stage of its
   qualification, so a `nightly.yml` that is red or not running on `main` is a
   red rc waiting to happen.
-  This repository's CI is GitHub Actions (`ci_mode: github`), so `nightly` and
-  `gcp-smoke` are GitHub Actions workflows, not grain CI runs: their list rows
+  This repository's CI is GitHub Actions (`ci_mode: github`), so `nightly`,
+  `gcp-smoke`, `live-agent` and `live-frameworks` are GitHub Actions workflows,
+  not grain CI runs: their list rows
   carry no YAML job ids, and a `job:` filter such as `go-long` never matches them.
   Query them by workflow file instead:
 
   - `list_ci_runs` with `repo: ai-on-gke/grain`, `ref: main`,
     `provider: github-actions`, `workflow: nightly.yml` and `since: 26h`
     (`grain ci list --repo ai-on-gke/grain --ref main --provider github-actions --workflow nightly.yml --since 26h`),
-    and the same with `workflow: gcp-smoke.yml`. Report the newest run's
-    conclusion and URL for each.
+    and the same with `workflow: gcp-smoke.yml`, and with `workflow: live-agent.yml`
+    and `workflow: live-frameworks.yml` (`since: 36h`). Report the newest run's
+    conclusion and URL for each. A live suite with no run on `main` for more than
+    36 hours has stopped firing (or the `live-models` environment lost a secret
+    and every run fails at "Require the live-models secrets"); report it with
+    subject `pipeline.live-suite-missing:ai-on-gke/grain`.
   - **If `nightly.yml` has no run on `main` in the last 26 hours**, its schedule has
     stopped firing (or the workflow was disabled). Raise it, whatever else you find:
 
@@ -103,11 +124,10 @@ body: |
     files a review task for every such run; check that one exists for the newest
     red run rather than filing another.
 
-  For `live-agent`, `live-frameworks` and `live-secrets-repo`, which still run in
-  grain CI, find the newest concluded grain CI run on `main` (`list_ci_runs` with
-  `ref: main`, `provider: grain`, `since: 36h` and a job only that workflow has:
-  `live-agy`, `live-claude`, `live-secrets-repo`), and report each verdict. A
-  workflow with no run on `main` for more than 30 hours means its schedule is not
+  For `live-secrets-repo`, which still runs in grain CI, find the newest
+  concluded grain CI run on `main` (`list_ci_runs` with `ref: main`,
+  `provider: grain`, `since: 36h` and `job: live-secrets-repo`), and report its
+  verdict. No run on `main` for more than 30 hours means its schedule is not
   firing; that is a fault to report.
 
   - Do not repair a red suite here unless it is a release pipeline fault: its own
@@ -126,6 +146,16 @@ body: |
 
   ## 4. Verify and report
 
-  - If everything is healthy and releases are up-to-date, leave a closing note confirming the pipeline health:
-    the newest release and rc, the rc's stage and age, and the flake retries and retractions you counted.
-  - If fixes were applied, commit with descriptive messages, push the branch, and wait for CI checks to pass.
+  - If fixes were applied on this task's branch, commit with descriptive
+    messages, push the branch, and wait for CI checks to pass (`grain pr open`
+    and `grain ci wait`).
+  - Otherwise (no branch pushed on this task -- whether everything is healthy
+    or faults were handled via `grain notify` and `propose_task`), close with
+    `nothing_needed` (never `comment_on_issue`, which parks a branchless task
+    in `awaiting_reply` and holds the 6-hour `overlap: skip` schedule) passing
+    the full pipeline health and triage summary as its `reason`: the newest
+    release and rc, the rc's stage and age, the flake retries and retractions
+    you counted, and any notifications raised or follow-up tasks proposed. If
+    a fault needs a person's direct action and no `pipeline.*` notification
+    already covers it, raise `grain notify --severity warning` before calling
+    `nothing_needed`.

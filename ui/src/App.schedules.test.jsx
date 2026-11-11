@@ -280,6 +280,49 @@ describe("App", () => {
     expect(screen.queryByRole("combobox", { name: "Admission" })).toBeNull();
   });
 
+  // Hosting (model.Schedule.Hosting) sits beside admission, the setting
+  // that replaced the console capability.
+  it("reads and saves a raw schedule's hosting", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Nightly dependency bump"));
+    const select = await screen.findByRole("combobox", { name: "Hosting" });
+    expect(select).toHaveTextContent("Unattended");
+    await user.click(select);
+    await user.click(
+      await screen.findByRole("option", { name: "Interactive console" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        api.mock.calls.find(
+          ([path, opts]) =>
+            path === "/api/schedules/sched-1" && opts?.method === "PATCH",
+        ),
+      ).toBeTruthy(),
+    );
+    const [, opts] = api.mock.calls.find(
+      ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
+    );
+    expect(JSON.parse(opts.body)).toMatchObject({ hosting: "console" });
+  });
+
   it("switches a schedule to every N minutes", async () => {
     const schedule = {
       id: "sched-1",
@@ -838,5 +881,102 @@ describe("App", () => {
     } finally {
       confirm.mockRestore();
     }
+  });
+
+  // 2026-11-11 recurring and composed work walkthrough: the link closed
+  // the pane before the task had loaded, which wrote the bare list into
+  // history between them, so Back from the task skipped the schedule. A
+  // suite run's task rows never did; the link now behaves as they do.
+  it("comes back to the schedule from the suppressed task it links to", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+      suppressed: { reason: "task", taskId: "1" },
+    };
+    window.history.replaceState(null, "", "/processes/schedules/sched-1");
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Edit schedule" });
+    const before = window.history.length;
+    await user.click(screen.getByRole("link", { name: "task 1" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/tasks/1"));
+    expect(window.history.length).toBe(before + 1);
+
+    window.history.back();
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/processes/schedules/sched-1"),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Edit schedule" }),
+    ).toBeInTheDocument();
+  });
+
+  it("refreshes schedules, templates and suites immediately when navigating into Processes", async () => {
+    setupApi(initialTasks, [], [], []);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    // Simulate declarations synced on another view before entering Processes
+    // (before the 3-second background poll fires).
+    setupApi(
+      initialTasks,
+      [
+        {
+          id: "repo:schedule:acme:widgets:nightly",
+          title: "Declared nightly audit",
+          repo: "acme/widgets",
+          recurrence: { kind: "daily", timeOfDay: "02:00" },
+          enabled: true,
+          nextRunAt: "2026-08-29T02:00:00Z",
+          declaredIn: {
+            repo: "acme/widgets",
+            path: ".grain/schedules/nightly.yml",
+          },
+        },
+      ],
+      [
+        {
+          id: "repo:template:acme:widgets:audit",
+          name: "Declared audit template",
+          title: "Audit repo",
+          repo: "acme/widgets",
+          declaredIn: {
+            repo: "acme/widgets",
+            path: ".grain/templates/audit.yml",
+          },
+        },
+      ],
+      [
+        {
+          id: "repo:suite:acme:widgets:smoke",
+          name: "Declared smoke suite",
+          repo: "acme/widgets",
+          mode: "until_clean",
+          maxPasses: 2,
+          items: [{ templateId: "repo:template:acme:widgets:audit" }],
+          declaredIn: { repo: "acme/widgets", path: ".grain/suites/smoke.yml" },
+        },
+      ],
+    );
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+
+    expect(
+      await screen.findByText("Declared nightly audit"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("Declared audit template"),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Declared smoke suite")).toBeInTheDocument();
   });
 });

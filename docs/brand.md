@@ -225,7 +225,7 @@ a heading three sizes up:
 | Every heading that opens one of the four: the template, schedule and suite editors, `SuiteRunOverlay`, `RepoPage`, `RepoReleases` | that kind's own | this pane is the thing the row that opened it named |
 | Every picker that names a template: `ScheduleOverlay`'s, `SuiteOverlay`'s, `NewTaskOverlay`'s Review, a repo's qualification plan | templates | this list is written on the Templates page |
 | `ScheduleOverlay`'s "Fires" choice and suite picker; `SuiteRunOverlay`'s suite picker; the Suites page's "Runs" heading | suites | a run is a run *of a suite* |
-| `RepoField`, `ReadOnlyReposField`'s results | repos | this field names a repo |
+| `RepoField`, `RepoPicker`'s results (the Grants list's repository pickers) | repos | this field names a repo |
 
 **One placement rule** for all of them, in `ItemGlyph`'s own
 `GlyphLabel`: 16px, inline, in front of the word, decorative — the

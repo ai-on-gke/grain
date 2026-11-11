@@ -39,6 +39,7 @@
 package servers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -126,6 +127,13 @@ type Status struct {
 	// yet: a configuration somebody saved that the server will not run
 	// under, which is worth raising rather than waiting quietly.
 	ConfigRefused bool `json:"configRefused,omitempty"`
+	// Waiting is what a needs-config server's configure said it is
+	// waiting on outside grain (protocol.WaitingError) -- a credential
+	// renewed on the host, say -- in its own short words, read after
+	// "waiting for". Such a server is tried again every RetryInterval and
+	// attaches by itself once that is done; Settings shows it as
+	// "waiting for <Waiting>" rather than asking anybody to configure it.
+	Waiting string `json:"waiting,omitempty"`
 	// Error is why the server is not attached (or why its last refresh
 	// failed), naming missing secrets by name and never a value.
 	Error       string     `json:"error,omitempty"`
@@ -166,7 +174,8 @@ type Options struct {
 	// command is resolved under (protocol.DialOptions.ConfigRoot).
 	ConfigRoot string
 	// Stderr, when set, gives each stdio server somewhere for its
-	// diagnostics; nil discards them.
+	// diagnostics, written one whole line per Write with the secrets it
+	// was started with scrubbed; nil discards them.
 	Stderr func(id string) io.Writer
 	// RefreshInterval and RetryInterval default to DefaultRefreshInterval
 	// and DefaultRetryInterval.
@@ -231,6 +240,10 @@ type entry struct {
 	// adds, or a hostd back from a restart, attaches it with no daemon
 	// restart.
 	hostRetry bool
+	// waiting is the server's configure having refused as waiting on
+	// something outside grain (Status.Waiting); it is retried every
+	// RetryInterval like hostRetry.
+	waiting string
 	// configRefused is the server's configure having refused cfg.Config
 	// (Status.ConfigRefused).
 	configRefused bool
@@ -411,7 +424,7 @@ func (r *Registry) Statuses() []Status {
 }
 
 func (e *entry) status(id string) Status {
-	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin, ConfigRefused: e.configRefused}
+	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin, ConfigRefused: e.configRefused, Waiting: e.waiting}
 	s.Aliases = append([]string(nil), e.cfg.Aliases...)
 	if e.state == NeedsConfig && !e.hostRetry {
 		s.Error, s.Reason = "", e.err
@@ -532,12 +545,12 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		}
 		r.mu.RLock()
 		e := r.entries[id]
-		cfg, state, server, tried, refreshed, hostRetry := e.cfg, e.state, e.server, e.tried, e.refreshed, e.hostRetry
+		cfg, state, server, tried, refreshed, hostRetry := e.cfg, e.state, e.server, e.tried, e.refreshed, e.hostRetry || e.waiting != ""
 		r.mu.RUnlock()
 		switch {
 		case cfg.Disabled:
 			if state != Disabled {
-				r.set(id, func(e *entry) { e.state, e.err, e.configRefused = Disabled, "", false })
+				r.set(id, func(e *entry) { e.state, e.err, e.configRefused, e.waiting = Disabled, "", false, "" })
 				if r.opts.OnClear != nil {
 					r.opts.OnClear(id)
 				}
@@ -556,6 +569,9 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		case state == NeedsConfig && len(cfg.SecretRefs()) == 0 && !hostRetry:
 			// Waiting for the operator to edit Config or Args in Settings
 			// (which changes cfg and resets the entry to Pending above).
+			// One whose configure said it is waiting on something outside
+			// grain -- an expired host credential -- is retried below
+			// instead, since nobody's edit is what it needs.
 		case state == Pending || reload || now.Sub(tried) >= r.opts.RetryInterval:
 			r.attach(ctx, id, cfg)
 		}
@@ -565,14 +581,14 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 // attach connects one entry, keeping the failure -- scrubbed of every
 // secret value the attempt resolved -- when it does not.
 func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerConfig) {
-	var resolved []string
+	resolved := &resolvedSecrets{}
 	lookup := func(name string) (string, bool) {
 		if r.opts.Secrets == nil {
 			return "", false
 		}
 		v, ok := r.opts.Secrets(name)
 		if ok && v != "" {
-			resolved = append(resolved, v)
+			resolved.add(v)
 		}
 		return v, ok
 	}
@@ -584,17 +600,24 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	r.mu.RUnlock()
 	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: identity, Managed: r.opts.Managed}
 	if r.opts.Stderr != nil {
-		opts.Stderr = r.opts.Stderr(id)
+		if w := r.opts.Stderr(id); w != nil {
+			opts.Stderr = &scrubbedLines{w: w, secrets: resolved}
+		}
 	}
 	server, err := r.opts.Attach(ctx, id, cfg, lookup, opts)
 	now := r.opts.Now()
 	if err != nil {
-		msg := Scrub(err.Error(), resolved)
+		msg := Scrub(err.Error(), resolved.values())
 		var schema map[string]any
 		var ce *protocol.ConfigureError
 		isConfigure := errors.As(err, &ce)
 		if isConfigure {
 			schema = ce.Schema
+		}
+		var waiting string
+		var we *protocol.WaitingError
+		if isConfigure && errors.As(err, &we) {
+			waiting = we.Waiting
 		}
 		state := Failed
 		if cfg.Builtin != "" && (isConfigure || len(cfg.Config) == 0) {
@@ -610,13 +633,24 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 			prevState, prevErr = e.state, e.err
 			e.state, e.err, e.tried, e.schema = state, msg, now, schema
 			e.hostRetry = state == NeedsConfig && !isConfigure && cfg.OnHost()
-			e.configRefused = isConfigure && len(cfg.Config) > 0
-			dropped = (e.wasAttached || e.configRefused) && (prevState != state || prevErr != msg)
+			e.waiting = ""
+			if state == NeedsConfig {
+				e.waiting = waiting
+			}
+			// A server waiting on something outside grain has not refused
+			// its config, but is out of use all the same: it is raised
+			// so somebody renews what it waits for.
+			e.configRefused = isConfigure && len(cfg.Config) > 0 && e.waiting == ""
+			dropped = (e.wasAttached || e.configRefused || e.waiting != "") && (prevState != state || prevErr != msg)
 			st = e.status(id)
 		})
 		if state == NeedsConfig {
 			if prevState != NeedsConfig || prevErr != msg {
-				r.opts.Logf("capability server %s: not configured: %s", id, msg)
+				if waiting != "" {
+					r.opts.Logf("capability server %s: %s, retrying every %s: %s", id, waitingLabel(waiting), r.opts.RetryInterval, msg)
+				} else {
+					r.opts.Logf("capability server %s: not configured: %s", id, msg)
+				}
 			}
 		} else {
 			r.opts.Logf("capability server %s: attach refused: %s", id, msg)
@@ -636,7 +670,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		var st Status
 		r.set(id, func(e *entry) {
 			prevState = e.state
-			e.state, e.err, e.tried, e.schema, e.hostRetry, e.configRefused = NeedsConfig, reason, now, schema, false, false
+			e.state, e.err, e.tried, e.schema, e.hostRetry, e.configRefused, e.waiting = NeedsConfig, reason, now, schema, false, false, ""
 			dropped = e.wasAttached && prevState != NeedsConfig
 			st = e.status(id)
 		})
@@ -652,7 +686,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	kept := r.set(id, func(e *entry) {
 		e.state, e.err, e.tried, e.server, e.methods, e.details = Attached, "", now, server, methods, details
 		e.schema, e.tools = server.ConfigSchema, tools
-		e.configRefused, e.wasAttached = false, true
+		e.configRefused, e.wasAttached, e.waiting = false, true, ""
 		e.attached, e.refreshed = now, now
 	})
 	if !kept {
@@ -664,6 +698,21 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	if r.opts.OnAttach != nil {
 		r.opts.OnAttach(id)
 	}
+}
+
+// waitingLabel is how a server's waiting phrase reads in a log line, an
+// alert or a chip: "waiting for a credential renewal".
+func waitingLabel(waiting string) string {
+	return "waiting for " + waiting
+}
+
+// WaitingLabel is waitingLabel for st.Waiting: empty when the server is
+// not waiting.
+func WaitingLabel(st Status) string {
+	if st.Waiting == "" {
+		return ""
+	}
+	return waitingLabel(st.Waiting)
 }
 
 // refresh re-issues tools/list. A server that no longer answers is
@@ -877,7 +926,7 @@ type ProbeResult struct {
 // set. extra resolves secrets ahead of the store, for a credential typed
 // into the form and not saved yet.
 func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) ProbeResult {
-	var resolved []string
+	resolved := &resolvedSecrets{}
 	var ephemeral *probeManaged
 	if r.opts.Managed != nil {
 		ephemeral = &probeManaged{existing: r.opts.Secrets, values: map[string]string{}}
@@ -895,7 +944,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 			v, ok = r.opts.Secrets(name)
 		}
 		if ok && v != "" {
-			resolved = append(resolved, v)
+			resolved.add(v)
 		}
 		return v, ok
 	}
@@ -911,7 +960,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: r.opts.Identity(), Stderr: stderr, Managed: managed}
 	if r.opts.Stderr != nil {
 		if w := r.opts.Stderr(id); w != nil {
-			opts.Stderr = io.MultiWriter(stderr, w)
+			opts.Stderr = io.MultiWriter(stderr, &scrubbedLines{w: w, secrets: resolved})
 		}
 	}
 	cfg.Disabled = false
@@ -933,7 +982,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		if out := strings.TrimSpace(stderr.String()); out != "" {
 			msg += "; its stderr: " + out
 		}
-		res.Error = Scrub(msg, resolved)
+		res.Error = Scrub(msg, resolved.values())
 		var ce *protocol.ConfigureError
 		if errors.As(err, &ce) {
 			res.ConfigSchema = protocol.OperatorSchema(ce.Schema)
@@ -979,6 +1028,60 @@ func (r *Registry) HostCapabilityEntries(ctx context.Context) ([]string, error) 
 const probeStderrMax = 2 << 10
 
 // tailBuffer keeps the last max bytes written to it.
+// resolvedSecrets are the secret values one attach or probe resolved:
+// added while the server starts, read by its stderr as the process
+// writes it.
+type resolvedSecrets struct {
+	mu sync.Mutex
+	v  []string
+}
+
+func (s *resolvedSecrets) add(v string) {
+	s.mu.Lock()
+	s.v = append(s.v, v)
+	s.mu.Unlock()
+}
+
+func (s *resolvedSecrets) values() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.v...)
+}
+
+// scrubbedLines hands w a stdio server's stderr one whole line per Write,
+// every secret value the server was started with replaced as Scrub does,
+// so Options.Stderr can log each line as it is.
+type scrubbedLines struct {
+	w       io.Writer
+	secrets *resolvedSecrets
+	mu      sync.Mutex
+	partial []byte
+}
+
+func (s *scrubbedLines) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partial = append(s.partial, p...)
+	for {
+		i := bytes.IndexByte(s.partial, '\n')
+		if i < 0 {
+			break
+		}
+		line := string(s.partial[:i])
+		s.partial = s.partial[i+1:]
+		_, _ = io.WriteString(s.w, Scrub(line, s.secrets.values())+"\n")
+	}
+	if len(s.partial) > maxStderrLine {
+		// A line that never ends is cut rather than held.
+		_, _ = io.WriteString(s.w, Scrub(string(s.partial), s.secrets.values())+"\n")
+		s.partial = s.partial[:0]
+	}
+	return len(p), nil
+}
+
+// maxStderrLine bounds how much of one unfinished stderr line is held.
+const maxStderrLine = 16 << 10
+
 type tailBuffer struct {
 	max int
 	mu  sync.Mutex

@@ -1,0 +1,180 @@
+01:43:51.739314 [item1-committed-context] PASS: 1a refused without -read when autoGrantContextReads is empty -- HTTP 400 {"error":"committed context \"acme/specs:architecture.md@main\" is in acme/specs (task target: acme/app): grant read access with -read acme/specs, or add acme/specs to autoGrantContextReads"}
+01:43:51.748275 [item1-committed-context] PASS: 1b explicit -read files and pins @main to the SHA -- HTTP 201 id=1
+01:43:51.749864 grain ui: settings saved by the access code: changed PollInterval, MaxWorkers, MaxMergers, MaxMergesPerRepo, MergeBatchSize, MergeGatherWindow, MaxCIJobs, GitHubHost, SandboxCPUOvercommit, SandboxMemoryOvercommit, SandboxDiskOvercommit, SandboxMemoryReserveMB, SandboxDiskFloorShare, SandboxDiskFloorMinMB, PackageCacheEnabled, ActionsCacheEnabled, DefaultFilters, ApprovedByDefault, AutoMergeByDefault, MaxAutoSubmitDepth, MaxAutoSubmitFanOut, TaskBranchTemplate, K8sPriorityClassInteractive, K8sPriorityClassAgent, K8sPriorityClassCI, AutoGrantContextReads, SessionSandboxIdleTTL
+01:43:51.750260 grain api: operator (access code) (access-code) changed settings: PUT /api/settings
+01:43:51.751866 [item1-committed-context] PASS: 1c PUT /api/settings stores autoGrantContextReads -- HTTP 200 stored=[acme/specs] {"configured":true,"pollInterval":"10s","pollIntervalDefault":"10s","maxWorkers":10,"maxMergesPerRepo":5,"maxAutoSubmitDepth":2,"maxAutoSubmitFanOut":5,"geminiEfforts":["low","medium","high"],"codexEfforts":["none","minimal","low","medium","high","xhigh","max","ultra"],"maxAgentTurns":0,"githubHost":"github.com","githubInsecureHttp":false,"gcpProject":"","gcpServiceAccountEmail":"","gcpServiceAccountCount":0,"iapBackendService":"","iapResource":"","newestFirst":false,"sandboxBackend":"","sandboxBackends":[],"sandboxBackendOptions":null,"sandboxCpus":0,"sandboxMemoryMb":0,"sandboxDiskGb":0,"san [clipped]
+01:43:51.764455 [item1-committed-context] PASS: 1d auto-granted -read acme/specs -- reads=[acme/specs]
+01:43:51.764474 [item1-committed-context] PASS: 1e @main pinned to immutable SHA at filing -- designs=[acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325 acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325] want [acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325 acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325]
+01:43:51.797228 orchestrator: filed task 3 for the director console session
+01:43:51.979229 [item1-committed-context] PASS: 1f sandbox clone detached at pinned SHA1 though main moved to SHA2 -- HEAD=bf7fe98b61f368d569ef277ac88b644e1ab7b325 sha1=bf7fe98b61f368d569ef277ac88b644e1ab7b325 sha2=4347adf03d192a3274b54082a41b560f489992ec
+01:43:51.979257 [item1-committed-context] PASS: 1g sandbox sees approved v1 content -- architecture.md="# Architecture v1 (approved)\n"
+01:43:51.979260 [item1-committed-context] PASS: 1h prompt names pinned SHA and manifest title, never SHA2 -- pinned=true manifest=true sha2=false
+01:43:51.979264 [item1-committed-context] PASS: 1i tamper: push via read-only remote refused -- pushURL=grain-read-only out=fatal: 'grain-read-only' does not appear to be a git repository
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+01:43:51.979268 [item1-committed-context] PASS: 1j tamper: push straight to proxy URL refused by scoped proxy -- out=remote: acme/specs is read-only for this sandbox: it may fetch it but not push to it
+fatal: unable to access 'http://127.0.0.1:41333/acme/specs.git/': The requested URL returned error: 403
+01:43:51.981197 [item1-committed-context] PASS: 1k acme/specs main untouched by sandbox -- main=4347adf03d192a3274b54082a41b560f489992ec
+01:43:51.981750 [item1-committed-context] PASS: 1l manifest persisted on task after checkout -- manifest=&{Title:PLC-042 billing spec Description:Approved by design review Files:[{Path:spec.md Kind:design Title:Billing spec SourceURL:https://planner.example.com/PLC-042}]}
+01:43:51.982733 [item1-committed-context] PASS: 1m propose_task child inherits pinned manifest refs -- child designs=[acme/specs:architecture.md@bf7fe98b61f368d569ef277ac88b644e1ab7b325 acme/specs:plc/042@bf7fe98b61f368d569ef277ac88b644e1ab7b325]
+01:43:51.982755 [item1-committed-context] PASS: 1n propose_task child inherits -read acme/specs -- child reads=[acme/specs]
+01:43:51.982780 [item1-committed-context] PASS: 1o propose_task child carries the manifest -- manifest=&{Title:PLC-042 billing spec Description:Approved by design review Files:[{Path:spec.md Kind:design Title:Billing spec SourceURL:https://planner.example.com/PLC-042}]}
+01:43:51.990458 [item1-committed-context] PASS: 1p GET /api/tasks/{id} renders context refs with manifest -- HTTP 200 context=[{"path":"architecture.md","placement":"read","repo":"acme/specs","rev":"bf7fe98b61f368d569ef277ac88b644e1ab7b325"},{"manifest":{"description":"Approved by design review","files":[{"kind":"design","path":"spec.md","source_url":"https://planner.example.com/PLC-042","title":"Billing spec"}],"title":"PLC-042 billing spec"},"path":"plc/042","placement":"read","repo":"acme/specs","rev":"bf7fe98b61f368d569ef277ac88b644e1ab7b325"}]
+01:43:52.018265 [item1-committed-context] PASS: 1p' grain show renders the pinned context refs and manifest -- err=<nil> out=2 Implement architecture
+state:      awaiting_reply
+owner:      operator@example.com
+repo:       acme/app
+reads:      acme/specs
+context:    acme/specs:architecture.md@bf7fe98b61f3, acme/specs:plc/042@bf7fe98b61f3
+  acme/specs:plc/042@bf7fe98b61f3: PLC-042 billing spec
+    Approved by design review
+    [design] spec.md -- Billing spec <https://planner.example.com/PLC-042>
+priority:   5
+auto-merge: false
+
+Follow the pinned spec.
+filed by:        operator (access code)
+
+history:
+  -> proposed        2026-11-08T01:43:51Z by operator (access code)
+  -> queued          2026-11-08T01:43:51Z
+  -> run [clipped]
+01:43:52.483868 [item1-committed-context] PASS: 1q pin to a commit missing upstream fails setup instead of using another revision -- runs=3 outcome=failed error=orchestrator: checking out committed context acme/specs:architecture.md@abababababababababababababababababababab: exit=128
+stdout:
+
+stderr:
+error: Server does not allow request for unadvertised object abababababababababababababababababababab
+01:43:52.516951 grain ui: settings saved by the access code: changed PollInterval, MaxWorkers, MaxMergers, MaxMergesPerRepo, MergeBatchSize, MergeGatherWindow, MaxCIJobs, GitHubHost, SandboxCPUOvercommit, SandboxMemoryOvercommit, SandboxDiskOvercommit, SandboxMemoryReserveMB, SandboxDiskFloorShare, SandboxDiskFloorMinMB, PackageCacheEnabled, ActionsCacheEnabled, DefaultFilters, ApprovedByDefault, AutoMergeByDefault, MaxAutoSubmitDepth, MaxAutoSubmitFanOut, TaskBranchTemplate, UpgradeCheckMode, K8sPriorityClassInteractive, K8sPriorityClassAgent, K8sPriorityClassCI, ExternalAgentAPI, SessionSandboxIdleTTL
+01:43:52.517251 grain api: operator (access code) (access-code) changed settings: PUT /api/settings
+01:43:52.535675 [item2-external-ref] PASS: 2a child proposal (repo B) inherits PROJ-42 from root (repo A) -- map[1:PROJ-42 2:PROJ-42 900:PROJ-42 901:PROJ-42]
+01:43:52.535692 [item2-external-ref] PASS: 2b superseding task inherits PROJ-42 -- map[1:PROJ-42 2:PROJ-42 900:PROJ-42 901:PROJ-42]
+01:43:52.535696 [item2-external-ref] PASS: 2c two-hop proposal inherits PROJ-42 -- map[1:PROJ-42 2:PROJ-42 900:PROJ-42 901:PROJ-42]
+01:43:52.537913 [item2-external-ref] PASS: 2d operator summary counts all 4 tasks -- HTTP 200 {"externalRef":"PROJ-42","total":4,"byState":{"proposed":3,"queued":1},"checks":{"passed":0,"total":0},"openQuestions":[],"pullRequests":{"opened":0,"merged":0,"open":0},"lastActivityAt":"2026-11-08T01:43:52.532547737Z"}
+01:43:52.543392 [item2-external-ref] PASS: 2e operator grain list -externalRef sees all 4 -- HTTP 200 ids=[1 2 900 901]
+01:43:52.543962 grain external-agent: operator (access code) (access-code) issued credential id=1 name="core-reader" owner="operator@example.com" scopeSet="" scopes=[tasks:read tasks:write] repos=[acme/core]
+01:43:52.546430 grain api: {agent, external:core-reader on behalf of operator@example.com} GET /api/refs/{ref}/summary scope=tasks:read repo="" reason="" -> 200
+01:43:52.546664 [item2-external-ref] PASS: 2f scoped summary counts only repo A's task -- HTTP 200 {"externalRef":"PROJ-42","total":1,"byState":{"queued":1},"checks":{"passed":0,"total":0},"openQuestions":[],"pullRequests":{"opened":0,"merged":0,"open":0},"lastActivityAt":"2026-11-08T01:43:52.521893719Z"}
+01:43:52.546679 [item2-external-ref] PASS: 2g scoped summary never names repo B -- {"externalRef":"PROJ-42","total":1,"byState":{"queued":1},"checks":{"passed":0,"total":0},"openQuestions":[],"pullRequests":{"opened":0,"merged":0,"open":0},"lastActivityAt":"2026-11-08T01:43:52.521893719Z"}
+01:43:52.549715 grain api: {agent, external:core-reader on behalf of operator@example.com} GET /api/tasks scope=tasks:read repo="" reason="" -> 200
+01:43:52.549990 [item2-external-ref] PASS: 2h scoped list -externalRef sees only the root -- HTTP 200 ids=[1] body=[{"id":"1","title":"Root PROJ-42 work","description":"root","author":"operator@example.com","authorKind":"human","authorSource":"access-code","authorLabel":"operator (access code)","approvedBy":"operator@example.com","approvedByKind":"human","approvedBySource":"access-code","approvedByLabel":"operator (access code)","state":"queued","repo":"acme/core","branch":"grain/6673dff4/task-1-root-proj-42-work","priority":5,"autoMerge":false,"autoApproveProposals":false,"interactive":false,"admission":"standard","hosting":"unattended","owner":"operator@example.com","creator":"operator@example.com","capa [clipped]
+01:43:52.550676 grain api: refused {agent, external:core-reader on behalf of operator@example.com} GET /api/refs/{ref}/summary: external:core-reader holds tasks:read, but not on acme/billing
+01:43:52.550922 [item2-external-ref] PASS: 2i scoped summary narrowed to repo B is refused or empty -- HTTP 403 {"error":"external:core-reader holds tasks:read, but not on acme/billing"}
+01:43:52.551860 grain api: refused {agent, external:core-reader on behalf of operator@example.com} GET /api/tasks/{id}: external:core-reader holds tasks:read, but not on acme/billing
+01:43:52.552110 [item2-external-ref] PASS: 2j scoped token cannot read repo B's task -- HTTP 403 {"error":"external:core-reader holds tasks:read, but not on acme/billing"}
+01:43:52.552810 grain api: refused {agent, external:core-reader on behalf of operator@example.com} GET /api/tasks: external:core-reader holds tasks:read, but not on acme/billing
+01:43:52.553035 [item2-external-ref] PASS: 2k scoped list narrowed to repo B is refused or empty -- HTTP 403 {"error":"external:core-reader holds tasks:read, but not on acme/billing"}
+01:43:52.559463 grain api: {agent, external:core-reader on behalf of operator@example.com} POST /api/tasks scope=tasks:write repo="acme/core" reason="" -> 201
+01:43:52.560154 [item2-external-ref] PASS: 2l scoped filer cannot inherit externalRef from an unreadable repo B task -- probe externalRef=""
+01:43:52.561740 grain api: {agent, external:core-reader on behalf of operator@example.com} GET /api/refs/{ref}/summary scope=tasks:read repo="" reason="" -> 200
+01:43:52.561989 [item2-external-ref] PASS: 2m unknown ref answers an empty summary -- HTTP 200 {"externalRef":"UNKNOWN-1","total":0,"byState":{},"checks":{"passed":0,"total":0},"openQuestions":[],"pullRequests":{"opened":0,"merged":0,"open":0}}
+01:43:52.593461 grain ui: settings saved by the access code: changed PollInterval, MaxWorkers, MaxMergers, MaxMergesPerRepo, MergeBatchSize, MergeGatherWindow, MaxCIJobs, GitHubHost, SandboxCPUOvercommit, SandboxMemoryOvercommit, SandboxDiskOvercommit, SandboxMemoryReserveMB, SandboxDiskFloorShare, SandboxDiskFloorMinMB, PackageCacheEnabled, ActionsCacheEnabled, DefaultFilters, ApprovedByDefault, AutoMergeByDefault, MaxAutoSubmitDepth, MaxAutoSubmitFanOut, TaskBranchTemplate, UpgradeCheckMode, K8sPriorityClassInteractive, K8sPriorityClassAgent, K8sPriorityClassCI, ExternalAgentAPI, SessionSandboxIdleTTL
+01:43:52.593884 grain api: operator (access code) (access-code) changed settings: PUT /api/settings
+01:43:52.595730 grain external-agent: operator (access code) (access-code) issued credential id=1 name="alice-cli" owner="alice@example.com" scopeSet="" scopes=[tasks:read tasks:write] repos=[acme/core]
+01:43:52.596523 grain external-agent: operator (access code) (access-code) issued credential id=2 name="bob-cli" owner="bob@example.com" scopeSet="" scopes=[tasks:read tasks:write] repos=[acme/core]
+01:43:52.603073 [item3-owner-proposer] PASS: 3a operator-filed task owner defaults to the operator -- owner="operator@example.com"
+01:43:52.608931 grain api: {agent, external:alice-cli on behalf of alice@example.com} POST /api/tasks scope=tasks:write repo="acme/core" reason="" -> 201
+01:43:52.609702 [item3-owner-proposer] PASS: 3b token-filed task owner defaults to the token owner (Alice) -- owner="alice@example.com" creator="alice@example.com"
+01:43:52.656669 orchestrator: filed task 3 for the director console session
+01:43:52.751635 grain api: {agent, external:alice-cli on behalf of alice@example.com} GET /api/tasks/{id} scope=tasks:read repo="acme/core" reason="" -> 200
+01:43:52.751997 [item3-owner-proposer] PASS: 3c agent proposal inherits owner=Alice -- owner="alice@example.com"
+01:43:52.752029 [item3-owner-proposer] PASS: 3c' proposer attribution names the proposing task -- proposer={Attribution:{Actor:{Kind:agent ID:2 Source:sandbox} OnBehalfOf:0x289c75c58720} TaskID:2 RunID:2-1}
+01:43:52.752034 [item3-owner-proposer] PASS: 3c'' timeline 'Proposed by' names task #2 on behalf of Alice -- HTTP 200 label="task #2 (run #1) on behalf of alice@example.com"
+01:43:52.755608 grain api: {agent, external:alice-cli on behalf of alice@example.com} GET /api/tasks scope=tasks:read repo="acme/core" reason="" -> 200
+01:43:52.758599 grain api: {agent, external:bob-cli on behalf of bob@example.com} GET /api/tasks scope=tasks:read repo="acme/core" reason="" -> 200
+01:43:52.758805 [item3-owner-proposer] PASS: 3d owner:me as Alice lists Alice's tasks -- alice=[2 4]
+01:43:52.758824 [item3-owner-proposer] PASS: 3e owner:me as Bob lists nothing yet -- bob=[]
+01:43:52.763091 [item3-owner-proposer] PASS: 3f UI owner transfer Alice -> Bob -- HTTP 200 {"id":"2","title":"Alice task","description":"x","author":"external:alice-cli","authorKind":"agent","authorSource":"external-token","authorLabel":"external agent alice-cli for alice@example.com","approvedBy":"operator@example.com","approvedByKind":"human","approvedBySource":"in-process","approvedByLabel":"operator (local)","state":"awaiting_reply","repo":"acme/core","branch":"grain/fd44d1bc/task-2-alice-task","priority":5,"autoMerge":false,"autoApproveProposals":false,"interactive":false,"admission":"standard","hosting":"unattended","owner":"bob@example.com","creator":"alice@example.com","capa [clipped]
+01:43:52.765811 grain api: {agent, external:alice-cli on behalf of alice@example.com} GET /api/tasks scope=tasks:read repo="acme/core" reason="" -> 200
+01:43:52.768842 grain api: {agent, external:bob-cli on behalf of bob@example.com} GET /api/tasks scope=tasks:read repo="acme/core" reason="" -> 200
+01:43:52.769108 [item3-owner-proposer] PASS: 3g owner:me follows the transfer -- alice=[4] bob=[2]
+01:43:52.769641 [item3-owner-proposer] PASS: 3h owner:<email> filter -- ids=[2]
+01:43:52.773809 [item3-owner-proposer] PASS: 3i ownership transfer recorded on the task's history -- HTTP 200
+01:43:52.806756 [item3-owner-proposer] PASS: 3j grain update -owner transfers Bob -> Carol -- err=<nil> out=2 Alice task
+state:      awaiting_reply
+owner:      carol@example.com
+repo:       acme/core
+priority:   5
+auto-merge: false
+
+x
+01:43:52.834345 grain api: refused {agent, external:alice-cli on behalf of alice@example.com} GET /api/config: external:alice-cli holds no api grant for scope settings:read, which GET /api/config needs
+01:43:52.839762 grain api: {agent, external:alice-cli on behalf of alice@example.com} GET /api/tasks scope=tasks:read repo="acme/core" reason="" -> 200
+01:43:52.841661 [item3-owner-proposer] PASS: 3k grain list -owner me as Alice lists her proposal only -- err=<nil> out=4      proposed        acme/core                Alice agent follow-up
+01:43:52.868382 grain api: refused {agent, external:bob-cli on behalf of bob@example.com} GET /api/config: external:bob-cli holds no api grant for scope settings:read, which GET /api/config needs
+01:43:52.873229 grain api: {agent, external:bob-cli on behalf of bob@example.com} GET /api/tasks scope=tasks:read repo="acme/core" reason="" -> 200
+01:43:52.875175 [item3-owner-proposer] PASS: 3l grain list -owner me as Bob is empty after the second transfer -- err=<nil> out=
+01:43:52.908666 [item3-owner-proposer] PASS: 3m grain show names the owner -- err=<nil> out=2 Alice task
+state:      awaiting_reply
+owner:      carol@example.com
+repo:       acme/core
+priority:   5
+auto-merge: false
+
+x
+filed by:        external agent alice-cli for alice@example.com
+
+history:
+  -> proposed        2026-11-08T01:43:52Z by external agent alice-cli for alice@example.com
+  -> queued          2026-11-08T01:43:52Z
+  -> running         2026-11-08T01:43:52Z
+  -> awaiting_reply  2026-11-08T01:43:52Z
+  -> owner_changed   2026-11-08T01:43:52Z by operator (access code) (alice@example.com -> bob@example.com); owner changed from alice@example.com to bob@example.com
+  -> owner_change [clipped]
+01:43:52.909468 [item3-owner-proposer] PASS: 3n both transfers audited as owner transitions -- [owner_changed by operator (access code): alice@example.com -> bob@example.com owner_changed by operator (access code): bob@example.com -> carol@example.com]
+01:43:52.910976 grain api: refused {agent, external:alice-cli on behalf of alice@example.com} PATCH /api/tasks/{id}: an agent cannot set or transfer task ownership
+01:43:53.017002 grain ui: settings saved by the access code: changed PollInterval, MaxWorkers, MaxMergers, MaxMergesPerRepo, MergeBatchSize, MergeGatherWindow, MaxCIJobs, GitHubHost, SandboxCPUOvercommit, SandboxMemoryOvercommit, SandboxDiskOvercommit, SandboxMemoryReserveMB, SandboxDiskFloorShare, SandboxDiskFloorMinMB, PackageCacheEnabled, ActionsCacheEnabled, DefaultFilters, ApprovedByDefault, AutoMergeByDefault, MaxAutoSubmitDepth, MaxAutoSubmitFanOut, TaskBranchTemplate, UpgradeCheckMode, K8sPriorityClassInteractive, K8sPriorityClassAgent, K8sPriorityClassCI, ExternalAgentAPI, SessionSandboxIdleTTL
+01:43:53.017264 grain api: operator (access code) (access-code) changed settings: PUT /api/settings
+01:43:53.054979 orchestrator: filed external PR review task 1 (trusted=true) for acme/widgets#41
+01:43:53.057002 [item4-pr-adoption-human-review] PASS: 4a grain pr review files a review of the external PR -- err=<nil> out=task 1: review of acme/widgets#41 (queued)
+01:43:53.088759 orchestrator: adopted acme/widgets#41 as task 2 (mode=review-only, approved=true)
+01:43:53.104864 orchestrator: filed external PR review task 3 (trusted=true) for acme/widgets#41
+01:43:53.111531 orchestrator: filed external PR review task 4 (trusted=true) for acme/widgets#41
+01:43:53.115102 [item4-pr-adoption-human-review] PASS: 4b grain pr adopt (default review-only) files a shepherd -- err=<nil> out=task 2 adopted acme/widgets#41
+state: queued
+mode:  review-only
+01:43:53.118890 orchestrator: filed task 5 for the director console session
+01:43:53.171426 [item4-pr-adoption-human-review] PASS: 4c review-only: no pushes to the PR branch, no merge, main untouched -- head=72458d331540 (was 72458d331540) main=8e9b5cf180a2 (was 8e9b5cf180a2) merged=false state=open
+01:43:53.205887 [item4-pr-adoption-human-review] PASS: 4d grain pr status reports the shepherd and review-only mode -- err=<nil> out=acme/widgets#41 (open)
+head:        72458d331540ecf61d59af3045e3f4a2d30e4493
+shepherd:    task 2, review-only, queued
+ci:          no grain CI run
+merge queue: held: review
+reviews:
+  task 3  code      pending   0 findings, 0 unresolved threads
+  task 4  security  pending   0 findings, 0 unresolved threads
+  task 1  code      pending   0 findings, 0 unresolved threads
+01:43:53.206516 grain external-agent: operator (access code) (access-code) issued credential id=1 name="widgets-writer" owner="dana@example.com" scopeSet="" scopes=[tasks:read tasks:write repos:read merge:write] repos=[acme/widgets]
+01:43:53.209319 grain api: {agent, external:widgets-writer on behalf of dana@example.com} POST /api/pull-requests/adopt scope=merge:write repo="acme/widgets" reason="" -> 403
+01:43:53.209568 [item4-pr-adoption-human-review] PASS: 4e upgrade to finish refused for a tasks:write token -- HTTP 403 {"error":"pull request request forbidden: upgrading approved shepherd 2 of acme/widgets#41 to finish needs an approved request (a person, or tasks:admin on acme/widgets)"}
+01:43:53.254185 [item4-pr-adoption-human-review] PASS: 4f operator upgrades review-only -> finish with grain pr adopt -- err=<nil> out=task 2 upgraded acme/widgets#41
+state: queued
+mode:  finish
+01:43:53.286524 orchestrator: filed task 7 for the director console session
+01:43:53.582870 [item4-pr-adoption-human-review] PASS: 4g review run's request_human_review raises a hold on #500 -- HTTP 200 {"task":"6","added":true,"reasons":[{"source":"requested","category":"security","reason":"Adds an unauthenticated cache endpoint","reviewTask":"9501","at":"2026-11-08T01:43:53Z"}]}
+01:43:53.699796 [item4-pr-adoption-human-review] PASS: 4h green checks + auto_merge still held for a person -- PR #9001 merged=false state=open
+01:43:53.706127 [item4-pr-adoption-human-review] PASS: 4i Task detail payload carries humanReviewHold with the category and reason -- state=awaiting_submit hold=[{"at":"2026-11-08T01:43:53Z","category":"security","reason":"Adds an unauthenticated cache endpoint","reviewTask":"9501","source":"requested"}]
+01:43:53.709729 [item4-pr-adoption-human-review] PASS: 4j task list payload carries the hold (humanReview filter / list badge) -- list mentions humanReviewHold=true
+01:43:53.777471 [item4-pr-adoption-human-review] PASS: 4k grain show names the hold -- out=6 feat: add widget cache
+state:      awaiting_submit
+owner:      operator@example.com
+repo:       acme/widgets
+priority:   5
+auto-merge: false
+pull request: acme/widgets#9001
+
+cache
+filed by:        operator (access code)
+
+history:
+  -> human_review_requested 2026-11-08T01:43:53Z by task 9501 (Adds an unauthenticated cache endpoint); category security; review task 9501
+  -> proposed        2026-11-08T01:43:53Z by operator (access code)
+  -> queued          2026-11-08T01:43:53Z
+  -> auto_merge_off  2026-11-08T01:43:53Z by task 9501 (held for a person's review); ui.(*Client).RequestHumanReview ( [clipped]
+01:43:53.778643 [item4-pr-adoption-human-review] PASS: 4l Inbox lists the held task for a person -- inbox={"items":[{"kind":"question","task":"7","title":"Director","summary":"I'm here.","path":"/tasks/7"},{"kind":"merge-held","task":"6","title":"feat: add widget cache","repo":"acme/widgets","path":"/tasks/6","pr":"acme/widgets#9001","reason":"held for a person's review: Adds an unauthenticated cache endpoint"}]}
+01:43:53.780691 grain api: {agent, external:widgets-writer on behalf of dana@example.com} POST /api/tasks/{id}/human-review/release scope=tasks:write repo="acme/widgets" reason="" -> 403
+01:43:53.781151 [item4-pr-adoption-human-review] PASS: 4m external agent token cannot release the hold -- HTTP 403 {"error":"an agent cannot release a human-review hold: only a person's Submit or Release does"}
+01:43:53.784933 [item4-pr-adoption-human-review] PASS: 4n operator releases the hold -- HTTP 200 {"task":"6","reasons":[]}
+01:43:53.926095 [item4-pr-adoption-human-review] PASS: 4o released hold lets auto-merge land -- PR #9001 merged=true state=closed
+01:43:53.928439 all checks passed

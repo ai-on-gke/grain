@@ -40,6 +40,7 @@ package staterepo
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -283,6 +284,10 @@ func referencedGCPAccountNames(cat *model.CapabilityCatalogue) []string {
 // secrets held by reference, scope sets that resolve, and everything the
 // catalogue checks of itself (model.CapabilityCatalogue.Validate).
 func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServerIDs map[string]bool) (*model.CapabilityCatalogue, error) {
+	return d.validateDoc(configuredSets, gcpServerIDs, true)
+}
+
+func (d *capabilitiesDoc) validateDoc(configuredSets []string, gcpServerIDs map[string]bool, checkDefaults bool) (*model.CapabilityCatalogue, error) {
 	var errs []string
 	if d.Servers != nil {
 		for i, s := range *d.Servers {
@@ -323,7 +328,13 @@ func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServer
 	// warning so check passes before the next export rewrites them.
 	stripRetiredAdmissionFromCatalogue(cat)
 	stripRetiredHostingFromCatalogue(cat)
-	if err := cat.Validate(); err != nil {
+	toValidate := cat
+	if !checkDefaults && cat != nil {
+		cp := *cat
+		cp.Defaults = model.CatalogueDefaults{}
+		toValidate = &cp
+	}
+	if err := toValidate.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
 	if len(errs) > 0 {
@@ -844,6 +855,65 @@ const capabilitiesHeader = `# grain's capability catalogue (design/design/config
 // is consistent with itself, and admits every grant a template or a
 // schedule in this dump carries.
 func checkCapabilities(dir string) error {
+	return checkCapabilitiesDir(dir, true)
+}
+
+// checkCapabilitiesBeforeMigration validates settings/capabilities.yml's syntax,
+// secret references, server definitions, scope sets and restriction blocks
+// before Import runs ApplyDataMigrations on an older-schema dump. Defaults,
+// template grants and schedule grants are checked after Import via
+// checkMigratedCapabilities so data migrations (such as 121 and 128) can rewrite
+// or drop pre-upgrade grants first.
+func checkCapabilitiesBeforeMigration(dir string) error {
+	return checkCapabilitiesDir(dir, false)
+}
+
+// checkMigratedCapabilities exports db's migrated configuration to a temporary
+// directory and runs checkCapabilities on it, ensuring an upgraded dump produces
+// a state repository that passes grain state check.
+func checkMigratedCapabilities(ctx context.Context, db *sql.DB, scratch string) error {
+	rows, err := db.QueryContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `capability_policy` != ''")
+	if err != nil {
+		return fmt.Errorf("staterepo: reading migrated capability_policy: %w", err)
+	}
+	hasCatalogue := false
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			rows.Close()
+			return fmt.Errorf("staterepo: scanning migrated capability_policy: %w", err)
+		}
+		if pol, err := model.DecodeCapabilityPolicy(raw); err == nil && pol.Catalogue != nil {
+			hasCatalogue = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("staterepo: iterating migrated capability_policy: %w", err)
+	}
+	rows.Close()
+	if !hasCatalogue {
+		return nil
+	}
+	base := ""
+	if scratch != "" {
+		if err := os.MkdirAll(scratch, 0o700); err == nil {
+			base = scratch
+		}
+	}
+	postDir, err := os.MkdirTemp(base, "grain-migrated-caps-*")
+	if err != nil {
+		return fmt.Errorf("staterepo: preparing migrated capability check dir: %w", err)
+	}
+	defer os.RemoveAll(postDir)
+	if err := ExportConfig(ctx, db, postDir); err != nil {
+		return err
+	}
+	return checkCapabilities(postDir)
+}
+
+func checkCapabilitiesDir(dir string, checkGrants bool) error {
 	doc, err := readCapabilitiesDoc(dir)
 	if err != nil || doc == nil {
 		return err
@@ -881,8 +951,8 @@ func checkCapabilities(dir string) error {
 	if !hasExplicitSets && len(configuredSets) == 0 {
 		configuredSets = referencedGCPAccountNames(doc.catalogue(nil))
 	}
-	cat, err := doc.validateWithGCPSets(configuredSets, serverIDs)
-	if err != nil {
+	cat, err := doc.validateDoc(configuredSets, serverIDs, checkGrants)
+	if err != nil || !checkGrants {
 		return err
 	}
 	var errs []string
@@ -906,7 +976,7 @@ func checkCapabilities(dir string) error {
 			id := fmt.Sprint(g[kind.parent])
 			owner := byID[id]
 			capability, _ := textOf(g["capability"])
-			if rewritten, changed, missing := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed && missing == "" {
+			if rewritten, changed, _ := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed {
 				capability = rewritten
 			}
 			gc := model.GrantContext{Kind: model.CatalogueKindTask, Grants: []string{capability}}

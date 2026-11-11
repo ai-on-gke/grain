@@ -17,10 +17,17 @@ import { Alert, Box, Button, Link } from "@mui/material";
 import api from "../../api.js";
 import { AlertsPanel } from "../AlertsButton.jsx";
 import { InstallNoticeAlert } from "../InstallNotice.jsx";
-import { SandboxOvercommitStatus } from "../SandboxHealthPage.jsx";
+import {
+  SandboxOvercommitStatus,
+  TargetRepoHostAlerts,
+} from "../SandboxHealthPage.jsx";
+import { targetRepoHostMismatches } from "../RepoList.jsx";
 import UnbackedStateDot, { stateDot } from "../UnbackedStateDot.jsx";
 import GitHubBudgetPanel from "./GitHubBudgetPanel.jsx";
 import HealthCountersPanel from "./HealthCountersPanel.jsx";
+import StaleSchedulesAlert, {
+  useStaleSchedules,
+} from "../StaleSchedulesAlert.jsx";
 import { HostdHealthNote } from "../HostdMissingNote.jsx";
 import { settingLabel, settingLocation } from "../../settingsPlan.js";
 
@@ -46,6 +53,9 @@ export default function HealthTab({
   // grain hostd's state (daemon.HostExecutorStatus), for a deployment
   // beside it: unreachable, or missing some of grain's own entries.
   const [hostExecutor, setHostExecutor] = useState(null);
+  const [reach, setReach] = useState(null);
+  const staleSchedules = useStaleSchedules();
+  const hasTargets = (config?.targetRepos || []).length > 0;
   useEffect(() => {
     let live = true;
     api("/api/settings")
@@ -54,10 +64,20 @@ export default function HealthTab({
     api("/api/settings/cli-run")
       .then((r) => live && setHostExecutor(r?.hostExecutor || null))
       .catch(() => {});
+    if (hasTargets) {
+      api("/api/deployment/reachable-repos")
+        .then((r) => live && setReach(r))
+        .catch(() => {});
+    }
     return () => {
       live = false;
     };
-  }, []);
+  }, [hasTargets]);
+  const hostMismatches = targetRepoHostMismatches(
+    reach,
+    config?.targetRepos,
+    config?.githubHost,
+  );
   const pending = settings?.pendingRestart || [];
   const unrunnable = settings?.unrunnable || [];
   const settingLink = (key) => {
@@ -92,6 +112,8 @@ export default function HealthTab({
         testId="health-install-notice"
       />
       <HostdHealthNote hostExecutor={hostExecutor} />
+      <StaleSchedulesAlert schedules={staleSchedules} />
+      <TargetRepoHostAlerts warnings={hostMismatches} />
       {stateDot(config) && (
         <Alert
           severity="warning"
@@ -107,8 +129,8 @@ export default function HealthTab({
             </Button>
           }
         >
-          <UnbackedStateDot config={config} /> A merged change reset settings on
-          this deployment.
+          <UnbackedStateDot decorative sx={{ mr: 0.75 }} /> A merged change
+          reset settings on this deployment.
         </Alert>
       )}
       {pending.length > 0 && (

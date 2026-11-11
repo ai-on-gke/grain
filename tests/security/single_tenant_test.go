@@ -30,6 +30,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -77,11 +78,14 @@ func accessHeader(code string) http.Header {
 	return h
 }
 
+// accessSessionName is who accessSession signs in as.
+const accessSessionName = "owner@example.com"
+
 // accessSession signs in to srv's "Enter access code" page from from
 // with code and returns the access session cookie it hands back.
 func accessSession(t *testing.T, srv http.Handler, from, code string) string {
 	t.Helper()
-	rec := serveForm(srv, from, "/api/auth/access-code", url.Values{"code": {code}}, nil)
+	rec := serveForm(srv, from, "/api/auth/access-code", url.Values{"code": {code}, "name": {accessSessionName}}, nil)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("signing in with the access code from %s: %d, want 303: %s", from, rec.Code, rec.Body.String())
 	}
@@ -205,7 +209,7 @@ func TestASingleTenantDaemonTrustsNoNetwork(t *testing.T) {
 
 func TestASingleTenantDaemonsAccessCookieIsTightlyScoped(t *testing.T) {
 	srv := singleTenantFixture(t)
-	rec := serveForm(srv, publicAddr, "/api/auth/access-code", url.Values{"code": {testAccessCode}}, http.Header{"X-Forwarded-Proto": {"https"}})
+	rec := serveForm(srv, publicAddr, "/api/auth/access-code", url.Values{"code": {testAccessCode}, "name": {"owner@example.com"}}, http.Header{"X-Forwarded-Proto": {"https"}})
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("signing in: %d %s", rec.Code, rec.Body.String())
 	}
@@ -237,7 +241,7 @@ func TestASingleTenantDaemonRateLimitsWrongAccessCodes(t *testing.T) {
 	srv := singleTenantFixture(t)
 	limited := false
 	for i := 0; i < 50 && !limited; i++ {
-		rec := serveForm(srv, publicAddr, "/api/auth/access-code", url.Values{"code": {wrongAccessCode}}, nil)
+		rec := serveForm(srv, publicAddr, "/api/auth/access-code", url.Values{"code": {wrongAccessCode}, "name": {"owner@example.com"}}, nil)
 		switch rec.Code {
 		case http.StatusUnauthorized:
 		case http.StatusTooManyRequests:
@@ -249,7 +253,7 @@ func TestASingleTenantDaemonRateLimitsWrongAccessCodes(t *testing.T) {
 	if !limited {
 		t.Fatal("50 wrong access codes from one source were never rate-limited")
 	}
-	if rec := serveForm(srv, publicAddr, "/api/auth/access-code", url.Values{"code": {testAccessCode}}, nil); rec.Code != http.StatusTooManyRequests {
+	if rec := serveForm(srv, publicAddr, "/api/auth/access-code", url.Values{"code": {testAccessCode}, "name": {"owner@example.com"}}, nil); rec.Code != http.StatusTooManyRequests {
 		t.Errorf("the right code from a source over its limit: %d, want the same 429 a wrong one gets", rec.Code)
 	}
 	if rec := serveFrom(srv, publicAddr, http.MethodGet, "/api/tasks", "", accessHeader(testAccessCode)); rec.Code != http.StatusTooManyRequests {
@@ -289,7 +293,7 @@ func TestASingleTenantDaemonsOwnerIsNotLockedOutByGuesses(t *testing.T) {
 		from := fmt.Sprintf("192.0.2.%d:4242", i+1) // TEST-NET-1
 		for j := 0; j < 10; j++ {
 			serveFrom(srv, from, http.MethodGet, "/api/tasks", "", accessHeader(wrongAccessCode))
-			serveForm(srv, from, "/api/auth/access-code", url.Values{"code": {wrongAccessCode}}, nil)
+			serveForm(srv, from, "/api/auth/access-code", url.Values{"code": {wrongAccessCode}, "name": {"owner@example.com"}}, nil)
 		}
 	}
 	if rec := serveFrom(srv, "192.0.2.1:4242", http.MethodGet, "/api/tasks", "", accessHeader(wrongAccessCode)); rec.Code != http.StatusTooManyRequests {
@@ -300,7 +304,7 @@ func TestASingleTenantDaemonsOwnerIsNotLockedOutByGuesses(t *testing.T) {
 		if rec := serveFrom(srv, from, http.MethodGet, "/api/tasks", "", accessHeader(testAccessCode)); rec.Code != http.StatusOK {
 			t.Errorf("the right bearer code from %s with the global limit spent: %d, want 200: %s", from, rec.Code, rec.Body.String())
 		}
-		rec := serveForm(srv, from, "/api/auth/access-code", url.Values{"code": {testAccessCode}}, nil)
+		rec := serveForm(srv, from, "/api/auth/access-code", url.Values{"code": {testAccessCode}, "name": {"owner@example.com"}}, nil)
 		if rec.Code != http.StatusSeeOther {
 			t.Errorf("signing in with the right code from %s with the global limit spent: %d, want 303: %s", from, rec.Code, rec.Body.String())
 		}
@@ -330,7 +334,7 @@ func TestASingleTenantDaemonNeverLimitsTheRightCodeFromLoopback(t *testing.T) {
 	if rec := serveFrom(srv, loopbackAddr, http.MethodGet, "/api/tasks", "", accessHeader(testAccessCode)); rec.Code != http.StatusOK {
 		t.Errorf("the right bearer code from loopback over its limit: %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if rec := serveForm(srv, loopbackAddr, "/api/auth/access-code", url.Values{"code": {testAccessCode}}, nil); rec.Code != http.StatusSeeOther {
+	if rec := serveForm(srv, loopbackAddr, "/api/auth/access-code", url.Values{"code": {testAccessCode}, "name": {"owner@example.com"}}, nil); rec.Code != http.StatusSeeOther {
 		t.Errorf("signing in with the right code from loopback over its limit: %d, want 303: %s", rec.Code, rec.Body.String())
 	}
 	proxied := accessHeader(testAccessCode)
@@ -601,8 +605,11 @@ func TestASingleTenantDaemonAttributesToItsOwnActor(t *testing.T) {
 	if err != nil || len(comments) == 0 {
 		t.Fatalf("reading the comment back: %v, %d comments", err, len(comments))
 	}
-	if by := comments[len(comments)-1].Author.Actor; by.ID != "operator" {
-		t.Errorf("a comment from loopback with %s's session was attributed to %+v, want the daemon's own actor", memberUser, by)
+	// The fixture's access session was signed in as owner@example.com
+	// (accessSession), so the comment is theirs, through the code -- never
+	// the member an old session or the body names.
+	if by := comments[len(comments)-1].Author.Actor; by.ID != ui.AccessCodeActorPrefix+accessSessionName || by.Source != model.SourceAccessCode {
+		t.Errorf("a comment from loopback with %s's session was attributed to %+v, want the access session's own name", memberUser, by)
 	}
 
 }
@@ -678,6 +685,7 @@ var singleTenantOpenRoutes = map[string]string{
 	"POST /api/hostd/renew":              "a connected host renewing its 30-day key-bound credential",
 	"GET /api/hostd/install.sh":          "the script that installs a grain hostd, which holds no secret",
 	"GET /hostd/install":                 "the short URL for the host install script, which holds no secret",
+	"GET /cli/install.sh":                "the script that installs the grain CLI on a workstation, which holds no secret (external-cli.spec.md#XC-32)",
 }
 
 // singleTenantGatedPublicRoutes are the public routes a single-tenant

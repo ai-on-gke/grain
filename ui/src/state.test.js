@@ -59,6 +59,7 @@ import {
   issueUrl,
   relativeAge,
   repoActivity,
+  repoPageRow,
   repoRows,
   repoTargetable,
   repoTasks,
@@ -451,6 +452,12 @@ describe("internalPullRequestUrl", () => {
     expect(
       internalPullRequestUrl("acme/widgets", "grain/task-12", "release/v1"),
     ).toBe("/repos/acme/widgets/compare/release/v1...grain/task-12");
+  });
+
+  it("escapes what a branch name can carry and a path cannot", () => {
+    expect(internalPullRequestUrl("acme/widgets", "fix/#123", "main")).toBe(
+      "/repos/acme/widgets/compare/main...fix/%23123",
+    );
   });
 });
 
@@ -979,6 +986,26 @@ describe("lastBaseForRepo", () => {
     expect(lastBaseForRepo(tasks, "acme/widgets")).toBe("");
   });
 
+  it("looks past a stacked review or repair whatever its author", () => {
+    const tasks = [
+      {
+        repo: "acme/widgets",
+        base: "release/1",
+        createdAt: "2026-08-01T00:00:00Z",
+        authorKind: "human",
+      },
+      {
+        repo: "acme/widgets",
+        base: "grain/task-30",
+        createdAt: "2026-08-02T00:00:00Z",
+        authorKind: "human",
+        stacked: true,
+        review: true,
+      },
+    ];
+    expect(lastBaseForRepo(tasks, "acme/widgets")).toBe("release/1");
+  });
+
   it("still suggests a task carrying no authorKind at all", () => {
     const tasks = [
       {
@@ -1423,6 +1450,47 @@ describe("repoRows", () => {
 });
 
 // The dot the repos list draws ahead of a repo's name (grain/task-327).
+describe("repoPageRow", () => {
+  // docs/test-runs/2026-11-07-repository-release-memory-ui.md,
+  // observation 2: a repo removed from a restricted deployment's
+  // targetRepos leaves the Repos list (repoRows' rule), but its own page
+  // still counts the work filed against it rather than reading "0 tasks
+  // filed here" over a queued task.
+  it("counts the tasks still targeting a repo that is off the list", () => {
+    const config = { targetRepos: ["acme/widgets"] };
+    const tasks = [
+      { repo: "acme/gadgets", state: "queued", blocked: false },
+      { repo: "Acme/Gadgets", state: "running", blocked: true },
+      { repo: "acme/gadgets", state: "queued", consoleSession: "director" },
+      { repo: "acme/widgets", state: "queued", blocked: false },
+    ];
+    expect(repoRows(config, tasks).map((r) => r.repo)).toEqual([
+      "acme/widgets",
+    ]);
+    expect(repoPageRow(config, tasks, "acme/gadgets")).toEqual({
+      repo: "acme/gadgets",
+      total: 2,
+      counts: { queued: 1, running: 1 },
+      blocked: 1,
+      configured: false,
+      defaults: false,
+      offList: true,
+    });
+  });
+
+  it("is the repo's own repoRows row wherever it has one", () => {
+    const config = { targetRepos: ["acme/widgets"] };
+    const tasks = [{ repo: "acme/widgets", state: "queued", blocked: false }];
+    expect(repoPageRow(config, tasks, "Acme/Widgets")).toEqual(
+      repoRows(config, tasks)[0],
+    );
+  });
+
+  it("says nothing is off the list on an unrestricted deployment", () => {
+    expect(repoPageRow({}, [], "acme/gadgets").offList).toBe(false);
+  });
+});
+
 describe("repoActivity", () => {
   const row = (counts) => ({
     repo: "acme/widgets",
@@ -2874,6 +2942,24 @@ describe("askedCase", () => {
       title: "Asked you to submit acme/widgets#12",
       action: "submit",
     });
+  });
+
+  // Task 3803: a person's question no run has been shown is waiting on an
+  // agent, not on the owner's Reply.
+  it("names a person's undelivered comment ahead of a plain answer", () => {
+    const t = {
+      state: "awaiting_reply",
+      unansweredCommentFrom: "atyburcy@example.com",
+    };
+    expect(askedCase(t)).toEqual({
+      kind: "unanswered",
+      title: "Unanswered question from atyburcy@example.com",
+      action: "reply",
+    });
+    expect(stateTitle(t)).toBe("Unanswered question from atyburcy@example.com");
+    expect(baseRepairWaitReason(t)).toBe(
+      "unanswered question from atyburcy@example.com",
+    );
   });
 
   it("distinguishes a parked question from an answered report in baseRepairWaitReason", () => {

@@ -1,0 +1,3 @@
+user:alice@example.com	grain/viewer	added by the access code	2026-11-08T03:23:48Z	alice reads
+group:devs@example.com	grain/contributor	added by the access code	2026-11-08T03:23:48Z	devs file tasks
+user:vic@example.com	grain/viewer	added by the access code	2026-11-08T03:23:48Z	vic reads

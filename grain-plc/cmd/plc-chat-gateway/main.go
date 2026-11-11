@@ -31,6 +31,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -62,6 +63,10 @@ type Gateway struct {
 	mu           sync.RWMutex
 	refBindings  map[string]chatBinding
 	taskBindings map[string]chatBinding
+
+	// lastEventID is the newest GET /api/events id WatchSSE has handled,
+	// so a reconnect resumes after it rather than replaying the stream.
+	lastEventID atomic.Int64
 }
 
 // NewGateway creates a new Gateway backed by client.
@@ -285,8 +290,32 @@ func (g *Gateway) WatchSSE(ctx context.Context, since int64) error {
 		return err
 	}
 	return inst.StreamEvents(ctx, grainclient.EventsFilter{Since: since}, func(ev grainclient.IntegrationEvent) error {
+		if ev.ID > g.lastEventID.Load() {
+			g.lastEventID.Store(ev.ID)
+		}
 		return g.ForwardEvent(ctx, ev)
 	})
+}
+
+// watchSSEForever keeps WatchSSE connected: a stream that could not open
+// (a refused token, a daemon not up yet) or that ended is reported on
+// stderr and retried, resuming after the last event handled. Before this
+// the gateway dropped WatchSSE's error and never retried, so a gateway
+// started before its daemon, or with a token the daemon refused, silently
+// consumed nothing.
+func (g *Gateway) watchSSEForever(ctx context.Context, stderr io.Writer, retry time.Duration) {
+	for ctx.Err() == nil {
+		err := g.WatchSSE(ctx, g.lastEventID.Load())
+		if ctx.Err() != nil {
+			return
+		}
+		fmt.Fprintf(stderr, "plc-chat-gateway: GET /api/events stream ended (%v); reconnecting in %s\n", err, retry)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retry):
+		}
+	}
 }
 
 func writeChatError(w http.ResponseWriter, status int, code, msg string) {
@@ -309,6 +338,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	listenAddr := fs.String("listen", envOrDefault("PLC_CHAT_GATEWAY_LISTEN", ":4286"), "HTTP listen address")
 	registryURL := fs.String("registry-url", os.Getenv("GRAIN_REGISTRY_URL"), "Grain Registry base URL")
 	grainURL := fs.String("grain-url", os.Getenv("GRAIN_URL"), "Default Grain daemon base URL")
+	grainToken := fs.String("grain-token", os.Getenv("GRAIN_TOKEN"), "Bearer token sent to the -grain-url daemon only (an access code or an external-agent token; $GRAIN_TOKEN)")
 	webhookSecret := fs.String("webhook-secret", os.Getenv("PLC_CHAT_WEBHOOK_SECRET"), "Shared secret for HMAC chat webhook verification")
 	defaultSpace := fs.String("default-space", os.Getenv("PLC_CHAT_DEFAULT_SPACE"), "Default chat space ID for outbound events")
 	watchSSE := fs.Bool("watch-sse", false, "Subscribe to GET /api/events SSE on startup")
@@ -325,15 +355,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	client := grainclient.New(grainclient.Config{
 		RegistryURL: *registryURL,
 		GrainURL:    *grainURL,
+		GrainToken:  *grainToken,
 		ClientName:  grainclient.ClientPLCChatGateway,
 		Perf:        recorder,
 	})
 	gw := NewGateway(client, recorder, *defaultSpace)
 
 	if *watchSSE {
-		go func() {
-			_ = gw.WatchSSE(ctx, 0)
-		}()
+		go gw.watchSSEForever(ctx, stderr, 5*time.Second)
 	}
 
 	ln, err := net.Listen("tcp", *listenAddr)

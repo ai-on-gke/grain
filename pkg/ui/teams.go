@@ -179,7 +179,12 @@ func (c *Client) populateTeamReposFrom(ctx context.Context, src *teamRepoSources
 			team.ConfigRepo = c.Config.StateRepoRef().String()
 		}
 		if team.ConfigRepo == "" {
-			team.ConfigRepo = remote
+			// owner/name, the form every other ConfigRepo is in and the
+			// one the repos pane compares repository names against -- not
+			// the remote URL, which matched no repository and let the
+			// config repo's own page offer Remove (2026-11-08
+			// walkthrough, task 3613).
+			team.ConfigRepo = repoSlugFromRemote(remote)
 		}
 		team.ConfigCloneURL = remote
 		team.CloneCommand = "git clone " + remote
@@ -603,22 +608,23 @@ type DeploymentRepoConfigResponse struct {
 // /api/deployment/repos/{owner}/{name}/config changes on the repository's
 // repo_config row. A field left out keeps what the row holds.
 type SetDeploymentRepoConfigRequest struct {
-	SetupCommand                 *string   `json:"setupCommand,omitempty"`
-	PromptExtension              *string   `json:"promptExtension,omitempty"`
-	DefaultCapabilities          *[]string `json:"defaultCapabilities,omitempty"`
-	DefaultAdmission             *string   `json:"defaultAdmission,omitempty"`
-	DefaultHosting               *string   `json:"defaultHosting,omitempty"`
-	CICapabilities               *[]string `json:"ciCapabilities,omitempty"`
-	CIMode                       *string   `json:"ciMode,omitempty"`
-	RepairTemplateID             *string   `json:"repairTemplateId,omitempty"`
-	CloneURL                     *string   `json:"cloneUrl,omitempty"`
-	GitCredential                *string   `json:"gitCredential,omitempty"`
-	RequireBranchUpToDate        *bool     `json:"requireBranchUpToDate,omitempty"`
-	WatchDefaultBranch           *bool     `json:"watchDefaultBranch,omitempty"`
-	MergeOnGreen                 *bool     `json:"mergeOnGreen,omitempty"`
-	BaseRepairBypassesHumanGates *bool     `json:"baseRepairBypassesHumanGates,omitempty"`
-	ReleaseSecrets               *[]string `json:"releaseSecrets,omitempty"`
-	User                         string    `json:"user,omitempty"`
+	SetupCommand                 *string             `json:"setupCommand,omitempty"`
+	PromptExtension              *string             `json:"promptExtension,omitempty"`
+	Skills                       *model.SkillsConfig `json:"skills,omitempty"`
+	DefaultCapabilities          *[]string           `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission             *string             `json:"defaultAdmission,omitempty"`
+	DefaultHosting               *string             `json:"defaultHosting,omitempty"`
+	CICapabilities               *[]string           `json:"ciCapabilities,omitempty"`
+	CIMode                       *string             `json:"ciMode,omitempty"`
+	RepairTemplateID             *string             `json:"repairTemplateId,omitempty"`
+	CloneURL                     *string             `json:"cloneUrl,omitempty"`
+	GitCredential                *string             `json:"gitCredential,omitempty"`
+	RequireBranchUpToDate        *bool               `json:"requireBranchUpToDate,omitempty"`
+	WatchDefaultBranch           *bool               `json:"watchDefaultBranch,omitempty"`
+	MergeOnGreen                 *bool               `json:"mergeOnGreen,omitempty"`
+	BaseRepairBypassesHumanGates *bool               `json:"baseRepairBypassesHumanGates,omitempty"`
+	ReleaseSecrets               *[]string           `json:"releaseSecrets,omitempty"`
+	User                         string              `json:"user,omitempty"`
 }
 
 // existingTeam is the deployment in the team shape when id names the
@@ -718,6 +724,13 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 	if req.PromptExtension != nil {
 		cfg.PromptExtension = strings.TrimSpace(*req.PromptExtension)
 	}
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return DeploymentRepoConfigResponse{}, validationErrorf("skills: %v", err)
+		}
+		cfg.Skills = norm
+	}
 	if req.DefaultAdmission != nil {
 		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
 		if err != nil {
@@ -789,9 +802,9 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 			if t != "" && !seen[t] {
 				canonicalID := t
 				if _, ok := model.CIGrantRuleFor(t); ok {
-					// The release server's methods, in either spelling
+					// Methods declaring a CI grant rule, in any spelling
 					// (cleanRepoCICapabilities).
-					canonicalID = model.CanonicalLegacyGrant(t)
+					canonicalID = model.CanonicalCIGrant(t)
 				} else if model.IsCapabilityRef(t) || t == "gcp-key" || strings.HasPrefix(t, "gcp-key:") {
 					normalized, err := c.normalizeCapabilityID(t)
 					if err != nil {

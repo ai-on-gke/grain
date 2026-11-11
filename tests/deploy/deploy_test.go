@@ -884,12 +884,53 @@ func TestTheDockerfileCarriesEveryBinaryGrainShellsOutTo(t *testing.T) {
 	// CAP_NET_BIND_SERVICE reaches a non-root process in a container only
 	// through a file capability -- --cap-add alone grants it nothing, so
 	// the default -ui-addr (port 80), and the package cache's 53, 443 and
-	// 80, would all fail to bind without this.
-	contains(t, text, "setcap cap_net_bind_service=+ep /usr/local/bin/grain")
+	// 80, would all fail to bind without this. Set on /src/bin/grain in the
+	// build stage before COPY so the runtime image does not copy up the
+	// grain binary into a second layer.
+	contains(t, text, "setcap cap_net_bind_service=+ep /src/bin/grain")
+	contains(t, text, "COPY --from=build /src/bin/grain /usr/local/bin/grain")
 	// The entrypoint is the binary, so `docker run <image> schema-version`
 	// runs the CLI -- which is how setup.sh's own wrapper and pkg/upgrade's
 	// image health check both invoke it.
 	contains(t, text, `"/usr/local/bin/grain"]`)
+}
+
+func TestTheDaemonImageAvoidsDuplicateCapabilityLayersAndUnusedDefaultCluster(t *testing.T) {
+	code := stripComments(read(t, "Dockerfile"))
+	runtime := code[strings.LastIndex(code, "\nFROM "):]
+
+	// Running setcap on /usr/local/bin/grain after COPY copies the entire
+	// binary into a second OCI layer (~75-105MB duplicated). Keep the setcap
+	// in the build stage before COPY, and setcap /usr/sbin/nft in the single
+	// runtime apt layer.
+	absent(t, runtime, "setcap cap_net_bind_service=+ep /usr/local/bin/grain")
+	if got := strings.Count(runtime, "apt-get install"); got != 2 {
+		t.Errorf("runtime stage runs apt-get install %d times, want 2 (base packages + PGDG postgresql-16 in one RUN)", got)
+	}
+
+	// postgresql-common's postinst otherwise creates a 38MB unused cluster at
+	// /var/lib/postgresql/16/main; embedded clusters initdb under <data-dir>/postgres.
+	contains(t, runtime, "create_main_cluster = false")
+
+	// Go binaries compiled for the daemon image strip DWARF and symbol tables
+	// (-s -w) and build paths (-trimpath) while keeping .gopclntab and .go.buildinfo.
+	makefile := stripComments(read(t, "Makefile"))
+	contains(t, makefile, "$(strip -s -w")
+	contains(t, makefile, " -trimpath ")
+	for _, target := range []string{"/out/granule", "/out/github-webhook", "/out/grain-sandbox"} {
+		found := false
+		for _, line := range strings.Split(code, "\n") {
+			if strings.Contains(line, "go build") && strings.Contains(line, target) {
+				found = true
+				if !strings.Contains(line, "-trimpath") || !strings.Contains(line, "-s -w") {
+					t.Errorf("Dockerfile builds %s without -trimpath and -s -w: %q", target, strings.TrimSpace(line))
+				}
+			}
+		}
+		if !found {
+			t.Errorf("Dockerfile has no go build line for %s", target)
+		}
+	}
 }
 
 // The privileged ports this daemon binds are not only the UI's.
@@ -1055,9 +1096,12 @@ func TestEveryBranchTagSubstitutionMatchesTagForBranch(t *testing.T) {
 // `${{ secrets.* }}` to either would hand a model credential to code no human
 // has read.
 //
-// The trigger is asserted for the same reason: no `push` and no
-// `pull_request`, since those events run code from branches that have not
-// been reviewed.
+// The trigger is asserted for the same reason: no `push`, no
+// `pull_request` and no `pull_request_target`, since those events run
+// code from branches (or forks) that have not been reviewed. And every
+// live job takes its credentials from the `live-models` environment,
+// whose deployment branch rule admits main alone, runs only on main, and
+// holds contents: read and nothing more.
 func TestOnlyDefaultBranchLiveJobsHoldAModelCredential(t *testing.T) {
 	for name, text := range map[string]string{
 		"tests.yml":   testsWorkflow(t),
@@ -1072,13 +1116,14 @@ func TestOnlyDefaultBranchLiveJobsHoldAModelCredential(t *testing.T) {
 	triggers := upTo(t, live, "jobs:")
 	contains(t, triggers, "schedule:")
 	contains(t, triggers, "workflow_dispatch:")
-	for _, forbidden := range []string{"push:", "pull_request:"} {
+	for _, forbidden := range []string{"push:", "pull_request:", "pull_request_target:"} {
 		if strings.Contains(triggers, forbidden) {
 			t.Errorf("live-agent.yml triggers on %s: the model credential it holds would then be readable by any branch", forbidden)
 		}
 	}
 
 	nightly := namedJob(t, live, "live-agy")
+	assertLiveModelsJob(t, "live-agent.yml", nightly)
 	contains(t, nightly, "GRAIN_LIVE_AGENT_TEST")
 	// The whole of tests/e2e's live set, by prefix rather than by name:
 	// a job naming one test is a job that silently stops running the next
@@ -1099,7 +1144,7 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	live := stripComments(liveFrameworksWorkflow(t))
 	contains(t, live, "schedule:")
 	contains(t, live, "workflow_dispatch:")
-	for _, forbidden := range []string{"push:", "pull_request:"} {
+	for _, forbidden := range []string{"push:", "pull_request:", "pull_request_target:"} {
 		if strings.Contains(upTo(t, live, "jobs:"), forbidden) {
 			t.Errorf("live-frameworks.yml triggers on %s: the two credentials it holds would then be readable by any branch, which is what the environments exist to prevent", forbidden)
 		}
@@ -1115,7 +1160,8 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 		{"live-codex", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "./pkg/agent/codex/"},
 	} {
 		text := namedJob(t, live, job.name)
-		contains(t, text, job.secret)
+		assertLiveModelsJob(t, "live-frameworks.yml", text)
+		contains(t, text, "secrets."+job.secret)
 		if strings.Contains(text, job.otherSecret) {
 			t.Errorf("the %s job reads %s as well: a job holding both credentials turns revoking one key into two frameworks losing their nightly", job.name, job.otherSecret)
 		}
@@ -1145,8 +1191,8 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 		t.Error("live-frameworks.yml pins a codex version of its own: it should read ARG CODEX_CLI_VERSION out of the Dockerfile, so bumping the image's codex is also what points this job at it")
 	}
 
-	// And both of codex's credential-free probes run *before* the
-	// credential gate. Neither spends a token, and between them they
+	// And both of codex's credential-free probes run whether or not the
+	// optional credential is there. Neither spends a token, and between them they
 	// measure the two facts about a live codex that this repository
 	// cannot check any other way: that grain's config is one codex loads
 	// (TestLiveCodexLoads...), and that `codex exec resume` still does
@@ -1155,7 +1201,7 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	// nothing at all on a night when no secret has been created -- which,
 	// as this file's own OPENAI_API_KEY assertion above is a reminder,
 	// has been every night so far.
-	free := between(t, codex, "Live codex probes (no credential)", "Require a credential")
+	free := between(t, codex, "Live codex probes (no credential)", "Live codex run")
 	for _, probe := range []string{"TestLiveCodexLoads", "TestLiveCodexResumes"} {
 		contains(t, free, probe)
 	}
@@ -1172,17 +1218,36 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	}
 }
 
+// assertLiveModelsJob holds one live job of name to how a model
+// credential may be held on GitHub Actions: from the live-models
+// environment, on main only, with a read-only token, and failing --
+// never skipping -- when a credential it requires is missing.
+func assertLiveModelsJob(t *testing.T, name, job string) {
+	t.Helper()
+	contains(t, job, "environment: live-models")
+	contains(t, job, "if: github.ref == 'refs/heads/main'")
+	contains(t, job, "permissions:\n      contents: read\n")
+	contains(t, job, "GRAIN_LIVE_AGENT_TEST")
+	if strings.Contains(job, "id-token") {
+		t.Errorf("%s: a live job asks for id-token, which no model credential needs", name)
+	}
+	if strings.Contains(job, "printenv") || strings.Contains(job, "env |") {
+		t.Errorf("%s: a live job prints its environment, which holds a model credential", name)
+	}
+}
+
 // Every workflow that installs an agent CLI at runtime must force IPv4 and
 // retry on transient network errors, matching the Dockerfile builds.
 func TestWorkflowCLIDownloadsForceIPv4AndRetry(t *testing.T) {
-	for _, name := range []string{
-		"live-frameworks.yml",
-		"live-agent.yml",
-		"codex-surface.yml",
-		"claude-surface.yml",
-		"agy-surface.yml",
+	for _, path := range [][]string{
+		{".github", "workflows", "live-frameworks.yml"},
+		{".github", "workflows", "live-agent.yml"},
+		{".grain", "workflows", "codex-surface.yml"},
+		{".grain", "workflows", "claude-surface.yml"},
+		{".grain", "workflows", "agy-surface.yml"},
 	} {
-		content := stripComments(read(t, ".grain", "workflows", name))
+		name := path[len(path)-1]
+		content := stripComments(read(t, path...))
 		for _, line := range strings.Split(content, "\n") {
 			if !strings.Contains(line, "curl ") {
 				continue
@@ -1951,14 +2016,7 @@ func TestTheInstallerNeedsNothingOnTheHostButDockerAndSystemd(t *testing.T) {
 	// optional rather than required -- host_git_version answers nothing
 	// on a host with no git, and the conversion then says what to run
 	// instead -- so it adds nothing to what a host must have.
-	//
-	// And installing from release assets (docs/release-assets.md) is a
-	// download from github.com before any image exists to run one in. It
-	// is optional too: with no curl on the host install_release_assets
-	// falls back to pulling the registry image, and manifest_field reads
-	// images.json with awk where there is no jq.
-	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true,
-		"install_release_assets": true, "manifest_field": true}
+	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true}
 	inHostGit := false
 
 	inImage := false
@@ -2910,6 +2968,11 @@ func TestTheSandboxGuestCanActOnThePowerButton(t *testing.T) {
 // of one is a bump of both, so two builds of one grain commit cannot carry
 // different toolchains (TestBothImagesPinTheSameAgentCLIs has the incident
 // that established it). Only the digests differ.
+//
+// kind and actionlint are built from source in Granulefile's
+// guest_tools_builder rather than downloaded, so their pin is the Go
+// checksum database `go install module@version` consults: nothing may
+// turn it off.
 func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 	for _, file := range []string{"Granulefile", "Granulefile.guest-base"} {
 		code := read(t, file)
@@ -2927,24 +2990,41 @@ func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 			`arm64) sha="${GO_SHA256_ARM64}"`,
 			`amd64) node_arch=x64; sha="${NODE_SHA256_AMD64}"`,
 			`arm64) node_arch=arm64; sha="${NODE_SHA256_ARM64}"`,
-			`amd64) sha="${ACTIONLINT_SHA256_AMD64}"`,
-			`arm64) sha="${ACTIONLINT_SHA256_ARM64}"`,
+			`amd64) act_arch=x86_64; sha="${ACT_SHA256_AMD64}"`,
+			`arm64) act_arch=arm64; sha="${ACT_SHA256_ARM64}"`,
+			// npm's tarball and pip's wheel are one file for every
+			// architecture, so each has one pin, and it is checked.
+			`echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c -`,
+			`echo "${PIP_SHA256}  /tmp/pip-${PIP_VERSION}-py3-none-any.whl" | sha256sum -c -`,
 			// An architecture with no pin stops the build rather than
 			// installing a toolchain nobody checked. This is the branch no
 			// build on either architecture ever takes, so it is the one
 			// worth asserting.
 			`no pinned go checksum for $arch`,
 			`no pinned node checksum for $arch`,
-			`no pinned actionlint checksum for $arch`,
+			`no pinned act checksum for $arch`,
 			`| sha256sum -c -`,
 		} {
 			if !strings.Contains(code, want) {
 				t.Errorf("%s does not contain %s", file, want)
 			}
 		}
+		for _, want := range []string{
+			`go install -trimpath "sigs.k8s.io/kind@${KIND_VERSION}"`,
+			`go install -trimpath "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"`,
+		} {
+			if !strings.Contains(code, want) {
+				t.Errorf("%s does not contain %s", file, want)
+			}
+		}
+		for _, gone := range []string{"GOSUMDB=off", "GONOSUMDB", "GONOSUMCHECK", "GOINSECURE", "GOFLAGS=-insecure"} {
+			if strings.Contains(code, gone) {
+				t.Errorf("%s turns off Go's checksum database with %s", file, gone)
+			}
+		}
 		// And no single-architecture pin survives, which is what a careless
 		// revert would reintroduce.
-		for _, gone := range []string{"ARG GO_SHA256=", "ARG NODE_SHA256=", "ARG ACTIONLINT_SHA256="} {
+		for _, gone := range []string{"ARG GO_SHA256=", "ARG NODE_SHA256=", "ARG ACT_SHA256="} {
 			if strings.Contains(code, gone) {
 				t.Errorf("%s still has the single-architecture pin %s", file, gone)
 			}
@@ -3297,11 +3377,17 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 		"CODEX_CLI_SHA256_ARM64",
 		"CODEX_CODE_MODE_HOST_SHA256_AMD64",
 		"CODEX_CODE_MODE_HOST_SHA256_ARM64",
+		"CODEX_CLI_NPM_VERSION",
+		"CODEX_CLI_NPM_SHA256_AMD64",
+		"CODEX_CLI_NPM_SHA256_ARM64",
 	} {
 		want, got := buildArgDefault(t, "Dockerfile", daemon, arg), buildArgDefault(t, "Dockerfile.k8s-sandbox", sandbox, arg)
 		if want != got {
 			t.Errorf("Dockerfile pins %s=%s and Dockerfile.k8s-sandbox pins %s=%s; a deployment's daemon and its sandboxes must not be on two different CLIs, so bump both in the same commit", arg, want, arg, got)
 		}
+	}
+	if codexVer, npmVer := buildArgDefault(t, "Dockerfile", daemon, "CODEX_CLI_VERSION"), buildArgDefault(t, "Dockerfile", daemon, "CODEX_CLI_NPM_VERSION"); codexVer != "rust-v"+npmVer {
+		t.Errorf("Dockerfile pins CODEX_CLI_VERSION=%s and CODEX_CLI_NPM_VERSION=%s; bump CODEX_CLI_NPM_VERSION and CODEX_CLI_NPM_SHA256_{AMD64,ARM64} (from https://registry.npmjs.org/@openai/codex/-/codex-<ver>-linux-{x64,arm64}.tgz) alongside CODEX_CLI_VERSION", codexVer, npmVer)
 	}
 
 	// And the pin only means anything if the build fetches the artifact
@@ -3331,6 +3417,11 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 			`= "$CLAUDE_CLI_VERSION"`,
 			`echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -`,
 			`echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -`,
+			"api.github.com/repos/openai/codex/releases/tags/${CODEX_CLI_VERSION}",
+			"Accept: application/octet-stream",
+			"rm -f /tmp/codex-release.json",
+			"registry.npmjs.org/@openai/codex/-/codex-${CODEX_CLI_NPM_VERSION}-linux-${npm_arch}.tgz",
+			`echo "$npm_sha256  /tmp/codex-npm.tgz" | sha256sum -c -`,
 		} {
 			if !strings.Contains(code, want) {
 				t.Errorf("%s does not run %s", file.name, want)
@@ -3346,6 +3437,7 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 			"$CLAUDE_CLI_SHA256_AMD64", "$CLAUDE_CLI_SHA256_ARM64",
 			"$CODEX_CLI_SHA256_AMD64", "$CODEX_CLI_SHA256_ARM64",
 			"$CODEX_CODE_MODE_HOST_SHA256_AMD64", "$CODEX_CODE_MODE_HOST_SHA256_ARM64",
+			"$CODEX_CLI_NPM_SHA256_AMD64", "$CODEX_CLI_NPM_SHA256_ARM64",
 		} {
 			if !strings.Contains(code, digest) {
 				t.Errorf("%s never checks %s", file.name, digest)
@@ -3353,20 +3445,90 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 		}
 	}
 
-	// Every download here forces IPv4 and retries, which is a property of
-	// the *line* and so is lost by anyone who rewrites one -- this test's
-	// own change nearly took it off two of them, resolving a conflict
-	// with the commit that had just added it. CI's build host has no
-	// IPv6 route, so an AAAA-first fetch spends a connect on an
-	// unreachable address; the Granulefile forces IPv4 for the same
-	// reason (TestTheGuestBuildRidesOutASlowArchive).
-	for _, line := range strings.Split(stripComments(sandbox), "\n") {
-		if !strings.Contains(line, "curl -") {
+	// Every download in both Dockerfiles forces IPv4 and retries with
+	// exponential backoff, which is a property of the *line* and so is lost
+	// by anyone who rewrites one -- this test's own change nearly took it
+	// off two of them, resolving a conflict with the commit that had just
+	// added it. CI's build host has no IPv6 route, so an AAAA-first fetch
+	// spends a connect on an unreachable address; the Granulefile forces
+	// IPv4 for the same reason (TestTheGuestBuildRidesOutASlowArchive).
+	// And none of them may pass --retry-delay: curl disables exponential
+	// backoff whenever a fixed delay is set, turning `--retry 3
+	// --retry-delay 2` into a 6s retry window that fails a whole release
+	// build on a multi-minute GitHub Releases 504 brownout.
+	for _, file := range []struct{ name, text string }{{"Dockerfile", daemon}, {"Dockerfile.k8s-sandbox", sandbox}} {
+		for _, line := range strings.Split(stripComments(file.text), "\n") {
+			if !strings.Contains(line, "curl -") {
+				continue
+			}
+			if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+				t.Errorf("%s runs a curl that does not force IPv4 and retry with --retry-max-time: %s", file.name, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "--retry-delay") {
+				t.Errorf("%s runs a curl with --retry-delay, which disables curl's exponential backoff: %s", file.name, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// TestGitHubWorkflowCosignDownloadsAreChecksummed: the cosign a release
+// workflow downloads is handed the image-signing key, so every install of
+// it -- the release asset and the image fallback alike -- is checked against
+// a pinned sha256 before it runs, not trusted for coming from a tag.
+func TestGitHubWorkflowCosignDownloadsAreChecksummed(t *testing.T) {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml", "promote-release.yml", "publish-release.yml"} {
+		content := stripComments(read(t, ".github", "workflows", name))
+		downloads := strings.Count(content, "/cosign-linux-amd64")
+		if downloads == 0 {
+			t.Errorf(".github/workflows/%s no longer downloads cosign-linux-amd64; update this test", name)
+		}
+		fallbacks := strings.Count(content, "docker cp \"$cid:/ko-app/cosign\"")
+		checks := strings.Count(content, "  /usr/local/bin/cosign\" | sha256sum -c -")
+		if checks != downloads+fallbacks {
+			t.Errorf(".github/workflows/%s installs cosign %d ways (%d release-asset downloads, %d image fallbacks) but checks a sha256 %d times; pin a checksum for each", name, downloads+fallbacks, downloads, fallbacks, checks)
+		}
+	}
+}
+
+func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
+		content := stripComments(read(t, ".github", "workflows", name))
+		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:")
+		for _, line := range strings.Split(content, "\n") {
+			if !strings.Contains(line, "curl ") || strings.Contains(line, "curl -fsSIL") {
+				continue
+			}
+			if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+				t.Errorf(".github/workflows/%s runs a binary download curl without -4, --retry-max-time and --retry-all-errors: %s", name, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "--retry-delay") {
+				t.Errorf(".github/workflows/%s runs a curl with --retry-delay, disabling exponential backoff: %s", name, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	testsWorkflow := stripComments(read(t, ".github", "workflows", "tests.yml"))
+	lintInstall := between(t, testsWorkflow, "- name: Install shellcheck and actionlint", "- name: Lint GitHub Actions workflows")
+	if strings.Contains(lintInstall, "| sudo tar") {
+		t.Error(".github/workflows/tests.yml pipes curl straight into sudo tar in Install shellcheck and actionlint; stage the archive to a file first so retries do not feed truncated bytes to tar")
+	}
+	contains(t, lintInstall, "docker.io/koalaman/shellcheck:v0.9.0@sha256:")
+	contains(t, lintInstall, "github.com/rhysd/actionlint/cmd/actionlint@v1.7.4")
+	var curls int
+	for _, line := range strings.Split(lintInstall, "\n") {
+		if !strings.Contains(line, "curl ") {
 			continue
 		}
-		if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") {
-			t.Errorf("Dockerfile.k8s-sandbox runs a curl that does not force IPv4 and retry: %s", strings.TrimSpace(line))
+		curls++
+		if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+			t.Errorf(".github/workflows/tests.yml lint install runs curl without -4, --retry-max-time and --retry-all-errors: %s", strings.TrimSpace(line))
 		}
+		if strings.Contains(line, "--retry-delay") {
+			t.Errorf(".github/workflows/tests.yml lint install runs curl with --retry-delay, disabling exponential backoff: %s", strings.TrimSpace(line))
+		}
+	}
+	if curls != 2 {
+		t.Errorf("expected 2 curl downloads in Install shellcheck and actionlint, got %d", curls)
 	}
 }
 
@@ -3404,7 +3566,7 @@ var (
 // GO_IMAGE and GO_VERSION -- neither of which chooses the digest.
 func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 	texts := map[string]string{}
-	for _, name := range []string{"Dockerfile", "Dockerfile.build", "Dockerfile.k8s-sandbox", "Dockerfile.registry", "Granulefile", "Granulefile.guest-base"} {
+	for _, name := range []string{"Dockerfile", "Dockerfile.build", "Dockerfile.k8s-sandbox", "Dockerfile.hub", "Granulefile", "Granulefile.guest-base"} {
 		text := read(t, name)
 		texts[name] = text
 		code := stripComments(text)
@@ -3432,13 +3594,13 @@ func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 
 	// The same upstream image carries the same pin everywhere it is used,
 	// so one bump cannot leave a second copy behind on the old bytes.
-	for _, name := range []string{"Dockerfile.build", "Dockerfile.registry"} {
+	for _, name := range []string{"Dockerfile.build", "Dockerfile.hub"} {
 		if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "GO_IMAGE_DIGEST"), buildArgDefault(t, name, texts[name], "GO_IMAGE_DIGEST"); a != b {
 			t.Errorf("Dockerfile pins GO_IMAGE_DIGEST=%s and %s pins %s; bump both in the same commit", a, name, b)
 		}
 	}
-	if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "RUNTIME_IMAGE"), buildArgDefault(t, "Dockerfile.registry", texts["Dockerfile.registry"], "RUNTIME_IMAGE"); a != b {
-		t.Errorf("Dockerfile pins RUNTIME_IMAGE=%s and Dockerfile.registry pins %s; bump both in the same commit", a, b)
+	if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "RUNTIME_IMAGE"), buildArgDefault(t, "Dockerfile.hub", texts["Dockerfile.hub"], "RUNTIME_IMAGE"); a != b {
+		t.Errorf("Dockerfile pins RUNTIME_IMAGE=%s and Dockerfile.hub pins %s; bump both in the same commit", a, b)
 	}
 	for _, name := range []string{"Dockerfile.k8s-sandbox", "Granulefile", "Granulefile.guest-base"} {
 		if a, b := buildArgDefault(t, "Dockerfile", texts["Dockerfile"], "RUNTIME_IMAGE"), buildArgDefault(t, name, texts[name], "BASE_IMAGE"); a != b {
@@ -3447,15 +3609,15 @@ func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 	}
 }
 
-func TestRegistryDockerfileStampsVersionAndExcludesBuildCA(t *testing.T) {
-	df := read(t, "Dockerfile.registry")
+func TestHubDockerfileStampsVersionAndExcludesBuildCA(t *testing.T) {
+	df := read(t, "Dockerfile.hub")
 	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Release=${RELEASE}")
 	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}")
 	absent(t, df, "pkg/buildinfo")
 	absent(t, df, "COPY --from=build /usr/local/share/ca-certificates/")
 
 	releaseScript := read(t, "scripts", "release-images.sh")
-	regBuild := body(t, releaseScript, "build_registry_image() {")
+	regBuild := body(t, releaseScript, "build_hub_image() {")
 	contains(t, regBuild, `check_release_stamp "$image" "$RELEASE"`)
 	contains(t, regBuild, `check_edition "$image" "$main"`)
 }
@@ -4075,28 +4237,20 @@ func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 	contains(t, script, `push_image "$target"`)
 }
 
-// The job that can delete images is a job no branch push can reach, it
-// deletes only when it is told to, and it is not part of anything a host
-// runs.
-//
-// It holds package-publish, which is the capability that deletes a
-// package version -- strictly worse in the wrong hands than the one
-// build-artifacts.yml holds to publish, and the same argument that file
-// makes about push-vs-pull_request applies with more force. What keeps
-// it out of reach is the trigger: workflow_dispatch needs write access
-// to the repository. This job declares no cron, so the trusted schedules
-// package-publish answers do not reach it either; automated pruning runs
-// on release in release.yml instead.
-//
-// The dry-run default is the other half. Deleting a package version
-// cannot be undone, so the command deletes only when passed -apply, and
-// a human dispatching this to see what it would do must not have to
-// remember that.
+// Deleting images is CI's job alone: the release workflow's prune step
+// holds DOCKER_PAT, and package-publish is a CI-only capability that is
+// never placed in a task sandbox. The weekly prune-packages template is
+// therefore an audit -- a dry run of the plan against the live registry
+// and a read of the release prune step's logs -- and declares the
+// CI-read scope that reading those logs needs rather than a credential
+// it would never be given.
 func TestThePruneJobIsDeliberateAndOutOfBranchReach(t *testing.T) {
 	prune := stripComments(pruneTemplate(t))
 
 	contains(t, prune, "name: Prune GHCR packages")
 	contains(t, prune, "cmd/ghcr-prune")
+	contains(t, prune, `capabilities: ["api:ci-read@ai-on-gke/grain"]`)
+	contains(t, prune, "Prune old package versions")
 
 	// And it is a maintenance tool, not the deployment's: nothing on a host runs
 	// it, so it stays out of the binaries `make build` produces and out

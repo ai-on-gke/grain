@@ -69,20 +69,20 @@ func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error 
 	return nil
 }
 
-// CheckUIRegistryVerifier validates -ui-registry-issuer, -ui-registry-audience,
-// and -ui-registry-keys-url (or $GRAIN_REGISTRY_ISSUER,
-// $GRAIN_REGISTRY_AUDIENCE, and $GRAIN_REGISTRY_KEYS_URL): if any is set, all
+// CheckUIHubVerifier validates -ui-hub-issuer, -ui-hub-audience,
+// and -ui-hub-keys-url (or $GRAIN_HUB_ISSUER,
+// $GRAIN_HUB_AUDIENCE, and $GRAIN_HUB_KEYS_URL): if any is set, all
 // three must be set, and neither issuer nor audience may contain commas.
-func CheckUIRegistryVerifier(cfg Config) error {
+func CheckUIHubVerifier(cfg Config) error {
 	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
-		RegistryIssuer:   cfg.UiRegistryIssuer,
-		RegistryAudience: cfg.UiRegistryAudience,
-		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+		HubIssuer:   cfg.UiHubIssuer,
+		HubAudience: cfg.UiHubAudience,
+		HubKeysURL:  cfg.UiHubKeysURL,
 	})
-	iss := strings.TrimSpace(ui.GetRegistryIssuer())
-	aud := strings.TrimSpace(ui.GetRegistryAudience())
-	keysURL := strings.TrimSpace(ui.GetRegistryKeysURL())
-	if rc, ok := ui.RegistryConfigFromContext(ctx); ok {
+	iss := strings.TrimSpace(ui.GetHubIssuer())
+	aud := strings.TrimSpace(ui.GetHubAudience())
+	keysURL := strings.TrimSpace(ui.GetHubKeysURL())
+	if rc, ok := ui.HubConfigFromContext(ctx); ok {
 		if v := strings.TrimSpace(rc.Issuer); v != "" {
 			iss = v
 		}
@@ -98,50 +98,50 @@ func CheckUIRegistryVerifier(cfg Config) error {
 	}
 	var missing []string
 	if iss == "" {
-		missing = append(missing, "-ui-registry-issuer")
+		missing = append(missing, "-ui-hub-issuer")
 	}
 	if aud == "" {
-		missing = append(missing, "-ui-registry-audience")
+		missing = append(missing, "-ui-hub-audience")
 	}
 	if keysURL == "" {
-		missing = append(missing, "-ui-registry-keys-url")
+		missing = append(missing, "-ui-hub-keys-url")
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("incomplete registry verifier configuration: missing %s (set all three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or none)", strings.Join(missing, ", "))
+		return fmt.Errorf("incomplete registry verifier configuration: missing %s (set all three of -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url, or none)", strings.Join(missing, ", "))
 	}
 	if strings.Contains(iss, ",") {
-		return errors.New("-ui-registry-issuer must be a single issuer URL, not a comma-separated list")
+		return errors.New("-ui-hub-issuer must be a single issuer URL, not a comma-separated list")
 	}
 	if strings.Contains(aud, ",") {
-		return errors.New("-ui-registry-audience must be a single URL (https://<name>.<instance-domain>), not a comma-separated list")
+		return errors.New("-ui-hub-audience must be a single URL (https://<name>.<instance-domain>), not a comma-separated list")
 	}
 	return nil
 }
 
-// CheckRegistryConnect validates -registry-connect: starting with
-// -registry-connect requires an active "registry" IdentityVerifier
-// (-ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or a
+// CheckHubConnect validates -hub-connect: starting with
+// -hub-connect requires an active "registry" IdentityVerifier
+// (-ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url, or a
 // registered "registry" IdentityVerifier) so incoming tunnel streams can never
 // be served without X-Grain-Registry-Assertion verification.
-func CheckRegistryConnect(cfg Config) error {
-	if err := CheckUIRegistryVerifier(cfg); err != nil {
+func CheckHubConnect(cfg Config) error {
+	if err := CheckUIHubVerifier(cfg); err != nil {
 		return err
 	}
-	if !cfg.RegistryConnect {
+	if !cfg.HubConnect {
 		return nil
 	}
 	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
-		Audience:         cfg.UiIAPAudience,
-		Issuer:           cfg.UiIAPIssuer,
-		KeysURL:          cfg.UiIAPKeysURL,
-		RegistryIssuer:   cfg.UiRegistryIssuer,
-		RegistryAudience: cfg.UiRegistryAudience,
-		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+		Audience:    cfg.UiIAPAudience,
+		Issuer:      cfg.UiIAPIssuer,
+		KeysURL:     cfg.UiIAPKeysURL,
+		HubIssuer:   cfg.UiHubIssuer,
+		HubAudience: cfg.UiHubAudience,
+		HubKeysURL:  cfg.UiHubKeysURL,
 	})
-	if ui.HasActiveVerifier(ctx, string(ui.AuthMethodRegistry)) {
+	if ui.HasActiveVerifier(ctx, string(ui.AuthMethodHub)) {
 		return nil
 	}
-	return errors.New("-registry-connect requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url")
+	return errors.New("-hub-connect requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url")
 }
 
 // CheckUIRequireVerifier validates -ui-require-verifier (and its
@@ -150,7 +150,7 @@ func CheckRegistryConnect(cfg Config) error {
 // able to verify and no access code accepted over the network, nobody could
 // reach the UI except from the daemon's own host.
 func CheckUIRequireVerifier(cfg Config) error {
-	if err := CheckRegistryConnect(cfg); err != nil {
+	if err := CheckHubConnect(cfg); err != nil {
 		return err
 	}
 	req := strings.TrimSpace(cfg.UiRequireVerifier)
@@ -166,12 +166,12 @@ func CheckUIRequireVerifier(cfg Config) error {
 		return nil
 	}
 	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
-		Audience:         cfg.UiIAPAudience,
-		Issuer:           cfg.UiIAPIssuer,
-		KeysURL:          cfg.UiIAPKeysURL,
-		RegistryIssuer:   cfg.UiRegistryIssuer,
-		RegistryAudience: cfg.UiRegistryAudience,
-		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+		Audience:    cfg.UiIAPAudience,
+		Issuer:      cfg.UiIAPIssuer,
+		KeysURL:     cfg.UiIAPKeysURL,
+		HubIssuer:   cfg.UiHubIssuer,
+		HubAudience: cfg.UiHubAudience,
+		HubKeysURL:  cfg.UiHubKeysURL,
 	})
 	if ui.HasActiveVerifier(ctx, req) {
 		return nil
@@ -184,8 +184,8 @@ func CheckUIRequireVerifier(cfg Config) error {
 		return errors.New("-ui-require-verifier=iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
 			"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-verifier to keep accepting the access code over the network")
 	}
-	if req == string(ui.AuthMethodRegistry) {
-		return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: set -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
+	if req == string(ui.AuthMethodHub) {
+		return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: set -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 	}
 	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 }
@@ -280,14 +280,14 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		settingsHistory = reader
 	}
 	var (
-		registryStatus           func(context.Context) (model.RegistrySnapshot, error)
-		triggerRegistryHeartbeat func(context.Context) (model.RegistrySnapshot, error)
-		triggerRegistrySync      func()
+		hubStatus           func(context.Context) (model.HubSnapshot, error)
+		triggerHubHeartbeat func(context.Context) (model.HubSnapshot, error)
+		triggerHubSync      func()
 	)
-	if reg := live.Registry(); reg != nil {
-		registryStatus = reg.Snapshot
-		triggerRegistryHeartbeat = reg.TriggerHeartbeat
-		triggerRegistrySync = reg.Trigger
+	if reg := live.Hub(); reg != nil {
+		hubStatus = reg.Snapshot
+		triggerHubHeartbeat = reg.TriggerHeartbeat
+		triggerHubSync = reg.Trigger
 	}
 	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
 	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
@@ -303,7 +303,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
 		return nil, err
 	}
-	if err := CheckRegistryConnect(cfg); err != nil {
+	if err := CheckHubConnect(cfg); err != nil {
 		return nil, err
 	}
 	var provisionedSAs []string
@@ -328,9 +328,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		IAPAudience:                cfg.UiIAPAudience,
 		IAPIssuer:                  cfg.UiIAPIssuer,
 		IAPKeysURL:                 cfg.UiIAPKeysURL,
-		RegistryIssuer:             cfg.UiRegistryIssuer,
-		RegistryAudience:           cfg.UiRegistryAudience,
-		RegistryKeysURL:            cfg.UiRegistryKeysURL,
+		HubIssuer:                  cfg.UiHubIssuer,
+		HubAudience:                cfg.UiHubAudience,
+		HubKeysURL:                 cfg.UiHubKeysURL,
 		RequireVerifier:            cfg.UiRequireVerifier,
 		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
@@ -364,25 +364,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// or clearing it can never touch an operator-managed file.
 		CodexAuthFile:         ManagedCodexAuthFile(cfg.DataDir),
 		CodexAuthFallbackFile: cfg.CodexAuthFile,
-		// The "test this credential" action on that same tab
-		// (ui.Config.CapabilityChecks): the pane that says **Ready**
-		// because a secret is set, given a way to ask the far end
-		// whether the key inside it still works. Wired here rather than
-		// behind a gate like PullRequests below, because it needs
-		// nothing the reconcile loop builds -- the providers come from
-		// the live configuration and the credentials from this same
-		// secrets directory (and, for a named GitHub token, from the
-		// ladder above), all available before (and regardless of
-		// whether) that loop ever starts.
-		CapabilityChecks: CapabilityCheckAdapter{Live: live, Creds: uiSecrets},
 		// What every task read asks whether a task's own state has stood
 		// for longer than that state should take (ui.Config.Stall). The
 		// answer is the orchestrator's -- it is the package that knows
 		// which component ought to have ended each wait and how long
 		// each one is given (its liveness.go) -- and the UI is what puts
 		// it on the row, so the two are joined here rather than by
-		// either reaching for the other. Wired unconditionally, like
-		// CapabilityChecks above: it reads nothing but the state, the
+		// either reaching for the other. Wired unconditionally: it reads nothing but the state, the
 		// timestamps the store already holds and the clock, none of
 		// which waits on the reconcile loop.
 		Stall: orchestrator.TaskStallNote,
@@ -403,7 +391,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// The Gemini model field's own picker (ui.Config.AgentModels):
 		// the model names agy will accept are agy's to say, and this
 		// deployment has the binary right here. Wired unconditionally,
-		// like CapabilityChecks above and for the same reason -- it
+		// like AgentKeyChecks above and for the same reason -- it
 		// needs nothing the reconcile loop builds, just the live
 		// configuration and this same secrets directory -- and a
 		// deployment whose image somehow has no agy gets that sentence
@@ -443,16 +431,17 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		Reboot:      HostAction(cfg, newRestartRequests(cfg.DataDir).wrap("the reboot button", rebootHost(cfg.RebootCmd))),
 		Shutdown:    HostAction(cfg, shutdownHost(cfg.ShutdownCmd)),
 		Restart:     HostAction(cfg, newRestartRequests(cfg.DataDir).wrap("the restart button", restartDaemon(cfg.RestartCmd))),
-		RepoNames:   repoNameGate{},
+		RepoNames:   repoNameGate{store: store, defaultHost: cfg.GithubHost},
 		Credentials: uiCredentials,
 		// What each of those credentials reaches on GitHub, so a task is
 		// refused at filing against a repository its team cannot reach
 		// and the New task pickers can offer what it can (grain/task-1850).
-		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: cfg.GithubHost},
+		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: restClientHost(cfg.GithubHost)},
 		GitHubBranches:         githubClient,
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
 		GitHubForkPullRequests: githubClient,
+		GitHubDefaultBranches:  githubClient,
 		// The manual "Import issues now" (POST .../import-issues): the
 		// orchestrator's own pass, read through the UI's GitHub client.
 		IssueImporter: func(ctx context.Context, repo model.RepoRef) (model.IssueImportResult, error) {
@@ -605,13 +594,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// unconditionally, since a wake written before that loop starts
 		// (this server is up first, deliberately) sits in the buffer and
 		// is read when it does.
-		Wake:                     wakeCycle,
-		TriggerIAPSync:           TriggerIAPSync,
-		RegistryStatus:           registryStatus,
-		TriggerRegistryHeartbeat: triggerRegistryHeartbeat,
-		TriggerRegistrySync:      triggerRegistrySync,
-		SandboxBackends:          cfg.availableSandboxBackends(),
-		SandboxBackendOptions:    cfg.sandboxBackendOptions(),
+		Wake:                  wakeCycle,
+		TriggerIAPSync:        TriggerIAPSync,
+		HubStatus:             hubStatus,
+		TriggerHubHeartbeat:   triggerHubHeartbeat,
+		TriggerHubSync:        triggerHubSync,
+		SandboxBackends:       cfg.availableSandboxBackends(),
+		SandboxBackendOptions: cfg.sandboxBackendOptions(),
 		// And whether a merged settings change reset something on this
 		// deployment that grain had nowhere to say out loud -- the same
 		// marker, for a fact that reaches nobody without one
@@ -847,10 +836,10 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)
 	srv := ui.NewServerWithClient(uiClient)
-	if cfg.RegistryConnect {
-		if reg := live.Registry(); reg != nil && !reg.HasTunnelConnector() {
-			reg.SetTunnelConnector(NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
-				Handler:        srv.RegistryTunnelHandler(),
+	if cfg.HubConnect {
+		if reg := live.Hub(); reg != nil && !reg.HasTunnelConnector() {
+			reg.SetTunnelConnector(NewHubTunnelSupervisor(HubTunnelSupervisorOptions{
+				Handler:        srv.HubTunnelHandler(),
 				OnUnauthorized: reg.InvalidateOIDCCache,
 			}))
 		}
@@ -908,6 +897,16 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		}()
 	}
 
+	socketSrv, err := startAPISocket(cfg, srv)
+	if err != nil {
+		localScriptApprovalURL.Store("")
+		_ = callbackSrv.Close()
+		if httpSrv != nil {
+			_ = httpSrv.Close()
+		}
+		return nil, err
+	}
+
 	log.Printf("grain daemon: single-tenant: every caller, this host's loopback included, presents the access code in %s -- "+
 		"a browser on the UI's \"Enter access code\" page, the grain CLI as a bearer token; `grain access-code` prints it",
 		ui.LocalAPITokenPath(cfg.DataDir))
@@ -923,11 +922,55 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		cancelDiscovery()
 		localScriptApprovalURL.Store("")
 		_ = callbackSrv.Shutdown(ctx)
+		if socketSrv != nil {
+			_ = socketSrv.Shutdown(ctx)
+		}
 		if httpSrv != nil {
 			return httpSrv.Shutdown(ctx)
 		}
 		return nil
 	}, nil
+}
+
+// startAPISocket serves srv on -api-socket as well (ui.HostAccountHandler):
+// every connection is recorded as the person its peer's uid maps to,
+// through -host-accounts or, for the daemon's own account,
+// -deployment-owner. With no account mapped there is nobody it could
+// admit, so it serves nothing, and nil.
+func startAPISocket(cfg Config, srv *ui.Server) (*http.Server, error) {
+	path := strings.TrimSpace(cfg.APISocket)
+	if strings.EqualFold(path, "none") {
+		return nil, nil
+	}
+	owner := strings.TrimSpace(cfg.DeploymentOwner)
+	if owner == "" {
+		owner = strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv))
+	}
+	owner, _ = ui.NormalizeDeploymentOwner(owner) // CheckDeploymentOwner has refused a bad one
+	accounts := cfg.HostAccounts.WithDaemonAccount(uint32(os.Getuid()), owner)
+	if len(accounts) == 0 {
+		log.Print("grain daemon: no API socket: neither -host-accounts nor -deployment-owner names a person for any host account")
+		return nil, nil
+	}
+	if path == "" {
+		path = ui.APISocketPath(cfg.DataDir)
+	}
+	ln, err := ui.ListenAPISocket(path)
+	if err != nil {
+		return nil, fmt.Errorf("listening on the API socket %s: %w", path, err)
+	}
+	log.Printf("grain daemon: serving the API on %s as well, for host accounts %s", path, accounts)
+	hs := &http.Server{
+		Handler:           srv.HostAccountHandler(func() ui.HostAccounts { return accounts }),
+		ConnContext:       ui.HostAccountConnContext,
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	go func() {
+		if err := hs.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("grain daemon: API socket server: %v", err)
+		}
+	}()
+	return hs, nil
 }
 
 // daemonRestarting is ui.Config.Restarting for this process: true once

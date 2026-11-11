@@ -22,7 +22,7 @@ const LABELS = "\u0000labels";
 
 // LOGIN_CLI is the CLI login (hostd.Hello.Logins) a connection of each
 // framework spends when its credentials are ambient.
-export const LOGIN_CLI = {
+const LOGIN_CLI = {
   antigravity: "antigravity",
   claude: "claude",
   codex: "codex",

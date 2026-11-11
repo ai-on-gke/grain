@@ -190,6 +190,7 @@ func liftGlobalFlags(fs *flag.FlagSet, cmd string, args []string) ([]string, err
 // stay a body word. misplacedFlag below is what that command says
 // instead of guessing.
 func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	renamed := defineHubSubcommandRenames(fs)
 	var terminated []string
 	for i, arg := range args {
 		if arg == "--" {
@@ -209,6 +210,9 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 		}
 		positional = append(positional, rest[0])
 		args = rest[1:]
+	}
+	if err := renamed.resolve(); err != nil {
+		return nil, err
 	}
 	return append(positional, terminated...), nil
 }

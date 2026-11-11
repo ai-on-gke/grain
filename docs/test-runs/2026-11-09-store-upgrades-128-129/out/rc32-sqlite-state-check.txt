@@ -1,0 +1,3 @@
+  template_sequence            1
+ok: grain can load this
+state check: ok

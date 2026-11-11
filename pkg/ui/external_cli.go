@@ -141,7 +141,10 @@ type InboxItem struct {
 
 // InboxResponse is GET /api/inbox's body.
 type InboxResponse struct {
-	Items []InboxItem `json:"items"`
+	Items      []InboxItem `json:"items"`
+	Total      int         `json:"total,omitempty"`
+	Truncated  bool        `json:"truncated,omitempty"`
+	NextCursor string      `json:"nextCursor,omitempty"`
 }
 
 // handleInbox answers GET /api/inbox?repo=&kind=: the questions and
@@ -149,6 +152,11 @@ type InboxResponse struct {
 // notifications, pull requests held at a gate that needs a person, and
 // unapproved proposals -- only on repositories the caller may read.
 func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	q := r.URL.Query()
 	kind := strings.TrimSpace(q.Get("kind"))
 	if kind != "" && !slices.Contains(InboxKinds, kind) {
@@ -165,24 +173,42 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	out := InboxResponse{Items: []InboxItem{}}
+	filtered := make([]InboxItem, 0, len(items))
 	for _, it := range items {
-		if kind == "" || it.Kind == kind {
-			out.Items = append(out.Items, it)
+		if (kind == "" || it.Kind == kind) && list.matches(it.Task, it.Title, it.Repo, it.Summary, it.Subject, it.PR) {
+			filtered = append(filtered, it)
 		}
+	}
+	out := InboxResponse{Items: filtered}
+	if list.Paged {
+		page := pageOfBy(filtered, list, inboxItemKey)
+		out.Items = page.Items
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSON(w, http.StatusOK, out)
 }
 
+// inboxItemKey names an inbox row for paging (pageOfBy): its kind with
+// the task, notification and pull request it is about, which together
+// tell any two rows apart.
+func inboxItemKey(it InboxItem) string {
+	return it.Kind + "\x00" + it.Task + "\x00" + strconv.FormatInt(it.Notification, 10) + "\x00" + it.PR + "\x00" + it.Path
+}
+
 // inboxReadable is which repositories the caller's tasks:read reaches:
-// an external-agent token's own grants, and everything for anyone else
-// (a person, the local CLI), whose task list is already the one they
-// may see.
+// an external-agent token's own grants; a limited role's, or an agent
+// run's, as the event stream reads them (eventsReadable); and everything
+// for anyone else (the access code, the local CLI). A role limited to
+// some repositories was once shown every repository's inbox -- titles,
+// questions and pending secret names included (task 3981).
 func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 	tok := externalTokenFromContext(r.Context())
 	if tok == nil {
-		return func(string) bool { return true }
+		readable, _ := s.eventsReadable(r)
+		return readable
 	}
 	_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 	if err != nil {
@@ -217,6 +243,11 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			summary := t.QuestionSummary
 			if summary == "" {
 				summary = "reply to run it again, or acknowledge to close it"
+			}
+			// A question's item links to the question itself, not just
+			// to the top of the task's conversation.
+			if obs != nil && obs.PendingQuestionCommentID != nil {
+				path = model.CommentPath(t.ID, *obs.PendingQuestionCommentID)
 			}
 			questions = append(questions, InboxItem{Kind: InboxQuestion, Task: t.ID, Title: t.Title, Repo: t.Repo,
 				Summary: summary, Path: path, At: t.EndedAt})
@@ -371,6 +402,11 @@ type TaskWaitState struct {
 	PendingSecret string      `json:"pendingSecret,omitempty"`
 	CI            *TaskWaitCI `json:"ci,omitempty"`
 	Revision      string      `json:"revision"`
+
+	// liveAttempt is whether the task has a run that has not finished.
+	// Not reported: it is what keeps until=awaiting-reply from waking on
+	// a question a run is still in the middle of parking on.
+	liveAttempt bool
 }
 
 // TasksWaitResponse is GET /api/tasks/wait's body. Met is whether one of
@@ -552,24 +588,27 @@ func (c *Client) taskWaitState(ctx context.Context, id string, now time.Time) (T
 		if obs.ClosedAt == nil && obs.PendingQuestionCommentID != nil {
 			pendingQ = strconv.FormatInt(*obs.PendingQuestionCommentID, 10)
 			st.PendingSecret = obs.PendingSecret
-			if comments, err := c.Store.Comments(ctx, id); err == nil {
-				for _, cm := range comments {
-					if cm.ID == *obs.PendingQuestionCommentID {
-						st.Question = cm.Body
-					}
-				}
+			if cm, err := c.Store.Comment(ctx, id, *obs.PendingQuestionCommentID); err == nil && cm != nil {
+				st.Question = cm.Body
 			}
 		}
 	}
-	attempts, err := c.Store.Attempts(ctx, id)
+	runs, err := c.Store.Runs(ctx, id)
 	if err != nil {
 		return st, err
+	}
+	attempts := len(runs)
+	for _, r := range runs {
+		if r.FinishedAt == nil {
+			st.liveAttempt = true
+		}
 	}
 	ci := ""
 	if st.CI != nil {
 		ci = st.CI.RunID + "/" + st.CI.Conclusion
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%t|%t|%s|%s|%s|%d", st.State, st.Closed, st.Merged, st.Outcome, ci, pendingQ, attempts)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%t|%t|%s|%s|%s|%d|%t",
+		st.State, st.Closed, st.Merged, st.Outcome, ci, pendingQ, attempts, st.liveAttempt)))
 	st.Revision = hex.EncodeToString(sum[:])[:16]
 	return st, nil
 }
@@ -601,8 +640,17 @@ func tasksWaitMet(condition string, tasks []TaskWaitState, since, revision strin
 		}
 		return all, false
 	case WaitUntilAwaitingReply:
+		// Parked, not merely asking. A run's question comment and its
+		// PendingQuestionCommentID are written while the run is still
+		// finishing (orchestrator.relayParkingCalls, or the chat tool
+		// mid-run), and the state, observation and runs are separate
+		// reads, so a question can be seen beside a state that is still
+		// running or queued. Waking then hands the caller a task a reply
+		// may yet be refused on. Only the derived awaiting_reply with no
+		// attempt left live counts; the commit that finishes the run or
+		// sets the marker wakes the wait again to see it.
 		for _, t := range tasks {
-			if t.Question != "" || t.PendingSecret != "" || t.State == model.StateAwaitingReply {
+			if t.State == model.StateAwaitingReply && !t.liveAttempt {
 				return true, false
 			}
 		}
@@ -644,7 +692,23 @@ func (c *HTTPClient) Reply(ctx context.Context, id, body string, attachments []A
 
 // Inbox is GET /api/inbox, narrowed to repo and kind when they are set.
 func (c *HTTPClient) Inbox(ctx context.Context, repo, kind string) (InboxResponse, error) {
+	return c.InboxPage(ctx, repo, kind, "", 0, "")
+}
+
+// InboxPage is Inbox asking for one page: at most limit items (0 for the
+// route's own default), starting at cursor (a previous answer's
+// NextCursor), narrowed by the substring search.
+func (c *HTTPClient) InboxPage(ctx context.Context, repo, kind, search string, limit int, cursor string) (InboxResponse, error) {
 	q := url.Values{}
+	if search != "" {
+		q.Set("q", search)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
 	if repo != "" {
 		q.Set("repo", repo)
 	}

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -83,13 +84,27 @@ func (c Client) Cancel(ctx context.Context, id string) error {
 
 // Drain asks hostd to drain for an upgrade (Server.Drain).
 func (c Client) Drain(ctx context.Context) error {
-	return c.oneShot(ctx, Request{Op: OpDrain}, frameOK, nil)
+	return drainAnswered(c.oneShot(ctx, Request{Op: OpDrain}, frameOK, nil))
 }
 
 // Cutover asks hostd to cut over to a new build at the first moment
 // nothing runs (Server.Cutover); a hostd that predates it drains.
 func (c Client) Cutover(ctx context.Context) error {
-	return c.oneShot(ctx, Request{Op: OpDrain, Idle: true}, frameOK, nil)
+	return drainAnswered(c.oneShot(ctx, Request{Op: OpDrain, Idle: true}, frameOK, nil))
+}
+
+// drainAnswered reads a drain request's error. A hostd with nothing
+// running exits as soon as it drains, and released builds (v3.3.0 and
+// earlier) answered only after starting the drain, so their exit can
+// close the connection before the answer is written: the request was
+// sent and taken, and the connection ending without a frame is that
+// hostd having drained, not a failure.
+func drainAnswered(err error) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return nil
+	}
+	return err
 }
 
 // SocketOwner asks hostd which process in a process tree it started holds
@@ -125,11 +140,21 @@ func (c Client) oneShot(ctx context.Context, req Request, want byte, out any) er
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Unix(1, 0))
+	})
+	defer stop()
 	if err := writeJSON(conn, frameRequest, req); err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
 		return err
 	}
 	typ, payload, err := readFrame(conn)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
 		return err
 	}
 	switch typ {
@@ -237,11 +262,21 @@ func (c Client) Offers(ctx context.Context) ([]Offer, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Unix(1, 0))
+	})
+	defer stop()
 	if err := writeJSON(conn, frameRequest, Request{Op: OpList}); err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	typ, payload, err := readFrame(conn)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	switch typ {

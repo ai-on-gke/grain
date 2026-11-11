@@ -239,6 +239,10 @@ const (
 	taskReasonBlocked     = "queued/blocked_on_task"
 	taskReasonUsagePaused = "queued/usage_limit_paused"
 	taskReasonLocalPolicy = "queued/held_by_local_policy"
+	// Held by its latest suspension's own resume time
+	// (model.SuspensionWaitCapability): a setup suspension waiting out
+	// its backoff, which dispatch passes over until then.
+	taskReasonHeldBySuspension = "queued/held_by_suspension"
 	// Nothing is dispatched on this deployment at all: a condition the
 	// daemon recorded against itself (pkg/dispatchcondition) -- the git
 	// proxy failed to bind, the reconcile loop gave up -- and not
@@ -250,14 +254,17 @@ const (
 	taskReasonUnapproved      = "proposed/unapproved"
 	taskReasonQuestion        = "awaiting_reply/question"
 	taskReasonAnswered        = "awaiting_reply/answered"
-	taskReasonYourMessage     = "awaiting_reply/your_message"
-	taskReasonAccessRequest   = "awaiting_reply/access_request"
-	taskReasonStopped         = "awaiting_reply/stopped"
-	taskReasonSubmit          = "awaiting_submit/not_auto_merge"
-	taskReasonFailedRuns      = "failed/consecutive_failures"
-	taskReasonDeferredNoWake  = "deferred/no_wake_time"
-	taskReasonDeferredWake    = "deferred/wake_time"
-	taskReasonClosed          = "closed/closed"
+	// A person's comment no run has been shown (task 3803): what it
+	// waits on is a run, which Run now (or another comment) queues.
+	taskReasonUnansweredComment = "awaiting_reply/unanswered_comment"
+	taskReasonYourMessage       = "awaiting_reply/your_message"
+	taskReasonAccessRequest     = "awaiting_reply/access_request"
+	taskReasonStopped           = "awaiting_reply/stopped"
+	taskReasonSubmit            = "awaiting_submit/not_auto_merge"
+	taskReasonFailedRuns        = "failed/consecutive_failures"
+	taskReasonDeferredNoWake    = "deferred/no_wake_time"
+	taskReasonDeferredWake      = "deferred/wake_time"
+	taskReasonClosed            = "closed/closed"
 	// A goal task at rest (model.TaskGoal): deferred, waiting for its
 	// goal's condition, which reconcileTaskGoals checks every cycle. One
 	// per goal kind, "deferred/awaiting-goal/<kind>".
@@ -266,6 +273,7 @@ const (
 	taskReasonGoalTasksClosed     = "deferred/awaiting-goal/tasks-closed"
 	taskReasonGoalPersonCloses    = "deferred/awaiting-goal/person-closes"
 	taskReasonGoalPipelineHealthy = "deferred/awaiting-goal/pipeline-healthy"
+	taskReasonGoalNightlyGreen    = "deferred/awaiting-goal/nightly-green"
 )
 
 // goalReasons is each goal kind's resting reason.
@@ -275,6 +283,7 @@ var goalReasons = map[model.GoalKind]string{
 	model.GoalTasksClosed:     taskReasonGoalTasksClosed,
 	model.GoalPersonCloses:    taskReasonGoalPersonCloses,
 	model.GoalPipelineHealthy: taskReasonGoalPipelineHealthy,
+	model.GoalNightlyGreen:    taskReasonGoalNightlyGreen,
 }
 
 // taskReasons classifies every task-lane reason.
@@ -304,6 +313,12 @@ var taskReasons = map[string]reasonLiveness{
 	// says so every cycle, so the escalation is the resource's. The
 	// resource TaskReason gives names the refusal and the file, off the
 	// wait dispatch recorded.
+	// Held by its suspension's resume time: a named time, which dispatch
+	// passes on the first cycle after. "Run now" made since the run that
+	// suspended is started straight away (dispatch.runNowEligible).
+	taskReasonHeldBySuspension: {class: livenessDriven, driver: "reconcileDispatch",
+		resource:   "its suspension's resume time",
+		escalation: stallToPerson, control: "Run now"},
 	taskReasonLocalPolicy: {class: livenessAwaitingExternal,
 		resource:   "an edit to this machine's local policy file allowing it",
 		escalation: stallToResource},
@@ -325,10 +340,12 @@ var taskReasons = map[string]reasonLiveness{
 		escalation: stallToResource},
 	// The badge still reads completed; the inbox shows it (completionPhase)
 	// with the merge lane's control.
-	taskReasonMergeGaveUp:    {class: livenessAwaitingPerson, control: "Retry merge"},
-	taskReasonUnapproved:     {class: livenessAwaitingPerson, control: "Approve"},
-	taskReasonQuestion:       {class: livenessAwaitingPerson, control: "Reply"},
-	taskReasonAnswered:       {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonMergeGaveUp: {class: livenessAwaitingPerson, control: "Retry merge"},
+	taskReasonUnapproved:  {class: livenessAwaitingPerson, control: "Approve"},
+	taskReasonQuestion:    {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonAnswered:    {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonUnansweredComment: {class: livenessAwaitingPerson,
+		resource: "a run to answer a person's comment", control: "Run now"},
 	taskReasonYourMessage:    {class: livenessAwaitingPerson, control: "Reply"},
 	taskReasonStopped:        {class: livenessAwaitingPerson, control: "Reply"},
 	taskReasonAccessRequest:  {class: livenessAwaitingPerson, control: "Grant"},
@@ -350,6 +367,8 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonGoalTasksClosed: {class: livenessDriven, driver: "reconcileTaskGoals",
 		resource: "the tasks it names closing", escalation: stallToResource, control: "Undefer"},
 	taskReasonGoalPersonCloses: {class: livenessAwaitingPerson, control: "Close"},
+	taskReasonGoalNightlyGreen: {class: livenessDriven, driver: "reconcileTaskGoals",
+		resource: "Stage 1 (nightly) going green", escalation: stallToResource, control: "Undefer"},
 	taskReasonGoalPipelineHealthy: {class: livenessDriven, driver: "reconcileTaskGoals",
 		resource: "the pipeline being healthy", escalation: stallToResource, control: "Undefer"},
 }
@@ -499,6 +518,8 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 			return taskReasonUsagePaused
 		case hold == holdLocalPolicy:
 			return taskReasonLocalPolicy
+		case hold == holdSuspension:
+			return taskReasonHeldBySuspension
 		}
 		return taskReasonReady
 	case model.StateRunning:
@@ -536,7 +557,8 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 // awaitingReplyReasonOf is which ask an awaiting_reply task is parked on,
 // in the UI's askedCase order (ui/src/state.js), so the reason chip and
 // the badge beside it name the same case: a stopped turn first, then an
-// access request, then an interactive task or console session (whose
+// access request, then a person's comment no run has been shown (which
+// Run now delivers), then an interactive task or console session (whose
 // every park is a wait for its next message, a question included), then
 // a pending question or secret request, and otherwise a run that
 // answered in a comment. Each is a person's: Reply ends all of them but
@@ -547,6 +569,8 @@ func awaitingReplyReasonOf(t model.Task, asked model.ReplyFacts) string {
 		return taskReasonStopped
 	case asked.Access:
 		return taskReasonAccessRequest
+	case asked.UnansweredComment:
+		return taskReasonUnansweredComment
 	case t.Interactive:
 		return taskReasonYourMessage
 	case asked.Question:
@@ -625,6 +649,8 @@ func TaskReason(t model.Task, state model.State, obs *model.Observation, openDep
 		r.Resource = localPolicyResource(wait.Resource, policyFile)
 	case taskReasonDispatchBlocked:
 		r.Resource = dispatchBlockedResource(dispatchBlocked)
+	case taskReasonHeldBySuspension:
+		r.Resource = wait.Resource
 	}
 	return r
 }
@@ -644,6 +670,9 @@ const (
 	holdNone queuedHold = iota
 	holdUsagePaused
 	holdLocalPolicy
+	// holdSuspension is a task its latest suspension's resume time holds
+	// (model.SuspensionWaitCapability, dispatch's setSuspensionWait).
+	holdSuspension
 	// holdDispatchBlocked is not read off a wait: it is the deployment's
 	// own condition (TaskReason's dispatchBlocked), and holds every
 	// queued task alike.
@@ -652,13 +681,17 @@ const (
 
 // queuedHoldOf is the hold wait records: a usage-limit pause
 // (usageLimitWait), a local-policy refusal (model.PolicyWaitCapability,
-// which heldByPolicy clears once the policy allows the task), or neither.
+// which heldByPolicy clears once the policy allows the task), a
+// suspension's resume time (model.SuspensionWaitCapability, which
+// dispatch clears once it has passed), or none of them.
 func queuedHoldOf(wait *model.GrantWait) queuedHold {
 	switch {
 	case usageLimitWait(wait):
 		return holdUsagePaused
 	case wait != nil && wait.Capability == model.PolicyWaitCapability:
 		return holdLocalPolicy
+	case wait != nil && wait.Capability == model.SuspensionWaitCapability:
+		return holdSuspension
 	}
 	return holdNone
 }

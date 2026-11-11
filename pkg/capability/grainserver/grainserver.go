@@ -27,6 +27,16 @@
 //     off the live task (model.Store.GitPushAnyRef). #credential {credential}
 //     selects a named git credential under secrets/github for a task
 //     (formerly github-credential:<name>).
+//     #target {repo, base}, and #read {repo} / #write {repo, base} with a
+//     base, are a task's own repository, Reads and Writes read as grants
+//     (model.TaskRepoGrants); a task's storage stays its repo fields, and
+//     an API request's grants: list is sorted back into them
+//     (model.SplitRequestGrants).
+//   - https://grain.dev/capabilities/api: grain's own agent API, one
+//     method per scope, preset and scope set of docs/agent-api.md, each
+//     with an optional {repo} (formerly api:<scope>[@owner/name],
+//     model.CanonicalGrant). Nothing is minted: the grant is served as
+//     the run's api_* tools.
 //   - https://grain.dev/capabilities/github: GitHub operations answered by
 //     grain itself: reading issues and comments with the run's team git
 //     credential (#read-issues, formerly read-issues), and provisioning a
@@ -41,6 +51,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,6 +167,14 @@ const (
 	// for a task's git proxy, PR opener, and git identity (formerly github-credential:<name>).
 	RepoCredentialMethod = model.RepoCredentialMethod
 	RepoCredentialRef    = model.RepoCredentialRef
+
+	// RepoTargetMethod is a task's own repository and base branch, read
+	// as a grant (formerly, and still stored as, its repo and base fields).
+	RepoTargetMethod = model.RepoTargetMethod
+	RepoTargetRef    = model.RepoTargetRef
+
+	// APIID is the canonical capability_id of the in-process agent API server.
+	APIID = model.APICapabilityServerID
 )
 
 var (
@@ -327,6 +346,130 @@ var repoArg = map[string]any{
 	"description": "The repository, owner/name (or host/owner/name), the CI job may reach through the git proxy.",
 }
 
+// taskRepoArgs is the schema of a task's own repository grant: one
+// repository and the base branch in it, "" for its default branch.
+func taskRepoArgs() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"repo", "base"},
+		"properties": map[string]any{
+			"repo": map[string]any{
+				"type":        "string",
+				"pattern":     repoArg["pattern"],
+				"description": "The repository, owner/name (or host/owner/name).",
+			},
+			"base": map[string]any{
+				"type":        "string",
+				"description": "The base branch work lands on; empty for the repository's default branch.",
+			},
+		},
+	}
+}
+
+// apiArgs is the schema of an api grant: an optional repository it is
+// limited to (formerly the @owner/name of api:<scope>@owner/name).
+func apiArgs() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"repo": map[string]any{
+				"type":        "string",
+				"pattern":     repoArg["pattern"],
+				"description": "Limit the grant to this repository, owner/name; omit for every repository.",
+			},
+		},
+	}
+}
+
+// buildAPIServer is the in-process https://grain.dev/capabilities/api
+// server: a method for every scope (model.APIScopes), preset
+// (model.APIPresets) and scope set (model.APIScopeSetsInEffect) of
+// docs/agent-api.md. A dangerous scope or person-only set is said so in
+// its description; who may grant one is model.IsDangerousGrant's, which
+// reads the reference through model.CanonicalGrant.
+func buildAPIServer() *protocol.Server {
+	mint := func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+		return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+	}
+	var methods []*protocol.Method
+	added := map[string]bool{}
+	add := func(name, description string) {
+		if added[name] || !protocol.ValidMethod(name) {
+			return
+		}
+		added[name] = true
+		m, err := protocol.NewMethod(protocol.MethodSpec{
+			Name:        name,
+			Description: description,
+			Args:        apiArgs(),
+			// Nothing is placed in the sandbox: the run is served the
+			// api_* tools its api grants reach (model.APIGrantsOf).
+			Mint: mint,
+			Now:  callerClock,
+		})
+		if err != nil {
+			panic(fmt.Sprintf("grainserver: building api#%s: %v", name, err))
+		}
+		methods = append(methods, m)
+	}
+	for _, s := range model.APIScopes() {
+		desc := s.Description
+		if s.Dangerous {
+			desc += " (dangerous: only a person may grant it, and every call carries a reason)"
+		}
+		add(string(s.Scope), desc)
+	}
+	for _, p := range model.APIPresets() {
+		scopes := make([]string, len(p.Scopes))
+		for i, s := range p.Scopes {
+			scopes[i] = string(s)
+		}
+		add(p.Name, p.Description+". Preset of: "+strings.Join(scopes, ", ")+".")
+	}
+	for _, set := range model.APIScopeSetsInEffect() {
+		scopes := make([]string, len(set.Resolved))
+		for i, s := range set.Resolved {
+			scopes[i] = string(s)
+		}
+		desc := set.Description
+		if desc == "" {
+			desc = "API scope set"
+		}
+		desc += ". Scope set of: " + strings.Join(scopes, ", ") + "."
+		if set.Person {
+			desc += " (dangerous: only a person may grant it)"
+		}
+		add(set.Name, desc)
+	}
+	cs, err := protocol.NewCapabilityServer("api", methods...)
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building api capability server: %v", err))
+	}
+	srv, err := protocol.NewServer(context.Background(), APIID, cs.InProcessCaller())
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: attaching in-process api server: %v", err))
+	}
+	return srv
+}
+
+// APIServer returns the in-process https://grain.dev/capabilities/api
+// server reflecting the currently installed scope sets as well as core's
+// scopes and presets.
+func APIServer() *protocol.Server {
+	return buildAPIServer()
+}
+
+// APIStatus is Status for the in-process api server.
+func APIStatus() servers.Status { return statusOf(APIID, APIServer()) }
+
+// titled is schema with a title, for a oneOf variant to be offered by.
+func titled(schema map[string]any, title string) map[string]any {
+	schema["title"] = title
+	return schema
+}
+
 // repoAccessArgs is the schema of a grant naming one repository.
 func repoAccessArgs() map[string]any {
 	return map[string]any{
@@ -390,7 +533,9 @@ func buildRepoServerFor(configured []string) *protocol.Server {
 	read, err := protocol.NewMethod(protocol.MethodSpec{
 		Name: RepoReadMethod,
 		Description: "Let a CI job fetch one other repository, read-only, through the git proxy with the " +
-			"deployment's own git credential (formerly repo-read:<repo>). CI only: a task is refused it.",
+			"deployment's own git credential (formerly repo-read:<repo>). Held as a capability it is CI only: " +
+			"a task is refused it. In a task's grants: list it is one of the task's read-only repositories " +
+			"(still stored as its reads).",
 		Args: repoAccessArgs(),
 		// Nothing is placed in the sandbox: the git proxy's read scope
 		// is widened to the repository for the job's sandbox
@@ -405,14 +550,19 @@ func buildRepoServerFor(configured []string) *protocol.Server {
 	}
 	write, err := protocol.NewMethod(protocol.MethodSpec{
 		Name: RepoWriteMethod,
-		Description: "Either {repo}: let a CI job push to one other repository through the git proxy, on a " +
+		Description: "Either {repo, base}: one more repository and base branch this task may land work in " +
+			"and file proposals for (a write target; still stored as the task's writes). Or {repo}: let a CI " +
+			"job push to one other repository through the git proxy, on a " +
 			"release, a workflow_dispatch or grain's own scheduled run only (formerly repo-write:<repo>; CI " +
 			"only). Or {refs, force}: let this task's run push any branch or tag of the repositories it may " +
 			"write -- the default branch, force-pushes and deletions included -- rather than only its own " +
 			"task branch, with the team's own git credential (formerly git-push-any-ref). Standing jobs " +
 			"declare the refs they push under `push:` in their .grain template instead.",
 		Args: map[string]any{
-			"oneOf": []any{repoAccessArgs(), map[string]any{
+			"title": "Kind of write",
+			// Each variant's title is what the UI's variant picker offers.
+			"oneOf": []any{titled(repoAccessArgs(), "CI push to another repo"), titled(taskRepoArgs(), "Write target (repo + base)"), map[string]any{
+				"title":                "Push any branch/tag (refs + force)",
 				"type":                 "object",
 				"additionalProperties": false,
 				"required":             []any{"refs", "force"},
@@ -478,7 +628,22 @@ func buildRepoServerFor(configured []string) *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoCredentialMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("repo", read, write, credentialMethod)
+	target, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: RepoTargetMethod,
+		Description: "The repository and base branch this task works on: cloned to work/ in its sandbox, " +
+			"and where its branch and pull request go (still stored as the task's repo and base).",
+		Args: taskRepoArgs(),
+		// Nothing is placed by the mint: the orchestrator clones the
+		// task's target from the task row, which is where it is stored.
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoTargetMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("repo", read, write, credentialMethod, target)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo capability server: %v", err))
 	}
@@ -563,7 +728,7 @@ func RepoStatusForCredentials(configured []string) servers.Status {
 // each server a build outside core contributed methods to
 // (capability.Register), ordered by ID.
 func Statuses() []servers.Status {
-	out := []servers.Status{Status(), RepoStatus(), GitHubStatus()}
+	out := []servers.Status{Status(), RepoStatus(), GitHubStatus(), APIStatus()}
 	for _, id := range capability.MethodServers() {
 		srv, ok, err := capability.MethodServer(id)
 		if !ok {
@@ -582,7 +747,8 @@ func Statuses() []servers.Status {
 // servers: core's own, or one a build contributed methods to
 // (capability.Register).
 func IsInProcessID(capabilityID string) bool {
-	return capabilityID == ID || capabilityID == RepoID || capabilityID == GitHubID || capability.IsMethodServer(capabilityID)
+	return capabilityID == ID || capabilityID == RepoID || capabilityID == GitHubID || capabilityID == APIID ||
+		capability.IsMethodServer(capabilityID)
 }
 
 func statusOf(id string, srv *protocol.Server) servers.Status {
@@ -651,7 +817,13 @@ func LookupWithRepoCredentials(fallback protocol.Lookup, repoCredentials []strin
 			}
 			return buildRepoServer(), nil
 		case GitHubID:
-			return buildGitHubServer(), nil
+			// The one server, not one built afresh: #sandbox-repo's leases
+			// are its protocol.Method's own, so a release_ answered by a
+			// server built for the release would know of no lease and never
+			// delete the repository (capability.MethodServer's doc comment).
+			return GitHubServer(), nil
+		case APIID:
+			return APIServer(), nil
 		}
 		if srv, ok, err := capability.MethodServer(capabilityID); ok {
 			return srv, err

@@ -1,0 +1,12 @@
+PUT /api/github-tokens/default -> 200 {"enabled":true,"dir":"/home/debian/walk1/pg-ghost/seed/secrets/github","tokens":[{"name":"default","app":false,"default":
+PUT /api/github-tokens/bot -> 200 {"enabled":true,"dir":"/home/debian/walk1/pg-ghost/seed/secrets/github","tokens":[{"name":"bot","app":false,"default":false,"c
+POST /api/repos -> 200 {"configured":true,"pollInterval":"10s","pollIntervalDefault":"10s","maxWorkers":10,"maxMergesPerRepo":5,"maxAutoSubmitDepth":2,"maxAutoS
+POST /api/repos -> 200 {"configured":true,"pollInterval":"10s","pollIntervalDefault":"10s","maxWorkers":10,"maxMergesPerRepo":5,"maxAutoSubmitDepth":2,"maxAutoS
+POST /api/tasks -> 201 {"id":"2","title":"retired grants","description":"schema-108 seed","author":"debian","authorKind":"human","authorSource":"access-code","a
+POST /api/tasks -> 201 {"id":"3","title":"priority only","description":"schema-108 seed","author":"debian","authorKind":"human","authorSource":"access-code","au
+POST /api/tasks -> 201 {"id":"4","title":"durable only","description":"schema-108 seed","author":"debian","authorKind":"human","authorSource":"access-code","aut
+POST /api/templates -> 201 {"id":"template-1","name":"retired-template","title":"retired template","description":"seed","repo":"acme/widgets","autoMerge":false,
+POST /api/schedules -> 201 {"id":"sched-1","title":"nightly","description":"seed","repo":"acme/widgets","autoMerge":false,"autoApproveProposals":false,"capabili
+POST /api/console-sessions -> 201 {"sessions":[{"id":"director","title":"Director","team":"default","taskId":"1","capabilities":["api:ci-read","api:deployment:r
+task=2,3,4 template=template-1 schedule=sched-1
+seeded: 32 statements

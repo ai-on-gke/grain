@@ -1,0 +1,221 @@
+2c2
+< 108
+---
+> 125
+4,7c4,5
+< 2 | bootstrap-playbooks | label
+< 2 | durable | label
+< 2 | github-credential:bot | label
+< 2 | https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true} | label
+---
+> 2 | api:self-debug | label
+> 2 | https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]} | label
+9,14c7,11
+< 2 | priority-dispatch | label
+< 2 | read-issues | label
+< 2 | self-debug | label
+< 3 | priority-dispatch | label
+< 4 | durable | label
+< 4 | https://grain.dev/capabilities/gcp#gcp-key={"account":"deploy"} | label
+---
+> 2 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | label
+> 2 | https://grain.dev/capabilities/github#read-issues={} | label
+> 2 | https://grain.dev/capabilities/grain#source={} | label
+> 2 | https://grain.dev/capabilities/repo#credential={"credential":"bot"} | label
+> 4 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true} | label
+16,21c13,19
+< 5 | api:deployment:read | grain
+< 5 | bootstrap-playbooks | grain
+< 5 | durable | grain
+< 5 | https://grain.dev/capabilities/grain#health={} | grain
+< 5 | https://grain.dev/capabilities/grain#journal={} | grain
+< 5 | self-debug | grain
+---
+> 5 | api:self-debug | grain
+> 5 | https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]} | grain
+> 5 | https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false} | grain
+> 5 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | grain
+> 5 | https://grain.dev/capabilities/github#read-issues={} | grain
+> 5 | https://grain.dev/capabilities/grain#source={} | grain
+> 5 | https://grain.dev/capabilities/repo#credential={"credential":"bot"} | grain
+23,26c21,22
+< template-1 | bootstrap-playbooks | label
+< template-1 | durable | label
+< template-1 | github-credential:bot | label
+< template-1 | https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true} | label
+---
+> template-1 | api:self-debug | label
+> template-1 | https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]} | label
+28,30c24,27
+< template-1 | priority-dispatch | label
+< template-1 | read-issues | label
+< template-1 | self-debug | label
+---
+> template-1 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | label
+> template-1 | https://grain.dev/capabilities/github#read-issues={} | label
+> template-1 | https://grain.dev/capabilities/grain#source={} | label
+> template-1 | https://grain.dev/capabilities/repo#credential={"credential":"bot"} | label
+32,35c29,30
+< sched-1 | bootstrap-playbooks | label
+< sched-1 | durable | label
+< sched-1 | github-credential:bot | label
+< sched-1 | https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true} | label
+---
+> sched-1 | api:self-debug | label
+> sched-1 | https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]} | label
+37,39c32,35
+< sched-1 | priority-dispatch | label
+< sched-1 | read-issues | label
+< sched-1 | self-debug | label
+---
+> sched-1 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | label
+> sched-1 | https://grain.dev/capabilities/github#read-issues={} | label
+> sched-1 | https://grain.dev/capabilities/grain#source={} | label
+> sched-1 | https://grain.dev/capabilities/repo#credential={"credential":"bot"} | label
+41,44c37,40
+< https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true}
+< self-debug
+< priority-dispatch
+< read-issues
+---
+> https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}
+> api:self-debug
+> https://grain.dev/capabilities/grain#source={}
+> https://grain.dev/capabilities/github#read-issues={}
+46,49c42,44
+< acme/widgets | default | https://grain.dev/capabilities/gcp#gcp-key={"account":"deploy"}
+< acme/widgets | default | bootstrap-playbooks
+< acme/widgets | default | github-credential:bot
+< acme/widgets | default | durable
+---
+> acme/widgets | default | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true}
+> acme/widgets | default | https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+> acme/widgets | default | https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+51,55c46,50
+< acme/widgets | ci | self-debug
+< acme/widgets | ci | read-issues
+< acme/widgets | ci | bootstrap-playbooks
+< acme/widgets | ci | github-credential:bot
+< acme/widgets | ci | priority-dispatch
+---
+> acme/widgets | ci | api:self-debug
+> acme/widgets | ci | https://grain.dev/capabilities/grain#source={}
+> acme/widgets | ci | https://grain.dev/capabilities/github#read-issues={}
+> acme/widgets | ci | https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+> acme/widgets | ci | https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+57c52
+< retired-session: ['bootstrap-playbooks', 'durable', 'github-credential:bot', 'https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true}', 'https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false}', 'priority-dispatch', 'read-issues', 'self-debug']
+---
+> retired-session: ['api:self-debug', 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}', 'https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false}', 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}', 'https://grain.dev/capabilities/github#read-issues={}', 'https://grain.dev/capabilities/grain#source={}', 'https://grain.dev/capabilities/repo#credential={"credential":"bot"}']
+60a56
+>   "apiScopes": {},
+63,65c59,60
+<     "bootstrap-playbooks",
+<     "github-credential:bot",
+<     "durable",
+---
+>     "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}",
+>     "https://grain.dev/capabilities/repo#credential={\"credential\":\"bot\"}",
+71,72c66,67
+<       "priority-dispatch",
+<       "self-debug"
+---
+>       "api:self-debug",
+>       "https://grain.dev/capabilities/grain#source={}"
+75,76c70
+<       "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"deploy\"}",
+<       "durable"
+---
+>       "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"deploy\",\"primary\":true}"
+81,83c75,77
+<     "self-debug",
+<     "priority-dispatch",
+<     "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"default\",\"activate\":true}"
+---
+>     "api:self-debug",
+>     "https://grain.dev/capabilities/grain#source={}",
+>     "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}"
+90,95d83
+<    "durable": {
+<     "enabled": true
+<    },
+<    "priority-dispatch": {
+<     "enabled": true
+<    },
+109c97
+<        "account": {
+---
+>        "permission_set": {
+111c99
+<          "default",
+---
+>          "sandbox-agent",
+115,120d102
+<        },
+<        "activate": {
+<         "allowed": [
+<          "true",
+<          "false"
+<         ]
+131c113
+<    "capability": "bootstrap-playbooks",
+---
+>    "capability": "https://grain.dev/capabilities/config-map#config-map",
+138c120
+<    "capability": "read-issues",
+---
+>    "capability": "https://grain.dev/capabilities/github#read-issues",
+145c127
+<    "capability": "github-credential:bot",
+---
+>    "capability": "https://grain.dev/capabilities/repo#credential",
+152,165c134
+<    "capability": "self-debug",
+<    "runKinds": [
+<     "task"
+<    ]
+<   },
+<   {
+<    "capability": "priority-dispatch",
+<    "deny": true,
+<    "repos": [
+<     "acme/denied"
+<    ]
+<   },
+<   {
+<    "capability": "durable",
+---
+>    "capability": "https://grain.dev/capabilities/grain#source",
+188a158,167
+>  "https://grain.dev/capabilities/figma": {
+>   "args": [
+>    "capability",
+>    "figma",
+>    "-listen",
+>    "127.0.0.1:4253"
+>   ],
+>   "builtin": "figma",
+>   "command": "grain"
+>  },
+245a225,232
+> task | 2 | durable
+> task | 3 | bypass
+> task | 4 | durable
+> task | 5 | durable
+> template | template-1 | durable
+> schedule | sched-1 | durable
+> grain_config | bypass
+> repo_config | acme/widgets | durable
+246a234
+> 2 | grain | grain: gcp#gcp-key migration kept grant https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false} because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp; configure that permission set or replace the grant's removed "account" argument with "permission_set".
+248a237,246
+> template | template-1 | seed
+> 
+> ---
+> 
+> grain: gcp#gcp-key migration kept grant https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false} because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp; configure that permission set or replace the grant's removed "account" argument with "permission_set".
+> schedule | sched-1 | seed
+> 
+> ---
+> 
+> grain: gcp#gcp-key migration kept grant https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false} because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp; configure that permission set or replace the grant's removed "account" argument with "permission_set".

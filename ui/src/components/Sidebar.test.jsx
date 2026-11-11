@@ -2073,4 +2073,68 @@ describe("Sidebar sections this browser hides", () => {
       expect(btn).not.toHaveAttribute("title");
     }
   });
+
+  // 2026-11-08 saved-boards walkthrough (task 3612): New task in the
+  // create menu was refused to a viewer and New board right under it
+  // was not.
+  it("refuses New board in Create options alongside New task for a role without tasks:write", async () => {
+    const user = userEvent.setup();
+    render(
+      <Sidebar
+        {...baseProps}
+        config={{
+          access: {
+            role: "grain/viewer",
+            roles: ["grain/viewer"],
+            full: false,
+            scopes: ["boards:read", "tasks:read"],
+          },
+        }}
+        tasks={tasks}
+        onNewBoard={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Create options" }));
+    expect(screen.getByRole("menuitem", { name: "New task" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("menuitem", { name: "New board" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "New session" }),
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("gives pinned same-named boards in different folders distinct accessible names", async () => {
+    const user = userEvent.setup();
+    const onOpenBoard = vi.fn();
+    localStorage.setItem(
+      "grain.pinned",
+      JSON.stringify([
+        { kind: "board", id: "board-10" },
+        { kind: "board", id: "board-11" },
+      ]),
+    );
+    const dupes = [
+      { id: "board-10", name: "Triage", folder: "Ops", kind: "list" },
+      { id: "board-11", name: "Triage", folder: "Zeta", kind: "kanban" },
+    ];
+    render(
+      <Sidebar
+        {...baseProps}
+        tasks={tasks}
+        boards={dupes}
+        onOpenBoard={onOpenBoard}
+      />,
+    );
+    const opsBtn = screen.getByRole("button", { name: "Triage, in Ops" });
+    const zetaBtn = screen.getByRole("button", { name: "Triage, in Zeta" });
+    await user.click(opsBtn);
+    expect(onOpenBoard).toHaveBeenCalledWith(dupes[0]);
+    await user.click(zetaBtn);
+    expect(onOpenBoard).toHaveBeenCalledWith(dupes[1]);
+  });
 });

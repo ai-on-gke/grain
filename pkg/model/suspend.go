@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -85,8 +86,9 @@ func standingJSON(st DispatchStanding) (string, error) {
 // run's outcome (SuspensionKind.Outcome), its suspend_kind, the
 // task_suspension row, the failure streak (which a suspension does not
 // move) and the Run now request the run spent (settleRunNow, which puts
-// it back for every kind) are all one transaction, so no crash can leave
-// a suspended run whose task has lost its standing.
+// it back for the kinds SuspensionKind.KeepsRunNow names) are all one
+// transaction, so no crash can leave a suspended run whose task has lost
+// its standing.
 //
 // It writes nothing a run never writes: not task.order_key, not the
 // base-branch repair mark, not the task's grants (DT-3). s.Standing is
@@ -126,7 +128,9 @@ func (s *Store) Suspend(ctx context.Context, susp Suspension) error {
 // since a run's outcome can be re-recorded (Store.SetRunOutcome).
 func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome, detail string, at time.Time, susp *Suspension) error {
 	if susp == nil {
-		if kind, ok := SuspensionKindOfOutcome(outcome); ok {
+		if outcome == InterruptedOutcome && strings.HasPrefix(detail, OperatorPausedDetail) {
+			susp = &Suspension{Kind: SuspendOperatorPause, Detail: detail, CreatedAt: at}
+		} else if kind, ok := SuspensionKindOfOutcome(outcome); ok {
 			susp = &Suspension{Kind: kind, Detail: detail, CreatedAt: at}
 		}
 	}
@@ -301,16 +305,34 @@ func (s *Store) FailedOverModels(ctx context.Context, taskID string) ([]string, 
 // time, has already been resumed, or there is none. dispatch.Cycle holds
 // a task until then: it is how a durable task's setup suspension waits
 // out its backoff without a strike to back off from.
+//
+// The agent's own suspension (SuspendRequested) is never held here, at
+// whatever time it names. Its at is a wake condition, and the task's
+// deferral already carries it (ui.Client.ResumeLater, ParkUntil): what
+// ends that deferral early -- a post under message: true
+// (WakeOnMessage), a CI verdict, a task closing, a person's Undefer --
+// is the condition being met, and the task is to run then. Holding it
+// to the at here as well kept a woken task queued, skipped every cycle,
+// until the time it had only named as a fallback.
+//
+// That suspension is left open rather than marked resumed: the run that
+// starts next resumes it (resumeSuspensionsTx), and until then an open
+// requested suspension with its deferral cleared is how a console
+// session, or a goal task, reads "woken and waiting to be dispatched".
 func (s *Store) SuspensionResumeAt(ctx context.Context, taskID string) (*time.Time, error) {
+	var kind string
 	var resumeAt sql.NullTime
 	err := s.db.QueryRowContext(ctx,
-		"SELECT `resume_at` FROM `task_suspension` WHERE `task_id` = ? AND `resumed_at` IS NULL "+
-			"ORDER BY `created_at` DESC, `run_id` DESC LIMIT 1", taskID).Scan(&resumeAt)
+		"SELECT `kind`, `resume_at` FROM `task_suspension` WHERE `task_id` = ? AND `resumed_at` IS NULL "+
+			"ORDER BY `created_at` DESC, `run_id` DESC LIMIT 1", taskID).Scan(&kind, &resumeAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading when task %s may resume: %w", taskID, err)
+	}
+	if SuspensionKind(kind) == SuspendRequested {
+		return nil, nil
 	}
 	return timePtr(resumeAt), nil
 }

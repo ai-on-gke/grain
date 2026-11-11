@@ -49,6 +49,21 @@ export function formatTime(value, zone) {
   });
 }
 
+// formatMoment is a moment printed beside "since" or "until" with nothing
+// else to say which day it is: the clock time alone when it falls on
+// today in zone, and the date and time otherwise. An alert or a pause can
+// stand for days, and "Since 6:10:07 AM" on one raised last week reads
+// as this morning.
+export function formatMoment(value, zone, now = new Date()) {
+  const day = (v) =>
+    format(v, zone, { year: "numeric", month: "numeric", day: "numeric" });
+  const on = day(value);
+  if (!on) return "";
+  return on === day(now)
+    ? formatTime(value, zone)
+    : formatDateTime(value, zone);
+}
+
 function format(value, zone, options) {
   const at = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(at.getTime())) return "";

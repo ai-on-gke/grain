@@ -64,11 +64,12 @@ func Current() *Provider {
 }
 
 type heldLease struct {
-	p     *Provider
-	creds model.CredentialResolver
-	ci    bool
-	lease *model.Lease
-	resp  *protocol.MintResponse
+	p       *Provider
+	creds   model.CredentialResolver
+	ci      bool
+	auditID string
+	lease   *model.Lease
+	resp    *protocol.MintResponse
 }
 
 var (
@@ -81,7 +82,7 @@ var (
 // Each mint is the retired Provider's own Resolve, Materialize and
 // PromptSection for the task run (model.MintRunID, model.MintCredentials)
 // or CI job (model.CIMintFrom) in the mint's context: the same refusal on
-// a deployment with no GitHub App, the same grain-sandbox-<run> repository
+// a deployment with no GitHub App, a grain-sandbox-<attempt> repository
 // on the App's one installation, the same two files with the same content
 // and mode, and the same prompt. Releasing the pass revokes the lease --
 // deletes the repository -- as the provider's Revoke did when the run
@@ -108,30 +109,35 @@ func MethodSpec() protocol.MethodSpec {
 			}
 
 			var (
-				runID string
-				creds model.CredentialResolver
-				repo  *model.RepoRef
-				isCI  bool
+				auditID string
+				creds   model.CredentialResolver
+				repo    *model.RepoRef
+				isCI    bool
 			)
 			if job, ok := model.CIMintFrom(ctx); ok {
-				runID = job.RunID
+				auditID = job.RunID
 				creds = job.Credentials
 				r := job.Repo
 				repo = &r
 				isCI = true
 			} else {
-				runID = model.MintRunID(ctx)
+				auditID = model.MintRunID(ctx)
 				creds = model.MintCredentials(ctx)
 			}
-			if runID == "" {
-				runID = attemptID
+			if auditID == "" {
+				auditID = attemptID
 			}
 
 			p := Current()
 			now := time.Now().UTC()
 			cc := model.CapabilityContext{
-				Task:        model.Task{Target: repo},
-				Run:         model.Run{ID: runID, Sandbox: runID, StartedAt: now},
+				Task: model.Task{Target: repo},
+				// The repository is named for the attempt (repoName), not the
+				// run: an attempt ID carries the deployment, task, attempt and
+				// grant index (protocol.AttemptID), so two deployments sharing
+				// one GitHub App installation cannot both claim one
+				// grain-sandbox-<run> name for runs that share an ID.
+				Run:         model.Run{ID: attemptID, Sandbox: attemptID, StartedAt: now},
 				Now:         now,
 				Deadline:    deadline,
 				Credentials: creds,
@@ -139,7 +145,7 @@ func MethodSpec() protocol.MethodSpec {
 			}
 			// The secret store's audit names the run, as it did for the
 			// provider (model.ResolveGrants).
-			ctx = secrets.WithRun(ctx, runID)
+			ctx = secrets.WithRun(ctx, auditID)
 			res, err := p.Resolve(ctx, cc)
 			if err != nil {
 				return nil, err
@@ -167,7 +173,7 @@ func MethodSpec() protocol.MethodSpec {
 				})
 			}
 			leasesMu.Lock()
-			leases[attemptID] = heldLease{p: p, creds: creds, ci: isCI, lease: mat.Lease, resp: resp}
+			leases[attemptID] = heldLease{p: p, creds: creds, ci: isCI, auditID: auditID, lease: mat.Lease, resp: resp}
 			leasesMu.Unlock()
 			return resp, nil
 		},
@@ -179,7 +185,12 @@ func MethodSpec() protocol.MethodSpec {
 			if !ok || h.lease == nil {
 				return nil
 			}
-			return h.p.Revoke(ctx, model.CapabilityContext{Now: time.Now(), Credentials: h.creds, CI: h.ci}, *h.lease)
+			// Deleting the repository reads the App's key from the secret
+			// store too, so its audit names the run the mint did.
+			if h.auditID != "" {
+				ctx = secrets.WithRun(ctx, h.auditID)
+			}
+			return h.p.Revoke(ctx, model.CapabilityContext{Now: time.Now().UTC(), Credentials: h.creds, CI: h.ci}, *h.lease)
 		},
 	}
 }

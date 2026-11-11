@@ -233,6 +233,8 @@ func TestRefSummaryAndTaskFilterVisibility(t *testing.T) {
 
 	// 2. External agent token without tasks:read is refused (403); repo-scoped
 	// external token sees only acme/widgets.
+	// Behind IAP a token works only while its owner is on the list.
+	h.allow(t, "user:admin@example.com", "grain/operator")
 	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "admin@example.com"})
 	noTasksTok, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name: "ci-bot", ScopeSet: "plc/ci-only", Owner: "admin@example.com",
@@ -426,7 +428,6 @@ func TestRefSummaryAndTaskFilterVisibility(t *testing.T) {
 	if emptyRefRec := callExt(multiTok.Token, "/api/tasks?externalRef="); emptyRefRec.Code != http.StatusForbidden {
 		t.Errorf("multi-repo external agent empty ?externalRef= = %d, want 403", emptyRefRec.Code)
 	}
-	h.allow(t, "user:admin@example.com", "grain/operator")
 	if dupRepoRec := doWithHeaders(t, srv, http.MethodGet, "/api/refs/CA-204/summary?repo=acme/widgets&repo=acme/gadgets", "", h.as("admin@example.com")); dupRepoRec.Code != http.StatusBadRequest {
 		t.Errorf("operator repeated ?repo= on summary = %d, want 400", dupRepoRec.Code)
 	}

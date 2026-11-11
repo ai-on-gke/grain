@@ -786,7 +786,19 @@ branch or a pull request number, and a comment or thread ID that is not
 on that pull request is refused before anything is posted. Resolution
 goes through GitHub's GraphQL API (`resolveReviewThread`), from the
 controller, with the same credential as the reads -- the sandbox still
-has no GraphQL of its own.
+has no GraphQL of its own. In the sandbox CLI, `grain pr threads
+[--unresolved]` lists the threads on the run's own pull request with the
+IDs `grain pr resolve --thread-id` and `grain pr reply --comment-id` take;
+it is a read of that one pull request, so it needs no CI grant. Outdated
+threads count as unresolved, because GitHub's rule counts them too.
+
+When GitHub refuses a merge because a conversation is unresolved, the
+merge queue sends the task back once, listing every unresolved thread, and
+asks for the merge again as soon as they are resolved. A sent-back run that
+finishes with threads still open is handed to a person. Threads grain
+opened itself for a review task's findings follow their owner's decision
+and are never sent back, and a refusal whose threads cannot be read is
+handed to a person rather than sent back.
 
 ### The sandbox image has no `gh`, and that is a decision
 

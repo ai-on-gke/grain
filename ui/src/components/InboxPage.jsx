@@ -13,9 +13,18 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import { Alert, Button, CircularProgress, TextField } from "@mui/material";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  CircularProgress,
+  FormControlLabel,
+  TextField,
+} from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
+import { taskDetailPath } from "../taskDetailPages.js";
+import AccessGate from "./AccessGate.jsx";
 import LinkedNote from "../linkedNote.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../taskRefs.js";
 import {
@@ -26,11 +35,19 @@ import {
   mergeQueueStalled,
   pullRequestUrl,
   reasonControl,
+  actionScope,
   redBaseRepairSentence,
   waitingBaseRepair,
   askedCase,
 } from "../state.js";
 import { forceMergeOffered, promptForceMerge } from "../taskWrites.js";
+import GateOverrideDialog from "./GateOverrideDialog.jsx";
+import MergeGatesList, {
+  needsHumanApproval,
+  overrideReviewButtonLabel,
+  submitButtonLabel,
+  unsatisfiedReviewGates,
+} from "./MergeGatesList.jsx";
 import { useNotificationSetting } from "../inboxNotifications.js";
 import { NavGlyph } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
@@ -45,15 +62,19 @@ import {
 } from "../alerts.js";
 import {
   ackNotification,
+  approveReleaseLabel,
+  decideRelease,
+  fetchReleaseApprovalKey,
   investigateNotification,
   notificationSentence,
-  decideRelease,
   pendingReleaseOf,
+  pendingReleaseSentence,
 } from "../notifications.js";
-import { formatTime } from "../time.js";
+import { formatMoment } from "../time.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { ListEmpty, ListHeader } from "./ListPrimitives.jsx";
 import Markdown from "./Markdown.jsx";
+import { commentPath, navigateInApp } from "../commentLinks.js";
 import PendingAccess from "./detail/PendingAccess.jsx";
 import QuestionDisclosure from "./QuestionDisclosure.jsx";
 import { TaskRow } from "./TaskList.jsx";
@@ -99,7 +120,7 @@ function usePendingLocalScripts() {
 // INBOX_COLLAPSED_STORAGE_KEY remembers which inbox sections this browser
 // has folded or unfolded, keyed by stable section id rather than display
 // title. Only choices that differ from a section's default are kept.
-export const INBOX_COLLAPSED_STORAGE_KEY = "grain.inbox.collapsed";
+const INBOX_COLLAPSED_STORAGE_KEY = "grain.inbox.collapsed";
 
 function readCollapsedMap() {
   try {
@@ -114,7 +135,7 @@ function readCollapsedMap() {
   }
 }
 
-export function useCollapsed(sectionId, defaultCollapsed = false) {
+function useCollapsed(sectionId, defaultCollapsed = false) {
   const [collapsed, setCollapsed] = useState(() => {
     const stored = readCollapsedMap()[sectionId];
     return typeof stored === "boolean" ? stored : Boolean(defaultCollapsed);
@@ -150,7 +171,7 @@ export function useCollapsed(sectionId, defaultCollapsed = false) {
 // heading is a button with a chevron, the section title and its count,
 // and folding a section hides its rows while keeping its heading and
 // count on screen.
-export function CollapsibleInboxGroup({
+function CollapsibleInboxGroup({
   sectionId,
   title,
   count,
@@ -291,24 +312,37 @@ const GROUPS = [
   {
     id: "red_base_repair",
     title: "Base-branch repair waiting",
-    hint: "A base branch is red and its repair pull request is waiting. Submit it to the merge queue or force-merge it to unblock the branch.",
+    hint: "A base branch is red and its repair pull request is waiting. Submit it to record your approval, or explicitly override unsatisfied gates to unblock the branch.",
     match: (t) => waitingBaseRepair(t),
     note: (t) => redBaseRepairSentence(t),
+    showGates: true,
     actions: [
       {
-        label: "Submit",
+        label: (t) => submitButtonLabel(t),
         variant: "contained",
         post: "/submit",
-        when: (t) => !t.autoMerge,
+        when: (t) => needsHumanApproval(t),
         title:
-          "Put this base-branch repair pull request on grain's merge queue: it is merged once its checks pass.",
+          "Record your approval for this base-branch repair pull request: it merges automatically once all required gates pass.",
+      },
+      {
+        label: (t) => overrideReviewButtonLabel(unsatisfiedReviewGates(t)),
+        variant: "outlined",
+        color: "warning",
+        overrideReviewGates: true,
+        when: (t, config) =>
+          unsatisfiedReviewGates(t).length > 0 && forceMergeOffered(config, t),
+        title:
+          "Explicitly override unsatisfied review gates on this base-branch repair pull request.",
       },
       {
         label: "Force merge",
         variant: "outlined",
         color: "warning",
         forceMerge: true,
-        when: (t, config) => forceMergeOffered(config, t),
+        when: (t, config) =>
+          unsatisfiedReviewGates(t).length === 0 &&
+          forceMergeOffered(config, t),
         title:
           "Force-merge this base-branch repair pull request now, overriding the merge queue.",
       },
@@ -354,27 +388,40 @@ const GROUPS = [
   {
     id: "review_questions",
     title: "Review needs your decision",
-    hint: "Each change's review fixed what it could and left questions only you can settle. Reply with your decision and another run carries it out, or ship it as it stands.",
+    hint: "Each change's review fixed what it could and left questions only you can settle. Reply with your decision so another run carries it out and a fresh review clears the gate.",
     match: (t) => awaitsHumanSubmit(t) && !!t.reviewQuestions,
     reply: true,
+    showGates: true,
     actions: [
       {
-        label: "Ship as is",
+        label: (t) => submitButtonLabel(t),
         variant: "outlined",
         post: "/submit",
+        when: (t) => needsHumanApproval(t),
         title:
-          "Submit the change as it stands, leaving the review's questions open: it goes on grain's merge queue and lands once its checks pass.",
+          "Record your human approval now: the pull request still waits until the review gate passes or is explicitly overridden.",
+      },
+      {
+        label: (t) => overrideReviewButtonLabel(unsatisfiedReviewGates(t)),
+        variant: "outlined",
+        color: "warning",
+        overrideReviewGates: true,
+        when: (t, config) =>
+          unsatisfiedReviewGates(t).length > 0 && forceMergeOffered(config, t),
+        title:
+          "Explicitly override unsatisfied review gates and merge now (requires merge:force and a recorded reason).",
       },
     ],
   },
   {
     id: "awaiting_submit",
     title: "Asked: submit for merge",
-    hint: "Each pull request is on no queue -- some may still have a run waiting on their checks. Nothing lands them until you submit them.",
+    hint: "Each pull request needs its merge gates satisfied before landing. Submit records your approval and merges automatically once all required reviews and CI checks pass.",
     // awaitsHumanSubmit, not the state alone: a run that opened a pull
     // request it will not merge by itself is often still running, blocked
     // in wait_for_checks, and Submit is owed just the same.
     match: (t) => awaitsHumanSubmit(t) && !t.reviewQuestions,
+    showGates: true,
     // "Asked you to submit owner/repo#12", with the hold that keeps it
     // off the queue where there is one (state.js's askedCase).
     // A CL not yet submittable says why instead (ClSubmit.jsx).
@@ -394,17 +441,29 @@ const GROUPS = [
           "Submit this CL now: its review, presubmit and grain's reviews have all cleared.",
       },
       {
-        label: "Submit",
+        label: (t) => submitButtonLabel(t),
         variant: "contained",
         post: "/submit",
-        when: (t) => !t.clSubmit,
+        when: (t) => !t.clSubmit && needsHumanApproval(t),
         title:
-          "Put this pull request on grain's merge queue: it is merged once its checks pass.",
+          "Record your approval: grain merges this pull request once every required review and CI check passes.",
         bulk: {
           label: "Submit all",
           confirm: (n) =>
-            `Submit all ${n} finished changes for merge? Each pull request goes on grain's merge queue and lands once its checks pass.`,
+            `Approve all ${n} changes for merge? Each pull request merges automatically once its required reviews and CI checks pass.`,
         },
+      },
+      {
+        label: (t) => overrideReviewButtonLabel(unsatisfiedReviewGates(t)),
+        variant: "outlined",
+        color: "warning",
+        overrideReviewGates: true,
+        when: (t, config) =>
+          !t.clSubmit &&
+          unsatisfiedReviewGates(t).length > 0 &&
+          forceMergeOffered(config, t),
+        title:
+          "Explicitly override unsatisfied review gates and merge now (requires merge:force and a recorded reason).",
       },
     ],
   },
@@ -706,33 +765,292 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
   );
 }
 
-// ReleaseSoak is what a soak-era pending release's Approve needs said
-// beside it: how long it soaked, and when that was under the minimum,
-// the SHORT SOAK warning -- approving it then accepts the short soak
-// (short_soak_ok), which the approve job otherwise refuses. Releases the
-// qualification-driven train stages (vX.Y.Z, minor or patch) write
-// "Qualification: PASS" instead, so release.soak and release.shortSoak
-// are null and nothing is rendered beside Approve.
+// ReleaseSoak is what a pending release's Approve needs said beside it:
+// for a soak-era release, how long it soaked and the SHORT SOAK warning
+// when under the minimum (short_soak_ok); for a release carrying breaking
+// changes outside a RELEASE_MAJOR major bump, the BREAKING warning
+// (allow_breaking), which the approve job otherwise refuses.
 function ReleaseSoak({ release }) {
-  if (!release.soak && !release.shortSoak) return null;
+  if (!release.soak && !release.shortSoak && !release.breaking) return null;
+  const tooltip = [release.shortSoak, release.breaking]
+    .filter(Boolean)
+    .join("\n");
   return (
     <span
       className="inbox-release-soak"
       data-testid="inbox-release-soak"
-      title={release.shortSoak || undefined}
+      title={tooltip || undefined}
     >
       {release.shortSoak && (
         <span className="inbox-release-short-soak">SHORT SOAK</span>
       )}
-      {release.soak || "no recorded soak"}
+      {release.breaking && (
+        <span className="inbox-release-short-soak">BREAKING</span>
+      )}
+      {(release.soak || release.shortSoak) &&
+        (release.soak || "no recorded soak")}
     </span>
   );
 }
+// PendingReleaseItem is one staged vX.Y.Z-pending release awaiting a
+// person's Approve or Reject under "Asked: approve a release". It carries
+// the allow_breaking and short_soak_ok options in place and surfaces any
+// failed promote-release.yml dispatch (with GET /api/release-approval-key
+// when GRAIN_RELEASE_APPROVAL_KEY is missing or mismatched) so the person
+// is never told a release succeeded when promotion failed.
+function PendingReleaseItem({ n, config, onChanged, showError }) {
+  const zone = useTimeZone();
+  const release = pendingReleaseOf(n);
+  const [busy, setBusy] = useState(null);
+  const [allowBreakingOverride, setAllowBreakingOverride] = useState(null);
+  const [shortSoakOverride, setShortSoakOverride] = useState(null);
+  const [approvalKey, setApprovalKey] = useState(null);
+  const [loadingKey, setLoadingKey] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+
+  const effectiveAllowBreaking =
+    allowBreakingOverride !== null
+      ? allowBreakingOverride
+      : Boolean(release.breaking);
+  const effectiveShortSoakOk =
+    shortSoakOverride !== null ? shortSoakOverride : Boolean(release.shortSoak);
+
+  const decide = async (approve) => {
+    setBusy(approve ? "approve" : "reject");
+    try {
+      const ok = await decideRelease(release, approve, {
+        shortSoakOk: effectiveShortSoakOk,
+        allowBreaking: effectiveAllowBreaking,
+      });
+      if (!ok) return;
+      await onChanged?.();
+    } catch (err) {
+      showError?.(err.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadApprovalKey = async () => {
+    setLoadingKey(true);
+    try {
+      const data = await fetchReleaseApprovalKey();
+      setApprovalKey(data || null);
+    } catch (err) {
+      showError?.(err.message);
+    } finally {
+      setLoadingKey(false);
+    }
+  };
+
+  const copyApprovalKey = async () => {
+    if (!approvalKey?.publicKey || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(approvalKey.publicKey);
+      setCopiedKey(true);
+    } catch {
+      // The key stays selectable in the pre block below if clipboard fails.
+    }
+  };
+
+  const failure = release.dispatchFailure;
+
+  return (
+    <li
+      className="inbox-item"
+      data-testid="inbox-pending-release"
+      data-severity={n.severity}
+    >
+      <div className="inbox-line">
+        <div className="inbox-gate">
+          <Alert
+            severity={muiSeverity(n.severity)}
+            variant="outlined"
+            sx={{ py: 0, px: 1, border: 0, alignItems: "center" }}
+          >
+            <strong>{n.title}</strong>
+          </Alert>
+        </div>
+        <div className="inbox-actions">
+          <ReleaseSoak release={release} />
+          <AccessGate
+            scope="releases:write"
+            repo={release.repo}
+            config={config}
+          >
+            <Button
+              size="small"
+              variant="contained"
+              color={
+                effectiveShortSoakOk || effectiveAllowBreaking
+                  ? "warning"
+                  : "primary"
+              }
+              disabled={busy !== null}
+              onClick={() => decide(true)}
+            >
+              {approveReleaseLabel({
+                shortSoak: effectiveShortSoakOk,
+                breaking: effectiveAllowBreaking,
+              })}
+            </Button>
+          </AccessGate>
+          <AccessGate
+            scope="releases:write"
+            repo={release.repo}
+            config={config}
+          >
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              disabled={busy !== null}
+              onClick={() => decide(false)}
+            >
+              Reject
+            </Button>
+          </AccessGate>
+        </div>
+      </div>
+      {failure && (
+        <div
+          className="inbox-release-failure"
+          data-testid="inbox-release-dispatch-failure"
+        >
+          <Alert severity="error">
+            <div>
+              <strong>Last promote-release.yml dispatch failed</strong> (
+              {failure.runUrl ? (
+                <a href={failure.runUrl} target="_blank" rel="noreferrer">
+                  {failure.runId}
+                </a>
+              ) : (
+                failure.runId
+              )}
+              ): {failure.message}
+            </div>
+            {failure.remedy && (
+              <div className="inbox-release-remedy">{failure.remedy}</div>
+            )}
+            {failure.needsApprovalKey && (
+              <div className="inbox-release-key-actions">
+                {!approvalKey ? (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="inherit"
+                    disabled={loadingKey}
+                    onClick={loadApprovalKey}
+                  >
+                    Show approval key
+                  </Button>
+                ) : (
+                  <div className="inbox-approval-key-box">
+                    <div className="inbox-approval-key-header">
+                      <span>
+                        Repository variable{" "}
+                        <code>
+                          {approvalKey.variable || "GRAIN_RELEASE_APPROVAL_KEY"}
+                        </code>{" "}
+                        (from <code>GET /api/release-approval-key</code>):
+                      </span>
+                      {navigator.clipboard?.writeText && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="inherit"
+                          onClick={copyApprovalKey}
+                        >
+                          {copiedKey ? "Copied" : "Copy key"}
+                        </Button>
+                      )}
+                    </div>
+                    <pre className="inbox-approval-key">
+                      {approvalKey.publicKey}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </Alert>
+        </div>
+      )}
+      <div className="inbox-release-options">
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              checked={effectiveAllowBreaking}
+              disabled={busy !== null}
+              onChange={(e) => setAllowBreakingOverride(e.target.checked)}
+              inputProps={{
+                "aria-label": `Allow breaking changes for ${release.version}`,
+              }}
+            />
+          }
+          label="Allow breaking changes"
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              checked={effectiveShortSoakOk}
+              disabled={busy !== null}
+              onChange={(e) => setShortSoakOverride(e.target.checked)}
+              inputProps={{
+                "aria-label": `Allow short soak for ${release.version}`,
+              }}
+            />
+          }
+          label="Allow short soak"
+        />
+      </div>
+      <p className="inbox-note">
+        {pendingReleaseSentence(n)}{" "}
+        <span className="inbox-note-meta">
+          {release.repo} · {n.subject} · since {formatMoment(n.raisedAt, zone)}
+        </span>
+      </p>
+    </li>
+  );
+}
+
+// PendingReleasesGroup lists staged vX.Y.Z-pending releases under "Asked",
+// expanded by default rather than folded inside Notifications: the approve
+// and reject routes refuse agents, so only a person's answer moves a
+// pending release along.
+function PendingReleasesGroup({ notifications, config, onChanged, showError }) {
+  if (!notifications || notifications.length === 0) return null;
+  return (
+    <CollapsibleInboxGroup
+      key="pending-releases"
+      sectionId="pending-releases"
+      title="Asked: approve a release"
+      count={notifications.length}
+      testId="inbox-pending-releases"
+      hint="A release candidate passed qualification and is staged as vX.Y.Z-pending. Only a person may approve or reject it — agents are refused — and it stays here until answered."
+    >
+      <ul className="task-list">
+        {notifications.map((n) => (
+          <PendingReleaseItem
+            key={n.id}
+            n={n}
+            config={config}
+            onChanged={onChanged}
+            showError={showError}
+          />
+        ))}
+      </ul>
+    </CollapsibleInboxGroup>
+  );
+}
+
 // NotificationsGroup is the open operator notifications
 // (notifications.js, design/design/durable-tasks.design.md DT-5), above the task
 // rows: one row each, with what a person can do about it. An
 // acknowledged one stays here, marked, until whatever raised it clears
 // it; acknowledging only takes it out of the alerts bell's count.
+// Pending releases live in PendingReleasesGroup under "Asked" instead.
 function NotificationsGroup({
   notifications,
   onChanged,
@@ -746,10 +1064,6 @@ function NotificationsGroup({
     setBusy(`${n.id}:${kind}`);
     try {
       if (kind === "ack") await ackNotification(n);
-      if (kind === "approve" || kind === "reject") {
-        if (!(await decideRelease(pendingReleaseOf(n), kind === "approve")))
-          return;
-      }
       if (kind === "investigate") {
         const id = await investigateNotification(n);
         if (id) onOpenTask?.(id);
@@ -790,51 +1104,30 @@ function NotificationsGroup({
                 </Alert>
               </div>
               <div className="inbox-actions">
-                {pendingReleaseOf(n) && (
-                  <>
-                    <ReleaseSoak release={pendingReleaseOf(n)} />
-                    <Button
-                      size="small"
-                      variant="contained"
-                      color={
-                        pendingReleaseOf(n).shortSoak ? "warning" : "primary"
-                      }
-                      disabled={busy !== null}
-                      onClick={() => act(n, "approve")}
-                    >
-                      {pendingReleaseOf(n).shortSoak
-                        ? "Approve short soak"
-                        : "Approve"}
-                    </Button>
+                {!n.ackedAt && (
+                  <AccessGate scope="notifications:write">
                     <Button
                       size="small"
                       variant="outlined"
-                      color="error"
                       disabled={busy !== null}
-                      onClick={() => act(n, "reject")}
+                      onClick={() => act(n, "ack")}
                     >
-                      Reject
+                      Acknowledge
                     </Button>
-                  </>
+                  </AccessGate>
                 )}
-                {!n.ackedAt && (
+                {/* POST .../investigate files the task, or finds the one
+                    already filed: tasks:write either way. */}
+                <AccessGate scope="tasks:write">
                   <Button
                     size="small"
                     variant="outlined"
                     disabled={busy !== null}
-                    onClick={() => act(n, "ack")}
+                    onClick={() => act(n, "investigate")}
                   >
-                    Acknowledge
+                    {n.investigationTaskId ? "Investigation" : "Investigate"}
                   </Button>
-                )}
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={busy !== null}
-                  onClick={() => act(n, "investigate")}
-                >
-                  {n.investigationTaskId ? "Investigation" : "Investigate"}
-                </Button>
+                </AccessGate>
                 {n.taskId && onOpenTask && (
                   <Button
                     size="small"
@@ -849,7 +1142,7 @@ function NotificationsGroup({
             <p className="inbox-note">
               {notificationSentence(n)}{" "}
               <span className="inbox-note-meta">
-                {n.subject} · since {formatTime(n.raisedAt, zone)}
+                {n.subject} · since {formatMoment(n.raisedAt, zone)}
                 {n.ackedAt ? " · acknowledged" : ""}
               </span>
             </p>
@@ -891,6 +1184,21 @@ function groupTasks(tasks) {
 // Nothing is offered on a group of one: the row's own button is already
 // under the reader's cursor, and a header full of "Approve all (1)"
 // teaches everybody to click past the confirm that matters.
+// inboxActionScope is the role scope the request behind one of a row's
+// answers needs (state.js's actionScope, which the task list's own
+// stalled-row control is gated on too).
+export const inboxActionScope = actionScope;
+
+// gated wraps a row's button in AccessGate when its answer writes.
+function gated(scope, repo, config, button) {
+  if (!scope) return button;
+  return (
+    <AccessGate key={button.key} scope={scope} repo={repo} config={config}>
+      {button}
+    </AccessGate>
+  );
+}
+
 function bulkActions(group, rows) {
   return (group.actions || []).filter((a) => a.bulk && rows.length >= 2);
 }
@@ -929,6 +1237,61 @@ function NotificationSwitch() {
   );
 }
 
+function GateOverridesGroup({ tasks, onOpenTask }) {
+  const overridden = (tasks || []).filter((t) => Boolean(t?.gateOverride));
+  if (overridden.length === 0) return null;
+  return (
+    <CollapsibleInboxGroup
+      key="gate-overrides"
+      sectionId="gate-overrides"
+      title="Gate overrides"
+      count={overridden.length}
+      testId="inbox-gate-overrides"
+      hint="Changes merged or queued by explicitly overriding required merge gates. Recorded for operator audit; any running review continues against the merged commit on the base branch."
+    >
+      <ul className="task-list">
+        {overridden.map((t) => (
+          <li
+            className="inbox-item"
+            key={`override-${t.id}`}
+            data-testid="inbox-gate-override-item"
+          >
+            <div className="inbox-line">
+              <div className="inbox-gate">
+                <Button size="small" onClick={() => onOpenTask?.(t.id)}>
+                  Task {t.id}
+                </Button>
+                <span>{t.title}</span>
+              </div>
+            </div>
+            <MergeGatesList t={t} compact onOpenTask={onOpenTask} />
+          </li>
+        ))}
+      </ul>
+    </CollapsibleInboxGroup>
+  );
+}
+
+// preferNextInbox is the per-browser default the new UI's "Default to new
+// UI" switch sets (ui-ng's ThemeService, PREFER_NEXT_STORAGE_KEY): with it
+// on, opening the classic Inbox goes to /next/inbox instead -- unless the
+// address says ?classic=1, which is how the new Inbox links back here.
+// The query is read when this module loads, before App's own routing
+// rewrites the address without it.
+const PREFER_NEXT_KEY = "grain.ui.preferNext";
+const classicAsked =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location?.search || "").has("classic");
+
+export function preferNextInbox() {
+  if (classicAsked) return false;
+  try {
+    return localStorage.getItem(PREFER_NEXT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function InboxPage({
   tasks,
   tasksLoaded = true,
@@ -945,10 +1308,23 @@ export default function InboxPage({
   // as tall as the question it is answering, and two of them open at
   // once turns a list of what is waiting into a page of forms.
   const [replyTo, setReplyTo] = useState(null);
+  const [overrideTask, setOverrideTask] = useState(null);
   const waiting = inboxTasks(tasks);
   const groups = groupTasks(waiting);
+  const overriddenTasks = (tasks || []).filter((t) => Boolean(t?.gateOverride));
   const [localScripts, reloadLocalScripts] = usePendingLocalScripts();
+  useEffect(() => {
+    if (window.location?.pathname === "/inbox" && preferNextInbox()) {
+      window.location.replace("/next/inbox");
+    }
+  }, []);
   const syncFailure = config?.stateRepoSyncFailure || null;
+  const pendingReleases = notifications.filter(
+    (n) => pendingReleaseOf(n) !== null,
+  );
+  const operatorNotifications = notifications.filter(
+    (n) => pendingReleaseOf(n) === null,
+  );
 
   // act wraps App's own runner so a row's button can say what it did
   // before firing: the confirm is here rather than in onAct because only
@@ -994,6 +1370,13 @@ export default function InboxPage({
         icon={<NavGlyph kind="inbox" size={20} />}
         action={<NotificationSwitch />}
       />
+      {/* The Angular rewrite's Inbox (ui-ng/, served at /next/inbox;
+          design/design/angular-ui.design.md). Same session, same API. */}
+      <p className="inbox-next-callout">
+        <a href="/next/inbox" className="inbox-try-next">
+          Try the new Inbox
+        </a>
+      </p>
       {/* Deliberately the same sentence it always was, and about tasks
           only: a line promising that every base branch is tested is the
           exact reassurance this page was extended to stop giving. */}
@@ -1008,6 +1391,7 @@ export default function InboxPage({
       )}
       {tasksLoaded &&
         groups.length === 0 &&
+        overriddenTasks.length === 0 &&
         localScripts.length === 0 &&
         notifications.length === 0 &&
         !syncFailure && (
@@ -1016,8 +1400,9 @@ export default function InboxPage({
             done.
           </ListEmpty>
         )}
+      <GateOverridesGroup tasks={overriddenTasks} onOpenTask={onOpenTask} />
       <NotificationsGroup
-        notifications={notifications}
+        notifications={operatorNotifications}
         onChanged={onNotificationsChanged}
         onOpenTask={onOpenTask}
         showError={showError}
@@ -1032,6 +1417,12 @@ export default function InboxPage({
         onOpenTask={onOpenTask}
         reload={reloadLocalScripts}
       />
+      <PendingReleasesGroup
+        notifications={pendingReleases}
+        config={config}
+        onChanged={onNotificationsChanged}
+        showError={showError}
+      />
       {groups.map(({ group, tasks: rows }) => {
         const bulk = bulkActions(group, rows);
         return (
@@ -1043,16 +1434,21 @@ export default function InboxPage({
             hint={group.hint}
             actions={
               bulk.length > 0
-                ? bulk.map((action) => (
-                    <Button
-                      key={action.bulk.label}
-                      size="small"
-                      variant="outlined"
-                      onClick={() => runAll(rows, action)}
-                    >
-                      {action.bulk.label} ({rows.length})
-                    </Button>
-                  ))
+                ? bulk.map((action) =>
+                    gated(
+                      inboxActionScope(action),
+                      rows.map((t) => t.repo).filter(Boolean),
+                      config,
+                      <Button
+                        key={action.bulk.label}
+                        size="small"
+                        variant="outlined"
+                        onClick={() => runAll(rows, action)}
+                      >
+                        {action.bulk.label} ({rows.length})
+                      </Button>,
+                    ),
+                  )
                 : null
             }
           >
@@ -1062,13 +1458,27 @@ export default function InboxPage({
                 // where it has something: the merge queue's own note on a
                 // stalled wait (GROUPS' merge_stalled).
                 const note = group.note?.(t) || null;
+                // A row parked on a question opens on the question itself
+                // (/tasks/<id>#comment=<cid>, CommentDeepLink), as GET
+                // /api/inbox's path for it does: the question is not
+                // always the newest comment, nor the timeline newest
+                // first, so the top of the pane may not show it.
+                const questionHref =
+                  group.reply && t.questionCommentId
+                    ? commentPath(t.id, t.questionCommentId)
+                    : null;
                 return (
                   <li className="inbox-item" key={t.id}>
                     <div className="inbox-line">
                       <TaskRow
                         t={t}
                         config={config}
-                        onOpenTask={onOpenTask}
+                        onOpenTask={
+                          questionHref
+                            ? () => navigateInApp(questionHref)
+                            : onOpenTask
+                        }
+                        href={questionHref || undefined}
                         hideQuestion={!!group.reply}
                       />
                       <div className="inbox-actions">
@@ -1084,19 +1494,23 @@ export default function InboxPage({
                         {t.changelists?.length > 0 && t.clSubmit && (
                           <BehindBadge submit={t.clSubmit} />
                         )}
-                        {group.reply && (
-                          <Button
-                            size="small"
-                            variant={
-                              replyTo === t.id ? "outlined" : "contained"
-                            }
-                            onClick={() =>
-                              setReplyTo(replyTo === t.id ? null : t.id)
-                            }
-                          >
-                            {replyTo === t.id ? "Cancel" : "Reply"}
-                          </Button>
-                        )}
+                        {group.reply &&
+                          gated(
+                            "tasks:write",
+                            t.repo,
+                            config,
+                            <Button
+                              size="small"
+                              variant={
+                                replyTo === t.id ? "outlined" : "contained"
+                              }
+                              onClick={() =>
+                                setReplyTo(replyTo === t.id ? null : t.id)
+                              }
+                            >
+                              {replyTo === t.id ? "Cancel" : "Reply"}
+                            </Button>,
+                          )}
                         {[
                           ...(group.controls?.(t) || []),
                           ...(group.actions || []),
@@ -1104,10 +1518,14 @@ export default function InboxPage({
                           .filter(
                             (action) => !action.when || action.when(t, config),
                           )
-                          .map((action) =>
-                            action.href ? (
+                          .map((action) => {
+                            const label =
+                              typeof action.label === "function"
+                                ? action.label(t)
+                                : action.label;
+                            return action.href ? (
                               <Button
-                                key={action.label}
+                                key={label}
                                 size="small"
                                 variant={action.variant || "outlined"}
                                 color={action.color}
@@ -1117,35 +1535,41 @@ export default function InboxPage({
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >
-                                {action.label}
+                                {label}
                               </Button>
                             ) : (
-                              <Button
-                                key={action.label}
-                                size="small"
-                                variant={action.variant || "outlined"}
-                                color={action.color}
-                                title={action.title}
-                                // `open` is the third kind of answer a row can
-                                // carry, beside a link out and a request: the
-                                // task's own pane, for a wait whose next step
-                                // is reading rather than doing.
-                                onClick={() =>
-                                  action.open
-                                    ? onOpenTask(t.id)
-                                    : action.forceMerge
-                                      ? promptForceMerge(t, (fn) =>
-                                          onAct(fn, t.id),
-                                        )
-                                      : run(t, action)
-                                }
-                              >
-                                {action.label}
-                              </Button>
-                            ),
-                          )}
+                              gated(
+                                inboxActionScope(action),
+                                t.repo,
+                                config,
+                                <Button
+                                  key={label}
+                                  size="small"
+                                  variant={action.variant || "outlined"}
+                                  color={action.color}
+                                  title={action.title}
+                                  onClick={() =>
+                                    action.open
+                                      ? onOpenTask(t.id)
+                                      : action.overrideReviewGates
+                                        ? setOverrideTask(t)
+                                        : action.forceMerge
+                                          ? promptForceMerge(t, (fn) =>
+                                              onAct(fn, t.id),
+                                            )
+                                          : run(t, action)
+                                  }
+                                >
+                                  {label}
+                                </Button>,
+                              )
+                            );
+                          })}
                       </div>
                     </div>
+                    {(group.showGates || t.gateOverride) && (
+                      <MergeGatesList t={t} compact onOpenTask={onOpenTask} />
+                    )}
                     {/* The note is grain's own sentence, and the page it
                         names -- the GitHub review an approval wait needs --
                         is a link here as it is in the task's pane. */}
@@ -1171,6 +1595,12 @@ export default function InboxPage({
           </CollapsibleInboxGroup>
         );
       })}
+      <GateOverrideDialog
+        open={Boolean(overrideTask)}
+        onClose={() => setOverrideTask(null)}
+        t={overrideTask}
+        onSubmit={(fn) => onAct(fn, overrideTask?.id)}
+      />
     </main>
   );
 }
@@ -1234,7 +1664,7 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
       if (!open) prefetchedIdRef.current = t.id;
       setFailed(false);
       Promise.resolve()
-        .then(() => api(`/api/tasks/${t.id}`))
+        .then(() => api(taskDetailPath(t.id)))
         .then((d) => {
           if (live && d) setDetail(d);
         })

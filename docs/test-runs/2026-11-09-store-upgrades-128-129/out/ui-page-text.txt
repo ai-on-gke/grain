@@ -1,0 +1,609 @@
+=== /templates/template-1
+grain
+new task
+pinned
+customize
+inbox
+2
+tasks
+2
+proposed
+1
+asked
+1
+boards
+0
+sessions
+1
+processes
+8
+repos
+2
+v0.0.0-20261109043048-d34ca67b02f7+dirty · d34ca67-dirty · 2026-11-09 04:30Z
+processes
+8
++ new
+​
+​
+filter
+next run soonest first
+suite runs
+0
+1
+processes
+all 8
+schedules 6
+workflow schedules 0
+templates 2
+suites 0
+triggers 0
+KIND
+NAME
+REPO
+LAST RUN
+NEXT RUN
+ENABLED
+schedule
+Pipeline steward
+🔒 system
+every 360m
+template: pipeline steward
+—
+—
+11/9/2026, 10:32:50 AM
+Enabled
+schedule
+nightly
+daily at 03:00
+acme/widgets
+—
+11/10/2026, 3:00:00 AM
+Enabled
+schedule
+Suggest what to tune for throughput and reliability
+🔒 system
+daily at 03:00
+template: infrastructure review
+—
+—
+11/10/2026, 3:00:00 AM
+Enabled
+schedule
+Write down what grain has learned about working here
+🔒 system
+daily at 03:00
+template: memory agent
+—
+—
+11/10/2026, 3:00:00 AM
+Enabled
+schedule
+Audit sampled pipeline steward reports
+🔒 system
+mondays at 03:00
+template: steward report audit
+—
+—
+11/16/2026, 3:00:00 AM
+Enabled
+schedule
+Write up what the cluster shipped this week
+🔒 system
+mondays at 03:00
+template: release notes
+—
+—
+11/16/2026, 3:00:00 AM
+Enabled
+template
+disabled-template
+disabled template
+acme/widgets
+—
+on demand
+—
+use…
+template
+Set up a GKE sandbox cluster
+🔒 system
+Set up a GKE sandbox cluster and attach it to grain
+any
+—
+on demand
+—
+use…
+suite runs
+No suite runs yet.
+← templates
+edit template
+name
+name *
+shown wherever a template is picked
+task title
+task title *
+description
+description
+Inputs optional -- write {{name}} in the title or description above, and whoever files a task from this template fills it in
++ add input
+repos optional -- leave the first empty to let whatever fires this template choose it
+base branch
+base branch
+optional, and only used with a bound repo
+​
+read-only repos
+read-only repos
+optional -- cloned alongside the target repo, never pushed to
+reviewers
+reviewers
+optional -- comma-separated usernames passed to workspace grants and used when mailing a CL
+task priority
+task priority
+optional -- every task this template files starts at this priority; default 5, higher numbers run first
+auto-merge once checks pass
+interactive (agent can chat with you)
+keep running
+admission
+Standard
+admission
+Queued with ordinary work, under the worker limit. Applies to every task this template files.
+hosting
+Unattended
+hosting
+Hands the agent its prompt and runs the turn to completion on its own. Applies to every task this template files.
+network access
+Deployment default
+network access
+fixes the network of every task this template files. A task with no network still reaches this deployment's git proxy.
+when the agent finds nothing to do
+Close
+when the agent finds nothing to do
+applies to every task this template files
+model
+model
+the model every task this template files asks for. A task filed from it can still choose its own.
+grants
+What the agent may use: grain's own API (docs/agent-api.md) and capability server methods (docs/capabilities.md).
+api:test-quarantine
+What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks
+add grant…
+delete
+new task from this template
+cancel
+save
+=== /schedules/sched-1
+grain
+new task
+pinned
+customize
+inbox
+2
+tasks
+2
+proposed
+1
+asked
+1
+boards
+0
+sessions
+1
+processes
+8
+repos
+2
+v0.0.0-20261109043048-d34ca67b02f7+dirty · d34ca67-dirty · 2026-11-09 04:30Z
+processes
+8
++ new
+​
+​
+filter
+next run soonest first
+suite runs
+0
+1
+processes
+all 8
+schedules 6
+workflow schedules 0
+templates 2
+suites 0
+triggers 0
+KIND
+NAME
+REPO
+LAST RUN
+NEXT RUN
+ENABLED
+schedule
+Pipeline steward
+🔒 system
+every 360m
+template: pipeline steward
+—
+—
+11/9/2026, 10:32:50 AM
+Enabled
+schedule
+nightly
+daily at 03:00
+acme/widgets
+—
+11/10/2026, 3:00:00 AM
+Enabled
+schedule
+Suggest what to tune for throughput and reliability
+🔒 system
+daily at 03:00
+template: infrastructure review
+—
+—
+11/10/2026, 3:00:00 AM
+Enabled
+schedule
+Write down what grain has learned about working here
+🔒 system
+daily at 03:00
+template: memory agent
+—
+—
+11/10/2026, 3:00:00 AM
+Enabled
+schedule
+Audit sampled pipeline steward reports
+🔒 system
+mondays at 03:00
+template: steward report audit
+—
+—
+11/16/2026, 3:00:00 AM
+Enabled
+schedule
+Write up what the cluster shipped this week
+🔒 system
+mondays at 03:00
+template: release notes
+—
+—
+11/16/2026, 3:00:00 AM
+Enabled
+template
+disabled-template
+disabled template
+acme/widgets
+—
+on demand
+—
+use…
+template
+Set up a GKE sandbox cluster
+🔒 system
+Set up a GKE sandbox cluster and attach it to grain
+any
+—
+on demand
+—
+use…
+suite runs
+No suite runs yet.
+← schedules
+edit schedule
+template
+template
+repos the first is the one each firing's own work lands in
+base branch
+base branch
+optional
+​
+model
+model
+the model every task this schedule files asks for
+title
+title *
+description
+description
+read-only repos
+read-only repos
+optional -- cloned alongside the target repo, never pushed to
+auto-merge once checks pass
+keep running
+admission
+Standard
+admission
+Queued with ordinary work, under the worker limit. Applies to every task this schedule files.
+hosting
+Unattended
+hosting
+Hands the agent its prompt and runs the turn to completion on its own. Applies to every task this schedule files.
+network access
+Deployment default
+network access
+fixes the network of every task this schedule files. A task with no network still reaches this deployment's git proxy.
+when the agent finds nothing to do
+Close
+when the agent finds nothing to do
+applies to every task this schedule files
+grants
+What the agent may use: grain's own API (docs/agent-api.md) and capability server methods (docs/capabilities.md).
+api:test-quarantine
+What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks
+add grant…
+repeat
+Daily, at a time
+repeat
+time (utc) *
+time (utc) *
+time zone
+time zone
+The timezone this schedule fires in. Defaults to UTC if left unset.
+if the last run has not finished
+Skip this run
+if the last run has not finished
+The cadence waits: the skipped run happens as soon as the last one finishes.
+delete
+pause
+run now
+cancel
+save
+what this schedule files
+as edited above, not as saved
+this schedule's own content
+Title
+nightly
+from the schedule
+Description
+seed --- grain: capability catalogue migration dropped grant https://grain.dev/capabilities/github#read-issues={} (capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced)); re-enable the capability in settings/capabilities.yml before re-attaching it.
+from the schedule
+Repo
+acme/widgets
+from the schedule
+Branch
+the repo's default branch
+from the schedule
+Reads
+none
+from the schedule
+Also writes
+none
+from the schedule
+Capabilities
+api:test-quarantine
+from the schedule
+Fields
+none
+from the schedule
+Network
+no override
+the deployment decides
+Nothing needed
+close
+from the schedule
+Model
+the deployment's default model
+the deployment decides
+Auto-merge
+off
+from the schedule
+Approval
+approved when filed
+from the schedule
+=== /tasks/3
+grain
+new task
+pinned
+customize
+inbox
+2
+tasks
+2
+proposed
+1
+asked
+1
+boards
+0
+sessions
+1
+processes
+8
+repos
+2
+v0.0.0-20261109043048-d34ca67b02f7+dirty · d34ca67-dirty · 2026-11-09 04:30Z
+task 3
+2
+​
+​
+filters (1)
+backlog order
+contact running
+1
+all tasks
+state is none of deferred, closed
+select all
+2
+disabled grant
+acme/widgets
+debian
+api preset: test-quarantine
+github › read-issues
+unapproved
+3
+parked on github-sandbox
+This task could not be dispatched: the capability https://grain.dev/capabilities/github#sandbox-rep…
+acme/widgets
+debian
+question
+← back
+3 parked on github-sandbox
+prompt
+edit
+as of just now
+Waiting for your reply
+This task could not be dispatched: the capability https://grain.dev/capabilities/github#sandbox-rep…
+This task could not be dispatched: the capability https://grain.dev/capabilities/github#sandbox-repo was refused, so no sandbox was built for it.
+What was said, verbatim -- untrusted text from capability:https://grain.dev/capabilities/github#sandbox-repo, not grain's own words:
+this deployment has no GitHub App configured (github-app/app-id is unset) -- run `grain controller bootstrap-github-app` on the host, or detach this capability from the task
+Change the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again.
+​
+send
+store-upgrade seed
+timeline
+​
+comment
+Sending a comment reopens this task for another run.
+11/9/2026, 4:32:53 AM
+Asked
+11/9/2026, 4:32:53 AM
+grain on behalf of capability:https://grain.dev/capabilities/github#sandbox-repo · automation
+This task could not be dispatched: the capability https://grain.dev/capabilities/github#sandbox-repo was refused, so no sandbox was built for it.
+What was said, verbatim -- untrusted text from capability:https://grain.dev/capabilities/github#sandbox-repo, not grain's own words:
+this deployment has no GitHub App configured (github-app/app-id is unset) -- run `grain controller bootstrap-github-app` on the host, or detach this capability from the task
+Change the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again.
+11/9/2026, 4:32:51 AM
+Waiting
+11/9/2026, 4:32:51 AM
+Proposed
+asked
+priority: 5
+pause
+auto-merge once checks pass
+keep running
+admission
+Standard
+admission
+Queued with ordinary work, under the worker limit.
+hosting
+Unattended
+hosting
+Hands the agent its prompt and runs the turn to completion on its own.
+this fixes a red main
+run now
+close
+goal
+No goal: this task completes when its agent says it is done.
+add goal
+repos
+repo
+base branch
+base branch
+empty starts from the repo's default branch
+​
+read-only repos
+read-only repos
+optional -- cloned alongside the target repo, never pushed to
+Owner
+debian
+change
+Filed by
+access
+grants
+What the agent may use: grain's own API (docs/agent-api.md) and capability server methods (docs/capabilities.md).
+github › sandbox-repo
+add grant…
+depends on
+No dependencies.
+​
+=== /tasks/2
+grain
+new task
+pinned
+customize
+inbox
+2
+tasks
+2
+proposed
+1
+asked
+1
+boards
+0
+sessions
+1
+processes
+8
+repos
+2
+v0.0.0-20261109043048-d34ca67b02f7+dirty · d34ca67-dirty · 2026-11-09 04:30Z
+task 2
+2
+​
+​
+filters (1)
+backlog order
+contact running
+1
+all tasks
+state is none of deferred, closed
+select all
+2
+disabled grant
+acme/widgets
+debian
+api preset: test-quarantine
+github › read-issues
+unapproved
+3
+parked on github-sandbox
+This task could not be dispatched: the capability https://grain.dev/capabilities/github#sandbox-rep…
+acme/widgets
+debian
+question
+← back
+2 disabled grant
+prompt
+edit
+as of just now
+store-upgrade seed
+timeline
+​
+comment
+11/9/2026, 4:32:51 AM
+Proposed
+proposed
+priority: 5
+approve
+until (optional)
+until (optional)
+Picks itself back up at the start of this day. Leave it empty to keep it aside until you say otherwise.
+defer
+pause
+auto-merge once checks pass
+keep running
+admission
+Standard
+admission
+Queued with ordinary work, under the worker limit.
+hosting
+Unattended
+hosting
+Hands the agent its prompt and runs the turn to completion on its own.
+this fixes a red main
+run now
+close
+goal
+No goal: this task completes when its agent says it is done.
+add goal
+repos
+repo
+base branch
+base branch
+empty starts from the repo's default branch
+​
+read-only repos
+read-only repos
+optional -- cloned alongside the target repo, never pushed to
+Owner
+debian
+change
+Filed by
+access
+grants
+What the agent may use: grain's own API (docs/agent-api.md) and capability server methods (docs/capabilities.md).
+api:test-quarantine
+What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks
+github › read-issues
+add grant…
+depends on
+No dependencies.
+​

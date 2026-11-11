@@ -42,7 +42,11 @@ func TestSandboxRepoMigrationFidelity(t *testing.T) {
 	// 1. Task mint fidelity: retired provider vs github#sandbox-repo MethodSpec.
 	oldClient := newFakeAppClient("grain-bot")
 	old := testProvider(oldClient)
+	// The method names the repository for the attempt, so the provider
+	// is held to a run with that ID.
+	const attempt = "dep-1-1-0"
 	cc := testContext(testCredentials(), now)
+	cc.Run.ID = attempt
 	if res, err := old.Resolve(ctx, cc); err != nil || res.Refused {
 		t.Fatalf("provider Resolve = %+v, %v", res, err)
 	}
@@ -66,8 +70,9 @@ func TestSandboxRepoMigrationFidelity(t *testing.T) {
 		t.Fatalf("github-sandbox is an alias for %q, want %q", got, model.GitHubSandboxRepoGrant)
 	}
 
-	mintCtx := model.WithMintCredentials(model.WithMintRunID(ctx, cc.Run.ID), testCredentials())
-	resp, err := spec.Mint(mintCtx, "attempt-1", now.Add(time.Hour), map[string]any{})
+	mintCreds := testCredentials()
+	mintCtx := model.WithMintCredentials(model.WithMintRunID(ctx, "t1-1"), mintCreds)
+	resp, err := spec.Mint(mintCtx, attempt, now.Add(time.Hour), map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +94,7 @@ func TestSandboxRepoMigrationFidelity(t *testing.T) {
 	}
 
 	// Renewal idempotence: keeps the repository and token the run was given.
-	again, err := spec.Mint(mintCtx, "attempt-1", now.Add(time.Hour), map[string]any{})
+	again, err := spec.Mint(mintCtx, attempt, now.Add(time.Hour), map[string]any{})
 	if err != nil || !reflect.DeepEqual(again, resp) {
 		t.Errorf("renewal = %+v, %v; want the first mint again", again, err)
 	}
@@ -98,8 +103,18 @@ func TestSandboxRepoMigrationFidelity(t *testing.T) {
 	if err := old.Revoke(ctx, cc, *mat.Lease); err != nil {
 		t.Fatal(err)
 	}
-	if err := spec.Release(mintCtx, "attempt-1"); err != nil {
+	// Released with a context that names no run, as the orchestrator's
+	// end-of-attempt release is: the audit still names the minting run.
+	if err := spec.Release(ctx, attempt); err != nil {
 		t.Fatal(err)
+	}
+	if len(mintCreds.runs) == 0 {
+		t.Fatal("the method resolved no credentials")
+	}
+	for i, run := range mintCreds.runs {
+		if run != "t1-1" {
+			t.Errorf("credential resolve %d (%s) audited under run %q, want t1-1", i, mintCreds.resolved[i], run)
+		}
 	}
 	if len(sortedRepoNames(oldClient)) != 0 || len(sortedRepoNames(newClient)) != 0 {
 		t.Errorf("after release: provider left %v, method left %v", sortedRepoNames(oldClient), sortedRepoNames(newClient))
@@ -111,7 +126,7 @@ func TestSandboxRepoMigrationFidelity(t *testing.T) {
 	oldCI := testProvider(oldCIClient)
 	ciCC := model.CapabilityContext{
 		Task:        model.Task{ID: "ci-42-build", Target: &ciRepo},
-		Run:         model.Run{ID: "ci-42-build", StartedAt: now},
+		Run:         model.Run{ID: "ci-attempt-1", StartedAt: now},
 		Credentials: testCredentials(),
 	}
 	if res, err := oldCI.Resolve(ctx, ciCC); err != nil || res.Refused {

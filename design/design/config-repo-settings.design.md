@@ -82,7 +82,7 @@ Every mutating HTTP route in `pkg/ui/` that touches deployment configuration, se
 | `POST /api/boards`<br>`PATCH /api/boards/{id}`<br>`DELETE /api/boards/{id}` | `boards:write` | **Config-repo only** | Refused with `409 Conflict` returning patch to `tables/board.json` and `tables/board_column.json`. |
 | `PUT /api/memory`<br>`PUT /api/memory/documents`<br>`PUT /api/release-notes` | `memory:write` | **Config-repo only** | Refused with `409 Conflict` returning patch to `memory/**` or `release-notes/**`. |
 | `POST /api/console-sessions`<br>`PUT /api/console-sessions/{id}`<br>`DELETE /api/console-sessions/{id}` | `sessions:write` | **Config-repo only** | Refused with `409 Conflict` returning patch to `tables/grain_config.json` (`console_sessions`) / `tables/console_session.json`. |
-| `POST /api/state-repo/sync`<br>`POST /api/state-repo/reset-notice`<br>`POST /api/host/reboot`<br>`POST /api/host/shutdown`<br>`POST /api/host/restart`<br>`POST /api/upgrade`<br>`DELETE /api/upgrade/scheduled`<br>`POST /api/persistent-sandboxes/{name}/{action}`<br>`DELETE /api/pause`<br>`POST /api/pipeline-pause`<br>`DELETE /api/pipeline-pause`<br>`DELETE /api/ci/cache`<br>`POST /api/package-cache/flush`<br>`POST /api/actions-cache/flush`<br>`POST /api/schedules/{id}/run`<br>`POST /api/suite-runs`<br>`POST /api/console-sessions/{id}/restart`<br>`POST /api/console-sessions/{id}/cancel`<br>`POST /api/repos/{owner}/{name}/release-runs`<br>`POST /api/repos/{owner}/{name}/base-branch-runs`<br>`POST /api/repos/{owner}/{name}/lifecycle/refresh`<br>`POST /api/capability-servers/test`<br>`POST /api/capability-servers/test-script`<br>`POST /api/capability-servers/gchat-test`<br>`POST /api/deployment/git-connections/check`<br>`POST /api/agent-keys/{framework}/check`<br>`POST /api/capabilities/{id}/check` | Various operational scopes | **Operational action** (Stays in UI / API) | Executes the runtime operation directly without mutating declarative config files. |
+| `POST /api/state-repo/sync`<br>`POST /api/state-repo/reset-notice`<br>`POST /api/host/reboot`<br>`POST /api/host/shutdown`<br>`POST /api/host/restart`<br>`POST /api/upgrade`<br>`DELETE /api/upgrade/scheduled`<br>`POST /api/persistent-sandboxes/{name}/{action}`<br>`DELETE /api/pause`<br>`POST /api/pipeline-pause`<br>`DELETE /api/pipeline-pause`<br>`DELETE /api/ci/cache`<br>`POST /api/package-cache/flush`<br>`POST /api/actions-cache/flush`<br>`POST /api/schedules/{id}/run`<br>`POST /api/suite-runs`<br>`POST /api/console-sessions/{id}/restart`<br>`POST /api/console-sessions/{id}/cancel`<br>`POST /api/repos/{owner}/{name}/release-runs`<br>`POST /api/repos/{owner}/{name}/base-branch-runs`<br>`POST /api/repos/{owner}/{name}/lifecycle/refresh`<br>`POST /api/capability-servers/test`<br>`POST /api/capability-servers/test-script`<br>`POST /api/capability-servers/gchat-test`<br>`POST /api/deployment/git-connections/check`<br>`POST /api/agent-keys/{framework}/check` | Various operational scopes | **Operational action** (Stays in UI / API) | Executes the runtime operation directly without mutating declarative config files. |
 
 ### 2.3 How the Config Repo Browser Fits In
 
@@ -536,12 +536,12 @@ From `ui/src/components/NewTaskOverlay.jsx` and `ui/src/components/GrantsPicker.
 | `repo` | `RepoField` ("Repos — the first is the one this task's own work lands in", includes `NO_REPO` and custom `changeTarget` options) | `shown` | `defaultRepo` (current page repo) or `""` |
 | `newBranch` | `Checkbox` ("Create a new branch") + `TextField` (`newBranchName`, "New branch name") | `shown` (when `!noRepo`) | `false` / `""` |
 | `base` | `BranchField` ("Base branch" or "Create from") | `shown` (when git repo target) | `lastBaseForRepo(tasks, repo)` or `""` |
-| `writes` | `WriteReposField` (additional writable `{repo, base}` rows) | `shown` (when git repo target) | `[]` |
-| `reads` | `ReadOnlyReposField` ("Read-only repos") | `shown` | `[]` |
+| `writes` | `…/repo#write` lines in the `grants` list (`RepoGrants.jsx`, unified-grants slice 5); draws nothing in its own place, and a hidden one is left out of the list | `shown` (when git repo target) | `[]` |
+| `reads` | `…/repo#read` lines in the `grants` list (as `writes`) | `shown` | `[]` |
 | `autoMerge` | `Checkbox` ("Auto-merge once checks pass") | `shown` (when git repo target) | `!!config.autoMergeByDefault` |
 | `noPort` | `Checkbox` ("Don't port to the repo's paired branches") | `shown` (when git repo target) | `false` |
 | `fixesBaseBranch` | `Checkbox` ("This fixes a red `<branch>`") | `shown` (when `!noRepo`) | `false` |
-| `legacyCapabilities` | `Select` multiple ("Legacy capabilities" — in-process capability IDs) | `shown` | `defaultCapabilitiesFor(config, repo)` filtered to legacy IDs |
+| `legacyCapabilities` | None: the "Legacy capabilities" select is removed (PR #985), and the id is read as an alias of `grants` | — | — |
 | `grants` | `GrantsPicker` ("Grants" — `api:` presets/scopes and `<server>#<method>` capability grants with `with:` args) | `shown` | `defaultCapabilitiesFor(config, repo)` filtered to `api:` + capability refs |
 | `model` | `ModelSelect` ("Model") | `shown` (when `models.length > 0`) | `""` (deployment default rotation) |
 | `dependsOn` | `TaskPicker` ("Depends on") | `shown` | `[]` |
@@ -758,7 +758,7 @@ $$\text{Built-in Defaults} \longrightarrow \text{Deployment (`default`)} \longri
 1. **Runtime policy filtering in the picker:**
    - The capabilities offered in `GrantsPicker` and pre-populated by `capabilities.defaults` are intersected with `catalogue.AllowedFor(GrantContext{Repo: selectedRepo, TemplateID: selectedTemplate, Kind: "task"})` (§3) and `CapabilityPolicy` (`pkg/model/capability_ref.go`).
    - If a capability is `ci_only: true`, disabled, or restricted to `repos: ["ai-on-gke/grain"]`, it is automatically excluded from the picker and from defaults when `bwsalmon/silo` is selected.
-   - Capabilities listed in `capabilities.hidden` are omitted from the `GrantsPicker` dropdown menu (unless already held on the draft/task, in which case `useHeldIds` keeps the chip removable), while remaining enabled at runtime for templates or schedules that declare them.
+   - Capabilities listed in `capabilities.hidden` are omitted from the `GrantsPicker` dropdown menu (a grant already held on the draft/task still renders as its own row, with its Remove button, outside that menu), while remaining enabled at runtime for templates or schedules that declare them.
 2. **Config PR validation (`staterepo.Check`):**
    - Validates `settings/new-task-form.yml` on every config PR:
      - Rejects unknown field IDs or invalid `visibility` values (`shown`, `more`, `hidden`).

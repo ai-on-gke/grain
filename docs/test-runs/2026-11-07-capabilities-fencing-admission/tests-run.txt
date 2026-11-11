@@ -1,0 +1,94 @@
+# go test summaries (run 2026-11-08)
+## /tmp/t-model.txt
+ok  	github.com/ai-on-gke/grain/pkg/model	0.032s
+ok  	github.com/ai-on-gke/grain/pkg/model/postgres	8.501s
+ok  	github.com/ai-on-gke/grain/pkg/model/sqlite	1.247s
+ok  	github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest	0.009s [no tests to run]
+ok  	github.com/ai-on-gke/grain/pkg/model/v2baseline	0.018s [no tests to run]
+## /tmp/t-decl.txt
+ok  	github.com/ai-on-gke/grain/pkg/repodecl	0.359s
+ok  	github.com/ai-on-gke/grain/pkg/staterepo	23.257s
+ok  	github.com/ai-on-gke/grain/pkg/staterepo/statecheck	0.464s
+## /tmp/t-orch.txt
+--- PASS: TestMaterializePassOnACommandlessSandboxPlacesOnlyTheBootstrapPlaybooks (0.00s)
+--- PASS: TestAdmissionMintsRecordsAndReleasesAPass (0.03s)
+--- PASS: TestAdmissionRefusalParksTheTaskWithTheServersWordsQuoted (0.01s)
+--- PASS: TestAdmissionBacksOffTransientFailuresAndRefusesTheThird (0.01s)
+--- PASS: TestAdmissionKeepsAnExhaustedGrantQueuedUntilRetryAfter (0.01s)
+--- PASS: TestAdmissionRefusesWhatTheCapabilityPolicyDoesNotAdmit (0.01s)
+--- PASS: TestAdmissionRefusesGrantsOnHostDirectorySandboxes (0.01s)
+--- PASS: TestAdmissionRefusesGrantsOnUnfencedContainerSandboxes (0.01s)
+--- PASS: TestAdmissionPassesTaskReviewersToWorkspaceGrant (0.01s)
+--- PASS: TestAdmissionWithholdsWhatALocalScriptsDeclarationBecameFromAScheduledRun (0.01s)
+--- PASS: TestAdmissionRejudgesNormalizedDefaultArgsAgainstPolicyAndCatalogue (0.01s)
+--- PASS: TestContainerFenceInstallsTheOpenNetworkChain (0.01s)
+--- PASS: TestContainerFenceFailsClosed (0.02s)
+--- PASS: TestContainerFenceUnfencedHosts (0.01s)
+--- PASS: TestParseContainerFenceMode (0.00s)
+--- PASS: TestADurableRunHasNoDeadlineAndNoWaitCreditCap (0.07s)
+--- PASS: TestADurableRunsPromptSaysItHasNoDeadline (0.00s)
+--- PASS: TestTheIdleWatchdogRenewsADurableRunsLeases (0.01s)
+--- PASS: TestADurableTasksSetupFailureIsASuspension (0.02s)
+--- PASS: TestResumeAdoptedRunWatchesAnAdoptedDurableRunForIdleness (0.07s)
+--- PASS: TestGranuleFirewall_OpenNetworkFence (0.00s)
+--- PASS: TestGranuleFirewall_OpenNetworkFenceFailsClosed (0.00s)
+--- PASS: TestOpenSandboxEgressPolicyFencesOffTheCluster (0.00s)
+--- PASS: TestRunCycleMaterializesBootstrapPlaybooksOnHostSandboxes (0.29s)
+--- PASS: TestBaseRepairBypassOptionOffRequiresHuman (0.39s)
+--- PASS: TestBaseRepairBypassHonoursHumanMarkedRepair (0.41s)
+--- PASS: TestBaseRepairBypassOptionOnLeavesNonRepairTaskHeldForHuman (0.44s)
+--- PASS: TestBaseRepairBypassOptionOnMergesOnGreenCIDespiteSensitiveTriggerAndTrustBoundary (0.53s)
+--- PASS: TestBaseRepairBypassReviewFindingsFileFollowUpTaskWithoutBlockingMerge (0.61s)
+--- PASS: TestBaseRepairOrdinaryFilesMergeOnGreenWithNothingToBypass (0.00s)
+--- PASS: TestBaseRepairBypassBaseAlreadyGreenOrTurnsGreenBeforeMerge (0.00s)
+--- PASS: TestBaseRepairBypassIgnoresClaimsAnAgentCanMake (0.00s)
+ok  	github.com/ai-on-gke/grain/pkg/orchestrator	1.285s
+## /tmp/t-cap.txt
+--- PASS: TestConvertToHostScriptsPreservesApproval (0.00s)
+--- PASS: TestConvertToHostScriptsEntry (0.00s)
+--- PASS: TestHostScriptNameTooLong (0.00s)
+--- PASS: TestAddToHostScriptServer (0.00s)
+--- PASS: TestHostScriptGrants (0.00s)
+--- PASS: TestHostScriptBodyRechecksTheFile (0.03s)
+--- PASS: TestMigrateToHostScriptLeavesAClashOnLocalScripts (0.00s)
+--- PASS: TestMigrateToHostScriptFollowsTheDeclaration (0.00s)
+ok  	github.com/ai-on-gke/grain/pkg/capability/localscripts	0.055s
+--- PASS: TestParseFigmaURL (0.00s)
+--- PASS: TestFigmaOAuthAuthorizeAndCodeExchange (0.00s)
+--- PASS: TestFigmaCapabilityServerMCPAndTokenGeneration (0.02s)
+--- PASS: TestFigmaExportImageBlocksSSRFHosts (0.00s)
+--- SKIP: TestHostScriptCommandWorksInAContainerSandbox (0.02s)
+--- PASS: TestHostScriptRunsOnTheHostThroughHostd (0.07s)
+--- PASS: TestHostScriptApprovalCallbackThroughHostd (0.07s)
+--- PASS: TestHostScriptBinDirIsTheSandboxBinDir (0.00s)
+--- PASS: TestHostScriptConfigValidation (0.00s)
+--- PASS: TestHostScriptConfigSchemaRefusesAnUnknownField (0.00s)
+--- PASS: TestHostScriptGrantIsAnEnumOfConfiguredScripts (0.01s)
+--- PASS: TestHostScriptArgvPassesThroughExactly (0.06s)
+--- PASS: TestHostScriptExitCodeStreamsAndHelp (4.22s)
+--- PASS: TestHostScriptRefusesBadArgv (0.01s)
+--- PASS: TestHostScriptTokenAndRelease (0.17s)
+--- PASS: TestHostScriptTimeoutKillsTheProcessGroup (1.04s)
+--- PASS: TestHostScriptOutputIsCapped (0.02s)
+--- PASS: TestHostScriptCallLimit (0.08s)
+--- PASS: TestHostScriptEnvironmentIsScrubbed (0.03s)
+--- PASS: TestHostScriptRunsInItsScratchDirectoryAndAudits (0.03s)
+--- PASS: TestHostScriptFrameIsLiteralForPrintf (0.00s)
+--- PASS: TestHostScriptAuditIsBounded (0.03s)
+--- PASS: TestHostScriptTestScriptRunsOnceOutsideAnyGrant (0.01s)
+--- PASS: TestHostScriptTestScriptRefusals (0.01s)
+--- PASS: TestHostScriptReleaseReturnsItsAudit (0.07s)
+--- PASS: TestHostScriptBindsDataPlaneOnlyOnceAScriptIsConfigured (0.01s)
+--- PASS: TestHostScriptStdinForwardingAndLimit (0.19s)
+--- PASS: TestHostScriptPerCallApproval (0.17s)
+--- PASS: TestLocalScriptsDeclarationRunsTheSameOnHostScript (0.08s)
+ok  	github.com/ai-on-gke/grain/pkg/capability/intree	6.456s
+## playwright
+[1/7] [chromium] › e2e/bootstrap-playbooks-deprecation-notice.spec.js:25:3 › shows the bootstrap-playbooks deprecation notice at desktop width
+[2/7] [chromium] › e2e/legacy-capabilities-gcp-help.spec.js:17:1 › Legacy capabilities GCP help wraps cleanly and links to the gcp server and Other secrets
+[3/7] [chromium] › e2e/host-script-settings.spec.js:36:1 › defines a host script, tests it with an argv, and grants it on a task
+[4/7] [chromium] › e2e/bootstrap-playbooks-deprecation-notice.spec.js:25:3 › shows the bootstrap-playbooks deprecation notice at phone width
+[5/7] [chromium] › e2e/local-scripts-approval-walkthrough.spec.js:64:1 › a local script's call is approved from the task pane and denied from the inbox
+[6/7] [chromium] › e2e/local-scripts-approval-walkthrough.spec.js:176:1 › a task without the capability cannot ask for a local-script approval
+[7/7] [chromium] › e2e/local-scripts-approval-walkthrough.spec.js:197:1 › the rail's Inbox count includes local-script calls waiting for approval
+  7 passed (32.0s)

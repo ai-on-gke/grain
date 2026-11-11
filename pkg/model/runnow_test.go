@@ -15,6 +15,7 @@
 package model_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -102,5 +103,162 @@ func TestFinishRunPutsBackTheRequestItsRunSpent(t *testing.T) {
 	}
 	if reqs := requests(); len(reqs) != 0 {
 		t.Fatalf("RunNow = %+v, want none: the interrupted run spent no request", reqs)
+	}
+}
+
+// A request is kept only by the suspensions that stopped the run before it
+// could do the work; the agent's own resume_later, and the other kinds in
+// which the agent ran its turn, spent it (task 3557).
+func TestSuspensionKindKeepsRunNowOnlyForInterruptions(t *testing.T) {
+	for _, kind := range []model.SuspensionKind{
+		model.SuspendSetup, model.SuspendRestart, model.SuspendOperatorPause,
+		model.SuspendOOM, model.SuspendUsageLimit, model.SuspendCapacity,
+		model.SuspendModel, model.SuspendCapability,
+	} {
+		if _, ok := kind.KeepsRunNow(); !ok {
+			t.Errorf("%q.KeepsRunNow() = false, want the request kept", kind)
+		}
+	}
+	for _, kind := range []model.SuspensionKind{
+		model.SuspendRequested, model.SuspendDeadline, model.SuspendIdle, model.SuspendContext,
+	} {
+		if _, ok := kind.KeepsRunNow(); ok {
+			t.Errorf("%q.KeepsRunNow() = true, want the request spent", kind)
+		}
+	}
+	if got, want := len(model.SuspensionKinds()), 12; got != want {
+		t.Errorf("%d suspension kinds, this test classifies %d: add the new one above", got, want)
+	}
+}
+
+// The stamps older builds left standing after a run spent them -- a parked
+// run's, and one on a closed task -- are withdrawn when the store is next
+// opened. A request a run genuinely gave back, and one made after the
+// last run, stand.
+func TestInitClearsSpentRunNowStamps(t *testing.T) {
+	store, ctx := open(t)
+	for _, id := range []string{"parked", "closed", "kept", "fresh"} {
+		if err := store.PutTask(ctx, model.Task{
+			ID: id, Intent: model.IntentImplement, Title: id,
+			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Binding:  model.BindingDirective,
+			Approval: &model.Attribution{Actor: human},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ id, outcome string }{
+		{"parked", model.ParkedOutcome}, {"kept", "setup-failed"}, {"fresh", model.ParkedOutcome},
+	} {
+		if err := store.StartRun(ctx, model.Run{ID: tc.id + "-1", TaskID: tc.id, Attempt: 1, StartedAt: now}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.FinishRun(ctx, tc.id+"-1", now.Add(time.Minute), tc.outcome, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asked := now.Add(-time.Hour)
+	later := now.Add(10 * time.Minute)
+	closedAt := now.Add(2 * time.Minute)
+	stamp := func(id string, at time.Time, closed *time.Time) {
+		t.Helper()
+		if err := store.ObserveField(ctx, id, at, func(o *model.Observation) {
+			o.RunNowAt = &at
+			if closed != nil {
+				o.ClosedAt = closed
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp("parked", asked, nil)
+	stamp("kept", asked, nil)
+	stamp("fresh", later, nil)
+	stamp("closed", asked, &closedAt)
+
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	for id, want := range map[string]*time.Time{"parked": nil, "closed": nil, "kept": &asked, "fresh": &later} {
+		obs, err := store.GetObservation(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got *time.Time
+		if obs != nil {
+			got = obs.RunNowAt
+		}
+		if (got == nil) != (want == nil) || got != nil && !got.Equal(*want) {
+			t.Errorf("%s: RunNowAt = %v after Init, want %v", id, got, want)
+		}
+	}
+}
+
+func TestSettleRunNowNotesAndOperatorPauseKind(t *testing.T) {
+	store, ctx := open(t)
+	for _, id := range []string{"setup", "dursetup", "usagelimit", "oppause", "restart"} {
+		if err := store.PutTask(ctx, model.Task{
+			ID: id, Intent: model.IntentImplement, Title: id,
+			Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Binding:  model.BindingDirective,
+			Approval: &model.Attribution{Actor: human},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		asked := now.Add(-time.Minute)
+		if err := store.ObserveField(ctx, id, asked, func(o *model.Observation) { o.RunNowAt = &asked }); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.StartRun(ctx, model.Run{ID: id + "-1", TaskID: id, Attempt: 1, StartedAt: now}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.Pause(ctx, model.TaskPause{TaskID: "oppause", PausedBy: human, PausedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "setup-1", now.Add(time.Second), model.SetupFailedOutcome, "mkdir denied"); err != nil {
+		t.Fatal(err)
+	}
+	resumeAt := now.Add(2 * time.Minute)
+	if err := store.Suspend(ctx, model.Suspension{RunID: "dursetup-1", TaskID: "dursetup", Kind: model.SuspendSetup,
+		Detail: "mkdir denied", ResumeAt: &resumeAt, CreatedAt: now.Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "usagelimit-1", now.Add(time.Second), model.PausedOutcome, "quota exceeded"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "oppause-1", now.Add(time.Second), model.InterruptedOutcome, model.OperatorPausedDetail); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "restart-1", now.Add(time.Second), model.InterruptedOutcome, model.InterruptedDetail); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.Runs(ctx, "oppause")
+	if err != nil || len(runs) != 1 || runs[0].SuspendKind != model.SuspendOperatorPause {
+		t.Fatalf("oppause run = %+v (%v), want SuspendOperatorPause", runs, err)
+	}
+
+	checks := []struct {
+		id, want, forbid string
+	}{
+		{"setup", "once the retry backoff has passed", "before reaching its agent before"},
+		{"dursetup", "once its suspension's hold has passed", "before reaching its agent before"},
+		{"usagelimit", "once the usage-limit pause ends", "retry backoff"},
+		{"oppause", "once the task is resumed", "retry backoff"},
+		{"restart", "on the next dispatch cycle", "retry backoff"},
+	}
+	for _, tc := range checks {
+		comments, err := store.Comments(ctx, tc.id)
+		if err != nil || len(comments) != 1 {
+			t.Fatalf("%s comments = %+v (%v), want 1", tc.id, comments, err)
+		}
+		body := comments[0].Body
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("%s note = %q, want %q", tc.id, body, tc.want)
+		}
+		if strings.Contains(body, tc.forbid) {
+			t.Errorf("%s note = %q, must not contain %q", tc.id, body, tc.forbid)
+		}
 	}
 }

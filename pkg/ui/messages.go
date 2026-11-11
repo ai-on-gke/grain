@@ -226,7 +226,7 @@ func (c *Client) messagesSince(ctx context.Context, id string, after int64, from
 	if task == nil {
 		return nil, &NotFoundError{ID: id}
 	}
-	comments, err := c.Store.Comments(ctx, id)
+	comments, err := c.Store.CommentsAfter(ctx, id, after)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +333,7 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 	if target == nil {
 		return Message{}, &NotFoundError{ID: to}
 	}
-	var signature, authorLabel string
+	var signature, authorLabel, notice string
 	if strings.HasPrefix(from, "external:") {
 		signature = fmt.Sprintf("external agent %s (%s)", strings.TrimPrefix(from, "external:"), from)
 		authorLabel = from
@@ -347,13 +347,16 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 			signature = fmt.Sprintf("task %s (%s)", from, strings.TrimSpace(sender.Title))
 		}
 		authorLabel = "task " + from
+		// A sender narrower than to is untrusted input to to's run
+		// (agentCrossTaskRail lets only a parent or child send one).
+		notice = c.untrustedAgentInputNotice(ctx, sender, target)
 	}
 	now := c.now()
 	attachments, err := decodeAttachments(uploads, now)
 	if err != nil {
 		return Message{}, err
 	}
-	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s", signature, body)
+	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s%s", signature, notice, body)
 	// Signed as the sender, with the person it is acting for when the
 	// request is that sender's own (operator-attribution spec §3.2).
 	author := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: from}}
@@ -419,6 +422,11 @@ func (s *Server) handleMessageTaskAgent(w http.ResponseWriter, r *http.Request) 
 // hand a chat turn every message ever posted and let it read the oldest
 // as this turn's reply.
 func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	var after int64
 	if raw := r.URL.Query().Get("after"); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
@@ -457,8 +465,11 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 				writeClientError(w, err)
 				return
 			}
+			messages = filterList(messages, func(m Message) bool {
+				return list.matches(m.Author, m.Body, m.Summary)
+			})
 			if len(messages) > 0 || waitCtx.Err() != nil {
-				writeJSON(w, http.StatusOK, messages)
+				writeListBy(w, messages, list, messageKey)
 				return
 			}
 			select {
@@ -473,8 +484,14 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, messages)
+	messages = filterList(messages, func(m Message) bool {
+		return list.matches(m.Author, m.Body, m.Summary)
+	})
+	writeListBy(w, messages, list, messageKey)
 }
+
+// messageKey names a message for paging (pageOfBy) by its comment id.
+func messageKey(m Message) string { return strconv.FormatInt(m.ID, 10) }
 
 // deliveredRequest is POST /api/tasks/{id}/delivered's body: the last
 // comment the run reporting it has now been shown.
@@ -514,11 +531,11 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 	// quiet on every one of them. The mcpserver only ever reports ids it
 	// read off this task's own conversation, so a real report always
 	// passes.
-	comments, err := c.Store.Comments(ctx, id)
+	comments, err := c.Store.CommentsAfter(ctx, id, through-1)
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(comments, func(comment model.Comment) bool { return comment.ID == through }) {
+	if len(comments) == 0 || comments[0].ID != through {
 		return validationErrorf("through must be the id of a comment on task %s", id)
 	}
 	now := c.now()

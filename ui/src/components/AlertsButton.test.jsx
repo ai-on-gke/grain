@@ -25,6 +25,7 @@ import AlertsButton, { groupAlerts } from "./AlertsButton.jsx";
 import DisconnectedBanner from "./DisconnectedBanner.jsx";
 import { collectAlerts } from "../alerts.js";
 import api from "../api.js";
+import { formatDateTime } from "../time.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -259,6 +260,25 @@ describe("AlertsButton (grain/task-4008)", () => {
     expect(onOpenConfigRepo).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(screen.queryByTestId("alerts-panel")).not.toBeInTheDocument(),
+    );
+  });
+
+  // An alert can stand for days. Its "Since" used to be the clock time
+  // alone, so a sync failing since a month ago read as this morning.
+  it("dates a since that is not today", () => {
+    renderBell(
+      config({
+        stateRepoSyncFailure: {
+          since: "2026-10-06T08:57:32Z",
+          error: "push rejected",
+          repo: "grain/config",
+        },
+      }),
+    );
+    const panel = openPanel();
+    const [row] = within(panel).getAllByTestId("alert-row");
+    expect(row).toHaveTextContent(
+      `Since ${formatDateTime("2026-10-06T08:57:32Z")}`,
     );
   });
 

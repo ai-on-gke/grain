@@ -1,0 +1,45 @@
+grain demo up at http://127.0.0.1:4292 (access code from /tmp/grain-demo-2941141511/local-api-token)
+== 5a without a token (the only mode before this fix): studio's upstream call
+{"error":{"code":"upstream_error","message":"{\"error\":\"this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \\\"Enter access code\\\" page, or send it as a bearer token (`grain access-code` prints it, to the account grain runs as and root)\"}"}}
+gateway stderr without a token:
+plc-chat-gateway listening on http://127.0.0.1:4288
+plc-chat-gateway: GET /api/events stream ended (grain api status 401: {"error":"this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \"Enter access code\" page, or send it as a bearer token (`grain access-code` prints it, to the account grain runs as and root)"}); reconnecting in 5s
+== 5b with -grain-token / GRAIN_TOKEN
+-- POST /api/studio/tasks (externalRef + committed context)
+{"id":"22","title":"PLC-7 implement billing","body":"Implement the billing spec.","description":"Implement the billing spec.","state":"proposed","repo":"acme/widgets","branch":"grain/task-22","priority":5,"externalRef":"PLC-7","designs":[".grain/context/planner/plc-042"],"context":[{"repo":"acme/widgets","path":".grain/context/planner/plc-042"}],"filedVia":"plc-studio","createdAt":"2026-11-08T01:41:20.305268105Z","updatedAt":"0001-01-01T00:00:00Z"}
+-- GET /api/studio/tasks?externalRef=PLC-7
+{"tasks":[{"id":"22","title":"PLC-7 implement billing","body":"Implement the billing spec.","description":"Implement the billing spec.","state":"proposed","repo":"acme/widgets","branch":"grain/task-22","priority":5,"externalRef":"PLC-7","designs":[".grain/context/planner/plc-042"],"context":[{"repo":"acme/widgets","path":".grain/context/planner/plc-042"}],"filedVia":"plc-studio","createdAt":"2026-11-08T01:41:20.305268105Z","updatedAt":"0001-01-01T00:00:00Z"}]}
+-- GET /api/studio/refs/PLC-7/summary
+{"externalRef":"PLC-7","counts":{"total":1,"active":1,"blocked":0,"done":0,"merged":0,"closed":0,"failed":0,"cancelled":0},"tasks":null,"total":1,"byState":{"proposed":1},"pullRequests":{"opened":0,"merged":0,"open":0}}
+-- grain show 22 (what the daemon stored)
+22 PLC-7 implement billing
+state:      proposed
+reason:     proposed/unapproved [Approve]
+owner:      debian
+repo:       acme/widgets
+context:    .grain/context/planner/plc-042
+priority:   5
+auto-merge: false
+capabilities: api:self-debug, https://grain.dev/capabilities/github#read-issues={}, https://grain.dev/capabilities/grain#source={}
+external ref: PLC-7
+
+Implement the billing spec.
+filed by:        operator (access code)
+provenance:      filed from plc-studio by debian
+
+history:
+  -> proposed        2026-11-08T01:41:20Z by operator (access code)
+-- REST payload fields the studio wrote
+{"id": "22", "description": "Implement the billing spec.", "externalRef": "PLC-7", "context": [{"repo": "acme/widgets", "path": ".grain/context/planner/plc-042", "placement": "target"}], "designs": [".grain/context/planner/plc-042"], "filedVia": "plc-studio", "origin": null}
+-- approve 22 so grain emits a task.state event
+22 PLC-7 implement billing
+state:      queued
+reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+-- GET /api/events?externalRef=PLC-7 (JSON poll, what the gateway's SSE stream carries)
+{"events":[{"id":"1","type":"task.state","at":"2026-11-07T21:41:15.394979896Z","taskId":"1","repo":"acme/widgets","state":"proposed","actor":"debian","actorKind":"human","actorSource":"in-process","actorLabel":"operator (local)"},{"id":"2","type":"task.state","at":"2026-11-07T22:41:15.394979896Z","taskId":"2","repo":"acme/widgets","state":"queued","actor":"debian","actorKind":"human","actorSource":"in-process","actorLabel":"operator (local)"},{"id":"3","type":"task.state","at":"2026-11-08T00:11:15.394979896Z","taskId":"3","repo":"acme/widgets","state":"queued","actor":"debian","actorKind":"human","actorSource":"in-process","actorLabel":"operator (local)"},{"id":"4","type":"task.state","at":"2026-11-08T01:35:15.394979896Z","taskId":"3","repo":"acme/widgets","previousState":"queued","state":"running","actor":"grain","actorKind":"automation","actorLabel":"grain"},{"id":"5","type":"task.state","at":"2026-11-07T23:41:15.394979896Z","taskId":"4","repo":"acme/widgets","state":"queued","actor":"debian","actorKind":"human","actorSource":"in-process","actorLabel":"operator (local)"},{"id":"6","type":"task.question","at":"2026-11-08T01:21:15.394979896Z","taskId":"4","repo":"acme/widgets","state":"queued","questionSummary":"Fix both lint-stuck PRs, or only unblock the merge queue?","commentId":1,"actor":"debian","actorKind":"automation","actorLabel":"grain","onBehalfOf":"demo-run-4","onBehalfOfKind":"agent"},{"id":"7","type":"task.state","at":"2026-11-08T01:21:15.394979896Z","taskId":"4"
+gateway stderr with the token (empty = stream connected, nothing refused):
+plc-chat-gateway listening on http://127.0.0.1:4288
+gateway perf (caches.sse.events_received counts events the SSE consumer decoded):
+{"generated_at":"2026-11-08T01:41:22.57194546Z","operations":{},"caches":{"sse.events_received":{"cache":"sse.events_received","hits":2,"misses":0,"evictions":0,"hit_rate":1}}}
+studio perf:
+{"generated_at":"2026-11-08T01:41:22.583481421Z","operations":{"grain.create_task":{"operation":"grain.create_task","count":1,"errors":0,"error_rate":0,"min_ms":13.305,"max_ms":13.305,"mean_ms":13.305,"p50_ms":13.305,"p95_ms":13.305,"p99_ms":13.305,"last_ms":13.305},"grain.list_tasks":{"operation":"grain.list_tasks","count":1,"errors":0,"error_rate":0,"min_ms":6.953,"max_ms":6.953,"mean_ms":6.953,"p50_ms":6.953,"p95_ms":6.953,"p99_ms":6.953,"last_ms":6.953},"grain.ref_summary":{"operation":"grain.ref_summary","count":1,"errors":0,"error_rate":0,"min_ms":1.88,"max_ms":1.88,"mean_ms":1.88,"p50_ms":1.88,"p95_ms":1.88,"p99_ms":1.88,"last_ms":1.88},"studio.ref_summary":{"operation":"studio.ref_summary","count":1,"errors":0,"error_rate":0,"min_ms":1.929,"max_ms":1.929,"mean_ms":1.929,"p50_ms":1.

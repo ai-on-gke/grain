@@ -1,0 +1,26 @@
+== capabilities + grants: []: {"capabilities":["api:ci-read"],"grants":[]}
+-- POST /api/tasks -> 400 "grants: grants and capabilities both name capability grants; send one"
+-- grain_invoke(api_create_task) -> isError=true api_create_task failed: HTTP 400: grants: grants and capabilities both name capability grants; send one
+-- grain_submit_task -> isError=false {"approved":false,"base":"","id":"8","interactive":false,"repo":"acme/widgets","state":"proposed","title":"intake: capabilities + grants: []","url":"/tasks/8"}
+-- tasks before 7, after 8
+== reads: [] + grants:: {"reads":[],"grants":[{"capability":"https://grain.dev/capabilities/repo#read","with":{"repo":"acme/widgets"}}]}
+-- POST /api/tasks -> 400 "grants: https://grain.dev/capabilities/repo#read and reads both name read access; send one"
+-- grain_invoke(api_create_task) -> isError=true api_create_task failed: HTTP 400: grants: https://grain.dev/capabilities/repo#read and reads both name read access; send one
+-- grain_submit_task -> isError=false {"approved":false,"base":"","id":"9","interactive":false,"repo":"acme/widgets","state":"proposed","title":"intake: reads: [] + grants:","url":"/tasks/9"}
+-- tasks before 8, after 9
+== base + repo#target: {"base":"main","grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/widgets","base":"main"}}]}
+-- POST /api/tasks -> 400 "grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one"
+-- grain_invoke(api_create_task) -> isError=true api_create_task failed: HTTP 400: grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+-- grain_submit_task -> isError=false {"approved":false,"base":"main","id":"10","interactive":false,"repo":"acme/widgets","state":"proposed","title":"intake: base + repo#target","url":"/tasks/10"}
+-- tasks before 9, after 10
+== noRepo + repo#target: {"noRepo":true,"grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/widgets","base":"main"}}]}
+-- POST /api/tasks -> 400 "grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one"
+-- grain_invoke(api_create_task) -> isError=true api_create_task failed: HTTP 400: grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+-- grain_submit_task -> isError=false {"approved":false,"base":"","id":"11","interactive":false,"repo":"","state":"proposed","title":"intake: noRepo + repo#target","url":"/tasks/11"}
+-- tasks before 10, after 11
+== control: grants only: {"grants":["api:ci-read"]}
+-- POST /api/tasks -> 201 {"id":"12","repo":"acme/widgets","base":null,"capabilities":["api:ci-read"],"reads":null}
+-- grain_invoke(api_create_task) -> isError=false {"id":"13","title":"intake: control: grants only","description":"§2 item 3","author":"debian","authorKind":"human","authorSource":"access-code","authorLabel":"operator (access code)","state":"proposed","repo":"acme/widgets","branch":"grain/a7a44
+
+-- grain_submit_task -> isError=false {"approved":false,"base":"","id":"14","interactive":false,"repo":"acme/widgets","state":"proposed","title":"intake: control: grants only","url":"/tasks/14"}
+-- tasks before 11, after 14

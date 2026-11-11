@@ -68,6 +68,17 @@ offers a role, not what the server lets it do.
 make ui-screenshots PAGES=/tasks/1,/settings/general ACCESS=viewer OUT=screenshots/viewer
 ```
 
+To shoot a state the demo does not seed, lay a JSON file's top-level
+fields over one route's real answer with `--merge PATH=FILE.json`
+(`MERGE=` for the make target), repeated for more routes. The stale
+schedules on System → Health and the CI pane are shot this way, from the
+same fixture `ui/e2e/stale-schedules.spec.js` uses:
+
+```sh
+make ui-screenshots PAGES=/system/health,/ci \
+  MERGE=/api/sandboxes=e2e/stale-schedules.fixture.json OUT=screenshots/after
+```
+
 An uncaught page error fails the run, because a blank pane is not a
 screenshot.
 

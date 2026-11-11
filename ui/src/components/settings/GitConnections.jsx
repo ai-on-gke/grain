@@ -29,7 +29,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../../api.js";
 import SearchSelect from "../SearchSelect.jsx";
 import {
@@ -72,6 +72,7 @@ export default function GitConnections({
   deployment,
   onDeploymentChanged,
   showError,
+  dismissError,
   deploymentGitName,
   deploymentGitEmail,
   canManageTokens = true,
@@ -99,6 +100,7 @@ export default function GitConnections({
         deployment={deployment}
         onChanged={onDeploymentChanged}
         showError={showError}
+        dismissError={dismissError}
         readOnly={!canManageTokens}
         onConnections={setConnections}
       />
@@ -207,7 +209,7 @@ const typeLabel = (type) =>
 
 // CredentialCheckResult is one Test's answer: whom GitHub took the token
 // for, and a ✓/✗ per repo with whether it can read and push there.
-export function CredentialCheckResult({ result, onClose }) {
+function CredentialCheckResult({ result, onClose }) {
   const identity = result.app
     ? `GitHub App installation${result.installationRepos ? ` (${result.installationRepos} repositories)` : ""}`
     : result.login
@@ -287,7 +289,7 @@ export function deploymentRepos(deployment) {
 // that is still being looked up and error when the credential names
 // nobody GitHub can say. A connection with no credential to speak of
 // (type None) is left out.
-export function commitIdentities(connections) {
+function commitIdentities(connections) {
   return distinctConnections(connections)
     .filter((c) => c?.credential && c.authType !== "none")
     .map((c) => ({
@@ -304,7 +306,7 @@ export function commitIdentities(connections) {
 // formatCommitAuthor is one commitIdentities entry as the Commit author
 // list says it: `Name <email>`, or what is still being asked, or the
 // fallback (grain's own) and why.
-export function formatCommitAuthor(author, fallback) {
+function formatCommitAuthor(author, fallback) {
   if (author.name || author.email) {
     return `${author.name || fallback} <${author.email || "no address"}>`;
   }
@@ -321,6 +323,7 @@ function GitConnectionsList({
   deployment,
   onChanged,
   showError,
+  dismissError,
   readOnly = false,
   onConnections,
 }) {
@@ -355,6 +358,25 @@ function GitConnectionsList({
   const [testingCred, setTestingCred] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [actionError, setActionError] = useState(null);
+  // A refused save or remove is said twice: in actionError here and in
+  // the shell's banner (showError). The banner used to stay up for its
+  // five seconds after the next attempt succeeded, so the row just saved
+  // sat under "the private key will not parse"; what it was raised for is
+  // kept, so a success -- or Cancel -- takes it down (App's dismissError
+  // leaves a later, unrelated banner alone).
+  const raisedRef = useRef(null);
+  const raise = (err) => {
+    const message = err?.message || String(err);
+    setActionError(message);
+    raisedRef.current = String(message);
+    showError?.(err);
+  };
+  const settle = () => {
+    setActionError(null);
+    if (raisedRef.current === null) return;
+    dismissError?.(raisedRef.current);
+    raisedRef.current = null;
+  };
 
   useEffect(() => {
     let active = true;
@@ -459,11 +481,11 @@ function GitConnectionsList({
           method: "DELETE",
         },
       );
+      settle();
       setReload((n) => n + 1);
       await onChanged?.();
     } catch (err) {
-      setActionError(err?.message || String(err));
-      showError?.(err);
+      raise(err);
     } finally {
       setBusy(false);
     }
@@ -471,7 +493,7 @@ function GitConnectionsList({
 
   const resetNewConnectionForm = () => {
     setAdding(false);
-    setActionError(null);
+    settle();
     setHost("");
     setKind("github");
     setAuthType("pat");
@@ -523,8 +545,7 @@ function GitConnectionsList({
       setReload((n) => n + 1);
       await onChanged?.();
     } catch (err) {
-      setActionError(err?.message || String(err));
-      showError?.(err);
+      raise(err);
     } finally {
       setBusy(false);
     }

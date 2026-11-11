@@ -1,0 +1,54 @@
++ timeout 60 /home/debian/bin2/grain list -closed -filter admission:any:durable -filter owner:any:console-rest-e2e-operator
++ head -4
+3515   awaiting_reply  acme/widgets             seed 3512 walkthrough row
+3536   awaiting_reply  acme/widgets             seed 3528 walkthrough row
+3497   closed          acme/widgets             seed 3496 walkthrough row
+3480   closed          acme/widgets             seed 3480 walkthrough row
++ timeout 60 /home/debian/bin2/grain list -closed -filter admission:any:durable -filter owner:any:console-rest-e2e-operator
++ wc -l
+221
++ timeout 60 /home/debian/bin2/grain list -closed -filter admission:any:standard -search 'seed 001'
++ head -12
+23     closed          acme/widgets             seed 0019 walkthrough row
+21     closed          acme/widgets             seed 0018 walkthrough row
+19     closed          acme/widgets             seed 0015 walkthrough row
+16     closed          acme/widgets             seed 0016 walkthrough row
+15     closed          acme/widgets             seed 0013 walkthrough row
+18     closed          acme/widgets             seed 0012 walkthrough row
+17     closed          acme/widgets             seed 0017 walkthrough row
+14     closed          acme/widgets             seed 0014 walkthrough row
++ timeout 60 /home/debian/bin2/grain list -closed -search 'seed 001' -sort admission:asc
++ head -14
+23     closed          acme/widgets             seed 0019 walkthrough row
+21     closed          acme/widgets             seed 0018 walkthrough row
+19     closed          acme/widgets             seed 0015 walkthrough row
+16     closed          acme/widgets             seed 0016 walkthrough row
+15     closed          acme/widgets             seed 0013 walkthrough row
+18     closed          acme/widgets             seed 0012 walkthrough row
+17     closed          acme/widgets             seed 0017 walkthrough row
+14     closed          acme/widgets             seed 0014 walkthrough row
+13     closed          acme/widgets             seed 0011 walkthrough row
+10     closed          acme/widgets             seed 0010 walkthrough row
++ timeout 60 /home/debian/bin2/grain list -closed -search 'seed 001' -sort admission:desc
++ head -6
+13     closed          acme/widgets             seed 0011 walkthrough row
+10     closed          acme/widgets             seed 0010 walkthrough row
+23     closed          acme/widgets             seed 0019 walkthrough row
+21     closed          acme/widgets             seed 0018 walkthrough row
+19     closed          acme/widgets             seed 0015 walkthrough row
+16     closed          acme/widgets             seed 0016 walkthrough row
++ timeout 60 /home/debian/bin2/grain list -filter admission:any:bogus
++ head -3
+grain: -filter "admission:any:bogus": unknown admission "bogus": one of standard, bypass, durable
++ echo exit=0
+exit=0
++ timeout 60 /home/debian/bin2/grain list -sort admission:sideways
++ head -3
+grain: unknown direction "sideways" in -sort "admission:sideways": asc or desc
++ timeout 60 /home/debian/bin2/grain list -closed -external-ref INC-99
++ head -5
+13     closed          acme/widgets             seed 0011 walkthrough row
+11     closed          acme/widgets             seed 0009 walkthrough row
+8      closed          acme/widgets             seed 0007 walkthrough row
+bogus exit=1
+owner me + durable lines: 221

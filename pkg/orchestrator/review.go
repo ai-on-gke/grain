@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -224,6 +225,9 @@ func hasPullRequest(task model.Task) bool {
 // other order would post a fresh copy of the note every cycle for as
 // long as the close kept failing.
 func closeFinishedReview(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
+	if err := clearReviewFindingsOnCleanReview(ctx, store, task); err != nil {
+		return err
+	}
 	if err := closeTask(ctx, store, task.ID, now, "review finished", func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
@@ -457,32 +461,25 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 	if task.Target != nil {
 		reviewTarget = *task.Target
 	}
-	grants := tmpl.Grants
+	grants := slices.Clip(tmpl.Grants)
 	if task.Target != nil {
-		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *task.Target)
+		ciDefaults, err := store.RepoCIDefaults(ctx, *task.Target)
 		if err != nil {
 			return model.Task{}, fmt.Errorf("orchestrator: checking CI mode for %s review of %s: %w", *task.Target, task.ID, err)
 		}
-		if usesGrainCI {
-			found := false
-			for _, g := range grants {
-				if grainci.IsGrant(g.Capability) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
-			}
+		// Only a review that opens a stacked pull request of its own on a
+		// grain-CI repository runs grain CI; an in-place review shares the
+		// reviewed task's branch and CI run (reviewsInPlace), and on a
+		// ci_mode: github repository grain#ci never gates. Every review
+		// reads its repository's CI through ensureReviewCIReadGrant, so
+		// the default api:ci-read (model.RepoCIDefaults) is not attached
+		// beside it.
+		if ciDefaults.GrainCI && !inPlace {
+			grants = model.AdjustRepoCIGrants(grants, *task.Target, ciDefaults)
 		} else {
-			filtered := make([]model.Grant, 0, len(grants))
-			for _, g := range grants {
-				if !grainci.IsGrant(g.Capability) {
-					filtered = append(filtered, g)
-				}
-			}
-			grants = filtered
+			grants = withoutGrainCIGrants(grants)
 		}
+		grants = ensureReviewCIReadGrant(grants, *task.Target)
 	}
 	// Never a dangerous api grant the reviewed task did not hold itself
 	// (model.ReviewGrants): whoever chose the template was checked when
@@ -606,9 +603,63 @@ func reviewTaskBody(tmpl model.Template, task model.Task, ref model.PullRequestR
 			"about, and put to the owner on task %s; any such call holds the change for "+
 			"their decision, and their reply sends another run to carry it out.",
 		task.ID, task.Title, branch, ref, branch, branch, task.ID, ref, task.ID)
+	b.WriteString("\n\n" + reviewTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
 	return b.String()
 }
+
+// withoutGrainCIGrants strips grain#ci grants from grants without mutating
+// the caller's slice.
+func withoutGrainCIGrants(grants []model.Grant) []model.Grant {
+	filtered := make([]model.Grant, 0, len(grants))
+	for _, g := range grants {
+		if !grainci.IsGrant(g.Capability) {
+			filtered = append(filtered, g)
+		}
+	}
+	return filtered
+}
+
+// ensureReviewCIReadGrant attaches a repo-scoped api:ci-read@<target> grant
+// (Via GrantByGrain) when grants do not already let the review read target's
+// CI -- the narrowest read-only grant that keeps `grain ci checks`,
+// `grain ci list` and `grain ci log` working on ci_mode: github repositories
+// as well as ci_mode: grain ones, without granting grain#ci's run-triggering
+// or merge-gating behaviour.
+func ensureReviewCIReadGrant(grants []model.Grant, target model.RepoRef) []model.Grant {
+	if target == (model.RepoRef{}) {
+		return grants
+	}
+	repo := target.String()
+	names := make([]string, len(grants))
+	for i, g := range grants {
+		names[i] = g.Capability
+		if model.IsGrainSourceGrant(g.Capability) {
+			return grants
+		}
+	}
+	if model.HasGrainCI(names) || model.APIGrantsOf(names).Allows("ci:read", repo) {
+		return grants
+	}
+	return append(slices.Clip(grants), model.Grant{
+		Capability: model.APIGrantString("ci-read", repo),
+		Via:        model.GrantByGrain,
+	})
+}
+
+// reviewTestingAndCINote tells a review that may push fixes to read the
+// change's own CI result rather than re-running suites or blocking on CI.
+const reviewTestingAndCINote = "**Testing and CI.** The change's own GitHub Actions or grain CI run is the " +
+	"test signal: read its result (`grain pr open` / check statuses, `grain ci checks <sha>`, " +
+	"`grain ci list`, `grain ci log`, or `grain pr status`) rather than re-running suites yourself. " +
+	"Do not run `go test ./...`, package-wide or `-race` runs across packages, or long suites: when " +
+	"a fix is pushed, CI re-runs on the new head and the merge queue gates on it. Do not call " +
+	"`grain ci wait` (or `wait_for_checks`) to wait for CI to finish -- finish the review; grain " +
+	"will not merge a head whose CI has not passed. Do run a narrowly targeted test " +
+	"(`go test ./pkg/x -run TestName`) when needed to confirm or refute a specific finding, or to " +
+	"check a fix you are about to push compiles and passes its own tests, and say which tests you " +
+	"ran in your closing note (`comment_on_issue`). After pushing a fix, `go build ./...` or " +
+	"`go vet` on the touched packages is enough locally."
 
 // reviewHumanReviewNote is what every template review is told about
 // request_human_review (model/human_review_hold.go): when to use it rather
@@ -819,26 +870,23 @@ func escalateUnfinishedReview(ctx context.Context, store *model.Store,
 
 	var comment string
 	if reviewTaskID == "" {
-		// The other way the wait can run out: no review task was ever
-		// filed at all, so SyncReviews has been failing for this task for
-		// the whole deadline -- a template deleted out from under it is
-		// the one way that happens on purpose.
 		comment = fmt.Sprintf(
 			"%s has been waiting more than %s for the review attached to it, and no "+
 				"review task was ever filed -- the template it names (`%s`) may be gone. "+
-				"The merge queue has stopped waiting and moved on to the next task in "+
-				"%s; %s merges as soon as it reads clean, reviewed or not. Check the "+
-				"daemon's log for what filing the review failed on.",
+				"The merge queue has stepped around it to the next task in %s; %s remains "+
+				"held until its required review finishes or an operator overrides the review "+
+				"gate under merge:force with a reason. Check the daemon's log for what filing "+
+				"the review failed on.",
 			ref, humanDuration(defaultReviewTaskDeadline), task.ReviewTemplateID, ref.Repo, ref,
 		)
 	} else {
 		comment = fmt.Sprintf(
 			"The review filed for %s never finished -- task %s was filed to review it more "+
 				"than %s ago and still hasn't run to completion -- so the merge queue has "+
-				"stopped waiting on it and moved on to the next task in %s. Have a look at "+
-				"%s (its run, or its own checks, may be stuck); %s itself merges as soon as "+
-				"it reads clean, reviewed or not, so close or finish the review depending on "+
-				"which you want.",
+				"stepped around it to the next task in %s. Have a look at %s (its run, or "+
+				"its own checks, may be stuck); %s remains held until that required review "+
+				"finishes cleanly, or an operator overrides the review gate under merge:force "+
+				"with a reason.",
 			ref, reviewTaskID, humanDuration(defaultReviewTaskDeadline), ref.Repo,
 			reviewTaskID, ref,
 		)

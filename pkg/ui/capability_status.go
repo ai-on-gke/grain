@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -88,34 +87,10 @@ type CapabilityStatus struct {
 	// capabilities" instead of "grain registers a provider nothing can
 	// reach; configuration cannot fix this one".
 	//
-	// It is not folded into Grantable for the same reason Checkable is
-	// not folded into Ready: they answer different questions, and one
-	// badge meaning either would leave a real drift indistinguishable
-	// from a deliberate restriction.
+	// It is not folded into Grantable because they answer different
+	// questions, and one badge meaning either would leave a real drift
+	// indistinguishable from a deliberate restriction.
 	CIOnly bool `json:"ciOnly,omitempty"`
-	// Checkable reports whether this deployment can actually *test* this
-	// capability's standing credential -- whether grain ships a check for
-	// it (model.CredentialChecker, capabilityCheckable) and this UI is
-	// wired to something that can run one (Config.CapabilityChecks). It
-	// is what decides whether the pane offers the action at all; the
-	// answer a check gives is POST /api/capabilities/{id}/check's own
-	// (CapabilityCheck), never stored here.
-	//
-	// A third axis again, beside Ready and Grantable, and for the reason
-	// this whole field exists: Ready means *configured* -- a project, an
-	// account and a secret are all set -- and no configuration pane can
-	// see whether the key inside that secret is one the far end still
-	// accepts. A checkable capability is one where that question has an
-	// answer somebody can go and get; it says nothing about what the
-	// answer is.
-	//
-	// False for a capability holding no standing credential at all
-	// (self-debug, self-repair, bootstrap-playbooks: nothing to go stale
-	// behind grain's back), and false on a UI not colocated with a
-	// daemon that could make the call -- the same
-	// nil-means-unavailable contract MissingSecrets already follows for
-	// a nil Config.Secrets.
-	Checkable bool `json:"checkable,omitempty"`
 	// Default reports whether this capability is in
 	// model.Config.DefaultCapabilities: whether every task filed on this
 	// deployment starts out holding it, rather than only the ones
@@ -330,15 +305,11 @@ func capabilityCatalog() []model.CapabilitySpec {
 // same way the rest of the catalog is.
 //
 // capabilityDisplayName is capabilityDisplayNames[id], or for a
-// capability contributed from outside core the Name it was registered
-// with (capability.RegisterProvider, or capability.Register for a
-// contributed method's reference or grant).
+// contributed method's reference or grant the Name it was registered
+// with (capability.Register).
 func capabilityDisplayName(id string) string {
 	if name, ok := capabilityDisplayNames[id]; ok {
 		return name
-	}
-	if r, ok := capability.Lookup(id); ok {
-		return r.Name
 	}
 	for _, m := range capability.Methods() {
 		if id == m.Ref() || id == m.Grant() {
@@ -355,28 +326,12 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
 		githubsandbox.NewProvider(githubsandbox.Config{}),
 	}
-	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
 	)
 	return providers
-}
-
-// capabilityShipped reports whether name is a capability this build
-// ships a provider for at all -- the catalog above, regardless of
-// whether this deployment configures it or the picker offers it.
-func capabilityShipped(name string) bool {
-	if _, ok := model.GCPKeyName(name); ok {
-		return true
-	}
-	for _, spec := range capabilityCatalog() {
-		if spec.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // ciOnlyCapability reports whether name is a capability this build ships
@@ -424,7 +379,7 @@ func ciOnlyCapability(name string) bool {
 // true of the picker and useless to the person reading it.
 func capabilityRefusal(id string) string {
 	if grainci.IsGrant(id) {
-		return grainci.Refusal()
+		return grainci.Refusal("", "")
 	}
 	if ciOnlyCapability(id) {
 		return model.CIOnlyRefusal(id)
@@ -440,43 +395,6 @@ func capabilityRefusal(id string) string {
 		}
 	}
 	return "unknown capability " + id
-}
-
-// capabilityCheckable reports whether grain ships a live credential
-// check for this capability -- whether its provider implements
-// model.CredentialChecker. Read off capabilityProviderCatalog above and
-// not off the deployment: a capability either has a check written for it
-// in this build or it does not, and whether *this* deployment can run
-// one is the separate question Config.CapabilityChecks answers.
-func capabilityCheckable(name string) bool {
-	if _, ok := model.GCPKeyName(name); ok {
-		return true
-	}
-	for _, p := range capabilityProviderCatalog() {
-		if p.Spec().Name != name {
-			continue
-		}
-		_, ok := p.(model.CredentialChecker)
-		return ok
-	}
-	return false
-}
-
-// checkable is capabilityCheckable widened by the one listing that is
-// not this build's catalog: a named GitHub token
-// (githubTokenStatuses below). Every one of those has a check --
-// githubtoken.Provider implements model.CredentialChecker for all of
-// them, which TestEveryNamedGitHubTokenRowCanBeChecked holds it to --
-// so what decides it here is whether this deployment offers that token
-// at all, which is exactly the id's own picker row and the thing
-// pkg/cli/daemon.go registered a provider beside.
-//
-// A method rather than a second package-level function because that
-// second half can only be answered from a Client: which tokens exist is
-// an operator's files, read at startup into Config.Capabilities, not a
-// property of this build.
-func (c *Client) checkable(id string) bool {
-	return capabilityCheckable(id)
 }
 
 // missingConfigFor is capabilityProviders' own gates
@@ -735,7 +653,6 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 			Description:   spec.Description,
 			Grantable:     grantable,
 			CIOnly:        spec.CIOnly,
-			Checkable:     c.Config.CapabilityChecks != nil && c.checkable(spec.Name),
 			Default:       slices.Contains(cfg.DefaultCapabilities, spec.Name) || slices.Contains(cfg.DefaultCapabilities, canonical),
 			DefaultRepos:  defaultRepos,
 			BuildDefault:  slices.Contains(buildDefaults, spec.Name),

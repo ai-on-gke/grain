@@ -1,0 +1,93 @@
+gcpwalk: 2026/11/08 02:11:54 serving the gcp capability server on http://127.0.0.1:4260/mcp; token data plane on 127.0.0.1:4252 once configured
+gcpwalk: 2026/11/08 02:17:45 gcp: audit: attempt grain-3-1-0: permission set org-deploy: granted access tokens for deployer@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:02:45Z
+gcpwalk: 2026/11/08 02:19:57 gcp: audit: attempt grain-4-1-0: permission set org-deploy: granted access tokens for deployer@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:04:57Z
+gcpwalk: 2026/11/08 02:20:02 walk clock advanced by 30m0s, now 2026-11-08T02:50:02Z
+gcpwalk: 2026/11/08 02:20:02 walk clock advanced by 1h0m0s, now 2026-11-08T03:50:02Z
+gcpwalk: 2026/11/08 02:20:02 walk clock advanced by 1h0m0s, now 2026-11-08T04:50:02Z
+gcpwalk: 2026/11/08 02:20:03 walk clock advanced by 1h0m0s, now 2026-11-08T05:50:03Z
+gcpwalk: 2026/11/08 02:20:03 gcp: audit: attempt grain-4-1-0: permission set org-deploy: minted an ID token for deployer@walk-proj.iam.gserviceaccount.com, audience "https://walk.example"
+gcpwalk: 2026/11/08 02:20:03 walk clock advanced by 1h0m0s, now 2026-11-08T06:50:03Z
+gcpwalk: 2026/11/08 02:20:03 gcp: audit: attempt grain-4-1-0: permission set org-deploy: an ID token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:04:57Z has passed
+gcpwalk: 2026/11/08 02:20:03 walk clock advanced by -4h30m0s, now 2026-11-08T02:20:03Z
+gcpwalk: 2026/11/08 02:21:56 walk clock advanced by 30m0s, now 2026-11-08T02:51:56Z
+gcpwalk: 2026/11/08 02:21:56 walk clock advanced by 1h0m0s, now 2026-11-08T03:51:56Z
+gcpwalk: 2026/11/08 02:21:56 walk clock advanced by 1h0m0s, now 2026-11-08T04:51:56Z
+gcpwalk: 2026/11/08 02:21:56 walk clock advanced by 1h0m0s, now 2026-11-08T05:51:56Z
+gcpwalk: 2026/11/08 02:21:56 walk clock advanced by 1h0m0s, now 2026-11-08T06:51:56Z
+gcpwalk: 2026/11/08 02:21:56 walk clock advanced by -4h30m0s, now 2026-11-08T02:21:56Z
+gcpwalk: 2026/11/08 02:22:59 gcp: audit: attempt grain-5-1-0: permission set org-deploy: granted access tokens for deployer@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:07:59Z
+gcpwalk: 2026/11/08 02:23:05 gcp: audit: attempt grain-5-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:23:05Z
+gcpwalk: 2026/11/08 02:23:05 walk clock advanced by 30m0s, now 2026-11-08T02:53:05Z
+gcpwalk: 2026/11/08 02:23:05 gcp: audit: attempt grain-5-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:53:05Z
+gcpwalk: 2026/11/08 02:23:05 walk clock advanced by 1h0m0s, now 2026-11-08T03:53:05Z
+gcpwalk: 2026/11/08 02:23:06 gcp: audit: attempt grain-5-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T04:53:06Z
+gcpwalk: 2026/11/08 02:23:06 walk clock advanced by 1h0m0s, now 2026-11-08T04:53:06Z
+gcpwalk: 2026/11/08 02:23:06 gcp: audit: attempt grain-5-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T05:53:06Z
+gcpwalk: 2026/11/08 02:23:06 walk clock advanced by 1h0m0s, now 2026-11-08T05:53:06Z
+gcpwalk: 2026/11/08 02:23:06 gcp: audit: attempt grain-5-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T06:08:00Z
+gcpwalk: 2026/11/08 02:23:06 gcp: audit: attempt grain-5-1-0: permission set org-deploy: minted an ID token for deployer@walk-proj.iam.gserviceaccount.com, audience "https://walk.example"
+gcpwalk: 2026/11/08 02:23:06 walk clock advanced by 1h0m0s, now 2026-11-08T06:53:06Z
+gcpwalk: 2026/11/08 02:23:06 gcp: audit: attempt grain-5-1-0: permission set org-deploy: an access token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:07:59Z has passed
+gcpwalk: 2026/11/08 02:23:06 gcp: audit: attempt grain-5-1-0: permission set org-deploy: an ID token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:07:59Z has passed
+gcpwalk: 2026/11/08 02:23:06 walk clock advanced by -4h30m0s, now 2026-11-08T02:23:06Z
+gcpwalk: 2026/11/08 02:23:06 gcp: audit: attempt grain-5-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:23:06Z
+gcpwalk: 2026/11/08 02:24:32 gcp: audit: attempt grain-7-1-0: permission set org-deploy: granted access tokens for deployer@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:09:32Z
+gcpwalk: 2026/11/08 02:24:38 gcp: audit: attempt grain-7-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:24:38Z
+gcpwalk: 2026/11/08 02:24:38 walk clock advanced by 30m0s, now 2026-11-08T02:54:38Z
+gcpwalk: 2026/11/08 02:24:38 gcp: audit: attempt grain-7-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:54:38Z
+gcpwalk: 2026/11/08 02:24:38 walk clock advanced by 1h0m0s, now 2026-11-08T03:54:38Z
+gcpwalk: 2026/11/08 02:24:38 gcp: audit: attempt grain-7-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T04:54:38Z
+gcpwalk: 2026/11/08 02:24:38 walk clock advanced by 1h0m0s, now 2026-11-08T04:54:38Z
+gcpwalk: 2026/11/08 02:24:38 gcp: audit: attempt grain-7-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T05:54:38Z
+gcpwalk: 2026/11/08 02:24:38 walk clock advanced by 1h0m0s, now 2026-11-08T05:54:38Z
+gcpwalk: 2026/11/08 02:24:38 gcp: audit: attempt grain-7-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T06:09:32Z
+gcpwalk: 2026/11/08 02:24:38 gcp: audit: attempt grain-7-1-0: permission set org-deploy: minted an ID token for deployer@walk-proj.iam.gserviceaccount.com, audience "https://walk.example"
+gcpwalk: 2026/11/08 02:24:38 walk clock advanced by 1h0m0s, now 2026-11-08T06:54:38Z
+gcpwalk: 2026/11/08 02:24:38 gcp: audit: attempt grain-7-1-0: permission set org-deploy: an access token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:09:32Z has passed
+gcpwalk: 2026/11/08 02:24:39 gcp: audit: attempt grain-7-1-0: permission set org-deploy: an ID token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:09:32Z has passed
+gcpwalk: 2026/11/08 02:24:39 walk clock advanced by -4h30m0s, now 2026-11-08T02:24:39Z
+gcpwalk: 2026/11/08 02:24:39 gcp: audit: attempt grain-7-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:24:39Z
+gcpwalk: 2026/11/08 02:26:05 gcp: audit: attempt grain-11-1-0: permission set org-deploy: granted access tokens for deployer@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:11:05Z
+gcpwalk: 2026/11/08 02:26:11 gcp: audit: attempt grain-11-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:26:11Z
+gcpwalk: 2026/11/08 02:26:11 walk clock advanced by 30m0s, now 2026-11-08T02:56:11Z
+gcpwalk: 2026/11/08 02:26:11 gcp: audit: attempt grain-11-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:56:11Z
+gcpwalk: 2026/11/08 02:26:11 walk clock advanced by 1h0m0s, now 2026-11-08T03:56:11Z
+gcpwalk: 2026/11/08 02:26:11 gcp: audit: attempt grain-11-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T04:56:11Z
+gcpwalk: 2026/11/08 02:26:11 walk clock advanced by 1h0m0s, now 2026-11-08T04:56:11Z
+gcpwalk: 2026/11/08 02:26:11 gcp: audit: attempt grain-11-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T05:56:11Z
+gcpwalk: 2026/11/08 02:26:11 walk clock advanced by 1h0m0s, now 2026-11-08T05:56:11Z
+gcpwalk: 2026/11/08 02:26:11 gcp: audit: attempt grain-11-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T06:11:05Z
+gcpwalk: 2026/11/08 02:26:11 gcp: audit: attempt grain-11-1-0: permission set org-deploy: minted an ID token for deployer@walk-proj.iam.gserviceaccount.com, audience "https://walk.example"
+gcpwalk: 2026/11/08 02:26:11 walk clock advanced by 1h0m0s, now 2026-11-08T06:56:11Z
+gcpwalk: 2026/11/08 02:26:12 gcp: audit: attempt grain-11-1-0: permission set org-deploy: an access token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:11:05Z has passed
+gcpwalk: 2026/11/08 02:26:12 gcp: audit: attempt grain-11-1-0: permission set org-deploy: an ID token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:11:05Z has passed
+gcpwalk: 2026/11/08 02:26:12 walk clock advanced by -4h30m0s, now 2026-11-08T02:26:12Z
+gcpwalk: 2026/11/08 02:26:12 gcp: audit: attempt grain-11-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:26:12Z
+gcpwalk: 2026/11/08 02:26:22 walk clock advanced by 30m0s, now 2026-11-08T02:56:22Z
+gcpwalk: 2026/11/08 02:26:22 walk clock advanced by 1h0m0s, now 2026-11-08T03:56:22Z
+gcpwalk: 2026/11/08 02:26:23 walk clock advanced by 1h0m0s, now 2026-11-08T04:56:23Z
+gcpwalk: 2026/11/08 02:26:23 walk clock advanced by 1h0m0s, now 2026-11-08T05:56:23Z
+gcpwalk: 2026/11/08 02:26:23 walk clock advanced by 1h0m0s, now 2026-11-08T06:56:23Z
+gcpwalk: 2026/11/08 02:26:23 walk clock advanced by -4h30m0s, now 2026-11-08T02:26:23Z
+gcpwalk: 2026/11/08 02:30:39 gcp: audit: attempt grain-18-1-0: permission set org-deploy: granted access tokens for deployer@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:15:39Z
+gcpwalk: 2026/11/08 02:30:44 gcp: audit: attempt grain-18-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:30:44Z
+gcpwalk: 2026/11/08 02:30:45 walk clock advanced by 30m0s, now 2026-11-08T03:00:45Z
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T04:00:45Z
+gcpwalk: 2026/11/08 02:30:45 walk clock advanced by 1h0m0s, now 2026-11-08T04:00:45Z
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T05:00:45Z
+gcpwalk: 2026/11/08 02:30:45 walk clock advanced by 1h0m0s, now 2026-11-08T05:00:45Z
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T06:00:45Z
+gcpwalk: 2026/11/08 02:30:45 walk clock advanced by 1h0m0s, now 2026-11-08T06:00:45Z
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T06:15:40Z
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: minted an ID token for deployer@walk-proj.iam.gserviceaccount.com, audience "https://walk.example"
+gcpwalk: 2026/11/08 02:30:45 walk clock advanced by 1h0m0s, now 2026-11-08T07:00:45Z
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: an access token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:15:39Z has passed
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: an ID token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set org-deploy: the grant's deadline 2026-11-08T06:15:39Z has passed
+gcpwalk: 2026/11/08 02:30:45 walk clock advanced by -4h30m0s, now 2026-11-08T02:30:45Z
+gcpwalk: 2026/11/08 02:30:45 gcp: audit: attempt grain-18-1-0: permission set org-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:30:45Z
+gcpwalk: 2026/11/08 02:30:56 walk clock advanced by 30m0s, now 2026-11-08T03:00:56Z
+gcpwalk: 2026/11/08 02:30:56 walk clock advanced by 1h0m0s, now 2026-11-08T04:00:56Z
+gcpwalk: 2026/11/08 02:30:56 walk clock advanced by 1h0m0s, now 2026-11-08T05:00:56Z
+gcpwalk: 2026/11/08 02:30:57 walk clock advanced by 1h0m0s, now 2026-11-08T06:00:57Z
+gcpwalk: 2026/11/08 02:30:57 walk clock advanced by 1h0m0s, now 2026-11-08T07:00:57Z
+gcpwalk: 2026/11/08 02:30:57 walk clock advanced by -4h30m0s, now 2026-11-08T02:30:57Z

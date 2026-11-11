@@ -1,0 +1,17 @@
+== task 10 filed by the person with https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"ext-logs"} and approved at 02:26:28
+== 02:26:46 task 10: awaiting_reply succeeded 
+== 02:26:49 the run's container is gone: 
+== attempt 1's capability audit
+{
+    "records": []
+}
+== the gcp server's audit lines since 2026/11/08 02:26:28
+2026/11/08 02:26:35 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-10-1-0: permission set ext-logs: granted access tokens for log-reader@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:11:35Z
+2026/11/08 02:26:39 orchestrator: capability https://grain.dev/capabilities/gcp#gcp-key (grain-10-1-0): setup /home/debian/.gcp-token/grain-10-1-0/activate.sh succeeded, 0 bytes of output
+== proposals task 10 filed
+{"id": "6", "title": "walk: pass the person-granted set on", "state": "proposed", "approved": null, "approvedBy": null, "capabilities": ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"ext-deploy\"}"], "reason": {"reason": "proposed/unapproved", "class": "awaiting a person", "control": "Approve"}}
+{"id": "7", "title": "walk: control, no grant", "state": "awaiting_reply", "approved": true, "approvedBy": "auto-submit", "capabilities": [], "reason": {"reason": "awaiting_reply/answered", "class": "awaiting a person", "control": "Reply"}}
+{"id": "8", "title": "walk: pass the person-granted set on", "state": "proposed", "approved": null, "approvedBy": null, "capabilities": ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"ext-deploy\"}"], "reason": {"reason": "proposed/unapproved", "class": "awaiting a person", "control": "Approve"}}
+{"id": "9", "title": "walk: control, no grant", "state": "proposed", "approved": null, "approvedBy": null, "capabilities": [], "reason": {"reason": "proposed/unapproved", "class": "awaiting a person", "control": "Approve"}}
+{"id": "11", "title": "walk: pass gcp set ext-logs on", "state": "proposed", "approved": null, "approvedBy": null, "capabilities": ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"ext-logs\"}"], "reason": {"reason": "proposed/unapproved", "class": "awaiting a person", "control": "Approve"}}
+{"id": "12", "title": "walk: control, no grant", "state": "running", "approved": true, "approvedBy": "auto-submit", "capabilities": [], "reason": {"reason": "running/live_run", "class": "driven", "resource": "the run in flight", "driver": "ProcessResult", "control": "Cancel"}}

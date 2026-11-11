@@ -146,6 +146,28 @@ func TestCapabilityListDecodesNamesRefsAndGrantObjects(t *testing.T) {
 	}
 }
 
+// A non-reference name written as {capability: <name>} with no with: is
+// refused for being an object, not for arguments it never sent: the
+// provider-seam-removal walkthrough (docs/test-runs/2026-11-08-provider-
+// seam-removal.md) filed POST /api/tasks grants: [{capability:
+// read-issues}] and was told only a reference "takes with: arguments".
+func TestCapabilityEntryRefusesANameObjectForWhatItIs(t *testing.T) {
+	_, err := CapabilityEntryNames([]byte(`{"capability":"read-issues"}`))
+	if err == nil {
+		t.Fatal("accepted {capability: read-issues}")
+	}
+	if msg := err.Error(); strings.Contains(msg, "takes with: arguments") || !strings.Contains(msg, "plain string") {
+		t.Errorf("refusal = %q, want it to say a name is written as a plain string, not blame with: arguments", msg)
+	}
+	_, err = CapabilityEntryNames([]byte(`{"capability":"read-issues","with":{"a":1}}`))
+	if err == nil || !strings.Contains(err.Error(), "takes with: arguments") {
+		t.Errorf("refusal of a name with with: = %v, want the with: arguments refusal", err)
+	}
+	if got, err := CapabilityEntryNames([]byte(`"read-issues"`)); err != nil || !reflect.DeepEqual(got, []string{"read-issues"}) {
+		t.Errorf("plain string = %q, %v", got, err)
+	}
+}
+
 func TestCapabilityListsWithCommasRoundTrip(t *testing.T) {
 	for _, list := range [][]string{
 		nil,

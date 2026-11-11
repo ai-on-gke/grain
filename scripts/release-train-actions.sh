@@ -180,6 +180,6 @@ fi
 stalled="$(value qualification_stalled)"
 [ -z "$stalled" ] || echo "::warning::release-train: $stalled has been re-run on infra failures repeatedly and is stalled; the runner, quota or credential behind it needs repair (playbook section 4)"
 escalated="$(value escalated_version)"
-[ -z "$escalated" ] || echo "::error::release-train: $escalated has used RELEASE_MAX_RC_ATTEMPTS release candidates; the train cuts no more of it until a person resets or advances it (playbook section 5)"
+[ -z "$escalated" ] || echo "::error::release-train: $escalated has used RELEASE_MAX_RC_ATTEMPTS release candidates; the train keeps cutting it from main, but a person should look at why it keeps failing (playbook section 5)"
 
 exit "$status"

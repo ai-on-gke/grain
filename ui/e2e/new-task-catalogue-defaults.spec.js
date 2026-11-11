@@ -13,27 +13,24 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
-import { chips, chooseOption } from "./searchSelect.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A deployment default the capability catalogue restricts to one repo,
 // on a task filed with No repo (2026-10-29 test run, Bug 3). The demo
 // defaults api:self-debug, grain#source (once self-debug) and
-// github#read-issues; this test adds the demo's example-legacy capability to
-// those defaults. With example-legacy restricted to acme/widgets, the form used
-// to post all defaults and be refused with a 400 for a grant nobody had
-// picked. Now it marks example-legacy as refused
-// where it is ticked, says it is left off, and files the task with the
-// defaults the server keeps.
+// github#read-issues; this test restricts the self-debug API preset to
+// acme/widgets. The form used to post all defaults and be refused with a
+// 400 for a grant nobody had picked. Now it says the refused default is
+// left off, and files the task with the defaults the server keeps.
 
-// -legacy-capability registers example-legacy, a made-up provider with
-// nothing to mint (every legacy provider core shipped has been retired onto
-// a capability server method), so the Legacy capabilities picker has a row.
-test.use({ demoArgs: ["-github-sim", "-fake-ci", "-legacy-capability"] });
+test.use({ demoArgs: ["-github-sim", "-fake-ci"] });
 
 const RESTRICTED = {
   catalogue: {
-    inProcess: {
-      "example-legacy": { restrictions: { repos: ["acme/widgets"] } },
+    apiScopes: {
+      presets: {
+        "self-debug": { restrictions: { repos: ["acme/widgets"] } },
+      },
     },
   },
 };
@@ -50,12 +47,11 @@ async function openStandalone(page, title) {
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   await page.getByLabel("Title").fill(title);
   await chooseOption(page.getByLabel(/^Repos/), "none");
-  const picker = page.getByRole("combobox", { name: "Legacy capabilities" });
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
-    "settings/capabilities.yml refuses example-legacy on a task with no repo, so that default is left off this task.",
+    "settings/capabilities.yml refuses https://grain.dev/capabilities/api#self-debug on a task with no repo, so that default is left off this task.",
   );
-  return { picker, note };
+  return { note };
 }
 
 test("a No repo task leaves off a default the catalogue refuses there", async ({
@@ -64,19 +60,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
 }) => {
   test.setTimeout(120_000);
   const before = await (await request.get("/api/capability-policy")).json();
-  const defaultsBefore =
-    (await (await request.get("/api/settings")).json()).defaultCapabilities ||
-    [];
   try {
-    expect(
-      (
-        await request.put("/api/settings", {
-          data: {
-            defaultCapabilities: [...defaultsBefore, "example-legacy"],
-          },
-        })
-      ).ok(),
-    ).toBe(true);
     const put = await request.put("/api/capability-policy", {
       data: { policy: RESTRICTED },
     });
@@ -89,37 +73,15 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
         `E2E catalogue default ${width} ${Date.now()}`,
       );
 
-      // Only example-legacy is marked, and it sits inside the picker; the note
-      // sits inside the picker's own column, at either width.
-      const refused = chips(picker).and(
-        page.locator("[data-catalogue-refused]"),
-      );
-      await expect(refused).toHaveCount(1);
-      await expect(refused).toHaveAccessibleName(/\(refused here\)$/);
-      const pickerBox = await picker
-        .locator("xpath=ancestor::div[contains(@class,'MuiInputBase-root')][1]")
-        .boundingBox();
-      within(await refused.boundingBox(), pickerBox);
-      const control = picker.locator(
-        "xpath=ancestor::div[contains(@class,'MuiFormControl-root')][.//*[@data-testid='new-task-catalogue-refused']][1]",
-      );
-      within(await note.boundingBox(), await control.boundingBox());
+      // The note sits inside the grants' own column, at either width.
+      const grants = page.getByTestId("new-task-grants");
+      within(await note.boundingBox(), await grants.boundingBox());
       const form = page.locator("form", {
         has: page.getByRole("button", { name: "Create task" }),
       });
       expect(
         await form.evaluate((el) => el.scrollWidth - el.clientWidth),
       ).toBeLessThanOrEqual(1);
-
-      // Its option carries the catalogue's reason, and stays enabled:
-      // it is ticked, and its own row is how it would come off.
-      await picker.click();
-      const option = page.getByRole("option", {
-        name: /Example legacy capability/i,
-      });
-      await expect(option).toContainText("repos: acme/widgets");
-      await expect(option).not.toHaveAttribute("aria-disabled", "true");
-      await page.keyboard.press("Escape");
 
       const dir = process.env.SHOTS_DIR;
       if (dir) {
@@ -130,15 +92,9 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
           );
           await page.emulateMedia({ colorScheme: theme });
           await page.waitForTimeout(200);
-          await control.scrollIntoViewIfNeeded();
+          await note.scrollIntoViewIfNeeded();
           await page.screenshot({
             path: `${dir}/new-task-no-repo-${width}-${theme}.png`,
-          });
-          await control.screenshot({
-            path: `${dir}/new-task-no-repo-picker-${width}-${theme}.png`,
-          });
-          await refused.screenshot({
-            path: `${dir}/new-task-no-repo-chip-${width}-${theme}.png`,
           });
         }
         await page.evaluate(() => localStorage.removeItem("grain.themeMode"));
@@ -147,7 +103,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
 
       if (width !== 1440) continue;
       // Filing leaves the untouched list to the server, which keeps the
-      // defaults it may and drops example-legacy, rather than refusing the task.
+      // defaults it may and drops api:self-debug, rather than refusing the task.
       const filing = page.waitForResponse(
         (r) =>
           r.url().endsWith("/api/tasks") && r.request().method() === "POST",
@@ -162,53 +118,23 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
       const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
       expect(detail.capabilities).toEqual(
         expect.arrayContaining([
-          "api:self-debug",
           "https://grain.dev/capabilities/grain#source={}",
         ]),
       );
-      expect(detail.capabilities).not.toContain("example-legacy");
+      expect(detail.capabilities).not.toContain("api:self-debug");
+      expect(detail.capabilities).not.toContain(
+        "https://grain.dev/capabilities/api#self-debug",
+      );
     }
-  } finally {
-    await request.put("/api/capability-policy", {
-      data: { policy: before.policy || {} },
-    });
-    await request.put("/api/settings", {
-      data: { defaultCapabilities: defaultsBefore },
-    });
-  }
-});
-
-// Once the picker is the person's, a refused grant still ticked is
-// theirs too: the form says to untick it, and on the repo the
-// catalogue grants it to, says nothing.
-test("an edited picker is asked to untick a refused grant", async ({
-  page,
-  request,
-}) => {
-  const before = await (await request.get("/api/capability-policy")).json();
-  try {
-    await request.put("/api/capability-policy", {
-      data: { policy: RESTRICTED },
-    });
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto("/");
-    await page.getByRole("button", { name: /^\+? ?New task$/ }).click();
-    await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
-    await page.getByLabel("Title").fill(`E2E catalogue edited ${Date.now()}`);
-    const picker = page.getByRole("combobox", { name: "Legacy capabilities" });
-    await chooseOption(picker, "example-legacy");
-    await page.keyboard.press("Escape");
-    await chooseOption(page.getByLabel(/^Repos/), "none");
-    const note = page.getByTestId("new-task-catalogue-refused");
-    await expect(note).toHaveText(
-      "settings/capabilities.yml refuses example-legacy on a task with no repo: untick it, or the task will not be filed.",
-    );
-    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
-    await expect(note).toHaveCount(0);
-    await expect(
-      chips(picker).and(page.locator("[data-catalogue-refused]")),
-    ).toHaveCount(0);
-    await page.getByRole("button", { name: "Discard draft" }).click();
+    // On the repo the catalogue grants it to, nothing is refused.
+    {
+      await openStandalone(page, `E2E catalogue repo ${Date.now()}`);
+      await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
+      await expect(page.getByTestId("new-task-catalogue-refused")).toHaveCount(
+        0,
+      );
+      await page.getByRole("button", { name: "Discard draft" }).click();
+    }
   } finally {
     await request.put("/api/capability-policy", {
       data: { policy: before.policy || {} },

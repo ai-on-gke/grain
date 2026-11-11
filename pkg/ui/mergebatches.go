@@ -127,7 +127,10 @@ type MergeBatches struct {
 	// on a running batch -- "22m" says nothing on its own -- and it is
 	// reported rather than hard-coded in the browser so that changing the
 	// bound changes what the card says.
-	MaxAgeSeconds int `json:"maxAgeSeconds"`
+	MaxAgeSeconds int    `json:"maxAgeSeconds"`
+	Total         int    `json:"total,omitempty"`
+	Truncated     bool   `json:"truncated,omitempty"`
+	NextCursor    string `json:"nextCursor,omitempty"`
 }
 
 // MergeBatchesFor reports the batches in flight, for one repository when
@@ -210,10 +213,25 @@ func (c *Client) mergeBatchView(ctx context.Context, row model.MergeBatch) (Merg
 // handleListMergeBatches answers GET /api/merge-batches, optionally
 // narrowed with ?repo=owner/name the way GET /api/ci/runs is.
 func (s *Server) handleListMergeBatches(w http.ResponseWriter, r *http.Request) {
-	batches, err := s.tasks.MergeBatchesFor(r.Context(), r.URL.Query().Get("repo"))
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, batches)
+	out, err := s.tasks.MergeBatchesFor(r.Context(), r.URL.Query().Get("repo"))
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	if list.Paged {
+		matched := filterList(out.Batches, func(b MergeBatch) bool {
+			return list.matches(b.Repo, b.Branch, b.Ref, b.RunID)
+		})
+		page := pageOfBy(matched, list, func(b MergeBatch) string { return b.Repo + "\x00" + b.Branch + "\x00" + b.Ref })
+		out.Batches = page.Items
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, out)
 }

@@ -285,6 +285,37 @@ func taskBlock(t ui.Task) string {
 			items = append(items, label)
 		}
 		fmt.Fprintf(&b, "context:    %s\n", strings.Join(items, ", "))
+		// The manifest (context.yml) each pinned folder carries, beneath
+		// its reference: what the folder is and which files in it say
+		// what. Without it `grain show` named a folder and nothing about
+		// what was in it, though the Task detail page shows the same
+		// manifest and the agent's prompt is built from it.
+		for i, c := range t.Context {
+			if c.Manifest == nil {
+				continue
+			}
+			head := items[i]
+			if title := strings.TrimSpace(c.Manifest.Title); title != "" {
+				head += ": " + title
+			}
+			fmt.Fprintf(&b, "  %s\n", head)
+			if desc := strings.TrimSpace(c.Manifest.Description); desc != "" {
+				fmt.Fprintf(&b, "    %s\n", desc)
+			}
+			for _, f := range c.Manifest.Files {
+				line := f.Path
+				if f.Kind != "" {
+					line = "[" + f.Kind + "] " + line
+				}
+				if f.Title != "" {
+					line += " -- " + f.Title
+				}
+				if f.SourceURL != "" {
+					line += " <" + f.SourceURL + ">"
+				}
+				fmt.Fprintf(&b, "    %s\n", line)
+			}
+		}
 	}
 	if len(t.Writes) > 0 {
 		// The branch beside each repo, since it is half of what the

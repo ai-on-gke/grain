@@ -273,15 +273,9 @@ func cmdSettings(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 	addAdmin := fs.String("add-admin", "",
 		"removed and ignored: whoever holds the access code is the deployment's owner")
 	// Not a setting: the one flag here that changes nothing and asks a
-	// question instead. It belongs on this command anyway, because the
-	// answer it gives is about the same capability listing this command
-	// already prints, and because "ready" on that listing means
-	// configured -- see cmdCheckCapability below.
-	checkCapability := fs.String("check-capability", "",
-		"test one capability's standing credential against the service that issued it, and print what came back -- changes nothing")
-	// The same question about the other kind of credential this command
-	// already reports on: an agent framework's own key, which this
-	// listing can likewise only say is *set*. See checkAgentCredential.
+	// question instead, about a credential this command already reports
+	// on: an agent framework's own key, which this listing can only say
+	// is *set*. See checkAgentCredential.
 	checkAgentKey := fs.String("check-agent-key", "",
 		"test one agent framework's credential (antigravity, claude, codex) against the vendor that issued it, "+
 			"and print what came back -- changes nothing")
@@ -290,9 +284,6 @@ func cmdSettings(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 	}
 	if err := noArgs(fs, fs.Args()); err != nil {
 		return err
-	}
-	if *checkCapability != "" {
-		return checkCapabilityCredential(ctx, c, out, *checkCapability)
 	}
 	if *checkAgentKey != "" {
 		return checkAgentCredential(ctx, c, out, *checkAgentKey)
@@ -594,40 +585,48 @@ func splitRepoList(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return []string{}
 	}
-	return strings.Split(s, ",")
-}
-
-// checkCapabilityCredential is `grain settings -check-capability <id>`:
-// it asks the daemon to authenticate as that capability's standing
-// credential and make one cheap, harmless call with it, then prints what
-// came back.
-//
-// The line above it -- `grain settings`' own capability listing -- can
-// only ever say "ready", meaning this deployment has the settings and
-// the secrets for it. Whether the key inside one of those secrets is
-// still one GCP (or GitHub) will accept is a question no stored
-// configuration can answer, and the whole of README.md's "Debugging
-// `gcp-key` again" is what it costs to find out from a failed task
-// instead. This is that question, asked from the host, where whoever is
-// reading the failed task's error is usually already standing.
-//
-// A refused credential is a successful call that prints a bad answer,
-// not a non-zero exit: nothing about the *command* failed, and the
-// sentence it prints names the secret to replace. The exit code stays
-// for the calls that could not be made at all -- an unknown capability,
-// a daemon that does not offer this.
-func checkCapabilityCredential(ctx context.Context, c *ui.HTTPClient, out *printer, id string) error {
-	check, err := c.CheckCapability(ctx, id)
-	if err != nil {
-		return err
+	var out []string
+	depth := 0
+	inQuote := false
+	escaped := false
+	start := 0
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inQuote {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inQuote = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inQuote = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				out = append(out, s[start:i])
+				start = i + 1
+			}
+		}
 	}
-	out.capabilityCheck(check)
-	return nil
+	out = append(out, s[start:])
+	return out
 }
 
 // checkAgentCredential is `grain settings -check-agent-key <framework>`:
-// the same question one line down, asked of the credential a run is
-// dispatched with rather than of a capability's.
+// it asks the daemon to authenticate as the credential a run is
+// dispatched with and prints what came back.
 //
 // `grain settings` prints which agent credentials are set, and "set" is
 // the whole of what the store knows: a Gemini key revoked in the console,
@@ -638,9 +637,8 @@ func checkCapabilityCredential(ctx context.Context, c *ui.HTTPClient, out *print
 // somebody's task. This authenticates as it and lists the models it can
 // see.
 //
-// A refused credential is a successful command printing a bad answer,
-// exactly as it is for -check-capability: nothing about the command
-// failed, and the sentence names the secret to replace. A non-zero exit
+// A refused credential is a successful command printing a bad answer:
+// nothing about the command failed, and the sentence names the secret to replace. A non-zero exit
 // stays for the calls that could not be made at all -- a framework grain
 // does not have, a daemon not offering this.
 func checkAgentCredential(ctx context.Context, c *ui.HTTPClient, out *printer, framework string) error {

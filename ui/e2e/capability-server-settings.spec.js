@@ -60,9 +60,25 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
   const demo = listed.find((s) => s.id === DEMO);
   expect(demo).toBeTruthy();
   const url = demo.config.serverUrl;
-  const auth = demo.config.headers.Authorization;
+  // A credential is never typed into a header (saving one is refused):
+  // the token goes into the secrets store and the header names it.
+  const token = demo.config.headers.Authorization.replace(/^Bearer /, "");
+  const auth = "Bearer $secret:cloud-e2e/token";
+  const putSecret = async (method, value) =>
+    page.evaluate(
+      async ([m, v]) =>
+        (
+          await fetch("/api/secrets/cloud-e2e/token", {
+            method: m,
+            headers: { "Content-Type": "application/json" },
+            body: m === "PUT" ? JSON.stringify({ value: v }) : undefined,
+          })
+        ).status,
+      [method, value],
+    );
 
   await page.goto("/settings/capabilities#capability-servers");
+  expect(await putSecret("PUT", token)).toBeLessThan(300);
   await page.getByTestId("capability-server-add-button").click();
   const add = page.getByTestId("capability-server-add");
   await add.getByLabel(/Capability ID/).fill(NEW);
@@ -260,10 +276,11 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
   // Removing it goes back to the list, which no longer has it, and the
   // demo server's row still opens its page.
   await expect(
-    page.getByRole("list", { name: "Capability servers" }),
+    page.getByRole("list", { name: "Capability servers", exact: true }),
   ).toBeVisible();
   await expect(serverRow(page, NEW)).toHaveCount(0);
   await openServer(page, DEMO);
+  await putSecret("DELETE");
 });
 
 test("run location offers host only where grain hostd is, and says why not", async ({
@@ -290,7 +307,10 @@ test("lists the built-in capability servers first, full width, badged and disabl
   page,
 }) => {
   await page.goto("/settings/capabilities#capability-servers");
-  const list = page.getByRole("list", { name: "Capability servers" });
+  const list = page.getByRole("list", {
+    name: "Capability servers",
+    exact: true,
+  });
   await expect(list).toBeVisible();
   const rows = list.locator("[data-capability-server-row]");
   await expect(rows.first()).toHaveAttribute("data-builtin-row", /.+/);
@@ -402,7 +422,7 @@ test("configures the built-in config-map server with config maps and secret maps
 }) => {
   await page.goto("/settings/capabilities#capability-servers");
   await page
-    .getByRole("list", { name: "Capability servers" })
+    .getByRole("list", { name: "Capability servers", exact: true })
     .locator('[data-builtin-row="config-map"]')
     .click();
   const cmCard = page.locator('[data-builtin="config-map"]');
@@ -548,7 +568,7 @@ test("stops reading the list once nothing is left attaching", async ({
   });
   await page.goto("/settings/capabilities#capability-servers");
   await expect(
-    page.getByRole("list", { name: "Capability servers" }),
+    page.getByRole("list", { name: "Capability servers", exact: true }),
   ).toBeVisible();
   await page.waitForTimeout(14000);
   const settled = reads;

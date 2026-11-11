@@ -17,6 +17,7 @@ import { Alert, Box, Button, Chip, Stack, Typography } from "@mui/material";
 import api from "../api.js";
 import DiffView from "./DiffView.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import MergeGatesList from "./MergeGatesList.jsx";
 import { repoApiRoot } from "../repoApi.js";
 
 // PullRequestPage is grain's own pull request: the change one branch
@@ -42,6 +43,8 @@ import { repoApiRoot } from "../repoApi.js";
 export default function PullRequestPage({
   repo,
   comparison: refs,
+  tasks,
+  onOpenTask,
   onBack,
   showError,
 }) {
@@ -89,6 +92,10 @@ export default function PullRequestPage({
   // and only the server knows what that is.
   const from = comparison?.base || base;
   const to = comparison?.head || head;
+  const matchedTask = (tasks || []).find(
+    (t) =>
+      t.repo === repo && t.branch && (t.branch === head || t.branch === to),
+  );
 
   return (
     <main>
@@ -119,6 +126,16 @@ export default function PullRequestPage({
             <> -- forked at {comparison.mergeBase.slice(0, 8)}</>
           )}
         </Typography>
+
+        {matchedTask && (
+          <Box sx={{ mt: 1.5, maxWidth: 520 }}>
+            <MergeGatesList
+              t={matchedTask}
+              onOpenTask={onOpenTask}
+              testId="pr-merge-gates"
+            />
+          </Box>
+        )}
 
         {!head ? (
           <Alert severity="info" sx={{ mt: 1 }}>

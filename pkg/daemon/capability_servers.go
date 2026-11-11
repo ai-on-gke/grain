@@ -18,7 +18,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/ai-on-gke/grain/pkg/change"
+	"io"
 	"log"
+	"regexp"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -83,6 +86,10 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		ConfigRoot: StateRepoDir(dataDir),
 		Hostd:      hostdClient,
 		Logf:       logf,
+		// A stdio server's own log is this one's: the gcp server's
+		// "gcp: audit: ..." lines, the only record of each grant and token
+		// it mints, were discarded here (2026-11-08 gcp token-mode walk).
+		Stderr: capabilityServerStderr,
 	}
 	if store != nil {
 		// A server that falls out of use says so where people look, not
@@ -244,12 +251,18 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		label := labelFor(st.ID)
 		title := fmt.Sprintf("Capability server %s is %s", label, st.State)
 		body := fmt.Sprintf("Capability server %s is no longer attached (%s): %s\n\n", label, st.State, reason)
+		fix := "Fix it in Settings → Capability servers; this clears itself once the server attaches."
 		if st.ConfigRefused {
 			title = fmt.Sprintf("Capability server %s refused its configuration", label)
 			body += "Its configuration was saved but the server will not run under it. "
+		} else if w := servers.WaitingLabel(st); w != "" {
+			// Nothing in Settings is wrong: the server waits on something
+			// outside grain -- a host credential to be renewed -- and is
+			// retried every minute until it attaches.
+			title = fmt.Sprintf("Capability server %s is %s", label, w)
+			fix = "grain tries it again every minute, so this clears itself once that is done and the server attaches; nothing in Settings needs changing."
 		}
-		body += "No new grant can be minted from it until it attaches again, and grants it issued earlier cannot be released meanwhile. " +
-			"Fix it in Settings → Capability servers; this clears itself once the server attaches."
+		body += "No new grant can be minted from it until it attaches again, and grants it issued earlier cannot be released meanwhile. " + fix
 		if _, err := store.RaiseNotification(ctx, model.Notification{
 			Subject:  subjectFor(st.ID),
 			Severity: model.NotificationWarning,
@@ -270,4 +283,26 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		}
 	}
 	return onDrop, onAttach
+}
+
+// serverLogStamp is the date and time a server's own log.Logger puts
+// before each line, which this log already puts before it.
+var serverLogStamp = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? `)
+
+// capabilityServerStderr is servers.Options.Stderr: each line a stdio
+// capability server writes to its stderr, already scrubbed of its
+// secrets, logged as the server's.
+func capabilityServerStderr(id string) io.Writer {
+	return capabilityServerLog{id: id, logf: log.Printf}
+}
+
+type capabilityServerLog struct {
+	id   string
+	logf func(format string, args ...any)
+}
+
+func (l capabilityServerLog) Write(p []byte) (int, error) {
+	line := serverLogStamp.ReplaceAllString(strings.TrimRight(string(p), "\r\n"), "")
+	l.logf("grain daemon: capability server %s: %s", l.id, line)
+	return len(p), nil
 }

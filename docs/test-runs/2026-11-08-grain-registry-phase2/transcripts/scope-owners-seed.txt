@@ -1,0 +1,23 @@
+=== seed (no catalog.scope_owners): bob claims acme primaries
+$ [bob@example.com @ 4251] grain registry register -standalone -mint-token -listed -scope acme/billing:primary -scope github.com/acme/payments:primary bob-ws
+    registered connected entry bob-ws on http://127.0.0.1:4251
+    registration token written to /tmp/gr2/bob-ws.token
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route acme/billing
+    Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")
+      bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route github.com/acme/billing
+    no matching grain entries for github.com/acme/billing 
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route acme/payments
+    no matching grain entries for acme/payments 
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route github.com/acme/payments
+    Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")
+      bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test
+    (exit 0)
+$ [alice@example.com @ 4261] GET /api/directory?repo=acme/billing 
+    HTTP 200
+    {"entries":[{"name":"bob-ws","url":"https://bob-ws.grain-user.test","kind":"connected","state":"running","status":"offline","owner":"bob@example.com","host_kind":"workstation","scopes":[{"repo":"acme/billing","path_prefix":"","role":"primary","effective_role":"primary","source":"declared","active":true,"claimed_at":"2026-11-08T23:12:28.640512Z","updated_at":"2026-11-08T23:12:28.640512Z"},{"repo":"github.com/acme/payments","path_prefix":"","role":"primary","effective_role":"primary","source":"declared","active":true,"claimed_at":"2026-11-08T23:12:28.640512Z","updated_at":"2026-11-08T23:12:28.640512Z"}],"active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"updated_at":"2026-11-08T23:12:28.640512Z"}]}
+

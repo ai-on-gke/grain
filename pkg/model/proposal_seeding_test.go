@@ -240,6 +240,16 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 			held:    "https://caps.example/seeded-person-only#approve",
 			refusal: "seeded with this deployment's default capability",
 		},
+		// A non-reference dangerous api grant (IsPersonOnlyGrant) seeded
+		// from the target's defaults must also stay held.
+		"person-only api default": {
+			child: seededChild(byDefault("api:self-upgrade")),
+			seeding: func(s *model.ProposalSeeding) {
+				s.RepoDefaults = append(s.RepoDefaults, "api:self-upgrade")
+			},
+			held:    "api:self-upgrade",
+			refusal: "seeded with this deployment's default capability",
+		},
 		// An unnormalized reference with no #method cannot have its
 		// method-level person-only rules or normalized args checked, even
 		// when the seeding source spells it identically.

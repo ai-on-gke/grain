@@ -214,7 +214,13 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 		// task with a fresh conversation, and the closed one keeps its
 		// record.
 		if task != nil && (obs == nil || obs.ClosedAt == nil) {
-			return updateConsoleSession(ctx, deps, session, *task, obs, running[task.ID], now)
+			// A run's row is finished before its result has been turned
+			// into what it implies (InFlight.Busy): its answer is not on
+			// the task yet, and parking in that window posts the resting
+			// line above the answer, so the next park cannot reuse it and
+			// posts a second one.
+			live := running[task.ID] || (deps.Runs != nil && deps.Runs.Busy(task.ID))
+			return updateConsoleSession(ctx, deps, session, *task, obs, live, now)
 		}
 		// The conversation that ended. The replacement is told where it
 		// came from and is handed that thread's standing summary --
@@ -322,14 +328,10 @@ func updateConsoleSession(ctx context.Context, deps Deps, session model.ConsoleS
 	}
 	if taskKeepRunning(ctx, deps.Store, task) {
 		if obs != nil && obs.PendingQuestionCommentID != nil {
-			if comments, err := deps.Store.Comments(ctx, task.ID); err == nil {
-				for _, c := range comments {
-					if c.ID == *obs.PendingQuestionCommentID && isConsoleSessionResting(c) {
-						return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
-							o.PendingQuestionCommentID = nil
-						})
-					}
-				}
+			if c, err := deps.Store.Comment(ctx, task.ID, *obs.PendingQuestionCommentID); err == nil && c != nil && isConsoleSessionResting(*c) {
+				return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+					o.PendingQuestionCommentID = nil
+				})
 			}
 		}
 		if waiting, unanswered, err := consoleSessionRest(ctx, deps, task.ID); err == nil && !waiting && unanswered == nil {
@@ -474,11 +476,11 @@ const consoleSessionTunnelNote = "_That has not been answered yet: the cluster's
 // session already ends on is not said again every cycle it stays true.
 // Unlike parkConsoleSession it leaves the task queued.
 func noteConsoleSession(ctx context.Context, deps Deps, taskID, note string, now time.Time) error {
-	comments, err := deps.Store.Comments(ctx, taskID)
+	last, err := deps.Store.LatestComment(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if n := len(comments); n > 0 && comments[n-1].Author.Actor == consoleSessionPrincipal && comments[n-1].Body == note {
+	if last != nil && last.Author.Actor == consoleSessionPrincipal && last.Body == note {
 		return nil
 	}
 	_, err = deps.Store.AddComment(ctx, model.Comment{
@@ -546,23 +548,15 @@ func consoleSessionFailureNote(run model.Run) string {
 // and a session dispatched for those would never stop being
 // dispatched.
 func consoleSessionRest(ctx context.Context, deps Deps, taskID string) (waiting bool, unanswered *model.Run, err error) {
-	comments, err := deps.Store.Comments(ctx, taskID)
-	if err != nil {
-		return false, nil, err
-	}
 	obs, err := deps.Store.GetObservation(ctx, taskID)
 	if err != nil {
 		return false, nil, err
 	}
-	var said time.Time
-	var saidID int64
-	for _, c := range comments {
-		if c.Author.Actor == consoleSessionPrincipal && !c.CreatedAt.Before(said) {
-			said = c.CreatedAt
-			saidID = c.ID
-		}
+	comments, said, saidID, err := consoleSessionTailComments(ctx, deps.Store, taskID, obs)
+	if err != nil {
+		return false, nil, err
 	}
-	runs, err := deps.Store.Runs(ctx, taskID)
+	runs, err := consoleSessionTailRuns(ctx, deps.Store, taskID, said)
 	if err != nil {
 		return false, nil, err
 	}
@@ -606,6 +600,89 @@ func consoleSessionRest(ctx context.Context, deps Deps, taskID string) (waiting 
 		}
 	}
 	return false, unanswered, nil
+}
+
+// consoleSessionTailComments reads only the tail of a session's conversation
+// that consoleSessionRest needs: back to grain's latest session line and
+// Observation.DeliveredCommentID, oldest first.
+func consoleSessionTailComments(ctx context.Context, store *model.Store, taskID string, obs *model.Observation) ([]model.Comment, time.Time, int64, error) {
+	var pages [][]model.Comment
+	var before int64
+	var said time.Time
+	var saidID int64
+	deliveredReached := obs == nil || obs.DeliveredCommentID == nil
+	for {
+		page, more, err := store.CommentsBefore(ctx, taskID, before, 50)
+		if err != nil {
+			return nil, time.Time{}, 0, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		pages = append(pages, page)
+		for _, c := range page {
+			if c.Author.Actor == consoleSessionPrincipal && (saidID == 0 || !c.CreatedAt.Before(said)) {
+				if c.CreatedAt.After(said) || (c.CreatedAt.Equal(said) && c.ID > saidID) || saidID == 0 {
+					said = c.CreatedAt
+					saidID = c.ID
+				}
+			}
+		}
+		if !deliveredReached && page[0].ID <= *obs.DeliveredCommentID {
+			deliveredReached = true
+		}
+		if !more || (saidID > 0 && deliveredReached) {
+			break
+		}
+		before = page[0].ID
+	}
+	var total int
+	for _, p := range pages {
+		total += len(p)
+	}
+	out := make([]model.Comment, 0, total)
+	for i := len(pages) - 1; i >= 0; i-- {
+		out = append(out, pages[i]...)
+	}
+	return out, said, saidID, nil
+}
+
+// consoleSessionTailRuns reads the recent runs of taskID back through said,
+// oldest first, so consoleSessionRest sees the latest run and every exchange
+// after grain's last rest line without loading the session's whole run history.
+func consoleSessionTailRuns(ctx context.Context, store *model.Store, taskID string, said time.Time) ([]model.Run, error) {
+	if said.IsZero() {
+		return store.Runs(ctx, taskID)
+	}
+	var pages [][]model.Run
+	beforeAttempt := 0
+	for {
+		page, older, err := store.RunsBefore(ctx, taskID, beforeAttempt, 20)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		pages = append(pages, page)
+		oldestEnded := page[0].StartedAt
+		if page[0].FinishedAt != nil && page[0].FinishedAt.After(oldestEnded) {
+			oldestEnded = *page[0].FinishedAt
+		}
+		if older == 0 || !oldestEnded.After(said) {
+			break
+		}
+		beforeAttempt = page[0].Attempt
+	}
+	var total int
+	for _, p := range pages {
+		total += len(p)
+	}
+	out := make([]model.Run, 0, total)
+	for i := len(pages) - 1; i >= 0; i-- {
+		out = append(out, pages[i]...)
+	}
+	return out, nil
 }
 
 // undeliveredHumanComment is the first comment a person posted on a task
@@ -690,11 +767,15 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		// Saved before sessions recorded who titled them: whether the
 		// body asks the agent to name the conversation turns on whether
 		// the title is still what its first message would give.
-		comments, err := deps.Store.Comments(ctx, task.ID)
+		first, err := deps.Store.FirstHumanComment(ctx, task.ID)
 		if err != nil {
 			return err
 		}
-		session.TitleSource = session.ResolvedTitleSource(model.ConsoleSessionFirstMessage(comments))
+		firstMsg := ""
+		if first != nil {
+			firstMsg = first.Body
+		}
+		session.TitleSource = session.ResolvedTitleSource(firstMsg)
 	}
 	prev, hasPrev := model.LastSyncedConsoleSession(ctx, deps.Store, task.ID)
 	configTitle := model.ConsoleSessionTitle(session)
@@ -840,7 +921,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		task.Admission == model.AdmissionDurable &&
 		model.NormalizeHosting(task.Hosting) == hosting &&
 		task.Model == chosenModel && task.KeepRunning == keepRunning &&
-		slices.Equal(task.Grants, grants) &&
+		slices.EqualFunc(task.Grants, grants, model.Grant.Equal) &&
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
 		slices.Equal(taskLinks, links) {
@@ -980,14 +1061,21 @@ func consoleSessionSnapshotEqual(a, b model.ConsoleSessionConfigSnapshot) bool {
 		slices.Equal(a.AutoReads, b.AutoReads)
 }
 
+func containsConsoleGrantKey(list []string, capability string) bool {
+	key := model.CanonicalGrantKey(capability)
+	return slices.ContainsFunc(list, func(s string) bool {
+		return model.CanonicalGrantKey(s) == key
+	})
+}
+
 func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession,
 	prev model.ConsoleSessionConfigSnapshot, hasPrev bool) []model.Grant {
 
 	removedSession := map[string]bool{}
 	if hasPrev {
 		for _, c := range prev.Capabilities {
-			if c != "" && !slices.Contains(session.Capabilities, c) {
-				removedSession[c] = true
+			if c != "" && !containsConsoleGrantKey(session.Capabilities, c) {
+				removedSession[model.CanonicalGrantKey(c)] = true
 			}
 		}
 	}
@@ -1002,22 +1090,23 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		if _, isLegacyHost := model.LegacyHostingAlias(g.Capability); isLegacyHost {
 			continue
 		}
-		if g.Capability == "" || seen[g.Capability] {
+		key := model.CanonicalGrantKey(g.Capability)
+		if g.Capability == "" || seen[key] {
 			continue
 		}
 		if g.Via == model.GrantByGrain {
-			if hasPrev && removedSession[g.Capability] {
+			if hasPrev && removedSession[key] {
 				continue
 			}
-			if !hasPrev && !slices.Contains(session.Capabilities, g.Capability) {
+			if !hasPrev && !containsConsoleGrantKey(session.Capabilities, g.Capability) {
 				continue
 			}
 		}
-		if g.Via == model.GrantByDefault && !slices.Contains(session.Capabilities, g.Capability) &&
+		if g.Via == model.GrantByDefault && !containsConsoleGrantKey(session.Capabilities, g.Capability) &&
 			(!model.IsConsoleSessionDefaultGrant(g.Capability) || session.DeclinesDefault(g.Capability)) {
 			continue
 		}
-		seen[g.Capability] = true
+		seen[key] = true
 		out = append(out, g)
 	}
 
@@ -1027,13 +1116,14 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 	// since -- and never one that was given them and no longer holds them,
 	// which is an operator having removed one from the task.
 	for _, name := range model.ConsoleSessionDefaultGrants() {
-		if seen[name] || session.DeclinesDefault(name) {
+		key := model.CanonicalGrantKey(name)
+		if seen[key] || session.DeclinesDefault(name) {
 			continue
 		}
-		if hasPrev && slices.Contains(prev.OfferedDefaults, name) {
+		if hasPrev && containsConsoleGrantKey(prev.OfferedDefaults, name) {
 			continue
 		}
-		seen[name] = true
+		seen[key] = true
 		out = append(out, model.Grant{Capability: name, Via: model.GrantByDefault})
 	}
 
@@ -1045,11 +1135,12 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		if _, isLegacyHost := model.LegacyHostingAlias(name); isLegacyHost {
 			continue
 		}
-		if name == "" || seen[name] {
+		key := model.CanonicalGrantKey(name)
+		if name == "" || seen[key] {
 			continue
 		}
-		if !hasPrev || !slices.Contains(prev.Capabilities, name) {
-			seen[name] = true
+		if !hasPrev || !containsConsoleGrantKey(prev.Capabilities, name) {
+			seen[key] = true
 			out = append(out, model.Grant{Capability: name, Via: model.GrantByGrain})
 		}
 	}

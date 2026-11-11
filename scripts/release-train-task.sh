@@ -116,18 +116,11 @@ while read -r t; do
 done < <(git tag -l 'v*-rc.*-discarded' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+-discarded$' | sed 's/-discarded$//' | sort -V)
 
 # Stage 0 (candidate-gate.sh select-lkg) reads only the required workflows on
-# the active cut branch -- main, or release/vX.Y.Z once rc.2 has been dropped
-# and its convergence branch exists -- so query each required workflow directly
-# rather than letting unrelated workflows on main crowd them out of one page.
+# main, where every rc is cut (playbook section 5; there is no convergence
+# branch since 2026-11-09), so query each required workflow directly rather
+# than letting unrelated workflows on main crowd them out of one page.
 cut_branch=main
 required="${CANDIDATE_GATE_REQUIRED-tests release}"
-if [ -z "$rc" ] && [ -n "$dropped" ] && [ "$(( ${dropped##*.} + 1 ))" -ge 3 ]; then
-  conv="release/${dropped%-rc.*}"
-  if git show-ref --verify --quiet "refs/remotes/origin/$conv"; then
-    cut_branch="$conv"
-    required="${RELEASE_BRANCH_REQUIRED-release}"
-  fi
-fi
 if [ -n "$required" ]; then
   : > "$out/runs.jsonl"
   for wf in $required; do
@@ -170,6 +163,10 @@ if [ -n "$hold_rc" ]; then
   app="${app:-$(jq -r '.grain_app // empty' "$out/hold-checks.json")}"
   env_args+=(RELEASE_HOLD_CHECKS_JSON="$out/hold-checks.json")
 fi
+# A forge connection that is no GitHub App (a PAT) reports no grain_app
+# (as does one grain cannot tell). Then the environment, or else
+# scripts/release.conf's RELEASE_QUALIFICATION_APP, decides: "none" there
+# qualifies on Stage 1 alone with nothing holding, and unset fails closed.
 app="${app:-${RELEASE_QUALIFICATION_APP:-}}"
 for f in "$out"/*.json; do
   note="$(jq -r '.grain_note // empty' "$f" 2>/dev/null || true)"

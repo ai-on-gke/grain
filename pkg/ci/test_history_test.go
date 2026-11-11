@@ -148,3 +148,72 @@ func TestQueryTestHistoryReadsQuarantineFromStepOutput(t *testing.T) {
 		t.Errorf("TestOther: %+v, want one failure", r)
 	}
 }
+
+// A GitHub Actions run's jobs that passed are not passes of the test --
+// grain keeps no log of them -- and the report names each source's runs
+// and the window they span.
+func TestQueryTestHistoryGitHubActionsCountsFailuresOnly(t *testing.T) {
+	grainAt := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	first := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	second := time.Date(2026, 11, 9, 6, 0, 0, 0, time.UTC)
+	gha := func(id string, at time.Time, failed bool) Run {
+		run := Run{ID: id, Provider: ProviderGitHubActions, Repo: "acme/widgets", Ref: "main", StartedAt: &at,
+			Actions: &ActionsRun{Workflow: ".github/workflows/nightly.yml"},
+			Jobs:    []JobRun{{Name: "go unit", Conclusion: ConclusionSuccess, StartedAt: &at}}}
+		if failed {
+			run.Jobs = append(run.Jobs, JobRun{Name: "go-long", Conclusion: ConclusionFailure, StartedAt: &at,
+				Steps: []StepRun{{Name: "test", Output: "--- FAIL: TestThing (0.10s)\n"}}})
+		}
+		return run
+	}
+	runs := []Run{
+		gha("gha:acme:widgets:2", second, true),
+		gha("gha:acme:widgets:1", first, false),
+		{ID: "run-1", Repo: "acme/widgets", Ref: "main", StartedAt: &grainAt,
+			Jobs: []JobRun{{Name: "go test", Conclusion: ConclusionSuccess, StartedAt: &grainAt}}},
+	}
+	report := QueryTestHistory(runs, "TestThing")
+	if report.Failed != 1 || report.Passed != 1 || !report.PassesUncounted {
+		t.Fatalf("report = %+v", report)
+	}
+	if got := report.RecentRuns[0]; got.Provider != ProviderGitHubActions || got.Workflow != "nightly.yml" || got.Status != TestStatusFail {
+		t.Errorf("the Actions failure = %+v", got)
+	}
+	if len(report.Sources) != 2 || report.Sources[0].Provider != ProviderGitHubActions || report.Sources[0].Runs != 2 ||
+		!report.Sources[0].Oldest.Equal(first) || !report.Sources[0].Newest.Equal(second) || report.Sources[1].Runs != 1 {
+		t.Errorf("sources = %+v", report.Sources)
+	}
+	rendered := report.Render()
+	for _, want := range []string{
+		"GitHub Actions: 2 run(s) (2026-11-08 06:00 UTC .. 2026-11-09 06:00 UTC)",
+		"Grain CI: 1 run(s) (2026-10-31 09:00 UTC)",
+		"GitHub Actions runs count only this test's failures",
+		`(nightly.yml, main) | job "go-long": FAIL`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the report does not say %q:\n%s", want, rendered)
+		}
+	}
+
+	none := QueryTestHistory(runs[1:2], "TestThing").Render()
+	if !strings.Contains(none, "No recorded failures of this test") {
+		t.Errorf("an Actions history with no failure should say it saw none, not that the test never ran:\n%s", none)
+	}
+}
+
+func TestQueryTestHistoryFallsBackToRunStartedAt(t *testing.T) {
+	at := time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC)
+	runs := []Run{{
+		ID: "gha:acme:widgets:9505", Provider: ProviderGitHubActions, Repo: "acme/widgets", Ref: "main",
+		StartedAt: &at, Conclusion: ConclusionFailure,
+		Actions: &ActionsRun{Workflow: ".github/workflows/nightly.yml"},
+		Jobs: []JobRun{{
+			Name: "go-long", Conclusion: ConclusionFailure,
+			Steps: []StepRun{{Name: "test", Output: "--- FAIL: TestNightly (1.00s)\n"}},
+		}},
+	}}
+	rendered := QueryTestHistory(runs, "TestNightly").Render()
+	if strings.Contains(rendered, "unknown time") || !strings.Contains(rendered, "2026-11-10 03:00 UTC | run gha:acme:widgets:9505") {
+		t.Fatalf("expected execution to inherit run StartedAt rather than unknown time:\n%s", rendered)
+	}
+}

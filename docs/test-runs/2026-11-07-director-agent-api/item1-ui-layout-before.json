@@ -1,0 +1,24 @@
+[
+  {
+    "width": "desktop",
+    "networkSelect": "none",
+    "warningShown": false,
+    "warningText": "",
+    "warningBelowSelect": null,
+    "warningInsideViewport": null,
+    "adoptBannerShown": false,
+    "horizontalOverflow": false,
+    "pageErrors": []
+  },
+  {
+    "width": "phone",
+    "networkSelect": "none",
+    "warningShown": false,
+    "warningText": "",
+    "warningBelowSelect": null,
+    "warningInsideViewport": null,
+    "adoptBannerShown": false,
+    "horizontalOverflow": false,
+    "pageErrors": []
+  }
+]

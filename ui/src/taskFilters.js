@@ -472,7 +472,7 @@ export function unknownConditions(filters, attributes) {
 // unknownConditionName is how one of those conditions is named: its
 // attribute, or its attribute and comparison when the comparison is
 // what could not be read.
-export function unknownConditionName({ cond, badOp }) {
+function unknownConditionName({ cond, badOp }) {
   return badOp ? `${cond?.attr}:${cond?.op}` : cond?.attr;
 }
 
@@ -530,6 +530,55 @@ export function admitsState(narrowing, config, state) {
     attributesFor(config),
   ).filter(({ attr }) => attr.id === "state");
   return matchesFilters({ id: "", title: "", state }, conditions, "", config);
+}
+
+// CLOSED_SERVER_ATTRS is the attributes GET /api/tasks can narrow closed
+// work by itself (pkg/ui's taskListQuery: ?owner= and ?externalRef=).
+const CLOSED_SERVER_ATTRS = ["owner", "externalRef"];
+
+// closedServerFilters is what of narrowing the server can answer over
+// closed work: for owner and externalRef, the one value a single "is any
+// of" condition on that attribute names -- `owner:any:me` read as the
+// viewer, the way the list itself reads it -- and "" for an attribute
+// with no such condition (none, several, another comparison, several
+// values, or "Not set"). useClosedTasks asks the server with these
+// (closedTasks.js), so a condition matching a task deep in closed work
+// finds it in one request rather than by paging through every closed
+// page (2026-11-07 walkthrough, F6). What comes back is still narrowed
+// by the views' own matchesFilters, so the server only has to answer
+// a superset of what the condition keeps -- and it does: it compares an
+// owner case-insensitively and an external reference exactly.
+export function closedServerFilters(narrowing, config) {
+  const out = { owner: "", externalRef: "" };
+  const conditions = resolveConditions(
+    narrowing?.filters || [],
+    attributesFor(config),
+  );
+  for (const id of CLOSED_SERVER_ATTRS) {
+    const on = conditions.filter(({ attr }) => attr.id === id);
+    if (on.length !== 1) continue;
+    const { attr, cond } = on[0];
+    if (cond.op !== "any" || (cond.values || []).length !== 1) continue;
+    const [value] = cond.values;
+    if (value === NONE || String(value).trim() === "") continue;
+    // "me" is the viewer, which only GET /api/config says. Before it has
+    // answered, expand reads "me" as its fallback "operator", and the
+    // list asked the server for owner=operator -- somebody else's closed
+    // work, or nothing -- on every cold load of an `owner:any:me` link,
+    // then asked again once the viewer was known (2026-11-08
+    // walkthrough, F1). Wait for the viewer instead.
+    if (
+      !config &&
+      id === "owner" &&
+      String(value).trim().toLowerCase() === "me"
+    ) {
+      continue;
+    }
+    const wanted = attr.expand ? attr.expand(value, config) : [value];
+    if (wanted.length !== 1 || !String(wanted[0]).trim()) continue;
+    out[id] = String(wanted[0]).trim();
+  }
+  return out;
 }
 
 // unknownValues is the values a condition names that its attribute's
@@ -964,7 +1013,7 @@ export function defaultNarrowing(config) {
 // newest merged first (taskAttributes.js's "merged" attribute). App's
 // listDefault and selectStateFilter ask it; isNarrowed leaves the sort
 // out entirely, so this default never offers Clear on its own.
-export const MERGED_SORT = [{ attr: "merged", dir: "desc" }];
+const MERGED_SORT = [{ attr: "merged", dir: "desc" }];
 export function defaultSortFor(stateFilter) {
   return stateFilter === "merged" ? MERGED_SORT : [];
 }

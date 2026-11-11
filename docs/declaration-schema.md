@@ -51,8 +51,9 @@ What the two contexts do *not* share is size, and that stays:
 |---|---|---|
 | carries | every field | the subset a repository may say about itself |
 | identity | the row's id | the file's own name |
-| `grants`, `reads`, `writes`, `target` | yes | **refused, loudly** |
+| `reads`, `writes`, `target` | yes | **refused, loudly** |
 | a template's `capabilities: [repo-read:..., repo-write:...]` | as `reads`/`writes` | accepted, and only those two (task 1780) |
+| a template's or schedule's `grants:` | the grant rows | accepted as the unified spelling of `capabilities:`, read as one list with it and held to exactly its rule (unified-grants §3) |
 | a schedule's own `title`/`body`/`auto-merge` | yes | **refused, loudly** |
 
 ## The thing that must not be got wrong
@@ -235,7 +236,9 @@ row.
   writes them. There is nothing in `tables/template.json` to rename.
   `Store.resolveTemplate` asks this build first and the store second.
 - **The schedule that fires one is a row**, seeded idempotently under
-  that same well-known id by `orchestrator.reconcileSystemSchedules`, and
+  that same well-known id by `orchestrator.reconcileSystemSchedules` (waiting
+  one hour, `systemScheduleFirstFiringGrace`, before a freshly seeded row's
+  first firing so an operator can review repositories and settings first), and
   it is exported. It is protected on four sides: the id is the identity,
   so no rename of anything else moves it; the seeder re-writes the row if
   it is missing; the resync writes this build's template back over its

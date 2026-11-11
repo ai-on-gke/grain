@@ -140,11 +140,9 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 			"orchestrator: task %s has no repo attached, so there is no branch to open a pull request for", task.ID)
 	}
 	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			if reason := src.GitOnly(prRepo.StoredOwner(), prRepo.Name); reason != "" {
-				return PullRequestStatus{}, fmt.Errorf("orchestrator: %s", reason)
-			}
+	if src, ok := client.(github.GitOnlySource); ok {
+		if reason := src.GitOnly(prRepo.StoredOwner(), prRepo.Name); reason != "" {
+			return PullRequestStatus{}, fmt.Errorf("orchestrator: %s", reason)
 		}
 	}
 	branch := task.BranchName()
@@ -153,6 +151,11 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 			"orchestrator: task %s pushes to %s, the branch of task %s under review, whose own pull request "+
 				"already carries what you push there -- there is no second pull request to open",
 			task.ID, branch, reviewedID)
+	}
+	if reviewCommentsOnly(task) {
+		return PullRequestStatus{}, fmt.Errorf(
+			"orchestrator: task %s is a review filed to post findings on the pull request it reviews, "+
+				"not to fix them -- record them with add_review_comment; there is no pull request to open", task.ID)
 	}
 	pushed, err := targetBranchExists(client, *task.Target, branch)
 	if err != nil {
@@ -260,9 +263,16 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 // idempotent across a retry.
 //
 // It also keeps a task to one repository's pull requests: linking ref
-// drops any LinkFixes link to a pull request in another repository.
+// drops any LinkFixes link to a pull request in another repository. When ref
+// becomes the task's new active pull request after an earlier pull request
+// already settled, stale PrOpenedAt/PrMergedAt/PrClosedAt stamps from the
+// earlier pull request are cleared on Observation so the task tracks ref.
 func linkPullRequest(ctx context.Context, store *model.Store, taskID string, ref model.PullRequestRef) error {
+	added := false
+	hadPriorPR := false
+	isActive := false
 	if err := store.UpdateTask(ctx, taskID, func(t *model.Task) error {
+		added, hadPriorPR, isActive = false, false, false
 		// A pull request in another repository is one the task was moved
 		// off: it is not this task's change any more, and leaving it
 		// linked beside this one has every reader of the task's links
@@ -275,17 +285,50 @@ func linkPullRequest(ctx context.Context, store *model.Store, taskID string, ref
 				return false
 			}
 			other, err := model.ParsePullRequestRef(l.Target)
-			return err == nil && !other.Repo.Same(ref.Repo)
+			if err == nil && !other.Repo.Same(ref.Repo) {
+				hadPriorPR = true
+				return true
+			}
+			hadPriorPR = true
+			return false
 		})
 		for _, l := range t.Links {
 			if l.Kind == model.LinkFixes && l.Target == ref.String() {
+				if tp := model.TaskPullRequest(*t); tp != nil && model.SamePullRequest(*tp, ref) {
+					isActive = true
+				}
 				return nil
 			}
 		}
 		t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: ref.String()})
+		added = true
+		if tp := model.TaskPullRequest(*t); tp != nil && model.SamePullRequest(*tp, ref) {
+			isActive = true
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("orchestrator: linking %s to %s: %w", taskID, ref, err)
+	}
+	if isActive {
+		obs, err := store.GetObservation(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: reading observation for %s after linking %s: %w", taskID, ref, err)
+		}
+		resetOpened := added && (hadPriorPR || (obs != nil && (obs.PrMergedAt != nil || obs.PrClosedAt != nil)))
+		if obs != nil && (obs.PrMergedAt != nil || obs.PrClosedAt != nil || (resetOpened && obs.PrOpenedAt != nil)) {
+			if err := store.ObserveField(ctx, taskID, time.Now().UTC(), func(o *model.Observation) {
+				if resetOpened {
+					o.PrOpenedAt = nil
+					o.PrAdditions = nil
+					o.PrDeletions = nil
+					o.PrChangedFiles = nil
+				}
+				o.PrMergedAt = nil
+				o.PrClosedAt = nil
+			}); err != nil {
+				return fmt.Errorf("orchestrator: clearing settled pull request timestamps on %s for %s: %w", taskID, ref, err)
+			}
+		}
 	}
 	return nil
 }

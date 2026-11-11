@@ -173,7 +173,7 @@ func TestGitHubIssueCorrelationAndAutoCloseWalkthrough(t *testing.T) {
 		if createdTask.Issue != issueNumber {
 			t.Fatalf("createdTask.Issue = %d, want %d", createdTask.Issue, issueNumber)
 		}
-		if len(createdTask.Capabilities) != 1 || createdTask.Capabilities[0] != model.GitHubReadIssuesGrant {
+		if caps := withoutDefaultCIRead(createdTask.Capabilities); len(caps) != 1 || caps[0] != model.GitHubReadIssuesGrant {
 			t.Fatalf("createdTask.Capabilities = %v, want [%q]", createdTask.Capabilities, model.GitHubReadIssuesGrant)
 		}
 

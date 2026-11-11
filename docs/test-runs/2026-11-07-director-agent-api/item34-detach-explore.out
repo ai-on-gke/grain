@@ -1,0 +1,42 @@
+## item 3: capabilities:detach credential
+dangerous scopes on the credential: ["capabilities:detach@acme/app","tasks:read@acme/app"]
+- tools/list: ["grain_explore_scope","grain_invoke","grain_filing_context","grain_submit_task","grain_list_tasks","grain_get_task"]
+- grain_explore_scope {} groups: [{"group":"capabilities","scopes":[{"scope":"capabilities:detach","dangerous":null,"routeCount":3}]},{"group":"tasks","scopes":[{"scope":"tasks:read","dangerous":null,"routeCount":17}]}]
+target task 2 grants: ["https://grain.dev/capabilities/github#read-issues={}","https://grain.dev/capabilities/grain#journal={}"]
+- attach over MCP (must be refused):
+isError=true api_set_capability failed: HTTP 403: capabilities:detach may only remove a grant on POST /api/tasks/{id}/capabilities ("attach": false); attaching one needs capabilities:admin
+- replace over MCP (must be refused):
+isError=true api_set_capability failed: HTTP 403: capabilities:detach cannot replace a grant on POST /api/tasks/{id}/capabilities; replacing one needs capabilities:admin
+- detach without a reason (must be refused):
+isError=true api_set_capability failed: reason is required: POST /api/tasks/{id}/capabilities is destructive (scope capabilities:admin)
+- detach from the Director (task 1, a standing session; must be refused):
+isError=true api_set_capability failed: HTTP 403: external:detacher holds capabilities:detach only for acme/app, and POST /api/tasks/{id}/capabilities does not name a repository it reaches
+- detach read-issues from 2 with a reason:
+isError=false {"id":"2","title":"detach target","author":"operator@example.com","authorKind":"human","authorSource":"access-code","authorLabel":"operator (access code)","state":"proposed","repo":"acme/app","branch":"grain/51ab02e4/task-2-detach-target","priority":5,"autoMer
+target task 2 grants now: ["https://grain.dev/capabilities/grain#journal={}"]
+- PATCH capabilities over REST (capabilities:admin route; must be refused):
+HTTP 403 {"error":"external:detacher holds no api grant for scope tasks:write, which PATCH /api/tasks/{id} needs"}
+- repo default capabilities superset over REST (must be refused):
+HTTP 403 {"error":"capabilities:detach may only narrow defaultCapabilities on PUT /api/repos/{owner}/{name}/capabilities, and \"https://grain.dev/capabilities/github#read-issues={}\" is not already on it; adding one needs capabilities:admin"}
+
+## item 4: grain_explore_scope size and hints
+{}                             2247 bytes  Call grain_explore_scope(scope='<group>', tool='<word>') to view matching route tool names and JSON input schemas; scope alone lists a whole group and scope='all' (or view='index') every route, each shrunk to fit one ans
+{"view":"index"}               2344 bytes  Tool names by scope: grain_explore_scope(tool='<name>') gives one route's path and inputSchema. 
+{"scope":"all"}                2344 bytes  Tool names by scope: grain_explore_scope(tool='<name>') gives one route's path and inputSchema. 
+{"scope":"tasks"}              9635 bytes  Schemas omitted: call grain_explore_scope(tool='<tool>') for one route's inputSchema, or view='full' for all of these. 
+{"tool":"approve"}             1432 bytes  
+{"tool":"aprove"}               175 bytes  
+    body: No authorized route matches tool "aprove". Did you mean api_approve? Call grain_explore_scope(scope='<group>') to list a group's routes, or (view='index') for every tool name.
+{"tool":"self-debug"}           153 bytes  
+    body: No authorized route matches tool "self-debug". Call grain_explore_scope(scope='<group>') to list a group's routes, or (view='index') for every tool name.
+{"tool":"priority-dispatch"}    199 bytes  
+    body: No authorized route matches tool "priority-dispatch". Scope groups near that word: dispatch. Call grain_explore_scope(scope='<group>') to list a group's routes, or (view='index') for every tool name.
+{"tool":"read-issues"}         1053 bytes  
+    body: {"routeCount":1,"routes":[{"tool":"api_import_issues","method":"POST","path":"/api/repos/{owner}/{name}/import-issues","scope":"tasks:write","description":"Import a repository's open GitHub issues as tasks now, as its issue importer would on its next poll: one task per issue not already imported, unapproved unless the repository's settings say approved. Calls POST /api/repos/{owner}/{name}/import-
+{"tool":"frobnicate"}           153 bytes  
+    body: No authorized route matches tool "frobnicate". Call grain_explore_scope(scope='<group>') to list a group's routes, or (view='index') for every tool name.
+{"scope":"secrets"}              99 bytes  
+    body: Scope "secrets" is not authorized for this caller (requires grant for secrets:read, secrets:write).
+{"scope":"tsks"}                116 bytes  
+    body: Unknown scope "tsks". Did you mean tasks? Call grain_explore_scope with no arguments to list available scope groups.
+- grain_invoke near-miss: isError=true grain_invoke failed: unknown route tool "api_aprove": did you mean api_approve? (use grain_explore_scope(tool='<word>') to find a route, or (view='index') to list every tool name)

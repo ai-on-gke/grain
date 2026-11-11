@@ -55,7 +55,7 @@ import { templateLabeler } from "../templateLabels.js";
 // to make that nested overlay work.
 // The most passes a suite may ask for: model.MaxSuitePasses, which the
 // server enforces on every create and update (task 3323).
-export const MAX_SUITE_PASSES = 100;
+const MAX_SUITE_PASSES = 100;
 
 function SuiteOverlay({
   suite,
@@ -251,10 +251,17 @@ function SuiteOverlay({
           </FormControl>
           {/* Gated like every other write on the Processes page
               (AccessGate.jsx): a role without templates:write is not
-              offered a template it could not save. */}
+              offered a template it could not save. The wrapper is
+              block-level: an inline one sits in a line box, whose strut
+              put the refused button 6px below the allowed one. */}
           <AccessGate
             scope="templates:write"
-            wrapperStyle={{ marginTop: -8, marginBottom: 8 }}
+            wrapperStyle={{
+              display: "flex",
+              width: "fit-content",
+              marginTop: -8,
+              marginBottom: 8,
+            }}
           >
             <Button
               size="small"
@@ -352,7 +359,7 @@ function SuiteOverlay({
           direction="row"
           justifyContent={isNew ? "flex-end" : "space-between"}
           alignItems="center"
-          sx={{ mt: 2 }}
+          sx={{ mt: 2, flexWrap: "wrap", gap: 1 }}
         >
           {/* Delete and Save are suites:write, as the list's own Run and
               New are (ProcessesList.jsx) -- missed here when the rest of
@@ -365,7 +372,7 @@ function SuiteOverlay({
               </Button>
             </AccessGate>
           )}
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
             <Button onClick={onClose}>{declaredIn ? "Close" : "Cancel"}</Button>
             <AccessGate scope="suites:write">
               <Button type="submit" variant="contained" disabled={!!declaredIn}>
@@ -390,7 +397,13 @@ function SuiteOverlay({
         path="/api/suites/composition"
         body={suiteRequest()}
         heading="What each pass files"
-        note={isNew ? "as filled in above" : "as edited above, not as saved"}
+        note={
+          isNew
+            ? "as filled in above"
+            : declaredIn
+              ? `declared in ${declaredIn.path}`
+              : "as edited above, not as saved"
+        }
       />
       {showNewTemplate && (
         <TemplateOverlay

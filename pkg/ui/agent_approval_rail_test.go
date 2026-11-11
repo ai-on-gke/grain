@@ -407,3 +407,59 @@ func TestAgentApprovalRailOnRunNowUnderDispatchWrite(t *testing.T) {
 		t.Errorf("task 30 state = %s (%v), want queued", state, err)
 	}
 }
+
+// A proposer that asks hold_for_approval wants a person to decide, whether
+// or not its own permission would have queued the proposal. Filed through
+// CreateTask by a run with no auto-approve permission, the proposal carries
+// no HeldForApprovalTag (no choice was made), so the rail used to let an
+// agent holding api:tasks:admin or dispatch:write approve it for the person
+// it was left for (docs/test-runs/2026-11-07-director-agent-api.md,
+// finding 2). HoldRequestedTag records the request itself.
+func TestAgentApprovalRailHonoursHoldForApprovalFromAProposerWithoutPermission(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	// Seeded ids well clear of the ones CreateTask allocates (1, 2, ...).
+	seedAPITask(t, client, "1001", "acme/widgets", "api:tasks:admin", "api:dispatch:write")
+	seedAPITask(t, client, "1009", "acme/widgets")
+
+	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:           "Drop the staging database",
+		Repo:            "acme/widgets",
+		ProposedBy:      "1009",
+		HoldForApproval: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := client.Store.GetTask(ctx, held.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("GetTask(%s): %v", held.ID, err)
+	}
+	if model.HeldForApproval(*stored) {
+		t.Errorf("task %s carries %s though task 1009's permission would not have queued it", held.ID, model.HeldForApprovalTag)
+	}
+	if !model.HoldRequested(*stored) {
+		t.Fatalf("task %s tags = %v, want %s recorded", held.ID, stored.Tags, model.HoldRequestedTag)
+	}
+	wantProposed(t, client, held.ID)
+
+	if code, body := approveAsAgent(t, srv, "1001", held.ID); code != http.StatusForbidden ||
+		!strings.Contains(body, "held for a person") || !strings.Contains(body, "hold_for_approval") {
+		t.Errorf("approve: %d %s, want 403 naming hold_for_approval", code, body)
+	}
+	if code, body := asAgent(t, srv, "1001", http.MethodPost, "/api/tasks/"+held.ID+"/run-now", `{}`, "testing the approval rail"); code != http.StatusForbidden ||
+		!strings.Contains(body, "hold_for_approval") {
+		t.Errorf("run-now: %d %s, want 403 naming hold_for_approval", code, body)
+	}
+	wantProposed(t, client, held.ID)
+
+	// The same proposal without hold_for_approval is held for nobody, so
+	// an unrelated tasks:admin still approves it.
+	plain, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Tidy the README", Repo: "acme/widgets", ProposedBy: "1009"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := approveAsAgent(t, srv, "1001", plain.ID); code != http.StatusOK {
+		t.Errorf("approving plain proposal %s: %d %s, want 200", plain.ID, code, body)
+	}
+}

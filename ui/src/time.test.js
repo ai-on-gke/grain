@@ -17,6 +17,7 @@ import {
   FALLBACK_TIME_ZONES,
   browserTimeZone,
   formatDateTime,
+  formatMoment,
   formatTime,
   timeZoneOptions,
   zoneAbbreviation,
@@ -82,6 +83,32 @@ describe("formatTime", () => {
     );
     // The date is not in it -- that is the difference from formatDateTime.
     expect(formatTime(noon, "UTC")).not.toContain("2026");
+  });
+});
+
+describe("formatMoment", () => {
+  it("is the clock time on the same day in the zone", () => {
+    const now = new Date("2026-01-15T23:00:00Z");
+    expect(formatMoment(noon, "UTC", now)).toBe(formatTime(noon, "UTC"));
+  });
+
+  it("carries the date on any other day", () => {
+    const now = new Date("2026-01-18T09:00:00Z");
+    expect(formatMoment(noon, "UTC", now)).toBe(formatDateTime(noon, "UTC"));
+  });
+
+  // 20:00Z on the 15th and 02:00Z on the 16th are both the 15th in
+  // Los Angeles, and two different days in UTC.
+  it("decides what is today in the zone, not in UTC", () => {
+    const now = new Date("2026-01-16T02:00:00Z");
+    expect(formatMoment(noon, "America/Los_Angeles", now)).toBe(
+      formatTime(noon, "America/Los_Angeles"),
+    );
+    expect(formatMoment(noon, "UTC", now)).toBe(formatDateTime(noon, "UTC"));
+  });
+
+  it("is empty for a value that is not a time", () => {
+    expect(formatMoment("not a time", "UTC")).toBe("");
   });
 });
 

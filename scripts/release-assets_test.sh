@@ -174,6 +174,11 @@ check "a promoted manifest names vX.Y.Z as its version and as every image's rele
   '[ "$(jq -r .version "$m")" = v3.4.0 ] && [ "$(jq -r .commit "$m")" = "$commit" ] &&
    [ "$(jq -r "[.images[].release] | unique | join(\",\")" "$m")" = v3.4.0 ] && bash "$assets" validate > /dev/null'
 
+run bash "$assets" promote-version
+check "promote-version names the release the git tag latest is on" '[ "$status" = 0 ] && [ "$out" = v3.4.0 ]'
+run bash "$assets" promote-version v3.4
+check "promote-version refuses a version that is not vX.Y.Z" '[ "$status" != 0 ] && grep -q "not a vX.Y.Z release" <<< "$out"'
+
 git tag -a v3.3.0 -m v3.3.0 "$first"
 git push -q origin v3.3.0
 rm -rf "$RELEASE_ASSETS_DIR"
@@ -242,6 +247,60 @@ check "a RELEASE_RETAIN_SHA that is not a number fails" '[ "$status" != 0 ] && g
 run bash "$assets" load
 check "load checks every image ID the manifest names" '[ "$status" = 0 ] && [ "$(grep -c "^release-assets.sh: loaded" <<< "$out")" = 3 ]'
 
+# The grain CLI archives scripts/build-cli.sh writes, which vX.Y.Z and
+# vX.Y.Z-rc.N releases carry for GET /cli/install.sh.
+cli="$work/cli"
+mkdir -p "$cli/stage"
+for a in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+  printf 'grain for %s\n' "$a" > "$cli/stage/grain"
+  tar -czf "$cli/grain-$a.tar.gz" -C "$cli/stage" grain
+done
+rm -rf "$cli/stage"
+(cd "$cli" && sha256sum grain-*.tar.gz > checksums.txt)
+cli_names="grain-linux-amd64.tar.gz grain-linux-arm64.tar.gz grain-darwin-amd64.tar.gz grain-darwin-arm64.tar.gz checksums.txt"
+# names_all PATTERN TEXT: TEXT has a line matching PATTERN, with NAME in
+# it, for every NAME the CLI publishes.
+names_all() {
+  local f
+  for f in $cli_names; do
+    grep -q "${1//NAME/$f}" <<< "$2" || return 1
+  done
+}
+
+run bash "$assets" cli-validate "$cli"
+check "cli-validate accepts the four archives and their checksums.txt" '[ "$status" = 0 ]'
+run bash "$assets" --dry-run cli-publish v3.4.0 "$cli"
+check "a promoted release's plan uploads all four CLI archives, then checksums.txt" \
+  '[ "$status" = 0 ] && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 5 ] &&
+   names_all "would POST .*/releases/dry-run/assets --upload NAME$" "$out" &&
+   grep "would POST .*--upload" <<< "$out" | tail -n 1 | grep -q " checksums.txt$"'
+run env RELEASE_CLI_DIR="$cli" bash "$assets" --dry-run cli-publish v3.5.0-rc.2
+check "an rc release carries the CLI too, from \$RELEASE_CLI_DIR" \
+  '[ "$status" = 0 ] && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 5 ] && grep -q "published the grain CLI on v3.5.0-rc.2" <<< "$out"'
+for other in v3.5.0-pending channel-main "sha-$short" v3.5.0-rc.2-discarded; do
+  run bash "$assets" --dry-run cli-publish "$other" "$cli"
+  check "cli-publish refuses $other, which no daemon reports as its release" \
+    '[ "$status" != 0 ] && grep -q "only those carry the grain CLI" <<< "$out" && ! grep -q "would POST" <<< "$out"'
+done
+run bash "$assets" cli-publish v3.4.0 "$cli"
+check "a real CLI publish with no token fails before writing anything" '[ "$status" != 0 ] && grep -q "needs GITHUB_TOKEN" <<< "$out"'
+
+badcli() {
+  rm -rf "$work/badcli"
+  cp -r "$cli" "$work/badcli"
+  (cd "$work/badcli" && eval "$1")
+  want="$3"
+  run bash "$assets" --dry-run cli-publish v3.4.0 "$work/badcli"
+  check "cli-publish refuses $2" '[ "$status" != 0 ] && grep -q -- "$want" <<< "$out" && ! grep -q "would POST" <<< "$out"'
+}
+badcli 'rm grain-darwin-arm64.tar.gz' "a missing archive" "no grain-darwin-arm64.tar.gz"
+badcli 'rm checksums.txt' "no checksums.txt" "no checksums.txt"
+badcli 'grep -v linux-arm64 checksums.txt > c && mv c checksums.txt' "a checksums.txt that leaves an archive out" "does not name grain-linux-arm64.tar.gz"
+badcli 'sha256sum grain-linux-amd64.tar.gz >> checksums.txt' "a checksums.txt naming an archive twice" "exactly once"
+badcli 'sed -i "s/  / */" checksums.txt' "a checksums.txt not in sha256sum's text format" "not sha256sum"
+badcli 'printf x >> grain-linux-amd64.tar.gz' "an archive its checksum does not match" "do not match"
+badcli 'mkdir s && echo x > s/other && tar -czf grain-linux-amd64.tar.gz -C s other && sha256sum grain-*.tar.gz > checksums.txt' "an archive with no grain in it" "holds no grain binary"
+
 # Against a fake GitHub API (a curl on PATH that answers from the URL):
 # prune and publish read every manifest they act on through the API, and
 # one they cannot read stops them before they write anything.
@@ -293,12 +352,22 @@ JSON
   "GET "*"/releases/5/assets?"*)
     jq -c '[.images[] | .asset, .asset + ".sha256"] | to_entries | map({id: (.key + 100), name: .value})' "$FAKE_MANIFEST" > "$out"
     printf 200 ;;
+  "GET "*"/releases/tags/v3.4.0")
+    echo '{"id":7,"upload_url":"https://uploads.example/repos/x/releases/7/assets{?name,label}"}' > "$out"
+    printf 200 ;;
+  "GET "*"/releases/7/assets?"*)
+    jq -R -s -c 'split("\n") | map(select(length > 0) | split(" ") | {id: (.[0] | tonumber), name: .[1]})' "$FAKE_V7_ASSETS" > "$out"
+    printf 200 ;;
+  "POST "*"/releases/7/assets?name="*)
+    echo "$((700 + $(wc -l < "$FAKE_V7_ASSETS"))) ${url##*name=}" >> "$FAKE_V7_ASSETS"
+    echo '{}' > "$out"
+    printf 201 ;;
   "DELETE "*) echo '' > "$out"; printf 204 ;;
   *) echo "{}" > "$out"; printf 404 ;;
 esac
 EOF
 chmod +x "$work/fakeapi/curl"
-export FAKE_LOG="$work/fakeapi/log" FAKE_MANIFEST="$RELEASE_ASSETS_DIR/images.json"
+export FAKE_LOG="$work/fakeapi/log" FAKE_MANIFEST="$RELEASE_ASSETS_DIR/images.json" FAKE_V7_ASSETS="$work/fakeapi/v7-assets"
 fake() { : > "$FAKE_LOG"; run env PATH="$work/fakeapi:$PATH" GITHUB_TOKEN=fake RELEASE_RETAIN_SHA=1 "$@"; }
 
 fake FAKE_MANIFEST_STATUS=404 bash "$assets" prune
@@ -317,6 +386,33 @@ fake FAKE_MANIFEST_STATUS=404 bash "$assets" publish channel-main
 check "publish refuses to move a channel whose manifest it cannot read" \
   '[ "$status" != 0 ] && grep -q "could not read channel-main" <<< "$out" &&
    ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+
+# v3.4.0 (release 7) holds images.json; its CLI assets come and go here.
+printf '70 images.json\n' > "$FAKE_V7_ASSETS"
+fake bash "$assets" cli-publish v3.4.0 "$cli"
+check "cli-publish uploads the four archives and checksums.txt to a promoted release, and checks they are there" \
+  '[ "$status" = 0 ] && [ "$(grep -c "^POST .*/releases/7/assets?name=" "$FAKE_LOG")" = 5 ] &&
+   names_all " NAME$" "$(cat "$FAKE_V7_ASSETS")" && grep -q "published the grain CLI on v3.4.0" <<< "$out"'
+fake bash "$assets" cli-publish v3.4.0 "$cli"
+check "a release that carries checksums.txt already is never written again" \
+  '[ "$status" = 0 ] && grep -q "already carries the grain CLI" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+printf '70 images.json\n71 grain-linux-amd64.tar.gz\n' > "$FAKE_V7_ASSETS"
+fake bash "$assets" cli-publish v3.4.0 "$cli"
+check "an archive a dead run left without checksums.txt is replaced" \
+  '[ "$status" = 0 ] && grep -qE "^DELETE .*/releases/assets/71$" "$FAKE_LOG" && [ "$(grep -c "^POST .*/releases/7/assets?name=" "$FAKE_LOG")" = 5 ]'
+printf '70 images.json\n72 checksums.txt\n' > "$FAKE_V7_ASSETS"
+fake bash "$assets" cli-publish v3.4.0 "$cli"
+check "a release with checksums.txt but not every archive fails closed" \
+  '[ "$status" != 0 ] && grep -q "carries checksums.txt but no grain-linux-amd64.tar.gz" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+fake bash "$assets" cli-publish v3.9.9 "$cli"
+check "cli-publish fails on a release that does not exist rather than creating it" \
+  '[ "$status" != 0 ] && grep -q "there is no release v3.9.9" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+fake RELEASE_CLI_SKIP_UNRELEASED=true bash "$assets" cli-publish v3.9.9 "$cli"
+check "RELEASE_CLI_SKIP_UNRELEASED warns of a missing release and skips it" \
+  '[ "$status" = 0 ] && grep -q "::warning::.*no release v3.9.9" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+fake DRY_RUN=true bash "$assets" cli-publish v3.9.9 "$cli"
+check "a dry run with GITHUB_TOKEN plans the CLI upload when promote --dry-run left no release yet" \
+  '[ "$status" = 0 ] && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 5 ] && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
 
 echo "$((cases - failures)) of $cases passed"
 [ "$failures" = 0 ]

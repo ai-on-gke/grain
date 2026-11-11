@@ -44,6 +44,7 @@ import {
 import { SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH } from "../theme.js";
 import { SIDEBAR_TOGGLE_KEY } from "../sidebarCollapse.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
+import { boardLabels } from "../boards.js";
 import { usePinnedNav } from "../PinnedNavContext.jsx";
 import { getPinnedItemInfo, samePin } from "../pinnedNav.js";
 import { useHiddenSections } from "../sidebarSections.js";
@@ -59,6 +60,8 @@ import CustomizeSidebarOverlay from "./CustomizeSidebarOverlay.jsx";
 import { NEW_SESSION_ID } from "./NewSessionPage.jsx";
 import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
+import AccessGate from "./AccessGate.jsx";
+import { useAccess } from "../AccessContext.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import { tasksLoadFailed } from "./ListPrimitives.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
@@ -301,8 +304,8 @@ function FooterItem({ kind, label, active, onClick, children }) {
   );
 }
 
-// SignedInRow is the phone's stand-in for the header rail's email badge
-// (PageHeader.jsx's GlobalButtons): who the deployment's identity
+// SignedInRow is the phone's form of the desktop footer's user tile and
+// Log out button (settings-panel design §4.3): who the deployment's identity
 // verifier says this browser is, as a row that opens Settings -> Access,
 // and Log out under it rather than behind a menu -- the drawer is
 // already the menu. Log out sits below the address, not beside it: in
@@ -616,6 +619,7 @@ export default function Sidebar({
   // pages read.
   unseenClosed = null,
   notificationCount = 0,
+  pendingReleaseCount = 0,
   schedules = [],
   templates = [],
   suites = [],
@@ -722,6 +726,7 @@ export default function Sidebar({
     (Array.isArray(processTriggers) ? processTriggers.length : 0);
   const visibleCIRuns = Array.isArray(ciRuns) ? ciRuns : [];
   const visibleBoards = Array.isArray(boards) ? boards : [];
+  const boardLabelById = boardLabels(visibleBoards);
   const asideRef = useRef(null);
   const tasksRef = useRef(null);
   const counts = {};
@@ -779,6 +784,12 @@ export default function Sidebar({
       ? `Tasks could not be refreshed (${tasksError}); showing the last list read — click to retry`
       : undefined;
   const repoCount = repoRows(config, tasks).length;
+  // Filing a task needs tasks:write: a role without it sees New task
+  // disabled, with the reason, rather than a form whose Create ends in a
+  // 403 (docs/test-runs/2026-11-07-rbac-roles.md F7).
+  const { reason: accessReason } = useAccess(config);
+  const fileWhy = accessReason("tasks:write");
+  const canFile = !fileWhy;
   // time.Time's zero value is still a non-empty string on the wire, so
   // FinishedAt cannot distinguish a live run here. Conclusion is CI's
   // canonical completion signal: its zero value means the run is pending.
@@ -827,10 +838,17 @@ export default function Sidebar({
       ? config.pendingLocalScripts
       : 0;
   const inboxCount =
-    waitingTasks + notificationCount + syncFailing + localScripts;
+    waitingTasks +
+    pendingReleaseCount +
+    notificationCount +
+    syncFailing +
+    localScripts;
   const inboxTitle = [
     waitingTasks > 0
       ? `${waitingTasks} task${waitingTasks === 1 ? "" : "s"} waiting on you`
+      : "",
+    pendingReleaseCount > 0
+      ? `${pendingReleaseCount} pending release${pendingReleaseCount === 1 ? "" : "s"} awaiting approval`
       : "",
     notificationCount > 0
       ? `${notificationCount} notification${notificationCount === 1 ? "" : "s"}`
@@ -1031,19 +1049,25 @@ export default function Sidebar({
             className="header-split-button"
             sx={{ my: 0.2 }}
           >
-            <Button
-              aria-label="+ New task"
-              onClick={onOpenNewTask}
-              startIcon={<AppIcon name="add" size={16} />}
-              sx={{
-                flex: "1 1 auto",
-                minWidth: 0,
-                whiteSpace: "nowrap",
-                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
-              }}
+            <AccessGate
+              scope="tasks:write"
+              config={config}
+              wrapperStyle={{ flex: "1 1 auto", minWidth: 0 }}
             >
-              New task
-            </Button>
+              <Button
+                aria-label="+ New task"
+                onClick={onOpenNewTask}
+                startIcon={<AppIcon name="add" size={16} />}
+                sx={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  whiteSpace: "nowrap",
+                  "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
+                }}
+              >
+                New task
+              </Button>
+            </AccessGate>
             <Button
               aria-label="Create options"
               aria-controls={createMenuOpen ? "create-options-menu" : undefined}
@@ -1079,6 +1103,8 @@ export default function Sidebar({
         }}
       >
         <MenuItem
+          disabled={!canFile}
+          title={canFile ? undefined : fileWhy}
           onClick={() => {
             setCreateMenuAnchor(null);
             onOpenNewTask?.();
@@ -1101,7 +1127,12 @@ export default function Sidebar({
           <ListItemText>New session</ListItemText>
         </MenuItem>
         {onNewBoard && (
+          // Filing a board is filing a task (boards.js), so a role that
+          // cannot file one is refused here exactly as on "New task"
+          // above -- not offered a form whose submit it cannot press.
           <MenuItem
+            disabled={!canFile}
+            title={canFile ? undefined : fileWhy}
             onClick={() => {
               setCreateMenuAnchor(null);
               onNewBoard();
@@ -1531,9 +1562,13 @@ export default function Sidebar({
           if (item.kind === "board") {
             const board = visibleBoards.find((b) => b.id === item.id);
             if (!board) return null;
+            const qualified = boardLabelById.get(board.id) || board.name;
+            const disambiguated = qualified !== board.name;
             return (
               <ListItemButton
                 key={`pinned-board-${board.id}-${idx}`}
+                label={qualified}
+                aria-label={disambiguated ? qualified : undefined}
                 selected={view === "boards" && openBoardId === board.id}
                 onClick={() => onOpenBoard && onOpenBoard(board)}
                 sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
@@ -1554,6 +1589,7 @@ export default function Sidebar({
                 </span>
                 <ListItemText
                   primary={board.name}
+                  title={disambiguated ? qualified : undefined}
                   sx={{ ml: 1 }}
                   primaryTypographyProps={{
                     noWrap: true,

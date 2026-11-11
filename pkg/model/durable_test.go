@@ -164,4 +164,20 @@ func TestSuspensionResumeAtAndSuspensionsInARow(t *testing.T) {
 	if streak, err := store.FailureStreak(ctx, "d"); err != nil || (streak != nil && streak.Count != 0) {
 		t.Fatalf("FailureStreak after suspensions = %+v, %v; want no count", streak, err)
 	}
+
+	// The agent's own resume_later time is its deferral's to keep, which
+	// a message, a CI verdict or Undefer ends sooner: it holds nothing here.
+	started := at.Add(4 * time.Hour)
+	if err := store.StartRun(ctx, model.Run{ID: "d-5", TaskID: "d", Attempt: 5, StartedAt: started}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	wake := started.Add(19 * time.Hour)
+	if err := store.Suspend(ctx, model.Suspension{RunID: "d-5", Kind: model.SuspendRequested,
+		ResumeOn: model.ResumeOn{At: &wake, Message: true}.JSON(), ResumeAt: &wake,
+		CreatedAt: started.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.SuspensionResumeAt(ctx, "d"); err != nil || got != nil {
+		t.Fatalf("SuspensionResumeAt after a resume_later = %v, %v; want nil", got, err)
+	}
 }

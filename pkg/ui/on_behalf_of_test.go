@@ -360,8 +360,8 @@ func TestASessionTurnActsForTheMessageItIsAnswering(t *testing.T) {
 // A dispatched run acts for the verified person who approved its task,
 // and for nobody when grain or the shared access code approved it.
 func TestADispatchedRunActsForItsApprover(t *testing.T) {
-	aliceRegistry := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceRegistry}
-	delegateBot := model.Principal{Kind: model.PrincipalService, ID: "slack-bot@proj.iam.gserviceaccount.com", Source: model.SourceRegistry}
+	aliceHub := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceHub}
+	delegateBot := model.Principal{Kind: model.PrincipalService, ID: "slack-bot@proj.iam.gserviceaccount.com", Source: model.SourceHub}
 	plainService := model.Principal{Kind: model.PrincipalService, ID: "ci-bot@proj.iam.gserviceaccount.com", Source: model.SourceIAP}
 	for _, tc := range []struct {
 		name     string
@@ -369,7 +369,7 @@ func TestADispatchedRunActsForItsApprover(t *testing.T) {
 		want     *model.Principal
 	}{
 		{"approved by alice", &model.Attribution{Actor: aliceIAP}, &aliceIAP},
-		{"approved via delegated registry app", &model.Attribution{Actor: delegateBot, OnBehalfOf: &aliceRegistry}, &aliceRegistry},
+		{"approved via delegated registry app", &model.Attribution{Actor: delegateBot, OnBehalfOf: &aliceHub}, &aliceHub},
 		{"approved by a plain service account", &model.Attribution{Actor: plainService}, nil},
 		{"approved by the access code", &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}}, nil},
 		{"approved by grain", &model.Attribution{Actor: model.AutoSubmitPrincipal}, nil},
@@ -452,10 +452,10 @@ func TestDelegatedSessionMessageAndActingTaskIsolation(t *testing.T) {
 	if rec := h.do(http.MethodPost, "/api/tasks/"+behalfSession+"/comments", `{"body":"hello from slack"}`, delHdr); rec.Code != http.StatusOK {
 		t.Fatalf("delegated session comment = %d %s, want 200", rec.Code, rec.Body.String())
 	}
-	aliceRegistry := model.Principal{Kind: model.PrincipalHuman, ID: alice, Source: model.SourceRegistry}
-	slackActor := model.Principal{Kind: model.PrincipalService, ID: slackSA, Source: model.SourceRegistry}
-	if got := newestAuthor(t, h.client, behalfSession); got.Actor != slackActor || behalfOf(got) != aliceRegistry {
-		t.Fatalf("delegated comment recorded as %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, slackActor, aliceRegistry)
+	aliceHub := model.Principal{Kind: model.PrincipalHuman, ID: alice, Source: model.SourceHub}
+	slackActor := model.Principal{Kind: model.PrincipalService, ID: slackSA, Source: model.SourceHub}
+	if got := newestAuthor(t, h.client, behalfSession); got.Actor != slackActor || behalfOf(got) != aliceHub {
+		t.Fatalf("delegated comment recorded as %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, slackActor, aliceHub)
 	}
 
 	target, err := h.client.CreateTask(ctx, ui.CreateTaskRequest{Title: "target", Approved: true, NoRepo: true})
@@ -471,8 +471,8 @@ func TestDelegatedSessionMessageAndActingTaskIsolation(t *testing.T) {
 	if rec := h.do(http.MethodPost, "/api/tasks/"+target.ID+"/comments", `{"body":"answering alice"}`, agentOnSessionHdr); rec.Code != http.StatusOK {
 		t.Fatalf("session turn comment = %d %s, want 200", rec.Code, rec.Body.String())
 	}
-	if got := newestAuthor(t, h.client, target.ID); got.Actor != sessionSelf || behalfOf(got) != aliceRegistry {
-		t.Errorf("session turn recorded as %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, sessionSelf, aliceRegistry)
+	if got := newestAuthor(t, h.client, target.ID); got.Actor != sessionSelf || behalfOf(got) != aliceHub {
+		t.Errorf("session turn recorded as %+v for %+v, want %+v for %+v", got.Actor, got.OnBehalfOf, sessionSelf, aliceHub)
 	}
 
 	// Now combine a valid delegated registry assertion (alice via slack-bot)

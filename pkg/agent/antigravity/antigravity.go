@@ -125,6 +125,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity/hook"
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
@@ -840,32 +841,6 @@ func eagerToolsConfig() map[string]any {
 	return tools
 }
 
-// mcpConfigJSON is the content of the file agy reads its MCP servers
-// from: grainBinaryPath spawned with mcpArgs (built by mcpServerArgs
-// above) -- the "mcpserver" argument selects the same subcommand
-// mcpserver.go implements, so agy forking this exact command is what
-// actually starts an MCP server, rather than needing a separately built
-// binary on disk. The schema is Gemini CLI's own mcpServers map, which
-// agy inherited along with the ~/.gemini config directory, plus the
-// per-server timeoutSeconds and tools keys agy added to it.
-//
-// Those two keys have to be the right JSON *type*, and getting one wrong
-// is not a partial load: agy drops the whole server entry and reports "No
-// MCP servers configured", with no error, no warning and nothing in the
-// file to say which key did it. Measured in docs/agy-surface.md, one key
-// at a time -- `tools` as a list rather than the object eagerToolsConfig
-// builds drops the server, `timeoutSeconds` as a string drops the server,
-// and a key agy has never heard of is ignored without harm. So the
-// asymmetry to hold on to is that an unknown key here is safe and a known
-// key of the wrong type costs a run every tool it has.
-//
-// Each capability MCP server (design/spec/capabilities/capabilities.spec.md §5.2.4) is an
-// entry beside grain-sandbox, its serverUrl grain's proxy and every tool
-// its tools/list reported registered eagerly the same way.
-func mcpConfigJSON(grainBinaryPath string, mcpArgs []string, servers ...agent.CapabilityMCPServer) ([]byte, error) {
-	return mcpConfigJSONFor(grainBinaryPath, "", mcpArgs, servers...)
-}
-
 // mcpConfigJSONFor is mcpConfigJSON, with grain-sandbox at mcpURL
 // rather than forked when mcpURL is set: the endpoint grain serves it
 // from, carried to the machine of an agy that cannot fork grain's
@@ -898,11 +873,6 @@ func mcpConfigJSONFor(grainBinaryPath, mcpURL string, mcpArgs []string, servers 
 	}
 	return json.Marshal(map[string]any{"mcpServers": all})
 }
-
-// capabilityToolName is how agy names a capability server's tool in the
-// model's roster and in the calls its hook sees: mcp_<server>_<tool>, the
-// spelling mcp.AgyQualifiedToolName gives grain-sandbox's.
-func capabilityToolName(server, tool string) string { return "mcp_" + server + "_" + tool }
 
 // Host returns the Host this framework stages files on and runs the CLI on.
 func (f *Framework) Host() agent.Host {
@@ -1060,6 +1030,7 @@ var (
 	mcpConfigRelPath   = filepath.Join(".gemini", "config", "mcp_config.json")
 	cliSettingsRelPath = filepath.Join(".gemini", "antigravity-cli", "settings.json")
 	hooksConfigRelPath = filepath.Join(".gemini", "config", "hooks.json")
+	hookPolicyRelPath  = filepath.Join("grain-run", hookpolicy.Filename)
 )
 
 const recordedToolsFilename = "recorded-tools.jsonl"
@@ -1141,8 +1112,10 @@ func HookDecision(payload []byte) []byte { return hook.Decision(payload) }
 type HookOptions = hook.Options
 
 // hookArgs is the argument list a run's hook command carries after
-// HookSubcommand: nothing at all for a run without a host-tool grant
-// (HostToolGrant), so its hooks.json is byte-for-byte what it always was.
+// HookSubcommand on a host that does not advertise hook_policy: nothing at
+// all for a run without a host-tool grant (HostToolGrant) or capability
+// server, so its hooks.json is byte-for-byte what an older host agent
+// expects.
 //
 // A run whose capability grants expose MCP servers carries one
 // -capability-tool per tool they reported, so the hook admits them.
@@ -1168,6 +1141,73 @@ func hookArgs(cfg agent.RunConfig, home string) []string {
 		args = append(args, hook.FlagRun, cfg.RunID)
 	}
 	return args
+}
+
+// hookArgsWithPolicy is hookArgs for a host advertising hook_policy: the
+// hook command points at the staged policy file (-policy), plus any
+// -capability-tool arguments the policy's CapabilityToolPrefix qualifies.
+// Host-tool grants and their recording metadata travel inside the policy
+// file itself so the host binary needs no compiled-in grant registrations.
+func hookArgsWithPolicy(cfg agent.RunConfig, home, policyPath string) []string {
+	if policyPath == "" {
+		return hookArgs(cfg, home)
+	}
+	args := []string{hook.FlagPolicy, policyPath}
+	for _, s := range cfg.CapabilityMCPServers {
+		for _, tool := range s.Tools {
+			args = append(args, hook.FlagCapabilityTool, s.Name+"/"+tool)
+		}
+	}
+	return args
+}
+
+// buildToolHookPolicy builds the serialized per-run hookpolicy.File for an
+// agy run from this daemon's live tool roster (agent.PublishedToolNames),
+// the run's capability MCP servers, and the daemon's registered host-tool
+// grants.
+func buildToolHookPolicy(cfg agent.RunConfig, home string) ([]byte, error) {
+	published := agent.PublishedToolNames()
+	allowed := make([]string, 0, len(published)+1)
+	for _, name := range published {
+		allowed = append(allowed, mcp.AgyQualifiedToolName(name))
+	}
+	allowed = append(allowed, "exit_plan_mode")
+	for _, s := range cfg.CapabilityMCPServers {
+		for _, tool := range s.Tools {
+			allowed = append(allowed, "mcp_"+s.Name+"_"+tool)
+		}
+	}
+	sandboxTools := mcp.NewSandboxTools("")
+	sandbox := make([]string, len(sandboxTools))
+	for i, t := range sandboxTools {
+		sandbox[i] = mcp.AgyQualifiedToolName(t.Name)
+	}
+	held := heldHostToolGrants(cfg.Grants)
+	var grants []hookpolicy.HostToolGrant
+	var recordPath, taskID, runID string
+	if len(held) > 0 {
+		grants = make([]hookpolicy.HostToolGrant, len(held))
+		for i, g := range held {
+			grants[i] = hookpolicy.HostToolGrant{
+				Capability: g.Capability,
+				Tools:      slices.Clone(g.Tools),
+			}
+		}
+		recordPath = filepath.Join(runScratchDir(home), hook.HostToolCallsFilename)
+		taskID = cfg.TaskID
+		runID = cfg.RunID
+	}
+	tp := &hookpolicy.ToolPolicy{
+		AllowedTools:         allowed,
+		CapabilityToolPrefix: "mcp_",
+		HostToolGrants:       grants,
+		RecordPath:           recordPath,
+		TaskID:               taskID,
+		RunID:                runID,
+		DenyReasons:          hook.DefaultDenyReasons(sandbox, mcp.AgyQualifiedToolName("run_command"), mcp.AgyQualifiedToolName("resume_later")),
+		DefaultDenySuffix:    hook.DefaultDenySuffix(sandbox, mcp.AgyQualifiedToolName("")),
+	}
+	return hookpolicy.Marshal(hookpolicy.File{Version: hookpolicy.Version, Tool: tp})
 }
 
 // ParseHookArgs reads what hookArgs wrote (hook.ParseArgs).
@@ -1234,16 +1274,32 @@ func writeAgyHomeFor(ctx context.Context, host agent.Host, store *sessionstore.S
 	}
 	recordedToolsPath := filepath.Join(runScratchDir(home), recordedToolsFilename)
 	runMcpArgs := append(slices.Clone(mcpArgs), "-recorded-tools", recordedToolsPath)
-	var runHookArgs []string
-	var servers []agent.CapabilityMCPServer
+	var runCfg agent.RunConfig
 	if len(cfg) > 0 {
-		runHookArgs = hookArgs(cfg[0], home)
-		servers = cfg[0].CapabilityMCPServers
+		runCfg = cfg[0]
 	}
-	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
+	isUnc := isUnconfined(host)
+	usePolicy := !isUnc && agent.SupportsHookPolicy(host)
+	var runHookArgs []string
+	var policyBytes []byte
+	if usePolicy {
+		policyPath := filepath.Join(runScratchDir(home), hookpolicy.Filename)
+		runHookArgs = hookArgsWithPolicy(runCfg, home, policyPath)
+		policyBytes, err = buildToolHookPolicy(runCfg, home)
+		if err != nil {
+			cleanup()
+			return "", false, nil, fmt.Errorf("antigravity: building agy's hook policy: %w", err)
+		}
+	} else if len(cfg) > 0 {
+		runHookArgs = hookArgs(runCfg, home)
+	}
+	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnc, runCfg.CapabilityMCPServers, runHookArgs...)
 	if err != nil {
 		cleanup()
 		return "", false, nil, err
+	}
+	if usePolicy {
+		files[hookPolicyRelPath] = policyBytes
 	}
 	for rel, content := range files {
 		path := filepath.Join(home, rel)
@@ -1329,15 +1385,31 @@ func refreshAgyHome(ctx context.Context, host agent.Host, home, grainBinaryPath 
 func refreshAgyHomeFor(ctx context.Context, host agent.Host, home, grainBinaryPath, mcpURL string, mcpArgs []string, provider string, cfg ...agent.RunConfig) error {
 	recordedToolsPath := filepath.Join(runScratchDir(home), recordedToolsFilename)
 	runMcpArgs := append(slices.Clone(mcpArgs), "-recorded-tools", recordedToolsPath)
-	var runHookArgs []string
-	var servers []agent.CapabilityMCPServer
+	var runCfg agent.RunConfig
 	if len(cfg) > 0 {
-		runHookArgs = hookArgs(cfg[0], home)
-		servers = cfg[0].CapabilityMCPServers
+		runCfg = cfg[0]
 	}
-	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnconfined(host), servers, runHookArgs...)
+	isUnc := isUnconfined(host)
+	usePolicy := !isUnc && agent.SupportsHookPolicy(host)
+	var runHookArgs []string
+	var policyBytes []byte
+	var err error
+	if usePolicy {
+		policyPath := filepath.Join(runScratchDir(home), hookpolicy.Filename)
+		runHookArgs = hookArgsWithPolicy(runCfg, home, policyPath)
+		policyBytes, err = buildToolHookPolicy(runCfg, home)
+		if err != nil {
+			return fmt.Errorf("antigravity: building agy's hook policy: %w", err)
+		}
+	} else if len(cfg) > 0 {
+		runHookArgs = hookArgs(runCfg, home)
+	}
+	files, err := agyHomeFilesFor(agent.HookBinary(host, grainBinaryPath), mcpURL, runMcpArgs, provider, isUnc, runCfg.CapabilityMCPServers, runHookArgs...)
 	if err != nil {
 		return err
+	}
+	if usePolicy {
+		files[hookPolicyRelPath] = policyBytes
 	}
 	for rel, content := range files {
 		path := filepath.Join(home, rel)

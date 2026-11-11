@@ -258,10 +258,23 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 // director-capabilities.spec.md §4.2), which the filing paths ask for
 // with the seeding source this function does not know.
 func EscalatedCapabilities(child, parent Task) []string {
-	held := make(map[string]bool, len(parent.Grants))
-	for _, g := range parent.Grants {
-		held[g.Capability] = true
-	}
+	return escalatedCapabilities(child, parent, true)
+}
+
+// AgentEscalatedCapabilities is EscalatedCapabilities for an agent approving
+// an unapproved task rather than proposing one: every non-default capability
+// child holds that parent does not cover, regardless of Via.
+func AgentEscalatedCapabilities(child, parent Task) []string {
+	return escalatedCapabilities(child, parent, false)
+}
+
+func escalatedCapabilities(child, parent Task, labelOnly bool) []string {
+	// Read through CanonicalGrant into the stored spelling, so an api
+	// reference and today's api:<scope> are one grant here, and treat
+	// retired bare aliases and their canonical expansions consistently in
+	// both directions.
+	child.Grants, parent.Grants = storedGrantSpellings(child.Grants), storedGrantSpellings(parent.Grants)
+	held := heldNonRefGrants(parent.Grants)
 	var out []string
 	listed := map[string]bool{}
 	for _, g := range child.Grants {
@@ -270,12 +283,22 @@ func EscalatedCapabilities(child, parent Task) []string {
 		}
 		// A dangerous api scope, or priority-dispatch, is a person's to
 		// grant, never an agent's (IsPersonOnlyGrant, docs/agent-api.md):
-		// a proposal asking for one is an escalation even when its
-		// proposer holds it.
-		if g.Via != GrantByLabel || (held[g.Capability] && !IsPersonOnlyGrant(g.Capability)) {
-			continue
+		// a child carrying one -- even seeded as a default -- is an
+		// escalation whether or not its proposer holds it, matching
+		// UncoveredCapabilityRefs on person-only reference grants and
+		// ProposalEscalations (director-capabilities.spec.md §4.2).
+		if !IsPersonOnlyGrant(g.Capability) {
+			if labelOnly {
+				if g.Via != GrantByLabel {
+					continue
+				}
+			} else if g.Via == GrantByDefault {
+				continue
+			}
+			if nonRefGrantCovered(g.Capability, held, parent.Grants) {
+				continue
+			}
 		}
-		held[g.Capability] = true
 		listed[g.Capability] = true
 		out = append(out, g.Capability)
 	}
@@ -284,10 +307,20 @@ func EscalatedCapabilities(child, parent Task) []string {
 	// included (design/spec/capabilities/capabilities.spec.md §2.3.4) --
 	// except grain#ci attached by default from the target repository's CI
 	// Mode, which mints no credential and cannot be held by a standing
-	// session or a task on a GitHub-mode repository (ui.Client.capabilityByID).
+	// session or a task on a GitHub-mode repository (ui.Client.capabilityByID),
+	// and the default api:ci-read on the child's own repository that takes
+	// its place there (DefaultCIReadGrant), which is read-only and mints
+	// nothing either.
+	var childTarget RepoRef
+	if child.Target != nil {
+		childTarget = *child.Target
+	}
 	childRefs := make([]Grant, 0, len(child.Grants))
 	for _, g := range child.Grants {
 		if g.Via == GrantByDefault && IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		if IsDefaultCIReadGrant(g, childTarget) {
 			continue
 		}
 		childRefs = append(childRefs, g)
@@ -299,22 +332,45 @@ func EscalatedCapabilities(child, parent Task) []string {
 // it asked for capabilities its proposer does not hold
 // (EscalatedCapabilities), so that approving the work is visibly also
 // approving those grants rather than doing so silently. "" for none.
+//
+// A grant only a person may give (IsPersonOnlyGrant: a person-granted
+// gcp set, a dangerous api scope) is escalated whether or not the
+// proposer holds it, so it is not said to be one the proposer lacks: the
+// 2026-11-08 gcp token-mode walk's proposal, from a task a person had
+// given exactly that set, read "which task 5 ... does not hold itself".
 func CapabilityEscalationNote(proposer string, caps []string) string {
-	if len(caps) == 0 {
-		return ""
+	var personOnly, ungranted []string
+	for _, c := range caps {
+		if IsPersonOnlyGrant(c) {
+			personOnly = append(personOnly, c)
+		} else {
+			ungranted = append(ungranted, c)
+		}
 	}
-	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which task %s, "+
-		"which proposed it, does not hold itself. It was filed holding them, so it waits for "+
-		"a person rather than being queued automatically: approving it grants those "+
-		"capabilities as well as the work. Remove them from the task first if it should go "+
-		"ahead without them.", "`"+strings.Join(caps, "`, `")+"`", proposer)
+	var note string
+	if len(personOnly) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which only a person may "+
+			"grant: an agent cannot pass it on, whether or not task %s, which proposed it, holds it. "+
+			"It was filed holding it, so it waits for a person rather than being queued "+
+			"automatically: approving it grants that as well as the work. Remove it from the task "+
+			"first if it should go ahead without it.", "`"+strings.Join(personOnly, "`, `")+"`", proposer)
+	}
+	if len(ungranted) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which task %s, "+
+			"which proposed it, does not hold itself. It was filed holding them, so it waits for "+
+			"a person rather than being queued automatically: approving it grants those "+
+			"capabilities as well as the work. Remove them from the task first if it should go "+
+			"ahead without them.", "`"+strings.Join(ungranted, "`, `")+"`", proposer)
+	}
+	return note
 }
 
 // SeededEscalations splits caps -- EscalatedCapabilities(child, ...) --
 // into those child's proposer named in its own call (asked) and those
 // child carries only because this deployment or its repo seeds every new
 // task with them (seeded, GrantByDefault). Only a capability reference
-// can be in seeded: a named default is never an escalation at all.
+// or a person-only grant can be in seeded: any other named default is
+// never an escalation at all.
 //
 // The two are told apart because they are different things to approve.
 // "This proposal asked for X" is false of a seeded default, and the
@@ -338,7 +394,7 @@ func isSeededGrant(grants []Grant, capability string) bool {
 	want, wantRef := recordedCapabilityGrant(capability)
 	found := false
 	for _, g := range grants {
-		match := g.Capability == capability
+		match := StoredGrantSpelling(g.Capability) == capability
 		if !match && wantRef {
 			if got, ok := recordedCapabilityGrant(g.Capability); ok {
 				match = RecordedCapabilityGrant(got) == RecordedCapabilityGrant(want)

@@ -188,11 +188,14 @@ export function displayCounts(counts) {
 // answered in a comment and opened no pull request), "message" (an
 // interactive task or console session waiting for its next message),
 // "access" (an agent's request_access -- ui.Task.AwaitingAccess),
+// "unanswered" (a person's comment no run has been shown --
+// ui.Task.UnansweredCommentFrom, which a reply to it would otherwise
+// hide behind a plain "Answered in a comment" for the owner),
 // "stopped" (a turn the reader stopped -- ui.Task.TurnStopped) or
 // "submit" (awaiting_submit); title is the chip's tooltip; action is what
 // ends it, "reply", "grant" or "submit".
 // humanReviewLine is a human-review hold's reasons on one line.
-export function humanReviewLine(t) {
+function humanReviewLine(t) {
   return [...new Set((t.humanReviewHold || []).map((r) => r.reason))].join(
     "; ",
   );
@@ -202,6 +205,22 @@ export function askedCase(t) {
   if (!t || !ASKED_STATES.includes(t.state)) return null;
   if (t.state === "awaiting_submit") {
     const what = t.pullRequest || "its change";
+    if (t.humanApprovedBy) {
+      let title = `Approved by ${t.humanApprovedBy} for ${what}`;
+      if (
+        t.reviewFindings?.length ||
+        t.humanReviewHold?.some((r) => r.category === "security-findings")
+      ) {
+        title += " — held on review findings";
+      } else if (t.reviewQuestions) {
+        title += ` — waiting on review questions from #${t.reviewQuestions}`;
+      } else if (t.securityHold) {
+        title += ` — waiting for security review${t.securityReviewTask ? ` #${t.securityReviewTask}` : ""}`;
+      } else if (t.pathTriggerHold) {
+        title += " — waiting for repository gating reviews";
+      }
+      return { kind: "submit", title, action: "submit" };
+    }
     let title = `Asked you to submit ${what}`;
     if (t.humanReviewHold?.length) {
       title += ` — held for a person's review: ${humanReviewLine(t)}`;
@@ -219,6 +238,12 @@ export function askedCase(t) {
     return { kind: "stopped", title: "Stopped by you", action: "reply" };
   if (t.awaitingAccess)
     return { kind: "access", title: "Asked for access", action: "grant" };
+  if (t.unansweredCommentFrom)
+    return {
+      kind: "unanswered",
+      title: `Unanswered question from ${t.unansweredCommentFrom}`,
+      action: "reply",
+    };
   if (t.interactive || t.consoleSession)
     return {
       kind: "message",
@@ -295,7 +320,7 @@ export const SET_ASIDE_STATES = ["deferred", "closed"];
 // said, through the nothing_needed tool, that the task needed no change:
 // a success, labelled apart from "Succeeded" so a deliberate no-op is
 // told from a run that produced something.
-export const OUTCOME_LABELS = {
+const OUTCOME_LABELS = {
   "": "Running",
   succeeded: "Succeeded",
   failed: "Failed",
@@ -666,8 +691,8 @@ export function questionActivity(t) {
 // dating them early would cry wolf on every dispatch. Past ten minutes a
 // setup phrase has outlived the longest step it can describe, and the age
 // is the fact somebody wants.
-export const RUN_ACTIVITY_AGE_AFTER_MS = 5 * 60 * 1000;
-export const GRAIN_ACTIVITY_AGE_AFTER_MS = 10 * 60 * 1000;
+const RUN_ACTIVITY_AGE_AFTER_MS = 5 * 60 * 1000;
+const GRAIN_ACTIVITY_AGE_AFTER_MS = 10 * 60 * 1000;
 
 // activityAge is relativeAge with a threshold under it and the word "ago"
 // on top: "22m ago", or null while the phrase is younger than after.
@@ -680,7 +705,7 @@ export const GRAIN_ACTIVITY_AGE_AFTER_MS = 10 * 60 * 1000;
 // the age says "ago" rather than standing as a bare "22m" beside a
 // sentence, because a number next to "waiting for CI" is as easily read
 // as how long the wait has left to run as how long it has already stood.
-export function activityAge(iso, now, after) {
+function activityAge(iso, now, after) {
   if (!iso) return null;
   const at = new Date(iso).getTime();
   if (!Number.isFinite(at) || now - at < after) return null;
@@ -1001,6 +1026,27 @@ const REASON_CONTROLS = {
   },
 };
 
+// actionScope is the role scope the request behind one of a row's
+// answers needs (pkg/ui's roleScopeOf for POST /api/tasks/{id}<post>), or
+// null for an answer that only reads -- opening the task, or a link out.
+// AccessGate disables the button for a role without it and says why,
+// rather than leaving a grain/viewer an Approve whose click ends in a 403
+// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
+export function actionScope(action) {
+  if (action.open || action.href) return null;
+  if (action.forceMerge || action.overrideReviewGates) return "merge:force";
+  switch (action.post) {
+    case "/approve":
+      return "tasks:admin";
+    case "/run-now":
+      return "dispatch:write";
+    case "/retry-merge":
+      return "merge:write";
+    default:
+      return "tasks:write";
+  }
+}
+
 // reasonControl is the button that ends this task's wait, as a row
 // offers it ({label, post, ...}), or null where its sub-case names no
 // control a row can press. A merge-queue sub-case's own control (Retry
@@ -1147,9 +1193,7 @@ export function baseRepairWaitReason(t) {
       return `waiting on review questions from #${t.reviewQuestions}`;
     }
     if (t.state === "awaiting_reply") {
-      return t.questionSummary || t.pendingSecret
-        ? "waiting for a reply to its question"
-        : "answered in a comment";
+      return awaitingReplyPhrase(t);
     }
     if (t.state === "failed") {
       return "failed and waiting for retry";
@@ -1178,9 +1222,7 @@ export function baseRepairWaitReason(t) {
     return `stalled (${t.stall})`;
   }
   if (t.state === "awaiting_reply") {
-    return t.questionSummary || t.pendingSecret
-      ? "waiting for a reply to its question"
-      : "answered in a comment";
+    return awaitingReplyPhrase(t);
   }
   if (t.state === "failed") {
     return "failed and waiting for retry";
@@ -1195,6 +1237,18 @@ export function baseRepairWaitReason(t) {
     return t.repairing ? "queued for repair" : "queued";
   }
   return "waiting in the merge queue";
+}
+
+// awaitingReplyPhrase is what an awaiting_reply task is waiting on, for
+// the phrase above: a person's comment no run has been shown is named
+// first, since it is waiting on an agent and not on the owner.
+function awaitingReplyPhrase(t) {
+  if (t.unansweredCommentFrom) {
+    return `unanswered question from ${t.unansweredCommentFrom}`;
+  }
+  return t.questionSummary || t.pendingSecret
+    ? "waiting for a reply to its question"
+    : "answered in a comment";
 }
 
 // redBaseRepairSentence formats the banner and inbox sentence for a waiting
@@ -1215,6 +1269,14 @@ export function redBaseRepairSentence(t) {
 // somebody pressed Submit.
 export function awaitsHumanSubmit(t) {
   if (!t || typeof t !== "object") return false;
+  if (
+    t.humanApprovedBy &&
+    !t.reviewQuestions &&
+    !(t.reviewFindings?.length > 0) &&
+    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+  ) {
+    return false;
+  }
   if (t.state === "awaiting_submit") return true;
   return (
     t.state === "running" &&
@@ -1346,7 +1408,19 @@ export function issueUrl(ref) {
 // Leave an undeclared base out: the server resolves it from the
 // repository, so this works for repos whose default branch is not `main`.
 export function internalPullRequestUrl(repo, branch, base = "") {
-  return `/repos/${repo}/compare/${base ? `${base}...${branch}` : branch}`;
+  const head = comparisonRefSegment(branch);
+  return `/repos/${repo}/compare/${base ? `${comparisonRefSegment(base)}...${head}` : head}`;
+}
+
+// comparisonRefSegment is one ref as a compare path spells it: its "/"
+// left literal, the way github.com's compare URLs write a branch name,
+// and everything else a path cannot carry escaped. Git allows "#", "?"
+// and "%" in a branch name (fix/#123 is a common one), and written
+// plainly the first two end the path: the page opened in-app, but a
+// reload or a shared link compared fix/ instead (2026-11-09 repository
+// walkthrough). paths.js decodes each ref on the way back in.
+export function comparisonRefSegment(ref) {
+  return encodeURIComponent(ref).replace(/%2F/gi, "/");
 }
 
 // repoUrl turns "owner/name" or "host/owner/name" -- the way a repo is
@@ -1428,8 +1502,7 @@ export const RETIRED_CAPABILITY_HINT =
 // everywhere with a warning under it (capabilityUnavailableHint). That
 // is a row nobody can do anything useful with in the pane they are
 // standing in: ticking it files work that fails to dispatch, and the fix
-// is on Settings > Legacy capabilities either way, which is the one pane that
-// still lists every capability with its own reason for not being ready.
+// is on Settings > Capabilities either way, under Deployment credentials.
 // So a picker hides it instead of explaining it.
 //
 // Already-selected ids survive the filter, for the reason capabilityRows
@@ -1450,20 +1523,10 @@ export function configuredCapabilities(offered, selected) {
   return (offered || []).filter((c) => c.ready !== false || held.has(c.id));
 }
 
-// NO_CAPABILITIES_HINT is what a picker says when configuredCapabilities
-// has left it with nothing at all: a deployment that has configured none
-// of them, which is a perfectly ordinary state for a new one. An empty
-// menu reads as a broken pane, and the pane that is not empty -- the one
-// listing every capability with what it still needs -- is worth naming.
-export const NO_CAPABILITIES_HINT =
-  "None configured -- set one up in Settings > Legacy capabilities";
-
-// LEGACY_CAPABILITIES_HINT sits under every in-process capability
-// checklist: those ids are being converted to capability server methods
-// or api scopes (design/design/unified-grants.design.md), so new access belongs
-// under Grants rather than here.
-export const LEGACY_CAPABILITIES_HINT =
-  "Legacy in-process capabilities, each being converted to a server method or API scope. Add new access under Grants.";
+// NO_CAPABILITIES_HINT is what the repo CI-capabilities picker says when
+// configuredCapabilities has left it with nothing at all. An empty menu reads as a broken pane, so it
+// says where access is granted instead.
+export const NO_CAPABILITIES_HINT = "None offered -- grant access under Grants";
 
 // capabilityRows is the listing any capability picker has to be built
 // from: the rows this build offers and this deployment has configured
@@ -1535,7 +1598,7 @@ export function capabilityUnavailableHint(c) {
   const needs = c.needs || [];
   const gap =
     needs.length > 0 ? ` -- needs ${needs.join(", ")}` : " on this deployment";
-  return `Not ready${gap}. A task holding this will fail to dispatch until that is set (Settings > Legacy capabilities).`;
+  return `Not ready${gap}. A task holding this will fail to dispatch until that is set (Settings > Capabilities).`;
 }
 
 // unionCapabilities composes the two layers of default capabilities the
@@ -1600,7 +1663,7 @@ export function defaultCapabilitiesFor(config, repo) {
 // filing.
 //
 // Reads are deliberately not here. A read-only repo grants a run no way
-// to change anything in it (WriteReposField, and repoRows' own comment
+// to change anything in it (RepoGrants.jsx, and repoRows' own comment
 // below), so a task that reads acme/schema is not work happening in
 // acme/schema.
 //
@@ -1772,6 +1835,46 @@ export function repoRows(config, tasks) {
   return [...byRepo.values()].sort((a, b) => a.repo.localeCompare(b.repo));
 }
 
+// repoPageRow is the row a repo's own page reads its counts from: its
+// repoRows row where it has one, and otherwise a row counting the tasks
+// that target it anyway. The second case is a repo that has fallen off
+// a restricted deployment's targetRepos with work still filed against
+// it -- repoRows rightly leaves it off the Repos list (a task never
+// raises a row of its own there), but someone who comes back to the
+// repo's page by URL or from one of those tasks is asking about the
+// repo itself, and reading "0 tasks filed here" over live queued work
+// hid it from them. `offList` marks that case so the page can say why
+// the repo is not on the list while its tasks are.
+//
+// A repo nothing here knows about at all -- a hand-typed URL -- gets
+// the same empty row it always did, so the page's forms still work.
+export function repoPageRow(config, tasks, repo) {
+  const key = repoKey(repo);
+  const listed = repoRows(config, tasks).find((r) => repoKey(r.repo) === key);
+  if (listed) return listed;
+  const row = {
+    repo,
+    total: 0,
+    counts: {},
+    blocked: 0,
+    configured: false,
+    defaults: false,
+    // Only a restricted deployment can leave a repo with tasks off the
+    // list; an unrestricted one raises a row for every task's repo.
+    offList: (config?.targetRepos || []).length > 0,
+  };
+  for (const t of tasks || []) {
+    if (repoKey(t.repo) !== key || !t.repo) continue;
+    // Left out for the reason repoRows leaves it out: the task list the
+    // count links to hides a session's task.
+    if (t.consoleSession || t.interactive) continue;
+    row.total += 1;
+    row.counts[t.state] = (row.counts[t.state] || 0) + 1;
+    if (t.blocked) row.blocked += 1;
+  }
+  return row;
+}
+
 // repoActivity is one repoRows row read as a single status, for the dot
 // the repos list draws ahead of a repo's name (grain/task-327) -- the
 // same "what is going on here, at a glance" a task row's own state badge
@@ -1915,7 +2018,7 @@ export function defaultRepoChoice(config, options) {
 // /api/deployment/reachable-repos lists the team's GitHub credential as
 // reaching, [{repo, push}] -- that a picker may offer: every one for a
 // read, only those it may push to for a target or an extra write.
-export function reachableRepoNames(reachable, { push = false } = {}) {
+function reachableRepoNames(reachable, { push = false } = {}) {
   return (reachable || [])
     .filter((r) => r && r.repo && (!push || r.push))
     .map((r) => r.repo);
@@ -2029,7 +2132,7 @@ export function repoTargetable(config, repo) {
 // dead branch is suggested again for the next task, which fails the same
 // way, which makes it the newest again. The suggestion outlives the
 // branch forever, and every task filed from it is dead on arrival.
-export const STALE_BASE_STATES = ["failed", "closed"];
+const STALE_BASE_STATES = ["failed", "closed"];
 
 // suggestsBase reports whether a task is evidence of where a repo's work
 // currently lives -- the filter behind both lastBaseForRepo below and
@@ -2052,8 +2155,16 @@ export const STALE_BASE_STATES = ["failed", "closed"];
 // Missing is treated as human: a task from a store or a caller that
 // never recorded one is unknown provenance, not known-automated, and
 // dropping it would quietly discard history rather than protect it.
+//
+// A stacked task (a review or a repair, filed onto another task's own
+// branch) is never evidence either, whoever its author is: its base is
+// that task's grain/task-N branch. grain files them as automation, but a
+// store that recorded them otherwise (the demo seeds its review as a
+// person's) made a template's New task prefill another task's branch
+// (2026-11-10 intake walkthrough).
 export function suggestsBase(task) {
   if (STALE_BASE_STATES.includes(task.state)) return false;
+  if (task.stacked) return false;
   return !task.authorKind || task.authorKind === "human";
 }
 
@@ -2184,7 +2295,7 @@ export function connectionPause(pause, connection, modelName) {
 // as its own or as one of its labels ("auto" for a provider-chosen run
 // the provider said was refused on p.model). orchestrator's
 // pauseWindow.coversRun.
-export function pauseCoversModel(p, modelName) {
+function pauseCoversModel(p, modelName) {
   if (!p) return false;
   if (!p.model) return true;
   const name = (modelName || "").trim().toLowerCase();
@@ -2307,7 +2418,7 @@ function taskConnectionPause(pause, t, b, config) {
 // taskFramework is the framework the usage-limit gate reads a task on no
 // connection as running on -- its own, else the deployment's default --
 // which is orchestrator.frameworkFor.
-export function taskFramework(t, config) {
+function taskFramework(t, config) {
   return t?.agentFramework || config?.agentFramework || "antigravity";
 }
 

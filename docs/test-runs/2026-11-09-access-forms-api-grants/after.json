@@ -1,0 +1,31 @@
+{
+  "task": [
+    "api:ci-read@acme/widgets",
+    "self-debug"
+  ],
+  "template": [
+    "api:ci-read@acme/widgets",
+    "api:self-debug",
+    "api:tasks:read",
+    "https://grain.dev/capabilities/grain#source={}"
+  ],
+  "schedule": [
+    "api:ci-read@acme/widgets",
+    "api:self-debug",
+    "api:tasks:read",
+    "https://grain.dev/capabilities/grain#source={}"
+  ],
+  "defaults": [
+    "api:self-debug",
+    "api:tasks:read",
+    "https://grain.dev/capabilities/grain#source={}"
+  ],
+  "repoDefaults": [
+    "api:self-debug",
+    "api:ci-read@acme/widgets",
+    "https://grain.dev/capabilities/grain#source={}"
+  ],
+  "repoCI": [
+    "release-gate-read"
+  ]
+}

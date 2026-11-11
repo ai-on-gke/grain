@@ -28,7 +28,10 @@
 //	             which is the cache that keeps most commits from booting
 //	             a VM for nine minutes
 //	guest-base   <hash>, one per vendored granule tree: the granule base
-//	             image that guest cache is built on top of
+//	             image that guest cache is built on top of. On Docker Hub
+//	             (sandbox-base) it also carries the same sha-<short>,
+//	             branch, `latest`, v<x>.<y>.<z> and signature names as
+//	             the other packages, and those are read the same way
 //
 // Nothing deleted any of it. This command is what the scheduled
 // prune-packages.yml runs.
@@ -59,6 +62,10 @@
 //   - v<x>.<y>.<z> -- always. A promoted release, retagged from its
 //     sha- build when `latest` moves onto it (.grain/workflows/promote.yml):
 //     what an operator pins to stay on, or roll back to, a release.
+//   - v<x>.<y>.<z>-pending -- until a person decides. The stamped build
+//     release-images.sh `pending` stages for approval, which `promote`
+//     only retags; once rejected it also carries v<x>.<y>.<z>-rejected
+//     and is held by the window alone.
 //   - a branch tag -- while that branch still exists on the remote. It
 //     is what pkg/upgrade's TagForBranch pulls when an operator upgrades
 //     onto a branch, and what setup.sh pulls for GRAIN_REF. Since
@@ -150,7 +157,7 @@ func run(args []string, out io.Writer) error {
 	usernameFlag := fs.String("username", "", "Docker Hub login username when -registry=docker.io (default: DOCKERHUB_USERNAME, PACKAGE_PUBLISH_USERNAME, or grainai)")
 	owner := fs.String("owner", "", "GitHub owner of the source repository (and GHCR package owner when -registry=ghcr.io)")
 	repo := fs.String("repo", "", "GitHub repository name for live branch lookup (and GHCR package prefix when -registry=ghcr.io)")
-	packages := fs.String("packages", "grain,sandbox,sandbox-base,sandbox-k8s,sandbox-k8s-base,registry", "comma-separated package names, relative to the repository")
+	packages := fs.String("packages", "grain,sandbox,sandbox-base,sandbox-k8s,sandbox-k8s-base,hub,registry", "comma-separated package names, relative to the repository")
 	tokenFlag := fs.String("token", "", "registry token (DOCKER_PAT/PACKAGE_PUBLISH_TOKEN on Docker Hub; GITHUB_TOKEN/GHCR_TOKEN on ghcr.io)")
 	// 48 hours -- and, on top of it, the most recent build of every
 	// branch that still exists, which is what a branch tag amounts to

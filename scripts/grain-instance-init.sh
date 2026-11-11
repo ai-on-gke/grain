@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Boot-time initializer for a registry-provisioned Grain Compute Engine VM
-# (grain-instance-init.service, design/design/registry.design.md).
+# (grain-instance-init.service, design/design/hub.design.md).
 #
 # Runs as a oneshot systemd unit After=network-online.target and
 # grain-block-metadata.service, and Before=grain-daemon.service:
@@ -29,7 +29,11 @@
 #      /run/grain-secrets/config-repo-key and writes
 #      ${GRAIN_DATA_DIR}/state-repo.json in mirror mode.
 #   4. Configures and starts cloud-sql-proxy (--auto-iam-authn) over the
-#      /cloudsql unix socket when `sql_instance` is set.
+#      /cloudsql unix socket when `sql_instance` is set. A built-in password
+#      user (`db_password_secret`, `instance_sql.cloud_sql_admin: false`)
+#      instead has its password read from Secret Manager with the VM's
+#      token and connects over `sql_private_ip` with `sslmode=require`; the
+#      password itself is never in grain-config.
 #   5. Writes /etc/grain/daemon.env (including GRAIN_DEPLOYMENT_OWNER and
 #      -deployment-owner) for grain-daemon.service.
 
@@ -48,6 +52,8 @@ GRAIN_ACCESS_TOKEN="${GRAIN_ACCESS_TOKEN:-}"
 GRAIN_SQL_PROXY_TIMEOUT="${GRAIN_SQL_PROXY_TIMEOUT:-60}"
 GRAIN_SKIP_TMPFS_MOUNT="${GRAIN_SKIP_TMPFS_MOUNT:-0}"
 GRAIN_SKIP_SYSTEMCTL="${GRAIN_SKIP_SYSTEMCTL:-0}"
+GRAIN_SM_ATTEMPTS="${GRAIN_SM_ATTEMPTS:-6}"
+GRAIN_SM_RETRY_DELAY="${GRAIN_SM_RETRY_DELAY:-1}"
 
 log() {
   echo "grain-instance-init: $*" >&2
@@ -189,20 +195,35 @@ encode_base64() {
 # sm_access_latest fetches the latest version of a Secret Manager secret
 # resource (projects/<project>/secrets/<name>). Returns 0 and prints the
 # decoded secret payload on HTTP 200; returns 44 on HTTP 404; exits on any
-# other error.
+# other error. A transient failure (no connection, HTTP 429 or 5xx) is
+# retried GRAIN_SM_ATTEMPTS times with doubling delays: this unit runs once
+# per boot and grain-daemon.service starts after it whether or not it
+# succeeded, so a single Secret Manager blip must not leave the VM without
+# its daemon.env.
 sm_access_latest() {
   local secret_name="$1"
   local token="$2"
   local body_file
   body_file="$(mktemp)"
   local url="${GRAIN_SM_API_URL%/}/v1/${secret_name#/}/versions/latest:access"
-  local http_code
-  http_code="$(
-    curl -sS -o "$body_file" -w '%{http_code}' \
-      -H "Authorization: Bearer ${token}" \
-      -H "Accept: application/json" \
-      "$url" 2>/dev/null || echo "000"
-  )"
+  local http_code attempt=1 delay="$GRAIN_SM_RETRY_DELAY"
+  while :; do
+    http_code="$(
+      curl -sS -o "$body_file" -w '%{http_code}' \
+        -H "Authorization: Bearer ${token}" \
+        -H "Accept: application/json" \
+        "$url" 2>/dev/null || echo "000"
+    )"
+    case "$http_code" in
+      000 | 429 | 5??) ;;
+      *) break ;;
+    esac
+    [ "$attempt" -lt "$GRAIN_SM_ATTEMPTS" ] || break
+    log "Secret Manager access ${secret_name} returned HTTP ${http_code}; retrying in ${delay}s (attempt ${attempt}/${GRAIN_SM_ATTEMPTS})"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
   if [ "$http_code" = "200" ]; then
     local b64
     b64="$(jq -r '.payload.data // empty' "$body_file")"
@@ -328,6 +349,38 @@ clone_config_repo() {
   write_grain_file 0600 "${GRAIN_DATA_DIR}/state-repo.json" "${settings_json}"$'\n'
 }
 
+# fetch_db_password prints the latest version of the built-in database
+# user's password secret (`db_password_secret`). The registry keeps the
+# password out of grain-config because GCE metadata is readable by anyone
+# with compute.instances.get on the project.
+fetch_db_password() {
+  local secret_name="$1"
+  local access_token="$2"
+  local value=""
+  local rc=0
+  value="$(sm_access_latest "$secret_name" "$access_token")" || rc=$?
+  if [ "$rc" -eq 44 ]; then
+    die "grain-config sets db_password_secret, but Secret Manager secret ${secret_name} has no version"
+  elif [ "$rc" -ne 0 ]; then
+    die "unable to read ${secret_name}"
+  fi
+  value="$(printf '%s' "$value" | tr -d '\r\n')"
+  [ -n "$value" ] || die "Secret Manager secret ${secret_name} is empty"
+  printf '%s' "$value"
+}
+
+# password_db_dsn builds the private-IP DSN for a built-in password user.
+# The connection always requires TLS (Cloud SQL accepts it on its private
+# IP by default), so neither the password nor any query crosses the VPC in
+# clear.
+password_db_dsn() {
+  local user="$1" password="$2" host="$3" name="$4"
+  local enc_user enc_pw
+  enc_user="$(printf '%s' "$user" | jq -sRr @uri)"
+  enc_pw="$(printf '%s' "$password" | jq -sRr @uri)"
+  printf 'postgres://%s:%s@%s:5432/%s?sslmode=require' "$enc_user" "$enc_pw" "$host" "$name"
+}
+
 configure_cloud_sql_proxy() {
   local sql_instance="$1"
   [ -n "$sql_instance" ] || return 0
@@ -367,7 +420,8 @@ main() {
   resolve_grain_account
 
   local instance_name deployment_owner owner_group issuer instance_domain audience jwks_url management_url
-  local sql_instance db_name db_user db_dsn sm_prefix object_store config_repo config_repo_branch
+  local environment_name
+  local sql_instance db_name db_user db_dsn db_password_secret sql_private_ip sm_prefix object_store config_repo config_repo_branch
 
   instance_name="$(printf '%s' "$config_json" | jq -r '.instance // .name // empty')"
   deployment_owner="$(printf '%s' "$config_json" | jq -r '.deployment_owner // .owner_email // empty')"
@@ -377,10 +431,16 @@ main() {
   audience="$(printf '%s' "$config_json" | jq -r '.audience // .registry_audience // empty')"
   jwks_url="$(printf '%s' "$config_json" | jq -r '.jwks_url // .registry_keys_url // empty')"
   management_url="$(printf '%s' "$config_json" | jq -r '.management_url // empty')"
+  # The hub entry's display name (else its entry name), already cut to a
+  # single env-file-safe line by the hub: the daemon's default
+  # environment name, which never overrides one its operator set.
+  environment_name="$(printf '%s' "$config_json" | jq -r '.environment_name // empty' | tr -d '\n\r')"
   sql_instance="$(printf '%s' "$config_json" | jq -r '.sql_instance // .cloud_sql_instance // empty')"
   db_name="$(printf '%s' "$config_json" | jq -r '.db_name // empty')"
   db_user="$(printf '%s' "$config_json" | jq -r '.db_user // empty')"
   db_dsn="$(printf '%s' "$config_json" | jq -r '.db_dsn // empty')"
+  db_password_secret="$(printf '%s' "$config_json" | jq -r '.db_password_secret // empty')"
+  sql_private_ip="$(printf '%s' "$config_json" | jq -r '.sql_private_ip // .GRAIN_SQL_PRIVATE_IP // empty')"
   sm_prefix="$(printf '%s' "$config_json" | jq -r '.sm_prefix // .secrets_sm_prefix // empty')"
   object_store="$(printf '%s' "$config_json" | jq -r '.object_store // empty')"
   config_repo="$(printf '%s' "$config_json" | jq -r '.config_repo // empty')"
@@ -405,7 +465,13 @@ main() {
   if [ -z "$db_name" ] && [ -n "$instance_name" ]; then
     db_name="grain_${instance_name//-/_}"
   fi
-  if [ -z "$db_dsn" ] && [ -n "$sql_instance" ]; then
+  if [ -n "$db_password_secret" ]; then
+    # Built-in password user: the password stays in Secret Manager and the
+    # DSN is built below, after it has been fetched.
+    [ -n "$db_user" ] || die "grain-config sets db_password_secret but not db_user"
+    [ -n "$db_name" ] || die "grain-config sets db_password_secret but not db_name"
+    [ -n "$sql_private_ip" ] || die "grain-config sets db_password_secret but not sql_private_ip"
+  elif [ -z "$db_dsn" ] && [ -n "$sql_instance" ]; then
     if [ -z "$db_user" ]; then
       local sa_email
       sa_email="$(fetch_service_account_email)"
@@ -419,10 +485,18 @@ main() {
   prepare_secrets_run_dir
   install -d -m 0750 -o "$GRAIN_USER" -g "$GRAIN_GROUP" "$GRAIN_DATA_DIR"
 
+  local access_token=""
+  if [ -n "$db_password_secret" ]; then
+    access_token="$(fetch_access_token)"
+    local db_password
+    db_password="$(fetch_db_password "$db_password_secret" "$access_token")"
+    db_dsn="$(password_db_dsn "$db_user" "$db_password" "$sql_private_ip" "$db_name")"
+    unset db_password
+  fi
+
   if [ -n "$sm_prefix" ] || [ -n "$config_repo" ]; then
     [ -n "$sm_prefix" ] || die "grain-config must specify sm_prefix to fetch Secret Manager credentials"
-    local access_token
-    access_token="$(fetch_access_token)"
+    [ -n "$access_token" ] || access_token="$(fetch_access_token)"
     ensure_local_api_token "$sm_prefix" "$access_token"
     local need_repo_key=0
     [ -n "$config_repo" ] && need_repo_key=1
@@ -448,6 +522,11 @@ main() {
     echo "# Generated by grain-instance-init.sh from GCE grain-config metadata."
     echo "GRAIN_DEPLOYMENT_OWNER=${deployment_owner}"
     echo "GRAIN_ALLOWED_PRINCIPALS=${allowed_principals}"
+    # Under the Grain Hub's names and, for one release, the Grain
+    # Registry's too: the instance's grain may predate the rename.
+    [ -n "$issuer" ] && echo "GRAIN_HUB_ISSUER=${issuer}"
+    [ -n "$audience" ] && echo "GRAIN_HUB_AUDIENCE=${audience}"
+    [ -n "$jwks_url" ] && echo "GRAIN_HUB_KEYS_URL=${jwks_url}"
     [ -n "$issuer" ] && echo "GRAIN_REGISTRY_ISSUER=${issuer}"
     [ -n "$audience" ] && echo "GRAIN_REGISTRY_AUDIENCE=${audience}"
     [ -n "$jwks_url" ] && echo "GRAIN_REGISTRY_KEYS_URL=${jwks_url}"
@@ -456,6 +535,7 @@ main() {
     fi
     echo "GRAIN_DISABLE_SELF_UPGRADE=true"
     [ -n "$management_url" ] && echo "GRAIN_MANAGEMENT_URL=${management_url}"
+    [ -n "$environment_name" ] && echo "GRAIN_DEFAULT_ENVIRONMENT_NAME=${environment_name}"
     if [ -n "$db_dsn" ]; then
       echo "GRAIN_DB_DRIVER=postgres"
       echo "GRAIN_DB_DSN=${db_dsn}"

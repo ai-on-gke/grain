@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -32,7 +32,6 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
-import { useHeldIds } from "../useHeldIds.js";
 import CompositionPanel from "./CompositionPanel.jsx";
 import { CustomFieldInputs, initialFieldValues } from "./CustomFields.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
@@ -48,23 +47,16 @@ import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
 import Overlay, { DISCARD_PROMPT } from "./Overlay.jsx";
 import { StaleEditNotice, isStaleEdit, withReload } from "./StaleEdit.jsx";
 import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
-import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
 import SearchSelect from "./SearchSelect.jsx";
-import WriteReposField from "./WriteReposField.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
 import { templateLabeler } from "../templateLabels.js";
-import {
-  configuredCapabilities,
-  LEGACY_CAPABILITIES_HINT,
-  NO_CAPABILITIES_HINT,
-  defaultRepoChoice,
-  targetableRepos,
-} from "../state.js";
+import { defaultRepoChoice, targetableRepos } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
 import AdmissionField from "./AdmissionField.jsx";
+import HostingField from "./HostingField.jsx";
 
 const WEEKDAYS = [
   "sunday",
@@ -339,26 +331,24 @@ function ScheduleOverlay({
   const [capabilities, setCapabilities] = useState(
     schedule?.capabilities || [],
   );
-  // What this deployment has configured, plus whatever this schedule
-  // already names -- configuredCapabilities (state.js) has why an
-  // unconfigured one is left off and a chosen one is not.
-  // Capability server grants, with their with: arguments, and the agent
-  // API's grants (apiGrants.js) share the list and are edited together
-  // by GrantsPicker rather than the legacy checklist.
-  const capabilityIds = capabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
-  const apiIds = capabilities.filter(isApiGrant);
+  // Capability server grants, with their with: arguments, the agent API's
+  // grants (apiGrants.js), and any held bare capability id share the list
+  // and are shown together by GrantsPicker.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capabilityIds = capabilities.filter(isBareGrant);
+  const apiIds = capabilities.filter(isLegacyApiGrant);
   const capabilityRefs = capabilities.filter(isCapabilityRef);
-  const heldCapabilityIds = useHeldIds(capabilityIds);
-  const capabilityOptions = withoutApiRows(
-    configuredCapabilities(config?.capabilities, heldCapabilityIds),
-  );
-  const methodGrants = localGrantHandlers(capabilityRefs, (refs) =>
-    setCapabilities([...capabilityIds, ...apiIds, ...refs]),
+  const methodGrants = localGrantHandlers(
+    [...capabilityIds, ...capabilityRefs],
+    (rest) =>
+      setCapabilities([
+        ...rest.filter(isBareGrant),
+        ...apiIds,
+        ...rest.filter(isCapabilityRef),
+      ]),
   );
   // reads is state for the reason capabilities is: its picker
-  // (ReadOnlyReposField) is a search box, not a form field submit could
+  // (the Grants list's repo#read lines, RepoGrants.jsx) is a search box, not a form field submit could
   // read the answer off.
   const [reads, setReads] = useState(schedule?.reads || []);
   const targetOptions = targetableRepos(config, tasks);
@@ -415,6 +405,9 @@ function ScheduleOverlay({
   // previewed: a repository's declared schedule may raise its
   // template's (docs/declarations.md).
   const [admission, setAdmission] = useState(schedule?.admission || "standard");
+  // How every firing is hosted (model.Schedule.Hosting); "" on the wire
+  // is unattended. Editable and previewed as admission is.
+  const [hosting, setHosting] = useState(schedule?.hosting || "unattended");
   const [networkAccess, setNetworkAccess] = useState(
     schedule?.networkAccess || "",
   );
@@ -501,6 +494,9 @@ function ScheduleOverlay({
       if (admission !== (schedule?.admission || "standard")) {
         req.admission = admission;
       }
+      if (hosting !== (schedule?.hosting || "unattended")) {
+        req.hosting = hosting;
+      }
       req.networkAccess = networkAccess;
       req.nothingNeededAction = nothingNeededAction;
       req.reads = reads;
@@ -533,6 +529,21 @@ function ScheduleOverlay({
               : templateId === schedule?.templateId
                 ? schedule?.admission || ""
                 : "",
+          hosting:
+            templateId === ""
+              ? hosting
+              : templateId === schedule?.templateId
+                ? schedule?.hosting || ""
+                : "",
+          // And the schedule's own capabilities, which a repository's
+          // declared schedule can carry beside `template:` and its firings
+          // grant beside the template's (docs/declarations.md); the
+          // preview dropped them (2026-11-08 walkthrough, task 3614).
+          ...(templateId !== "" &&
+          templateId === schedule?.templateId &&
+          capabilities.length > 0
+            ? { capabilities }
+            : {}),
         };
 
   // Whether leaving now would lose an edit: the form's own fields (the
@@ -800,9 +811,13 @@ function ScheduleOverlay({
                         }
                         discarded.current = true;
                       }
+                      // The task is opened over the pane rather than after
+                      // closing it, as a suite run's task rows do
+                      // (SuiteRunPane): closing first wrote the bare list
+                      // into history while the task was still loading, so
+                      // Back from the task skipped this schedule.
                       if (onOpenTask) {
                         e.preventDefault();
-                        onClose?.();
                         onOpenTask(schedule.suppressed.taskId);
                       }
                     }}
@@ -1000,13 +1015,6 @@ function ScheduleOverlay({
                 warnMissing="each firing fails until it is cut"
                 onChange={setBase}
               />
-              {!firesSuite && templateId === "" && (
-                <WriteReposField
-                  options={repoOptions}
-                  value={writes}
-                  onChange={setWrites}
-                />
-              )}
             </Box>
           )}
           {!firesSuite && (
@@ -1063,17 +1071,6 @@ function ScheduleOverlay({
                 fullWidth
                 margin="normal"
               />
-              <ReadOnlyReposField
-                options={repoOptions}
-                value={reads}
-                onChange={setReads}
-                // The saved target, not what the repo field says as it is
-                // typed -- WriteReposField's own reason above: this only
-                // decides what the picker offers, and re-rendering the
-                // whole form on every keystroke to hide one row of a
-                // dropdown is not worth it.
-                target={schedule?.repo || ""}
-              />
               <FormControlLabel
                 control={
                   <Checkbox
@@ -1100,6 +1097,11 @@ function ScheduleOverlay({
               <AdmissionField
                 value={admission}
                 onChange={setAdmission}
+                noun="schedule"
+              />
+              <HostingField
+                value={hosting}
+                onChange={setHosting}
                 noun="schedule"
               />
               <TextField
@@ -1135,30 +1137,10 @@ function ScheduleOverlay({
                 <MenuItem value="close">Close</MenuItem>
                 <MenuItem value="ack">Leave for acknowledgement</MenuItem>
               </TextField>
-              <FormControl fullWidth margin="normal" size="small">
-                <SearchSelect
-                  multiple
-                  label="Legacy capabilities"
-                  value={capabilityIds}
-                  onChange={(next) =>
-                    setCapabilities([...next, ...apiIds, ...capabilityRefs])
-                  }
-                  noOptionsText={
-                    capabilityOptions.length === 0
-                      ? NO_CAPABILITIES_HINT
-                      : "No matches"
-                  }
-                  options={capabilityOptions.map((c) => ({
-                    value: c.id,
-                    label: c.name,
-                    title: c.description,
-                  }))}
-                />
-                <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-              </FormControl>
               <GrantsPicker
                 config={config}
                 grants={capabilities}
+                disabled={!!declaredIn}
                 onApiChange={(next) =>
                   setCapabilities([
                     ...capabilityIds,
@@ -1169,6 +1151,21 @@ function ScheduleOverlay({
                 onSubmit={methodGrants.onSubmit}
                 onRemove={methodGrants.onRemove}
                 idPrefix="schedule"
+                // The repos each firing reads and writes are grants too
+                // (unified-grants slice 5), beside the repo and base
+                // branch every firing targets.
+                repos={{
+                  target: repo,
+                  base,
+                  targetNote:
+                    "the repo every firing targets -- change it above",
+                  reads,
+                  writes,
+                  readOptions: repoOptions,
+                  writeOptions: repoOptions,
+                  onReadsChange: setReads,
+                  onWritesChange: setWrites,
+                }}
                 policyRepo={repo}
               />
               {/* Renders nothing on a deployment that declares no fields,
@@ -1250,14 +1247,24 @@ function ScheduleOverlay({
         <CompositionPanel
           path={`/api/schedules/${schedule.id}/composition`}
           heading="What this schedule files"
-          note="grain's own job -- its content comes from this build"
+          note={
+            declaredIn
+              ? `declared in ${declaredIn.path}`
+              : "grain's own job -- its content comes from this build"
+          }
         />
       ) : (
         <CompositionPanel
           path="/api/schedules/composition"
           body={previewRequest()}
           heading="What this schedule files"
-          note={isNew ? "as filled in above" : "as edited above, not as saved"}
+          note={
+            isNew
+              ? "as filled in above"
+              : declaredIn
+                ? `declared in ${declaredIn.path}`
+                : "as edited above, not as saved"
+          }
         />
       )}
     </Overlay>

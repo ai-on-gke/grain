@@ -1,0 +1,249 @@
+# schema
+108
+# task_grant
+2 | bootstrap-playbooks | label
+2 | durable | label
+2 | github-credential:bot | label
+2 | https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true} | label
+2 | https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false} | label
+2 | priority-dispatch | label
+2 | read-issues | label
+2 | self-debug | label
+3 | priority-dispatch | label
+4 | durable | label
+4 | https://grain.dev/capabilities/gcp#gcp-key={"account":"deploy"} | label
+5 | api:ci-read | default
+5 | api:deployment:read | grain
+5 | bootstrap-playbooks | grain
+5 | durable | grain
+5 | https://grain.dev/capabilities/grain#health={} | grain
+5 | https://grain.dev/capabilities/grain#journal={} | grain
+5 | self-debug | grain
+# template_grant
+template-1 | bootstrap-playbooks | label
+template-1 | durable | label
+template-1 | github-credential:bot | label
+template-1 | https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true} | label
+template-1 | https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false} | label
+template-1 | priority-dispatch | label
+template-1 | read-issues | label
+template-1 | self-debug | label
+# schedule_grant
+sched-1 | bootstrap-playbooks | label
+sched-1 | durable | label
+sched-1 | github-credential:bot | label
+sched-1 | https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true} | label
+sched-1 | https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false} | label
+sched-1 | priority-dispatch | label
+sched-1 | read-issues | label
+sched-1 | self-debug | label
+# grain_config.default_capabilities
+https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true}
+self-debug
+read-issues
+priority-dispatch
+# repo_config
+acme/widgets | default | https://grain.dev/capabilities/gcp#gcp-key={"account":"deploy"}
+acme/widgets | default | bootstrap-playbooks
+acme/widgets | default | github-credential:bot
+acme/widgets | default | durable
+acme/widgets | ci | https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false}
+acme/widgets | ci | self-debug
+acme/widgets | ci | read-issues
+acme/widgets | ci | bootstrap-playbooks
+acme/widgets | ci | github-credential:bot
+acme/widgets | ci | priority-dispatch
+# console_sessions (id: capabilities)
+retired-session: ['bootstrap-playbooks', 'durable', 'github-credential:bot', 'https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true}', 'https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false}', 'priority-dispatch', 'read-issues', 'self-debug']
+# capability_policy
+{
+ "catalogue": {
+  "defaults": {
+   "ci": [
+    "bootstrap-playbooks",
+    "github-credential:bot",
+    "durable",
+    "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"ghost-set\",\"activate\":false}"
+   ],
+   "repos": {
+    "acme/widgets": {
+     "ci": [
+      "priority-dispatch",
+      "self-debug"
+     ],
+     "task": [
+      "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"deploy\"}",
+      "durable"
+     ]
+    }
+   },
+   "task": [
+    "self-debug",
+    "priority-dispatch",
+    "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"default\",\"activate\":true}"
+   ]
+  },
+  "inProcess": {
+   "bootstrap-playbooks": {
+    "enabled": true
+   },
+   "durable": {
+    "enabled": true
+   },
+   "priority-dispatch": {
+    "enabled": true
+   },
+   "read-issues": {
+    "enabled": false
+   },
+   "self-debug": {
+    "enabled": true
+   }
+  },
+  "servers": [
+   {
+    "id": "https://grain.dev/capabilities/gcp",
+    "methods": [
+     {
+      "args": {
+       "account": {
+        "allowed": [
+         "default",
+         "deploy",
+         "ghost-set"
+        ]
+       },
+       "activate": {
+        "allowed": [
+         "true",
+         "false"
+        ]
+       }
+      },
+      "name": "gcp-key"
+     }
+    ]
+   }
+  ]
+ },
+ "rules": [
+  {
+   "capability": "bootstrap-playbooks",
+   "deny": true,
+   "repos": [
+    "acme/denied"
+   ]
+  },
+  {
+   "capability": "read-issues",
+   "deny": true,
+   "repos": [
+    "acme/denied"
+   ]
+  },
+  {
+   "capability": "github-credential:bot",
+   "deny": true,
+   "repos": [
+    "acme/denied"
+   ]
+  },
+  {
+   "capability": "self-debug",
+   "runKinds": [
+    "task"
+   ]
+  },
+  {
+   "capability": "priority-dispatch",
+   "deny": true,
+   "repos": [
+    "acme/denied"
+   ]
+  },
+  {
+   "capability": "durable",
+   "runKinds": [
+    "task"
+   ]
+  },
+  {
+   "capability": "https://grain.dev/capabilities/skill#config-map",
+   "deny": true,
+   "repos": [
+    "acme/skill-denied"
+   ]
+  }
+ ]
+}
+# mcp_servers
+{
+ "https://grain.dev/capabilities/config-map": {
+  "args": [
+   "capability",
+   "config-map"
+  ],
+  "builtin": "config-map",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gchat": {
+  "args": [
+   "capability",
+   "gchat",
+   "-listen",
+   "127.0.0.1:4251"
+  ],
+  "builtin": "gchat",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gcp": {
+  "args": [
+   "capability",
+   "gcp"
+  ],
+  "builtin": "gcp",
+  "command": "grain",
+  "config": {
+   "admin_credential_source": "ambient",
+   "permission_sets": [
+    {
+     "name": "sandbox-agent",
+     "project": "walk-proj",
+     "roles": [
+      "roles/viewer"
+     ]
+    },
+    {
+     "name": "deploy",
+     "project": "walk-proj",
+     "roles": [
+      "roles/run.developer"
+     ]
+    }
+   ]
+  }
+ },
+ "https://grain.dev/capabilities/git": {
+  "args": [
+   "capability",
+   "git"
+  ],
+  "builtin": "git",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/host-script": {
+  "args": [
+   "capability",
+   "host-script"
+  ],
+  "builtin": "host-script",
+  "command": "grain"
+ }
+}
+# agent_backends
+[]
+# admission (absent before schema 122)
+# task notes (task_comment by grain)
+5 | console-session | I'm here. Ask me about this deployment, tell me what you want set up, or say what has gone wrong -- I can look at the record, read grain's own source, and file tasks for anything that needs doing.
+# template/schedule notes (bodies mentioning grain:)
+# gcp_key

@@ -62,7 +62,7 @@ test("a template's Keep running is set from the form, previewed and filed", asyn
       .click();
     const dialog = page.getByRole("dialog").last();
     const row = keepRunningRow(dialog);
-    await expect(row.locator("dd")).toHaveText("on");
+    await expect(row.locator("dd .composition-value")).toHaveText("on");
     await expect(row).toContainText("from the template");
     await dialog.getByRole("button", { name: /create task/i }).click();
     await expect(page).toHaveURL(/\/tasks\/\d+/);
@@ -87,7 +87,7 @@ test("a raw task schedule's Keep running is set from the form and previewed", as
     await expect(keepRunningRow(page)).toHaveCount(0);
     await page.getByRole("checkbox", { name: "Keep running" }).check();
     const row = keepRunningRow(page);
-    await expect(row.locator("dd")).toHaveText("on");
+    await expect(row.locator("dd .composition-value")).toHaveText("on");
     await expect(row).toContainText("from the schedule");
     const created = page.waitForResponse(
       (r) =>

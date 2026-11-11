@@ -159,6 +159,46 @@ func TestCredentialGitIdentityOfAPATPrefersHostGitConfigAndUserEmail(t *testing.
 	}
 }
 
+// CredentialOwnerIdentity is who the token belongs to as /user answers
+// it, with no host git config laid over it -- what a "Signed by" line
+// names -- while CredentialGitIdentity keeps preferring the host's git
+// config for commits. Both share one /user lookup per token.
+func TestCredentialOwnerIdentityIgnoresHostGitConfig(t *testing.T) {
+	state := fakeHostTools(t)
+	c, _ := ambientSet(t)
+	rt := &routeTransport{routes: map[string]github.ApiResponse{
+		"GET /user": {Status: 200, Body: []byte(`{"login":"octo-dev","id":5150,"name":"Octo Dev"}`)},
+	}}
+	c.AppTransport = rt
+	if err := c.SetPAT("team-pat", "ghp_octo"); err != nil {
+		t.Fatal(err)
+	}
+	writeState(t, state, "git-user-name", "Host Person")
+	writeState(t, state, "git-user-email", "host@example.com")
+
+	owner, err := c.CredentialOwnerIdentity("team-pat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.Name != "Octo Dev" || owner.Email != "5150+octo-dev@users.noreply.github.com" {
+		t.Fatalf("owner identity = %+v, want Octo Dev and the login's noreply address", owner)
+	}
+	commit, err := c.CredentialGitIdentity("team-pat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit.Name != "Host Person" || commit.Email != "host@example.com" {
+		t.Fatalf("commit identity = %+v, want the host's git config", commit)
+	}
+	owner, pending, err := c.CredentialOwnerIdentityWithin("team-pat", 5*time.Second)
+	if err != nil || pending || owner.Name != "Octo Dev" {
+		t.Fatalf("CredentialOwnerIdentityWithin = %+v, %v, %v; want Octo Dev", owner, pending, err)
+	}
+	if n := rt.count("GET", "/user"); n != 1 {
+		t.Fatalf("/user asked %d times, want 1", n)
+	}
+}
+
 // A GitHub App installation commits as the App's bot account:
 // `<slug>[bot]` with the bot user's noreply address, as GitHub's own
 // Apps do.

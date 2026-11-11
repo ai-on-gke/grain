@@ -35,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -1732,7 +1733,7 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	// holds is a file here, which a link there cannot reach.
 	hostLogin := ""
 	if h, ok := container.(agent.HostdHost); ok && h.Remote != nil {
-		hostLogin = h.CodexAuth
+		hostLogin = h.HostLogin(hostd.LoginCodex)
 	}
 	if container == nil {
 		if err := checkConnectionCLI(cfg); err != nil {

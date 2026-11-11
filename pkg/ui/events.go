@@ -82,10 +82,26 @@ type IntegrationEvent struct {
 // EventsResponse is GET /api/events's JSON envelope for immediate and
 // long-poll (?wait=) requests.
 type EventsResponse struct {
-	Events   []IntegrationEvent `json:"events"`
-	Cursor   string             `json:"cursor"`
-	HasMore  bool               `json:"hasMore,omitempty"`
-	TimedOut bool               `json:"timedOut,omitempty"`
+	Events     []IntegrationEvent `json:"events"`
+	Cursor     string             `json:"cursor"`
+	NextCursor string             `json:"nextCursor,omitempty"`
+	HasMore    bool               `json:"hasMore,omitempty"`
+	Truncated  bool               `json:"truncated,omitempty"`
+	TimedOut   bool               `json:"timedOut,omitempty"`
+}
+
+func newEventsResponse(events []IntegrationEvent, cursor int64, hasMore bool) EventsResponse {
+	cur := strconv.FormatInt(cursor, 10)
+	resp := EventsResponse{
+		Events:  events,
+		Cursor:  cur,
+		HasMore: hasMore,
+	}
+	if hasMore {
+		resp.Truncated = true
+		resp.NextCursor = cur
+	}
+	return resp
 }
 
 type eventsQuery struct {
@@ -143,8 +159,12 @@ func acceptsEventStream(header string) bool {
 
 func (s *Server) parseEventsQuery(r *http.Request) (eventsQuery, error) {
 	q := r.URL.Query()
+	defaultLimit := DefaultEventsLimit
+	if isAgentListCaller(r) {
+		defaultLimit = listPageLarge
+	}
 	out := eventsQuery{
-		limit:  DefaultEventsLimit,
+		limit:  defaultLimit,
 		stream: acceptsEventStream(r.Header.Get("Accept")),
 	}
 
@@ -313,10 +333,17 @@ func readAuthorizedEvents(
 	nextCursor = prevCursor
 	nextScanAfter = scanAfter
 	batchSize := max(limit+1, 100)
+	// queryAfter is where the next batch is read from. It always moves
+	// past every row read, readable or not: nextScanAfter stops moving once
+	// the page is full (so the next page starts right after its last
+	// event), and reading the next batch from there re-read the same
+	// unreadable rows forever when a full batch of them followed a full
+	// page -- a repo-limited caller's request never returned.
+	queryAfter := scanAfter
 
 	for {
 		rows, err := store.ListIntegrationEvents(ctx, model.IntegrationEventFilter{
-			AfterID: nextScanAfter,
+			AfterID: queryAfter,
 			Repo:    repo,
 			Types:   types,
 			Limit:   batchSize,
@@ -325,6 +352,7 @@ func readAuthorizedEvents(
 			return nil, prevCursor, scanAfter, false, err
 		}
 		for _, row := range rows {
+			queryAfter = row.ID
 			if !readable(row.Repo) {
 				if len(events) < limit {
 					nextScanAfter = row.ID
@@ -404,11 +432,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
-	writeJSON(w, http.StatusOK, EventsResponse{
-		Events:  events,
-		Cursor:  strconv.FormatInt(nextCursor, 10),
-		HasMore: hasMore,
-	})
+	writeJSON(w, http.StatusOK, newEventsResponse(events, nextCursor, hasMore))
 }
 
 func (s *Server) serveEventsLongPoll(
@@ -442,11 +466,7 @@ func (s *Server) serveEventsLongPoll(
 		scanAfter = nextScan
 		if len(events) > 0 {
 			w.Header().Set("Cache-Control", "no-cache")
-			writeJSON(w, http.StatusOK, EventsResponse{
-				Events:  events,
-				Cursor:  strconv.FormatInt(clientCursor, 10),
-				HasMore: hasMore,
-			})
+			writeJSON(w, http.StatusOK, newEventsResponse(events, clientCursor, hasMore))
 			return
 		}
 

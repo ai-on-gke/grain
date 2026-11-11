@@ -31,6 +31,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+// corpResearch and upgradeDefault are the recorded grants of the made-up
+// default-on methods the test below registers.
+const (
+	corpResearch   = capabilitytest.MethodServer + "#corp-research={}"
+	upgradeDefault = capabilitytest.MethodServer + "#upgrade-default={}"
+)
+
 // grain/task-2126: on a build that registers a DefaultOn capability (such as
 // corp-research on the Google build), both Config.DefaultCapabilities and the
 // shipped Director console session start holding it. Once an operator removes
@@ -39,13 +46,12 @@ import (
 // daemon restarts), nor restarting the session may re-add it from
 // Config.DefaultCapabilities.
 func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndRestart(t *testing.T) {
-	unregister := capability.RegisterProvider(capability.Registration{
-		ID:          "corp-research",
-		Name:        "Corp Research",
-		Description: "Internal search tools.",
-		New:         func() model.CapabilityProvider { return &capabilitytest.Provider{} },
-		RunGrant:    true,
-		DefaultOn:   true,
+	unregister := capability.Register(capability.Method{
+		Server:    capabilitytest.MethodServer,
+		Spec:      capabilitytest.MethodSpec("corp-research"),
+		Name:      "Corp Research",
+		RunGrant:  true,
+		DefaultOn: true,
 	})
 	t.Cleanup(unregister)
 
@@ -57,7 +63,7 @@ func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	if initialCfg == nil || !slices.Contains(initialCfg.DefaultCapabilities, "corp-research") {
+	if initialCfg == nil || !slices.Contains(initialCfg.DefaultCapabilities, corpResearch) {
 		t.Fatalf("seeded DefaultCapabilities = %v, want corp-research", initialCfg)
 	}
 
@@ -70,7 +76,7 @@ func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndResta
 			return g.Capability == capID
 		})
 	}
-	if !hasGrant(director.Grants, "corp-research") {
+	if !hasGrant(director.Grants, corpResearch) {
 		t.Fatalf("initial director task grants = %+v, want corp-research present", director.Grants)
 	}
 
@@ -93,7 +99,7 @@ func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(afterUpdate.Grants, "corp-research") {
+	if hasGrant(afterUpdate.Grants, corpResearch) {
 		t.Fatalf("immediately after UpdateConsoleSession, director task grants = %+v, want corp-research absent", afterUpdate.Grants)
 	}
 
@@ -105,7 +111,7 @@ func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(storedCfg.DefaultCapabilities, "corp-research") {
+	if !slices.Contains(storedCfg.DefaultCapabilities, corpResearch) {
 		t.Fatalf("stored DefaultCapabilities = %v, want corp-research still present", storedCfg.DefaultCapabilities)
 	}
 
@@ -114,7 +120,7 @@ func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(afterSync.Grants, "corp-research") {
+	if hasGrant(afterSync.Grants, corpResearch) {
 		t.Fatalf("after restart sync cycle, director task grants = %+v, want corp-research absent", afterSync.Grants)
 	}
 
@@ -137,7 +143,7 @@ func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(afterRestart.Grants, "corp-research") {
+	if hasGrant(afterRestart.Grants, corpResearch) {
 		t.Fatalf("after session restart, director task grants = %+v, want corp-research absent", afterRestart.Grants)
 	}
 
@@ -147,7 +153,7 @@ func TestRemovedDeploymentDefaultCapabilityStaysRemovedAcrossSessionSyncAndResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(afterSecondSync.Grants, "corp-research") {
+	if hasGrant(afterSecondSync.Grants, corpResearch) {
 		t.Fatalf("after post-restart sync cycle, director task grants = %+v, want corp-research absent", afterSecondSync.Grants)
 	}
 }
@@ -255,13 +261,12 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	db.Close()
 	closed = true
 
-	unregisterUpgrade := capability.RegisterProvider(capability.Registration{
-		ID:          "upgrade-default",
-		Name:        "Upgrade Default",
-		Description: "Added by an upgrade while down.",
-		New:         func() model.CapabilityProvider { return &capabilitytest.Provider{} },
-		RunGrant:    true,
-		DefaultOn:   true,
+	unregisterUpgrade := capability.Register(capability.Method{
+		Server:    capabilitytest.MethodServer,
+		Spec:      capabilitytest.MethodSpec("upgrade-default"),
+		Name:      "Upgrade Default",
+		RunGrant:  true,
+		DefaultOn: true,
 	})
 	t.Cleanup(unregisterUpgrade)
 
@@ -283,7 +288,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if !hasGrant(restartedTask.Grants, model.GrainHostExecGrant) {
 		t.Errorf("after daemon restart, task grants = %+v, lost attached self-repair", restartedTask.Grants)
 	}
-	if !hasGrant(restartedTask.Grants, "upgrade-default") {
+	if !hasGrant(restartedTask.Grants, upgradeDefault) {
 		t.Errorf("after daemon restart, task grants = %+v, missing new build-default upgrade-default", restartedTask.Grants)
 	}
 
@@ -298,7 +303,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if !slices.Contains(sessions[0].Capabilities, model.GrainHostExecGrant) {
 		t.Errorf("after daemon restart, ListConsoleSessions capabilities = %v, lost self-repair", sessions[0].Capabilities)
 	}
-	if !slices.Contains(sessions[0].Capabilities, "upgrade-default") {
+	if !slices.Contains(sessions[0].Capabilities, upgradeDefault) {
 		t.Errorf("after daemon restart, ListConsoleSessions capabilities = %v, missing upgrade-default", sessions[0].Capabilities)
 	}
 	cfg, err = store.GetConfig(ctx)

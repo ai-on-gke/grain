@@ -70,6 +70,7 @@ const SETTING_LABELS = {
   promptExtension: "Standing instructions for every run",
   taskBranchTemplate: "Branch name template",
   deploymentId: "Deployment ID",
+  externalAgentApi: "Accept external agents",
   githubHost: "GitHub host",
   githubInsecureHttp: "Speak plain HTTP to GitHub host",
   gcpProject: "GCP project",
@@ -138,15 +139,17 @@ const SETTING_LABELS = {
   autoUpgradeChannel: "Automatic upgrade channel",
   autoUpgradeTime: "Automatic upgrade time of day",
   autoUpgradeOn: "Automatic upgrades",
-  registry: "Registry",
-  registryUrl: "Registry URL",
+  autoUpgradeMinIntervalHours:
+    "Minimum interval between release upgrades (hours)",
+  hub: "Hub",
+  registryUrl: "Hub URL",
   registryEntry: "Entry name",
   registryAuthMode: "Credential source",
   registryHostKind: "Host kind",
   registryOidcAudience: "OIDC audience",
   registryDisplayName: "Display name",
   registryPurpose: "Purpose",
-  registryListed: "Listed in registry directory",
+  registryListed: "Listed in hub directory",
 };
 
 // settingLabel is what to call one setting, by its JSON name.
@@ -198,6 +201,7 @@ const SETTING_MINS = {
   ciArtifactDays: 0,
   ciArtifactRunMb: 0,
   ciArtifactFileMb: 0,
+  autoUpgradeMinIntervalHours: 0,
 };
 
 // settingMin is the lower bound for a numeric setting, or undefined when

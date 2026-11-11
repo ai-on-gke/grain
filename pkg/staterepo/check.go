@@ -186,8 +186,14 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 	if err := checkConfigPolicy(dir); err != nil {
 		return report, err
 	}
-	if err := checkCapabilities(dir); err != nil {
-		return report, err
+	if migrating && found < version {
+		if err := checkCapabilitiesBeforeMigration(dir); err != nil {
+			return report, err
+		}
+	} else {
+		if err := checkCapabilities(dir); err != nil {
+			return report, err
+		}
 	}
 	if err := checkNewTaskForm(dir); err != nil {
 		return report, err
@@ -200,6 +206,11 @@ func check(ctx context.Context, db *sql.DB, dir, scratch string, version int, mi
 
 	if err := Import(ctx, db, dir); err != nil {
 		return report, err
+	}
+	if migrating && found < version {
+		if err := checkMigratedCapabilities(ctx, db, scratch); err != nil {
+			return report, err
+		}
 	}
 	// A migration is an upgrade being rehearsed, and the build being
 	// upgraded to refuses a multi-tenant deployment's rows at its first

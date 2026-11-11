@@ -106,6 +106,33 @@ describe("NewSessionPage", () => {
     });
   });
 
+  it("shows the first message as sending while the session starts", async () => {
+    let finish;
+    const onStart = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<NewSessionPage onStart={onStart} />);
+
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("plan the docs refresh");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
+    // The box is cleared, but the message is not gone: it is in the
+    // transcript, marked sending, for as long as starting it takes.
+    expect(box.textContent).toBe("");
+    expect(screen.getByText("plan the docs refresh")).toBeInTheDocument();
+    expect(screen.getByText("Sending…")).toBeInTheDocument();
+    expect(screen.queryByText("No messages yet")).toBeNull();
+    finish();
+    await waitFor(() => expect(screen.queryByText("Sending…")).toBeNull());
+  });
+
   it("keeps the message in the box when starting the session fails", async () => {
     const onStart = vi.fn().mockRejectedValue(new Error("503"));
     const user = userEvent.setup();
@@ -118,5 +145,111 @@ describe("NewSessionPage", () => {
 
     await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(box).toHaveTextContent("lost otherwise"));
+    // Back in the box only: no sending or failed bubble is left behind.
+    expect(screen.queryByText("Sending…")).toBeNull();
+    expect(screen.queryByText("Not sent")).toBeNull();
+    expect(screen.getByText("No messages yet")).toBeInTheDocument();
+  });
+
+  it("hands off follow-up sends and unsent drafts typed while the session starts", async () => {
+    let finish;
+    let takeHandoff;
+    const onStart = vi.fn(
+      (_payload, handoff) =>
+        new Promise((resolve) => {
+          takeHandoff = handoff;
+          finish = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<NewSessionPage onStart={onStart} />);
+
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("first message");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
+
+    await user.click(box);
+    await user.paste("second queued");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await user.click(box);
+    await user.paste("third draft in box");
+
+    expect(screen.getAllByText("Sending…")).toHaveLength(2);
+    const handoff = takeHandoff();
+    expect(handoff.draft.text).toBe("third draft in box");
+    expect(handoff.attachments).toEqual([]);
+    expect(handoff.queued).toHaveLength(1);
+    expect(handoff.queued[0].sent.text).toBe("second queued");
+
+    finish();
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start the session out of order with a queued message when the first message fails", async () => {
+    let fail;
+    const onStart = vi.fn(
+      () =>
+        new Promise((_, reject) => {
+          fail = reject;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<NewSessionPage onStart={onStart} />);
+
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("first, fails");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
+
+    await user.click(box);
+    await user.paste("second, held behind first");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    fail(new Error("503"));
+
+    await waitFor(() => expect(box).toHaveTextContent("first, fails"));
+    const second = await screen.findByText("second, held behind first");
+    await waitFor(() =>
+      expect(second.closest(".cs-message")).toHaveTextContent("Not sent"),
+    );
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands off a message sent while Create session is in flight", async () => {
+    let finish;
+    let takeHandoff;
+    const onStart = vi.fn(
+      (_payload, handoff) =>
+        new Promise((resolve) => {
+          takeHandoff = handoff;
+          finish = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<NewSessionPage onStart={onStart} />);
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Session name" }),
+      "Incident review",
+    );
+    await user.click(screen.getByRole("button", { name: "Create session" }));
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
+
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("sent while create is in flight");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByText("Sending…")).toBeInTheDocument();
+    const handoff = takeHandoff();
+    expect(handoff.queued).toHaveLength(1);
+    expect(handoff.queued[0].sent.text).toBe("sent while create is in flight");
+
+    finish();
+    expect(onStart).toHaveBeenCalledTimes(1);
   });
 });

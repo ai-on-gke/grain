@@ -1,0 +1,85 @@
+{
+  "enabled": true,
+  "mode": "image",
+  "running": {
+    "image": "grain/grain:main"
+  },
+  "channel": "main",
+  "branch": "main",
+  "phase": "ok",
+  "source": "release-assets",
+  "detail": "loaded grain/grain:main (sha256:7b76445fc708f9a611d233fe7d3210cbb37a7dd7e6b9f29524cafbc93d100489) from 127.0.0.1:4380/ai-on-gke/grain release channel-main; restarting",
+  "steps": [
+    {
+      "name": "pull image",
+      "state": "done",
+      "detail": "loaded grain-image.tar.gz (sha256:7b76445fc708f9a611d233fe7d3210cbb37a7dd7e6b9f29524cafbc93d100489) from 127.0.0.1:4380/ai-on-gke/grain release channel-main",
+      "startedAt": "2026-11-08T22:59:32.689107463Z",
+      "finishedAt": "2026-11-08T22:59:32.802963162Z"
+    },
+    {
+      "name": "signature",
+      "state": "skipped",
+      "detail": "no signature verification configured (-upgrade-verify-cmd): running whatever the registry serves for this tag, whoever published it"
+    },
+    {
+      "name": "health check",
+      "state": "done",
+      "detail": "the loaded image runs",
+      "startedAt": "2026-11-08T22:59:32.803086614Z",
+      "finishedAt": "2026-11-08T22:59:34.29264105Z"
+    },
+    {
+      "name": "unit flags",
+      "state": "done",
+      "detail": "grain/grain:sha-9dcf31219d78 accepts all 14 flags this deployment was started with",
+      "startedAt": "2026-11-08T22:59:34.292718276Z",
+      "finishedAt": "2026-11-08T22:59:35.875266403Z"
+    },
+    {
+      "name": "sandbox image",
+      "state": "skipped",
+      "detail": "this deployment runs no sandbox containers"
+    },
+    {
+      "name": "schema",
+      "state": "done",
+      "detail": "unchanged: both builds are at schema 128",
+      "startedAt": "2026-11-08T22:59:35.875418499Z",
+      "finishedAt": "2026-11-08T22:59:37.262971319Z"
+    },
+    {
+      "name": "record image",
+      "state": "done",
+      "detail": "/tmp/s5-item1/daemon/image.env now names grain/grain:main (sha256:7b76445fc708f9a611d233fe7d3210cbb37a7dd7e6b9f29524cafbc93d100489)",
+      "startedAt": "2026-11-08T22:59:37.263091362Z",
+      "finishedAt": "2026-11-08T22:59:37.810669357Z"
+    },
+    {
+      "name": "restart",
+      "state": "done",
+      "startedAt": "2026-11-08T22:59:37.810778342Z",
+      "finishedAt": "2026-11-08T22:59:37.812713179Z"
+    }
+  ],
+  "startedAt": "2026-11-08T22:59:32.688304469Z",
+  "finishedAt": "2026-11-08T22:59:37.810809252Z",
+  "inFlightRuns": 0,
+  "database": {
+    "driver": "sqlite",
+    "dsn": "",
+    "isSqlite": true,
+    "postgresAvailable": true
+  },
+  "imageRepo": "grain/grain",
+  "defaultImageRepo": "docker.io/grainai/grain",
+  "defaultImageRef": "grain/grain:main",
+  "imageSource": {
+    "source": "release-assets",
+    "sourceDefault": false,
+    "locked": true,
+    "releaseRepository": "127.0.0.1:4380/ai-on-gke/grain",
+    "manifestAsset": "images.json",
+    "checksumSuffix": ".sha256"
+  }
+}

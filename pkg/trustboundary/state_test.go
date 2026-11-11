@@ -248,3 +248,63 @@ func TestClassifyIgnoresStatePaths(t *testing.T) {
 		t.Errorf("Classify = %v, want nothing", categoryIDs(got))
 	}
 }
+
+// TestStateScopesJudgesGrainConfigByColumn pins task 3973: a change to
+// tables/grain_config.json is judged by the columns it alters, so a
+// plain settings edit there needs settings:write alone, while one to a
+// column that grants still needs capabilities:admin. Without columns the
+// path decides, as it did before.
+func TestStateScopesJudgesGrainConfigByColumn(t *testing.T) {
+	paths := []string{GrainConfigPath}
+	if got := StateScopes(paths, nil); !reflect.DeepEqual(got, []string{"capabilities:admin"}) {
+		t.Errorf("StateScopes(grain_config, no columns) = %v, want [capabilities:admin]", got)
+	}
+	for _, tc := range []struct {
+		columns []string
+		want    []string
+	}{
+		{nil, []string{}},
+		{[]string{"max_workers", "time_zone"}, []string{}},
+		{[]string{"max_workers", "mcp_servers"}, []string{"capabilities:admin"}},
+		{[]string{"default_capabilities"}, []string{"capabilities:admin"}},
+		{[]string{"auto_merge_by_default"}, []string{"capabilities:admin"}},
+		{[]string{"git_connections"}, []string{"secrets:write"}},
+		{[]string{"agent_backends"}, []string{"connections:write"}},
+		{[]string{"a_column_added_later"}, []string{"capabilities:admin"}},
+	} {
+		got := StateScopes(paths, map[string][]string{GrainConfigPath: tc.columns})
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("StateScopes(grain_config, %v) = %v, want %v", tc.columns, got, tc.want)
+		}
+	}
+	// Columns for grain_config.json say nothing about another path.
+	got := StateScopes([]string{GrainConfigPath, "tables/api_scope_set.json"},
+		map[string][]string{GrainConfigPath: {"max_workers"}, "tables/api_scope_set.json": {"name"}})
+	if !reflect.DeepEqual(got, []string{"capabilities:admin"}) {
+		t.Errorf("StateScopes with api_scope_set.json = %v, want [capabilities:admin]", got)
+	}
+}
+
+func TestChangedColumns(t *testing.T) {
+	before := []byte(`[{"id": 1, "max_workers": 4, "mcp_servers": {"a": [1, 2]}, "time_zone": ""}]`)
+	for _, tc := range []struct {
+		name  string
+		after []byte
+		want  []string
+	}{
+		{"unchanged, reformatted", []byte("[\n  {\"time_zone\": \"\", \"mcp_servers\": {\"a\": [1,2]}, \"id\": 1, \"max_workers\": 4}\n]\n"), []string{}},
+		{"one setting", []byte(`[{"id": 1, "max_workers": 7, "mcp_servers": {"a": [1, 2]}, "time_zone": ""}]`), []string{"max_workers"}},
+		{"a grant", []byte(`[{"id": 1, "max_workers": 4, "mcp_servers": {"a": [1, 2, 3]}, "time_zone": ""}]`), []string{"mcp_servers"}},
+		{"a column dropped", []byte(`[{"id": 1, "max_workers": 4, "time_zone": ""}]`), []string{"mcp_servers"}},
+		{"a row added", []byte(`[{"id": 1, "max_workers": 4, "mcp_servers": {"a": [1, 2]}, "time_zone": ""}, {"id": 2, "time_zone": "UTC"}]`), []string{"id", "time_zone"}},
+		{"file removed", nil, []string{"id", "max_workers", "mcp_servers", "time_zone"}},
+	} {
+		got, ok := ChangedColumns(before, tc.after)
+		if !ok || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: ChangedColumns = %v, %v; want %v, true", tc.name, got, ok, tc.want)
+		}
+	}
+	if _, ok := ChangedColumns(before, []byte(`{"not": "rows"}`)); ok {
+		t.Error("ChangedColumns of a file that is not rows reported ok")
+	}
+}

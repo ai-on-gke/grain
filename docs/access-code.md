@@ -24,7 +24,7 @@ network listener takes depends on two settings:
 | **No IAP** | neither | accepted from anywhere, as below | not checked (logged and ignored) |
 | **IAP, code still accepted** | `-ui-iap-audience` | accepted from anywhere | verified, and its person is signed in |
 | **IAP required** | `-ui-iap-audience` and `-ui-require-iap` | only over loopback with no forwarding headers ([break-glass](#break-glass-over-loopback)) | verified, and its person is signed in |
-| **Registry required** | `-ui-registry-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
+| **Hub required** | `-ui-hub-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
 
 - **No IAP.** Local and standalone deployments. Everything on this page
   applies as written.
@@ -56,28 +56,28 @@ network listener takes depends on two settings:
   network listener to the access code the same way, and the daemon
   refuses to start unless an `IdentityVerifier` of that name is active
   (for `iap`, an IAP audience; for `registry`, all three of
-  `-ui-registry-issuer`, `-ui-registry-audience` and
-  `-ui-registry-keys-url`; otherwise one a wrapper build registered).
+  `-ui-hub-issuer`, `-ui-hub-audience` and
+  `-ui-hub-keys-url`; otherwise one a wrapper build registered).
   Any active verifier's assertion still signs its caller in.
-- **Behind the grain registry (`-ui-require-verifier=registry`).**
-  Core ships a built-in `registry` verifier ([`docs/registry.md`](registry.md))
-  alongside `iap`, active when `-ui-registry-issuer`
-  (`GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience`
-  (`GRAIN_REGISTRY_AUDIENCE`) and `-ui-registry-keys-url`
-  (`GRAIN_REGISTRY_KEYS_URL`) are all set. It verifies the short-lived
+- **Behind the Grain Hub (`-ui-require-verifier=registry`).**
+  Core ships a built-in `registry` verifier ([`docs/hub.md`](hub.md))
+  alongside `iap`, active when `-ui-hub-issuer`
+  (`GRAIN_HUB_ISSUER`), `-ui-hub-audience`
+  (`GRAIN_HUB_AUDIENCE`) and `-ui-hub-keys-url`
+  (`GRAIN_HUB_KEYS_URL`) are all set. It verifies the short-lived
   ES256 `X-Grain-Registry-Assertion` JWT that `grain-registry` signs on
   every proxied request to `https://<name>.<instance-domain>/`, checking
-  the signature against the registry's JWKS
+  the signature against the hub's JWKS
   (`https://<registry-host>/.well-known/jwks.json`), exact `iss`
   equality, single-audience `aud` equality
   (`https://<name>.<instance-domain>`), and `exp`/`iat`/`nbf` bounds.
-  Its `AccessCodeWins()` is `false`: a verified registry assertion always
+  Its `AccessCodeWins()` is `false`: a verified hub assertion always
   takes precedence over the access code, and an invalid assertion fails
-  closed with `401`. Hosted VM instances created by the registry run with
+  closed with `401`. Hosted VM instances created by the hub run with
   `-ui-require-verifier=registry`, closing the network listener to the
   access code while keeping unforwarded loopback open for break-glass SSH
   ([Break-glass SSH on registry-hosted instances](#break-glass-ssh-on-registry-hosted-instances)).
-  On external `connected` grains running `-registry-connect`, streams
+  On external `connected` grains running `-hub-connect`, streams
   arriving over the outbound `/api/entries/<name>/connect` tunnel are
   served in-process over a `MuxListener` (`RemoteAddr` is
   `stream-<id>-remote`, never `127.0.0.1`) behind a mandatory
@@ -105,7 +105,7 @@ With `-ui-require-iap` or `-ui-require-verifier=<name>` (including
 `Forwarded`, `X-Real-Ip`, IAP's headers (`X-Goog-IAP-JWT-Assertion`),
 `X-Grain-Registry-Assertion` or any registered verifier's headers. A
 proxy on the same host therefore cannot relay somebody's code in. That
-leaves a way in which does not depend on IAP or the registry proxy, from
+leaves a way in which does not depend on IAP or the hub proxy, from
 the daemon's own host:
 
 ```bash
@@ -115,14 +115,14 @@ kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRA
 ### Break-glass SSH on registry-hosted instances
 
 Hosted VM instances provisioned by `grain-registry` (`kind = instance`,
-[`docs/registry.md`](registry.md)) run with
+[`docs/hub.md`](hub.md)) run with
 `-ui-require-verifier=registry` and have no external IP address, so the
 access code is never accepted over `https://<name>.<instance-domain>/` or
 over the VPC listener when proxy headers are present.
 
 When break-glass SSH is enabled (`compute.ssh_break_glass: true` in the
-registry configuration, the default, and `-allow-ssh` on the entry), the
-registry grants the entry's accountable human `owner` (`user:<owner>`)
+hub configuration, the default, and `-allow-ssh` on the entry), the
+hub grants the entry's accountable human `owner` (`user:<owner>`)
 conditional OS Login administrator and IAP TCP-forwarding bindings
 (`roles/compute.osAdminLogin` and `roles/iap.tunnelResourceAccessor`) on
 that instance VM (`<vm-prefix><name>`). The owner can open a shell on the
@@ -159,11 +159,11 @@ you rotate it.
 Break-glass SSH stays bound to the entry's individual accountable
 `owner` (not pooled across `owner_group` by default) so root shell access
 remains individually attributable; when ownership is transferred
-(`grain registry transfer` / `grain registry accept-transfer`), the
-registry revokes the previous owner's SSH bindings and grants them to the
+(`grain hub transfer` / `grain hub accept-transfer`), the
+hub revokes the previous owner's SSH bindings and grants them to the
 new owner. Deployments that forbid shell access to hosted VMs can disable
-break-glass SSH across the registry (`compute.ssh_break_glass: false`) or
-per entry (`grain registry update -allow-ssh=false <name>`).
+break-glass SSH across the hub (`compute.ssh_break_glass: false`) or
+per entry (`grain hub update -allow-ssh=false <name>`).
 
 ## Who is let in
 
@@ -216,15 +216,20 @@ the database (`allowed_principal`).
   the list gets a `403` naming **Settings → Access** and
   `grain access allow`.
 - **Who assigns roles:** the access code (and loopback break-glass) can
-  assign any role. A role that holds a dangerous scope, including
-  `grain/operator` itself, can be assigned only with the access code,
-  and the assignment needs a reason (`--reason`). The reason is
-  recorded in `config_audit` along with the old and new role. A
-  verified session whose role holds `access:write` can add, re-role and
-  remove entries, but only at roles no wider than its own and holding
-  no dangerous scope. It cannot change or remove an entry at a wider or
-  dangerous role. Agents and sandboxes cannot change the list by any
-  route, whatever they hold.
+  assign any role. A change involving a role that holds a dangerous
+  scope, including `grain/operator` itself, or one that denies scopes
+  needs a reason (`--reason`). The reason is recorded in `config_audit`
+  along with who made the change and the old and new role, and Settings
+  → Access shows it under **Access history**. A verified person whose
+  role holds `access:write` can add, re-role and remove entries,
+  dangerous and deny roles included, as long as their own role holds
+  every scope of the entry's current and new role. They cannot widen,
+  or add or lift a deny on, an entry that matches themselves (their
+  `user:` entry or a group they are in); narrowing one asks them to
+  confirm (`--confirm-self`). Nobody signed in can remove or narrow the
+  last entry holding a full admin role: the access code stays the way
+  to recover. Agents and sandboxes cannot change the list by any route,
+  whatever they hold.
 - **Routes outside the scope table:** the SPA's static pages are served
   to every admitted caller, and so are sign-in, `GET /api/config` and
   `whoami`. Event streams, console terminals and file downloads are
@@ -320,8 +325,13 @@ never changes the code.
 
 Behind IAP, the browser signs in through IAP's Google sign-in, and
 grain shows no code page to a caller whose assertion verifies. With
-`-ui-require-iap` there is no code page at all. The rest of this
-section is how the code works where it is accepted.
+`-ui-require-iap` there is no code page at all. A browser whose request
+carries a verified assertion that posts the code anyway gets a `403`
+saying that its IAP sign-in, not the code, decides its role, and no
+cookie. The code is not checked, so the refusal does not say whether it
+was right. To use the code, run it over loopback ([Break-glass over
+loopback](#break-glass-over-loopback)). The rest of this section is how
+the code works where it is accepted.
 
 A request to a single-tenant daemon that carries no valid code gets a
 minimal **Enter access code** page (`401`) and never the app. An API
@@ -464,6 +474,128 @@ starts on the host can find the file. That includes a run's
 working across a rotation. A bearer code is accepted from any address,
 because the code is the credential, unless the daemon requires IAP
 (`-ui-require-iap`), which takes it over unforwarded loopback only.
+
+## Who the code is recorded as
+
+The code carries the owner's powers, but every request it authenticates
+also records who presented it, as the principal `access-code:<name>`
+(a human, source `access-code`, shown as "`<name>` (access code)"):
+
+- **The browser sign-in** asks for your email beside the code. When the
+  allowlist (Settings -> Access) names anybody, the email must be one it
+  admits; a verified identity that arrives with the code (a verifier
+  declaring `AccessCodeWins`) is used instead of what was typed. The
+  session cookie carries the name under its MAC
+  (`v2.<issued>.<name>.<mac>`), so it cannot be edited. A session signed
+  in before names existed (`v1`) keeps working until it expires, as
+  "operator (access code)".
+- **The CLI**, when it sends the code, sends `X-Grain-Access-Name`
+  beside it: `$GRAIN_OWNER` when set, else the local account as
+  `<user>@<host>`. The header counts only beside the code. The name is
+  what the CLI says, not something grain verified: anybody who holds the
+  code is the owner already, so the name attributes the request, it does
+  not authorize it. The two ways below give the host CLI a verified
+  identity instead, and day to day it then sends no code at all.
+- **The access history** (Settings -> Access, the config audit) records
+  every mutating request the code authenticates under the surface
+  `access-code`: who, the source address, the route and the time,
+  beside role changes.
+
+### On the daemon's host: the API socket
+
+The daemon also serves its API on a unix socket,
+`<data-dir>/api/grain.sock`, in a directory only its own account may
+enter (mode `0700`). `-api-socket` names another path, and `none` turns
+it off. For each connection the daemon asks the kernel which account
+connected (`SO_PEERCRED`) and maps that uid to a person:
+
+- `-host-accounts 1000=alice@example.com,1001=bob@example.com`
+  (`$GRAIN_HOST_ACCOUNTS`) names them;
+- the daemon's own account maps to `-deployment-owner` unless
+  `-host-accounts` names it.
+
+With neither set, no account maps to anybody and the socket is not
+served. A mapped caller is recorded as that person, with the source
+`host-account`, which is a verified source: it can be named in an
+`Approved-by:` trailer, which `access-code:<name>` never can. The
+allowlist still decides what they may do, as for any verified sign-in;
+`-deployment-owner` is always on it.
+
+Nothing on the socket is trusted for being there:
+
+- a uid the map names nobody for is refused with `403` before the
+  request reaches the API, whatever it presents, the access code
+  included;
+- a mapped caller is only that person: the socket drops the access
+  code, bearer tokens, cookies, `X-Grain-Access-Name`,
+  `X-Grain-Acting-Task` and every proxy identity or forwarding header;
+- a socket request's address is `unix-socket:uid=<n>`, never empty, so
+  it is never taken for the daemon's own in-process calls, which stay
+  trusted as before.
+
+The host `grain` CLI dials the socket in place of a loopback
+`-server` whenever it exists and this account can reach it, unless
+`-token`, `$GRAIN_TOKEN` (or another token variable) or the context's
+own credential says how to sign in. It finds the socket under
+`$GRAIN_DATA_DIR`; `$GRAIN_API_SOCKET` names another, and
+`GRAIN_API_SOCKET=none` sends the CLI back to `-server` and the code.
+The directory's `0700` means that by default only the daemon's account
+(and root) can connect, which is what the CLI wrapper `scripts/setup.sh`
+installs runs as. To let another account in, grant it search on the
+directory (`setfacl -m u:alice:x <data-dir>/api`) and name its uid in
+`-host-accounts`. Being able to connect admits nobody on its own.
+
+### Elsewhere: `grain login` through IAP or an identity proxy
+
+`grain login <url>` that signs a person in through IAP (a Google ID
+token) or a credential source a wrapper registered (`--auth <source>`)
+now keeps a personal token afterwards: a `grain/external-dev` `gma_`
+token owned by them, as `--issue-token` mints. From then on the context
+is that token, recorded as `external:cli-…` on behalf of the person,
+and needs neither the proxy's sign-in nor the code day to day. `grain
+logout` revokes it. `--issue-token=false` keeps a context that signs in
+through the proxy on every call instead. A deployment with
+`externalAgentApi` off cannot issue one, and says so.
+
+## Bootstrap and recovery only: `grain access-code mode`
+
+```bash
+grain access-code mode            # prints on, recovery or off
+grain access-code mode recovery   # recommended once a verified sign-in works
+grain access-code mode off
+grain access-code mode on         # the default
+```
+
+The mode is kept in `<data-dir>/access-code-mode`, beside the code, and
+the daemon re-reads it within a second. Only this command, on the host,
+changes it, never Settings. That way someone holding the code on the
+network cannot switch it back on, and an owner who has lost every
+verified sign-in still has the host.
+
+- **on** (the default, and how every existing install behaves): the code
+  works everywhere, as described above.
+- **recovery**: once a person on the allowlist with a full role (a
+  `user:` entry, `grain/operator` or wider) can sign in through a
+  verifier (an IAP audience, `-ui-require-verifier`, or a registered
+  identity proxy), the code only manages access and settings:
+  `/api/access/*`, `/api/api-scope-sets*`, `/api/settings*`,
+  `/api/config`, `/api/deployment` and its config audit,
+  `/api/whoami`, signing in and out, and the frontend. Every other
+  route answers `403` naming recovery mode. Each use raises an Inbox
+  notification (`access-code:recovery:<source>`, at most one a minute
+  per name and source, with every raise counted) that names who used it
+  and from where. Until such a person exists, recovery works like
+  **on**, so it cannot lock out the bootstrap it is meant to protect.
+- **off**: the code is refused as a bearer token, in
+  `X-Grain-Access-Code`, as a session, and at sign-in. One exception
+  remains: a run's own plumbing (`grain mcpserver` requests carrying
+  `X-Grain-Acting-Task`, held to that task's grants and recorded as the
+  task) still reaches the daemon with the code, until runs carry a
+  credential of their own. Undo it with `grain access-code mode on` on
+  the host.
+
+A mode file holding anything else is read as **off**, so a typo never
+opens the code wider than intended.
 
 ## Rotating
 

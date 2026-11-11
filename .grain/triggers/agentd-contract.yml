@@ -1,0 +1,34 @@
+# Path trigger marking the host agent contract
+# (design/design/agentd-stable-contract.design.md). grain-agentd and
+# `grain host -server` are installed on operators' other machines and are
+# updated by hand, so anything that changes what a daemon and an installed
+# host agent say to each other -- the wire types, ops and frames, the
+# feature list, the dial-out headers, the allowlist schema the host owner
+# writes, the on-host stage and spool layout -- strands every host that has
+# not been updated. A pull request touching one of these waits for a
+# person, who checks it against the design doc's extensibility rules:
+# optional fields only, new behaviour behind a new feature the daemon
+# checks and degrades without, nothing removed inside its deprecation
+# window. pkg/hostd/contract_test.go fails the same change unless the doc's
+# generated contract block moves with it, and scripts/agentd-compat.sh runs
+# the daemon against released host agents.
+on: pull_request
+paths:
+  - pkg/hostd/protocol.go
+  - pkg/hostd/features.go
+  - pkg/hostd/allowlist.go
+  - pkg/hostd/carry.go
+  - pkg/hostd/dialout.go
+  - pkg/hostd/enroll.go
+  - pkg/hostd/logins.go
+  - pkg/hostd/spool_linux.go
+  - pkg/hostd/stage_linux.go
+  - pkg/hostd/contract_test.go
+  - pkg/tunnel/mux/**
+  - pkg/tunnel/wsupgrade/**
+  - design/design/agentd-stable-contract.design.md
+  - tests/agentdcompat/**
+  - scripts/agentd-compat.sh
+gate: true
+human: required
+sensitive: true

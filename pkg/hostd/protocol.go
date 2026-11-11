@@ -64,16 +64,20 @@ const (
 )
 
 // ProtocolVersion is the hostd protocol this build speaks, and
-// MinCompatible the oldest one it still serves and still drives. Bump
-// ProtocolVersion for any change a peer of the previous version would
-// misread or could not use -- a new op or frame the other side must
-// understand, a changed meaning for a field, a different spool layout --
-// never for a new optional JSON field an old peer ignores. Raise
-// MinCompatible only when this build stops serving, or stops being able
-// to drive, a version: it must stay at most ProtocolVersion-1 for at
-// least one release after a bump, so a daemon and a hostd one version
-// apart keep re-attaching to what is already running (the upgrade order
-// is never guaranteed: either side may be the newer one).
+// MinCompatible the oldest one it still serves and still drives.
+//
+// Protocol 4 is host agent contract v1
+// (design/design/agentd-stable-contract.design.md), and it is frozen: new
+// behaviour is a new Feature (features.go) the other side checks with
+// Hello.Has, never a ProtocolVersion bump, and a new optional JSON field
+// an old peer ignores needs neither. ProtocolVersion moves only for a
+// major contract change, which the design doc says when (if ever) is
+// allowed. Raise MinCompatible only when this build stops serving, or
+// stops being able to drive, a version: it must stay at most
+// ProtocolVersion-1 for at least the deprecation window after a bump, so
+// a daemon and a hostd one version apart keep re-attaching to what is
+// already running (the upgrade order is never guaranteed: either side
+// may be the newer one). contract_test.go holds both to the golden file.
 const (
 	ProtocolVersion = 4
 	MinCompatible   = 1
@@ -120,23 +124,41 @@ type Hello struct {
 	// every CLI entry's paths_under and cwd_under take on as well for a
 	// start over the session.
 	StageRoot string `json:"stage_root,omitempty"`
-	// CodexAuth is the codex login on hostd's machine
-	// ($CODEX_HOME/auth.json, else ~/.codex/auth.json), when there is
-	// one: what a codex run there links to in place of a login the
-	// daemon holds.
+	// CodexAuth is the codex login on hostd's machine, when there is
+	// one: what an older daemon links a remote codex run to.
+	//
+	// Deprecated: use LoginTargets (FeatureLoginsMap). Kept for peers
+	// without logins_map until the contract's deprecation window passes.
 	CodexAuth string `json:"codex_auth,omitempty"`
-	// Logins are the agent CLIs (LoginCodex, LoginClaude,
-	// LoginAntigravity) with a login of their own on hostd's machine, as
-	// the user hostd runs as: what a model connection with ambient
-	// credentials placed on this hostd spends (loginsUnder). Set by
-	// hostd alone, local or remote; an older hostd says nothing, which
-	// is "not known", not "none".
+	// Logins are the named CLI logins present on hostd's machine, from
+	// the allowlist's logins: map (or the built-in table when absent), as
+	// names only and never file contents: what a model connection with
+	// ambient credentials placed on this hostd spends. Set by hostd
+	// alone, local or remote; Has(FeatureLogins) distinguishes "none"
+	// (empty with FeatureLogins) from "not known" (without it).
 	Logins []string `json:"logins,omitempty"`
+	// LoginTargets maps each existing regular-file login in the
+	// allowlist's logins: map (or the built-in table when absent) to its
+	// resolved path on hostd's machine, set on remote sessions for
+	// StageSymlink (FeatureLoginsMap).
+	LoginTargets map[string]string `json:"login_targets,omitempty"`
+	// AgentsOnly is set by a host agent that runs agent CLIs and nothing
+	// else (grain-agentd, Server.AgentsOnly): its allowlist has no
+	// capabilities: and may not have any, so a run: host capability
+	// server placed on it needs a `grain host` instead. An older build
+	// says nothing, which is "not known".
+	AgentsOnly bool `json:"agents_only,omitempty"`
+
+	// Features are the contract features this side's build implements
+	// (features.go). Check one with Has, never by comparing Protocol: a
+	// peer that predates the list is credited from its protocol version.
+	Features []Feature `json:"features,omitempty"`
 }
 
 // ThisHello is this build's Hello; build is its version string.
 func ThisHello(build string) Hello {
-	return Hello{Protocol: ProtocolVersion, MinCompatible: MinCompatible, Build: build}
+	return Hello{Protocol: ProtocolVersion, MinCompatible: MinCompatible, Build: build,
+		Features: append([]Feature(nil), Features...)}
 }
 
 // legacyHello is what a hostd that does not know OpHello is taken to
@@ -168,15 +190,15 @@ func (e *MismatchError) Error() string {
 
 // SupportsAttach reports whether a hostd that said peer serves detached
 // starts, OpProcesses, OpAttach and OpCancel.
-func (h Hello) SupportsAttach() bool { return h.Protocol >= 2 }
+func (h Hello) SupportsAttach() bool { return h.Has(FeatureDetach) }
 
 // SupportsSocketOwner reports whether a hostd that said h serves
 // OpSocketOwner.
-func (h Hello) SupportsSocketOwner() bool { return h.Protocol >= 3 }
+func (h Hello) SupportsSocketOwner() bool { return h.Has(FeatureSocketOwner) }
 
 // SupportsCarry reports whether a hostd that said h serves OpStage and
 // OpListen, and opens OpCarry streams back to the daemon.
-func (h Hello) SupportsCarry() bool { return h.Protocol >= 4 }
+func (h Hello) SupportsCarry() bool { return h.Has(FeatureStage) && h.Has(FeatureListen) }
 
 // WaitDelay bounds how long hostd waits for a process's stdout and stderr
 // to close once the process itself has exited or been killed -- the same

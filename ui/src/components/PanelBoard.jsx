@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Typography } from "@mui/material";
 import api from "../api.js";
 import { STATE_LABELS } from "../state.js";
@@ -25,6 +25,7 @@ import {
   NO_NARROWING,
   admitsState,
   defaultFilters,
+  defaultNarrowing,
   describeUnknownConditions,
   narrowTasks,
   unknownConditions,
@@ -41,11 +42,16 @@ import {
   panelUsesNarrowing,
   panelTitle,
 } from "../panels.js";
-import { childRenderKeys } from "../childOrder.js";
+import {
+  childDestinationIndex,
+  childOrderSignature,
+  childRenderKeys,
+} from "../childOrder.js";
 import { panelPlaces } from "../panelOrder.js";
-import { keptQuery } from "../boards.js";
+import { boardNarrowing, keptQuery } from "../boards.js";
 import { reportPath, reportScope, scopeSummary } from "../report.js";
 import { loadView } from "../gantt.js";
+import AccessGate from "./AccessGate.jsx";
 import {
   MoveHandle,
   MoveSlot,
@@ -56,6 +62,7 @@ import GanttChart from "./GanttChart.jsx";
 import Sparkline from "./Sparkline.jsx";
 import StateDot, { isLiveRunning } from "./StateDot.jsx";
 import {
+  FollowLink,
   ListEmpty,
   TasksLoadError,
   tasksLoadFailed,
@@ -302,7 +309,13 @@ function ListPanel({ tasks, config, narrowing, onOpenTask, partial = false }) {
 // Each count is a link into the list narrowed to that column's states,
 // on top of whatever the panel is already narrowed to: "eleven waiting"
 // is a number worth clicking, and what it opens should be those eleven.
-function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
+function StatesPanel({
+  tasks,
+  narrowing,
+  onOpen,
+  partial = false,
+  panelKey = "",
+}) {
   const columns = useMemo(() => loadColumns() || defaultColumns(), []);
   const { cards, hidden } = groupIntoColumns(tasks, columns);
   return (
@@ -317,26 +330,21 @@ function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
           ],
         };
         return (
-          <a
+          <FollowLink
             className="panel-state"
             key={c.id}
             href={buildPath({ view: "tasks", narrowing: asked })}
             // A real href so a count can be copied and sent, followed
             // in-app when it is simply clicked -- DetailOverlay's own
-            // treatment of the link it offers.
-            onClick={(e) => {
-              if (
-                !onOpen ||
-                e.button !== 0 ||
-                e.metaKey ||
-                e.ctrlKey ||
-                e.shiftKey ||
-                e.altKey
-              )
-                return;
-              e.preventDefault();
-              onOpen({ view: "tasks", narrowing: asked });
-            }}
+            // treatment of the link it offers. Tagged with the panel and
+            // the column, so Back puts focus on this count and not on
+            // another link to the same list (useReturnFocus).
+            tag={`${panelKey}:state:${c.id}`}
+            onFollow={
+              onOpen
+                ? () => onOpen({ view: "tasks", narrowing: asked })
+                : undefined
+            }
           >
             <span
               className="panel-state-count"
@@ -368,7 +376,7 @@ function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
               )}
               {c.title}
             </span>
-          </a>
+          </FollowLink>
         );
       })}
       {hidden > 0 && (
@@ -511,6 +519,10 @@ function scopeNote(scope) {
 function Panel({
   panel,
   asked,
+  // What the dashboard asks before anybody narrows it (keptQuery's own
+  // comparison point), so a throughput panel offers "Keep" only when the
+  // reader's narrowing changes the report it fetches.
+  baseline,
   kept,
   handle,
   // The drag, in two halves: `grip` is what makes the header a drag
@@ -599,6 +611,7 @@ function Panel({
             tasks={narrowed}
             narrowing={narrowing}
             onOpen={onOpen}
+            panelKey={panel.key}
             partial={partial}
           />
         );
@@ -637,7 +650,7 @@ function Panel({
     Boolean(onKeep) &&
     kept &&
     !panel.query &&
-    panelUsesNarrowing(panel, narrowing);
+    panelUsesNarrowing(panel, narrowing, baseline);
 
   // What the row asked for and did not get. "" on every panel whose
   // range was understood, and on every panel that named none, so this
@@ -684,50 +697,48 @@ function Panel({
           </span>
         )}
         {keepable && (
-          <button
-            type="button"
-            className="panel-keep"
-            // Named for the reader who cannot see which panel this
-            // button sits in: a dashboard can have several of them at
-            // once, and "Keep" on its own would be several buttons with
-            // one name. The title says what will happen, since the
-            // gesture writes nothing itself -- it opens the task that
-            // does.
-            aria-label={`Keep this narrowing on “${panelTitle(panel)}”`}
-            title={`File the task that makes \`${kept}\` this panel's own question`}
-            onClick={() => onKeep(panel)}
-          >
-            Keep
-          </button>
+          // Keep files a task, so a role without tasks:write is refused
+          // it the way BoardPage's own "Edit board" is.
+          <AccessGate scope="tasks:write" config={config}>
+            <button
+              type="button"
+              className="panel-keep"
+              // Named for the reader who cannot see which panel this
+              // button sits in: a dashboard can have several of them at
+              // once, and "Keep" on its own would be several buttons with
+              // one name. The title says what will happen, since the
+              // gesture writes nothing itself -- it opens the task that
+              // does.
+              aria-label={`Keep this narrowing on “${panelTitle(panel)}”`}
+              title={`File the task that makes \`${kept}\` this panel's own question`}
+              onClick={() => onKeep(panel)}
+            >
+              Keep
+            </button>
+          </AccessGate>
         )}
-        <a
+        <FollowLink
           className="panel-open"
           href={panelPath(panel, asked)}
+          // Two panels following the dashboard's own question have an
+          // "Open" to the same list, so the panel tags it: Back puts
+          // focus on the one that was followed (useReturnFocus).
+          tag={`${panel.key}:open`}
           // An anchor is a drag source of its own, and this one sits
           // inside a header that is the panel's: without this, dragging
           // from "Open" hands the browser a URL to drop somewhere
           // instead of moving the panel. Refusing it lets the drag fall
           // through to the header, which is the gesture that was meant.
           draggable={false}
-          onClick={(e) => {
-            if (
-              !onOpen ||
-              e.button !== 0 ||
-              e.metaKey ||
-              e.ctrlKey ||
-              e.shiftKey ||
-              e.altKey
-            )
-              return;
-            e.preventDefault();
-            // The destination the href was built from, so the in-app
-            // click and the copyable link open the same thing -- the
-            // list for three kinds, the report for the throughput one.
-            onOpen(panelDestination(panel, asked));
-          }}
+          // The destination the href was built from, so the in-app
+          // click and the copyable link open the same thing -- the
+          // list for three kinds, the report for the throughput one.
+          onFollow={
+            onOpen ? () => onOpen(panelDestination(panel, asked)) : undefined
+          }
         >
           Open
-        </a>
+        </FollowLink>
       </header>
       {rangeNote && (
         <Typography
@@ -786,6 +797,7 @@ export default function PanelBoard({
   // question about the dashboard ("has its reader narrowed it away from
   // what the board says?"), and every panel gets the same answer.
   const kept = keptQuery(board, narrowing, config);
+  const baseline = boardNarrowing(board) || defaultNarrowing(config);
 
   // The two halves of the gesture, held exactly as BoardList holds them.
   // dragKey is the panel a mouse is dragging; overKey is only the
@@ -808,6 +820,28 @@ export default function PanelBoard({
   useEffect(() => cancel, [board.id, cancel]);
   const pickedKey = pickedPresent ? picked.ids[0] : null;
   const renderKeys = childRenderKeys(panels);
+  const gridRef = useRef(null);
+  const landedRef = useRef(null);
+  const orderSig = childOrderSignature(panels);
+  useEffect(() => {
+    landedRef.current = null;
+  }, [board.id]);
+  useEffect(() => {
+    if (!landedRef.current || landedRef.current.sig === orderSig) return;
+    const { to } = landedRef.current;
+    landedRef.current = null;
+    const active = document.activeElement;
+    const keepHandleFocus =
+      !active ||
+      active === document.body ||
+      (gridRef.current?.contains(active) &&
+        active.classList.contains("task-drag-handle"));
+    if (keepHandleFocus) {
+      gridRef.current
+        ?.querySelectorAll(".task-drag-handle")
+        ?.[to]?.focus({ preventScroll: true });
+    }
+  }, [orderSig]);
 
   const stop = () => {
     setDragKey(null);
@@ -818,7 +852,11 @@ export default function PanelBoard({
     stop();
   };
   const move = (beforeKey) => {
-    if (pickedKey !== null) onMovePanel(board, pickedKey, beforeKey);
+    if (pickedKey !== null) {
+      const to = childDestinationIndex(panels, pickedKey, beforeKey);
+      if (to >= 0) landedRef.current = { to, sig: orderSig };
+      onMovePanel(board, pickedKey, beforeKey);
+    }
     cancel();
   };
 
@@ -877,9 +915,11 @@ export default function PanelBoard({
         defaults={defaultFilters(config)}
         searchPlaceholder="Search this dashboard…"
       >
-        <Button size="small" onClick={() => onAddPanel?.(board)}>
-          Add panel
-        </Button>
+        <AccessGate scope="tasks:write" config={config}>
+          <Button size="small" onClick={() => onAddPanel?.(board)}>
+            Add panel
+          </Button>
+        </AccessGate>
       </NarrowingBar>
       {pickedKey !== null && (
         <MovingBar
@@ -900,6 +940,7 @@ export default function PanelBoard({
         // wrapping row -- the section at the top of this file has the
         // argument.
         <div
+          ref={gridRef}
           className={`panel-grid${pickedKey !== null ? " panel-grid-arranging" : ""}`}
         >
           {panels.map((panel, i) => (
@@ -908,6 +949,7 @@ export default function PanelBoard({
               <Panel
                 panel={panel}
                 asked={narrowing}
+                baseline={baseline}
                 kept={kept}
                 handle={
                   enabled ? (

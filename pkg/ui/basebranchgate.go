@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
@@ -231,8 +232,10 @@ type BaseBranchGate struct {
 	// Detail is the finding in the words a person needs, because this is
 	// a fact three readings away from its consequence and nobody
 	// assembled it from the fields alone the first time -- the same
-	// contract SandboxGuestPublishing.Detail keeps next door.
-	Detail string `json:"detail"`
+	// contract SandboxGuestPublishing.Detail keeps next door. A paged
+	// read leaves it out unless it asks for fields=full: at ~650 bytes
+	// it was most of each row, and a default page of twenty was 15 KB.
+	Detail string `json:"detail,omitempty"`
 }
 
 // baseBranchGates is the reading GET /api/sandboxes carries, and through
@@ -328,7 +331,10 @@ type BaseBranchGates struct {
 	// in baseBranchGates' own order. Never null, so a caller can iterate
 	// it without checking -- and empty on a deployment whose gates are
 	// all working, which is the ordinary day.
-	Gates []BaseBranchGate `json:"gates"`
+	Gates      []BaseBranchGate `json:"gates"`
+	Total      int              `json:"total,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+	NextCursor string           `json:"nextCursor,omitempty"`
 }
 
 // handleListBaseBranchGates answers GET /api/base-branch-gates.
@@ -340,11 +346,30 @@ type BaseBranchGates struct {
 // seconds would be worse than one line missing from the inbox until the
 // next tick.
 func (s *Server) handleListBaseBranchGates(w http.ResponseWriter, r *http.Request) {
-	gates := s.tasks.baseBranchGates(r.Context())
-	if gates == nil {
-		gates = []BaseBranchGate{}
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, BaseBranchGates{Gates: gates})
+	gates := s.tasks.baseBranchGates(r.Context())
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
+		gates = filterList(gates, func(g BaseBranchGate) bool { return strings.EqualFold(g.Repo, repo) })
+	}
+	gates = filterList(gates, func(g BaseBranchGate) bool {
+		return list.matches(g.Repo, g.Branch, g.Reason)
+	})
+	page := pageOf(gates, list)
+	if trimsPagedRows(r, list) {
+		for i := range page.Items {
+			page.Items[i].Detail = ""
+		}
+	}
+	writeJSON(w, http.StatusOK, BaseBranchGates{
+		Gates:      page.Items,
+		Total:      page.Total,
+		Truncated:  page.Truncated,
+		NextCursor: page.NextCursor,
+	})
 }
 
 // baseBranchGate is the same reading for one repository, for its own

@@ -714,6 +714,101 @@ describe("NewTaskOverlay", () => {
     expect(body.reviewers).toEqual(["alice", "bob"]);
   });
 
+  // 2026-11-08 intake walkthrough: a draft saves every field, so a title
+  // left in the form marked Task priority edited too, and "New task from
+  // this template" then showed and filed the draft's untouched 5 over the
+  // template's own priority. Only a priority somebody typed is the draft's.
+  it("lets a template's priority win over a draft's untouched one, but not a typed one", async () => {
+    const templates = [{ id: "tmpl-8", name: "Audit", priority: 8 }];
+    const leaveDraft = async (typePriority) => {
+      const user = userEvent.setup();
+      const { unmount } = render(
+        <NewTaskOverlay
+          config={null}
+          onClose={() => {}}
+          onCreated={() => Promise.resolve()}
+          showError={() => {}}
+        />,
+      );
+      await user.type(screen.getByLabelText(/Title/), "Left behind");
+      if (typePriority) {
+        const box = screen.getByLabelText("Task priority");
+        await user.clear(box);
+        await user.type(box, typePriority);
+      }
+      unmount();
+    };
+    const openFromTemplate = () =>
+      render(
+        <NewTaskOverlay
+          config={null}
+          templates={templates}
+          templateId="tmpl-8"
+          onClose={() => {}}
+          onCreated={() => Promise.resolve()}
+          showError={() => {}}
+        />,
+      );
+
+    await leaveDraft();
+    let view = openFromTemplate();
+    expect(screen.getByLabelText(/Title/)).toHaveValue("Left behind");
+    expect(screen.getByLabelText("Task priority")).toHaveValue(8);
+    const user = userEvent.setup();
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    const body = JSON.parse(api.mock.calls.at(-1)[1].body);
+    expect(body.templateId).toBe("tmpl-8");
+    expect(body.priority).toBe(8);
+    view.unmount();
+    localStorage.removeItem(TASK_DRAFT_STORAGE_KEY);
+
+    await leaveDraft("3");
+    view = openFromTemplate();
+    expect(screen.getByLabelText("Task priority")).toHaveValue(3);
+    view.unmount();
+    localStorage.removeItem(TASK_DRAFT_STORAGE_KEY);
+  });
+
+  // 2026-11-10 intake walkthrough: "New task from this template", a
+  // title typed, then a reload. The form came back on /new with the
+  // draft's title but no template, so Task priority fell to 5 and the
+  // task filed without the template at all. The draft keeps the template.
+  it("keeps a draft's template, and its priority, when the form reopens without one", async () => {
+    const templates = [{ id: "tmpl-8", name: "Audit", priority: 8 }];
+    const user = userEvent.setup();
+    const first = render(
+      <NewTaskOverlay
+        config={null}
+        templates={templates}
+        templateId="tmpl-8"
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+    await user.type(screen.getByLabelText(/Title/), "From the template");
+    first.unmount();
+
+    render(
+      <NewTaskOverlay
+        config={null}
+        templates={templates}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+    expect(screen.getByLabelText(/Title/)).toHaveValue("From the template");
+    expect(screen.getByLabelText("Task priority")).toHaveValue(8);
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    const body = JSON.parse(api.mock.calls.at(-1)[1].body);
+    expect(body.templateId).toBe("tmpl-8");
+    expect(body.priority).toBe(8);
+    localStorage.removeItem(TASK_DRAFT_STORAGE_KEY);
+  });
+
   it("defaults Task priority to 5 and sends a custom priority in the payload", async () => {
     const user = userEvent.setup();
     render(

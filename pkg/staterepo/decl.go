@@ -100,6 +100,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -177,6 +179,9 @@ const (
 	shapeValues
 	// shapeItems is suite_item: the templates a suite runs, in order.
 	shapeItems
+	// shapeSkills is a JSON-encoded model.SkillsConfig column, written as
+	// a mapping {enabled, folders} when canonical and verbatim otherwise.
+	shapeSkills
 )
 
 // declFieldShape is one field of a document.
@@ -199,6 +204,7 @@ var booleanKeys = map[string]bool{
 	"require-approval":       true,
 	"interactive":            true,
 	"keep-running":           true,
+	"grain-ci":               true,
 }
 
 // declKinds is the three of them, built from pkg/declschema so the keys,
@@ -267,6 +273,9 @@ func shapeOf(f declschema.Field, key string) (shape, error) {
 	case len(f.Columns) == 1:
 		if booleanKeys[key] {
 			return shapeBool, nil
+		}
+		if key == "skills" {
+			return shapeSkills, nil
 		}
 		return shapeScalar, nil
 	case len(f.Columns) == 2 && f.Columns[0] == "target_owner":
@@ -428,7 +437,36 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				out = append(out, rows...)
+				if f.shape == shapeGrants {
+					// A task-level repository grant is reads:/writes:
+					// spelt as a grant, and lands in those tables instead.
+					rows = slices.DeleteFunc(rows, func(r map[string]any) bool {
+						_, _, projected := projectedRepoRow(r)
+						return projected
+					})
+					out = appendUniqueGrants(out, rows, k.parent)
+				} else if f.shape == shapeRepos || f.shape == shapeWrites {
+					out = appendUniqueRows(out, rows)
+				} else {
+					out = append(out, rows...)
+				}
+			case f.shape == shapeGrants && (strings.HasSuffix(table, "_read") || strings.HasSuffix(table, "_write")) && slices.Contains(k.companions, table):
+				// unified-grants §3: `grants:` and `reads:`/`writes:` are one
+				// key on import. A …/repo#read {repo} or …/repo#write {repo,
+				// base} under grants: is a row of the read or write table, and
+				// one both lists name is held once.
+				rows, err := decodeCompanion(d.path, id, k.parent, f, node, &items)
+				if err != nil {
+					return nil, err
+				}
+				var projected []map[string]any
+				for _, r := range rows {
+					if kind, repoRow, ok := projectedRepoRow(r); ok && strings.HasSuffix(table, "_"+kind) {
+						repoRow[k.parent] = id
+						projected = append(projected, repoRow)
+					}
+				}
+				out = appendUniqueRows(out, projected)
 			case f.table == "suite_item":
 				// Counted even when another table is being read, so that
 				// the ids a suite's items get do not depend on which
@@ -442,6 +480,70 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 	}
 	out = append(out, d.orphans[table]...)
 	return out, nil
+}
+
+// projectedRepoRow is a grant row that is a task-level repository grant
+// -- …/repo#read {repo}, or …/repo#write {repo, base} -- as the row of the
+// read ("read") or write ("write") table it stands for (model.TaskRepoGrants'
+// inverse). ok is false for every other grant, a CI job's {repo}-only
+// #write and a #write widening refs among them.
+func projectedRepoRow(r map[string]any) (kind string, row map[string]any, ok bool) {
+	capability, isText := r["capability"].(string)
+	if !isText {
+		return "", nil, false
+	}
+	g := model.CanonicalGrant(capability)
+	if g.Capability != model.RepoReadRef && g.Capability != model.RepoWriteRef {
+		return "", nil, false
+	}
+	var with map[string]any
+	if err := json.Unmarshal(g.With, &with); err != nil {
+		return "", nil, false
+	}
+	repo, base, hasBase, err := model.RepoGrantArgs(g)
+	if err != nil {
+		return "", nil, false
+	}
+	owner, name := repo.String(), ""
+	if i := strings.LastIndex(owner, "/"); i >= 0 {
+		owner, name = owner[:i], owner[i+1:]
+	}
+	switch {
+	case g.Capability == model.RepoReadRef && !hasBase && len(with) == 1:
+		return "read", map[string]any{"owner": owner, "name": name}, true
+	case g.Capability == model.RepoWriteRef && hasBase && len(with) == 2:
+		return "write", map[string]any{"owner": owner, "name": name, "base": base}, true
+	}
+	return "", nil, false
+}
+
+// appendUniqueRows is out with each of rows not already in it appended: the
+// read and write tables are sets, and an entry `reads:` and `grants:` both
+// name is one row.
+func appendUniqueRows(out, rows []map[string]any) []map[string]any {
+	for _, r := range rows {
+		if !slices.ContainsFunc(out, func(o map[string]any) bool { return reflect.DeepEqual(o, r) }) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// appendUniqueGrants is out with each of rows whose (parent, canonical grant
+// key) is not already in it appended: a grant table's primary key is (parent,
+// capability), and two entries in `grants:` that spell the same grant (such as
+// `{capability: …/api#tasks:read, with: {}}`, `api:tasks:read` and
+// `…/api#tasks:read`) are one row.
+func appendUniqueGrants(out, rows []map[string]any, parent string) []map[string]any {
+	for _, r := range rows {
+		rk := model.CanonicalGrantKey(fmt.Sprint(r["capability"]))
+		if !slices.ContainsFunc(out, func(o map[string]any) bool {
+			return o[parent] == r[parent] && model.CanonicalGrantKey(fmt.Sprint(o["capability"])) == rk
+		}) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (d declDocument) entryID(k declKind, i int, entry map[string]*yaml.Node) (string, error) {
@@ -707,7 +809,7 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 // column. Only a one-column field can be missing that way: the cadence,
 // target and change target are older than any schema this build migrates.
 func hasColumn(f declFieldShape, row map[string]any) bool {
-	if f.shape != shapeBool && f.shape != shapeScalar {
+	if f.shape != shapeBool && f.shape != shapeScalar && f.shape != shapeSkills {
 		return true
 	}
 	_, ok := row[f.columns[0]]
@@ -769,9 +871,35 @@ func columnNode(f declFieldShape, row map[string]any) (string, *yaml.Node, error
 			return f.key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: boolWord(n == 1)}, nil
 		}
 		return f.key, valueNode(v), nil
+	case shapeSkills:
+		v := row[f.columns[0]]
+		text, ok := textOf(v)
+		if !ok || text == "" {
+			return f.key, valueNode(v), nil
+		}
+		sc := model.DecodeSkillsConfig(text)
+		if sc != nil && model.EncodeSkillsConfig(sc) == text {
+			out := &yaml.Node{Kind: yaml.MappingNode}
+			if sc.Enabled != nil {
+				out.Content = append(out.Content, key("enabled"), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: boolWord(*sc.Enabled)})
+			}
+			if sc.Folders != nil {
+				seq := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+				for _, folder := range *sc.Folders {
+					seq.Content = append(seq.Content, str(folder))
+				}
+				out.Content = append(out.Content, key("folders"), seq)
+			}
+			return f.key, out, nil
+		}
+		return f.key, valueNode(v), nil
 	default:
 		return f.key, valueNode(row[f.columns[0]]), nil
 	}
+}
+
+func isBase64Mapping(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.MappingNode && len(node.Content) == 2 && node.Content[0].Value == "base64"
 }
 
 func boolWord(b bool) string {
@@ -1177,14 +1305,85 @@ func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[s
 		}
 		row[f.columns[0]] = fromBool(v)
 		return nil
-	default:
+	case shapeSkills:
+		if node.Kind == yaml.MappingNode && !isBase64Mapping(node) {
+			var sc model.SkillsConfig
+			if err := node.Decode(&sc); err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+			}
+			norm, err := model.NormalizeSkillsConfig(&sc)
+			if err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+			}
+			row[f.columns[0]] = model.EncodeSkillsConfig(norm)
+			return nil
+		}
 		v, err := nodeValue(node)
 		if err != nil {
 			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
 		}
 		row[f.columns[0]] = v
 		return nil
+	default:
+		if f.key == "overlap" && node.Kind == yaml.MappingNode {
+			return decodeOverlapMapping(path, id, node, row)
+		}
+		v, err := nodeValue(node)
+		if err != nil {
+			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+		}
+		if f.key == "overlap-group" && v == "" {
+			// `overlap: {group: g}` already said it; the blank key the
+			// export writes beside it does not unsay it.
+			if prev, ok := row["overlap_group"].(string); ok && prev != "" {
+				return nil
+			}
+		}
+		row[f.columns[0]] = v
+		return nil
 	}
+}
+
+// decodeOverlapMapping reads `overlap: {skip: true, group: <name>}`, the
+// form a repository's schedule file may use (repodecl's rawOverlap),
+// into the overlap and overlap_group columns, so a settings row written
+// the same way imports the same way (grain/task-3895). The export itself
+// always writes the plain `overlap:` and `overlap-group:` keys.
+func decodeOverlapMapping(path, id string, node *yaml.Node, row map[string]any) error {
+	policy := string(model.OverlapSkip)
+	var group string
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		v, err := nodeValue(node.Content[i+1])
+		if err != nil {
+			return fmt.Errorf("staterepo: %s, %s: overlap: %w", path, id, err)
+		}
+		switch k := node.Content[i].Value; k {
+		case "skip":
+			b, ok := v.(bool)
+			if !ok {
+				return fmt.Errorf("staterepo: %s, %s: overlap.skip is true or false", path, id)
+			}
+			if !b {
+				policy = string(model.OverlapAllow)
+			}
+		case "group":
+			s, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("staterepo: %s, %s: overlap.group is a name", path, id)
+			}
+			group = strings.TrimSpace(s)
+		default:
+			return fmt.Errorf("staterepo: %s, %s: overlap: unknown key %q", path, id, k)
+		}
+	}
+	if group != "" && policy == string(model.OverlapAllow) {
+		return fmt.Errorf("staterepo: %s, %s: overlap: `skip: false` cannot be combined with `group:`", path, id)
+	}
+	row["overlap"] = policy
+	if group != "" {
+		row["overlap_group"] = group
+	}
+	return nil
 }
 
 // fromBool turns the booleans these files are written with back into the
@@ -1329,6 +1528,9 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 				return fail(err.Error())
 			}
 			r := model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &trig}
+			if err := r.Validate(); err != nil {
+				return fail(err.Error())
+			}
 			row["recurrence_kind"] = r.StoredKind()
 			return nil
 		}
@@ -1344,6 +1546,9 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 			return fail(err.Error())
 		}
 		r := model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &trig}
+		if err := r.Validate(); err != nil {
+			return fail(err.Error())
+		}
 		row["recurrence_kind"] = r.StoredKind()
 		return nil
 	}
@@ -1421,10 +1626,20 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			if err != nil {
 				return nil, fail(err.Error())
 			}
-			named, _ := v.(map[string]any)
+			named, isMap := v.(map[string]any)
+			if !isMap {
+				return nil, fail("a grant is a capability, or {capability, with, via, folder}")
+			}
+			for k := range named {
+				switch k {
+				case "capability", "with", "via", "folder":
+				default:
+					return nil, fail(fmt.Sprintf("unknown key %q in grant (want capability, with, via, folder)", k))
+				}
+			}
 			capability, ok := named["capability"]
 			if !ok {
-				return nil, fail("a grant is a capability, or {capability, via, folder}")
+				return nil, fail("a grant is a capability, or {capability, with, via, folder}")
 			}
 			if via, ok := named["via"]; ok {
 				row["via"] = via
@@ -1433,6 +1648,30 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 				row["folder"] = folder
 			}
 			if name, isText := capability.(string); isText {
+				// {capability, with} is the unified grant's own shape
+				// (unified-grants §1): the with: arguments fold into the
+				// stored <reference>=<json> string.
+				if with, hasWith := named["with"]; hasWith {
+					if _, isObj := with.(map[string]any); !isObj {
+						return nil, fail(fmt.Sprintf("%s: with: must be a mapping", name))
+					}
+					trimmed := strings.TrimSpace(name)
+					if strings.Contains(trimmed, "=") {
+						return nil, fail(fmt.Sprintf("%s: capability already carries =<json> arguments beside with:", name))
+					}
+					if !model.IsCapabilityRef(trimmed) {
+						return nil, fail(fmt.Sprintf("%s: only a capability reference (https://...) takes with: arguments", name))
+					}
+					data, err := json.Marshal(with)
+					if err != nil {
+						return nil, fail(fmt.Sprintf("%s: with: %v", name, err))
+					}
+					encoded := trimmed + "=" + string(data)
+					if err := model.CheckCapabilityGrantSyntax(encoded); err != nil {
+						return nil, fail(err.Error())
+					}
+					name = model.CanonicalGrant(encoded).Key()
+				}
 				for _, capID := range model.CanonicalLegacyGrants(name) {
 					out = append(out, map[string]any{
 						parent:       id,
@@ -1442,6 +1681,9 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 					})
 				}
 				continue
+			}
+			if _, hasWith := named["with"]; hasWith {
+				return nil, fail("capability must be a string when with: is set")
 			}
 			row["capability"] = capability
 			out = append(out, row)

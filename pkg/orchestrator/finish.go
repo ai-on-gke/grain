@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/forkhead"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -272,6 +273,15 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// that the task stays open and gets dispatched again must not.
 	proxyResult := withProxyReviewCalls(store, runID, result)
 	if err := relayHandover(ctx, store, task, proxyResult, now); err != nil {
+		return err
+	}
+	// compact_context and update_brief, on the same terms: written for
+	// the runs after this one, and neither ends anything
+	// (context_compaction.go).
+	if err := relayCompaction(ctx, store, task, proxyResult, runID, now); err != nil {
+		return err
+	}
+	if err := relayBrief(ctx, store, task, proxyResult, now); err != nil {
 		return err
 	}
 
@@ -844,6 +854,14 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if !pushed {
 		return false, nil
 	}
+	if reviewCommentsOnly(task) {
+		// A review posts its findings; it was not asked to fix them
+		// (pathtriggerreview.go). What it pushed is left where it is, and
+		// the run ends like any other review's.
+		return false, noteOnTask(ctx, store, task.ID, fmt.Sprintf("Branch %s was pushed, but this review "+
+			"was filed to post findings, not to fix them, so no pull request was opened for it.",
+			task.BranchName()), now)
+	}
 	closed, err := taskClosed(ctx, store, task.ID)
 	if err != nil {
 		return true, err
@@ -851,28 +869,30 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if closed {
 		return true, noteOrphanedPullRequests(ctx, store, client, task.ID, now)
 	}
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
-				host := task.Target.GitHost()
-				note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
-				if !strings.Contains(reason, "a plain git host") {
-					note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
-				}
-				if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
-					return true, err
-				}
-				if taskKeepRunning(ctx, store, task) {
-					markKeepRunningRequeued(store, task.ID, "", false)
-					return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-						o.CompletedAt = nil
-					})
-				}
+	// Asked of the client rather than of a *github.RESTClient's Tokens:
+	// the daemon's client is a StateRepoPullRequestClient around one, and
+	// a type assertion to the REST client never saw a plain git host
+	// through it (tests/e2e/git_hosts_daemon_test.go).
+	if src, ok := client.(github.GitOnlySource); ok {
+		if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
+			host := task.Target.GitHost()
+			note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
+			if !strings.Contains(reason, "a plain git host") {
+				note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
+			}
+			if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
+				return true, err
+			}
+			if taskKeepRunning(ctx, store, task) {
+				markKeepRunningRequeued(store, task.ID, "", false)
 				return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-					o.CompletedAt = &now
-					o.RetryRequestedAt = nil
+					o.CompletedAt = nil
 				})
 			}
+			return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.CompletedAt = &now
+				o.RetryRequestedAt = nil
+			})
 		}
 	}
 	if err := finishWithPullRequest(ctx, store, client, task, now); err != nil {
@@ -987,11 +1007,9 @@ var (
 // plain git host asks about a different repository on GitHub, and a 404
 // from that read every pushed branch there as one nobody could check.
 func targetBranchExists(client github.Client, target model.RepoRef, branch string) (bool, error) {
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitBranchSource); ok {
-			if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
-				return exists, err
-			}
+	if src, ok := client.(github.GitBranchSource); ok {
+		if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
+			return exists, err
 		}
 	}
 	return branchExistsSettled(client, target.Owner, target.Name, branch)
@@ -1415,21 +1433,25 @@ func relayHandover(ctx context.Context, store *model.Store, task model.Task,
 	if !ok || handover == "" {
 		return nil
 	}
-	existing, err := store.Comments(ctx, task.ID)
+	last, err := store.LatestHandover(ctx, task.ID)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading comments before posting handover for %s: %w", task.ID, err)
+		return fmt.Errorf("orchestrator: reading the last handover before posting one for %s: %w", task.ID, err)
 	}
-	for i := len(existing) - 1; i >= 0; i-- {
-		if existing[i].Handover {
-			if strings.TrimSpace(existing[i].Body) == handover {
-				return nil
-			}
-			break
+	if last != nil && strings.TrimSpace(last.Body) == handover {
+		// The same handover written again is the run confirming it is
+		// still true, which resets its age (model.HandoverAge) without a
+		// new version.
+		if err := store.ConfirmHandover(ctx, task.ID, now); err != nil {
+			return fmt.Errorf("orchestrator: confirming handover for %s: %w", task.ID, err)
 		}
+		return nil
 	}
 	now, err = answeringTime(ctx, store, task.ID, now)
 	if err != nil {
 		return fmt.Errorf("orchestrator: posting handover for %s: %w", task.ID, err)
+	}
+	if err := store.BumpHandoverVersion(ctx, task.ID); err != nil {
+		return fmt.Errorf("orchestrator: counting handover for %s: %w", task.ID, err)
 	}
 	agentPrincipal := model.Principal{Kind: model.PrincipalAgent, ID: task.ID}
 	if _, err := store.AddComment(ctx, model.Comment{
@@ -1643,6 +1665,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	if err != nil {
 		return err
 	}
+	// Which branch each repository's default is, asked of the forge at
+	// most once per repository for the batch, so a proposal that named no
+	// base and a parent filed with `base: main` read as the one branch
+	// they are (model.AlignDefaultBases).
+	defaultBranch := proposalDefaultBranches(client)
 
 	// Local `id` of a propose_task call -> the task id it was filed
 	// under, filled in as each proposal lands so only earlier calls are
@@ -1669,7 +1696,50 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		catalogue = catalogueCfg.CapabilityPolicy.Catalogue
 		autoGrantContextReads = catalogueCfg.AutoGrantContextReads
 	}
-	for _, p := range proposals {
+	for _, rawP := range proposals {
+		if err := mcp.ValidateProposeTaskArgs(rawP); err != nil {
+			log.Printf("orchestrator: skipping proposed task with invalid arguments: %v", err)
+			continue
+		}
+		p := rawP
+		if rawP["grants"] != nil {
+			decoded, hasGrants, gErr := model.DecodeRawRequestGrants(rawP["grants"], mcp.ProposeTaskGrantSpelling(rawP))
+			if gErr != nil {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %v", gErr)
+				continue
+			}
+			if ct, _ := mcp.ProposedChangeTarget(rawP); ct != nil && len(decoded.Writes) > 0 {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %s cannot be combined with writes", ct.Kind)
+				continue
+			}
+			if hasGrants {
+				p = make(map[string]any, len(rawP)+4)
+				for k, v := range rawP {
+					p[k] = v
+				}
+				if decoded.Capabilities != nil {
+					p["capabilities"] = decoded.Capabilities
+				}
+				if len(decoded.Reads) > 0 {
+					readStrs := make([]string, len(decoded.Reads))
+					for i, r := range decoded.Reads {
+						readStrs[i] = r.String()
+					}
+					p["reads"] = readStrs
+				}
+				if len(decoded.Writes) > 0 {
+					writeMaps := make([]any, len(decoded.Writes))
+					for i, w := range decoded.Writes {
+						writeMaps[i] = map[string]any{"repo": w.Repo.String(), "base": w.Base}
+					}
+					p["writes"] = writeMaps
+				}
+				if decoded.Target != nil {
+					p["repo"] = decoded.Target.Repo.String()
+					p["branch"] = decoded.Target.Base
+				}
+			}
+		}
 		title, _ := p["title"].(string)
 		body, _ := p["body"].(string)
 		var tmplID string
@@ -1841,11 +1911,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if title == "" || body == "" {
 			continue
 		}
-		key := mcp.ProposalKeyArgs(task.ID, p)
+		key := mcp.ProposalKeyArgs(task.ID, rawP)
 		if existing, err := store.TaskWithTag(ctx, key); err != nil {
 			return fmt.Errorf("orchestrator: finding already-filed proposed task %q: %w", title, err)
 		} else if existing != nil {
-			if local, _ := p["id"].(string); local != "" {
+			if local, _ := rawP["id"].(string); local != "" {
 				if _, taken := filed[local]; !taken {
 					filed[local] = existing.ID
 				}
@@ -1915,21 +1985,25 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// here would otherwise file a proposal against a non-grain
 			// repo holding a grant its proposer was given by grain, and
 			// so unapproved (model.EscalatedCapabilities).
-			if cap == "" || grainci.IsGrant(cap) {
-				continue
-			}
-			found := false
-			for _, g := range grants {
-				if g.Capability == cap {
-					found = true
-					break
+			//
+			// Retired one-release aliases expand via CanonicalLegacyGrants
+			// and api grants are written as canonical api#* references,
+			// matching ui.Client.creationGrants so a relayed proposal stores
+			// the exact same grant set as its live twin.
+			for _, expanded := range expandProposalGrant(cap) {
+				found := false
+				for _, g := range grants {
+					if g.Capability == expanded {
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{
-					Capability: cap,
-					Via:        model.GrantByLabel,
-				})
+				if !found {
+					grants = append(grants, model.Grant{
+						Capability: expanded,
+						Via:        model.GrantByLabel,
+					})
+				}
 			}
 		}
 		customFields, droppedFields, err := proposedCustomFields(ctx, store, p)
@@ -2174,6 +2248,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if !model.NormalizeAdmission(askedAdmission).AtLeast(model.AdmissionBypass) {
 			permissionProposal.Admission = model.AdmissionStandard
 		}
+		// Where the proposal lands, spelled as this task's own write
+		// targets spell it wherever the two name the same default branch
+		// -- for the permission checks below only; the proposal is filed
+		// with the base the call gave it.
+		aligned := model.AlignDefaultBases(proposal, task, defaultBranch)
+		permissionProposal.Base, permissionProposal.Writes = aligned.Base, aligned.Writes
 		// admission above standard, keep_running, or a priority above this
 		// task's own: settings only a person may give a task
 		// (model.PersonOnlyProposalSettings), so filed as asked, for a
@@ -2310,7 +2390,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// the person deciding is told which ones they are. That holds
 		// for a session's approval as much as for AutoSubmits, for the
 		// reason escalated capabilities do.
-		ungranted := model.UngrantedWrites(proposal, task)
+		ungranted := model.UngrantedWrites(aligned, task)
 		if len(ungranted) > 0 {
 			proposal.Body += model.UngrantedWritesNote(task.ID, ungranted)
 		}
@@ -2334,6 +2414,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// (AutoSubmits knows nothing of keep_running or priority).
 		heldByRun, _ := p["hold_for_approval"].(bool)
 		hold := heldByRun || needsPersonWhy != ""
+		if heldByRun {
+			// The run asked for a person whatever its permission covers
+			// (model.HoldRequestedTag), which the agent approval rail
+			// reads; HeldForApprovalTag below says only whether that
+			// request changed the outcome.
+			proposal.Tags = append(proposal.Tags, model.HoldRequestedTag)
+		}
 		// A fixture on this task's own qualification scratch branch is
 		// within a permission of its own (model.ScratchFixture): this
 		// task may push that branch itself, so the fixture is queued, and
@@ -2377,10 +2464,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				// it can be told they are now the bound.
 				proposal.Body += model.AutoSubmitLimitNote(task.ID, limit, limits)
 			}
+		case proposal.ChangeTarget == nil && model.AutoSubmitRefusedOnLanding(permissionProposal, task):
+			// This task may queue its proposals, and this one asks for
+			// nothing that permission does not cover -- it only lands on
+			// a branch the permission does not reach. Nothing above says
+			// so, and a proposal left unapproved with no word on why
+			// reads as grain having forgotten it (task 3411's live walk).
+			proposal.Body += otherBranchQueueNote(task, proposal)
 		}
 		asked := proposedAutoMerge(p, task) &&
-			model.GrantsSubsetOf(proposal.Grants, task.Grants)
-		proposal.AutoMerge = asked && model.LandsWhereGranted(proposal, task)
+			model.GrantsSubsetOf(model.GrantsBeyondCIReadDefault(proposal), task.Grants)
+		proposal.AutoMerge = asked && model.LandsWhereGranted(aligned, task)
 		if scratch {
 			// Merging into the scratch branch is what the fixture is for,
 			// whatever this task's own auto-merge says about its default
@@ -2532,20 +2626,23 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 	seen := make(map[string]bool, len(ids))
 	grants := make([]model.Grant, 0, len(ids))
 	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] || grainci.IsGrant(id) {
-			continue
+		for _, expanded := range expandProposalGrant(id) {
+			if seen[expanded] {
+				continue
+			}
+			seen[expanded] = true
+			grants = append(grants, model.Grant{Capability: expanded, Via: model.GrantByDefault})
 		}
-		seen[id] = true
-		grants = append(grants, model.Grant{Capability: id, Via: model.GrantByDefault})
 	}
 	if target != nil {
-		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *target)
-		if err == nil && usesGrainCI {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
-		} else if err != nil && grainci.RepoUsesGrainCI(repoCfg, *target) {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
+		ciDefaults, err := store.RepoCIDefaults(ctx, *target)
+		if err != nil {
+			ciDefaults = model.RepoCIDefaults{GrainCI: grainci.RepoUsesGrainCI(repoCfg, *target)}
+			if !ciDefaults.GrainCI && cfg != nil {
+				ciDefaults = model.RepoCIDefaultsFor(false, cfg.CapabilityPolicy, *target)
+			}
 		}
+		grants = model.AdjustRepoCIGrants(grants, *target, ciDefaults)
 	}
 	return grants, nil
 }
@@ -2615,7 +2712,7 @@ func proposalSeeding(ctx context.Context, store *model.Store, target *model.Repo
 	}
 	seeding := &model.ProposalSeeding{Catalogue: catalogue, GrantContext: model.TaskGrantContext(proposal)}
 	if cfg != nil {
-		seeding.DeploymentDefaults = append([]string(nil), cfg.DefaultCapabilities...)
+		seeding.DeploymentDefaults = expandProposalGrantNames(cfg.DefaultCapabilities)
 	}
 	if target != nil {
 		repo := *target
@@ -2625,10 +2722,63 @@ func proposalSeeding(ctx context.Context, store *model.Store, target *model.Repo
 			return nil, err
 		}
 		if repoCfg != nil {
-			seeding.RepoDefaults = append([]string(nil), repoCfg.DefaultCapabilities...)
+			seeding.RepoDefaults = expandProposalGrantNames(repoCfg.DefaultCapabilities)
 		}
 	}
 	return seeding, nil
+}
+
+// expandProposalGrant expands retired one-release capability aliases via
+// model.CanonicalLegacyGrants, writes api and repository grants in either
+// spelling as their canonical references, and normalizes in-process capability
+// references to recorded form, matching ui.Client.normalizeCapabilityIDs.
+// grain-ci / grain#ci is omitted so the target repository's CI Mode decides it.
+func expandProposalGrant(cap string) []string {
+	cap = strings.TrimSpace(cap)
+	if cap == "" || grainci.IsGrant(cap) {
+		return nil
+	}
+	expanded := model.CanonicalLegacyGrants(cap)
+	out := make([]string, 0, len(expanded))
+	for _, part := range expanded {
+		part = strings.TrimSpace(part)
+		if part == "" || grainci.IsGrant(part) {
+			continue
+		}
+		// An api or repository grant in either spelling is written as its
+		// canonical reference (unified-grants slice 3), as
+		// model.NormalizeCapabilityNames writes it for the live call; one
+		// that does not parse is kept as given, for the filing checks to
+		// refuse as they would live.
+		if strings.HasPrefix(part, model.APIGrantPrefix) || model.IsAPIGrantRef(part) ||
+			strings.HasPrefix(part, model.RepoReadCapabilityPrefix) || strings.HasPrefix(part, model.RepoWriteCapabilityPrefix) {
+			if names, err := model.NormalizeCapabilityNames([]string{part}, nil); err == nil && len(names) == 1 {
+				part = names[0]
+			}
+		}
+		if model.IsCapabilityRef(part) && grainserver.IsInProcessGrant(part) {
+			if names, err := model.NormalizeCapabilityNames([]string{part}, grainserver.Lookup(nil)); err == nil && len(names) == 1 {
+				part = names[0]
+			}
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func expandProposalGrantNames(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		for _, expanded := range expandProposalGrant(id) {
+			if seen[expanded] {
+				continue
+			}
+			seen[expanded] = true
+			out = append(out, expanded)
+		}
+	}
+	return out
 }
 
 // newestFirst is model.Config.NewestFirst, read fresh from the store --
@@ -3101,6 +3251,39 @@ func otherBranchAutoMergeNote(task, proposal model.Task) string {
 		task.ID, landingBranch(task), landingBranch(proposal))
 }
 
+// otherBranchQueueNote is model.OtherBranchQueueNote, which
+// ui.Client.CreateTask appends to the identical proposal filed live.
+func otherBranchQueueNote(task, proposal model.Task) string {
+	return model.OtherBranchQueueNote(task, proposal)
+}
+
+// proposalDefaultBranches is relayProposedTasks' answer to which branch a
+// repository's default is (model.AlignDefaultBases), asked of client at
+// most once per repository and remembered for the batch. "" -- for a
+// repository the forge cannot answer for, or with no client at all --
+// leaves a base as written, so the permission checks still withhold.
+func proposalDefaultBranches(client github.Client) func(model.RepoRef) string {
+	if client == nil {
+		return nil
+	}
+	known := map[string]string{}
+	return func(repo model.RepoRef) string {
+		key := strings.ToLower(repo.String())
+		if def, ok := known[key]; ok {
+			return def
+		}
+		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		if err != nil {
+			log.Printf("orchestrator: reading %s's default branch to judge a proposal's base: %v "+
+				"-- comparing bases as written", repo, err)
+			def = ""
+		}
+		def = strings.TrimSpace(def)
+		known[key] = def
+		return def
+	}
+}
+
 // changeTargetAutoMergeNote is otherBranchAutoMergeNote for a proposal
 // with a change target: it would have inherited auto-merge, and has no
 // pull request for it to apply to.
@@ -3123,16 +3306,7 @@ func changeTargetAutoMergeNote(task, proposal model.Task) string {
 // names the note reads as though grain refused an inheritance between
 // two identical things.
 func landingBranch(task model.Task) string {
-	if task.Target == nil {
-		if task.Base != "" {
-			return "`" + task.Base + "`"
-		}
-		return "its repository's default branch"
-	}
-	if task.Base != "" {
-		return fmt.Sprintf("`%s` in `%s`", task.Base, task.Target)
-	}
-	return fmt.Sprintf("the default branch of `%s`", task.Target)
+	return model.LandingBranch(task)
 }
 
 // argStrings reads a tool argument that should have arrived as an array

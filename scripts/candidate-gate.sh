@@ -47,8 +47,15 @@
 #     The live-provider suites (CANDIDATE_GATE_ADVISORY: gcp-smoke and
 #     live-*, post-reset-e2e) are reported and never block. Every
 #     required suite found infra is reported as needing a re-run.
-#     --tasks-json and --now are accepted and ignored, for callers from
-#     before nightly.yml left LKG selection.
+#     The live real-model suites (CANDIDATE_GATE_LIVE: live-agent and
+#     live-frameworks) are also held to a freshness policy, which warns
+#     and never blocks: each one's newest verdict and newest pass on REF
+#     are printed, and a "WARNING live" line is printed when the newest
+#     verdict is not a pass, or there is no pass newer than
+#     CANDIDATE_GATE_LIVE_MAX_AGE_DAYS (3) before --now (an epoch or a
+#     date; default the clock) -- a suite that stopped running is how
+#     v3.5.0 shipped a schema Gemini refuses. --tasks-json is accepted
+#     and ignored, for callers from before nightly.yml left LKG selection.
 #
 #     Prints one line per commit it looked at and a last line
 #     "LKG <sha>", exiting 0; or "LKG none", exiting 1.
@@ -77,10 +84,15 @@
 #                 numeric id: grain's own forge connection) created
 #                 counts; one of the same name from any other app -- an
 #                 Actions workflow with checks: write, another installed
-#                 app -- is reported as IGNORED and never judged, and with
-#                 CHECK_QUALIFICATION_APP unset no check run is trusted at
-#                 all (exit 64). Only judged once Stage 1 passes; without
-#                 --checks-json it is PENDING;
+#                 app -- is reported as IGNORED and never judged. With
+#                 CHECK_QUALIFICATION_APP "none", set explicitly (a
+#                 deployment whose forge connection is no GitHub App, and
+#                 so posts no check run) Stage 2 is SKIPPED and no check
+#                 run is read at all: Stage 1 alone qualifies the RC.
+#                 With CHECK_QUALIFICATION_APP empty or unset no check run
+#                 is trusted at all (exit 64): an unconfigured gate never
+#                 passes. Otherwise only judged once Stage 1 passes;
+#                 without --checks-json it is PENDING;
 #       never     TAG, and the release it would become, are not in
 #                 RELEASE_NEVER_PROMOTE (scripts/release.conf).
 #     Every job (and the check run) is judged on its attempts in order:
@@ -116,6 +128,8 @@ set -euo pipefail
 
 CANDIDATE_GATE_REQUIRED="${CANDIDATE_GATE_REQUIRED-tests release}"
 CANDIDATE_GATE_ADVISORY="${CANDIDATE_GATE_ADVISORY-gcp-smoke live-* post-reset-e2e}"
+CANDIDATE_GATE_LIVE="${CANDIDATE_GATE_LIVE-live-agent live-frameworks}"
+CANDIDATE_GATE_LIVE_MAX_AGE_DAYS="${CANDIDATE_GATE_LIVE_MAX_AGE_DAYS-3}"
 # Stage 1's required nightly.yml jobs, each "id=name" (the job's key in
 # the workflow and the name GitHub reports it by): the playbook's Stage 1
 # table, as nightly.yml's own stage-1 job needs them.
@@ -131,6 +145,7 @@ tunnel-stress=reverse tunnel multiplexer stress
 ui-e2e-long=ui e2e, repeated
 installer-variants=installer trixie and hostmode
 vulns=govulncheck
+image-vulns=release image vulnerabilities
 cmd-grain-stress=pkg/cli stress under load
 upgrade-test=upgrade from previous versions}"
 # Jobs that carry no verdict of their own: nightly.yml's roll-up of the
@@ -140,6 +155,9 @@ CHECK_QUALIFICATION_CHECK="${CHECK_QUALIFICATION_CHECK-grain/release-qualificati
 # The GitHub App (slug or numeric id) whose CHECK_QUALIFICATION_CHECK is
 # trusted: grain's own forge connection, which posts it. Anything else
 # that can write check runs on the repository can post one by that name.
+# "none" -- only ever as an explicit setting, never a default -- skips
+# Stage 2: no check run is trusted, so none is read, and Stage 1 alone
+# qualifies the RC. Empty or unset trusts nothing and fails closed.
 CHECK_QUALIFICATION_APP="${CHECK_QUALIFICATION_APP-}"
 CHECK_QUALIFICATION_MAX_FLAKES="${CHECK_QUALIFICATION_MAX_FLAKES:-2}"
 CHECK_QUALIFICATION_INFRA_STALL="${CHECK_QUALIFICATION_INFRA_STALL:-3}"
@@ -204,13 +222,14 @@ listed() { # listed <word> <space-separated globs>
 # --- select-lkg -------------------------------------------------------------
 
 select_lkg() {
-  local runs="" floor="" ref="origin/main" max=200
+  local runs="" floor="" ref="origin/main" max=200 now=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --runs-json) runs="${2:-}"; shift 2 ;;
       --floor-sha) floor="${2:-}"; shift 2 ;;
       --ref) ref="${2:-}"; shift 2 ;;
-      --tasks-json | --now) shift 2 ;;
+      --now) now="${2:-}"; shift 2 ;;
+      --tasks-json) shift 2 ;;
       --max-commits) max="${2:-}"; shift 2 ;;
       *) usage ;;
     esac
@@ -309,11 +328,54 @@ select_lkg() {
     echo "  advisory $w.yml: $v at $c (does not block)."
   done <<< "$adv"
 
+  live_freshness "$head" "$now" "$table"
+
   if [ -z "$lkg" ]; then
     echo "LKG none"
     return 1
   fi
   echo "LKG $lkg"
+}
+
+# live_freshness <head> <now> <table>: select-lkg's live-suite policy
+# (CANDIDATE_GATE_LIVE). For each suite, its newest verdict and newest pass
+# among head's ancestors, and a WARNING line when the newest is not a pass
+# or the newest pass is older than CANDIDATE_GATE_LIVE_MAX_AGE_DAYS.
+live_freshness() {
+  local head="$1" now="$2" table="$3"
+  if [ -z "$now" ]; then
+    now="$(date -u +%s)"
+  elif ! [[ "$now" =~ ^[0-9]+$ ]]; then
+    now="$(date -u -d "$now" +%s)" || die "--now $2 is neither an epoch nor a date"
+  fi
+  local limit=$((CANDIDATE_GATE_LIVE_MAX_AGE_DAYS * 86400))
+  local suite c w v t full newest newest_t pass pass_t
+  for suite in $CANDIDATE_GATE_LIVE; do
+    newest="" newest_t=0 pass="" pass_t=0
+    while IFS=$'\t' read -r c w v t; do
+      [ "$w" = "$suite" ] || continue
+      full="$(git rev-parse --verify -q "$c^{commit}" 2>/dev/null || true)"
+      [ -n "$full" ] || continue
+      git merge-base --is-ancestor "$full" "$head" 2>/dev/null || continue
+      [ "$v" != pending ] || continue
+      if [ "$t" -gt "$newest_t" ]; then newest="$v at ${full:0:12}"; newest_t="$t"; fi
+      if [ "$v" = success ] && [ "$t" -gt "$pass_t" ]; then pass="${full:0:12}"; pass_t="$t"; fi
+    done <<< "$table"
+    if [ -z "$newest" ]; then
+      echo "  WARNING live $suite.yml: no verdict on any commit of this ref; the release has no live-model verdict (does not block)."
+      continue
+    fi
+    local age=$(( (now - pass_t) / 3600 ))
+    if [ -z "$pass" ]; then
+      echo "  WARNING live $suite.yml: newest is $newest and it has never passed here (does not block)."
+    elif [ "${newest%% *}" != success ]; then
+      echo "  WARNING live $suite.yml: newest is $newest; newest pass at $pass, ${age}h old (does not block)."
+    elif [ $((now - pass_t)) -gt "$limit" ]; then
+      echo "  WARNING live $suite.yml: newest pass at $pass is ${age}h old, past ${CANDIDATE_GATE_LIVE_MAX_AGE_DAYS}d -- is its schedule still firing? (does not block)."
+    else
+      echo "  live $suite.yml: passed at $pass, ${age}h old."
+    fi
+  done
 }
 
 # --- check-qualification ----------------------------------------------------
@@ -486,13 +548,16 @@ check_qualification() {
     done < <(jq -r '.[].id' <<< "$names")
   fi
 
-  # Stage 2: the agent suite's check run, once Stage 1 is clean.
-  if [ "${#failed[@]}" -gt 0 ] || [ "${#pending[@]}" -gt 0 ] || [ "${#infra[@]}" -gt 0 ]; then
+  # Stage 2: the agent suite's check run, once Stage 1 is clean -- unless
+  # no app is trusted to post it, when no check run is read at all.
+  if [ "$CHECK_QUALIFICATION_APP" = none ]; then
+    echo "SKIPPED $CHECK_QUALIFICATION_CHECK: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)"
+  elif [ "${#failed[@]}" -gt 0 ] || [ "${#pending[@]}" -gt 0 ] || [ "${#infra[@]}" -gt 0 ]; then
     echo "PENDING $CHECK_QUALIFICATION_CHECK: waits for Stage 1 (nightly.yml) to pass"
   elif [ -z "$checks" ]; then
     wait_for "$CHECK_QUALIFICATION_CHECK" "no check run listing was given"
   elif [ -z "$CHECK_QUALIFICATION_APP" ]; then
-    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none to qualify on Stage 1 alone"
   else
     local foreign
     foreign="$(jq -r --arg rc "$rc" --arg check "$CHECK_QUALIFICATION_CHECK" --arg app "$CHECK_QUALIFICATION_APP" "$JQ_CHECK_RUN"'

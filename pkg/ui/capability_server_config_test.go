@@ -56,6 +56,9 @@ type fakeProber struct {
 	// placedEntries, when non-nil, simulates CapabilityServerPlacedProber:
 	// nil slice for a key means registered-but-disconnected.
 	placedEntries map[string][]string
+	// agentsOnly names the placed hosts whose hello says they run agent
+	// CLIs only (CapabilityServerAgentsOnlyProber).
+	agentsOnly map[string]bool
 	// refuse makes the server's configure refuse every config with it;
 	// unreachable makes the probe fail before configure is reached.
 	refuse, unreachable string
@@ -111,6 +114,10 @@ func (f *fakeProber) HostCapabilityEntriesFor(_ context.Context, selector string
 		return nil, false, fmt.Errorf("hostd %s is not connected", selector)
 	}
 	return entries, true, nil
+}
+
+func (f *fakeProber) HostAgentsOnly(_ context.Context, selector string) bool {
+	return f.agentsOnly[selector]
 }
 
 func configTestServer(t *testing.T, p *fakeProber) (*httptest.Server, *ui.HTTPClient, *ui.Client, *secrets.Store) {
@@ -262,6 +269,53 @@ func TestRunHostIsCheckedAgainstTheHostdAllowlist(t *testing.T) {
 	// Back to the container is always allowed.
 	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: protocol.ServerConfig{Command: "grain"}}); err != nil {
 		t.Errorf("run in the container: %v", err)
+	}
+}
+
+// A server placed on an agents-only host (grain-agentd) is refused with
+// advice that can work there: that host runs agent CLIs only, so the
+// server needs a `grain host`, not an entry in /etc/grain/hostd.yaml.
+func TestPlacedCapabilityServerOnAnAgentsOnlyHostSaysItNeedsAGrainHost(t *testing.T) {
+	ctx := context.Background()
+	_, hc, client, _ := configTestServer(t, &fakeProber{
+		noHostd: true,
+		placedEntries: map[string][]string{
+			"host-d":   {},
+			"host-old": {},
+			"host-e":   {"other-cap"},
+		},
+		agentsOnly: map[string]bool{"host-d": true},
+	})
+	registerHostds(t, client.Store, model.Hostd{Name: "host-d"}, model.Hostd{Name: "host-old"}, model.Hostd{Name: "host-e"})
+
+	cfg := protocol.ServerConfig{Command: "walk-echo", Run: protocol.RunHostd, Hostd: "host-d"}
+	_, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg})
+	if err == nil {
+		t.Fatal("placing a run: host server on an agents-only host succeeded")
+	}
+	for _, want := range []string{"host-d runs agent CLIs only", "grain host", `"walk-echo"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "under capabilities: in") {
+		t.Errorf("refusal %q tells the operator to add an allowlist entry an agents-only host refuses", err)
+	}
+
+	// A host that offers no capabilities entries and does not say it is
+	// agents-only (an older grain-agentd) gets both pieces of advice.
+	cfg.Hostd = "host-old"
+	_, err = hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg})
+	if err == nil || !strings.Contains(err.Error(), "it offers no capabilities entries") ||
+		!strings.Contains(err.Error(), "if this host runs grain-agentd, it runs agent CLIs only") {
+		t.Errorf("refusal on a host offering nothing = %v", err)
+	}
+
+	// A full host offering other entries is told to add one, as before.
+	cfg.Hostd = "host-e"
+	_, err = hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg})
+	if err == nil || !strings.Contains(err.Error(), `add an entry "walk-echo" under capabilities:`) || strings.Contains(err.Error(), "grain-agentd") {
+		t.Errorf("refusal on a full host = %v", err)
 	}
 }
 
@@ -619,5 +673,146 @@ func TestCapabilityServerSaveGuardsProbeAndBuiltinSpoofing(t *testing.T) {
 	}
 	if len(p.probed) != 0 || len(p.resolved) != 0 {
 		t.Errorf("external mode still ran Probe: probed=%v resolved=%v", p.probed, p.resolved)
+	}
+}
+
+func TestGCPPermissionSetRefusalMapsToField(t *testing.T) {
+	p := &fakeProber{schema: gcpsetsSchemaForTest()}
+	ts, _, _, _ := configTestServer(t, p)
+
+	for _, tc := range []struct {
+		name      string
+		refuse    string
+		wantField string
+	}{
+		{
+			name:      "pool_max exclusive with token mode",
+			refuse:    `permission set "ar-writer": credential: token and pool_max are exclusive: in token mode grain creates one service account`,
+			wantField: "permission_sets[0].pool_max",
+		},
+		{
+			name:      "invalid resource_scope",
+			refuse:    `permission set "ar-writer": resource_scope "topics/x" must be buckets/<name> or repositories/<location>/<repo>`,
+			wantField: "permission_sets[0].resource_scope",
+		},
+		{
+			name:      "grants no roles",
+			refuse:    `permission set "ar-writer" grants no roles: add roles for grain to bind`,
+			wantField: "permission_sets[0].roles",
+		},
+		{
+			name:      "missing project",
+			refuse:    `permission set "ar-writer": "" is not a project id: project is required when service_account is omitted`,
+			wantField: "permission_sets[0].project",
+		},
+		{
+			name:      "service_account exclusive",
+			refuse:    `permission set "ar-writer": service_account "bad" is not a service account email`,
+			wantField: "permission_sets[0].service_account",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p.refuse = tc.refuse
+			body := map[string]any{
+				"id": configCap,
+				"config": map[string]any{
+					"command": "grain",
+					"config": map[string]any{
+						"permission_sets": []any{
+							map[string]any{"name": "ar-writer", "project": "my-project", "credential": "token", "roles": []any{"roles/artifactregistry.writer"}},
+						},
+					},
+				},
+			}
+			var refused struct {
+				Fields map[string]string `json:"fields"`
+			}
+			if code := postJSON(t, ts, "PUT", "/api/capability-servers", body, &refused); code != 400 {
+				t.Fatalf("status = %d, want 400", code)
+			}
+			if got := refused.Fields[tc.wantField]; got == "" {
+				t.Fatalf("fields = %v, want non-empty message under %q", refused.Fields, tc.wantField)
+			}
+		})
+	}
+}
+
+func gcpsetsSchemaForTest() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"permission_sets": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"required":             []any{"name"},
+					"properties": map[string]any{
+						"name":            map[string]any{"type": "string"},
+						"project":         map[string]any{"type": "string"},
+						"credential":      map[string]any{"type": "string", "enum": []any{"token", "key"}},
+						"roles":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"pool_max":        map[string]any{"type": "integer"},
+						"resource_scope":  map[string]any{"type": "string"},
+						"service_account": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	}
+}
+
+// A credential typed into an entry's env, headers, args or URL would be
+// stored in grain_config and exported with it, so the save is refused,
+// naming where the credential is and what to write instead, and nothing
+// is stored (docs/security/audits/2026-11-10-credential-exposure.md).
+func TestCapabilityServerSaveRefusesATypedInCredential(t *testing.T) {
+	_, hc, client, _ := configTestServer(t, &fakeProber{})
+	ctx := context.Background()
+	for name, cfg := range map[string]protocol.ServerConfig{
+		"env":    {Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "typed-in-token-value"}},
+		"args":   {Command: "grain", Args: []string{"capability", "cloud", "--key=sk-typedinkeytypedinkey0000"}},
+		"header": {ServerURL: "https://cap.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer typed-in-token-value"}},
+	} {
+		_, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: "typed-in-" + name, Config: cfg})
+		if err == nil || !strings.Contains(err.Error(), "$secret:<name>") {
+			t.Errorf("%s: SetCapabilityServer = %v, want a refusal pointing at $secret:<name>", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "typed-in-token-value") {
+			t.Errorf("%s: the refusal echoes the credential: %v", name, err)
+		}
+	}
+	stored, _ := client.Store.GetConfig(ctx)
+	row, _ := json.Marshal(stored)
+	if strings.Contains(string(row), "typed-in-token-value") {
+		t.Errorf("a refused save was stored: %s", row)
+	}
+	// An entry saved before the rule keeps its literal through an edit of
+	// something else, and is refused a new one.
+	const legacyID = "legacy-literal"
+	if err := client.Store.UpdateConfig(ctx, func(c *model.Config) error {
+		if c.MCPServers == nil {
+			c.MCPServers = map[string]protocol.ServerConfig{}
+		}
+		c.MCPServers[legacyID] = protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "legacy-token-value"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	carried := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "legacy-token-value", "REGION": "eu"}}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: legacyID, Config: carried}); err != nil && strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a stored literal carried forward was refused: %v", err)
+	}
+	carried.Env["API_TOKEN"] = "replaced-token-value"
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: legacyID, Config: carried}); err == nil || !strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a replaced literal was not refused: %v", err)
+	}
+
+	// A reference, with its scheme word, is still accepted.
+	ok := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "$secret:cap-token", "REGION": "eu"}}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: ok}); err != nil &&
+		strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a $secret: reference was refused as typed in: %v", err)
 	}
 }

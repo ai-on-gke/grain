@@ -58,7 +58,13 @@ func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 // can ask for: a pull request's, an ordinary push's, or an agent's
 // withheld workflow_dispatch/release run gets no token.
 func TestAPIGrantsAreGrantedToTrustedSchedulesAndReleasesOnly(t *testing.T) {
-	for _, id := range []string{model.ReleaseGateReadCapability, "api:release-gate-read", "api:ci:read"} {
+	for _, id := range []string{
+		model.ReleaseGateReadCapability,
+		"api:release-gate-read",
+		"api:ci:read",
+		model.APIRef(model.ReleaseGateReadCapability),
+		model.APIRef("ci:read"),
+	} {
 		t.Run(id, func(t *testing.T) { testTrustedOnly(t, id) })
 	}
 }
@@ -91,7 +97,7 @@ func testTrustedOnly(t *testing.T, id string) {
 		}
 		var granted bool
 		for _, r := range resolved {
-			if r.Grant.Capability == id && !r.Resolution.Refused {
+			if r.Grant.Capability == model.StoredGrantSpelling(id) && !r.Resolution.Refused {
 				granted = true
 			}
 		}
@@ -125,7 +131,7 @@ func testTrustedOnly(t *testing.T, id string) {
 		t.Fatal(err)
 	}
 	for _, r := range resolved {
-		if r.Grant.Capability == id && !r.Resolution.Refused {
+		if r.Grant.Capability == model.StoredGrantSpelling(id) && !r.Resolution.Refused {
 			t.Errorf("another repository's trusted schedule was not refused: %+v", resolved)
 		}
 	}
@@ -209,16 +215,27 @@ func TestADangerousAPIScopeIsRefusedInCI(t *testing.T) {
 	gate := ciapi.NewEndpoint()
 	gate.SetURL("http://192.0.2.1:9000")
 	reg := ciAPIRegistry(gate)
-	for _, id := range []string{"api:settings:write", "api:task-admin", "api:secrets:read", "api:deployment:restart"} {
+	for _, id := range []string{
+		"api:settings:write", "api:task-admin", "api:secrets:read", "api:deployment:restart",
+		model.APIRef("settings:write"), model.APIRef("task-admin"), model.APIRef("secrets:read"), model.APIRef("deployment:restart"),
+		model.APIRef("ci:read") + `={"bogus":1}`,
+	} {
 		cc, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, model.GrainSourceRepo(), "ci-job",
 			ci.EventRelease, false, []string{id})
 		if err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
+		found := false
 		for _, r := range resolved {
-			if r.Grant.Capability == id && !r.Resolution.Refused {
-				t.Errorf("%s was granted to a release job", id)
+			if r.Grant.Capability == model.StoredGrantSpelling(id) {
+				found = true
+				if !r.Resolution.Refused {
+					t.Errorf("%s was granted to a release job", id)
+				}
 			}
+		}
+		if !found {
+			t.Errorf("%s was silently skipped instead of resolved as refused", id)
 		}
 		if _, err := model.MaterializeGrants(context.Background(), reg, cc, resolved); err != nil {
 			t.Fatal(err)
@@ -243,18 +260,21 @@ func TestATasksAPIGrantIsNotTheCIProvider(t *testing.T) {
 	}
 }
 
-func TestTheDeploymentRegistersReleaseGateRead(t *testing.T) {
-	reg := model.NewCapabilityRegistry(CapabilityProviders(Config{}, nil, nil, nil, nil)...)
-	provider, ok := reg.Lookup(model.ReleaseGateReadCapability)
-	if !ok {
-		t.Fatalf("%s has no provider in the deployment's registry", model.ReleaseGateReadCapability)
-	}
-	if !provider.Spec().SupportsCI() {
-		t.Errorf("%s is not offered to CI", model.ReleaseGateReadCapability)
+func TestTheDeploymentServesReleaseGateReadToCIOnly(t *testing.T) {
+	// Slice 4 of design/design/unified-grants.design.md retired the static
+	// release-gate-read provider: the bare name and its api reference both
+	// resolve through ciapi.DynamicProvider, for a CI job only.
+	if got := CapabilityProviders(Config{}, nil, nil, nil, nil); len(got) != 0 {
+		t.Errorf("CapabilityProviders = %d providers, want none (release-gate-read is a CI alias, not a provider)", len(got))
 	}
 	full := newCapabilityRegistryWithStore(nil)
-	if p, ok := full.LookupFor("api:ci:read", true); !ok || !p.Spec().SupportsCI() {
-		t.Errorf("api:ci:read has no CI provider in the deployment's registry")
+	for _, name := range []string{model.ReleaseGateReadCapability, model.APIRef(model.ReleaseGateReadCapability), "api:ci:read"} {
+		if p, ok := full.LookupFor(name, true); !ok || !p.Spec().SupportsCI() {
+			t.Errorf("%s has no CI provider in the deployment's registry", name)
+		}
+	}
+	if _, ok := full.Lookup(model.ReleaseGateReadCapability); ok {
+		t.Errorf("%s resolves outside CI; it is a CI job's alias only", model.ReleaseGateReadCapability)
 	}
 }
 
@@ -404,5 +424,115 @@ func TestACIJobsCapabilityContextCarriesItsDeadline(t *testing.T) {
 	}
 	if !cc.Deadline.IsZero() {
 		t.Errorf("Deadline = %v for a job with no deadline, want none", cc.Deadline)
+	}
+}
+
+func TestCheckCIJobRepoAccessPolicyEnforcesPolicyOnCIAPIGrants(t *testing.T) {
+	pol := model.CapabilityPolicy{
+		Rules: []model.CapabilityPolicyRule{
+			{Capability: model.APIRef("ci:read"), Deny: true},
+			{Capability: model.APIRef(model.ReleaseGateReadCapability), Deny: true},
+		},
+	}
+	for _, capID := range []string{"api:ci:read", model.APIRef("ci:read"), model.ReleaseGateReadCapability} {
+		if err := CheckCIJobRepoAccessPolicy(pol, nil, ci.SandboxRequest{
+			Repo: "ai-on-gke/grain", Event: ci.EventRelease, Capabilities: []string{capID},
+		}); err == nil {
+			t.Errorf("release job with %q admitted despite CapabilityPolicy deny rule", capID)
+		}
+		// On pull_request, ciapi is withheld by its event gate and must not fail PR runs.
+		if err := CheckCIJobRepoAccessPolicy(pol, nil, ci.SandboxRequest{
+			Repo: "ai-on-gke/grain", Event: ci.EventPullRequest, Untrusted: true, Capabilities: []string{capID},
+		}); err != nil {
+			t.Errorf("pull_request job with withheld %q failed policy check: %v", capID, err)
+		}
+	}
+	if refs := ciCapabilityRefs([]string{model.APIRef("ci:read")}, ci.EventRelease, false, false); len(refs) != 0 {
+		t.Errorf("ciCapabilityRefs included ciapi ref %+v in protocol pass grants", refs)
+	}
+}
+
+// grain_config.ci_api_repos offers a CI job's api grants to the
+// repositories it lists, beside grain's own: a listed repository's
+// trusted job is honoured, an unlisted one's is still refused, and only
+// on the events that were always trusted.
+func TestCIAPIReposOffersTheAPIToTheReposItLists(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	listed := model.RepoRef{Host: "git.example.com", Owner: "acme", Name: "widgets"}
+	unlisted := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	ids := []string{"api:tasks:read", "api:tasks:from-template"}
+	// newCapabilityRegistryWithStore resolves into the process's CIAPI,
+	// which refuses every job while it is not served.
+	was := CIAPI.URL()
+	CIAPI.SetURL("http://192.0.2.1:9000")
+	t.Cleanup(func() { CIAPI.SetURL(was) })
+
+	granted := func(t *testing.T, repo model.RepoRef, event ci.Event, trusted bool) bool {
+		t.Helper()
+		_, resolved, err := ResolveCICapabilities(ctx, newCapabilityRegistryWithStore(store), nil, repo, "ci-job", event, trusted, ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, r := range resolved {
+			if !r.Resolution.Refused {
+				n++
+			} else {
+				t.Logf("%s: %+v", repo, r.Resolution)
+			}
+		}
+		return n == len(ids)
+	}
+
+	if granted(t, listed, ci.EventSchedule, true) {
+		t.Errorf("%s's trusted schedule was honoured before ci_api_repos listed it", listed)
+	}
+	if !granted(t, model.GrainSourceRepo(), ci.EventSchedule, true) {
+		t.Errorf("grain's own trusted schedule was refused with ci_api_repos empty")
+	}
+
+	if err := store.PutConfig(ctx, model.Config{CIAPIRepos: []string{"git.example.com/acme/widgets", "not a repo"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Read per registry build, so this is the next job after a reload.
+	for _, tc := range []struct {
+		repo    model.RepoRef
+		event   ci.Event
+		trusted bool
+		want    bool
+	}{
+		{listed, ci.EventSchedule, true, true},
+		{listed, ci.EventManual, false, true},
+		{listed, ci.EventRelease, false, true},
+		{listed, ci.EventSchedule, false, false},
+		{listed, ci.EventPush, false, false},
+		{listed, ci.EventPullRequest, false, false},
+		{unlisted, ci.EventSchedule, true, false},
+		{unlisted, ci.EventManual, false, false},
+		{model.GrainSourceRepo(), ci.EventSchedule, true, true},
+	} {
+		if got := granted(t, tc.repo, tc.event, tc.trusted); got != tc.want {
+			t.Errorf("%s %s (trusted schedule %v): granted %v, want %v", tc.repo, tc.event, tc.trusted, got, tc.want)
+		}
+	}
+
+	// The CI scope allowlist still applies to a listed repository.
+	_, resolved, err := ResolveCICapabilities(ctx, newCapabilityRegistryWithStore(store), nil, listed, "ci-job", ci.EventManual, false, []string{"api:operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range resolved {
+		if !r.Resolution.Refused {
+			t.Errorf("a listed repository's job was granted %s: %+v", r.Grant.Capability, r)
+		}
 	}
 }

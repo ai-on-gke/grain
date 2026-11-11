@@ -263,4 +263,44 @@ describe("SessionsPage", () => {
       expect(onOpen).not.toHaveBeenCalled();
     });
   });
+
+  describe("loadError", () => {
+    it("shows a load failure with Retry instead of claiming no sessions exist when sessions failed to load", async () => {
+      const onRetry = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <SessionsPage
+          sessions={[]}
+          loadError="console session manager is still starting"
+          onRetry={onRetry}
+          onNewSession={() => {}}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          "The sessions could not be loaded (console session manager is still starting).",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("No interactive sessions yet.")).toBeNull();
+      expect(document.querySelector(".list-count")).toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Retry" }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps already-loaded sessions on screen when a later refresh fails", () => {
+      render(
+        <SessionsPage
+          sessions={[{ id: "director", title: "Director" }]}
+          loadError="503 Service Unavailable"
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "Open session Director" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/The sessions could not be loaded/)).toBeNull();
+    });
+  });
 });

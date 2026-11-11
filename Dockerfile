@@ -136,20 +136,29 @@ ARG GO_IMAGE=golang
 # both versions. Dockerfile.build pins the same value, and
 # TestEveryBaseImageIsPinnedByDigest keeps the two equal.
 ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
-ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # The docker CLI is copied out of this image rather than apt-installed:
 # Debian's own `docker.io` package pulls in the whole daemon --
 # containerd, runc, iptables, a systemd unit -- to get one client binary
-# that only ever talks to a socket mounted from the host.
-ARG DOCKER_CLI_IMAGE=docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349fd857dd85035f98c2c9acbdd4d
+# that only ever talks to a socket mounted from the host. The 29 CLI
+# negotiates down to an older engine's API (it still drives Engine 24),
+# and the hosts grain drives run a current one anyway: docker-ce from
+# pkg/hostinit, or the CI runner's own engine under tests/container and
+# tests/installer.
+ARG DOCKER_CLI_IMAGE=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a
 # distroless base with nothing else in it), and this pin is the whole of
-# what decides which bytes it is. The version is the one
-# scripts/release-images.sh signs with (its COSIGN_VERSION default); the
-# two need not move together, since a signature from one cosign verifies
-# under another, but a bump of one is the moment to look at the other.
-ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31
+# what decides which bytes it is. This cosign only ever verifies, so it
+# is a v3 release while scripts/release-images.sh still signs with v2
+# (its COSIGN_VERSION default): v3 verifies the legacy `.sig`
+# signatures v2 writes, with the same flags and the same JSON on stdout
+# the Kubernetes upgrade path reads its digest from. The signer has to
+# keep writing that legacy format for as long as images carrying the
+# old v2.4.1 verifier are in the field -- v2.4.1 cannot find a v3
+# new-format bundle -- so a bump of one is the moment to look at the
+# other, but they need not move together.
+ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 
@@ -167,14 +176,14 @@ ENV GOTOOLCHAIN=local
 # same reason Dockerfile.build does -- and, as there, Debian 12's own
 # nodejs/npm are recent enough for the pinned Vite version, with no
 # NodeSource repo to add.
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates libcap2-bin \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY Dockerfile .grain-ca.cr[t] /tmp/
 RUN if [ -f /tmp/.grain-ca.crt ]; then \
 		cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt \
 		&& update-ca-certificates; \
-	fi && rm -f /tmp/.grain-ca.crt
+	fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /src
@@ -233,7 +242,8 @@ ARG RELEASE=
 # grain, unless a build with a main of its own says otherwise (the
 # Makefile's MAIN_grain).
 ARG MAIN_GRAIN=./cmd/grain
-RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_IMAGE=${K8S_SANDBOX_IMAGE} GRAIN_IMAGE_REF=${GRAIN_IMAGE_REF} RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN}
+RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_IMAGE=${K8S_SANDBOX_IMAGE} GRAIN_IMAGE_REF=${GRAIN_IMAGE_REF} RELEASE=${RELEASE} MAIN_grain=${MAIN_GRAIN} \
+	&& setcap cap_net_bind_service=+ep /src/bin/grain
 
 # granule only -- not `granule` or `granule-mem-agent`, which run inside
 # each sandbox VM's own container (the image
@@ -251,8 +261,8 @@ RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_I
 # over it. Without this, a checkout the stage's git cannot read simply
 # moves the failed build four lines down.
 RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/granule github.com/gke-labs/granule/cmd/granule \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/github-webhook ./cmd/github-webhook \
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/granule github.com/gke-labs/granule/cmd/granule \
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/github-webhook ./cmd/github-webhook \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/grain-sandbox ./cmd/grain-sandbox
 
 # kubectl, for a deployment running -k8s-sandboxes: pkg/k8s creates,
@@ -275,9 +285,9 @@ RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
 # `curl: (6) Could not resolve host: dl.k8s.io`, a DNS blip on a step
 # that had passed in about a second on the commit before. --retry alone
 # does not count a failed lookup as transient, hence --retry-all-errors.
-ARG KUBECTL_VERSION=v1.37.0
-ARG KUBECTL_SHA256_AMD64=6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
-ARG KUBECTL_SHA256_ARM64=922df28df248cc00a9e025f947704f1d1482de64ece54cfe57e61f19eaf1eef3
+ARG KUBECTL_VERSION=v1.37.2
+ARG KUBECTL_SHA256_AMD64=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+ARG KUBECTL_SHA256_ARM64=fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
 RUN set -eu; \
 	arch="$(dpkg --print-architecture)"; \
 	case "$arch" in \
@@ -285,7 +295,7 @@ RUN set -eu; \
 		arm64) sha="${KUBECTL_SHA256_ARM64}" ;; \
 		*) echo "no kubectl checksum pinned for $arch -- add one above" >&2; exit 1 ;; \
 	esac; \
-	curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+	curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 		-o /out/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl"; \
 	echo "${sha}  /out/kubectl" | sha256sum -c -; \
 	chmod 0755 /out/kubectl
@@ -355,9 +365,12 @@ LABEL org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
 # takes only the binary out of this image, so none of it reaches the host.
 ENV GRAIN_IN_CONTAINER=1
 
-# libcap2-bin is installed, used, and removed in this one layer: setcap
-# below is the only thing that needs it, and leaving it in the image
-# would hand a task's own `bash -c` a tool for handing out capabilities.
+# libcap2-bin is installed, used on /usr/sbin/nft, and purged in this one
+# layer: leaving it in the image would hand a task's own `bash -c` a tool
+# for handing out capabilities. /usr/local/bin/grain gets its
+# CAP_NET_BIND_SERVICE file capability in the build stage before COPY so
+# BuildKit carries the extended attribute in that single COPY layer rather
+# than copying up the whole ~75MB binary a second time here.
 #
 # systemd is here for /bin/journalctl and nothing else -- see this file's
 # header. --no-install-recommends keeps it to the binaries and their
@@ -370,34 +383,80 @@ ENV GRAIN_IN_CONTAINER=1
 # Debian 12's default PostgreSQL 15: scripts/setup.sh provisions a
 # `postgres:16-bookworm` local server by default, and `pg_dump` refuses
 # to dump a server whose major version is newer than its own.
+# `create_main_cluster = false` prevents postgresql-common's postinst
+# from initializing an unused 38MB cluster at /var/lib/postgresql/16/main
+# (embedded clusters run `initdb` against `<data-dir>/postgres`).
 RUN set -eu; \
+	printf '%s\n' \
+		'path-exclude /usr/share/i18n/locales/*' \
+		'path-exclude /usr/share/i18n/charmaps/*' \
+		> /etc/dpkg/dpkg.cfg.d/grain-slim; \
 	apt-get update -o Acquire::Retries=3 \
 	&& apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
 		bash \
 		ca-certificates \
 		curl \
 		git \
+		libcap2-bin \
 		nftables \
 		openssh-client \
 		postgresql-common \
 		procps \
 		systemd \
 		tini; \
+	setcap cap_net_admin=+ep /usr/sbin/nft; \
+	apt-get purge -y --auto-remove libcap2-bin; \
 	test -f /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
+	mkdir -p /etc/postgresql-common/createcluster.d; \
+	echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.d/no-main-cluster.conf; \
 	echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
 		> /etc/apt/sources.list.d/pgdg.list; \
 	apt-get update -o Acquire::Retries=3 \
 	&& apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
 		postgresql-16 \
-		postgresql-client-16 \
-		postgresql-contrib-16; \
+		postgresql-client-16; \
 	rm -f /etc/apt/sources.list.d/pgdg.list; \
-	rm -rf /var/lib/apt/lists/*; \
+	rm -rf /var/lib/apt/lists/* /var/cache/debconf/*-old /var/log/apt/* /var/log/dpkg.log /var/log/alternatives.log; \
 	(useradd --system --uid 1000 --user-group --create-home --shell /bin/bash grain || true); \
 	chmod 0666 /etc/passwd /etc/group
 
 ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
 
+# Three of this daemon's listeners want a privileged port -- which an
+# unprivileged process cannot bind. The UI/API binds -ui-addr, and
+# scripts/setup.sh's own default for that is port 80; the package cache's
+# DNS interception binds 53, and the listeners its answers redirect a
+# sandbox's fetch to bind 443 and 80 of the address sandboxes reach this
+# host at (pkg/cli/packagecache.go).
+#
+# The unit setup.sh writes runs this container as the host's own
+# unprivileged `grain` account (never root), so systemd's
+# AmbientCapabilities, which is how the pre-container unit granted this,
+# has no equivalent here: a non-root process in a container gets no
+# capability from --cap-add alone. A file capability (set on /src/bin/grain
+# in the build stage before COPY below) does what is needed instead -- with
+# CAP_NET_BIND_SERVICE in the container's bounding set (the unit passes
+# --cap-add=NET_BIND_SERVICE, unconditionally now that it is not only the
+# UI's port at stake) this binary, and only this binary, gains it; every
+# other process in the container, a task's `bash -c` included, gets nothing.
+#
+# /usr/sbin/nft got CAP_NET_ADMIN in the apt layer above the same way, for
+# the host nftables chain that keeps a granule NetworkNone sandbox off the
+# network from outside its VM (pkg/orchestrator/granule_firewall.go). The
+# daemon fails such a sandbox's Acquire when it cannot install that chain,
+# and this image has no sudo for runNFT's fallback, so without this
+# NetworkNone cannot run on a container deployment at all. setup.sh adds
+# NET_ADMIN to the bounding set only when granule is on (docker_run_args);
+# without it the capability is never raised and nft is an ordinary binary.
+#
+# Unlike the grain binary's grant, this one is not only the daemon's:
+# the container runs --network host, so any process in it that runs nft
+# can change the host's firewall, a host-directory sandbox's own commands
+# included. That was weighed and accepted (grain/task-1364): every
+# deployment that gets NET_ADMIN here also has the host's docker socket
+# mounted in, which is already root-equivalent on the host for those same
+# processes. The guest VMs get nothing from it -- they run in their own
+# containers and network namespaces.
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /src/bin/grain /usr/local/bin/grain
 COPY --from=build /out/granule /usr/local/bin/granule
@@ -412,47 +471,6 @@ COPY --from=build /out/kubectl /usr/local/bin/kubectl
 COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
 # pkg/cli/daemon.go's defaultSourceDir -- keep the two in step.
 COPY --from=build /src-export /usr/local/share/grain/src
-
-# Three of this daemon's listeners want a privileged port -- which an
-# unprivileged process cannot bind. The UI/API binds -ui-addr, and
-# scripts/setup.sh's own default for that is port 80; the package cache's
-# DNS interception binds 53, and the listeners its answers redirect a
-# sandbox's fetch to bind 443 and 80 of the address sandboxes reach this
-# host at (pkg/cli/packagecache.go).
-#
-# The unit setup.sh writes runs this container as the host's own
-# unprivileged `grain` account (never root), so systemd's
-# AmbientCapabilities, which is how the pre-container unit granted this,
-# has no equivalent here: a non-root process in a container gets no
-# capability from --cap-add alone. A file capability does exactly what is
-# needed instead -- with CAP_NET_BIND_SERVICE in the container's bounding
-# set (the unit passes --cap-add=NET_BIND_SERVICE, unconditionally now
-# that it is not only the UI's port at stake) this binary, and only this
-# binary, gains it; every other process in the container, a task's
-# `bash -c` included, gets nothing.
-#
-# /usr/sbin/nft gets CAP_NET_ADMIN the same way, for the host nftables
-# chain that keeps a granule NetworkNone sandbox off the network from
-# outside its VM (pkg/orchestrator/granule_firewall.go). The daemon fails
-# such a sandbox's Acquire when it cannot install that chain, and this
-# image has no sudo for runNFT's fallback, so without this NetworkNone
-# cannot run on a container deployment at all. setup.sh adds NET_ADMIN to
-# the bounding set only when granule is on (docker_run_args); without it
-# the capability is never raised and nft is an ordinary binary.
-#
-# Unlike the grain binary's grant, this one is not only the daemon's:
-# the container runs --network host, so any process in it that runs nft
-# can change the host's firewall, a host-directory sandbox's own commands
-# included. That was weighed and accepted (grain/task-1364): every
-# deployment that gets NET_ADMIN here also has the host's docker socket
-# mounted in, which is already root-equivalent on the host for those same
-# processes. The guest VMs get nothing from it -- they run in their own
-# containers and network namespaces.
-RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
-	&& setcap cap_net_bind_service=+ep /usr/local/bin/grain \
-	&& setcap cap_net_admin=+ep /usr/sbin/nft \
-	&& apt-get purge -y libcap2-bin && apt-get autoremove -y \
-	&& rm -rf /var/lib/apt/lists/*
 
 # The Claude Code CLI, from the pinned release's own binary with its
 # digest checked, rather than through https://claude.ai/install.sh. That
@@ -486,8 +504,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
 # image build succeeding beside it), which is a flake rather than a
 # network that cannot reach it. --retry-all-errors because a reset
 # mid-handshake is not one of the transient failures --retry alone
-# covers. A network that genuinely cannot reach downloads.claude.ai still
-# fails, three attempts later, exactly as loudly.
+# covers; no --retry-delay because setting a fixed delay disables curl's
+# exponential backoff (1s..128s) and exhausts three retries in 6 seconds
+# during a multi-minute GitHub or CDN 504 brownout. A network that
+# genuinely cannot reach downloads.claude.ai still fails after backoff,
+# exactly as loudly.
 #
 # INSTALL_CLAUDE_CLI=0 opts out for a build on a network that cannot
 # reach downloads.claude.ai at all; the resulting image runs everything
@@ -500,9 +521,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
 # the default PATH so the daemon's own bare exec.LookPath("claude")
 # finds it with nothing to configure.
 ARG INSTALL_CLAUDE_CLI=1
-ARG CLAUDE_CLI_VERSION=2.1.316
-ARG CLAUDE_CLI_SHA256_AMD64=fd13c70000fec3f2116dfbcbb6121210b4a29328bf0e46210a59dd594a67d824
-ARG CLAUDE_CLI_SHA256_ARM64=55cdb8e162d190432696ea54010e0fca2e18d06fa7a7127fd563b9ffd4f22624
+ARG CLAUDE_CLI_VERSION=2.1.319
+ARG CLAUDE_CLI_SHA256_AMD64=dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed
+ARG CLAUDE_CLI_SHA256_ARM64=a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f
 RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
 		set -eu; \
 		mkdir -p /opt/claude; \
@@ -512,7 +533,7 @@ RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
 			aarch64|arm64) platform=linux-arm64; sha256="$CLAUDE_CLI_SHA256_ARM64" ;; \
 			*) echo "unsupported architecture for the Claude CLI: $arch" >&2; exit 1 ;; \
 		esac; \
-		curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors \
+		curl -4 -fsSL --max-time 300 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 			"https://downloads.claude.ai/claude-code-releases/${CLAUDE_CLI_VERSION}/${platform}/claude" \
 			-o /tmp/claude; \
 		echo "$sha256  /tmp/claude" | sha256sum -c -; \
@@ -560,10 +581,10 @@ RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
 # measured not to work.
 ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 ARG INSTALL_AGY_CLI=1
-ARG AGY_CLI_VERSION=1.4.12
-ARG AGY_CLI_BUILD=4768735748292608
-ARG AGY_CLI_SHA256_AMD64=3368d1923fc869f21ec8fce83252a8c96c89283aac9393958ac91fbf7a3949e4
-ARG AGY_CLI_SHA256_ARM64=30dd61ebe1f0a8829057ea2de29dad08c710dd972ce4c02949f51e632135a86b
+ARG AGY_CLI_VERSION=1.5.3
+ARG AGY_CLI_BUILD=6604829099950080
+ARG AGY_CLI_SHA256_AMD64=1b4850599cce73a17f94ffb422df3bf9531531b77dbddc40c1a435e0c2c16807
+ARG AGY_CLI_SHA256_ARM64=2d50060c7b1327995e5c81ec58829c91c2564ebb9fec165d3f9f1325ec188675
 RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
 		set -eu; \
 		mkdir -p /opt/antigravity; \
@@ -573,7 +594,7 @@ RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
 			aarch64|arm64) platform=linux-arm; archive=cli_linux_arm64.tar.gz; sha256="$AGY_CLI_SHA256_ARM64" ;; \
 			*) echo "unsupported architecture for the Antigravity CLI: $arch" >&2; exit 1 ;; \
 		esac; \
-		curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+		curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 			"https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_CLI_VERSION}-${AGY_CLI_BUILD}/${platform}/${archive}" \
 			-o /tmp/agy.tar.gz; \
 		echo "$sha256  /tmp/agy.tar.gz" | sha256sum -c -; \
@@ -618,40 +639,107 @@ RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
 # against their digests before anything in them is unpacked, for both
 # architectures, the way agy's is above. The values are the sha256
 # digests GitHub's release API reports for each asset of
-# CODEX_CLI_VERSION; bump them with the version.
+# CODEX_CLI_VERSION; bump them with the version. When GitHub's web
+# /releases/download/... redirect returns HTTP 504 on large multi-asset
+# releases, each archive falls back to the GitHub Releases REST API
+# (api.github.com/repos/openai/codex/releases/tags/${CODEX_CLI_VERSION}
+# -> /releases/assets/<id> with Accept: application/octet-stream, which
+# redirects straight to release-assets.githubusercontent.com) and checks
+# the same release digest; if GitHub Releases and its API are both
+# unreachable (or in a sandbox network that reaches registry.npmjs.org
+# through the package cache), the build falls back to the immutable
+# @openai/codex@<CODEX_CLI_NPM_VERSION>-linux-{x64,arm64} tarball on
+# registry.npmjs.org, verified against CODEX_CLI_NPM_SHA256_* before
+# unpacking the static musl binaries (no node runtime needed).
 ARG INSTALL_CODEX_CLI=1
-ARG CODEX_CLI_VERSION=rust-v0.166.0
-ARG CODEX_CLI_SHA256_AMD64=a0bf572d2f93f056c6712a6da348e96078dc84f3885fd7be67807ef389cb3978
-ARG CODEX_CLI_SHA256_ARM64=94eb707605ec2646b2e05b7edf7c4e7b3ccf02b16237c34ae9beb8cfb7f810a9
-ARG CODEX_CODE_MODE_HOST_SHA256_AMD64=7588334fd47bc4003d970b70dfd4d1e4578491b1e9baa72976a4c2d7e97590da
-ARG CODEX_CODE_MODE_HOST_SHA256_ARM64=ac98d1f878e353a16cba711fd47bfef2f6c814109bdd819ee2b6b6d6a19701e7
+ARG CODEX_CLI_VERSION=rust-v0.167.0
+ARG CODEX_CLI_SHA256_AMD64=9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a
+ARG CODEX_CLI_SHA256_ARM64=843489acb4d4b1079745c36b03c5963b887b83155af208fd53584e33ee8eb281
+ARG CODEX_CODE_MODE_HOST_SHA256_AMD64=b5074d5dd64643b2c073927e494a588eff31c1f5a27f12c1e2c45f9a6cf07dd4
+ARG CODEX_CODE_MODE_HOST_SHA256_ARM64=6e99948fa20ca816a01f222a56afa261b321e00cbed611d76bb92c765fd11ec6
+ARG CODEX_CLI_NPM_VERSION=0.167.0
+ARG CODEX_CLI_NPM_SHA256_AMD64=2dc9aa871abb513c3539d20d025f701faf1974c46ee906bda3a1e1f5026d4434
+ARG CODEX_CLI_NPM_SHA256_ARM64=e24d7b6f0af5695a36c04692c3a79672bdadebcac7c44005259cb3cad36ac40e
 RUN if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
 		set -eu; \
 		mkdir -p /opt/codex; \
 		arch="$(uname -m)"; \
 		case "$arch" in \
-			x86_64|amd64) target=x86_64-unknown-linux-musl; sha256="$CODEX_CLI_SHA256_AMD64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_AMD64" ;; \
-			aarch64|arm64) target=aarch64-unknown-linux-musl; sha256="$CODEX_CLI_SHA256_ARM64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_ARM64" ;; \
+			x86_64|amd64) target=x86_64-unknown-linux-musl; npm_arch=x64; sha256="$CODEX_CLI_SHA256_AMD64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_AMD64"; npm_sha256="$CODEX_CLI_NPM_SHA256_AMD64" ;; \
+			aarch64|arm64) target=aarch64-unknown-linux-musl; npm_arch=arm64; sha256="$CODEX_CLI_SHA256_ARM64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_ARM64"; npm_sha256="$CODEX_CLI_NPM_SHA256_ARM64" ;; \
 			*) echo "unsupported architecture for the codex CLI: $arch" >&2; exit 1 ;; \
 		esac; \
-		curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
-			"https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-${target}.tar.gz" \
-			-o /tmp/codex.tar.gz; \
-		echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -; \
-		tar -xzf /tmp/codex.tar.gz -C /opt/codex; \
-		rm -f /tmp/codex.tar.gz; \
-		codex="$(find /opt/codex -type f -name 'codex*' -perm -u+x | head -n1)"; \
-		test -n "$codex"; \
-		ln -sf "$codex" /usr/local/bin/codex; \
-		curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
-			"https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-code-mode-host-${target}.tar.gz" \
-			-o /tmp/codex-code-mode-host.tar.gz; \
-		echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -; \
-		tar -xzf /tmp/codex-code-mode-host.tar.gz -C /opt/codex; \
-		rm -f /tmp/codex-code-mode-host.tar.gz; \
+		fetch_codex_asset() { \
+			asset="$1"; out="$2"; \
+			if curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+				"https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/${asset}" \
+				-o "$out"; then \
+				return 0; \
+			fi; \
+			rm -f "$out"; \
+			echo "GitHub Releases download failed for ${asset}; falling back to GitHub Releases API" >&2; \
+			if [ ! -s /tmp/codex-release.json ]; then \
+				curl -4 -fsSL --max-time 60 --retry 3 --retry-max-time 90 --retry-connrefused --retry-all-errors \
+					-H "Accept: application/vnd.github+json" \
+					"https://api.github.com/repos/openai/codex/releases/tags/${CODEX_CLI_VERSION}" \
+					-o /tmp/codex-release.json || { rm -f /tmp/codex-release.json; return 1; }; \
+			fi; \
+			asset_url=$(grep -oE '"(\\.|[^"\\])*"|[{}]|[:,]' /tmp/codex-release.json | awk -v want="$asset" ' \
+				$0 == "{" { d++; if (d == 2) { name = ""; url = "" }; key = ""; prev = ""; next } \
+				$0 == "}" { \
+					if (d == 2 && name == "\042" want "\042" && url ~ /^\042https:\/\/api\.github\.com\/repos\/openai\/codex\/releases\/assets\/[0-9]+\042$/) { \
+						print substr(url, 2, length(url) - 2); exit \
+					} \
+					d--; key = ""; prev = ""; next \
+				} \
+				$0 == "," { key = ""; prev = ""; next } \
+				d == 2 && $0 == ":" { key = prev; prev = ""; next } \
+				d == 2 { \
+					if (key == "\042name\042") name = $0; \
+					else if (key == "\042url\042") url = $0; \
+					key = ""; prev = $0 \
+				} \
+			' || true); \
+			if [ -z "$asset_url" ]; then \
+				echo "GitHub Releases API metadata for ${CODEX_CLI_VERSION} has no asset URL for ${asset}" >&2; \
+				return 1; \
+			fi; \
+			curl -4 -fsSL --max-time 180 --retry 5 --retry-max-time 300 --retry-connrefused --retry-all-errors \
+				-H "Accept: application/octet-stream" \
+				"$asset_url" \
+				-o "$out" || { rm -f "$out"; return 1; }; \
+		}; \
+		if fetch_codex_asset "codex-${target}.tar.gz" /tmp/codex.tar.gz && \
+			fetch_codex_asset "codex-code-mode-host-${target}.tar.gz" /tmp/codex-code-mode-host.tar.gz; then \
+			rm -f /tmp/codex-release.json; \
+			echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -; \
+			tar -xzf /tmp/codex.tar.gz -C /opt/codex; \
+			rm -f /tmp/codex.tar.gz; \
+			codex="$(find /opt/codex -type f -name 'codex*' ! -name 'codex-code-mode-host*' -perm -u+x | head -n1)"; \
+			test -n "$codex"; \
+			ln -sf "$codex" /usr/local/bin/codex; \
+			echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -; \
+			tar -xzf /tmp/codex-code-mode-host.tar.gz -C /opt/codex; \
+			rm -f /tmp/codex-code-mode-host.tar.gz; \
+		else \
+			rm -f /tmp/codex.tar.gz /tmp/codex-code-mode-host.tar.gz /tmp/codex-release.json; \
+			echo "GitHub Releases download and API fallback failed for ${CODEX_CLI_VERSION}; falling back to digest-pinned @openai/codex npm archive" >&2; \
+			curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
+				"https://registry.npmjs.org/@openai/codex/-/codex-${CODEX_CLI_NPM_VERSION}-linux-${npm_arch}.tgz" \
+				-o /tmp/codex-npm.tgz; \
+			echo "$npm_sha256  /tmp/codex-npm.tgz" | sha256sum -c -; \
+			tar -xzf /tmp/codex-npm.tgz -C /opt/codex --strip-components=4 \
+				"package/vendor/${target}/bin/codex" \
+				"package/vendor/${target}/bin/codex-code-mode-host"; \
+			rm -f /tmp/codex-npm.tgz; \
+			test -x /opt/codex/codex; \
+			ln -sf /opt/codex/codex /usr/local/bin/codex; \
+		fi; \
 		code_mode_host="$(find /opt/codex -type f -name 'codex-code-mode-host*' -perm -u+x | head -n1)"; \
 		test -n "$code_mode_host"; \
-		ln -sf "$code_mode_host" /opt/codex/codex-code-mode-host; \
+		if [ "$code_mode_host" != "/opt/codex/codex-code-mode-host" ]; then \
+			ln -sf "$code_mode_host" /opt/codex/codex-code-mode-host; \
+		fi; \
 		ln -sf /opt/codex/codex-code-mode-host /usr/local/bin/codex-code-mode-host; \
 		chmod -R a+rX /opt/codex; \
 		codex --version >/dev/null; \

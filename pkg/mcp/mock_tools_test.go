@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // escapeHatchText returns each escape hatch's description and the
@@ -35,6 +37,8 @@ func escapeHatchText(t *testing.T) map[string]struct{ description, confirmation 
 		"comment_on_issue":   {"comment": "the answer is 4"},
 		"nothing_needed":     {"reason": "the flag is already off on main"},
 		"write_handover":     {"handover": "the merge lane may only ever hold one branch"},
+		"compact_context":    {"handover": "stage 1 is built; stage 2 is the merge lane"},
+		"update_brief":       {"brief": "keep the merge lane green", "reason": "stage 1 is finished"},
 		"propose_task":       {"title": "follow-up", "body": "the rest of it"},
 		"add_review_comment": {"body": "this loop is quadratic"},
 	}
@@ -124,6 +128,10 @@ func TestRelayedEscapeHatchesConfirmWhatGrainDoesWithTheCall(t *testing.T) {
 		// complete the task and is not the run's ending, so a run that
 		// wrote one has to carry on with the work it was dispatched for.
 		{"write_handover", []string{"conversation", "handover", "does not complete the task"}},
+		// A compaction is a handover that also moves the cursor, and says
+		// both halves: what later prompts leave out, and that the run goes on.
+		{"compact_context", []string{"handover", "later prompts", "does not complete the task"}},
+		{"update_brief", []string{"current brief", "original description"}},
 		// A proposal becomes a real task in the queue, and a human's
 		// approval -- not a label -- is what lets it ever be dispatched.
 		{"propose_task", []string{"real task", "unapproved", "approves"}},
@@ -148,20 +156,20 @@ func TestRequestSecretRecordsTheNameAndNeverAValue(t *testing.T) {
 	tool := toolNamed(t, NewMockTools(sink, nil), "request_secret")
 
 	res := tool.Handler(context.Background(), map[string]any{
-		"secret": "github-app/app-id", "reason": "the deploy needs to authenticate",
+		"secret": "deploy-bot/token", "reason": "the deploy needs to authenticate",
 	})
 	if res.IsError {
 		t.Fatalf("well-formed call errored: %s", res.Text)
 	}
 	got := sink.SecretRequest()
-	if got == nil || got.Secret != "github-app/app-id" || got.Reason != "the deploy needs to authenticate" {
+	if got == nil || got.Secret != "deploy-bot/token" || got.Reason != "the deploy needs to authenticate" {
 		t.Fatalf("SecretRequest() = %+v, want the name and reason as given", got)
 	}
 
 	// First call wins, matching what orchestrator.ProcessResult relays
 	// off agent.Result.ToolCalls.
 	tool.Handler(context.Background(), map[string]any{"secret": "other-key", "reason": "second thoughts"})
-	if sink.SecretRequest().Secret != "github-app/app-id" {
+	if sink.SecretRequest().Secret != "deploy-bot/token" {
 		t.Fatalf("SecretRequest() = %+v, want the first call's own name", sink.SecretRequest())
 	}
 
@@ -175,6 +183,70 @@ func TestRequestSecretRecordsTheNameAndNeverAValue(t *testing.T) {
 		if res := tool.Handler(context.Background(), bad); !res.IsError {
 			t.Errorf("Handler(%v) = %q, want an error", bad, res.Text)
 		}
+	}
+}
+
+// TestRequestSecretRefusesGrainsOwnCredentials pins that a run cannot
+// ask a human to set a secret grain keeps its own key material in: once
+// the git credentials, CA bundles and release-approval key moved into
+// the store, a value pasted for such a request would replace them with
+// whatever the run's question suggested.
+func TestRequestSecretRefusesGrainsOwnCredentials(t *testing.T) {
+	for _, name := range []string{
+		"github-credential-bot/token",
+		"github-credential-ci-app",
+		"release-approval-key/key.pem",
+		"sandbox-access-ca/bundle.pem",
+		"package-cache-ca",
+		"state-repo-token/token",
+		"secrets-repo-token",
+	} {
+		sink := &MockSink{}
+		tool := toolNamed(t, NewMockTools(sink, nil), "request_secret")
+		res := tool.Handler(context.Background(), map[string]any{
+			"secret": name, "reason": "rotate it", "summary": "Set " + name,
+		})
+		if !res.IsError || !strings.Contains(res.Text, "its own credentials") {
+			t.Errorf("request_secret(%q) = %q, want a refusal naming grain's own credentials", name, res.Text)
+		}
+		if got := sink.SecretRequest(); got != nil {
+			t.Errorf("request_secret(%q) recorded %+v, want nothing", name, got)
+		}
+	}
+}
+
+// TestRequestSecretRefusesCredentialsAlreadyInTheStore is the same
+// refusal for the credentials that were in the store before grain's CAs
+// and keys moved there: each has its own place in Settings, and a value
+// a run suggested pasted over one (a cosign key it generated, its own
+// model or App key) would hand the run the deployment's identity.
+func TestRequestSecretRefusesCredentialsAlreadyInTheStore(t *testing.T) {
+	for _, tc := range []struct{ what, name string }{
+		{"the default GCP minter key", "gcp-key-minter"},
+		{"a named GCP key's minter key", "gcp-key-minter-research/key.json"},
+		{"the Gemini API key", "gemini-api-key"},
+		{"the Claude OAuth token", "claude-oauth-token/value"},
+		{"the OpenAI API key", "openai-api-key"},
+		{"a custom agent backend's credential", "agent-backend-vertex/value"},
+		{"the cosign key", "image-signing/key"},
+		{"the cosign password", "image-signing/password"},
+		{"the GitHub App's id", "github-app/app-id"},
+		{"the GitHub App's private key", "github-app/private-key"},
+		{"a repository's release secret", "repo-release-0123abcd/DOCKERHUB_TOKEN"},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			sink := &MockSink{}
+			tool := toolNamed(t, NewMockTools(sink, nil), "request_secret")
+			res := tool.Handler(context.Background(), map[string]any{
+				"secret": tc.name, "reason": "rotate it", "summary": "Set " + tc.name,
+			})
+			if !res.IsError || !strings.Contains(res.Text, "its own credentials") {
+				t.Errorf("request_secret(%q) = %q, want a refusal naming grain's own credentials", tc.name, res.Text)
+			}
+			if got := sink.SecretRequest(); got != nil {
+				t.Errorf("request_secret(%q) recorded %+v, want nothing", tc.name, got)
+			}
+		})
 	}
 }
 
@@ -617,5 +689,223 @@ func TestProposeTaskRefusesAReviewGrant(t *testing.T) {
 	}
 	if got := sink.ProposedTasks(); len(got) != 0 {
 		t.Errorf("ProposedTasks() = %+v, want none", got)
+	}
+}
+
+func TestProposeTaskAcceptsUnifiedGrantsAndRefusesMixedSpellings(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+
+	res := tool.Handler(context.Background(), map[string]any{
+		"title": "child with unified grants",
+		"body":  "exercise slice 2 grants on propose_task",
+		"grants": []any{
+			map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read", "with": map[string]any{"repo": "acme/app"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "release"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#read", "with": map[string]any{"repo": "acme/docs"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#write", "with": map[string]any{"repo": "acme/site", "base": "main"}},
+		},
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Text)
+	}
+	got := sink.ProposedTasks()
+	if len(got) != 1 {
+		t.Fatalf("ProposedTasks() = %+v, want 1", got)
+	}
+	p := got[0]
+	if p.Repo != "acme/app" || p.Branch != "release" {
+		t.Errorf("Repo, Branch = %q, %q, want acme/app, release", p.Repo, p.Branch)
+	}
+	if want := model.APIGrantString("tasks:read", "acme/app"); len(p.Capabilities) != 1 || p.Capabilities[0] != want {
+		t.Errorf("Capabilities = %v, want [%s]", p.Capabilities, want)
+	}
+	if len(p.Reads) != 1 || p.Reads[0] != "acme/docs" {
+		t.Errorf("Reads = %v, want [acme/docs]", p.Reads)
+	}
+	if len(p.Writes) != 1 || p.Writes[0] != (WriteTarget{Repo: "acme/site", Base: "main"}) {
+		t.Errorf("Writes = %v, want [{acme/site main}]", p.Writes)
+	}
+
+	for _, bad := range []map[string]any{
+		{
+			"title": "mix caps", "body": "b",
+			"capabilities": []any{"api:ci:read"},
+			"grants":       []any{map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read"}},
+		},
+		{
+			"title": "mix empty grants", "body": "b",
+			"capabilities": []any{"api:ci:read"},
+			"grants":       []any{},
+		},
+		{
+			"title": "mix repo", "body": "b", "repo": "acme/app",
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "main"}}},
+		},
+		{
+			"title": "mix branch", "body": "b", "branch": "develop",
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "main"}}},
+		},
+		{
+			"title": "mix reads", "body": "b", "reads": []any{},
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#read", "with": map[string]any{"repo": "acme/docs"}}},
+		},
+		{
+			"title": "mix writes", "body": "b", "writes": []any{},
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#write", "with": map[string]any{"repo": "acme/site", "base": "main"}}},
+		},
+	} {
+		r := tool.Handler(context.Background(), bad)
+		if !r.IsError {
+			t.Errorf("expected error for %v, got %+v", bad["title"], r)
+		}
+	}
+}
+
+func TestProposeTaskTargetRefusalNamesSentField(t *testing.T) {
+	t.Cleanup(model.RegisterChangeTarget(model.ChangeTargetRegistration{Kind: testChangeTargetKind}))
+
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+	target := map[string]any{
+		"capability": "https://grain.dev/capabilities/repo#target",
+		"with":       map[string]any{"repo": "acme/app", "base": "main"},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{"repo", map[string]any{"repo": "acme/app"}, "the request's repo field both name the task's repository"},
+		{"branch", map[string]any{"branch": "develop"}, "the request's branch field both name the task's repository"},
+		{"no_repo", map[string]any{"no_repo": true}, "the request's no_repo field both name the task's repository"},
+		{"change target", map[string]any{testChangeTargetKind: map[string]any{}}, "the request's " + testChangeTargetKind + " field both name the task's repository"},
+		{"repo and branch", map[string]any{"repo": "acme/app", "branch": "develop"}, "the request's repo and branch fields both name the task's repository"},
+	} {
+		args := map[string]any{
+			"title":  "mix " + tc.name,
+			"body":   "b",
+			"grants": []any{target},
+		}
+		for k, v := range tc.extra {
+			args[k] = v
+		}
+		res := tool.Handler(context.Background(), args)
+		if !res.IsError || !strings.Contains(res.Text, tc.want) {
+			t.Errorf("%s: got %+v, want error containing %q", tc.name, res, tc.want)
+		}
+	}
+	if got := sink.ProposedTasks(); len(got) != 0 {
+		t.Errorf("ProposedTasks() = %+v, want none recorded", got)
+	}
+}
+
+func TestProposeTaskRefusesUndeclaredArgumentsAndSuggestsNearest(t *testing.T) {
+	sink := &MockSink{}
+	mockTool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+	filerCalled := false
+	liveTool := NewLiveProposalTools(&MockSink{}, nil, "3750", filerFunc(func(context.Context, ProposedTask, string) (FiledProposal, error) {
+		filerCalled = true
+		return FiledProposal{ID: "99"}, nil
+	}))[0]
+
+	target := map[string]any{
+		"capability": "https://grain.dev/capabilities/repo#target",
+		"with":       map[string]any{"repo": "acme/widgets", "base": "main"},
+	}
+
+	for _, tc := range []struct {
+		name      string
+		extra     map[string]any
+		wantSub   []string
+		forbidSub string
+	}{
+		{
+			name:    "base alone",
+			extra:   map[string]any{"base": "release/v3.2.0"},
+			wantSub: []string{`"base"`, `"branch"`},
+		},
+		{
+			name:    "base alongside repo#target (walkthrough O2)",
+			extra:   map[string]any{"base": "main", "grants": []any{target}},
+			wantSub: []string{`"base"`, `"branch"`},
+		},
+		{
+			name:    "description synonym",
+			extra:   map[string]any{"description": "extra prose"},
+			wantSub: []string{`"description"`, `"body"`},
+		},
+		{
+			name:    "fields synonym",
+			extra:   map[string]any{"fields": map[string]any{"k": "v"}},
+			wantSub: []string{`"fields"`, `"template_fields"`},
+		},
+		{
+			name:    "camelCase noRepo",
+			extra:   map[string]any{"noRepo": true},
+			wantSub: []string{`"noRepo"`, `"no_repo"`},
+		},
+		{
+			name:    "capabilities typo",
+			extra:   map[string]any{"capabilites": []any{"api:ci-read"}},
+			wantSub: []string{`"capabilites"`, `"capabilities"`},
+		},
+		{
+			name:    "singular read",
+			extra:   map[string]any{"read": []any{"acme/docs"}},
+			wantSub: []string{`"read"`, `"reads"`},
+		},
+		{
+			name:    "writes entry with branch instead of base",
+			extra:   map[string]any{"writes": []any{map[string]any{"repo": "acme/site", "branch": "main"}}},
+			wantSub: []string{"writes[0]", `"branch"`, `"base"`},
+		},
+		{
+			name:      "unrelated unknown argument gets no bogus suggestion",
+			extra:     map[string]any{"xyzzy_nonsense": 1},
+			wantSub:   []string{`"xyzzy_nonsense"`},
+			forbidSub: "did you mean",
+		},
+	} {
+		args := map[string]any{"title": "follow-up", "body": "details"}
+		for k, v := range tc.extra {
+			args[k] = v
+		}
+		for label, tool := range map[string]Tool{"mock": mockTool, "live": liveTool} {
+			res := tool.Handler(context.Background(), args)
+			if !res.IsError {
+				t.Errorf("%s (%s): succeeded with %q, want error", tc.name, label, res.Text)
+				continue
+			}
+			for _, sub := range tc.wantSub {
+				if !strings.Contains(res.Text, sub) {
+					t.Errorf("%s (%s): error = %q, want substring %q", tc.name, label, res.Text, sub)
+				}
+			}
+			if tc.forbidSub != "" && strings.Contains(res.Text, tc.forbidSub) {
+				t.Errorf("%s (%s): error = %q, did not want %q", tc.name, label, res.Text, tc.forbidSub)
+			}
+		}
+	}
+
+	if got := sink.ProposedTasks(); len(got) != 0 {
+		t.Errorf("ProposedTasks() = %+v, want none recorded", got)
+	}
+	if filerCalled {
+		t.Error("live ProposalFiler was called on a refused propose_task request")
+	}
+
+	// Every property advertised in InputSchema (including registered change-target kinds) is accepted.
+	t.Cleanup(model.RegisterChangeTarget(model.ChangeTargetRegistration{Kind: testChangeTargetKind}))
+	toolWithCT := toolNamed(t, NewMockTools(&MockSink{}, nil), "propose_task")
+	props, ok := toolWithCT.InputSchema["properties"].(map[string]any)
+	if !ok || len(props) == 0 {
+		t.Fatalf("InputSchema properties = %T %v", toolWithCT.InputSchema["properties"], toolWithCT.InputSchema["properties"])
+	}
+	for name := range props {
+		if err := ValidateProposeTaskArgs(map[string]any{name: nil}); err != nil {
+			t.Errorf("ValidateProposeTaskArgs rejected declared schema property %q: %v", name, err)
+		}
 	}
 }

@@ -90,6 +90,7 @@ async function expectUsable(page) {
 }
 
 async function signIn(page, code) {
+  await page.getByLabel("Your email").fill("alice@example.com");
   await page.getByLabel("Access code").fill(code);
   await page.getByRole("button", { name: "Continue" }).click();
 }

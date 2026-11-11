@@ -907,3 +907,193 @@ func TestSecretManagerMetadataServerTokenCaching(t *testing.T) {
 		t.Fatalf("GRAIN_SECRET_MANAGER_TOKEN hit metadata server (%d calls)", metaCalls)
 	}
 }
+
+// A catalogued key deleted out of band in Secret Manager (HTTP 404) or left
+// with no enabled version must not fail KnownValues as a whole -- that refused
+// every transcript upload and its database fallback (task 3577) -- but it must
+// still be surfaced, by MissingUpstream and by Resolve's ErrGoneUpstream.
+func TestSecretManagerKnownValuesSkipsKeysGoneUpstream(t *testing.T) {
+	ctx := context.Background()
+	writer, fake, cat := newTestSMStore(t)
+	for _, kv := range []struct{ secret, key, val string }{
+		{"multi", "a", "a-secret"},
+		{"multi", "b", "b-secret"},
+		{"solo", "value", "solo-secret"},
+		{"zeta", "token", "z-secret"},
+	} {
+		if err := writer.Set(kv.secret, kv.key, []byte(kv.val)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resourceOf := func(secret, key string) string {
+		t.Helper()
+		entry, ok, err := cat.GetSecretEntry(ctx, secret, key)
+		if err != nil || !ok {
+			t.Fatalf("catalogue entry %s/%s: ok=%v err=%v", secret, key, ok, err)
+		}
+		id, err := writer.sm.secretIDForEntry(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := writer.sm.resourceName(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	// multi/b: the secret itself deleted out of band.
+	// zeta/token: the secret kept, every version destroyed.
+	deleted, destroyed := resourceOf("multi", "b"), resourceOf("zeta", "token")
+	fake.mu.Lock()
+	delete(fake.secrets, deleted)
+	for _, v := range fake.secrets[destroyed].versions {
+		v.state, v.data = "DESTROYED", nil
+	}
+	fake.mu.Unlock()
+
+	// A fresh instance over the same catalogue: nothing cached, as after a
+	// restart or an instance replacement.
+	reader := OpenSecretManager(SecretManagerConfig{
+		Prefix:     writer.sm.prefix,
+		Catalogue:  cat,
+		Endpoint:   writer.sm.endpoint,
+		HTTPClient: writer.sm.httpClient,
+		Token:      func(context.Context) (string, error) { return fake.token, nil },
+	})
+	for _, s := range []*Store{reader, writer} {
+		got, err := s.MissingUpstream(ctx)
+		if err != nil {
+			t.Fatalf("MissingUpstream: %v", err)
+		}
+		want := []SecretKeyRef{{SecretName: "multi", Key: "b"}, {SecretName: "zeta", Key: "token"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("MissingUpstream = %+v, want %+v", got, want)
+		}
+	}
+
+	known, err := reader.KnownValues(ctx)
+	if err != nil {
+		t.Fatalf("KnownValues with keys gone upstream = %v, want the rest and no error", err)
+	}
+	wantKnown := []SecretValue{
+		{SecretName: "multi", Key: "a", Value: "a-secret"},
+		{SecretName: "solo", Key: "value", Value: "solo-secret"},
+	}
+	if !reflect.DeepEqual(known, wantKnown) {
+		t.Fatalf("KnownValues = %+v, want %+v", known, wantKnown)
+	}
+
+	_, err = reader.Resolve(ctx, "multi/b")
+	if !errors.Is(err, ErrGoneUpstream) || errors.Is(err, ErrNoSecret) {
+		t.Fatalf("Resolve(multi/b) = %v, want ErrGoneUpstream and not ErrNoSecret", err)
+	}
+	if !strings.Contains(err.Error(), "grain secrets delete multi b") {
+		t.Fatalf("Resolve(multi/b) = %v, want it to name the reconciling command", err)
+	}
+
+	// Gone upstream is the only failure KnownValues forgives: one it cannot
+	// read at all still fails closed.
+	unauth := OpenSecretManager(SecretManagerConfig{
+		Prefix:     writer.sm.prefix,
+		Catalogue:  cat,
+		Endpoint:   writer.sm.endpoint,
+		HTTPClient: writer.sm.httpClient,
+		Token:      func(context.Context) (string, error) { return "wrong-token", nil },
+	})
+	if _, err := unauth.KnownValues(ctx); err == nil || errors.Is(err, ErrGoneUpstream) {
+		t.Fatalf("KnownValues with HTTP 401 = %v, want a non-ErrGoneUpstream error", err)
+	}
+	if _, err := unauth.MissingUpstream(ctx); err == nil {
+		t.Fatal("MissingUpstream with HTTP 401 = nil, want an error")
+	}
+
+	// Once reconciled, nothing is reported missing.
+	if err := reader.DeleteKey("multi", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Set("zeta", "token", []byte("z-again")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := reader.MissingUpstream(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("MissingUpstream after reconciling = %+v, %v; want none", got, err)
+	}
+}
+
+func TestAccessGoneUpstream(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+		want   bool
+	}{
+		{http.StatusNotFound, `{"error":{"code":404,"status":"NOT_FOUND"}}`, true},
+		{http.StatusBadRequest, `{"error":{"code":400,"status":"FAILED_PRECONDITION","message":"Secret Version [projects/1/secrets/x/versions/3] is in DESTROYED state."}}`, true},
+		{http.StatusBadRequest, `{"error":{"code":400,"status":"FAILED_PRECONDITION","message":"Secret Version [projects/1/secrets/x/versions/3] is in DISABLED state."}}`, true},
+		{http.StatusBadRequest, `{"error":{"code":400,"status":"INVALID_ARGUMENT"}}`, false},
+		{http.StatusForbidden, `{"error":{"code":403,"status":"PERMISSION_DENIED"}}`, false},
+		{http.StatusUnauthorized, `{"error":{"code":401}}`, false},
+		{http.StatusServiceUnavailable, `unavailable`, false},
+		// A 404 that is not a Secret Manager error -- a wrong endpoint, a
+		// proxy -- says nothing about the secret and must stay fatal, or it
+		// would drop every value from redaction at once.
+		{http.StatusNotFound, "404 page not found\n", false},
+		{http.StatusNotFound, `<html><body>Not Found</body></html>`, false},
+		{http.StatusNotFound, `{"error":{"code":403,"status":"PERMISSION_DENIED"}}`, false},
+		{http.StatusBadRequest, `FAILED_PRECONDITION: version is DESTROYED`, false},
+	} {
+		if got := accessGoneUpstream(tc.status, []byte(tc.body)); got != tc.want {
+			t.Errorf("accessGoneUpstream(%d, %s) = %v, want %v", tc.status, tc.body, got, tc.want)
+		}
+	}
+}
+
+// A value this process read before its key went from Secret Manager may still
+// be in a running sandbox's output, so it stays in KnownValues -- even past the
+// read cache's expiry -- while it no longer resolves, and until the key is
+// reconciled.
+func TestSecretManagerKnownValuesRetainsValueReadBeforeItWentUpstream(t *testing.T) {
+	ctx := context.Background()
+	writer, fake, cat := newTestSMStore(t)
+	if err := writer.Set("tok", "value", []byte("handed-out-secret")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	reader := OpenSecretManager(SecretManagerConfig{
+		Prefix:     writer.sm.prefix,
+		Catalogue:  cat,
+		Endpoint:   writer.sm.endpoint,
+		HTTPClient: writer.sm.httpClient,
+		Token:      func(context.Context) (string, error) { return fake.token, nil },
+		Now:        func() time.Time { return now },
+	})
+	if _, err := reader.Resolve(ctx, "tok"); err != nil {
+		t.Fatalf("Resolve(tok): %v", err)
+	}
+
+	fake.mu.Lock()
+	for res := range fake.secrets {
+		delete(fake.secrets, res)
+	}
+	fake.mu.Unlock()
+	now = now.Add(2 * DefaultSecretManagerCacheTTL)
+
+	if _, err := reader.Resolve(ctx, "tok"); !errors.Is(err, ErrGoneUpstream) {
+		t.Fatalf("Resolve(tok) after deletion upstream = %v, want ErrGoneUpstream", err)
+	}
+	want := []SecretValue{{SecretName: "tok", Key: "value", Value: "handed-out-secret"}}
+	for i := 0; i < 2; i++ {
+		known, err := reader.KnownValues(ctx)
+		if err != nil {
+			t.Fatalf("KnownValues: %v", err)
+		}
+		if !reflect.DeepEqual(known, want) {
+			t.Fatalf("KnownValues #%d = %+v, want the value read before it went, %+v", i, known, want)
+		}
+	}
+
+	if err := reader.DeleteKey("tok", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if known, err := reader.KnownValues(ctx); err != nil || len(known) != 0 {
+		t.Fatalf("KnownValues after reconciling = %+v, %v; want none", known, err)
+	}
+}

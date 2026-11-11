@@ -117,7 +117,7 @@ func TestClassifyWhatTheRepoWideReviewFoundOutsideV1(t *testing.T) {
 
 func TestClassifyLeavesOrdinaryPathsAlone(t *testing.T) {
 	for _, p := range []string{
-		"pkg/ui/client.go", "pkg/ui/tasks.go", "README.md", "scripts/build-cli.sh",
+		"pkg/ui/client.go", "pkg/ui/tasks.go", "README.md",
 		"docs/deploy.md", "pkg/orchestratorx/a.go", "web/src/App.tsx",
 		"pkg/cifault/fault.go", "tests/e2e/x_test.go", "pkg/ui/auth_test_helpers.txt",
 	} {
@@ -254,6 +254,18 @@ var knownBoundaryFiles = []string{
 	"pkg/model/capability_catalogue.go", "pkg/model/template_grants.go",
 	"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
 	"pkg/ui/external_agents.go",
+	"pkg/webauth/", "pkg/hubenv/", "pkg/hub/", "cmd/grain-hub/", "cmd/grain-registry/",
+	"pkg/hub/signer.go", "pkg/hub/server/router.go", "pkg/hub/server/proxy.go",
+	"pkg/hub/store/delegation.go", "pkg/hub/delegation_admin.go", "pkg/hub/server.go",
+	"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
+	"pkg/model/director_floor.go", "pkg/ui/on_behalf_of.go",
+	"scripts/build-cli.sh",
+	"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go",
+	"pkg/ui/cli_install.sh", "pkg/ui/cli_install.go",
+	"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
+	"scripts/granule/", "scripts/release-patch.sh",
+	"scripts/grain-instance-init.sh", "scripts/bake-gce-release-image.sh",
+	"pkg/hostinit/", "pkg/installtrack/",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -407,6 +419,39 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 	}
 }
 
+// v26: the workstation CLI installer, served unauthenticated and piped into
+// sh like its hostd counterpart, and the helpers the release builds and
+// workflows run or source. v25 classified none of them, so a change to any
+// merged itself.
+func TestCLIInstallerAndReleaseHelpersAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/ui/cli_install.sh":               "setup-scripts",
+		"pkg/ui/cli_install.go":               "setup-scripts",
+		"scripts/buildvcs.sh":                 "release-machinery",
+		"scripts/configure-dockerhub-auth.sh": "release-machinery",
+		"scripts/release-image-repos.sh":      "release-machinery",
+	} {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+	defined := funcFiles(t, "pkg/ui")
+	for _, name := range []string{"cliInstallRoute", "renderCLIInstallScript"} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/ui: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if Classify([]string{file}) == nil {
+			t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+		}
+	}
+}
+
 // funcFiles maps each func and method name declared in dir's non-test Go
 // files (dir relative to the repository root) to the repository path of
 // the file declaring it.
@@ -474,8 +519,15 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
 		// v21: the release-asset publisher and the workflow that runs it
-		// on the train's tag pushes.
-		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
+		// on the train's tag pushes; v24: the CLI archive builder whose
+		// output they publish on every release.
+		"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
+		// v26: the helpers the release builds and workflows run or source.
+		"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
+		// v28: the guest-image cache-key and runtime build helpers under
+		// scripts/granule/ and the patch-release branch/tag script.
+		"scripts/granule/build-granule-image.sh", "scripts/granule/guest-inputs.sh",
+		"scripts/granule/README.md", "scripts/release-patch.sh",
 	}
 	for _, p := range reviewed {
 		got := Classify([]string{p})
@@ -507,8 +559,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v21" {
-		t.Errorf("Version = %q, want trust-boundary/v21", Version)
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -557,8 +609,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v21" {
-		t.Errorf("Version = %q, want trust-boundary/v21", Version)
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -593,8 +645,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v21" {
-		t.Errorf("Version = %q, want trust-boundary/v21", Version)
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -641,6 +693,222 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 			}
 			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
 				t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+			}
+		}
+	}
+}
+
+// v22 (task 3479, found in the security review of task 3284): grain-registry's
+// front door. pkg/webauth/ verifies IAP and registry-assertion JWTs, admits
+// principals and checks proxy-auth CSRF (auth-routes); pkg/hub/ and
+// cmd/grain-hub/ decide visibility and delegation, sign assertions,
+// strip edge credentials before a tunnel and authenticate grc_ credentials
+// (credential-proxy). v21 classified none of them, so a change to any merged
+// itself.
+func TestHubFrontDoorIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/webauth/iap.go":           "auth-routes",
+		"pkg/webauth/hub.go":           "auth-routes",
+		"pkg/webauth/admission.go":     "auth-routes",
+		"pkg/webauth/csrf.go":          "auth-routes",
+		"pkg/hub/signer.go":            "credential-proxy",
+		"pkg/hub/server/router.go":     "credential-proxy",
+		"pkg/hub/server/proxy.go":      "credential-proxy",
+		"pkg/hub/server/tunnel.go":     "credential-proxy",
+		"pkg/hub/store/store.go":       "credential-proxy",
+		"pkg/hub/providers/gcp/kms.go": "credential-proxy",
+		"cmd/grain-hub/main.go":        "credential-proxy",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+
+	// Control: the registry's React app is UI, not the front door.
+	if got := Classify([]string{"ui-hub/src/App.jsx"}); got != nil {
+		t.Errorf("Classify(ui-hub/src/App.jsx) = %v, want nothing", categoryIDs(got))
+	}
+}
+
+// v23 (task 3329, finding 1 of the 2026-11-08 security review of main):
+// the web-auth and registry identity-asserting paths the review found
+// unclassified at d7dde0c2 (classified since by v22), and what v22 still
+// left out -- the human-review hold an agent may raise but never release,
+// the director's Tier 3 floor, and agent on-behalf-of attribution.
+func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/webauth/iap.go":             "auth-routes",
+		"pkg/webauth/hub.go":             "auth-routes",
+		"pkg/webauth/csrf.go":            "auth-routes",
+		"pkg/webauth/admission.go":       "auth-routes",
+		"pkg/webauth/groups.go":          "auth-routes",
+		"pkg/hub/server/router.go":       "credential-proxy",
+		"pkg/hub/server/proxy.go":        "credential-proxy",
+		"pkg/hub/signer.go":              "credential-proxy",
+		"pkg/hub/store/delegation.go":    "credential-proxy",
+		"pkg/hub/delegation_admin.go":    "credential-proxy",
+		"pkg/hub/server.go":              "credential-proxy",
+		"pkg/model/human_review_hold.go": "auth-routes",
+		"pkg/ui/human_review.go":         "auth-routes",
+		"pkg/model/director_floor.go":    "auth-routes",
+		"pkg/ui/on_behalf_of.go":         "auth-routes",
+		// Contrast: the pkg/ui files the web-auth code moved out of.
+		"pkg/ui/csrf.go":      "auth-routes",
+		"pkg/ui/verifier.go":  "auth-routes",
+		"pkg/ui/allowlist.go": "auth-routes",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+
+	// The gates by name, as in TestNewAuthorizationFilesAreClassified, so
+	// a move out of these files fails here rather than at the next audit.
+	gates := map[string][]string{
+		"pkg/model": {"ReleaseHumanReviewHold", "WithinDirectorFloor", "DirectorFloorRefusal"},
+		"pkg/ui":    {"agentOnBehalfOf"},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+				t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+			}
+		}
+	}
+}
+
+// v25 (task 3644, finding 1 of the 2026-11-08 second security review of
+// main, task 3584): pkg/model/canonical_grant.go, which every grant
+// predicate reads through since #927, matched nothing, so a pull request
+// touching only it merged with no security review. auto_submit.go
+// (EscalatedCapabilities) is the same shape.
+func TestCanonicalGrantIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	}
+	for _, p := range []string{"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go"} {
+		matches := Classify([]string{p})
+		if len(matches) != 1 || matches[0].Category.ID != "capabilities-secrets" {
+			t.Errorf("Classify(%q) = %v, want exactly one match in capabilities-secrets", p, categoryIDs(matches))
+		}
+	}
+
+	// The predicates by name, so a move out of these files fails here
+	// rather than at the next audit.
+	defined := funcFiles(t, "pkg/model")
+	for _, name := range []string{
+		"CanonicalGrant", "CanonicalGrantKey", "LegacyGrantString", "StoredGrantSpelling",
+		"SplitRequestGrants", "EscalatedCapabilities",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/model: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [capabilities-secrets]", name, file, got)
+		}
+	}
+}
+
+// v27 (task 3762, security review of task 3710): the Grain Hub rename
+// extracted GRAIN_HUB_* / GRAIN_REGISTRY_* lookups into pkg/hubenv/
+// (read by pkg/webauth/, pkg/daemon/ and pkg/hub/) and kept
+// cmd/grain-registry/ as a compatibility shim binary for one release.
+func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/hubenv/hubenv.go":       "auth-routes",
+		"cmd/grain-registry/main.go": "credential-proxy",
+		"pkg/registry/server.go":     "credential-proxy",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+}
+
+// v28 (task 3926, finding 3.1 of task 3905): sibling guest-image build helpers
+// (scripts/granule/), the patch-release branch/tag script
+// (scripts/release-patch.sh), hosted Grain Hub GCE VM bake and boot scripts
+// (scripts/grain-instance-init.sh, scripts/bake-gce-release-image.sh), host
+// initialization (pkg/hostinit/) and install-track image repository selection
+// (pkg/installtrack/).
+func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v28" {
+		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	}
+	cases := map[string]string{
+		// scripts/granule/ prefix (real files + synthetic child to pin prefix matching)
+		"scripts/granule/build-granule-image.sh": "release-machinery",
+		"scripts/granule/guest-inputs.sh":        "release-machinery",
+		"scripts/granule/README.md":              "release-machinery",
+		"scripts/granule/new-helper.sh":          "release-machinery",
+		// Exact script in release-machinery
+		"scripts/release-patch.sh": "release-machinery",
+		// Exact GCE VM init/bake scripts in setup-scripts
+		"scripts/grain-instance-init.sh":    "setup-scripts",
+		"scripts/bake-gce-release-image.sh": "setup-scripts",
+		// pkg/hostinit/ prefix (real files + synthetic child to pin prefix matching)
+		"pkg/hostinit/hostinit.go":      "exec-sandbox",
+		"pkg/hostinit/steps.go":         "exec-sandbox",
+		"pkg/hostinit/k8s_granule.go":   "exec-sandbox",
+		"pkg/hostinit/gke_sandboxes.go": "exec-sandbox",
+		"pkg/hostinit/new_step.go":      "exec-sandbox",
+		// pkg/installtrack/ prefix (real files + nested package + synthetic child)
+		"pkg/installtrack/installtrack.go":                      "upgrade-images",
+		"pkg/installtrack/installtracktest/installtracktest.go": "upgrade-images",
+		"pkg/installtrack/new_track.go":                         "upgrade-images",
+	}
+	for p, want := range cases {
+		matches := Classify([]string{p})
+		if got := categoryIDs(matches); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+		if RequiresHuman(matches) {
+			t.Errorf("Classify(%q) requires human approval; want releasable by a clean security review", p)
+		}
+	}
+
+	// Pin key entrypoints by AST function name so moving them out of
+	// pkg/hostinit or pkg/installtrack into an unclassified package fails here.
+	gates := map[string]struct {
+		want  string
+		names []string
+	}{
+		"pkg/hostinit": {
+			want:  "exec-sandbox",
+			names: []string{"Init", "RegisterAllowedHosts"},
+		},
+		"pkg/installtrack": {
+			want:  "upgrade-images",
+			names: []string{"RegisterTrack", "ResolveLegacyRepository", "ResolveLegacyImageRef"},
+		},
+	}
+	for dir, spec := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range spec.names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{spec.want}) {
+				t.Errorf("%s is defined in %s, Classify = %v, want [%s]", name, file, got, spec.want)
 			}
 		}
 	}

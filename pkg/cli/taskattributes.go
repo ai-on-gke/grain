@@ -196,6 +196,15 @@ var taskStates = []model.State{
 // the less specific of two true things.
 var taskOrigins = []string{"hand", "external", "proposed", "imported", "schedule", "suite", "fix", "review"}
 
+// taskAdmissions is every admission a task can have (model.Admission), in
+// its own rank order -- standard < bypass < durable -- which is what
+// `-sort admission` orders by and what a typo is answered with.
+var taskAdmissions = []string{
+	string(model.AdmissionStandard),
+	string(model.AdmissionBypass),
+	string(model.AdmissionDurable),
+}
+
 func taskOrigin(t ui.Task) string {
 	switch {
 	// Review before fix: both are stacked on another task's own branch,
@@ -359,6 +368,20 @@ var builtinAttributes = attributeSet{
 			return []string{"off"}
 		},
 		order: []string{"on", "off"},
+	},
+	{
+		// How the task is admitted past the queue (ui.Task.Admission,
+		// model.Admission). A row with none is from a server older than
+		// the setting, and was run as standard work.
+		id:  "admission",
+		typ: typeEnum,
+		values: func(t ui.Task) []string {
+			if t.Admission == "" {
+				return []string{string(model.AdmissionStandard)}
+			}
+			return []string{t.Admission}
+		},
+		order: taskAdmissions,
 	},
 	{
 		// Held for a person's decision (ui.Task.HumanReviewHold), by the

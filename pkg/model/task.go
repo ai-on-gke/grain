@@ -37,6 +37,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -98,7 +99,7 @@ type AuthSource string
 
 const (
 	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
-	SourceRegistry      AuthSource = "registry"       // a verified registry assertion
+	SourceHub           AuthSource = "registry"       // a verified registry assertion
 	SourceToken         AuthSource = "token"          // a per-user API token (future)
 	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
 	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback
@@ -107,6 +108,10 @@ const (
 	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
 	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
 	SourceInternal      AuthSource = "internal"       // grain itself
+	// SourceHostAccount is a caller on the daemon's unix socket whose
+	// account the kernel named (SO_PEERCRED) and the daemon's
+	// -host-accounts map (or -deployment-owner) named a person for.
+	SourceHostAccount AuthSource = "host-account"
 )
 
 // unverifiedSources are the sources that establish nobody in particular:
@@ -479,6 +484,29 @@ func WritesBesides(writes []WriteTarget, target RepoRef, base string) []WriteTar
 	return out
 }
 
+// ReadsBesides is reads with any entry naming target dropped -- WritesBesides'
+// read-only counterpart, for reusable content (a Template's Reads, a
+// Schedule's) whose target repository is decided at firing time rather than
+// when the content was saved. When target is the zero RepoRef (an unbound
+// preview before any repo is picked, or a repoless firing), reads is returned
+// unchanged.
+func ReadsBesides(reads []RepoRef, target RepoRef) []RepoRef {
+	if target == (RepoRef{}) {
+		return reads
+	}
+	out := make([]RepoRef, 0, len(reads))
+	for _, r := range reads {
+		if r.Same(target) {
+			continue
+		}
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // WriteTargets is every repository a task may have work landed in, with
 // the base branch for each: Target/Base first, when it has one, then
 // Writes in whatever order they are in (the store hands them back sorted
@@ -594,8 +622,16 @@ type CredentialRef struct{ Name string }
 // Grant records how this task came by a capability, which a capability's
 // own definition cannot say: the same capability can be label-requested
 // on one task and folder-inherited on another.
+//
+// Capability is the grant string as stored. With is a unified grant's
+// normalized with: arguments (design/design/unified-grants.design.md §1),
+// set by CanonicalGrant and by requests that send grants:
+// [{capability, with}]; nil on every grant read from the store, where
+// arguments are still folded into Capability (slice 2 writes today's
+// spelling, CanonicalGrant reads either).
 type Grant struct {
 	Capability string
+	With       json.RawMessage
 	Via        GrantSource
 	Folder     *FolderRef
 }
@@ -613,20 +649,71 @@ type Grant struct {
 // A capability reference is covered only by a reference with the same
 // canonical capability and deep-equal normalized args
 // (UncoveredCapabilityRefs, design/spec/capabilities/capabilities.spec.md §2.3.4).
+// A grant only a person may give (IsPersonOnlyGrant) is never covered,
+// matching protocol.Covers on reference grants and EscalatedCapabilities
+// on named grants.
+//
+// Both sides are read through CanonicalGrant into the spelling slice 2
+// stores (StoredGrantSpelling), so an api reference and the api:<scope>
+// it stands for compare equal, and retired one-release aliases match
+// the canonical grant(s) they became (CanonicalLegacyGrants) in either
+// direction.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
-	have := make(map[string]bool, len(allowed))
-	for _, g := range allowed {
-		have[g.Capability] = true
-	}
+	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
+	have := heldNonRefGrants(allowed)
 	for _, g := range grants {
+		if IsPersonOnlyGrant(g.Capability) {
+			return false
+		}
 		if IsCapabilityRef(g.Capability) {
 			continue
 		}
-		if !have[g.Capability] {
+		if !nonRefGrantCovered(g.Capability, have, allowed) {
 			return false
 		}
 	}
 	return len(UncoveredCapabilityRefs(grants, allowed)) == 0
+}
+
+// heldNonRefGrants returns the non-reference grant names covered by grants,
+// including the non-reference canonical grants any retired bare capability in
+// grants expanded into. Assumes grants has passed through storedGrantSpellings.
+func heldNonRefGrants(grants []Grant) map[string]bool {
+	have := make(map[string]bool, len(grants))
+	for _, g := range grants {
+		have[g.Capability] = true
+		for _, c := range CanonicalLegacyGrants(g.Capability) {
+			c = StoredGrantSpelling(c)
+			if !IsCapabilityRef(c) {
+				have[c] = true
+			}
+		}
+	}
+	return have
+}
+
+// nonRefGrantCovered reports whether capability (already in StoredGrantSpelling
+// and not a capability reference) is covered by parent: either held directly in
+// have, or a retired alias whose canonical replacement grants are every one
+// covered by have and UncoveredCapabilityRefs(..., parent).
+func nonRefGrantCovered(capability string, have map[string]bool, parent []Grant) bool {
+	if have[capability] {
+		return true
+	}
+	repl := CanonicalLegacyGrants(capability)
+	if len(repl) == 0 || (len(repl) == 1 && StoredGrantSpelling(repl[0]) == capability) {
+		return false
+	}
+	var refs []Grant
+	for _, c := range repl {
+		c = StoredGrantSpelling(c)
+		if IsCapabilityRef(c) {
+			refs = append(refs, Grant{Capability: c})
+		} else if !have[c] {
+			return false
+		}
+	}
+	return len(refs) == 0 || len(UncoveredCapabilityRefs(refs, parent)) == 0
 }
 
 // SameBranch reports whether two tasks' work lands in the same place:
@@ -690,7 +777,9 @@ func SameBranch(a, b Task) bool {
 // default is, so a child that names a branch explicitly where the
 // declaration left it empty reads as a different branch and inherits
 // nothing. That errs toward withholding, which is the direction a trust
-// gate should fail in.
+// gate should fail in. A caller that can resolve the default branch
+// passes the child through AlignDefaultBases first, so "" and an explicit
+// default-branch name read as the one branch they are.
 //
 // Where the child lands is only half of it. A child carries extra write
 // targets of its own (Task.Writes), and those are permission it hands
@@ -717,7 +806,7 @@ func LandsWhereGranted(child, parent Task) bool {
 	if child.Target == nil || IsConfigRepo(*child.Target) {
 		return false
 	}
-	for _, w := range WriteTargets(parent) {
+	for _, w := range WriteTargetsOfGrants(TaskRepoGrants(parent)) {
 		if w.Repo.Same(*child.Target) && w.Base == child.Base {
 			return true
 		}
@@ -729,10 +818,14 @@ func LandsWhereGranted(child, parent Task) bool {
 // already among parent's WriteTargets, repo and branch alike -- the
 // write targets a proposal asked for that the task proposing it was
 // never given. Empty when there are none.
+//
+// Both sides are read as unified grants (TaskRepoGrants,
+// design/design/unified-grants.design.md §2): parent's #target and
+// #write grants against child's own #write grants.
 func UngrantedWrites(child, parent Task) []WriteTarget {
-	granted := WriteTargets(parent)
+	granted := WriteTargetsOfGrants(TaskRepoGrants(parent))
 	var out []WriteTarget
-	for _, w := range child.Writes {
+	for _, w := range childWriteGrants(child) {
 		found := false
 		for _, g := range granted {
 			if g.Repo.Same(w.Repo) && g.Base == w.Base {
@@ -745,6 +838,133 @@ func UngrantedWrites(child, parent Task) []WriteTarget {
 		}
 	}
 	return out
+}
+
+// AlignDefaultBases is child with every base it names -- its own Base and
+// each of its Writes entries' -- respelled the way parent's WriteTargets
+// entry for the same repository spells it, wherever the two differ only
+// in that one of them is "" and the other names that repository's
+// default branch. Every other base is left exactly as written.
+//
+// LandsWhereGranted, UngrantedWrites and SameBranch compare bases as
+// written, with "" left unresolved, because nothing in this package can
+// ask a remote which branch its default is. That errs toward withholding,
+// and it withheld the commonest proposal there is: a run whose task was
+// filed with an explicit `base: main` calls propose_task without naming a
+// base, which files the proposal with Base "" -- the default branch,
+// which is `main` -- and `"main" == ""` is false, so the proposal was
+// never auto-approved however its parent was configured (found by task
+// 3411's live walk). defaultBranch is the caller's answer to the question
+// this package cannot ask: the repository's default branch, or "" when it
+// cannot say, in which case the base is left as written and the gate
+// still withholds. A nil defaultBranch changes nothing.
+//
+// It never changes where child lands: a respelled base names the branch
+// the original did. Callers hand the result to the permission checks and
+// file the child as written, so a proposal that named no base keeps
+// meaning "the repository's default branch, whatever that is when it
+// runs" -- proposedTarget's reason for never copying a parent's own Base
+// onto the proposals it makes, since that base may be a branch that is
+// gone by the time anybody approves them.
+func AlignDefaultBases(child, parent Task, defaultBranch func(RepoRef) string) Task {
+	if defaultBranch == nil {
+		return child
+	}
+	granted := WriteTargets(parent)
+	if len(granted) == 0 {
+		return child
+	}
+	align := func(repo RepoRef, base string) string {
+		var other []string
+		for _, g := range granted {
+			if !g.Repo.Same(repo) {
+				continue
+			}
+			if g.Base == base {
+				return base
+			}
+			if (g.Base == "") != (base == "") {
+				other = append(other, g.Base)
+			}
+		}
+		if len(other) == 0 {
+			return base
+		}
+		def := strings.TrimSpace(defaultBranch(repo))
+		if def == "" {
+			return base
+		}
+		for _, g := range other {
+			// Exactly one of g and base is "", so whichever is not has
+			// to be the default branch for the two to be one branch.
+			if g == def || base == def {
+				return g
+			}
+		}
+		return base
+	}
+	if child.Target != nil {
+		child.Base = align(*child.Target, child.Base)
+	}
+	if len(child.Writes) > 0 {
+		writes := make([]WriteTarget, len(child.Writes))
+		for i, w := range child.Writes {
+			writes[i] = WriteTarget{Repo: w.Repo, Base: align(w.Repo, w.Base)}
+		}
+		child.Writes = writes
+	}
+	return child
+}
+
+// AutoSubmitRefusedOnLanding reports whether AutoSubmits refuses child on
+// LandsWhereGranted and on nothing else: parent holds the permission to
+// queue its proposals, child asks for nothing that permission does not
+// cover, and the one thing wrong with it is the branch it lands on. That
+// is the refusal nothing else on the proposal explains -- escalated
+// capabilities, ungranted writes and reads each leave a note of their
+// own -- so a caller filing it for a person says why with this.
+func AutoSubmitRefusedOnLanding(child, parent Task) bool {
+	return (parent.AutoMerge || parent.AutoApproveProposals) &&
+		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
+		len(UngrantedReads(child, parent)) == 0 &&
+		!LandsWhereGranted(child, parent)
+}
+
+// OtherBranchQueueNote is what a human approving a proposal reads when
+// the task that proposed it may queue its proposals unreviewed
+// (AutoMerge or AutoApproveProposals) and this one was filed for them
+// anyway, for the one reason no other note covers: it lands on a branch
+// that permission does not reach (AutoSubmitRefusedOnLanding). Attributed
+// to grain and naming both branches. It is appended to the proposal's
+// body wherever the proposal is filed: by orchestrator.relayProposedTasks
+// at the end of a run, and by ui.Client.CreateTask for a propose_task call
+// filed live -- which the end-of-run relay then skips as already filed.
+func OtherBranchQueueNote(parent, proposal Task) string {
+	granted := LandingBranch(parent)
+	if len(parent.Writes) > 0 {
+		granted += " (or one of the write targets it declares)"
+	}
+	return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, may queue the work it splits "+
+		"out without review, but only work landing on %s. This task lands on %s instead, so "+
+		"it was filed for a person to approve. Approve it if it belongs there.",
+		parent.ID, granted, LandingBranch(proposal))
+}
+
+// LandingBranch names the branch task's change lands on, for a note a
+// person reads: its Base where it names one, else its repository's
+// default branch.
+func LandingBranch(task Task) string {
+	if task.Target == nil {
+		if task.Base != "" {
+			return "`" + task.Base + "`"
+		}
+		return "its repository's default branch"
+	}
+	if task.Base != "" {
+		return fmt.Sprintf("`%s` in `%s`", task.Base, task.Target)
+	}
+	return fmt.Sprintf("the default branch of `%s`", task.Target)
 }
 
 // UngrantedReads is the entries of child's own Reads the task proposing
@@ -842,7 +1062,7 @@ var AutoSubmitPrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-submit"
 func AutoSubmits(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		LandsWhereGranted(child, parent)
 }
@@ -1097,6 +1317,14 @@ const (
 	// SecurityReviewTemplateID. LinkReviewTask's shape, kept apart from
 	// it so a task can carry both its declared review and a security one.
 	LinkSecurityReviewTask LinkKind = "security-review-task"
+	// LinkReviewsPullRequest records, on a review task grain filed against
+	// a task's pull request, which pull request ("owner/repo#number") that
+	// review was filed to read. A reopened or multi-attempt task can open a
+	// second pull request in the same repository after an earlier one has
+	// settled; naming the pull request on the review itself ensures
+	// settling one pull request never closes a review filed for another.
+	// Provenance and scoping only; blocks nothing.
+	LinkReviewsPullRequest LinkKind = "reviews-pr"
 	// LinkPushesReviewedBranch marks a review task that works on the
 	// reviewed change's own branch rather than one of its own (-> the
 	// reviewed task's ID): its Branch is the reviewed task's, the git
@@ -1205,6 +1433,18 @@ const (
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
 	LinkPathTriggersRead LinkKind = "path-triggers-read"
+	// LinkPathTriggerReviewed records the last review of one kind grain
+	// filed for this task's pull request from its pull-request triggers
+	// (-> "<review template>=<review task ID>@<head sha>"), one per kind:
+	// what the next push's review starts its incremental diff from
+	// (orchestrator's pathtriggerreview.go).
+	LinkPathTriggerReviewed LinkKind = "path-trigger-reviewed"
+	// LinkReviewCommentsOnly marks a review that posts its findings and
+	// fixes nothing (-> the reviewed task's ID): its run never opens a
+	// pull request, whatever it pushed. Grain files every review that
+	// way unless what asked for it asked for fixes
+	// (docs/declarations.md#gating-reviews).
+	LinkReviewCommentsOnly LinkKind = "review-comments-only"
 	// LinkApprovalRequired records that a rule this task's change matched
 	// lets only named people release it (-> "<rule>=<approver>,..."),
 	// and LinkApprovedBy that one of them has (-> "<rule>=<user>"). A
@@ -1224,6 +1464,20 @@ const (
 	// trust-boundary auto-merge withdrawal) under
 	// RepoConfig.BaseRepairBypassesHumanGates while the base branch was red.
 	LinkBaseRepairBypass LinkKind = "base-repair-bypass"
+	// LinkReviewFindings records that a required review of this task's pull
+	// request failed its gate -- left findings or open questions, had fixes
+	// closed without merging, or could not be filed (-> ReviewFindingsRecord
+	// JSON). Cleared only by a clean re-review after fixes or an explicit
+	// merge:force gate override, never by Submit.
+	LinkReviewFindings LinkKind = "review-findings"
+	// LinkGateOverride records an operator's explicit merge:force override
+	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
+	LinkGateOverride LinkKind = "gate-override"
+	// LinkHumanApproved records a person's persisted Submit approval of a
+	// pull request head (-> HumanSubmittedByTarget), kept after
+	// LinkHumanSubmitted is consumed so the UI and merge gates know who
+	// approved which commit.
+	LinkHumanApproved LinkKind = "human-approved"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
@@ -1257,6 +1511,17 @@ const (
 	// replaced is closed, so there is nothing for either to hold up.
 	LinkSupersedes   LinkKind = "supersedes"
 	LinkSupersededBy LinkKind = "superseded-by"
+	// LinkRolledOverFrom records that this task was filed to carry on a
+	// durable task whose record had grown past its limits (-> the
+	// predecessor's ID), and LinkRolledOverTo is the same fact written on
+	// the predecessor (-> the successor's ID). One writer for both:
+	// Store.Rollover (design/design/durable-tasks.design.md#DT-15).
+	//
+	// LinkSupersedes' shape: both directions stored, provenance only,
+	// neither blocks. A reader resolving a closed task with a
+	// LinkRolledOverTo forwards to the successor.
+	LinkRolledOverFrom LinkKind = "rolled-over-from"
+	LinkRolledOverTo   LinkKind = "rolled-over-to"
 	// LinkGoogleChat records the Google Chat space linked to this task
 	// (-> space resource name like "spaces/AAAAAAAAAAA" or space URL).
 	// Provenance/external reference only, never blocks dispatch.
@@ -1584,6 +1849,9 @@ type Task struct {
 	// Hosting says whether this task runs unattended or opens an interactive
 	// terminal console attached to its sandbox (unattended or console).
 	Hosting Hosting `json:"hosting,omitempty"`
+	// Skills is the per-task repository skill discovery override (nil defers
+	// to the target repository and deployment defaults).
+	Skills *SkillsConfig `json:"skills,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a

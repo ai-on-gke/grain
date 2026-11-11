@@ -21,6 +21,7 @@ import (
 	"log"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -222,7 +223,8 @@ func reconcileCI(ctx context.Context, deps Deps, now time.Time) error {
 			running := !run.Conclusion.Done()
 			if running {
 				if repo, err := model.ParseRepo(run.Repo); err == nil {
-					if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, repo); err == nil && disabled {
+					if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, repo); err == nil && disabled &&
+						!scheduledRunKeepsGrainCI(ctx, deps.Store, repo, run, mode) {
 						if rules, rerr := deps.Store.MergeRulesOf(ctx, repo); rerr == nil && (rules == nil || !rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()) {
 							reason := cancelReasonForCIMode(mode)
 							deps.CI.Cancel(run.ID, reason, ci.CancelBySystem)
@@ -453,6 +455,30 @@ func reconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 	default:
 		return collectCIRun(ctx, deps, task, *status, now)
 	}
+}
+
+// scheduledRunKeepsGrainCI reports whether run is a scheduled workflow's
+// own `schedule` run on repo (scheduledWorkflowRequester, or an infra
+// re-run of one) whose schedule runs on grain CI under mode
+// (model.Schedule.GrainCI) -- a run the sweep of a ci_mode: github
+// repository must leave alone, since the schedule's own reconciler
+// started it there on purpose.
+func scheduledRunKeepsGrainCI(ctx context.Context, store *model.Store, repo model.RepoRef, run ci.Run, mode model.CIMode) bool {
+	if run.Event != ci.EventSchedule || store == nil {
+		return false
+	}
+	id, ok := strings.CutPrefix(run.RequestedBy, scheduledWorkflowStarter+":")
+	if !ok {
+		return false
+	}
+	if i := strings.LastIndex(id, infraRetrySuffix); i >= 0 {
+		if n, err := strconv.Atoi(id[i+len(infraRetrySuffix):]); err != nil || n <= 0 {
+			return false
+		}
+		id = id[:i]
+	}
+	sched, err := store.GetSchedule(ctx, id)
+	return err == nil && sched != nil && sched.Target.Same(repo) && sched.WorkflowRunsUnder(mode)
 }
 
 // repoExplicitlyDisablesGrainCI reports whether repo's stored RepoConfig

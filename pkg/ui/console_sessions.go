@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -75,6 +76,15 @@ type ConsoleSessionSetting struct {
 	// NetworkAccess is "" for the deployment's own default, or one of
 	// model.NetworkAccesses().
 	NetworkAccess string `json:"networkAccess,omitempty"`
+	// EffectiveNetworkAccess is the network this session's runs are
+	// actually given when that is not NetworkAccess: "open" when the
+	// session asks for "none" on a sandbox backend that cannot withhold a
+	// network (sandboxesIsolateNetwork false, e.g. -host-sandboxes), where
+	// orchestrator.reconcileConsoleSessions files the session's task with
+	// egress whatever is chosen. "" when the setting is what runs get, so
+	// the pane warns only when its select would otherwise say something
+	// untrue.
+	EffectiveNetworkAccess string `json:"effectiveNetworkAccess,omitempty"`
 	// TasksApproved is whether tasks this session proposes are filed
 	// approved rather than waiting for a person. False is the default --
 	// see model.ConsoleSession's own doc comment on why.
@@ -151,10 +161,13 @@ type ConsoleSessionSettingsResponse struct {
 	// unconfigured capability would go on being tickable here after the
 	// rest of the app stopped offering them (configuredCapabilities,
 	// ui/src/state.js).
-	Capabilities []Capability `json:"capabilities"`
+	Capabilities []Capability `json:"capabilities,omitempty"`
 	// NetworkAccessOptions is model.NetworkAccesses() as strings, for
 	// the same reason Settings carries it.
-	NetworkAccessOptions []string `json:"networkAccessOptions"`
+	NetworkAccessOptions []string `json:"networkAccessOptions,omitempty"`
+	Total                int      `json:"total,omitempty"`
+	Truncated            bool     `json:"truncated,omitempty"`
+	NextCursor           string   `json:"nextCursor,omitempty"`
 }
 
 // UpdateConsoleSessionRequest is PUT /api/console-sessions/{id}: the
@@ -187,6 +200,24 @@ type UpdateConsoleSessionRequest struct {
 	// setting rather than a task edit -- the next cycle resolves the
 	// session's reads from it -- so it needs writable settings.
 	ReadsAll *bool `json:"readsAll"`
+	// AdoptShippedDefaults adds the shipped Tier 1 grants the session
+	// lacks (ConsoleSessionSetting.MissingShippedDefaults) to what it
+	// holds when the request is served, keeping everything else it
+	// holds. It is the pane's Adopt shipped defaults button, and it is
+	// resolved here rather than by the caller because a caller's copy
+	// of the held set may be stale: a tab that read the session before
+	// another tab granted it something, then sent held plus missing, put
+	// back the old set and lost that grant (2026-11-07 director agent
+	// API walkthrough, finding 4). Exclusive with Capabilities.
+	AdoptShippedDefaults bool `json:"adoptShippedDefaults,omitempty"`
+	// ExpectCapabilities is the held set (ConsoleSessionSetting.
+	// Capabilities) the caller computed Capabilities from. Given, the
+	// edit is refused with a 409 coded "stale" (staleEditError),
+	// changing nothing, when the session no longer holds exactly that
+	// set -- somebody else changed its grants after the caller read
+	// them -- so a whole-list save cannot silently undo their change.
+	// Order does not matter. Only valid alongside Capabilities.
+	ExpectCapabilities *[]string `json:"expectCapabilities,omitempty"`
 
 	// renameByAgent marks a Title written by the session's own agent
 	// (RenameConsoleSessionOfTask) rather than by a person: it is
@@ -356,11 +387,11 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 						if g.Capability == "" || legacyAdm || legacyHost {
 							continue
 						}
-						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) &&
+						if g.Via == model.GrantByDefault && !containsSessionGrantKey(s.Capabilities, g.Capability) &&
 							(!model.IsConsoleSessionDefaultGrant(g.Capability) || s.DeclinesDefault(g.Capability)) {
 							continue
 						}
-						if !slices.Contains(capabilities, g.Capability) {
+						if !containsSessionGrantKey(capabilities, g.Capability) {
 							capabilities = append(capabilities, g.Capability)
 						}
 					}
@@ -430,6 +461,10 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			}
 			missingShippedDefaults = missing
 		}
+		var effectiveNetwork string
+		if model.NetworkAccess(networkAccess) == model.NetworkNone && !c.sandboxesIsolateNetwork() {
+			effectiveNetwork = string(model.NetworkOpen)
+		}
 		out = append(out, ConsoleSessionSetting{
 			ID:                     s.ID,
 			Title:                  title,
@@ -438,6 +473,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			Capabilities:           capabilities,
 			MissingShippedDefaults: missingShippedDefaults,
 			NetworkAccess:          networkAccess,
+			EffectiveNetworkAccess: effectiveNetwork,
 			TasksApproved:          tasksApproved,
 			KeepRunning:            keepRunning,
 			Hosting:                hosting,
@@ -548,7 +584,88 @@ func (c *Client) consoleSessionCrowding(ctx context.Context, taskID string) (boo
 // new capabilities onto it on the next cycle
 // (orchestrator.syncConsoleSessionTask), which is the same one-writer
 // discipline every other setting follows.
+//
+// Edits are served one at a time (consoleSessionEditMu), and an edit
+// that names what it was computed from -- adoptShippedDefaults, or
+// capabilities with expectCapabilities -- is resolved against the
+// session as it is listed now (resolveConsoleSessionCapabilityEdit),
+// inside that one-at-a-time section, so no other edit can land between
+// that read and this write.
 func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req UpdateConsoleSessionRequest) ([]ConsoleSessionSetting, error) {
+	c.consoleSessionEditMu.Lock()
+	defer c.consoleSessionEditMu.Unlock()
+	if req.AdoptShippedDefaults || req.ExpectCapabilities != nil {
+		resolved, err := c.resolveConsoleSessionCapabilityEdit(ctx, id, req)
+		if err != nil {
+			return nil, err
+		}
+		req = resolved
+	}
+	return c.updateConsoleSession(ctx, id, req)
+}
+
+// resolveConsoleSessionCapabilityEdit turns an edit that depends on what
+// the session holds into a plain Capabilities edit, reading what it
+// holds the way GET /api/console-sessions lists it -- which is what the
+// pane read, and what MissingShippedDefaults is measured against.
+//
+// adoptShippedDefaults becomes held plus the missing shipped defaults;
+// expectCapabilities is checked against held and refused, as a
+// staleEditError, when the two differ as sets. With nothing missing,
+// adopting is left a no-op rather than a save of held, which would also
+// decline any session default held does not list.
+func (c *Client) resolveConsoleSessionCapabilityEdit(ctx context.Context, id string, req UpdateConsoleSessionRequest) (UpdateConsoleSessionRequest, error) {
+	if req.AdoptShippedDefaults && req.Capabilities != nil {
+		return req, validationErrorf("adoptShippedDefaults and capabilities are exclusive: adopting adds the missing shipped defaults to what the session holds now, so send one or the other")
+	}
+	if req.ExpectCapabilities != nil && req.Capabilities == nil {
+		return req, validationErrorf("expectCapabilities is the held set capabilities was computed from, so it needs capabilities alongside it")
+	}
+	listed, err := c.ListConsoleSessions(ctx)
+	if err != nil {
+		return req, err
+	}
+	i := slices.IndexFunc(listed, func(s ConsoleSessionSetting) bool { return s.ID == id })
+	if i < 0 {
+		// updateConsoleSession says why: not configured, or settings
+		// read-only.
+		return req, nil
+	}
+	current := listed[i]
+	if req.ExpectCapabilities != nil && !sameCapabilitySet(*req.ExpectCapabilities, current.Capabilities) {
+		return req, &staleEditError{Kind: "console session", ID: id}
+	}
+	if req.AdoptShippedDefaults {
+		req.AdoptShippedDefaults = false
+		if len(current.MissingShippedDefaults) > 0 {
+			next := slices.Clone(current.Capabilities)
+			for _, capID := range current.MissingShippedDefaults {
+				if !slices.Contains(next, capID) {
+					next = append(next, capID)
+				}
+			}
+			req.Capabilities = &next
+		}
+	}
+	return req, nil
+}
+
+// sameCapabilitySet reports whether a and b name the same capabilities,
+// in any order and ignoring repeats and surrounding space.
+func sameCapabilitySet(a, b []string) bool {
+	set := func(ids []string) map[string]bool {
+		out := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			if id = strings.TrimSpace(id); id != "" {
+				out[id] = true
+			}
+		}
+		return out
+	}
+	return maps.Equal(set(a), set(b))
+}
+
+func (c *Client) updateConsoleSession(ctx context.Context, id string, req UpdateConsoleSessionRequest) ([]ConsoleSessionSetting, error) {
 	cfg, err := c.consoleSessionConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -670,10 +787,10 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		// unticked: declined, so it stays off when the session's task is
 		// filed again, and ticked again, no longer.
 		declined := slices.DeleteFunc(slices.Clone(session.DeclinedDefaults), func(id string) bool {
-			return model.IsConsoleSessionDefaultGrant(id) && slices.Contains(ids, id)
+			return model.IsConsoleSessionDefaultGrant(id) && containsSessionGrantKey(ids, id)
 		})
 		for _, id := range model.ConsoleSessionDefaultGrants() {
-			if !slices.Contains(ids, id) && !slices.Contains(declined, id) {
+			if !containsSessionGrantKey(ids, id) && !containsSessionGrantKey(declined, id) {
 				declined = append(declined, id)
 			}
 		}
@@ -1051,11 +1168,18 @@ func (c *Client) sandboxesIsolateNetwork() bool {
 // from the task: given already, so one an operator then removes is not
 // given back, while one the task never had still reaches it on the next
 // sync.
+func containsSessionGrantKey(list []string, capability string) bool {
+	key := model.CanonicalGrantKey(capability)
+	return slices.ContainsFunc(list, func(s string) bool {
+		return model.CanonicalGrantKey(s) == key
+	})
+}
+
 func consoleSessionHeldDefaults(grants []model.Grant) []string {
 	var out []string
 	for _, g := range grants {
-		if model.IsConsoleSessionDefaultGrant(g.Capability) && !slices.Contains(out, g.Capability) {
-			out = append(out, g.Capability)
+		if model.IsConsoleSessionDefaultGrant(g.Capability) && !containsSessionGrantKey(out, g.Capability) {
+			out = append(out, model.CanonicalGrantKey(g.Capability))
 		}
 	}
 	return out
@@ -1196,11 +1320,16 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		// newly created session starts holding what its own proposals are
 		// seeded with (grain/task-1983) while keeping session.Capabilities as
 		// the single source of truth an operator can untick (grain/task-2126).
+		// For a limited role, keep only capabilities within the caller's own role.
+		role := accessRoleFromContext(ctx)
 		seen := map[string]bool{}
 		defs := model.DefaultConsoleSessions()
 		if len(defs) > 0 {
 			for _, capability := range defs[0].Capabilities {
 				if capability == "" || seen[capability] {
+					continue
+				}
+				if role != nil && !role.Full && roleGrantRefusal(role, "capabilities", capability, c.normalizeCapabilityID) != nil {
 					continue
 				}
 				seen[capability] = true
@@ -1215,18 +1344,26 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 			if _, ok := c.capabilityByID(capability); !ok {
 				continue
 			}
+			if role != nil && !role.Full && roleGrantRefusal(role, "capabilities", capability, c.normalizeCapabilityID) != nil {
+				continue
+			}
 			seen[capability] = true
 			caps = append(caps, capability)
 		}
 	}
 
+	role := accessRoleFromContext(ctx)
 	access := model.NetworkAccess(req.NetworkAccess)
 	if access != "" && !model.ValidNetworkAccess(access) {
 		return "", nil, validationErrorf("networkAccess must be one of %s, or empty for this deployment's own default",
 			networkAccessNames())
 	}
 	if access == "" {
-		access = model.NetworkOpen
+		if role != nil && !role.Full && c.networkAccessWidens(ctx, "", string(model.NetworkOpen)) {
+			access = model.NetworkNone
+		} else {
+			access = model.NetworkOpen
+		}
 	}
 
 	var reads []model.RepoRef
@@ -1257,21 +1394,36 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		return "", nil, err
 	}
 
+	readsAll := req.ReadsAll
+	var declinedDefaults []string
+	if role != nil && !role.Full {
+		if readsAll == nil && !role.allows("tasks:read", "") {
+			off := false
+			readsAll = &off
+		}
+		for _, defID := range model.ConsoleSessionDefaultGrants() {
+			if !containsSessionGrantKey(caps, defID) && roleGrantRefusal(role, "capabilities", defID, c.normalizeCapabilityID) != nil {
+				declinedDefaults = append(declinedDefaults, defID)
+			}
+		}
+	}
+
 	newSession := model.ConsoleSession{
-		ID:              id,
-		Title:           title,
-		TitleSource:     titleSource,
-		Team:            team,
-		Capabilities:    caps,
-		NetworkAccess:   access,
-		TasksApproved:   req.TasksApproved,
-		KeepRunning:     req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
-		Hosting:         sessionHosting,
-		Reads:           reads,
-		Writes:          writes,
-		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),
-		Model:           chosenModel,
-		ReadsAll:        req.ReadsAll,
+		ID:               id,
+		Title:            title,
+		TitleSource:      titleSource,
+		Team:             team,
+		Capabilities:     caps,
+		DeclinedDefaults: declinedDefaults,
+		NetworkAccess:    access,
+		TasksApproved:    req.TasksApproved,
+		KeepRunning:      req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		Hosting:          sessionHosting,
+		Reads:            reads,
+		Writes:           writes,
+		GoogleChatSpace:  strings.TrimSpace(req.GoogleChatSpace),
+		Model:            chosenModel,
+		ReadsAll:         readsAll,
 	}
 
 	sessions = append(sessions, newSession)
@@ -1283,8 +1435,13 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return "", nil, err
 	}
+	stateRepo := c.stateRepoRef()
+	if role != nil && !role.Full && stateRepo.Owner != "" &&
+		!role.allows("settings:read", "") && !role.allows("tasks:read", stateRepo.String()) {
+		stateRepo = model.RepoRef{}
+	}
 	taskID, err := model.FileConsoleSessionTask(ctx, c.Store, newSession, model.FileConsoleSessionOptions{
-		StateRepo:       c.stateRepoRef(),
+		StateRepo:       stateRepo,
 		NetworkIsolates: c.sandboxesIsolateNetwork(),
 		Now:             now,
 	})
@@ -1530,9 +1687,33 @@ func (c *Client) DeleteConsoleSession(ctx context.Context, id string) error {
 
 // handleListConsoleSessions is GET /api/console-sessions.
 func (s *Server) handleListConsoleSessions(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageTiny)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	sessions, err := s.tasks.ListConsoleSessions(r.Context())
 	if err != nil {
 		writeClientError(w, err)
+		return
+	}
+	if list.Paged {
+		matched := filterList(sessions, func(cs ConsoleSessionSetting) bool {
+			return list.matches(cs.ID, cs.Title, cs.TaskID, cs.Team)
+		})
+		page := pageOfBy(matched, list, func(cs ConsoleSessionSetting) string { return cs.ID })
+		for i := range page.Items {
+			page.Items[i].MissingShippedDefaults = nil
+			if len(page.Items[i].AutoReads) > listPageSmall {
+				page.Items[i].AutoReads = page.Items[i].AutoReads[:listPageSmall]
+			}
+		}
+		writeJSON(w, http.StatusOK, ConsoleSessionSettingsResponse{
+			Sessions:   page.Items,
+			Total:      page.Total,
+			Truncated:  page.Truncated,
+			NextCursor: page.NextCursor,
+		})
 		return
 	}
 	// The same two readings GET /api/config's own capability listing is

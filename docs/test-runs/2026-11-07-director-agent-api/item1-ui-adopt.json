@@ -1,0 +1,24 @@
+[
+  {
+    "width": "desktop",
+    "missingBefore": 10,
+    "bannerInsideViewport": true,
+    "buttonInsideBanner": true,
+    "missingAfter": 0,
+    "customExtraKept": true,
+    "heldAfter": 18,
+    "horizontalOverflow": false,
+    "pageErrors": []
+  },
+  {
+    "width": "phone",
+    "missingBefore": 10,
+    "bannerInsideViewport": true,
+    "buttonInsideBanner": true,
+    "missingAfter": 0,
+    "customExtraKept": true,
+    "heldAfter": 18,
+    "horizontalOverflow": false,
+    "pageErrors": []
+  }
+]

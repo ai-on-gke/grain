@@ -177,9 +177,10 @@ func TestGCPKeyLeaseIsPlacedActivatedAndRevoked(t *testing.T) {
 		t.Errorf("setup = %q", resp.Setup)
 	}
 	script := placement(t, resp, resp.Setup)
-	if !strings.Contains(script.Content, "--key-file='"+GCPKeyPath+"'") || !strings.Contains(script.Content, "config set project 'grain-test-proj'") {
+	if !strings.Contains(script.Content, "gcloud auth activate-service-account --key-file='"+GCPKeyPath+"'") || !strings.Contains(script.Content, "config set project 'grain-test-proj'") {
 		t.Errorf("setup script = %q", script.Content)
 	}
+	assertSetupKeepsStderr(t, script.Content)
 	for _, want := range []string{"permission set reader", "grain-049f1e09-reader-1@grain-test-proj.iam.gserviceaccount.com", "project grain-test-proj"} {
 		if !strings.Contains(resp.PromptSection, want) {
 			t.Errorf("prompt section %q lacks %q", resp.PromptSection, want)

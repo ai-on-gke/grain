@@ -1,0 +1,43 @@
+=== one job failing once then passing (exit 0)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    Qualification: PASS v1.4.0-rc.2.
+=== one job failing twice (exit 1)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    FAIL loadtest: failed again on its retry (failure,failure): confirmed red
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    Qualification: FAIL v1.4.0-rc.2 (loadtest).
+=== three jobs failing once each (exit 1)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    PENDING loadtest: failed for the first time (failure); it gets one retry on v1.4.0-rc.2
+    PENDING merge-stress: failed for the first time (failure); it gets one retry on v1.4.0-rc.2
+    PENDING vulns: failed for the first time (failure); it gets one retry on v1.4.0-rc.2
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    FAIL systemic: 3 jobs failed on v1.4.0-rc.2 (loadtest merge-stress vulns), more than the 2 that may use a flake retry
+    Qualification: FAIL v1.4.0-rc.2 (systemic).
+=== matrix shards failing once each (exit 2)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    PENDING go-long: failed for the first time (failure); it gets one retry on v1.4.0-rc.2
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    RERUN nightly go-long flake
+    Qualification: PENDING v1.4.0-rc.2 (go-long).
+=== matrix shards: shard 1 fails its retry (exit 1)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    FAIL go-long: failed again on its retry (failure,failure): confirmed red
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    Qualification: FAIL v1.4.0-rc.2 (go-long).
+=== the roll-up job failing alone (exit 0)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    Qualification: PASS v1.4.0-rc.2.
+=== a job cancelled three attempts in a row (exit 3)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    INFRA loadtest: cancelled, timed out or starved of capacity (infra,infra,infra); re-run, not red; stalled after 3 infra attempts in a row
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    RERUN nightly loadtest infra
+    Qualification: INFRA v1.4.0-rc.2 (loadtest).
+=== a job blocked (cancelled, then queued) (exit 2)
+    Qualification of v1.4.0-rc.2 (89abcdef0123).
+    PENDING loadtest: still running (infra,pending)
+    SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    Qualification: PENDING v1.4.0-rc.2 (loadtest).
