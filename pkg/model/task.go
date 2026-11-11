@@ -1511,6 +1511,17 @@ const (
 	// replaced is closed, so there is nothing for either to hold up.
 	LinkSupersedes   LinkKind = "supersedes"
 	LinkSupersededBy LinkKind = "superseded-by"
+	// LinkRolledOverFrom records that this task was filed to carry on a
+	// durable task whose record had grown past its limits (-> the
+	// predecessor's ID), and LinkRolledOverTo is the same fact written on
+	// the predecessor (-> the successor's ID). One writer for both:
+	// Store.Rollover (design/design/durable-tasks.design.md#DT-15).
+	//
+	// LinkSupersedes' shape: both directions stored, provenance only,
+	// neither blocks. A reader resolving a closed task with a
+	// LinkRolledOverTo forwards to the successor.
+	LinkRolledOverFrom LinkKind = "rolled-over-from"
+	LinkRolledOverTo   LinkKind = "rolled-over-to"
 	// LinkGoogleChat records the Google Chat space linked to this task
 	// (-> space resource name like "spaces/AAAAAAAAAAA" or space URL).
 	// Provenance/external reference only, never blocks dispatch.

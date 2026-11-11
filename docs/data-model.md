@@ -3780,7 +3780,7 @@ apart, as [above](#decided-whoever-writes-it-owns-it).
 
 | Group | Tables |
 |---|---|
-| The deployment | `grain_schema` (the stamped version), `grain_instance` (the installation's durable id), `grain_config` (the settings row), `pipeline_pause`, `scheduled_upgrade`, `tuning_recommendation` |
+| The deployment | `grain_schema` (the stamped version), `grain_instance` (the installation's durable id), `grain_config` (the settings row), `pipeline_pause`, `scheduled_upgrade`, `auto_upgrade_run`, `auto_upgrade_release`, `tuning_recommendation` |
 | Tasks: declaration | `task`, `task_sequence`, `task_link`, `task_tag`, `task_read`, `task_write`, `task_grant`, `task_custom_field`, `task_filed_template`, `work_origin_comment` |
 | Tasks: observation | `task_observation`, `task_comment`, `task_attachment`, `task_grant_wait`, `task_context`, `task_brief_edit` |
 | Runs | `task_run`, `task_run_tool`, `task_run_check_wait`, `task_run_wait_credit`, `task_run_ci_habit`, `task_run_spool_cursor`, `task_run_unmatched_failure`, `task_run_exec_failure`, `task_suspension`, `lease` |
