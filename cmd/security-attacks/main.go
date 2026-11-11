@@ -235,35 +235,47 @@ const (
 type result struct {
 	status Status
 	output []string
+	own    []string // the lines of output the top-level test printed itself, not its subtests
 }
 
 var reasonLine = regexp.MustCompile(`^\s+\S+\.go:\d+: (.*)$`)
 
-// finish settles a skipped test's status from its reason: the last
-// file:line message it printed, which is the t.Skip call's own. An
+// skipReason is a skipped test's reason: the last file:line message the
+// top-level test printed itself, which is its t.Skip call's own. A
+// subtest's message -- a parallel subtest's can come after the parent's
+// skip -- is not.
+func (r *result) skipReason() string {
+	for i := len(r.own) - 1; i >= 0; i-- {
+		if m := reasonLine.FindStringSubmatch(r.own[i]); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// finish settles a skipped test's status from its reason (skipReason). An
 // earlier t.Log, or a subtest's output, that happens to start "known
 // gap:" does not excuse a skip for some other reason.
 func (r *result) finish() {
 	if r.status != Skip {
 		return
 	}
-	for i := len(r.output) - 1; i >= 0; i-- {
-		m := reasonLine.FindStringSubmatch(r.output[i])
-		if m == nil {
-			continue
-		}
-		reason := strings.ToLower(m[1])
-		switch {
-		case strings.HasPrefix(reason, "known gap:"):
-			r.status = KnownGap
-		case strings.HasPrefix(reason, "infrastructure:"):
-			r.status = Infra
-		}
-		return
+	reason := strings.ToLower(r.skipReason())
+	switch {
+	case strings.HasPrefix(reason, "known gap:"):
+		r.status = KnownGap
+	case strings.HasPrefix(reason, "infrastructure:"):
+		r.status = Infra
 	}
 }
 
 func (r *result) reason() string {
+	switch r.status {
+	case Skip, KnownGap, Infra:
+		if s := r.skipReason(); s != "" {
+			return s
+		}
+	}
 	for _, line := range r.output {
 		if m := reasonLine.FindStringSubmatch(line); m != nil {
 			return m[1]
@@ -331,7 +343,11 @@ func parseJSON(r io.Reader, log io.Writer) *pkgRun {
 				run.failed = lastMeaningful(pkgOut)
 			}
 		case ev.Action == "output":
-			run.test(top).output = append(run.test(top).output, strings.TrimRight(ev.Output, "\n"))
+			r, line := run.test(top), strings.TrimRight(ev.Output, "\n")
+			r.output = append(r.output, line)
+			if sub == "" {
+				r.own = append(r.own, line)
+			}
 		case sub != "":
 			// Subtests are their parent's business: it fails when they do.
 		case ev.Action == "run":
@@ -350,24 +366,40 @@ func parseJSON(r io.Reader, log io.Writer) *pkgRun {
 	return run
 }
 
-var verdictLine = regexp.MustCompile(`^--- (PASS|FAIL|SKIP): (Test[^\s/]*) `)
+var (
+	verdictLine = regexp.MustCompile(`^--- (PASS|FAIL|SKIP): (Test[^\s/]*) `)
+	headerLine  = regexp.MustCompile(`^=== (?:RUN|NAME|CONT|PAUSE)\s+(Test\S*)$`)
+)
 
 // parseText reads `go test -v` output: only unindented --- lines are
-// top-level verdicts, and the indented lines after one are its output.
+// top-level verdicts. An indented line belongs to the test the last ===
+// header named -- -v streams a test's messages ahead of its verdict -- or,
+// in output that is not streamed, to the verdict just above it.
 func parseText(r io.Reader) *pkgRun {
 	run := newPkgRun()
 	var cur *result
+	own := false
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 	for sc.Scan() {
 		line := sc.Text()
 		if m := verdictLine.FindStringSubmatch(line); m != nil {
-			cur = run.test(m[2])
+			cur, own = run.test(m[2]), true
 			cur.status = map[string]Status{"PASS": Pass, "FAIL": Fail, "SKIP": Skip}[m[1]]
+			continue
+		}
+		if m := headerLine.FindStringSubmatch(line); m != nil {
+			top, sub, _ := strings.Cut(m[1], "/")
+			cur, own = run.test(top), sub == ""
 			continue
 		}
 		if cur != nil && strings.HasPrefix(line, "    ") {
 			cur.output = append(cur.output, line)
+			// Unstreamed, a subtest's lines are indented four spaces more
+			// than its parent's.
+			if own && !strings.HasPrefix(line, "        ") {
+				cur.own = append(cur.own, line)
+			}
 			continue
 		}
 		cur = nil

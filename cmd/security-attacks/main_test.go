@@ -267,10 +267,56 @@ func TestOnlyTheSkipsOwnReasonExcusesIt(t *testing.T) {
 		{[]string{"    x_test.go:5: known gap: logged earlier", "    x_test.go:9: initdb not installed"}, Skip},
 		{[]string{"    x_test.go:5: infrastructure: logged earlier", "    x_test.go:9: initdb not installed"}, Skip},
 	} {
-		r := &result{status: Skip, output: c.output}
+		r := &result{status: Skip, output: c.output, own: c.output}
 		r.finish()
 		if r.status != c.want {
 			t.Errorf("skip with output %q = %s, want %s", c.output, r.status, c.want)
+		}
+	}
+}
+
+// What go test really prints for a test that skips for one reason while a
+// parallel subtest logs "known gap:" after it, and for an excused skip:
+// -v streams a test's messages ahead of its verdict, and -json indents a
+// subtest's messages no deeper than its parent's.
+func TestASubtestsMessageDoesNotExcuseItsParentsSkip(t *testing.T) {
+	verbose := `=== RUN   TestX
+=== RUN   TestX/sub
+=== PAUSE TestX/sub
+=== NAME  TestX
+    x_test.go:5: initdb missing
+=== CONT  TestX/sub
+    x_test.go:4: known gap: sub
+--- SKIP: TestX (0.00s)
+    --- PASS: TestX/sub (0.00s)
+=== RUN   TestY
+    x_test.go:7: known gap: real
+--- SKIP: TestY (0.00s)
+PASS
+`
+	events := `{"Action":"run","Test":"TestX"}
+{"Action":"output","Test":"TestX","Output":"=== RUN   TestX\n"}
+{"Action":"run","Test":"TestX/sub"}
+{"Action":"output","Test":"TestX/sub","Output":"=== RUN   TestX/sub\n"}
+{"Action":"output","Test":"TestX","Output":"    x_test.go:5: initdb missing\n"}
+{"Action":"output","Test":"TestX/sub","Output":"    x_test.go:4: known gap: sub\n"}
+{"Action":"pass","Test":"TestX/sub"}
+{"Action":"output","Test":"TestX","Output":"--- SKIP: TestX (0.00s)\n"}
+{"Action":"skip","Test":"TestX"}
+{"Action":"run","Test":"TestY"}
+{"Action":"output","Test":"TestY","Output":"    x_test.go:7: known gap: real\n"}
+{"Action":"output","Test":"TestY","Output":"--- SKIP: TestY (0.00s)\n"}
+{"Action":"skip","Test":"TestY"}
+`
+	for name, run := range map[string]*pkgRun{
+		"-v":    parseText(strings.NewReader(verbose)),
+		"-json": parseJSON(strings.NewReader(events), io.Discard),
+	} {
+		if x := run.tests["TestX"]; x == nil || x.status != Skip || x.reason() != "initdb missing" {
+			t.Errorf("%s: TestX = %+v, want a skip for initdb missing", name, x)
+		}
+		if y := run.tests["TestY"]; y == nil || y.status != KnownGap || y.reason() != "known gap: real" {
+			t.Errorf("%s: TestY = %+v, want a known gap", name, y)
 		}
 	}
 }
