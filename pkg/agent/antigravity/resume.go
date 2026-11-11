@@ -49,7 +49,7 @@ import (
 // established, was that --conversation composes with --input-format
 // stream-json and a fresh user turn on stdin: docs/agy-surface.md records
 // the flag's existence, not its behaviour, and every scheduled run of
-// .grain/workflows/live-agent.yml had died at "Require a credential"
+// .github/workflows/live-agent.yml had died at "Require a credential"
 // without executing a live agy at all.
 //
 // It has now been measured, and it holds. live_resume_stub_test.go is the
@@ -169,7 +169,7 @@ import (
 // conversation out of its own on-disk database, which is what the request
 // bodies show -- and if that ever changes, these probes go on passing
 // while a deployment stops resuming. tests/e2e/live_resume_test.go, and
-// the credential .grain/workflows/live-agent.yml has never been given,
+// the credential .github/workflows/live-agent.yml has never been given,
 // remain the only way to see it.
 //
 // # A refused model turn gets a grain-owned deadline
