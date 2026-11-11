@@ -70,6 +70,12 @@ triggers match, posting findings rather than pushing fixes unless asked to,
 and re-reading only what a new push changed. See "Gating reviews" under
 `.grain/triggers/<name>.yml`.
 
+To review every pull request with findings only, declare a gating
+trigger on `paths: ["**"]` naming a review template rather than a
+default review. Do not declare both, or every task is reviewed twice.
+This repository's `.grain/triggers/every-pr.yml` and
+`.grain/templates/pr-review.yml` are a worked example.
+
 ### `.grain/settings.yml`
 
 A repository can declare five of its own settings, in `.grain/settings.yml`
