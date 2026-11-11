@@ -178,6 +178,11 @@ func (a *ModelAuthorizer) Authorize(ctx context.Context, sandbox, owner, repo, a
 	owner, repo = canonicalizeRepo(owner, repo)
 
 	matchesTarget := target != nil && canonicalMatches(*target, owner, repo)
+	if _, off, err := a.removedFromDeployment(ctx, owner, repo, target, writes); err != nil {
+		return false, err
+	} else if off {
+		return false, nil
+	}
 	if action == "git-receive-pack" {
 		if matchesTarget {
 			return true, nil
@@ -203,6 +208,70 @@ func (a *ModelAuthorizer) Authorize(ctx context.Context, sandbox, owner, repo, a
 		}
 	}
 	return false, nil
+}
+
+// DeploymentRepoLister lists the repositories this deployment works in
+// -- Settings, Repositories; model.Store.TargetRepos. An empty list is an
+// unrestricted deployment (model.RepoAllowed). Optional on
+// ModelAuthorizer.Store: a store that cannot answer it restricts nothing
+// beyond the run's own scope.
+type DeploymentRepoLister interface {
+	TargetRepos(ctx context.Context) ([]string, error)
+}
+
+// RemovalExplainer is an Authorizer that can say a refusal was because
+// the repository was removed from the deployment while the run asking
+// was live (ModelAuthorizer.RemovedReason). Optional, as Refuser is.
+type RemovalExplainer interface {
+	RemovedReason(ctx context.Context, sandbox, owner, repo string) (string, bool)
+}
+
+// removedFromDeployment reports whether owner/repo (canonicalized) is the
+// run's own target or one of its write targets and is no longer on the
+// deployment's list, with the list as it stands.
+//
+// A run's scope is pinned when it is dispatched (Store.GitScope), and
+// dispatch is where the list is checked (orchestrator.reconcileTargetRepos)
+// -- so a repository removed while a run is live would otherwise stay
+// clonable and pushable by that run until it ended. Reads are left to the
+// scope: the list has never governed what a task may read.
+func (a *ModelAuthorizer) removedFromDeployment(ctx context.Context, owner, repo string,
+	target *model.RepoRef, writes []model.RepoRef) ([]string, bool, error) {
+
+	lister, ok := a.Store.(DeploymentRepoLister)
+	if !ok {
+		return nil, false, nil
+	}
+	bound := target != nil && canonicalMatches(*target, owner, repo)
+	for _, w := range writes {
+		bound = bound || canonicalMatches(w, owner, repo)
+	}
+	if !bound {
+		return nil, false, nil
+	}
+	allowed, err := lister.TargetRepos(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("gitproxy: reading the deployment's repositories: %w", err)
+	}
+	return allowed, !model.RepoAllowed(allowed, model.RepoFromStored(owner, repo)), nil
+}
+
+// RemovedReason implements RemovalExplainer: the refusal Authorize gave
+// sandbox for owner/repo, when it gave it because the repository came off
+// the deployment's list.
+func (a *ModelAuthorizer) RemovedReason(ctx context.Context, sandbox, owner, repo string) (string, bool) {
+	target, _, writes, err := a.Store.GitScope(ctx, sandbox)
+	if err != nil {
+		return "", false
+	}
+	// Canonicalized as Authorize does, so a request it refused for any
+	// spelling of the repo is explained the same way.
+	owner, repo = canonicalizeRepo(owner, repo)
+	allowed, off, err := a.removedFromDeployment(ctx, owner, repo, target, writes)
+	if err != nil || !off {
+		return "", false
+	}
+	return model.OffAllowlistAtProxyReason(model.RepoFromStored(owner, repo), allowed), true
 }
 
 // canonicalMatches reports whether r is the canonicalized owner/repo,
