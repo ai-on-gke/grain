@@ -74,16 +74,17 @@ func testsWorkflow(t *testing.T) string {
 // liveAgentWorkflow is the third one, and the only one that holds a model
 // credential: the nightly live agy run (tests/e2e/live_test.go).
 func liveAgentWorkflow(t *testing.T) string {
-	return read(t, ".grain", "workflows", "live-agent.yml")
+	return read(t, ".github", "workflows", "live-agent.yml")
 }
 
 // liveFrameworksWorkflow is live-agent.yml's counterpart for the other
 // two frameworks a deployment can dispatch: the nightly claude and codex
 // runs (pkg/agent/claude/claude_live_test.go,
-// pkg/agent/codex/codex_live_test.go), one job and one environment per
-// vendor credential.
+// pkg/agent/codex/codex_live_test.go), one job per vendor credential.
+// Both live on GitHub Actions: grain stopped firing scheduled grain CI
+// workflows once this repository went ci_mode: github.
 func liveFrameworksWorkflow(t *testing.T) string {
-	return read(t, ".grain", "workflows", "live-frameworks.yml")
+	return read(t, ".github", "workflows", "live-frameworks.yml")
 }
 
 // gcpSmokeWorkflow is the fourth, and the only one that holds a GCP

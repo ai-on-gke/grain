@@ -88,7 +88,7 @@ model accepts only access tokens that authority issued. The authority
 holds the first refresh request until a second arrives, so a race is
 forced rather than left to timing. No credential is involved. It runs
 nightly in the "Live codex probes (no credential)" step of
-`.grain/workflows/live-frameworks.yml`.
+`.github/workflows/live-frameworks.yml`.
 
 | Case | How the refresh starts | Result with 0.153.0 |
 | --- | --- | --- |

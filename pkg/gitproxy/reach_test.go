@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 func reachFixture(t *testing.T) (*gitproxy.Reach, *gitproxy.CredentialSet, *githubsim.Sim, *time.Time) {
@@ -100,5 +102,34 @@ func TestReachIsUnknownWithoutAListing(t *testing.T) {
 	var none *gitproxy.Reach
 	if got, err := none.Check("bouncer", "gke-labs", "bouncer", true); got != gitproxy.ReachUnknown || err != nil {
 		t.Errorf("nil Reach Check = %v, %v; want unknown", got, err)
+	}
+}
+
+func TestReachKeepsNonDefaultHostPrefixEvenWhenDefaultHostFieldIsEmpty(t *testing.T) {
+	t.Parallel()
+	reach, creds, _, _ := reachFixture(t)
+	if err := creds.SetToken("ghe", "tok-ghe"); err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.SetHost("ghe", gitproxy.CredentialHost{
+		Host: "ghe.example.com",
+		Kind: model.GitHostGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gheSim := githubsim.New("acme", "internal", "", "main")
+	gheSim.Reachable = map[string][]githubsim.ReachableRepo{
+		"tok-ghe": {{FullName: "acme/internal", Push: true}},
+	}
+	reach.Transports = map[string]github.Transport{
+		"ghe.example.com": gheSim,
+	}
+
+	repos, ok, err := reach.ReposForHost("ghe", "ghe.example.com")
+	if err != nil || !ok || len(repos) != 1 {
+		t.Fatalf("ReposForHost = %v, %v, %v; want 1 repo", repos, ok, err)
+	}
+	if repos[0].Repo != "ghe.example.com/acme/internal" {
+		t.Errorf("Repo = %q, want ghe.example.com/acme/internal", repos[0].Repo)
 	}
 }

@@ -94,7 +94,7 @@ func TestLiveRunWithAmbientPermissions(t *testing.T) {
 	t.Parallel()
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		skipUnlessLiveRequired(t, "GEMINI_API_KEY is not set")
+		skipUnlessLiveRequired(t, missingLiveSecret("GEMINI_API_KEY"))
 	}
 	agyPath, err := exec.LookPath("agy")
 	if err != nil {

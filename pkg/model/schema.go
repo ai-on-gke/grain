@@ -649,7 +649,15 @@ import "strconv"
 // (model.Config.HubEnvironmentName): the environment name a Grain Hub last
 // supplied as this deployment's default, so a rename of its hub entry can
 // replace it without overwriting a name the operator chose (grain/task-4200).
-const SchemaVersion = 137
+// 138 adds `grain_config`.`sandbox_shape_limits`
+// (model.Config.SandboxShapeLimits): the deployment-wide and per-role
+// ceilings on the sandbox shape a task may ask for (grain/task-4018).
+// 139 adds `grain_config`.`auto_upgrade_min_interval_hours`
+// (model.Config.AutoUpgradeMinIntervalHours, default 6; 0 = off) and
+// `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
+// the minimum interval between two completed automatic upgrades in release
+// mode, and when the last automatic upgrade succeeded (grain/task-4230).
+const SchemaVersion = 139
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2699,6 +2707,8 @@ var Tables = []string{
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
   ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`sandbox_shape_limits`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_upgrade_min_interval_hours`" + ` INTEGER NOT NULL DEFAULT 6,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3155,6 +3165,7 @@ var Tables = []string{
   ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`scheduled_at`" + ` DATETIME NULL,
   ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`succeeded_at`" + ` DATETIME NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

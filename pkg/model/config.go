@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -877,6 +878,15 @@ type Config struct {
 	// existed, which AutoUpgradeMode reads the way that grain did: daily
 	// when a channel is set, off when not.
 	AutoUpgradeOn string
+	// AutoUpgradeMinIntervalHours is the minimum interval, in hours,
+	// between two completed automatic upgrades in AutoUpgradeOnRelease mode
+	// (orchestrator's reconcileReleaseUpgrade): once a release-triggered
+	// upgrade has waited out its settle window, it waits until this long
+	// after the last successful automatic upgrade before scheduling a drain,
+	// and then goes straight to whatever release is newest then. Default
+	// DefaultAutoUpgradeMinIntervalHours (6); 0 turns the minimum interval
+	// off.
+	AutoUpgradeMinIntervalHours int
 	// JudgementModel is the model the symbolic model JudgementModelName
 	// ("judgement") resolves to: the model a durable judgement agent --
 	// the pipeline steward -- runs on (design/design/durable-tasks.design.md#DT-11,
@@ -977,6 +987,12 @@ type Config struct {
 	// grants are resolved, so a change applies to the next job without a
 	// restart. Stored comma-separated in one column, as TargetRepos is.
 	CIAPIRepos []string
+	// SandboxShapeLimits bounds the sandbox shape a task may ask for itself
+	// (Task.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB): a deployment-wide
+	// maximum every caller is held to, and optional per-role ceilings for
+	// limited roles (sandbox_shape_limits.go). Zero is grain's defaults.
+	// Stored as JSON in one column.
+	SandboxShapeLimits SandboxShapeLimits
 	// Registry configures self-registration and periodic heartbeating with a
 	// grain hub as a connected entry (design/design/hub.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in
@@ -1114,6 +1130,26 @@ func (c Config) AutoUpgradeMode() string {
 	return AutoUpgradeOff
 }
 
+// DefaultAutoUpgradeMinIntervalHours is the minimum interval in hours between
+// two completed automatic upgrades in AutoUpgradeOnRelease mode when a
+// deployment has not chosen another (Config.AutoUpgradeMinIntervalHours).
+const DefaultAutoUpgradeMinIntervalHours = 6
+
+// AutoUpgradeMinInterval returns the minimum interval between two completed
+// automatic upgrades in AutoUpgradeOnRelease mode, or 0 when turned off (or
+// negative in a hand-edited row). An hour count too large for a
+// time.Duration is read as the longest one rather than wrapping round to a
+// short or negative interval.
+func (c Config) AutoUpgradeMinInterval() time.Duration {
+	if c.AutoUpgradeMinIntervalHours <= 0 {
+		return 0
+	}
+	if int64(c.AutoUpgradeMinIntervalHours) > math.MaxInt64/int64(time.Hour) {
+		return math.MaxInt64
+	}
+	return time.Duration(c.AutoUpgradeMinIntervalHours) * time.Hour
+}
+
 // ParseAutoUpgradeOn reads a Config.AutoUpgradeOn a person typed:
 // one of AutoUpgradeModes, any case, or "" for AutoUpgradeOff.
 func ParseAutoUpgradeOn(raw string) (string, error) {
@@ -1203,10 +1239,11 @@ func DefaultConfig() Config {
 		// deployment that has chosen nothing keeps grain's own tenth of
 		// each volume free rather than nothing at all, which is what a
 		// zero here would mean (DiskFloor).
-		SandboxDiskFloorShare: DefaultDiskFloorShare,
-		SandboxDiskFloorMinMB: MinDiskFloorMB,
-		UpgradeCheckMode:      UpgradeCheckAuto,
-		DefaultFilters:        DefaultTaskFilters,
+		SandboxDiskFloorShare:       DefaultDiskFloorShare,
+		SandboxDiskFloorMinMB:       MinDiskFloorMB,
+		UpgradeCheckMode:            UpgradeCheckAuto,
+		AutoUpgradeMinIntervalHours: DefaultAutoUpgradeMinIntervalHours,
+		DefaultFilters:              DefaultTaskFilters,
 
 		K8sPriorityClassInteractive: DefaultK8sPriorityClassInteractive,
 		K8sPriorityClassAgent:       DefaultK8sPriorityClassAgent,

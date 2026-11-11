@@ -161,6 +161,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/tasks/{id}/context":                                   trusted,
 	"POST /api/tasks/{id}/compact":                                  trusted,
 	"POST /api/tasks/{id}/brief":                                    trusted,
+	"POST /api/tasks/{id}/rollover":                                 trusted,
 	"POST /api/tasks/{id}/pull-request":                             trusted,
 	"POST /api/pull-requests/adopt":                                 trusted,
 	"POST /api/pull-requests/review":                                trusted,
@@ -218,6 +219,7 @@ var routeAuthorization = map[string]authLevel{
 
 	// Repos: their configuration, releases and branches.
 	"POST /api/repos":                                                      trusted,
+	"POST /api/repos/plan":                                                 trusted,
 	"DELETE /api/repos/{owner}/{name}":                                     trusted,
 	"GET /api/repos/{owner}/{name}/ci-capabilities":                        trusted,
 	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        trusted,

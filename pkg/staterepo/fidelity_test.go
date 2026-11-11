@@ -1034,7 +1034,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// scheduled (model.AutoUpgradeRelease).
 	if err := store.SetAutoUpgradeRelease(ctx, model.AutoUpgradeRelease{
 		Newest: "v3.6.0", SeenAt: sub, Release: "v3.5.0", Target: "latest", ScheduledAt: &sub,
-		Outcome: model.AutoUpgradeFailed,
+		Outcome: model.AutoUpgradeFailed, SucceededAt: &sub,
 	}); err != nil {
 		t.Fatalf("recording a release-triggered upgrade: %v", err)
 	}

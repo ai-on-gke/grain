@@ -200,6 +200,7 @@ Each of these takes `<id>`, calls the route, and prints the task. `approve` and 
 | `run-now <id>` | `POST /api/tasks/{id}/run-now` | |
 | `compact [-handover-file f] <id>` | `POST /api/tasks/{id}/compact`. With a handover the task is compacted now, through every comment so far; without one its next run is asked to compact first (`design/design/durable-tasks.design.md#DT-15`) | |
 | `brief [-file f -reason r] <id>` | `GET /api/tasks/{id}/context` to show the current brief, handover age and compaction cursor; with `-file`, `POST /api/tasks/{id}/brief` replaces the brief (an empty file reverts to the original description) | |
+| `rollover <id>` | `POST /api/tasks/{id}/rollover`. Files a successor carrying the task's current brief, handover and settings, moves every reference to the task onto it, and closes the task as `rolled_over`; refused for a closed task, a running one, a console session, and a task that is not durable (`design/design/durable-tasks.design.md#DT-15`) | |
 | `resume <id>` | `POST /api/tasks/{id}/resume` | |
 | `capability <id> <capability-id> attach\|detach` | `POST /api/tasks/{id}/capabilities`. A bad verb gets `third argument must be attach or detach, got "<x>"`; fewer than three arguments get `usage: grain capability <id> <capability-id> attach\|detach` | admin |
 
@@ -244,6 +245,10 @@ _No flags._
 | `-reason` | string |  |  | why the brief changed (required with -file) |
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain rollover -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain resume -->
 _No flags._
 <!-- END GENERATED FLAGS -->
@@ -257,7 +262,7 @@ _No flags._
 ### 3.6 `grain defer`, `comment`, `close`/`delete`, `reopen` {#CLI-27}
 
 - `defer <id>` calls `POST /api/tasks/{id}/defer`.
-- `comment <id> <body…>` calls `POST /api/tasks/{id}/comments`. Every word after the id is the body, and a flag written after the id is refused.
+- `comment <id> <body…>` calls `POST /api/tasks/{id}/comments`. Every word after the id is the body, and a flag written after the id is refused. On a closed task the comment reaches no agent, and the command says so on stderr; `-reopen` sends `{"reopen": true}`, which reopens the task with the comment so a run is queued to answer it.
 - `close <id>` (alias `delete`) calls `POST /api/tasks/{id}/close`. `-close-pull-request` also closes the open pull request unmerged, and `-reason` is kept in history.
 - `reopen <id>` calls `POST /api/tasks/{id}/reopen` with `{"reason"}`.
 
@@ -271,6 +276,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-attach` | value |  |  | path to a local file to attach to the comment (repeatable) |
+| `-reopen` | bool |  |  | reopen the task if it is closed, so the comment reaches an agent (a comment on a closed task otherwise reaches none) |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain close -->

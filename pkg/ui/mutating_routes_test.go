@@ -73,6 +73,18 @@ func fileTask(approved bool) func(*testing.T, *ui.Client, sender) string {
 	}
 }
 
+// fileDurableTask is an approved durable task: what
+// POST /api/tasks/{id}/rollover rolls over.
+func fileDurableTask(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	task, err := client.CreateTask(context.Background(), ui.CreateTaskRequest{Title: "attributed", Approved: true,
+		NoRepo: true, Admission: string(model.AdmissionDurable)})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	return task.ID
+}
+
 // taskParkedOnQuestion is a task whose run parked it on a question
 // (ask_question): what POST /api/tasks/{id}/reply answers.
 func taskParkedOnQuestion(t *testing.T, client *ui.Client, _ sender) string {
@@ -444,6 +456,11 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/close": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
+		recorded:    lastEvent,
+	},
+	"POST /api/tasks/{id}/rollover": {
+		setup:       fileDurableTask,
+		agentGrants: []string{"api:dispatch:write"},
 		recorded:    lastEvent,
 	},
 	"POST /api/tasks/{id}/reopen": {
@@ -818,6 +835,7 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/deployment/git-connections/check":         true,
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
+	"POST /api/repos/plan":                               true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
