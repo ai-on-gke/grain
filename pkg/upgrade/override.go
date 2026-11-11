@@ -157,13 +157,6 @@ func (u *Upgrader) ImageTarget() (ImageTarget, bool) {
 
 // validateRepository is whether this deployment may pull from repo.
 func (u *Upgrader) validateRepository(repo string) error {
-	if u.Mode() == ModeKube {
-		base := strings.TrimSpace(u.cfg.Kube.Repository)
-		if base == "" && u.cfg.Kube.Track != "" {
-			base = installtrack.DefaultRepository(u.cfg.Kube.Track)
-		}
-		return installtrack.ValidateTargetRepository(base, repo)
-	}
 	base := strings.TrimSpace(u.cfg.Image.Repository)
 	if base == "" && u.cfg.Image.Track != "" {
 		base = installtrack.DefaultRepository(u.cfg.Image.Track)
@@ -219,6 +212,16 @@ func (u *Upgrader) validateImage(branch, image string, opts ImageOptions) (strin
 		return "", "", nil, err
 	}
 	isRollback := u.isRecordedRollbackImage(image)
+	// A Kubernetes deployment takes an explicit image for one thing only:
+	// rolling back to the exact image its last upgrade replaced. Anything
+	// else would be a new way to point its Deployment at an image of the
+	// caller's choosing, and one without the edition guard the image path
+	// has (deploymentEdition reads only ImageConfig's track) -- so it is
+	// refused, as every explicit image on this path was before rollback.
+	if u.Mode() == ModeKube && !isRollback {
+		return "", "", nil, errors.New("an explicit image only applies to a deployment that upgrades by pulling an image (-upgrade-image); " +
+			"a Kubernetes deployment accepts one only to roll back to the image its last upgrade replaced")
+	}
 	if !isRollback {
 		if err := u.validateRepository(o.Repository); err != nil {
 			return "", "", nil, err

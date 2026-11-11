@@ -566,3 +566,41 @@ func boolStr(v bool) string {
 	}
 	return "false"
 }
+
+// A Kubernetes deployment takes an explicit image only as the exact
+// image its last upgrade replaced: the rollback the pane and
+// `grain upgrade rollback` offer. Any other image is refused before
+// anything touches the cluster, as every explicit image on this path was
+// before rollback existed -- the Kubernetes path has no edition guard of
+// its own (deploymentEdition reads only ImageConfig), so letting an
+// arbitrary image through would let a caller cross editions unasked.
+func TestKubeTakesAnExplicitImageOnlyAsTheRecordedRollback(t *testing.T) {
+	u := kubeUpgrader(t, "/nonexistent", []string{"schema-version"})
+	prev := "example/grain:v3.1.0@sha256:" + strings.Repeat("a", 64)
+	if err := writeStatus(u.cfg.StatusFile, Status{Branch: "main", Phase: PhaseOK, PreviousImage: prev}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, image := range []string{
+		"example/grain:main",
+		"example/grain@sha256:" + strings.Repeat("b", 64),
+		"example/grain",
+	} {
+		if err := u.StartImage("main", image); err == nil || !strings.Contains(err.Error(), "roll back") {
+			t.Errorf("StartImage(main, %q) = %v, want a refusal naming rollback", image, err)
+		}
+	}
+	select {
+	case <-u.Done():
+	default:
+		t.Fatal("a refused explicit image started an upgrade")
+	}
+
+	branch, ref, err := u.ValidateImage("", prev)
+	if err != nil {
+		t.Fatalf("ValidateImage(recorded previous image) = %v, want it accepted", err)
+	}
+	if ref != prev || branch != "v3.1.0" {
+		t.Errorf("ValidateImage(recorded previous image) = (%q, %q), want (v3.1.0, %q)", branch, ref, prev)
+	}
+}
