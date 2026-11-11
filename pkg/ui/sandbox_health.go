@@ -445,6 +445,11 @@ type DaemonHealth struct {
 // (bwsalmon/agents#536) puts this one alongside.
 type SandboxHealthResponse struct {
 	Enabled bool `json:"enabled"`
+	// StaleSchedules is every enabled schedule -- a workflow's cron
+	// included -- that has gone more than twice its cadence without a
+	// firing that ran anything (model.Store.StaleSchedules): a nightly
+	// that went quiet says so here rather than nowhere.
+	StaleSchedules []model.StaleSchedule `json:"staleSchedules,omitempty"`
 	// DispatchBlocked is every condition holding this deployment's
 	// dispatch (Config.DispatchConditions): the failing checks of this
 	// response, first because nothing below them matters while one is
@@ -1057,7 +1062,8 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, DispatchBlocked: s.tasks.dispatchBlocked(),
 			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
-			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context())})
+			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
+			StaleSchedules: s.tasks.staleSchedules(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
@@ -1077,6 +1083,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		Counters:             healthCounterSections(),
 		CapabilityServers:    s.tasks.capabilityServersDown(),
 		Hub:                  s.tasks.hubHealth(r.Context()),
+		StaleSchedules:       s.tasks.staleSchedules(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
@@ -1181,4 +1188,18 @@ func (c *Client) capabilityServersDown() []CapabilityServerDown {
 		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Waiting: st.Waiting, Reason: reason})
 	}
 	return out
+}
+
+// staleSchedules is model.Store.StaleSchedules as of now, nil on a store
+// that cannot answer: health is read when something is already wrong, and
+// one unreadable section must not cost the rest of the pane.
+func (c *Client) staleSchedules(ctx context.Context) []model.StaleSchedule {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	stale, err := c.Store.StaleSchedules(ctx, time.Now())
+	if err != nil {
+		return nil
+	}
+	return stale
 }
