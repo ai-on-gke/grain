@@ -97,6 +97,40 @@ func cmdBrief(ctx context.Context, c *ui.HTTPClient, out *printer, args []string
 	return nil
 }
 
+// cmdRollover is `grain rollover <id>`: file a successor to a durable
+// task whose record has grown too large, carrying its current brief,
+// handover and settings, and close the task as rolled over to it
+// (design/design/durable-tasks.design.md#DT-15).
+func cmdRollover(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	fs := flag.NewFlagSet("grain rollover", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := atMostArgs(fs, fs.Args(), 1); err != nil {
+		return err
+	}
+	id, err := taskID(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	result, err := c.RolloverTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	if out.json {
+		out.encode(result)
+		return nil
+	}
+	fmt.Printf("task %s rolled over to task %s\n", id, result.Successor)
+	if len(result.Moved) > 0 {
+		fmt.Printf("now waiting on task %s instead: %s\n", result.Successor, strings.Join(result.Moved, ", "))
+	}
+	for _, k := range result.Kept {
+		fmt.Printf("task %s left waiting on task %s: %s\n", k.ID, id, k.Reason)
+	}
+	return nil
+}
+
 func (p *printer) taskContext(id string, v ui.TaskContextView) {
 	if p.json {
 		p.encode(v)

@@ -35,6 +35,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import { readNumberBox } from "../numberBox.js";
 import GrainMark from "./GrainMark.jsx";
 import UpgradeReleaseNotes from "./UpgradeReleaseNotes.jsx";
 import {
@@ -1803,7 +1804,12 @@ export default function UpgradePanel({
 // Shown even on a deployment with no upgrader wired: the setting is
 // stored either way, and a deployment configured for upgrading later
 // should not have to discover afterwards that this choice existed.
-export function UpgradeCheckSettings({ settings, onSave }) {
+export function UpgradeCheckSettings({
+  settings,
+  onSave,
+  onIntBlur,
+  onEnterKey,
+}) {
   const modes = settings.upgradeCheckModes || ["off", "approve", "auto"];
   const [mode, setMode] = useState(settings.upgradeCheckMode || "auto");
   const [pauses, setPauses] = useState(!!settings.upgradeCheckPausesPipeline);
@@ -1861,7 +1867,12 @@ export function UpgradeCheckSettings({ settings, onSave }) {
         }
         sx={{ display: "flex", mt: 1 }}
       />
-      <AutoUpgradeSettings settings={settings} onSave={onSave} />
+      <AutoUpgradeSettings
+        settings={settings}
+        onSave={onSave}
+        onIntBlur={onIntBlur}
+        onEnterKey={onEnterKey}
+      />
       <Typography variant="caption" color="text.secondary">
         Changes to these choices save immediately.
       </Typography>
@@ -1901,16 +1912,49 @@ function autoUpgradeMode(settings) {
 // mode a channel saved some other way (the CLI, a settings import) that
 // is not one of the three is offered too, so the picker can show what is
 // actually set.
-export function AutoUpgradeSettings({ settings, onSave }) {
+export function AutoUpgradeSettings({
+  settings,
+  onSave,
+  onIntBlur,
+  onEnterKey,
+}) {
   const [mode, setMode] = useState(autoUpgradeMode(settings));
   const [channel, setChannel] = useState(settings.autoUpgradeChannel || "");
   const [time, setTime] = useState(settings.autoUpgradeTime || "03:00");
+  const defaultMinIntervalHours =
+    settings.autoUpgradeMinIntervalHoursDefault ?? 6;
+  const minIntervalHours =
+    settings.autoUpgradeMinIntervalHours ?? defaultMinIntervalHours;
   const zone = settings.timeZone || "UTC";
   const channels =
     AUTO_UPGRADE_CHANNELS.includes(channel) || !channel
       ? AUTO_UPGRADE_CHANNELS
       : [...AUTO_UPGRADE_CHANNELS, channel];
   const releaseTarget = channel === "latest" ? "latest" : "exact";
+  const blurOnEnter =
+    onEnterKey ||
+    ((e) => {
+      if (e.key === "Enter") e.target.blur();
+    });
+  const handleMinIntervalBlur = onIntBlur
+    ? onIntBlur("autoUpgradeMinIntervalHours", {
+        defaultVal: defaultMinIntervalHours,
+        emptyVal: defaultMinIntervalHours,
+      })
+    : (e) => {
+        const read = readNumberBox(e.target, {
+          integer: true,
+          min: 0,
+          label: "Minimum interval (hours)",
+        });
+        if (read.error) return;
+        const next = read.empty ? defaultMinIntervalHours : read.value;
+        if (next !== minIntervalHours) {
+          onSave({ autoUpgradeMinIntervalHours: next });
+        } else if (read.empty) {
+          e.target.value = e.target.defaultValue ?? "";
+        }
+      };
 
   const chooseMode = (next) => {
     setMode(next);
@@ -1948,11 +1992,13 @@ export function AutoUpgradeSettings({ settings, onSave }) {
         slotProps={{ inputLabel: { shrink: true } }}
         helperText={
           mode === "release"
-            ? "Within about an hour of a new release appearing on this " +
-              "deployment's image channel, grain holds the queue, lets the work " +
-              "in flight finish, and upgrades. Release candidates are never " +
-              "followed. A failed upgrade is reported in the Inbox and is not " +
-              "retried until the next release."
+            ? "Once a new release has stood for an hour" +
+              (minIntervalHours > 0
+                ? ` and at least ${minIntervalHours}h has passed since the last automatic upgrade`
+                : "") +
+              ", grain holds the queue, lets the work in flight finish, and upgrades " +
+              "to the newest release. Release candidates are never followed. A failed " +
+              "upgrade is reported in the Inbox and is not retried until the next release."
             : mode === "daily"
               ? `Upgrade onto ${channel || "latest"} once a day, after the work in flight finishes.`
               : "grain upgrades only when somebody presses Upgrade. " +
@@ -1966,29 +2012,46 @@ export function AutoUpgradeSettings({ settings, onSave }) {
         ))}
       </TextField>
       {mode === "release" && (
-        <TextField
-          select
-          name="autoUpgradeTarget"
-          data-setting-id="autoUpgradeChannel"
-          label="Upgrade to"
-          value={releaseTarget}
-          onChange={(e) => {
-            const next = e.target.value === "latest" ? "latest" : "";
-            setChannel(next);
-            onSave({ autoUpgradeChannel: next });
-          }}
-          fullWidth
-          margin="normal"
-          slotProps={{ inputLabel: { shrink: true } }}
-          helperText={
-            releaseTarget === "latest"
-              ? "Follows the latest tag, which moves with each release."
-              : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
-          }
-        >
-          <MenuItem value="latest">latest</MenuItem>
-          <MenuItem value="exact">The exact release tag</MenuItem>
-        </TextField>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+          <TextField
+            select
+            name="autoUpgradeTarget"
+            data-setting-id="autoUpgradeChannel"
+            label="Upgrade to"
+            value={releaseTarget}
+            onChange={(e) => {
+              const next = e.target.value === "latest" ? "latest" : "";
+              setChannel(next);
+              onSave({ autoUpgradeChannel: next });
+            }}
+            fullWidth
+            margin="normal"
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText={
+              releaseTarget === "latest"
+                ? "Follows the latest tag, which moves with each release."
+                : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
+            }
+          >
+            <MenuItem value="latest">latest</MenuItem>
+            <MenuItem value="exact">The exact release tag</MenuItem>
+          </TextField>
+          <TextField
+            key={`minInterval-${minIntervalHours}`}
+            type="number"
+            name="autoUpgradeMinIntervalHours"
+            data-setting-id="autoUpgradeMinIntervalHours"
+            label="Minimum interval (hours)"
+            defaultValue={String(minIntervalHours)}
+            onBlur={handleMinIntervalBlur}
+            onKeyDown={blurOnEnter}
+            inputProps={{ min: 0, step: 1 }}
+            slotProps={{ inputLabel: { shrink: true } }}
+            fullWidth
+            margin="normal"
+            helperText={`Hours after a completed automatic upgrade before draining again, onto the newest release (default ${defaultMinIntervalHours}; 0 = off).`}
+          />
+        </Stack>
       )}
       {mode === "daily" && (
         <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
