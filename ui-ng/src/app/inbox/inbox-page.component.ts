@@ -28,7 +28,7 @@ import {
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
-import type { TaskDetail } from "../api/models";
+import type { DiffPreview, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { ThemeService } from "../services/theme.service";
 import {
@@ -647,6 +647,84 @@ export function questionOf(
                 <h3 class="section-title">Why this needs a person</h3>
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
               </div>
+              @if (store.selectedDiff(); as diff) {
+                <div
+                  class="evidence-card diff-container"
+                  data-testid="inspector-diff"
+                >
+                  <div class="diff-summary">
+                    <h3 class="section-title">The change</h3>
+                    <span class="muted diff-count">{{
+                      diffCountText(diff)
+                    }}</span>
+                  </div>
+                  @for (f of diff.files; track f.path) {
+                    <div class="diff-file" data-testid="diff-file">
+                      <div class="diff-file-head">
+                        <span class="diff-path" [title]="f.path">{{
+                          f.oldPath ? f.oldPath + " → " + f.path : f.path
+                        }}</span>
+                        @if (f.status !== "modified") {
+                          <span class="diff-status">{{ f.status }}</span>
+                        }
+                        <span class="diff-stat">
+                          <span class="diff-stat-add">+{{ f.additions }}</span>
+                          <span class="diff-stat-del">−{{ f.deletions }}</span>
+                        </span>
+                      </div>
+                      @if (f.binary) {
+                        <p class="muted diff-note">Binary file</p>
+                      }
+                      @for (h of f.hunks; track $index) {
+                        <div
+                          class="diff-hunk"
+                          role="region"
+                          tabindex="0"
+                          [attr.aria-label]="f.path + ' ' + h.header"
+                        >
+                          <div class="diff-hunk-body">
+                            <div class="diff-hunk-head">{{ h.header }}</div>
+                            @for (l of h.lines; track $index) {
+                              <div
+                                [class]="'diff-line diff-line-' + l.kind"
+                                data-testid="diff-line"
+                              >
+                                <span class="diff-sign" aria-hidden="true">{{
+                                  l.kind === "add"
+                                    ? "+"
+                                    : l.kind === "del"
+                                      ? "−"
+                                      : " "
+                                }}</span
+                                ><span class="diff-text">{{ l.text }}</span>
+                              </div>
+                            }
+                            @if (h.linesOmitted) {
+                              <div class="diff-line diff-line-more">
+                                {{ h.linesOmitted }} more lines
+                              </div>
+                            }
+                          </div>
+                        </div>
+                      }
+                    </div>
+                  }
+                  @if (diff.truncated) {
+                    <p class="muted diff-note" data-testid="diff-truncated">
+                      Showing the first {{ shownHunks(diff) }} of
+                      {{ diff.totalHunks }} changes.
+                      @if (sel.externalLink) {
+                        <a
+                          [href]="sel.externalLink"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          >See the whole pull request</a
+                        >
+                      }
+                    </p>
+                  }
+                </div>
+              }
             </div>
           } @else {
             <div class="empty-state">
@@ -727,6 +805,8 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   protected readonly filters = FILTERS;
   protected readonly ago = ago;
+  protected readonly diffCountText = diffCountText;
+  protected readonly shownHunks = shownHunks;
   protected readonly commentsRoute = "POST /api/tasks/{id}/comments" as const;
   protected readonly grantRoute =
     "POST /api/tasks/{id}/access-request/grant" as const;
@@ -990,4 +1070,16 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       .querySelector(".queue-row.is-selected")
       ?.scrollIntoView?.({ block: "nearest" });
   }
+}
+
+// diffCountText is the preview's headline: how many files the whole
+// change touches.
+export function diffCountText(d: DiffPreview): string {
+  const n = d.totalFiles;
+  return `${n} ${n === 1 ? "file" : "files"} changed`;
+}
+
+// shownHunks is how many hunks the preview holds.
+export function shownHunks(d: DiffPreview): number {
+  return d.files.reduce((n, f) => n + f.hunks.length, 0);
 }
