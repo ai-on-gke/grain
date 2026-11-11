@@ -216,8 +216,11 @@ Screenshots of every failing or known-gap form on the task pane:
      given through Repository access; the refusal doesn't say so.
    - `api#ops/triage {repo}` with a repository outside the scope set's
      reach: `check` passes it and the write refuses it.
-   - `grain#ci` and `repo#write {repo}`: `check` passes them, and the
-     task writes refuse them with the right message.
+   - `repo#write {repo}`: `check` passes it, and the task writes refuse
+     it with the right message. (`grain#ci` was in the same state when
+     this run started; since then `main` has `check` refusing it with the
+     same CI Mode message the writes give, and the API spec accepts a
+     check refusal that matches the expected one.)
 3. **No `api#grain/*` preset is offered by Add grant… on a task**,
    though `GET /api/capability-methods` lists all 18. They are granted
    fine through the API. Either the picker should offer them, or the

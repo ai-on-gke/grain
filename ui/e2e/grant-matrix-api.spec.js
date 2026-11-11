@@ -119,12 +119,19 @@ test("every method and argument variant is granted, round-trips and is removed t
       }));
       results.push(...cells);
       const [cCheck, cAttach, cPatch] = cells;
-      if (checked.error || !checked.recorded) {
+      // A grant grain refuses on every task may be refused by check
+      // too, as long as it says the same thing the writes do: then the
+      // form and the save agree.
+      const checkRefused = Boolean(checked.error || !checked.recorded);
+      if (checkRefused && refusal && refusal.test(checked.error || "")) {
+        cCheck.outcome = "refused";
+      } else if (checkRefused) {
         fail(cCheck, `check refused a valid set: ${checked.error}`);
         continue;
       }
-      const recorded = checked.recorded;
-      if (!recorded.startsWith(ref)) fail(cCheck, `recorded ${recorded}`);
+      const recorded = checked.recorded || "";
+      if (!checkRefused && !recorded.startsWith(ref))
+        fail(cCheck, `recorded ${recorded}`);
 
       // Attach, as a chip does.
       let res = await request.post(`/api/tasks/${task.id}/capabilities`, {
@@ -193,7 +200,8 @@ test("every method and argument variant is granted, round-trips and is removed t
     // An invalid set: refused by check and by both writes, naming the
     // field (or, for a schema of alternatives, the arguments as a whole).
     const bad = invalidArgs(method);
-    if (!bad || policyFor(method, TASK_KIND)) continue;
+    if (!bad || policyFor(method, TASK_KIND) || expectedRefusal(ref, "invalid"))
+      continue;
     const cell = {
       ref,
       variant: "invalid",
