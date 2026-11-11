@@ -188,6 +188,18 @@ the WARNING, returned 0 and left no record to attest (F6 for the message).
 
 ## Gates on this change
 
-- No `scripts/release*`, `scripts/release-train-task.sh`, `promote*.yml` or `.github/workflows/*` file changed, so neither the `release-promotion` Submit nor the workflow security review applies. F3 and F6 are left as follow-ups for that reason.
+- No `scripts/release*`, `scripts/release-train-task.sh` or `promote*.yml` file changed, so the `release-promotion` Submit does not apply. F3 and F6 are left as follow-ups for that reason.
+- `.github/workflows/tests.yml` did change, by one line, to add `pkg/infrasig` to the go-unit shard (below). That edit brings in the automated security review.
+
+## Inherited breakage fixed on this branch
+
+As the merge queue's repair, the second attempt fixed every check that was red on `main` and therefore on this pull request:
+
+| Check | Failing test | Cause on `main` | Fix |
+|---|---|---|---|
+| go model | `TestRatchetRules/git-argv-separator` | `pkg/staterepo/settingshistory.go` ran `git cat-file blob <spec>` with no separator (6326eddc6) | `--end-of-options` before the spec |
+| go e2e | `tests/deploy` `TestTheGoJobsCoverEveryPackageInTheModuleOnce` | `pkg/infrasig` (1e27c1585) was in no Go test job | added to go-unit in `.grain/workflows/tests.yml` and `.github/workflows/tests.yml` |
+| go unit | `pkg/gitproxy` `TestDefaultCIReadScopeReadsItsOwnGitHubActionsCI` | the canonical-capability conversion (ac5301bd2) reworded the CI-read refusal, and this test still expected `api:ci-read@acme/widgets` | the test expects `api#ci-read with {repo: "acme/widgets"}`, as `pkg/namespace` already does |
+| go unit | `pkg/ui` `TestHostScriptGrantAndScopedCallbackToken` (flaky, about 2 runs in 3) | a real bug: `HTTPApprover.Approve` asked with the call's own context, so a cancel during the ask left the server-side approval pending with no ID to expire. 012400fcc widened the window | the ask finishes on a bounded detached context and is then expired. `TestHTTPApproverExpiresAnApprovalCancelledMidAsk` (`pkg/localexec`) fails without the fix; the ui test passed 10/10 after it |
 - `pkg/orchestrator/scheduledworkflow.go` is not a classified path.
 - `go test ./tests/e2e/... ./tests/deploy/...` passed locally on this branch before `main` was merged in.
