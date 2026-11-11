@@ -553,6 +553,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/attempts/{number}/transcript", s.handleGetAttemptTranscript)
 	s.route("GET /api/tasks/{id}/attempts/{number}/capability-audit", s.handleGetAttemptCapabilityAudit)
 	s.route("GET /api/tasks/{id}/prompt", s.handleGetTaskPrompt)
+	s.route("GET /api/tasks/{id}/diff-preview", s.handleTaskDiffPreview)
 	s.route("GET /api/tasks/{id}/tree", s.handleGetTaskTree)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
@@ -753,6 +754,7 @@ func (s *Server) routes() {
 	s.route("GET /api/host/top", s.handleGetHostTop)
 	s.route("GET /api/upgrade", s.handleGetUpgradeStatus)
 	s.route("POST /api/upgrade", s.handleStartUpgrade)
+	s.route("DELETE /api/upgrade/current", s.handleCancelCurrentUpgrade)
 	s.route("DELETE /api/upgrade/scheduled", s.handleCancelScheduledUpgrade)
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)

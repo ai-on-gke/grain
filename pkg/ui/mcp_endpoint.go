@@ -302,7 +302,7 @@ func scopeDomainGroup(scope APIScope) string {
 }
 
 var domainGuidance = map[string]string{
-	"tasks":        "Task lifecycle & mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.",
+	"tasks":        "Task lifecycle and mutations. Read and file with grain_list_tasks, grain_get_task, grain_filing_context, grain_submit_task; grain_invoke the rest, with arguments.expect on admin edits.",
 	"ci":           "Grain CI workflows, runs, logs, faults, and artifacts. Filter list calls by repo/branch when possible before fetching full job logs.",
 	"merge":        "Pull request creation, merge-queue retries, and force-merges. Force-merge requires merge:force and an explicit reason.",
 	"repos":        "Target repository onboarding, branch configuration, CI mode, merge settings, and declarations. api_get_repo_settings / api_set_repo_settings read and write every per-repository setting together; the per-field routes (ci-mode, setup-command, ...) are aliases of them, listed only with includeAliases=true.",

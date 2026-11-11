@@ -161,3 +161,48 @@ func stringsOf(v any) []string {
 	}
 	return out
 }
+
+func TestConfigRouteExpandsRetiredAliasesAndCanonicalizesDefaultCapabilities(t *testing.T) {
+	ts, c := grantTestServer(t)
+	ctx := context.Background()
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := model.DefaultConfig()
+	if cfg != nil {
+		next = *cfg
+	}
+	next.DefaultCapabilities = []string{"self-debug", "api:tasks:read@acme/widgets"}
+	if err := c.Store.PutConfig(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                model.RepoRef{Owner: "acme", Name: "widgets"},
+		DefaultCapabilities: []string{"self-debug", "api:ci:read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	if code := postJSON(t, ts, http.MethodGet, "/api/config", nil, &out); code != http.StatusOK {
+		t.Fatalf("GET /api/config: %d %v", code, out)
+	}
+	wantDeploy := []string{
+		model.APIRef("self-debug"),
+		model.GrainSourceGrant,
+		model.APIGrantString("tasks:read", "acme/widgets"),
+	}
+	if got := stringsOf(out["defaultCapabilities"]); !slices.Equal(got, wantDeploy) {
+		t.Fatalf("/api/config defaultCapabilities = %v, want %v", got, wantDeploy)
+	}
+	repoMap, _ := out["repoDefaultCapabilities"].(map[string]any)
+	wantRepo := []string{
+		model.APIRef("self-debug"),
+		model.GrainSourceGrant,
+		model.APIRef("ci:read"),
+	}
+	if got := stringsOf(repoMap["acme/widgets"]); !slices.Equal(got, wantRepo) {
+		t.Fatalf("/api/config repoDefaultCapabilities[acme/widgets] = %v, want %v", got, wantRepo)
+	}
+}

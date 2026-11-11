@@ -58,6 +58,13 @@ describe("upgradeProgress", () => {
     expect(got.current.name).toBe("step-1");
     expect(got.position).toBe(2);
   });
+
+  it("points at the cancelled step and counts it as settled", () => {
+    const got = upgradeProgress(plan("done", "cancelled", "pending"));
+    expect(got.settled).toBe(2);
+    expect(got.current.name).toBe("step-1");
+    expect(got.position).toBe(2);
+  });
 });
 
 describe("stepElapsedMs", () => {

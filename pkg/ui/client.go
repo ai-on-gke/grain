@@ -1503,6 +1503,12 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if task.UnansweredCommentFrom, err = c.unansweredCommentFrom(ctx, id, state, obs); err != nil {
 		return TaskDetail{}, err
 	}
+	if state == model.StateAwaitingReply {
+		if cm := model.UncountedAgentComment(comments, obs, id); cm != nil {
+			task.UncountedAgentReplyFrom = sessionLabel(cm.Author.Actor, cm.Author.OnBehalfOf, c.sessionTitles(ctx))
+			task.UncountedAgentReplyID = cm.ID
+		}
+	}
 	detail := TaskDetail{
 		Task:          c.withReasons(task, *t, obs, wait),
 		Comments:      make([]Comment, 0, len(comments)),
@@ -6924,6 +6930,43 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 		return nil
 	}
 	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
+// AddRelayedComment is a person's answer that a console session carries
+// to another task for them -- "tell task 2588 yes, use the staging
+// key" said in a director chat. It is written as the person's, via the
+// session ((human, via agent), model.RelayedVia), and does everything a
+// comment the person posted on the task themselves would: it lifts the
+// pending question and sends an awaiting_reply task back to the queue.
+// Whether session may speak for person on the task is the route's
+// question (Server.relayAttribution), asked before this is called.
+func (c *Client) AddRelayedComment(ctx context.Context, id, body string, uploads []AttachmentUpload, person model.Principal, session model.Principal) error {
+	if strings.TrimSpace(body) == "" && len(uploads) == 0 {
+		return validationErrorf("a comment needs a body, an attachment, or both")
+	}
+	if person.Kind != model.PrincipalHuman || session.Kind != model.PrincipalAgent {
+		return forbiddenErrorf("a relayed answer is a person's, carried by a session acting for them")
+	}
+	now := c.now()
+	attachments, err := decodeAttachments(uploads, now)
+	if err != nil {
+		return err
+	}
+	by := model.Attribution{Actor: person, OnBehalfOf: &session}
+	return c.addAttributedComment(ctx, id, body, attachments, by, now, true)
+}
+
+// CommentAwaitingPerson is the commentDelivery an agent's comment is
+// answered with when it lands on a task waiting for a person's reply and
+// does not count as one (Server.handleAddComment), and
+// CommentAwaitingPersonNotice the sentence that says so.
+const CommentAwaitingPerson = "awaiting_person"
+
+// CommentAwaitingPersonNotice says an agent's comment on task id was
+// recorded but left it waiting for a person.
+func CommentAwaitingPersonNotice(id string) string {
+	return fmt.Sprintf("Recorded; task %s is still waiting for a person's reply. An agent's comment does not answer it. "+
+		"A console session acting for a person can pass relay: true (grain task message --relay) to answer for them.", id)
 }
 
 // commentWithAuthor is AddCommentWithAuthor with the one thing a team

@@ -305,3 +305,93 @@ func TestRESTDoesNotRetryAnAnswer(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitRepoTakesOwnerNameAndHostOwnerName(t *testing.T) {
+	for _, tc := range []struct{ repo, host, owner, name string }{
+		{"example/grain", "github.com", "example", "grain"},
+		{"git.example.test/experimental/grain", "git.example.test", "experimental", "grain"},
+		{"GIT.Example.test/experimental/grain", "git.example.test", "experimental", "grain"},
+	} {
+		host, owner, name, err := SplitRepo(tc.repo)
+		if err != nil || host != tc.host || owner != tc.owner || name != tc.name {
+			t.Errorf("SplitRepo(%q) = %q, %q, %q, %v", tc.repo, host, owner, name, err)
+		}
+	}
+	for _, bad := range []string{"", "grain", "/grain", "example/", "a/b/c/d", "/example/grain"} {
+		if _, _, _, err := SplitRepo(bad); err == nil {
+			t.Errorf("SplitRepo(%q) took it", bad)
+		}
+	}
+	if got := APIBaseURL("github.com"); got != "https://api.github.com" {
+		t.Errorf("APIBaseURL(github.com) = %q", got)
+	}
+	if got := APIBaseURL("git.example.test"); got != "https://git.example.test/api/v3" {
+		t.Errorf("APIBaseURL(git.example.test) = %q", got)
+	}
+}
+
+// roundTripFunc serves a request in process, as a host tool's
+// http.Client would, so a test sees the URL REST built.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func inProcessClient(urls *[]string, h http.Handler) *http.Client {
+	return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		*urls = append(*urls, r.URL.String())
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Result(), nil
+	})}
+}
+
+// TestRESTAsksAnEnterpriseRepositorysOwnAPI: a host/owner/name
+// repository is read from https://<host>/api/v3 and recorded whole.
+func TestRESTAsksAnEnterpriseRepositorysOwnAPI(t *testing.T) {
+	const repo = "git.example.test/experimental/grain"
+	var urls []string
+	client := inProcessClient(&urls, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/repos/experimental/grain/commits/abc/pulls":
+			fmt.Fprint(w, `[{"number":7,"state":"closed","merged_at":"2026-11-10T00:00:00Z","merge_commit_sha":"abc","base":{"ref":"main"},"head":{"sha":"h7"},"user":{"login":"alice"}}]`)
+		case "/api/v3/repos/experimental/grain/pulls/7":
+			fmt.Fprint(w, `{"merged_by":{"login":"grain-bot"}}`)
+		case "/api/v3/repos/experimental/grain/git/commits/abc":
+			fmt.Fprint(w, `{"parents":[{"sha":"p1"},{"sha":"h7"}]}`)
+		case "/api/v3/repos/experimental/grain/compare/p1...abc":
+			fmt.Fprint(w, `{"status":"ahead","merge_base_commit":{"sha":"p1"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	f := REST{Client: client}
+	p := Policy{Repo: repo, Branches: []string{"main"}, Mergers: []string{"grain-bot"}}
+	rec, err := p.CheckChain(context.Background(), f, "abc", "p1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Repo != repo {
+		t.Fatalf("record repo = %q, want %q", rec.Repo, repo)
+	}
+	cmp, err := f.Compare(context.Background(), repo, "p1", "abc")
+	if err != nil || cmp.Status != "ahead" || cmp.MergeBase != "p1" {
+		t.Fatalf("compare = %+v, %v", cmp, err)
+	}
+	for _, u := range urls {
+		if !strings.HasPrefix(u, "https://git.example.test/api/v3/repos/experimental/grain/") {
+			t.Errorf("asked %s, not the repository's own host's API", u)
+		}
+	}
+	if len(urls) != 4 {
+		t.Errorf("urls = %q", urls)
+	}
+
+	// owner/name stays on api.github.com.
+	urls = nil
+	if _, err := (REST{Client: client}).FirstParent(context.Background(), "example/grain", "abc"); err == nil {
+		t.Fatal("api.github.com path was served by the Enterprise handler")
+	}
+	if len(urls) != 1 || !strings.HasPrefix(urls[0], "https://api.github.com/repos/example/grain/") {
+		t.Fatalf("owner/name asked %q", urls)
+	}
+}

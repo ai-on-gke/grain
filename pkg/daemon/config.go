@@ -47,6 +47,10 @@ type Config struct {
 	DbDSN           string
 	SecretsBackend  string
 	SecretsSMPrefix string
+	// ReleaseApprovalKMSKey is the Cloud KMS key version release
+	// approvals are signed with (-release-approval-kms-key), or "" for
+	// the key the secrets store holds (ui.Config.ReleaseApprovalKMSKey).
+	ReleaseApprovalKMSKey string
 	// WriterLockWaitTimeout, WriterLockKeepAlive, and WriterLockReacquireWindow
 	// configure the PostgreSQL session-level single-writer advisory lock
 	// acquired at daemon startup when DbDriver is "postgres". Zero values use
@@ -451,12 +455,15 @@ type Config struct {
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
 	UpgradeVerifyCmd []string
-	// UpgradeReviewedMergeRepo, when set (owner/name), also refuses an
+	// UpgradeReviewedMergeRepo, when set (owner/name, or host/owner/name
+	// on a GitHub Enterprise Server), also refuses an
 	// image upgrade whose commit did not reach that repository's release
 	// branches through a reviewed merge (upgrade.ImageConfig.ReviewedMerge,
 	// pkg/reviewedmerge). UpgradeReviewedMergeLogins are the forge logins
 	// its grain merges as, and UpgradeReviewedMergeTokenFile a file holding
-	// a read token for its API (none reads anonymously).
+	// a read token for its API (none reads through the host's forge tool
+	// when a command-backed ambient source claims its host, and
+	// anonymously otherwise).
 	UpgradeReviewedMergeRepo      string
 	UpgradeReviewedMergeLogins    []string
 	UpgradeReviewedMergeTokenFile string
@@ -466,6 +473,9 @@ type Config struct {
 	// UpgradeDrainWindow bounds how long a scheduled upgrade waits for active
 	// runs to finish before proceeding with the upgrade anyway.
 	UpgradeDrainWindow time.Duration
+	// UpgradeGraceWindow adds a countdown between confirming a manual upgrade
+	// and starting its work (0 disables the countdown).
+	UpgradeGraceWindow time.Duration
 	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
 	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
 	// and hides in-VM upgrade controls in the UI in favour of an optional
