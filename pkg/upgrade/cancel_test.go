@@ -16,6 +16,7 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -602,5 +603,31 @@ func TestKubeTakesAnExplicitImageOnlyAsTheRecordedRollback(t *testing.T) {
 	}
 	if ref != prev || branch != "v3.1.0" {
 		t.Errorf("ValidateImage(recorded previous image) = (%q, %q), want (v3.1.0, %q)", branch, ref, prev)
+	}
+}
+
+// A rollback by release or commit is a branch name like any other, so it
+// goes through AllowedBranches: a branch named after the commit this
+// deployment used to run is one anybody who can push could create, and
+// building it would be exactly what the allow-list exists to refuse.
+// Only an image rollback, pinned by digest, skips the allow-list.
+func TestRollbackByReleaseOrCommitStillNeedsTheAllowList(t *testing.T) {
+	dir := t.TempDir()
+	u := New(Config{SrcDir: dir, AllowedBranches: []string{"main"}, StatusFile: filepath.Join(dir, "upgrade-status.json")})
+	commit := strings.Repeat("c", 40)
+	if err := writeStatus(u.cfg.StatusFile, Status{
+		Branch: "main", Phase: PhaseOK,
+		PreviousRelease: "v3.1.0", PreviousCommit: commit,
+		PreviousImage: "example/grain:main",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, branch := range []string{"v3.1.0", commit} {
+		if err := u.checkBranch(branch); !errors.Is(err, ErrBranchNotAllowed) {
+			t.Errorf("checkBranch(%q) = %v, want ErrBranchNotAllowed", branch, err)
+		}
+	}
+	if u.isRecordedRollbackImage("example/grain:main") {
+		t.Error("a recorded previous image with no digest counted as a rollback that skips the allow-lists")
 	}
 }

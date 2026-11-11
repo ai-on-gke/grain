@@ -167,12 +167,18 @@ func (u *Upgrader) validateRepository(repo string) error {
 // isRecordedRollbackImage reports whether image is the exact PreviousImage a
 // completed upgrade recorded in StatusFile, so "Roll back to <previous>" works
 // even when the previous build was pinned to a sha-... tag or digest alone.
+// Only a digest-pinned reference counts: it skips the repository and branch
+// allow-lists, which is safe only for content this deployment already ran,
+// and a tag alone names whatever was last pushed to it.
 func (u *Upgrader) isRecordedRollbackImage(image string) bool {
 	if u.cfg.StatusFile == "" {
 		return false
 	}
 	prev, err := readStatus(u.cfg.StatusFile)
 	if err != nil || prev.PreviousImage == "" {
+		return false
+	}
+	if _, pinned := kubeDigestRef(prev.PreviousImage); !pinned {
 		return false
 	}
 	return strings.TrimSpace(image) == strings.TrimSpace(prev.PreviousImage)

@@ -609,14 +609,11 @@ func (u *Upgrader) checkBranch(branch string) error {
 	if err := validateBranch(branch); err != nil {
 		return err
 	}
-	if u.cfg.StatusFile != "" {
-		if prev, err := readStatus(u.cfg.StatusFile); err == nil {
-			if (prev.PreviousRelease != "" && branch == prev.PreviousRelease) ||
-				(prev.PreviousCommit != "" && branch == prev.PreviousCommit) {
-				return nil
-			}
-		}
-	}
+	// No exception for the PreviousRelease or PreviousCommit a rollback
+	// names: those are branch names here like any other, and a branch
+	// named after the commit or release this deployment used to run is
+	// one anybody who can push could create (see AllowedBranches). Only an
+	// image rollback, pinned by digest, skips this (isRecordedRollbackImage).
 	allowed := u.AllowedBranches()
 	for _, pattern := range allowed {
 		pattern = strings.TrimSpace(pattern)
