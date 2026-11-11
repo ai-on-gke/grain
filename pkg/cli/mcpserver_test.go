@@ -475,6 +475,9 @@ func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testi
 		"-task", "task-review",
 		"-pr-repo", "acme/app",
 		"-pr-branch", "grain/task-review",
+		// A data directory, so there is a GitHub reader: without one
+		// GitHub's tools are left off the roster altogether.
+		"-data-dir", t.TempDir(),
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("serveMCPServer (full): %v", err)
@@ -572,6 +575,7 @@ func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testi
 		"-task", "task-review",
 		"-pr-repo", "acme/widgets",
 		"-pr-branch", "grain/task-review",
+		"-data-dir", t.TempDir(),
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("serveMCPServer (control): %v", err)
