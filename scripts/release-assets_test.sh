@@ -439,6 +439,14 @@ run env AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/wrong-pub.pem" \
 check "agentd-validate refuses a manifest signed by an unpinned key" \
   '[ "$status" != 0 ] && grep -q "not pinned release key" <<< "$out"'
 
+bad_features_dir="$work/agentd-bad-features"
+cp -r "$agentd_dir" "$bad_features_dir"
+jq '.features = ["start,stage"]' "$agentd_dir/grain-agentd-linux-amd64.manifest.json" \
+  > "$bad_features_dir/grain-agentd-linux-amd64.manifest.json"
+run env AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-validate "$bad_features_dir"
+check "agentd-validate refuses a features entry pkg/agentd/release would reject" \
+  '[ "$status" != 0 ] && grep -q "invalid features" <<< "$out"'
+
 printf '70 images.json\n' > "$FAKE_V7_ASSETS"
 fake AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-publish v3.4.0 "$agentd_dir"
 check "agentd-publish uploads both binaries and then both signed manifests to a promoted release" \
