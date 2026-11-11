@@ -139,3 +139,14 @@ The screenshots were not committed: this task changes no UI, so there is no befo
 ## CI-only coverage relied on
 
 `pkg/model/sqlite/canonical_grant_migration_test.go`, `pkg/model/{ci_read_default,declared_grant_hold}_test.go`, `pkg/ui/ci_read_default_test.go`, `pkg/gitproxy/cli_ci_read_default_test.go`, `pkg/orchestrator/ci_prompt_golden_test.go`, `pkg/capability/gcpsets/managed_token_test.go`, `pkg/capability/protocol/waiting_test.go`, `pkg/daemon/ci_declaration_test.go`, plus the new `pkg/model/declared_schedule_own_grants_test.go`.
+
+## CI repairs carried on this branch (inherited from `main` at `83c3a1c1b`)
+
+PR #1273's first CI run failed `go model`, `go unit`, `go e2e` and `ui e2e`. Each failure was already on `main` and none came from this walkthrough's change. The merge queue sent the branch back for repair, so they are fixed here:
+
+| Check | Failure on `main` | Fix |
+|---|---|---|
+| `go model` | `tests/security` `TestRatchetRules` (git-argv-separator): `pkg/staterepo/settingshistory.go` passed a spec to `git cat-file` without `--end-of-options`. The line arrived in `6326eddc6`. | `Repo.blob` now passes `--end-of-options` before the spec. |
+| `go unit` | `pkg/gitproxy` `TestDefaultCIReadScopeReadsItsOwnGitHubActionsCI` still expected `api:ci-read@acme/widgets`. Task 4366 changed `namespace.RefuseCIRead` to the canonical `api#ci-read with {repo: "acme/widgets"}`. | The test now expects the canonical spelling. |
+| `go e2e` | `tests/deploy` `TestTheGoJobsCoverEveryPackageInTheModuleOnce`: `pkg/infrasig` (from `1e27c1585`) was in no Go test shard. | Added to the go unit shard in `.grain/workflows/tests.yml` and `.github/workflows/tests.yml`. |
+| `ui e2e` | `api-scope-set-edit`, `capability-policy-pickers` and `session-pending-grants` expected the legacy `api:<scope>` labels that task 4366 replaced in the UI. | The three specs now expect the canonical labels. Only spec text changed; no `ui/src` change. |
