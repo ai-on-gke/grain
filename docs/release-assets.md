@@ -37,8 +37,10 @@ partial archive uploads left without `checksums.txt` are replaced.
 writes their manifests (`version`, `platform`, `sha256`, `size`,
 `min_contract_features`, `features`). In the release workflows, the `agentd`
 job builds them with `contents: read` and no secrets, and `agentd-assets` signs
-the manifests with `AGENTD_RELEASE_SIGNING_KEY` (`scripts/release-assets.sh
-agentd-sign`), checks them (`agentd-validate`), and uploads the binaries
+the manifests with `AGENTD_RELEASE_SIGNING_KEY`, a secret of the
+`agentd-release` environment only that job declares
+([agentd-release-signing.md](agentd-release-signing.md#key-custody)),
+(`scripts/release-assets.sh agentd-sign`), checks them (`agentd-validate`), and uploads the binaries
 followed by the manifests (`agentd-publish`). The controller image also bundles
 `/usr/local/share/grain/agentd` and serves `/api/hostd/agentd/linux/<arch>` and
 `/api/hostd/agentd/linux/<arch>/manifest.json` for hosts that cannot reach

@@ -54,7 +54,9 @@ key_id: <key_id>
 
 ## Key custody
 
-The release signing private key must never be stored on a Grain controller (neither in its data directory nor in its secrets store). Hold it in an offline keystore or in the release repository's CI secret store (`secrets.AGENTD_RELEASE_SIGNING_KEY`), exposed only to the verified release-publishing jobs (`publish-release.yml`, `promote-release.yml`, `promote.yml`, and `release-train-assets.yml`).
+The release signing private key must never be stored on a Grain controller (neither in its data directory nor in its secrets store). Hold it in an offline keystore and as the `AGENTD_RELEASE_SIGNING_KEY` secret of the release repository's `agentd-release` **GitHub environment** -- not as a repository secret. A repository secret is readable by any workflow run on any branch somebody can push, before anybody has reviewed that branch's workflow files; an environment secret reaches only jobs that declare `environment: agentd-release`, and only on the refs the environment's deployment rules allow. The `agentd-assets` jobs of `publish-release.yml`, `promote-release.yml`, `promote.yml` and `release-train-assets.yml` are the only ones that declare it (`TestEveryPublishedReleaseGetsSignedGrainAgentd`).
+
+Configure the `agentd-release` environment (Settings → Environments) with **Deployment branches and tags: selected** and allow only `main`, `candidate` and tags matching `v*`. Those are the refs those four jobs sign and publish from; a manual dispatch from any other branch is a dry run that never reads the key, and its `agentd-assets` job is refused by the environment rather than handed the key. Required reviewers are optional: they put a manual approval in front of every release's signing step.
 
 ### Generating the initial keypair
 
@@ -67,7 +69,7 @@ go run ./pkg/agentd/release/cmd/grain-agentd-sign keygen \
 
 (Equivalently, `openssl genpkey -algorithm Ed25519 -out agentd-release.key` and `openssl pkey -in agentd-release.key -pubout -out pkg/agentd/release/agentd-release.pub`.)
 
-1. Store `agentd-release.key` outside the controller as the repository secret `AGENTD_RELEASE_SIGNING_KEY` (and keep an offline backup for future key rotation), then delete the working copy.
+1. Store `agentd-release.key` outside the controller as the `agentd-release` environment secret `AGENTD_RELEASE_SIGNING_KEY` (and keep an offline backup for future key rotation), then delete the working copy.
 2. Commit `pkg/agentd/release/agentd-release.pub` (or set the repository variable `AGENTD_RELEASE_PUBLIC_KEY` to stamp `-X github.com/ai-on-gke/grain/pkg/agentd/release.ReleasePublicKey=...` at build time).
 3. Optionally set the repository variable `REQUIRE_AGENTD_SIGNING=true` so release publishing fails closed if `AGENTD_RELEASE_SIGNING_KEY` is absent.
 
@@ -99,7 +101,7 @@ When rotating from outgoing key `A` (`old.key`) to replacement key `B` (`new.key
    new_public_key: ed25519:<base64>
    issued_at: <RFC3339 UTC>
    ```
-3. Commit `new.pub` to `pkg/agentd/release/agentd-release.pub` (so newly installed hosts pin `B` immediately), update `secrets.AGENTD_RELEASE_SIGNING_KEY` to `new.key`, and set the repository variable `AGENTD_RELEASE_ROTATIONS` to the JSON contents of `agentd-rotations.json`.
+3. Commit `new.pub` to `pkg/agentd/release/agentd-release.pub` (so newly installed hosts pin `B` immediately), update the `agentd-release` environment secret `AGENTD_RELEASE_SIGNING_KEY` to `new.key`, and set the repository variable `AGENTD_RELEASE_ROTATIONS` to the JSON contents of `agentd-rotations.json`.
 4. Retire `old.key` once `agentd-rotations.json` is recorded.
 
 Verification walks `rotations` **strictly forward** from the host's own pinned key:
