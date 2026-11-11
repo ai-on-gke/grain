@@ -1072,6 +1072,41 @@ describe("TaskList", () => {
         expect(onReorder).toHaveBeenCalledWith([1], 3, null);
       });
 
+      // A review whose own task the list leaves out is a row of its own,
+      // in its backlog place -- and the end of the list is after the last
+      // task in the backlog, not after wherever that row was drawn
+      // (2026-11-11 saved-boards walkthrough: it was drawn last, so this
+      // move sent afterId 4 and the task stayed at the top).
+      it("keeps a stacked review whose task is filtered out in its backlog place", async () => {
+        const review = {
+          id: 4,
+          title: "Review: the hidden task",
+          state: "queued",
+          capabilities: [],
+          blocked: false,
+          stacked: true,
+          generatedFrom: 9,
+        };
+        const onReorder = vi.fn();
+        const user = userEvent.setup();
+        renderList({ tasks: [review, ...threeTasks], onReorder });
+
+        expect(
+          [...document.querySelectorAll(".task-row")].map(
+            (r) => r.querySelector(".row-link")?.textContent,
+          ),
+        ).toEqual(["Review: the hidden task", "First", "Second", "Third"]);
+
+        await user.click(screen.getByRole("button", { name: "Move task 1" }));
+        await user.click(
+          screen.getByRole("button", {
+            name: "Move here, to the end of the list",
+          }),
+        );
+
+        expect(onReorder).toHaveBeenCalledWith([1], 3, null);
+      });
+
       it("picks up the whole selection when the row is part of one", async () => {
         const onReorder = vi.fn();
         const user = userEvent.setup();
