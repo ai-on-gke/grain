@@ -647,7 +647,7 @@ jobs:
       - name: Test
         run: |
           ./scripts/run-go-tests.sh go test -race -timeout 20m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/image-vulns/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/image-vulns/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... ./cmd/reviewed-merge/... \
             ./docs/releases/... ./tests/agentdcompat/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
@@ -659,7 +659,7 @@ jobs:
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
-            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/reviewedmerge/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... ./pkg/usage/... \
