@@ -500,6 +500,20 @@ type agentdReleaseCache struct {
 	// dir holds the verified binaries fetched from the release URL,
 	// created 0700 on first use.
 	dir string
+
+	// local remembers what loadLocalAgentdAsset made of each local
+	// directory's assets, so the open routes re-read and re-hash a binary
+	// only when its files (or the pinned key) change, not on every request.
+	localMu sync.Mutex
+	local   map[string]localAgentdAsset
+}
+
+// localAgentdAsset is one local verification result and the state it was
+// made from.
+type localAgentdAsset struct {
+	stamp string
+	entry cachedAgentdRelease
+	ok    bool
 }
 
 func (s *Server) handleHostdAgentdBinary(w http.ResponseWriter, r *http.Request) {
@@ -567,7 +581,7 @@ func (s *Server) resolveAgentdRelease(ctx context.Context, platform string) (cac
 	dirs := agentdLocalDirs()
 	// 1. Prefer a local directory carrying a signed, verified manifest + binary.
 	for _, dir := range dirs {
-		if entry, ok := loadLocalAgentdAsset(dir, platform, true); ok {
+		if entry, ok := s.agentdRelease.loadLocal(dir, platform, true); ok {
 			return entry, true
 		}
 	}
@@ -587,7 +601,7 @@ func (s *Server) resolveAgentdRelease(ctx context.Context, platform string) (cac
 	// 3. Fall back to a bundled local binary + hash-verified manifest (for
 	// example /usr/local/share/grain/agentd inside an offline controller image).
 	for _, dir := range dirs {
-		if entry, ok := loadLocalAgentdAsset(dir, platform, false); ok {
+		if entry, ok := s.agentdRelease.loadLocal(dir, platform, false); ok {
 			return entry, true
 		}
 	}
@@ -633,6 +647,39 @@ func controllerPinnedAgentdKey() ([]byte, error) {
 	return agentdrelease.EmbeddedPublicKey()
 }
 
+// loadLocal is loadLocalAgentdAsset, answered from c.local while the
+// manifest, the binary and the pinned key are as they were when it last ran.
+func (c *agentdReleaseCache) loadLocal(dir, platform string, requireSigned bool) (cachedAgentdRelease, bool) {
+	binName, err := agentdrelease.AssetName(platform)
+	if err != nil {
+		return cachedAgentdRelease{}, false
+	}
+	manifestName, err := agentdrelease.ManifestAssetName(platform)
+	if err != nil {
+		return cachedAgentdRelease{}, false
+	}
+	stamp := os.Getenv(agentdReleasePublicKeyEnv)
+	for _, name := range []string{manifestName, binName} {
+		st, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			return cachedAgentdRelease{}, false
+		}
+		stamp += fmt.Sprintf("|%d|%d", st.Size(), st.ModTime().UnixNano())
+	}
+	key := fmt.Sprintf("%s|%s|%t", dir, platform, requireSigned)
+	c.localMu.Lock()
+	defer c.localMu.Unlock()
+	if cur, ok := c.local[key]; ok && cur.stamp == stamp {
+		return cur.entry, cur.ok
+	}
+	entry, ok := loadLocalAgentdAsset(dir, platform, requireSigned)
+	if c.local == nil {
+		c.local = make(map[string]localAgentdAsset)
+	}
+	c.local[key] = localAgentdAsset{stamp: stamp, entry: entry, ok: ok}
+	return entry, ok
+}
+
 func loadLocalAgentdAsset(dir, platform string, requireSigned bool) (cachedAgentdRelease, bool) {
 	binName, err := agentdrelease.AssetName(platform)
 	if err != nil {
@@ -654,6 +701,9 @@ func loadLocalAgentdAsset(dir, platform string, requireSigned bool) (cachedAgent
 		return cachedAgentdRelease{}, false
 	}
 	if requireSigned && m.Signature == "" {
+		return cachedAgentdRelease{}, false
+	}
+	if st, err := os.Stat(binPath); err != nil || st.Size() != m.Size || st.Size() > maxAgentdBinaryBytes {
 		return cachedAgentdRelease{}, false
 	}
 	binBytes, err := os.ReadFile(binPath)

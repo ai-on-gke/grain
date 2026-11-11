@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	agentdrelease "github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -679,5 +680,54 @@ func TestControllerRefusesUnsignedAgentdFromReleaseURL(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s with an unsigned upstream release = %d, want 404", p, rec.Code)
 		}
+	}
+}
+
+// The open routes remember a local asset's verification, but only while its
+// files are unchanged: a binary swapped after the first request is checked
+// again, and refused.
+func TestControllerReverifiesALocalAgentdAssetThatChanged(t *testing.T) {
+	pub, priv, _ := agentdrelease.GenerateKeyPair()
+	pubPEM, _ := agentdrelease.FormatPublicKeyPEM(pub)
+
+	distDir := t.TempDir()
+	t.Setenv(agentdDistDirEnv, distDir)
+	t.Setenv(agentdReleaseURLEnv, "off")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+
+	binPath := filepath.Join(distDir, "grain-agentd-linux-amd64")
+	binPayload := []byte("agentd-bytes")
+	m, _ := agentdrelease.NewManifestForBinary("v3.5.0", "linux/amd64", binPayload, nil)
+	signed, _ := agentdrelease.SignManifest(m, priv, nil)
+	raw, _ := json.Marshal(signed)
+	if err := os.WriteFile(binPath, binPayload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "grain-agentd-linux-amd64.manifest.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(Config{}, nil)
+	get := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/linux/amd64", nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+	for i := 0; i < 2; i++ {
+		if rec := get(); rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), binPayload) {
+			t.Fatalf("request %d: code=%d body=%q", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	if err := os.WriteFile(binPath, []byte("evil-agentd-bytes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(binPath, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if rec := get(); rec.Code != http.StatusNotFound {
+		t.Fatalf("swapped binary served with %d, want 404: %q", rec.Code, rec.Body.String())
 	}
 }
