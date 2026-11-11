@@ -83,6 +83,82 @@ export function repoHostOf(text) {
   return "";
 }
 
+// targetRepoHostMismatches returns stored hostless targetRepos entries that
+// resolve to defaultHost while reachable only on a non-default git host.
+// Prefers the server's own hostMismatches (which exclude entries with an
+// explicit cloneURL), filtered against current targetRepos, and falls back to
+// computing from reach.repos when hostMismatches is absent.
+export function targetRepoHostMismatches(
+  reach,
+  targetRepos,
+  defaultHost = "github.com",
+) {
+  if (
+    !reach ||
+    !reach.available ||
+    !Array.isArray(targetRepos) ||
+    targetRepos.length === 0
+  ) {
+    return [];
+  }
+  const currentTargets = new Set(
+    targetRepos.map((r) => (r || "").trim().toLowerCase()).filter(Boolean),
+  );
+  if (Array.isArray(reach.hostMismatches)) {
+    return reach.hostMismatches.filter(
+      (m) => m?.repo && currentTargets.has(m.repo.trim().toLowerCase()),
+    );
+  }
+  const normDefault = (defaultHost || "github.com").trim().toLowerCase();
+  const conns = Array.isArray(reach.connections) ? reach.connections : [];
+  const defaultConns = conns.filter(
+    (c) => (c.host || normDefault).toLowerCase() === normDefault,
+  );
+  if (defaultConns.length > 0 && !defaultConns.some((c) => c.ok)) {
+    return [];
+  }
+  const onDefault = new Set();
+  const offDefault = new Map();
+  for (const item of reach.repos || []) {
+    const raw = (item?.repo || "").trim();
+    if (!raw) continue;
+    const rHost = repoHostOf(raw);
+    const bare = rHost ? raw.slice(raw.indexOf("/") + 1) : raw;
+    const key = bare.toLowerCase();
+    if (!rHost || rHost === normDefault) {
+      onDefault.add(key);
+      continue;
+    }
+    const existing = offDefault.get(key) || [];
+    if (!existing.some((e) => e.toLowerCase() === raw.toLowerCase())) {
+      existing.push(raw);
+      offDefault.set(key, existing);
+    }
+  }
+  const out = [];
+  for (const raw of targetRepos) {
+    const entry = (raw || "").trim();
+    if (!entry || repoHostOf(entry)) continue;
+    const key = entry.toLowerCase();
+    if (
+      key === "grain/config" ||
+      key.startsWith("grain/config-") ||
+      onDefault.has(key)
+    ) {
+      continue;
+    }
+    const candidates = offDefault.get(key);
+    if (!candidates || candidates.length === 0) continue;
+    out.push({
+      repo: entry,
+      resolvesTo: normDefault,
+      candidates,
+      message: `this entry resolves to ${normDefault}; did you mean ${candidates.join(" or ")}?`,
+    });
+  }
+  return out;
+}
+
 // discoveryStatus is the line under the Add repo picker: what
 // GET /api/deployment/reachable-repos found and from how many of the
 // team's Git connections, or why it found nothing -- so a picker with no
@@ -295,6 +371,11 @@ export default function RepoList({
     (r) => q === "" || r.repo.toLowerCase().includes(q),
   );
   const targetRepos = config?.targetRepos || [];
+  const hostMismatches = targetRepoHostMismatches(
+    reach,
+    targetRepos,
+    config?.githubHost,
+  );
 
   // firstAddWarning is what the confirmation says before the first repo
   // is added to an empty (== unrestricted) allowlist, or null when this
@@ -629,6 +710,16 @@ export default function RepoList({
           here; removing this one allows any repo again.
         </Alert>
       )}
+      {hostMismatches.map((m) => (
+        <Alert
+          key={m.repo}
+          severity="warning"
+          data-testid="repo-host-mismatch-alert"
+          sx={{ mx: "1.75rem", mt: 2, overflowWrap: "anywhere" }}
+        >
+          <strong>{m.repo}</strong>: {m.message}
+        </Alert>
+      ))}
       {/* A section label, not a heading: it marks the list below as the
           repos already added, apart from the add form above it, without
           adding a second "Repos" heading beside the page's own. */}

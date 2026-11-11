@@ -77,6 +77,7 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 	if err != nil {
 		return Settings{}, validationErrorf("repo: %v", err)
 	}
+	typed := parsed
 	cloneURL = strings.TrimSpace(cloneURL)
 	authoritative := false
 	if cloneURL == "" {
@@ -95,7 +96,11 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 			updated := make([]string, 0, len(cfg.TargetRepos)+1)
 			found := false
 			for _, r := range cfg.TargetRepos {
-				if existing, err := model.ParseRepo(r); err == nil && existing.Same(parsed) {
+				if existing, err := model.ParseRepo(r); err == nil &&
+					(existing.Same(parsed) || (authoritative && existing.Same(typed))) {
+					if found {
+						continue
+					}
 					found = true
 					if authoritative {
 						updated = append(updated, repo)
@@ -126,56 +131,98 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 	return c.GetSettings(ctx)
 }
 
-// RepoNames resolves a repository's own name -- what GitHub calls it, as
-// against what somebody typed. github.(*RESTClient).RepoFullName is the
-// implementation; nil on Config means this deployment cannot ask, which
-// is the ordinary state of a UI with no GitHub client beside it
-// (`grain demo`, and any UI not colocated with a daemon) and the same
-// nil-means-unavailable contract Config.PullRequests already gives.
+// RepoNames resolves a repository's own name on its git host -- what the
+// forge calls it, as against what somebody typed. host is empty on the
+// deployment's default host and normalized otherwise (model.RepoRef.OffDefaultHost).
+// pkg/daemon's repoNameGate routes the lookup to that host's forge connection;
+// nil on Config means this deployment cannot ask, which is the ordinary state
+// of a UI with no GitHub client beside it (`grain demo`, and any UI not
+// colocated with a daemon) and the same nil-means-unavailable contract
+// Config.PullRequests already gives.
 type RepoNames interface {
-	RepoFullName(owner, name string) (string, error)
+	RepoFullName(host, owner, name string) (string, error)
 }
 
-// githubSpelling is repo as GitHub itself spells it, and whether that is
+// githubSpelling is repo as its forge itself spells it, and whether that is
 // in fact where the answer came from -- false meaning repo is returned
-// exactly as given, because this deployment cannot ask or GitHub would
+// exactly as given, because this deployment cannot ask or the forge would
 // not answer.
 //
 // Falling back rather than refusing is the whole of the error handling
 // here, and it is deliberate. The reasons this call fails are a network
-// that is down, a credential that cannot see a private repo, and a
-// deployment with no GitHub client at all -- none of which is a reason
-// to refuse to add a repo to a list. The cost of falling back is that
-// the entry keeps the operator's capitalisation, which is what every
-// entry had before this existed.
+// that is down, a credential that cannot see a private repo, a host with
+// no forge connection configured, and a deployment with no GitHub client at
+// all -- none of which is a reason to refuse to add a repo to a list. The
+// cost of falling back is that the entry keeps the operator's capitalisation,
+// which is what every entry had before this existed.
 //
 // The bool is what keeps that fallback honest: its caller respells an
 // existing entry only on an authoritative answer, so a deployment that
-// cannot reach GitHub goes on treating a re-add as the no-op it always
+// cannot reach the forge goes on treating a re-add as the no-op it always
 // was rather than letting each operator overwrite the last one's
 // capitalisation.
 //
-// A rename is adopted along with the capitalisation, because this
-// endpoint follows GitHub's redirect and so answers under the name the
-// repository has now. That is the same repository under the name it
-// actually responds to, and storing the name it has moved away from
-// would leave the allowlist naming something that only works by
-// redirect.
+// A rename on the same host is adopted along with the capitalisation, because
+// this endpoint follows the forge's redirect and so answers under the name the
+// repository has now. GitHub-style JSON `full_name` never includes the host,
+// so repo.Host is always preserved on the returned RepoRef, and an answer that
+// explicitly names a different host is treated as non-authoritative.
 func (c *Client) githubSpelling(repo model.RepoRef) (model.RepoRef, bool) {
 	if c.Config.RepoNames == nil || model.IsConfigRepo(repo) {
 		// The config repository's name is the one grain's git proxy
 		// gives it; GitHub has no spelling of it to offer.
 		return repo, false
 	}
-	full, err := c.Config.RepoNames.RepoFullName(repo.Owner, repo.Name)
+	full, err := c.Config.RepoNames.RepoFullName(repo.OffDefaultHost(), repo.Owner, repo.Name)
 	if err != nil {
 		return repo, false
 	}
+	full = strings.TrimSpace(full)
 	canonical, err := model.ParseRepo(full)
-	if err != nil {
+	if err != nil || model.IsConfigRepo(canonical) {
+		return repo, false
+	}
+	if explicitHost, hasHost := explicitRepoHost(full); hasHost {
+		if !model.SameGitHost(explicitHost, repo.GitHost(), model.DefaultRepoHost()) {
+			return repo, false
+		}
+	}
+	canonical.Host = repo.Host
+	if canonical.OffDefaultHost() != repo.OffDefaultHost() {
 		return repo, false
 	}
 	return canonical, true
+}
+
+// explicitRepoHost reports the git host text explicitly names -- as a URL,
+// an scp-style SSH remote, or a host/owner/name triple -- and false for a
+// bare owner/name.
+func explicitRepoHost(text string) (string, bool) {
+	spec := strings.TrimSpace(text)
+	if at := strings.Index(spec, "@"); at >= 0 && !strings.Contains(spec, "://") {
+		if colon := strings.Index(spec[at:], ":"); colon >= 0 {
+			h, err := model.NormalizeGitHost(spec[at+1 : at+colon])
+			return h, err == nil && h != ""
+		}
+	}
+	if scheme := strings.Index(spec, "://"); scheme >= 0 {
+		rest := spec[scheme+len("://"):]
+		authority := rest
+		if slash := strings.Index(rest, "/"); slash >= 0 {
+			authority = rest[:slash]
+		}
+		if at := strings.LastIndex(authority, "@"); at >= 0 {
+			authority = authority[at+1:]
+		}
+		h, err := model.NormalizeGitHost(authority)
+		return h, err == nil && h != ""
+	}
+	spec = strings.TrimSuffix(strings.TrimSuffix(strings.Trim(spec, "/"), ".git"), "/")
+	if first, rest, ok := strings.Cut(spec, "/"); ok && rest != "" && strings.ContainsAny(first, ".:") {
+		h, err := model.NormalizeGitHost(first)
+		return h, err == nil && h != ""
+	}
+	return "", false
 }
 
 // RemoveTargetRepo removes repo from the deployment's TargetRepos

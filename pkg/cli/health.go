@@ -85,6 +85,13 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
+	if len(h.TargetRepoHostWarnings) > 0 {
+		fmt.Println("WARNING: target repositories missing their git host:")
+		for _, w := range h.TargetRepoHostWarnings {
+			fmt.Printf("  %s: %s\n", w.Repo, w.Message)
+		}
+		fmt.Println()
+	}
 	hasHubIssue := h.Hub != nil && (h.Hub.LastError != "" || len(h.Hub.ScopeConflicts) > 0)
 	if hasHubIssue {
 		fmt.Printf("hub (%s @ %s): %s\n", h.Hub.Entry, h.Hub.URL, h.Hub.State)
@@ -111,7 +118,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasHubIssue && len(h.CapabilityServers) == 0 {
+		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return

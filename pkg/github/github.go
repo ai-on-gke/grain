@@ -2779,8 +2779,8 @@ func (c *RESTClient) SetDefaultBranch(owner, repo, branch string) error {
 // loop asks this question -- the loop works in the repo a task already
 // names, whatever its spelling -- so putting it there would make every
 // implementation of Client carry a method only the settings path calls.
-// pkg/ui declares the one-method interface it needs (ui.RepoNames) and
-// this satisfies it.
+// pkg/daemon's repoNameGate adapts this to pkg/ui's host-aware RepoNames
+// interface.
 func (c *RESTClient) RepoFullName(owner, repo string) (string, error) {
 	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s", owner, repo))
 	if err != nil {
