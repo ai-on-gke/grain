@@ -311,11 +311,11 @@ func (s *Store) WaitTargetAt(ctx context.Context, id string, now time.Time) (*Wa
 	}
 	if target.Closed || state == StateFailed || state == StateCompleted ||
 		state == StateAwaitingSubmit || state == StateAwaitingReply {
-		comments, err := s.Comments(ctx, task.ID)
+		note, err := s.latestClosingNote(ctx, task.ID)
 		if err != nil {
 			return nil, err
 		}
-		target.ClosingNote = closingNote(comments, task.ID)
+		target.ClosingNote = note
 	}
 	return target, nil
 }
@@ -395,6 +395,25 @@ func pullRequestStillRead(task Task, obs *Observation, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// latestClosingNote is closingNote over taskID's conversation, read a page
+// at a time from the newest back until one of its runs' comments turns up.
+func (s *Store) latestClosingNote(ctx context.Context, taskID string) (string, error) {
+	var before int64
+	for {
+		page, more, err := s.CommentsBefore(ctx, taskID, before, 32)
+		if err != nil {
+			return "", err
+		}
+		if note := closingNote(page, taskID); note != "" {
+			return note, nil
+		}
+		if !more || len(page) == 0 {
+			return "", nil
+		}
+		before = page[0].ID
+	}
 }
 
 // closingNote is the most recent comment taskID's own runs posted, bounded

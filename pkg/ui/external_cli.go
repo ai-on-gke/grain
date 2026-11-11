@@ -588,12 +588,8 @@ func (c *Client) taskWaitState(ctx context.Context, id string, now time.Time) (T
 		if obs.ClosedAt == nil && obs.PendingQuestionCommentID != nil {
 			pendingQ = strconv.FormatInt(*obs.PendingQuestionCommentID, 10)
 			st.PendingSecret = obs.PendingSecret
-			if comments, err := c.Store.Comments(ctx, id); err == nil {
-				for _, cm := range comments {
-					if cm.ID == *obs.PendingQuestionCommentID {
-						st.Question = cm.Body
-					}
-				}
+			if cm, err := c.Store.Comment(ctx, id, *obs.PendingQuestionCommentID); err == nil && cm != nil {
+				st.Question = cm.Body
 			}
 		}
 	}
