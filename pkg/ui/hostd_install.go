@@ -15,7 +15,9 @@
 package ui
 
 import (
+	"context"
 	_ "embed"
+	"encoding/json"
 	"log"
 	"net/http"
 	"regexp"
@@ -24,6 +26,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -46,6 +51,7 @@ const (
 	hostdInstallURLMark     = "@GRAIN_DAEMON_URL@"
 	hostdInstallReleaseMark = "@GRAIN_DAEMON_RELEASE@"
 	hostdInstallImageMark   = "@GRAIN_DAEMON_IMAGE@"
+	hostdAgentdTemplateMark = "@GRAIN_AGENTD_TEMPLATE@"
 )
 
 // Each value is written into the script between single quotes and from
@@ -75,16 +81,57 @@ func hostdInstallRoute(r *http.Request) bool {
 
 // handleHostdInstallScript serves hostd_install.sh with this daemon's
 // URL, as the caller reached it, filled in for the hostd to dial, and
-// for a caller with access the daemon's release and image too.
+// for a caller with access the daemon's release and image too. When the
+// caller asks for the agentd allowlist template (?template=agentd or
+// Accept: application/json), it serves the deployment's CLI allowlist
+// template as JSON data instead.
 func (s *Server) handleHostdInstallScript(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	hasAccess := s.hostdInstallCallerHasAccess(r)
+	origin := hostdInstallOrigin(r)
+	tmpl := s.agentdAllowlistTemplate(r.Context(), origin, hasAccess)
+	if wantsAgentdAllowlistTemplate(r) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if b, err := json.Marshal(tmpl); err == nil {
+			_, _ = w.Write(append(b, '\n'))
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	release, image := "", ""
-	if s.hostdInstallCallerHasAccess(r) {
+	if hasAccess {
 		release, image = version.Get().Release, s.hostdInstallImage()
 	}
-	_, _ = w.Write([]byte(renderHostdInstallScript(hostdInstallDaemonURL(r), release, image)))
+	_, _ = w.Write([]byte(renderHostdInstallScriptWithTemplate(hostdInstallDaemonURL(r), release, image, tmpl)))
+}
+
+func wantsAgentdAllowlistTemplate(r *http.Request) bool {
+	q := r.URL.Query()
+	if q.Get(hostd.InstallTemplateQuery) == hostd.InstallTemplateAgentd ||
+		q.Get("agentd") == "template" ||
+		q.Get("agentd-template") == "1" {
+		return true
+	}
+	for _, part := range strings.Split(r.Header.Get("Accept"), ",") {
+		media, _, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if strings.EqualFold(strings.TrimSpace(media), "application/json") {
+			return true
+		}
+	}
+	return false
+}
+
+// RegisterHostCLICandidates prepends candidate binary paths for CLI name in
+// the allowlist template served by /hostd/install.
+func RegisterHostCLICandidates(name string, paths ...string) (unregister func()) {
+	return hostd.RegisterCLICandidates(name, paths...)
+}
+
+// RegisterHostCLITemplate adds or overrides an agent CLI entry in the
+// allowlist template served by /hostd/install.
+func RegisterHostCLITemplate(entry hostd.CLITemplateEntry) (unregister func()) {
+	return hostd.RegisterCLITemplate(entry)
 }
 
 // hostdInstallCallerHasAccess reports whether r is a caller the access
@@ -369,25 +416,189 @@ func (s *Server) hostdInstallInfo() *HostdInstall {
 	return out
 }
 
-// renderHostdInstallScript is hostd_install.sh with url, release and
-// image in its placeholders, each left empty when it does not match
-// its pattern.
+// renderHostdInstallScript is hostd_install.sh with url, release, image
+// and the default agentd allowlist template in its placeholders, each left
+// empty when it does not match its pattern.
 func renderHostdInstallScript(url, release, image string) string {
+	safeURL := sanitizeHostdInstallURL(url)
+	return renderHostdInstallScriptWithTemplate(url, release, image, defaultAgentdAllowlistTemplate(safeURL))
+}
+
+func sanitizeHostdInstallURL(url string) string {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") ||
 		!hostdInstallHostRE.MatchString(strings.TrimPrefix(strings.TrimPrefix(url, "http://"), "https://")) {
-		url = ""
+		return ""
 	}
+	return url
+}
+
+func renderHostdInstallScriptWithTemplate(url, release, image string, tmpl hostd.AllowlistTemplate) string {
+	url = sanitizeHostdInstallURL(url)
 	if !hostdInstallReleaseRE.MatchString(release) {
 		release = ""
 	}
 	if !hostdInstallImageRE.MatchString(image) {
 		image = ""
 	}
+	tmpl.Server = url
 	return strings.NewReplacer(
 		hostdInstallURLMark, url,
 		hostdInstallReleaseMark, release,
 		hostdInstallImageMark, image,
+		hostdAgentdTemplateMark, encodeHeredocTemplate(tmpl),
 	).Replace(hostdInstallScript)
+}
+
+func encodeHeredocTemplate(tmpl hostd.AllowlistTemplate) string {
+	if err := tmpl.Validate(); err != nil {
+		return ""
+	}
+	raw, err := json.Marshal(tmpl)
+	if err != nil {
+		return ""
+	}
+	s := string(raw)
+	if strings.ContainsAny(s, "\r\n\x00") || strings.Contains(s, "AGENTD_TEMPLATE") {
+		return ""
+	}
+	return s
+}
+
+func (s *Server) agentdAllowlistTemplate(ctx context.Context, serverURL string, includeCustomPaths bool) hostd.AllowlistTemplate {
+	if s == nil || s.tasks == nil || s.tasks.Store == nil {
+		return defaultAgentdAllowlistTemplate(serverURL)
+	}
+	cfg, err := s.tasks.Store.GetConfig(ctx)
+	if err != nil {
+		return defaultAgentdAllowlistTemplate(serverURL)
+	}
+	return buildAgentdAllowlistTemplate(cfg, serverURL, includeCustomPaths)
+}
+
+func defaultAgentdAllowlistTemplate(serverURL string) hostd.AllowlistTemplate {
+	return buildAgentdAllowlistTemplate(nil, serverURL, false)
+}
+
+func buildAgentdAllowlistTemplate(cfg *model.Config, serverURL string, includeCustomPaths bool) hostd.AllowlistTemplate {
+	frameworks := orderedTemplateFrameworks(cfg)
+	customPaths := map[string][]string{}
+	if cfg != nil && includeCustomPaths {
+		for _, b := range cfg.AgentBackends {
+			bin := model.AgentCLIBinary(b.Framework)
+			p := strings.TrimSpace(b.CLIPath)
+			if bin == "" || p == "" {
+				continue
+			}
+			if !slices.Contains(customPaths[bin], p) {
+				customPaths[bin] = append(customPaths[bin], p)
+			}
+		}
+	}
+
+	clis := make([]hostd.CLITemplateEntry, 0, len(frameworks))
+	for _, fw := range frameworks {
+		entry, ok := frameworkCLITemplateEntry(fw, customPaths[model.AgentCLIBinary(fw)])
+		if ok {
+			clis = append(clis, entry)
+		}
+	}
+	for _, extra := range hostd.RegisteredCLITemplates() {
+		extra.Candidates = mergeUniqueCandidates(hostd.RegisteredCLICandidates(extra.Name), extra.Candidates)
+		if err := extra.Validate(); err != nil {
+			continue
+		}
+		replaced := false
+		for i := range clis {
+			if clis[i].Name == extra.Name {
+				clis[i] = extra
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			clis = append(clis, extra)
+		}
+	}
+	return hostd.AllowlistTemplate{
+		Version: hostd.AllowlistTemplateVersion,
+		Server:  serverURL,
+		CLIs:    clis,
+	}
+}
+
+func orderedTemplateFrameworks(cfg *model.Config) []string {
+	var order []string
+	add := func(fw string) {
+		norm := model.NormalizeAgentFrameworkName(strings.TrimSpace(fw))
+		if model.ValidAgentFramework(norm) && !slices.Contains(order, norm) {
+			order = append(order, norm)
+		}
+	}
+	if cfg != nil {
+		if strings.TrimSpace(cfg.AgentFramework) != "" {
+			add(cfg.AgentFramework)
+		}
+		for _, b := range model.DeploymentAgentBackends(cfg.AgentBackends, false) {
+			add(b.Framework)
+		}
+	}
+	for _, fw := range model.AgentFrameworks() {
+		add(fw)
+	}
+	return order
+}
+
+func frameworkCLITemplateEntry(framework string, customPaths []string) (hostd.CLITemplateEntry, bool) {
+	norm := model.NormalizeAgentFrameworkName(framework)
+	bin := model.AgentCLIBinary(norm)
+	if bin == "" {
+		return hostd.CLITemplateEntry{}, false
+	}
+	var env, aliases []string
+	switch norm {
+	case model.AgentFrameworkAntigravity:
+		env = antigravity.HostdEnv()
+		aliases = []string{model.AgentFrameworkAntigravity}
+	case model.AgentFrameworkClaude:
+		env = claude.HostdEnv()
+	case model.AgentFrameworkCodex:
+		env = codex.HostdEnv()
+	default:
+		return hostd.CLITemplateEntry{}, false
+	}
+	defaults := []string{
+		bin,
+		"~/.local/bin/" + bin,
+		"/usr/local/bin/" + bin,
+		"/usr/bin/" + bin,
+	}
+	candidates := mergeUniqueCandidates(hostd.RegisteredCLICandidates(bin), defaults)
+	for _, cp := range customPaths {
+		test := hostd.CLITemplateEntry{Name: bin, Candidates: []string{cp}}
+		if test.Validate() == nil && !slices.Contains(candidates, cp) {
+			candidates = append(candidates, cp)
+		}
+	}
+	return hostd.CLITemplateEntry{
+		Name:       bin,
+		Aliases:    aliases,
+		Candidates: candidates,
+		Env:        env,
+		PassEnv:    slices.Clone(hostd.ProxyVars),
+	}, true
+}
+
+func mergeUniqueCandidates(first, rest []string) []string {
+	out := make([]string, 0, len(first)+len(rest))
+	for _, list := range [][]string{first, rest} {
+		for _, c := range list {
+			c = strings.TrimSpace(c)
+			if c != "" && !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }
 
 // hostdInstallDaemonURL is the URL r reached this daemon at: https when
