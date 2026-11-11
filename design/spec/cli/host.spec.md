@@ -910,6 +910,52 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 
 **Pinned by:** `TestGrainReleaseRollbackCLI` in `pkg/cli/release_test.go`.
 
+### 4.10a `grain upgrade [status|start|cancel|rollback]` {#CLI-111}
+
+Manages in-place upgrades of a running `grain daemon` deployment (`GET /api/upgrade`, `POST /api/upgrade`, `DELETE /api/upgrade/current`, `DELETE /api/upgrade/scheduled`). Requires `deployment:upgrade` on mutating subcommands (`deployment:read` for `status`).
+
+- `grain upgrade` / `grain upgrade status` reads `GET /api/upgrade` and prints the running image or commit, any pending scheduled upgrade, whether an in-progress upgrade is still cancellable (with any remaining manual grace window or the point-of-no-return message), and the image or commit the last completed upgrade replaced.
+- `grain upgrade start [-after-tasks-finish] [-image <ref>] [<branch>]` posts `POST /api/upgrade` to start an immediate upgrade (subject to `-upgrade-grace-window`) or schedule one after active tasks and CI jobs drain.
+- `grain upgrade cancel [-reason <why>] [-scheduled]` cancels an upgrade currently in progress via `DELETE /api/upgrade/current`, recording the operator and reason in `config_audit` and ending progress in `cancelled`. If no upgrade is running and a scheduled upgrade is waiting to drain, it cancels `DELETE /api/upgrade/scheduled` (`-scheduled` cancels only a scheduled upgrade). Once the upgrade has reached its point of no return, the daemon returns `409 Conflict` (`restarting onto <target> — too late to cancel; upgrade back to <previous> afterwards`).
+- `grain upgrade rollback` posts `POST /api/upgrade` with `rollback: true`, starting a rollback onto the build the last completed upgrade replaced: its digest-pinned `previousImage`, or on source deployments its `previousCommit`, checked out by object id. The daemon reads the target from its own status file, and a rollback always starts now (it cannot be scheduled).
+- For Grain Hub entries: `connected` instances run `pkg/upgrade` and support per-instance `grain -context <name> upgrade cancel`; hosted `instance` VMs run with `-disable-self-upgrade` and upgrade externally by VM replacement (`grain hub upgrade <name>`).
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade status`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade status -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade start`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade start -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-after-tasks-finish` | bool |  |  | hold the queue and wait for running tasks and CI jobs to finish before upgrading |
+| `-image` | string |  |  | explicit image repository, repo:tag or repo@sha256:<digest> to pull (-upgrade-image deployments only) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade cancel`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade cancel -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-reason` | string |  |  | why the upgrade is being cancelled (recorded in the deployment's audit log) |
+| `-scheduled` | bool |  |  | cancel only a scheduled upgrade waiting for tasks to finish |
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade rollback`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade rollback -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `TestGrainUpgradeCLI` in `pkg/cli/upgrade_cmd_test.go`.
+
 ### 4.11 `grain metrics`, `grain failures`, `grain usage` and `grain health` {#CLI-40}
 
 - `metrics [-window 7d | -since t -until t] [-repo R]… [-author A]…` calls `GET /api/metrics`. It prints throughput, latency, prompt sizes and sandbox cost, and says what it was scoped to. An impossible span is refused before the daemon is asked.
@@ -1547,7 +1593,7 @@ _No flags._
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
 | `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
-| `-version` | string |  |  | target grain release version (defaults to hub's current pinned release) |
+| `-version` | string |  |  | target grain release version for hosted VM replacement (defaults to hub's current pinned release; connected entries run in-place upgrades via "grain -context <name> upgrade") |
 <!-- END GENERATED FLAGS -->
 
 #### `grain hub resize`
@@ -1979,6 +2025,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ui-require-verifier` | string |  | $GRAIN_REQUIRE_VERIFIER | require network callers to sign in through the named IdentityVerifier (e.g. "iap", "registry", or a registered verifier): accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers (or through a verifier that declares AccessCodeWins), and serve no "Enter access code" page (-ui-require-iap is an alias for -ui-require-verifier=iap). Defaults to $GRAIN_REQUIRE_VERIFIER |
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
+| `-upgrade-grace-window` | duration | `10s` | $GRAIN_UPGRADE_GRACE_WINDOW | grace window between confirming a manual upgrade and starting its work, during which the Upgrade pane shows a countdown with Cancel (0 disables the countdown; $GRAIN_UPGRADE_GRACE_WINDOW when unset) |
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |

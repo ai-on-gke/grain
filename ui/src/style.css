@@ -3572,6 +3572,9 @@ fieldset legend {
 .upgrade-phase-failed {
   color: var(--danger);
 }
+.upgrade-phase-cancelled {
+  color: var(--text-secondary, var(--text-tertiary));
+}
 
 /* The step list under the progress bar (grain/task-37): one row per step
    of the upgrade's plan, with its own second line for whatever the step
@@ -3628,6 +3631,10 @@ fieldset legend {
 }
 .upgrade-step-skipped {
   color: var(--text-tertiary);
+}
+.upgrade-step-cancelled .upgrade-step-mark,
+.upgrade-step-cancelled .upgrade-step-state {
+  color: var(--text-secondary, var(--text-tertiary));
 }
 
 /* ---------- The detail pane: what opening a task, a schedule, a

@@ -67,7 +67,7 @@ func startUpgrade(upgrader *upgrade.Upgrader) func(string) error {
 	if upgrader == nil {
 		return nil
 	}
-	return upgrader.Start
+	return upgrader.StartScheduled
 }
 
 // upgradeUnchanged is orchestrator.Config.UpgradeUnchanged: the cheap
@@ -243,6 +243,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			// returns (upgrade.Upgrader.restarts).
 			StatusFile:      filepath.Join(cfg.DataDir, "upgrade-status.json"),
 			AllowedBranches: cfg.UpgradeAllowedBranches,
+			GraceWindow:     cfg.UpgradeGraceWindow,
 		})
 	case cfg.UpgradeImage != "" && (!KubernetesMode(cfg) || cfg.UpgradeImageRefFile != ""):
 		// The container path: no checkout, no build, no install -- pull
@@ -312,6 +313,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			Refusal:         hostModeUpgradeRefusal(cfg, systemHostModeProbe()),
 			StatusFile:      filepath.Join(cfg.DataDir, "upgrade-status.json"),
 			AllowedBranches: cfg.UpgradeAllowedBranches,
+			GraceWindow:     cfg.UpgradeGraceWindow,
 		})
 	case cfg.UpgradeSrcDir != "":
 		return upgrade.New(upgrade.Config{
@@ -341,6 +343,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			Stopping:        cfg.shutdownStarted,
 			StatusFile:      filepath.Join(cfg.DataDir, "upgrade-status.json"),
 			AllowedBranches: cfg.UpgradeAllowedBranches,
+			GraceWindow:     cfg.UpgradeGraceWindow,
 		})
 	}
 	return nil
