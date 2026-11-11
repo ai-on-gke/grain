@@ -335,6 +335,15 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 		return Denial(500, "authorization check failed")
 	}
 	if !allowed {
+		if explainer, ok := p.Authorizer.(RemovalExplainer); ok {
+			if reason, removed := explainer.RemovedReason(ctx, sandbox, scopeOwner, req.Repo); removed {
+				p.audit().Record(AuditEntry{
+					Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
+					Action: req.Action, Outcome: "denied: removed from the deployment",
+				})
+				return Denial(403, reason)
+			}
+		}
 		if withholder, ok := p.Authorizer.(interface {
 			WithheldReason(sandbox, owner, repo string) (string, bool)
 		}); ok {
