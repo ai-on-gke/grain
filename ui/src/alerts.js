@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import api from "./api.js";
-import { formatDateTime, formatMoment, formatTime } from "./time.js";
+import { formatDateTime, formatMoment } from "./time.js";
 import { hasGitCredential } from "./gitConnections.js";
 import { redBaseRepairSentence, waitingBaseRepair } from "./state.js";
 import { forceMergeOffered } from "./taskWrites.js";
@@ -136,14 +136,17 @@ export function pauseSubject(entry) {
 // is what somebody deciding whether to wait or to go to lunch actually
 // plans around. On the deployment's clock (grain/task-368), like every
 // other absolute time on screen -- zone empty is the browser's own,
-// which is what a caller with no provider above it gets.
+// which is what a caller with no provider above it gets. The clock time
+// stands alone only when the pause ends today (formatMoment): a quota
+// window can be days away, and "until 9:13 AM" on a pause that lifts on
+// Saturday reads as this morning.
 //
 // A pause on one model says so first, as the model on its connection --
 // "gemini-3-pro on Gemini (deployment default) paused until 3:40 PM — usage
 // limit" -- since the connection's other models are still dispatching;
 // one escalated to the whole connection says why.
-export function pauseMessage(entry, zone = "") {
-  const until = entry?.until ? formatTime(entry.until, zone) : "";
+export function pauseMessage(entry, zone = "", now = new Date()) {
+  const until = entry?.until ? formatMoment(entry.until, zone, now) : "";
   const when = until
     ? `${until} (${formatRemaining(entry.secondsRemaining)})`
     : "the provider's window resets";
@@ -164,8 +167,8 @@ export function pauseMessage(entry, zone = "") {
 // pausedUntil is the same pause as a clause for a place that already
 // names what is paused -- a connection on Team settings, a queued task's
 // pane: "paused until 10:58 PM (about 5h 59m) — <reason>".
-export function pausedUntil(pause, zone = "") {
-  const until = pause?.until ? formatTime(pause.until, zone) : "";
+export function pausedUntil(pause, zone = "", now = new Date()) {
+  const until = pause?.until ? formatMoment(pause.until, zone, now) : "";
   const when = until
     ? `until ${until} (${formatRemaining(pause.secondsRemaining)})`
     : "until the provider's window resets";
