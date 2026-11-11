@@ -12,25 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  OnDestroy,
+  OnInit,
   computed,
   inject,
+  signal,
 } from "@angular/core";
-import { RouterLink, RouterLinkActive, RouterOutlet } from "@angular/router";
+import {
+  Router,
+  RouterLink,
+  RouterLinkActive,
+  RouterOutlet,
+} from "@angular/router";
 import { InboxStore } from "./inbox/inbox.store";
 import { AccessService } from "./services/access.service";
+import { KeyboardService } from "./services/keyboard.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
-
-// Destinations not yet moved to this app open in the classic UI: plain
-// links to the classic paths, which the daemon serves beside /next/.
-interface Destination {
-  label: string;
-  href: string;
-  icon: string;
-}
+import { TipDirective } from "./shared/tip.directive";
+import {
+  CLASSIC_NEW_SESSION,
+  CLASSIC_NEW_TASK,
+  DESTINATIONS,
+  type Destination,
+  SETTINGS,
+  hrefFor,
+} from "./shell/nav";
+import { SnackbarComponent } from "./shell/snackbar.component";
 
 // Material-style 24px outline paths, drawn for this app.
 const ICONS: Record<string, string> = {
@@ -43,8 +55,14 @@ const ICONS: Record<string, string> = {
   ci: "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
   processes:
     "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
+  telemetry: "M4 19h16v2H4zM6 10h3v7H6zm5-5h3v12h-3zm5 8h3v4h-3z",
+  fleet:
+    "M4 4h16v6H4zm2 2v2h2V6zm-2 8h16v6H4zm2 2v2h2v-2zM10 6v2h8V6zm0 10v2h8v-2z",
   settings:
     "M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58-2-3.46-2.39.96a7.03 7.03 0 0 0-1.63-.94L14.8 3.5h-4l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96-2 3.46 2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58 2 3.46 2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54h4l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96 2-3.46zM12.8 15.5a3.5 3.5 0 1 1 3.5-3.5 3.5 3.5 0 0 1-3.5 3.5z",
+  add: "M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z",
+  caret: "M7 10l5 5 5-5z",
+  more: "M6 10a2 2 0 1 0 2 2 2 2 0 0 0-2-2zm6 0a2 2 0 1 0 2 2 2 2 0 0 0-2-2zm6 0a2 2 0 1 0 2 2 2 2 0 0 0-2-2z",
   moon: "M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z",
   sun: "M12 7a5 5 0 1 0 5 5 5 5 0 0 0-5-5zM11 1h2v3h-2zm0 19h2v3h-2zM3.5 4.9l1.4-1.4 2.1 2.1-1.4 1.4zm13 13 1.4-1.4 2.1 2.1-1.4 1.4zM1 11h3v2H1zm19 0h3v2h-3zM4.9 20.5l-1.4-1.4 2.1-2.1 1.4 1.4zm13-13-1.4-1.4 2.1-2.1 1.4 1.4z",
   search:
@@ -52,45 +70,131 @@ const ICONS: Record<string, string> = {
   mark: "M12 2c-3 3-5 6-5 10a5 5 0 0 0 10 0c0-4-2-7-5-10zm0 15a3 3 0 0 1-3-3c0-2 1-4 3-6 2 2 3 4 3 6a3 3 0 0 1-3 3z",
 };
 
+interface CreateItem {
+  label: string;
+  href: string;
+  tip: string;
+}
+
 @Component({
   selector: "g-root",
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [
+    NgTemplateOutlet,
+    RouterOutlet,
+    RouterLink,
+    RouterLinkActive,
+    TipDirective,
+    SnackbarComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { "(document:click)": "onDocumentClick($event)" },
   template: `
     <div class="app-shell">
       <nav class="nav-rail" aria-label="Primary destinations">
         <a
-          class="brand-mark-btn"
-          routerLink="/inbox"
-          aria-label="Grain home — Inbox"
+          class="rail-fab"
+          data-testid="rail-new-task"
+          [href]="newTaskHref"
+          aria-label="New task"
+          gTip="New task (c): describe the work and Grain files it."
+          gTipPlacement="right"
         >
-          <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
-            <path [attr.d]="icons['mark']" fill="currentColor" />
+          <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+            <path [attr.d]="icons['add']" fill="currentColor" />
           </svg>
         </a>
-        <span class="rail-divider" aria-hidden="true"></span>
-        <a
-          class="rail-item"
-          routerLink="/inbox"
-          routerLinkActive
-          #inboxActive="routerLinkActive"
-          [attr.aria-current]="inboxActive.isActive ? 'page' : null"
-          data-testid="rail-inbox"
-        >
-          <span class="rail-pill">
-            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-              <path [attr.d]="icons['inbox']" fill="currentColor" />
+        <div class="rail-create">
+          <button
+            type="button"
+            class="rail-new-btn"
+            data-testid="rail-create-menu"
+            aria-haspopup="menu"
+            [attr.aria-expanded]="createOpen()"
+            aria-controls="create-menu"
+            (click)="toggleCreate($event)"
+          >
+            New
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+              <path [attr.d]="icons['caret']" fill="currentColor" />
             </svg>
-            @if (inboxCount() > 0) {
-              <span class="rail-badge" data-testid="rail-inbox-count">{{
-                inboxCount()
-              }}</span>
-            }
-          </span>
-          <span class="rail-label">Inbox</span>
-        </a>
-        @for (d of classic; track d.href) {
-          <a class="rail-item" [href]="d.href">
+          </button>
+          @if (createOpen()) {
+            <div
+              class="create-menu"
+              id="create-menu"
+              role="menu"
+              aria-label="Create"
+              data-testid="create-menu"
+              tabindex="-1"
+              [style.top.px]="createPos().top"
+              [style.left.px]="createPos().left"
+              (keydown.escape)="createOpen.set(false)"
+            >
+              @for (item of createItems; track item.href) {
+                <a
+                  class="create-menu-item"
+                  role="menuitem"
+                  [href]="item.href"
+                  [gTip]="item.tip"
+                  gTipPlacement="right"
+                  >{{ item.label }}</a
+                >
+              }
+            </div>
+          }
+        </div>
+        <span class="rail-divider" aria-hidden="true"></span>
+        @for (d of destinations; track d.id; let i = $index) {
+          <ng-container
+            *ngTemplateOutlet="railItem; context: { $implicit: d, key: i + 1 }"
+          />
+        }
+        <span class="rail-spacer" aria-hidden="true"></span>
+        <ng-container
+          *ngTemplateOutlet="
+            railItem;
+            context: { $implicit: settings, key: ',' }
+          "
+        />
+      </nav>
+
+      <ng-template #railItem let-d let-key="key">
+        @if (d.route) {
+          <a
+            class="rail-item"
+            [routerLink]="d.route"
+            routerLinkActive
+            #active="routerLinkActive"
+            [attr.aria-current]="active.isActive ? 'page' : null"
+            [attr.data-testid]="'rail-' + d.id"
+            [gTip]="d.tip + ' (' + key + ')'"
+            gTipPlacement="right"
+          >
+            <span class="rail-pill">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path [attr.d]="icons[d.icon]" fill="currentColor" />
+              </svg>
+              @if (d.id === "inbox" && inboxCount() > 0) {
+                <span class="rail-badge" data-testid="rail-inbox-count">{{
+                  inboxCount()
+                }}</span>
+              }
+            </span>
+            <span class="rail-label">{{ d.label }}</span>
+          </a>
+        } @else {
+          <a
+            class="rail-item"
+            [href]="d.classic"
+            [attr.data-testid]="'rail-' + d.id"
+            [gTip]="d.tip + ' Opens in the classic UI. (' + key + ')'"
+            gTipPlacement="right"
+          >
             <span class="rail-pill">
               <svg
                 width="20"
@@ -104,7 +208,7 @@ const ICONS: Record<string, string> = {
             <span class="rail-label">{{ d.label }}</span>
           </a>
         }
-      </nav>
+      </ng-template>
 
       <header class="top-bar">
         <div class="top-brand-cluster">
@@ -120,7 +224,8 @@ const ICONS: Record<string, string> = {
           <span class="app-wordmark">Grain</span>
           <span
             class="next-chip"
-            title="The new UI, built beside the classic one"
+            gTip="The new UI, built beside the classic one."
+            tabindex="0"
             >Next</span
           >
         </div>
@@ -150,6 +255,7 @@ const ICONS: Record<string, string> = {
                 ? 'Switch to light theme'
                 : 'Switch to dark theme'
             "
+            gTip="Switch between light and dark (t)."
             (click)="theme.toggle()"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
@@ -165,7 +271,8 @@ const ICONS: Record<string, string> = {
             <span
               class="role-chip"
               data-testid="role-chip"
-              [title]="'Signed in with role ' + access.roleLabel()"
+              tabindex="0"
+              [gTip]="'Signed in with role ' + access.roleLabel() + '.'"
             >
               {{ access.roleLabel() }}
             </span>
@@ -184,52 +291,184 @@ const ICONS: Record<string, string> = {
         <a class="btn-text bottom-link" href="/">Classic UI</a>
       </footer>
 
+      <a
+        class="phone-fab"
+        data-testid="phone-new-task"
+        [href]="newTaskHref"
+        aria-label="New task"
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+          <path [attr.d]="icons['add']" fill="currentColor" />
+        </svg>
+      </a>
+
       <nav class="compact-nav" aria-label="Primary destinations (compact)">
-        <a
+        @for (d of phoneDestinations; track d.id) {
+          @if (d.route) {
+            <a
+              class="compact-nav-btn"
+              [routerLink]="d.route"
+              routerLinkActive
+              #compact="routerLinkActive"
+              [attr.aria-current]="compact.isActive ? 'page' : null"
+            >
+              <span class="compact-nav-pill">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path [attr.d]="icons[d.icon]" fill="currentColor" />
+                </svg>
+              </span>
+              {{ d.label }}
+            </a>
+          } @else {
+            <a class="compact-nav-btn" [href]="d.classic">
+              <span class="compact-nav-pill">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path [attr.d]="icons[d.icon]" fill="currentColor" />
+                </svg>
+              </span>
+              {{ d.label }}
+            </a>
+          }
+        }
+        <button
+          type="button"
           class="compact-nav-btn"
-          routerLink="/inbox"
-          routerLinkActive
-          #inboxCompact="routerLinkActive"
-          [attr.aria-current]="inboxCompact.isActive ? 'page' : null"
+          data-testid="compact-more"
+          aria-haspopup="dialog"
+          [attr.aria-expanded]="moreOpen()"
+          (click)="toggleMore($event)"
         >
           <span class="compact-nav-pill">
             <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-              <path [attr.d]="icons['inbox']" fill="currentColor" />
+              <path [attr.d]="icons['more']" fill="currentColor" />
             </svg>
           </span>
-          Inbox
-        </a>
-        @for (d of classic.slice(0, 3); track d.href) {
-          <a class="compact-nav-btn" [href]="d.href">
-            <span class="compact-nav-pill">
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path [attr.d]="icons[d.icon]" fill="currentColor" />
-              </svg>
-            </span>
-            {{ d.label }}
-          </a>
-        }
+          More
+        </button>
       </nav>
+
+      @if (moreOpen()) {
+        <div
+          class="more-sheet"
+          role="dialog"
+          aria-label="More destinations"
+          data-testid="more-sheet"
+          tabindex="-1"
+          (keydown.escape)="moreOpen.set(false)"
+        >
+          @for (d of moreDestinations; track d.id) {
+            <a class="more-sheet-item" [href]="hrefOf(d)">{{ d.label }}</a>
+          }
+        </div>
+      }
+
+      <g-snackbar />
     </div>
   `,
 })
-export class AppComponent {
+export class AppComponent implements OnInit, OnDestroy {
   protected readonly theme = inject(ThemeService);
   protected readonly access = inject(AccessService);
   protected readonly filter = inject(ViewFilter);
   protected readonly store = inject(InboxStore);
+  private readonly keyboard = inject(KeyboardService);
+  private readonly router = inject(Router);
+  private readonly doc = inject(DOCUMENT);
+
   protected readonly icons = ICONS;
-  protected readonly inboxCount = computed(() => this.store.entries().length);
-  protected readonly classic: Destination[] = [
-    { label: "Tasks", href: "/tasks", icon: "tasks" },
-    { label: "Sessions", href: "/sessions", icon: "sessions" },
-    { label: "CI", href: "/ci", icon: "ci" },
-    { label: "Processes", href: "/processes", icon: "processes" },
-    { label: "Settings", href: "/settings", icon: "settings" },
+  protected readonly destinations = DESTINATIONS;
+  protected readonly settings = SETTINGS;
+  protected readonly phoneDestinations = DESTINATIONS.filter((d) => d.phone);
+  protected readonly moreDestinations = [
+    ...DESTINATIONS.filter((d) => !d.phone),
+    SETTINGS,
   ];
+  protected readonly newTaskHref = CLASSIC_NEW_TASK;
+  protected readonly createItems: CreateItem[] = [
+    {
+      label: "New task",
+      href: CLASSIC_NEW_TASK,
+      tip: "Describe a piece of work for an agent to do.",
+    },
+    {
+      label: "New session",
+      href: CLASSIC_NEW_SESSION,
+      tip: "Start a standing conversation with an agent.",
+    },
+  ];
+  protected readonly inboxCount = computed(() => this.store.entries().length);
+  protected readonly createOpen = signal(false);
+  protected readonly createPos = signal({ top: 0, left: 0 });
+  protected readonly moreOpen = signal(false);
+  protected readonly hrefOf = hrefFor;
+
+  private unregister: (() => void)[] = [];
+
+  ngOnInit(): void {
+    const r = (key: string, description: string, run: () => void) =>
+      this.unregister.push(this.keyboard.register({ key, description, run }));
+    r("c", "New task", () => this.go(this.newTaskHref));
+    DESTINATIONS.slice(0, 9).forEach((d, i) =>
+      r(String(i + 1), `Open ${d.label}`, () => this.open(d)),
+    );
+    r(",", "Open Settings", () => this.open(SETTINGS));
+    r("t", "Switch light and dark", () => this.theme.toggle());
+  }
+
+  ngOnDestroy(): void {
+    this.unregister.forEach((u) => u());
+  }
+
+  // open goes to a destination: a route inside this app, or the classic
+  // page with a full navigation.
+  open(d: Destination): void {
+    if (d.route) void this.router.navigateByUrl(d.route);
+    else this.go(d.classic);
+  }
+
+  private go(href: string): void {
+    this.doc.defaultView?.location.assign(href);
+  }
+
+  protected toggleCreate(ev: Event): void {
+    ev.stopPropagation();
+    this.moreOpen.set(false);
+    if (this.createOpen()) {
+      this.createOpen.set(false);
+      return;
+    }
+    // The rail scrolls, which would clip a menu positioned inside it, so
+    // the menu is fixed and placed beside the button that opened it.
+    const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    this.createPos.set({
+      top: Math.round(r.top),
+      left: Math.round(r.right + 8),
+    });
+    this.createOpen.set(true);
+  }
+
+  protected toggleMore(ev: Event): void {
+    ev.stopPropagation();
+    this.createOpen.set(false);
+    this.moreOpen.update((v) => !v);
+  }
+
+  // A click anywhere outside an open menu closes it.
+  protected onDocumentClick(ev: Event): void {
+    const t = ev.target as HTMLElement | null;
+    if (this.createOpen() && !t?.closest(".rail-create")) {
+      this.createOpen.set(false);
+    }
+    if (this.moreOpen() && !t?.closest(".more-sheet")) this.moreOpen.set(false);
+  }
 }

@@ -27,7 +27,8 @@ export interface AccessInfo {
 
 export interface GrainConfig {
   access?: AccessInfo | null;
-  version?: string;
+  // The build stamp (api/version.ts); a string on older servers.
+  version?: string | Record<string, unknown>;
   stateRepoSyncFailure?: unknown;
   [key: string]: unknown;
 }

@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { HttpClient, HttpHeaders } from "@angular/common/http";
+import {
+  HttpClient,
+  HttpErrorResponse,
+  HttpHeaders,
+} from "@angular/common/http";
 import { Injectable, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
@@ -56,6 +60,14 @@ export function splitRepo(repo: string): { owner: string; name: string } {
 
 const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 
+// Fresh is one conditional read: the body (the cached copy when the
+// server answered 304 Not Modified) and whether it changed since the
+// last read of the same URL.
+export interface Fresh<T> {
+  body: T;
+  changed: boolean;
+}
+
 // GrainApi is the typed REST client: same origin, the daemon's own
 // session cookie, and nothing of its own for CSRF -- the browser's
 // Sec-Fetch-Site: same-origin is what pkg/ui/csrf.go checks, exactly as
@@ -63,10 +75,67 @@ const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 @Injectable({ providedIn: "root" })
 export class GrainApi {
   private readonly http = inject(HttpClient);
+  // The last ETag and body per URL, for getIfChanged. Unlike the classic
+  // UI's per-path ETag map, a 304 hands back the cached body, so any
+  // number of readers can poll the same URL safely.
+  private readonly etags = new Map<string, { etag: string; body: unknown }>();
 
   get<T>(key: RouteKey, params?: RouteParams, query?: string): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
     return firstValueFrom(this.http.get<T>(url, { headers: JSON_HEADERS }));
+  }
+
+  // getIfChanged reads a URL with If-None-Match, the way the server's
+  // polled lists expect (pkg/ui tasks.go answers 304 when nothing moved),
+  // so a page can poll every few seconds for the price of a header.
+  async getIfChanged<T>(
+    key: RouteKey,
+    params?: RouteParams,
+    query?: string,
+  ): Promise<Fresh<T>> {
+    const url = routePath(key, params) + (query ? `?${query}` : "");
+    const cached = this.etags.get(url);
+    let headers = JSON_HEADERS;
+    if (cached) headers = headers.set("If-None-Match", cached.etag);
+    try {
+      const res = await firstValueFrom(
+        this.http.get<T>(url, { headers, observe: "response" }),
+      );
+      const body = res.body as T;
+      const etag = res.headers.get("ETag");
+      if (etag) this.etags.set(url, { etag, body });
+      else this.etags.delete(url);
+      return { body, changed: true };
+    } catch (err) {
+      if (cached && (err as HttpErrorResponse)?.status === 304) {
+        return { body: cached.body as T, changed: false };
+      }
+      throw err;
+    }
+  }
+
+  patch<T = unknown>(
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+  ): Promise<T> {
+    return firstValueFrom(
+      this.http.patch<T>(routePath(key, params), body ?? null, {
+        headers: JSON_HEADERS,
+      }),
+    );
+  }
+
+  put<T = unknown>(
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+  ): Promise<T> {
+    return firstValueFrom(
+      this.http.put<T>(routePath(key, params), body ?? null, {
+        headers: JSON_HEADERS,
+      }),
+    );
   }
 
   post<T = unknown>(

@@ -59,6 +59,11 @@
   --md-sys-color-outline: #747775;
   --md-sys-color-outline-variant: #c4c7c5;
   --md-sys-color-scrim: rgba(15, 20, 28, 0.42);
+  --md-sys-color-inverse-surface: #303030;
+  --md-sys-color-inverse-on-surface: #f2f2f2;
+  --md-sys-color-inverse-primary: #a8c7fa;
+  --md-sys-elevation-fab:
+    0 1px 3px rgba(0, 0, 0, 0.18), 0 4px 8px rgba(0, 0, 0, 0.12);
   --md-sys-elevation-dialog:
     0 12px 32px rgba(15, 23, 42, 0.14), 0 4px 8px rgba(15, 23, 42, 0.08);
 
@@ -132,6 +137,11 @@
   --md-sys-color-outline: #8e918f;
   --md-sys-color-outline-variant: #444746;
   --md-sys-color-scrim: rgba(0, 0, 0, 0.64);
+  --md-sys-color-inverse-surface: #e3e3e3;
+  --md-sys-color-inverse-on-surface: #303030;
+  --md-sys-color-inverse-primary: #0b57d0;
+  --md-sys-elevation-fab:
+    0 1px 3px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.4);
   --md-sys-elevation-dialog:
     0 16px 40px rgba(0, 0, 0, 0.55), 0 4px 8px rgba(0, 0, 0, 0.35);
 
@@ -2028,4 +2038,223 @@ g-inbox-page {
   .queue-group-note {
     display: none;
   }
+}
+
+/* ---- Shell: New task FAB, create menu, More, snackbar, tooltip (M0) ---- */
+
+/* The one filled element in the rail (spec D-23): 56px here, the rail
+ * being 72px wide; 48px on short windows. */
+.rail-fab,
+.phone-fab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-radius: var(--md-sys-shape-corner-large);
+  box-shadow: var(--md-sys-elevation-fab);
+  text-decoration: none;
+}
+
+.rail-fab {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  margin-top: 4px;
+}
+
+.rail-fab:hover,
+.phone-fab:hover {
+  filter: brightness(1.08);
+}
+
+.rail-fab:focus-visible,
+.phone-fab:focus-visible,
+.rail-new-btn:focus-visible,
+.create-menu-item:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+@media (max-height: 860px) {
+  .rail-fab {
+    width: 48px;
+    height: 48px;
+  }
+}
+
+.rail-create {
+  position: relative;
+}
+
+.rail-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.rail-new-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.create-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container);
+  box-shadow: var(--md-sys-elevation-dialog);
+}
+
+.create-menu-item {
+  padding: 10px 16px;
+  color: var(--md-sys-color-on-surface);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.create-menu-item:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.rail-spacer {
+  flex: 1;
+  min-height: 8px;
+}
+
+/* Phone: the floating FAB above the bottom bar, and the More sheet. */
+.phone-fab {
+  display: none;
+}
+
+.more-sheet {
+  display: none;
+}
+
+@media (max-width: 599.95px), (max-height: 480px) and (orientation: landscape) {
+  .phone-fab {
+    display: inline-flex;
+    position: fixed;
+    right: 16px;
+    bottom: calc(56px + 36px + 16px);
+    width: 56px;
+    height: 56px;
+    z-index: 40;
+  }
+
+  .more-sheet {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 56px;
+    z-index: 50;
+    padding: 8px 0 16px;
+    border-radius: var(--md-sys-shape-corner-large)
+      var(--md-sys-shape-corner-large) 0 0;
+    background: var(--md-sys-color-surface-container);
+    box-shadow: var(--md-sys-elevation-dialog);
+  }
+
+  .more-sheet-item {
+    padding: 14px 24px;
+    color: var(--md-sys-color-on-surface);
+    font-size: 15px;
+    text-decoration: none;
+  }
+}
+
+@media (max-height: 480px) and (orientation: landscape) {
+  .phone-fab {
+    bottom: calc(52px + 12px);
+  }
+}
+
+/* Snackbar: bottom centre, above the bottom bar (and the phone bar). */
+.snackbar-region {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--grain-bottombar-height) + 16px);
+  transform: translateX(-50%);
+  z-index: 80;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+}
+
+.snackbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 6px 8px 6px 16px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  box-shadow: var(--md-sys-elevation-dialog);
+  font-size: 14px;
+}
+
+.snackbar-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.snackbar-action,
+.snackbar-close {
+  border: none;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--md-sys-shape-corner-full);
+}
+
+.snackbar-action {
+  padding: 8px 12px;
+  color: var(--md-sys-color-inverse-primary);
+  font-weight: 500;
+}
+
+.snackbar-close {
+  width: 32px;
+  height: 32px;
+  color: inherit;
+  font-size: 18px;
+}
+
+@media (max-width: 599.95px) {
+  .snackbar-region {
+    bottom: calc(56px + 36px + 16px);
+  }
+}
+
+/* The one shared tooltip (D-16): inverse surface, 12px, at most 280px. */
+.g-tip {
+  position: fixed;
+  z-index: 100;
+  max-width: 280px;
+  padding: 6px 8px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  font-size: 12px;
+  line-height: 16px;
+  pointer-events: none;
+}
+
+.g-tip[hidden] {
+  display: none;
 }

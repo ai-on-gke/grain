@@ -1,0 +1,64 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { provideHttpClient } from "@angular/common/http";
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from "@angular/common/http/testing";
+import { TestBed } from "@angular/core/testing";
+import { GrainApi } from "./grain-api.service";
+
+describe("GrainApi.getIfChanged", () => {
+  let api: GrainApi;
+  let http: HttpTestingController;
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    api = TestBed.inject(GrainApi);
+    http = TestBed.inject(HttpTestingController);
+  });
+  afterEach(() => {
+    http.verify();
+    TestBed.resetTestingModule();
+  });
+
+  it("sends If-None-Match after the first read and returns the cached body on 304", async () => {
+    const first = api.getIfChanged<{ id: string }[]>("GET /api/tasks");
+    const req1 = http.expectOne("/api/tasks");
+    expect(req1.request.headers.has("If-None-Match")).toBe(false);
+    req1.flush([{ id: "1" }], { headers: { ETag: '"v1"' } });
+    expect(await first).toEqual({ body: [{ id: "1" }], changed: true });
+
+    const second = api.getIfChanged<{ id: string }[]>("GET /api/tasks");
+    const req2 = http.expectOne("/api/tasks");
+    expect(req2.request.headers.get("If-None-Match")).toBe('"v1"');
+    req2.flush(null, { status: 304, statusText: "Not Modified" });
+    expect(await second).toEqual({ body: [{ id: "1" }], changed: false });
+  });
+
+  it("keeps a separate tag per query and rethrows real errors", async () => {
+    const a = api.getIfChanged("GET /api/tasks", undefined, "state=closed");
+    http
+      .expectOne("/api/tasks?state=closed")
+      .flush({ tasks: [] }, { headers: { ETag: '"c1"' } });
+    await a;
+    const b = api.getIfChanged("GET /api/tasks");
+    const req = http.expectOne("/api/tasks");
+    expect(req.request.headers.has("If-None-Match")).toBe(false);
+    req.flush("boom", { status: 500, statusText: "Server Error" });
+    await expect(b).rejects.toMatchObject({ status: 500 });
+  });
+});

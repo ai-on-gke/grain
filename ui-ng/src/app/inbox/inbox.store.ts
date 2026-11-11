@@ -23,6 +23,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { versionLabel } from "../api/version";
 import { ViewFilter } from "../services/view-filter.service";
 import {
   type FilterId,
@@ -231,7 +232,7 @@ export class InboxStore {
     ]);
     if (config.status === "fulfilled") {
       this.access.setConfig(config.value);
-      this.version.set(String(config.value.version ?? ""));
+      this.version.set(versionLabel(config.value.version));
     }
     if (tasks.status === "fulfilled") {
       this.tasks.set(Array.isArray(tasks.value) ? tasks.value : []);
