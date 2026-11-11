@@ -554,13 +554,24 @@ func stateCheck(ctx context.Context, dataDir string, args []string) error {
 	// which the answer is still worth having.
 	migrate := fs.Bool("migrate", false,
 		"rehearse a migration: accept a dump written at another schema and report what would arrive")
+	// -base is the branch a pull request is against, which the check
+	// grain posts on its own configuration repositories reads from the
+	// clone's origin/HEAD by itself. Without it a typed-in capability
+	// server credential cannot be told new from held, and is only warned
+	// about (statecheck.LiteralCredentials).
+	base := fs.String("base", "",
+		"git revision the change is against: a typed-in capability server credential it does not hold fails the check")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "usage: grain state check [-migrate] DIR\n\n"+
+		fmt.Fprint(os.Stderr, "usage: grain state check [-migrate] [-base REV] DIR\n\n"+
 			"DIR is the root of a state repository -- the directory holding tables/ and\n"+
 			"schema-version, which for a CI step run at the top of the checkout is \".\".\n\n"+
 			"-migrate accepts a dump stamped with a different schema and imports it the way\n"+
 			"an upgrade would, so an upgrade can find out whether this build can take a\n"+
-			"deployment's rows before it takes over from the build that wrote them.\n")
+			"deployment's rows before it takes over from the build that wrote them.\n\n"+
+			"-base names the git revision the change is against (origin/main, say). A\n"+
+			"credential typed into a capability server rather than referenced as\n"+
+			"$secret:<name> fails the check when the change adds it, and is a warning when\n"+
+			"the base already held it; without -base every one is a warning.\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -575,7 +586,15 @@ func stateCheck(ctx context.Context, dataDir string, args []string) error {
 		return errors.New("check takes one directory")
 	}
 
-	return statecheck.Run(ctx, os.Stdout, dir, statecheck.Options{Migrate: *migrate, DataDir: dataDir})
+	opts := statecheck.Options{Migrate: *migrate, DataDir: dataDir}
+	if *base != "" {
+		b, err := statecheck.GitBase(dir, *base)
+		if err != nil {
+			return err
+		}
+		opts.Base = b
+	}
+	return statecheck.Run(ctx, os.Stdout, dir, opts)
 }
 
 // stateKey is the operator's view of the secrets key: the public half,

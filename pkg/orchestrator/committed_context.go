@@ -265,6 +265,9 @@ echo "%[2]s$grain_pinned"`, qCloneDir, contextSHAMarker)
 		if res.IsError {
 			err := fmt.Errorf("orchestrator: checking out committed context %s:%s@%s: %s",
 				ref.Repo, ref.Path, ref.Rev, strings.TrimSpace(res.Text))
+			if said, ok := gitproxy.LoginLapsed(res.Text); ok {
+				return &hostLoginLapsedError{Repo: ref.Repo, Said: said, err: err}
+			}
 			if gitproxy.IsAccessRefusal(res.Text) {
 				return &accessRefusedError{Repo: ref.Repo, Output: strings.TrimSpace(res.Text), err: err}
 			}
