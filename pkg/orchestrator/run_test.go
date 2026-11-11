@@ -299,7 +299,7 @@ func TestBuildPromptDescribesThePushAndCheckCILoop(t *testing.T) {
 		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
 	}
 	prompt := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", false, orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
-	for _, want := range []string{"pull_request_status", "Push as often as you like", "check fails"} {
+	for _, want := range []string{"`grain ci wait`", "Push as often as you like", "check fails"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt does not mention %q: %q", want, prompt)
 		}
@@ -325,6 +325,9 @@ func TestBuildPromptTellsARepairToFixBreakageItDidNotCause(t *testing.T) {
 		ID: "t1", Title: "Do the thing", Body: "details",
 		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
 	}
+	// The default read of its own repository's CI (model.DefaultCIReadGrant)
+	// is what lets it read the base with `grain pr base-status`.
+	task.Grants = []model.Grant{model.DefaultCIReadGrant(*task.Target)}
 	repair := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", false,
 		orchestrator.DefaultMaxRunRuntime, orchestrator.History{Repair: true}, nil)
 	for _, want := range []string{
@@ -332,7 +335,7 @@ func TestBuildPromptTellsARepairToFixBreakageItDidNotCause(t *testing.T) {
 		// The two things the ordinary paragraph is right about, which
 		// this one keeps: the tool is still worth calling, and a test is
 		// still not to be weakened.
-		"base_branch_status", "rather than weakening the test",
+		"`grain pr base-status`", "rather than weakening the test",
 	} {
 		if !strings.Contains(repair, want) {
 			t.Errorf("a repair's prompt does not mention %q: %q", want, repair)
@@ -912,7 +915,7 @@ func TestBuildPromptStatesTheWaitCreditAndTheCeiling(t *testing.T) {
 	}
 	prompt := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", false,
 		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
-	for _, want := range []string{"wait_for_checks", "45m", "2h45m"} {
+	for _, want := range []string{"blocked inside `grain ci wait` is not", "45m", "2h45m"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt does not mention %q: %q", want, prompt)
 		}
@@ -921,7 +924,7 @@ func TestBuildPromptStatesTheWaitCreditAndTheCeiling(t *testing.T) {
 	// A caller with no budget to state gets no paragraph at all, and so
 	// no offer of credit against a deadline nobody named.
 	if none := orchestrator.BuildPrompt(task, orchestrator.CheckoutDir, "", false, 0,
-		orchestrator.History{}, nil); strings.Contains(none, "wait_for_checks is not") {
+		orchestrator.History{}, nil); strings.Contains(none, "blocked inside `grain ci wait` is not") {
 		t.Errorf("prompt offers credit against a budget it was given none of: %q", none)
 	}
 }

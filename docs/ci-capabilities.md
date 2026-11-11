@@ -563,6 +563,32 @@ They are honoured only for jobs of grain's own repository
 with others), since the state they read belongs to the whole deployment, and a dangerous scope is refused
 outright.
 
+## A task's own CI on a GitHub-CI repository
+
+This page is about what CI *jobs* hold. One grant about CI goes to
+*tasks*, and it is often confused with `grain#ci`, so it is covered
+here as well.
+
+- **On a repository grain CI gates** (CI Mode "Use Grain CI"), a task
+  is filed holding `https://grain.dev/capabilities/grain#ci` by
+  default. That grant runs its branch through grain CI and reads that
+  CI.
+- **On any other repository** (`ci_mode: github`), `grain#ci` is never
+  attached, because it would change merge gating. Nobody can grant it
+  there by hand either. Instead the task is filed holding
+  `api:ci-read@<owner>/<name>` on its own repository by default.
+
+`api:ci-read@<owner>/<name>` is read-only and covers that one
+repository. It covers its CI runs, jobs and logs (GitHub Actions
+included) and nothing else. It is what `grain ci list/show/log`,
+`grain pr status/base-status` and `ci://` need there.
+
+A capability policy deny rule on
+`https://grain.dev/capabilities/api#ci-read` turns the default off.
+Without `repos` the rule covers every repository; with `repos`, only
+those named. See [agent-api.md](agent-api.md#a-tasks-own-ci-the-default-apici-read)
+for the routes, the trade-off and the opt-out.
+
 ## Repository access: declared in the repository, enforced by the team's credential
 
 `https://grain.dev/capabilities/repo#read={"repo":"<owner>/<repo>"}` and
