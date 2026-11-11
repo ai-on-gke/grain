@@ -71,6 +71,11 @@ type MergeGate struct {
 	State       MergeGateState `json:"state"`
 	Detail      string         `json:"detail,omitempty"`
 	ReviewTask  string         `json:"reviewTask,omitempty"`
+	// Tasks lists every review task the gate stands for, when it stands for
+	// more than one: the code-review gate folds every gating trigger's
+	// review (one per review template) and a configured Review: task into
+	// one gate, and ReviewTask can name only one of them.
+	Tasks []string `json:"tasks,omitempty"`
 	ApprovedBy  string         `json:"approvedBy,omitempty"`
 	Overridable bool           `json:"overridable,omitempty"`
 }
@@ -492,6 +497,13 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	hasCodeQuestions := hasQuestions && (secTask == "" || q.ReviewTaskID != secTask)
 	triggerPending := false
 	var firstTriggerTask string
+	var codeTasks, pendingTasks []string
+	if reviewTask != "" {
+		codeTasks = append(codeTasks, reviewTask)
+		if isCodeReviewPending(t, reviewTask, targetStates) {
+			pendingTasks = append(pendingTasks, reviewTask)
+		}
+	}
 	for _, raw := range triggerTasks {
 		_, tid, ok := strings.Cut(raw, "=")
 		if !ok || tid == "" {
@@ -500,6 +512,9 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		if firstTriggerTask == "" {
 			firstTriggerTask = tid
 		}
+		if !slices.Contains(codeTasks, tid) {
+			codeTasks = append(codeTasks, tid)
+		}
 		if pathTriggerHold == "" {
 			continue
 		}
@@ -507,12 +522,20 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			triggerPending = true
 		} else if st, exists := targetStates[tid]; !exists || (st != StateClosed && st != StateCompleted) {
 			triggerPending = true
+		} else {
+			continue
+		}
+		if !slices.Contains(pendingTasks, tid) {
+			pendingTasks = append(pendingTasks, tid)
 		}
 	}
 	codeReviewTask := firstGateText(reviewTask, firstTriggerTask)
 	codePending := triggerPending || isCodeReviewPending(t, reviewTask, targetStates)
 	if t.ReviewTemplateID != "" || reviewTask != "" || len(triggerTasks) > 0 || len(codeFindings) > 0 || hasCodeQuestions {
 		g := MergeGate{ID: GateReview, Label: "Code review", ReviewTask: codeReviewTask}
+		if len(codeTasks) > 1 {
+			g.Tasks = codeTasks
+		}
 		switch {
 		case hasOv && GateOverriddenBy(GateReview, ovGates):
 			g.State = GateStateOverridden
@@ -532,7 +555,14 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			g.Overridable = true
 		case codePending:
 			g.State = GateStateRunning
-			if g.ReviewTask != "" {
+			// Name the reviews still running, not merely the first one
+			// filed: with one per review template, that one may be done.
+			if len(pendingTasks) > 0 {
+				g.ReviewTask = pendingTasks[0]
+			}
+			if len(pendingTasks) > 1 {
+				g.Detail = "running (tasks #" + strings.Join(pendingTasks, ", #") + ")"
+			} else if g.ReviewTask != "" {
 				g.Detail = "running (task #" + g.ReviewTask + ")"
 			} else {
 				g.Detail = "queued"
