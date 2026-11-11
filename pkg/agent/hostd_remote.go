@@ -368,3 +368,19 @@ func HookBinary(h Host, fallback string) string {
 	}
 	return fallback
 }
+
+// SupportsHookPolicy implements SupportsHookPolicy: true when the host
+// agent advertised hostd.FeatureHookPolicy.
+func (h HostdHost) SupportsHookPolicy() bool { return h.HookPolicy }
+
+// SupportsHookPolicy reports whether the binary answering hooks on h
+// evaluates a staged per-run hook policy file (-policy). A host agent says
+// so through Hello.Has(hostd.FeatureHookPolicy); LocalHost and a run host
+// built from this image fork this build's own grain binary, which always
+// does.
+func SupportsHookPolicy(h Host) bool {
+	if p, ok := h.(interface{ SupportsHookPolicy() bool }); ok {
+		return p.SupportsHookPolicy()
+	}
+	return true
+}
