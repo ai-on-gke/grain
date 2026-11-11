@@ -4470,6 +4470,14 @@ fieldset legend {
   font-size: 0.9rem;
   margin-bottom: 0.4rem;
 }
+.pending-question-uncounted {
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid var(--state-awaiting);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
 .pending-question-body {
   color: var(--text-secondary);
   font-size: 0.9rem;

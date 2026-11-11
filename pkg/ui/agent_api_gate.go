@@ -3725,6 +3725,16 @@ func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, ki
 				redacted[k] = v
 			}
 		}
+		if call.pattern == "POST /api/tasks/{id}/comments" {
+			// What became of the comment is the caller's own to know --
+			// whether it was relayed as a person's answer, and whether the
+			// task is still waiting for one (commentResponse).
+			for _, k := range []string{"commentDelivery", "notice", "relayed"} {
+				if v, ok := full[k]; ok {
+					redacted[k] = v
+				}
+			}
+		}
 		if kind == taskRespPatch {
 			for _, k := range editedPatchResponseKeys(call.body) {
 				if v, ok := full[k]; ok {
