@@ -17,6 +17,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DetailOverlay from "../DetailOverlay.jsx";
 import { baseTask } from "./testFixtures.js";
+import { AccessConfigProvider } from "../../AccessContext.jsx";
+import { viewerConfig } from "../../accessTestConfigs.js";
 
 const customFieldConfig = {
   customFields: [
@@ -248,5 +250,29 @@ describe("CustomFieldsSection unsaved edits", () => {
     await user.click(screen.getByRole("button", { name: /99 Blocker task/ }));
     expect(onOpenTask).toHaveBeenCalledWith("99");
     confirm.mockRestore();
+  });
+
+  // Saving fields is PATCH /api/tasks/{id}, a tasks:write: a role without
+  // it sees Edit fields disabled with the reason rather than an editor
+  // whose Save ends in a 403 (2026-11-11 walkthrough, Bug 2).
+  it("disables Edit fields for a role without tasks:write", () => {
+    render(
+      <AccessConfigProvider config={viewerConfig}>
+        <DetailOverlay
+          task={{ ...baseTask, customFields: { customer: "acme" } }}
+          tasks={[]}
+          config={customFieldConfig}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={vi.fn()}
+        />
+      </AccessConfigProvider>,
+    );
+    const edit = screen.getByRole("button", { name: "Edit fields" });
+    expect(edit).toBeDisabled();
+    expect(edit.closest("[data-access-denied]")).toHaveAttribute(
+      "data-access-denied",
+      "tasks:write",
+    );
   });
 });

@@ -1238,7 +1238,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		// And whether a reviewed commit went into it (reviewed.go): the
 		// signature says only that CI built it. With the check on and no
 		// signature verification, this refuses.
-		reviewed, err := u.checkReviewedMerge(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref)
+		reviewed, err := u.checkImageReviewedMerge(ctx, p, stepVerify, ref)
 		if err != nil {
 			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 		}
