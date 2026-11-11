@@ -86,14 +86,20 @@ func IsReadAPICall(tool string) bool {
 	return false
 }
 
-// ReadIDsFromAPICalls returns the set of task or CI run IDs read in calls
-// prior to the closing report call.
+// ReadIDsFromAPICalls returns the set of task or CI run IDs read anywhere
+// in the run's calls.
+//
+// It does not stop at the closing report call. The run's rows are its MCP
+// tool calls in their own order followed by every read the in-sandbox grain
+// CLI made through the sandbox proxy (Store.mergeWithProxyAPICalls), so a
+// CLI read sits after comment_on_issue in seq even though it happened
+// before it; cutting the list there threw away every read a steward made
+// through `grain` and reported each of its citations as unread. The
+// closing report ends the run, so nothing read after it is in the report
+// anyway.
 func ReadIDsFromAPICalls(calls []model.RunAPICall) map[string]bool {
 	read := map[string]bool{}
 	for _, call := range calls {
-		if call.Tool == "comment_on_issue" || call.Tool == "nothing_needed" {
-			break
-		}
 		if !IsReadAPICall(call.Tool) || call.TargetIDs == "" {
 			continue
 		}
@@ -133,6 +139,7 @@ func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks ma
 	}
 
 	inFence := false
+	inUnverified := false
 	seenOffending := map[string]bool{}
 	addOffending := func(line string) {
 		if !seenOffending[line] {
@@ -148,7 +155,24 @@ func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks ma
 			inFence = !inFence
 			continue
 		}
-		if inFence || line == "" || strings.HasPrefix(line, "#") || isMarkdownTableSeparator(line) {
+		if inFence || line == "" || isMarkdownTableSeparator(line) {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			inUnverified = isUnverifiedHeading(line)
+			continue
+		}
+		if isBoldHeading(line) {
+			// A bold line may be a heading or a claim: it opens or closes
+			// the Unverified section, and is otherwise checked as a claim.
+			if inUnverified = isUnverifiedHeading(line); inUnverified {
+				continue
+			}
+		}
+		if inUnverified {
+			// Said to be unverified, which is what the steward is told to
+			// do with a claim it could not ground this wake: not a claim
+			// the report asserts, so neither counted nor flagged.
 			continue
 		}
 
@@ -197,6 +221,28 @@ func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks ma
 	}
 
 	return res
+}
+
+// unverifiedHeadingRe matches a report heading that sets its lines apart as
+// not grounded this wake: "## Unverified", "**Unverified:**".
+var unverifiedHeadingRe = regexp.MustCompile(`(?i)^[#*\s]*unverified\b`)
+
+// isUnverifiedHeading reports whether heading line opens the report's
+// "Unverified" section (model.PipelineStewardUnverifiedHeading).
+func isUnverifiedHeading(line string) bool {
+	return unverifiedHeadingRe.MatchString(line)
+}
+
+// isBoldHeading reports whether line is wholly bold, the way a report
+// writes a heading without '#': "**Unverified**", "**Unverified:**".
+func isBoldHeading(line string) bool {
+	inner, ok := strings.CutPrefix(line, "**")
+	if !ok {
+		return false
+	}
+	inner, ok = strings.CutSuffix(strings.TrimSuffix(inner, ":"), "**")
+	inner = strings.TrimSpace(strings.TrimSuffix(inner, ":"))
+	return ok && inner != "" && !strings.Contains(inner, "**")
 }
 
 func isMarkdownTableSeparator(line string) bool {
@@ -298,9 +344,13 @@ func hasTaskAttributeMismatch(line, taskID string, allCited []string, task Stewa
 		return true
 	}
 
-	// 2. Check fixed vocabulary of task states.
+	// 2. Check fixed vocabulary of task states. Only the state the line
+	// says the task is in now: a transition's source ("queued→running",
+	// "moved from queued to running") is history, and the record has
+	// already left it.
+	stateScope := stripPriorStates(scope)
 	for _, st := range stateVocabularyChecks {
-		if !st.matches(scope) {
+		if !st.matches(stateScope) {
 			continue
 		}
 		if st.satisfiedBy(task.State) {
@@ -313,6 +363,16 @@ func hasTaskAttributeMismatch(line, taskID string, allCited []string, task Stewa
 	}
 
 	return false
+}
+
+// priorStateRe matches a state the line says a task was in before, not
+// one it is in: the source of a transition arrow (the pipeline-changes
+// feed's "queued→running"), or a state after "from", "previously" or
+// "formerly".
+var priorStateRe = regexp.MustCompile(`[a-z_]+\s*(?:→|->|=>)|\b(?:from|previously|formerly)\s+[a-z_]+`)
+
+func stripPriorStates(scope string) string {
+	return priorStateRe.ReplaceAllString(scope, " ")
 }
 
 type stateVocabCheck struct {
@@ -355,15 +415,18 @@ var stateVocabularyChecks = []stateVocabCheck{
 	{
 		name:        "running",
 		phrases:     []string{"running"},
-		ignoreAfter: []string{"running ci", "running job", "running check"},
+		ignoreAfter: []string{"running ci", "running job", "running check", "ci running", "ci is running", "checks running", "job running"},
 		satisfiedBy: func(s model.State) bool {
 			return s == model.StateRunning
 		},
 	},
 	{
-		name:        "failed",
-		phrases:     []string{"failed"},
-		ignoreAfter: []string{"failed attempt", "failed attempts", "failed run", "failed runs", "failed job", "failed jobs", "failed check", "failed checks", "failed ci"},
+		name:    "failed",
+		phrases: []string{"failed"},
+		ignoreAfter: []string{"failed attempt", "failed attempts", "failed run", "failed runs", "failed job", "failed jobs", "failed check", "failed checks", "failed ci",
+			// A task's CI, a job or a batch failing is not the task failing.
+			"ci failed", "ci has failed", "checks failed", "check failed", "job failed", "jobs failed", "tests failed",
+			"test failed", "run failed", "runs failed", "build failed", "batch failed", "merge failed", "qualification failed"},
 		satisfiedBy: func(s model.State) bool {
 			return s == model.StateFailed
 		},
@@ -550,6 +613,88 @@ func loadStewardCheckTasks(ctx context.Context, store *model.Store) (map[string]
 	return out, nil
 }
 
+// checkStewardReportAgainstStore runs stewardReportCheck on report against
+// calls and the records in store, counting what the task's own prompt and
+// wake notes named as read.
+func checkStewardReportAgainstStore(ctx context.Context, store *model.Store, task model.Task, runID, report string,
+	calls []model.RunAPICall) (StewardReportCheckResult, error) {
+
+	tasks, err := loadStewardCheckTasks(ctx, store)
+	if err != nil {
+		return StewardReportCheckResult{}, err
+	}
+	// The steward's own task is not a record it has to read to name: its
+	// notify subjects and messages are agent.<its id>:...
+	promptIDs := append([]string{task.ID}, extractCitedTaskIDs(task.Body)...)
+	if comments, err := store.Comments(ctx, task.ID); err == nil {
+		for _, c := range comments {
+			if c.Author.Actor == model.SchedulePrincipal {
+				promptIDs = append(promptIDs, extractCitedTaskIDs(c.Body)...)
+			}
+		}
+	}
+	return stewardReportCheck(runID, report, calls, tasks, promptIDs...), nil
+}
+
+// CheckStewardReportDraft is grain report check: report checked, before it
+// is posted, against what run runID of taskID has read so far -- the grain
+// CLI's reads are recorded as they are served (Store.RecordProxyAPICall),
+// so they are all there. It is the check checkAndRecordStewardReportText
+// runs once the report is posted, so a draft that passes here passes there
+// unless a record changes in between. The text says what failed, line by
+// line, and what to do about it.
+func CheckStewardReportDraft(ctx context.Context, store *model.Store, taskID, runID, report string) (string, bool, error) {
+	task, err := store.GetTask(ctx, taskID)
+	if err != nil {
+		return "", false, err
+	}
+	if task == nil {
+		return "", false, fmt.Errorf("task %s not found", taskID)
+	}
+	calls, err := store.RunAPICallsForRun(ctx, runID)
+	if err != nil {
+		return "", false, err
+	}
+	res, err := checkStewardReportAgainstStore(ctx, store, *task, runID, report, calls)
+	if err != nil {
+		return "", false, err
+	}
+	return FormatStewardReportCheck(res), res.HasMismatch(), nil
+}
+
+// FormatStewardReportCheck is res as grain report check prints it.
+func FormatStewardReportCheck(res StewardReportCheckResult) string {
+	var b strings.Builder
+	c := res.Check
+	verdict := "passes"
+	if res.HasMismatch() {
+		verdict = "fails"
+	}
+	fmt.Fprintf(&b, "Report check %s: claims=%d uncited=%d unread=%d mismatched=%d\n",
+		verdict, c.Claims, c.Uncited, c.Unread, c.Mismatched)
+	if !res.HasMismatch() {
+		return b.String()
+	}
+	if len(res.UnreadIDs) > 0 {
+		fmt.Fprintf(&b, "\nCited but not read in this run: %s. Run `grain task read <id>` for each, "+
+			"then restate only what the record says.\n", strings.Join(res.UnreadIDs, ", "))
+	}
+	if len(res.MismatchLines) > 0 {
+		b.WriteString("\nSay a kind or state the record does not have:\n")
+		for _, l := range res.MismatchLines {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+	}
+	if len(res.UncitedLines) > 0 {
+		b.WriteString("\nMake a claim with no id to cite:\n")
+		for _, l := range res.UncitedLines {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+	}
+	b.WriteString("\nFix each line from the record, or move it under a `## Unverified` heading.\n")
+	return b.String()
+}
+
 // checkAndRecordStewardReport resolves the posted closing report from result and
 // runs checkAndRecordStewardReportText.
 func checkAndRecordStewardReport(ctx context.Context, store *model.Store, task model.Task, runID string,
@@ -597,22 +742,11 @@ func checkAndRecordStewardReportText(ctx context.Context, store *model.Store, ta
 		calls = runTelemetryAt(result, now).APICalls
 	}
 
-	tasks, err := loadStewardCheckTasks(ctx, store)
+	checkRes, err := checkStewardReportAgainstStore(ctx, store, task, runID, report, calls)
 	if err != nil {
 		log.Printf("orchestrator: run %s: loading tasks for steward report check: %v", runID, err)
 		return
 	}
-
-	promptIDs := extractCitedTaskIDs(task.Body)
-	if comments, err := store.Comments(ctx, task.ID); err == nil {
-		for _, c := range comments {
-			if c.Author.Actor == model.SchedulePrincipal {
-				promptIDs = append(promptIDs, extractCitedTaskIDs(c.Body)...)
-			}
-		}
-	}
-
-	checkRes := stewardReportCheck(runID, report, calls, tasks, promptIDs...)
 	if err := store.RecordRunReportCheck(ctx, checkRes.Check); err != nil {
 		log.Printf("orchestrator: run %s: recording steward report check: %v", runID, err)
 		return

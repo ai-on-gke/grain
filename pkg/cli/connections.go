@@ -77,7 +77,9 @@ already started on once: they are recorded on the settings row it seeds.
 
 -data-dir defaults to $GRAIN_DATA_DIR. The store is the one the daemon on
 that data dir opens: -db-driver and -db-dsn, $GRAIN_DB_DRIVER and
-$GRAIN_DB_DSN, or what the data dir records.
+$GRAIN_DB_DSN, or what the data dir records. Model credentials go to the
+secret store the daemon reads: <data-dir>/secrets, or Secret Manager when
+$GRAIN_SECRETS_BACKEND is secretmanager (under $GRAIN_SECRETS_SM_PREFIX).
 `
 
 // defaultModelSeed accepts a single model string, a comma-separated list,
@@ -298,7 +300,9 @@ func importConnections(ctx context.Context, store *model.Store, dataDir string, 
 			return fmt.Errorf("model connection %s: %w", m.ID, err)
 		}
 		if secretStore == nil {
-			secretStore = daemon.OpenSecrets(dataDir)
+			if secretStore, err = connectionSecretStore(dataDir, store); err != nil {
+				return fmt.Errorf("model connection %s: %w", m.ID, err)
+			}
 		}
 		if err := secretStore.Set(secrets.AgentBackendCredentialSecret(m.ID), secrets.AgentCredentialKey, []byte(strings.TrimSpace(string(value)))); err != nil {
 			return fmt.Errorf("model connection %s: %w", m.ID, err)
@@ -393,4 +397,23 @@ func mergeModelConnections(have []model.AgentBackend, seed []modelConnectionSeed
 		}
 	}
 	return out
+}
+
+// connectionSecretStore is the secret store a model connection's
+// credential goes to: the one the daemon reads. Under
+// -secrets-backend=secretmanager (given here as $GRAIN_SECRETS_BACKEND,
+// the way `grain secrets` takes it) that is Secret Manager catalogued in
+// store; a credential written to <data-dir>/secrets instead is one the
+// daemon never sees ("this connection has no Claude Code OAuth token of
+// its own", in the 2026-11-07 walkthrough).
+func connectionSecretStore(dataDir string, store *model.Store) (*secrets.Store, error) {
+	backend := secretsBackendDefault()
+	if backend != secrets.BackendSecretManager {
+		return daemon.OpenSecrets(dataDir), nil
+	}
+	return daemon.OpenSecretsForConfig(daemon.Config{
+		DataDir:         dataDir,
+		SecretsBackend:  backend,
+		SecretsSMPrefix: strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")),
+	}, store)
 }

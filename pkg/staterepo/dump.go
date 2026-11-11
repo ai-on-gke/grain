@@ -282,6 +282,17 @@ func exportAll(ctx context.Context, db querier, dir string) error {
 	return nil
 }
 
+// settingsTablesSince names the SettingsTables a database can predate,
+// with the schema version whose migration created each. Every other
+// settings table is in the v2 baseline, so a missing one is a bug and
+// exportTable says so; one of these is simply absent from a store that
+// has not been migrated that far yet (an export taken before an in-place
+// upgrade, or the daemon's schema-upgrade tests), and is left out of
+// that export rather than failing it.
+var settingsTablesSince = map[string]int{
+	"usage_setting": 130,
+}
+
 // ExportConfig writes only the editable configuration tables and removes
 // every operational table file left by an older build.
 func ExportConfig(ctx context.Context, db *sql.DB, dir string) error {
@@ -316,6 +327,17 @@ func exportConfig(ctx context.Context, tx querier, dir string) error {
 	for _, table := range tables {
 		if nested[table] {
 			continue
+		}
+		if _, late := settingsTablesSince[table]; late {
+			cols, err := columns(ctx, tx, table)
+			if err != nil {
+				return err
+			}
+			if len(cols) == 0 {
+				// A store that predates the table: nothing to export,
+				// and the stale-file sweep below drops any old copy.
+				continue
+			}
 		}
 		data, err := exportTable(ctx, tx, dir, table, true)
 		if err != nil {

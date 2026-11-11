@@ -28,9 +28,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
@@ -144,7 +147,7 @@ func (s *Server) release(id, why string) {
 	s.mu.Unlock()
 	if !exited {
 		s.logf("hostd: releasing %s %q (pid %d, run %s): %s", info.Kind, info.Name, info.PID, info.Run, why)
-		p.cancel()
+		p.cancel(killCanceled)
 		_ = syscall.Kill(-info.PID, syscall.SIGKILL)
 		select {
 		case <-p.done:
@@ -160,11 +163,37 @@ func (s *Server) release(id, why string) {
 	}
 }
 
+func (s *Server) newDetachedProc(info Process, stdinOpen bool) *proc {
+	p := &proc{
+		info:      info,
+		detached:  true,
+		stdinOpen: stdinOpen,
+		handover:  make(chan struct{}),
+		watchDone: make(chan struct{}),
+		done:      make(chan struct{}),
+	}
+	p.cancel = func(kind killKind) {
+		s.mu.Lock()
+		exited := p.info.Exited
+		if !exited && p.killKind == killNone {
+			p.killKind = kind
+		}
+		pid := p.info.PID
+		s.mu.Unlock()
+		if !exited && pid > 1 {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	}
+	return p
+}
+
 // startDetached is OpStart with Detach: the process's output goes to its
 // spool, and the connection is attached to it from cursor zero, with
 // stdin. When the connection drops the process carries on until it ends
-// or reaches its deadline; only its stdin is closed.
-func (s *Server) startDetached(ctx context.Context, conn net.Conn, req *Request, spec *Spec) {
+// or reaches its deadline; only its stdin is closed. Across a handover
+// re-exec (StartHandover) the process keeps running and is adopted from
+// its spool by the replacement hostd (loadSpools).
+func (s *Server) startDetached(_ context.Context, conn net.Conn, req *Request, spec *Spec, onAdded func()) {
 	deadline := time.Now().Add(spec.MaxDuration)
 	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
 		deadline = req.Deadline
@@ -189,72 +218,208 @@ func (s *Server) startDetached(ctx context.Context, conn net.Conn, req *Request,
 	}
 	stdout, err := open(spoolStdout)
 	if err != nil {
+		os.RemoveAll(dir)
 		fail(err)
 		return
 	}
 	stderr, err := open(spoolStderr)
 	if err != nil {
 		stdout.Close()
+		os.RemoveAll(dir)
 		fail(err)
 		return
 	}
-	// The process lives on hostd's own context, not the connection's: a
-	// detached process is bounded by its deadline, a cancel, a drain's
-	// cap and hostd stopping -- never by the daemon going away.
-	runCtx, cancel := context.WithDeadline(ctx, deadline)
-	cmd := exec.CommandContext(runCtx, spec.Path, spec.Args...)
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		stdout.Close()
+		stderr.Close()
+		os.RemoveAll(dir)
+		fail(err)
+		return
+	}
+	cmd := exec.Command(spec.Path, spec.Args...)
 	procgroup.Prepare(cmd)
+	cmd.Cancel = nil // watchDetached enforces deadlines and cancels across handovers
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
+	cmd.Stdin = stdinR
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.WaitDelay = WaitDelay
-	stdin, err := cmd.StdinPipe()
-	if err == nil {
-		err = cmd.Start()
-	}
+	err = cmd.Start()
 	if err == nil {
 		sacrificeOnOOM(cmd.Process.Pid)
 	}
+	stdinR.Close()
 	stdout.Close()
 	stderr.Close()
 	if err != nil {
-		cancel()
+		stdinW.Close()
 		os.RemoveAll(dir)
 		fail(err)
 		return
 	}
 	pid := cmd.Process.Pid
 	s.record(pid)
-	p := &proc{
-		info: Process{ID: id, Run: req.Run, Task: req.Task, Kind: req.Kind, Name: req.Name, PID: pid,
-			Started: time.Now().UTC(), Deadline: deadline, Detached: true, Spool: dir},
-		detached: true,
-		cancel:   cancel,
-		done:     make(chan struct{}),
-	}
+	p := s.newDetachedProc(Process{
+		ID: id, Run: req.Run, Task: req.Task, Kind: req.Kind, Name: req.Name, PID: pid,
+		Started: time.Now().UTC(), Deadline: deadline, Detached: true, Spool: dir,
+	}, true)
 	if b, err := json.Marshal(p.info); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, spoolProcess), b, 0o600)
 	}
 	s.add(id, p)
+	onAdded()
 	s.logf("hostd: started %s %q detached as pid %d (id %s, run %s, deadline %s, spool %s)",
 		req.Kind, req.Name, pid, id, req.Run, deadline.Format(time.RFC3339), dir)
-	go func() {
-		err := cmd.Wait()
-		exit := s.reap(cmd, err, runCtx, req)
-		cancel()
-		s.forget(pid)
-		if err := writeExitFile(dir, exit); err != nil {
-			s.logf("hostd: recording how %s %q (pid %d) ended: %v", req.Kind, req.Name, pid, err)
+	go s.watchDetached(p)
+	s.attach(conn, p, Cursor{}, stdinW)
+}
+
+func (s *Server) watchDetached(p *proc) {
+	defer close(p.watchDone)
+	s.mu.Lock()
+	info := p.info
+	s.mu.Unlock()
+	if !info.Deadline.IsZero() {
+		d := time.Until(info.Deadline)
+		if d <= 0 {
+			p.cancel(killDeadline)
+		} else {
+			timer := time.AfterFunc(d, func() { p.cancel(killDeadline) })
+			defer timer.Stop()
 		}
-		s.mu.Lock()
-		p.info.Exited = true
-		p.info.Exit = &exit
-		s.mu.Unlock()
-		close(p.done)
-		s.signalChanged()
+	}
+	ws, reaped, err := waitPidOrStop(info.PID, p.handover)
+	if !reaped && err == nil {
+		// Handover: leave the child, its process group, its state-dir
+		// start-time record, and its spool untouched for the next hostd.
+		return
+	}
+	s.mu.Lock()
+	killed := p.killKind
+	s.mu.Unlock()
+	exit := s.reapDetached(info, ws, reaped, err, killed)
+	s.forget(info.PID)
+	if werr := writeExitFile(info.Spool, exit); werr != nil {
+		s.logf("hostd: recording how %s %q (pid %d) ended: %v", info.Kind, info.Name, info.PID, werr)
+	}
+	s.mu.Lock()
+	p.info.Exited = true
+	p.info.Exit = &exit
+	s.mu.Unlock()
+	close(p.done)
+	s.signalChanged()
+}
+
+func (s *Server) reapDetached(info Process, ws syscall.WaitStatus, reaped bool, err error, killed killKind) Exit {
+	exit := Exit{Code: -1}
+	if reaped {
+		if ws.Exited() {
+			exit.Code = ws.ExitStatus()
+		} else if ws.Signaled() {
+			exit.Signal = signalName(ws.Signal())
+		}
+	} else if err != nil {
+		exit.Error = err.Error()
+	}
+	switch {
+	case killed == killDraining:
+		exit.Draining = true
+	case killed == killDeadline:
+		exit.Deadline = true
+	}
+	exit.FinishedAt = time.Now().UTC()
+	if info.PID > 1 {
+		_ = syscall.Kill(-info.PID, syscall.SIGKILL)
+	}
+	s.logf("hostd: %s %q (pid %d) ended: code %d signal %q deadline %v draining %v",
+		info.Kind, info.Name, info.PID, exit.Code, exit.Signal, exit.Deadline, exit.Draining)
+	return exit
+}
+
+// waitPidOrStop waits for child pid to terminate and reaps it with Wait4,
+// or returns (0, false, nil) without reaping if stop closes first (handover).
+func waitPidOrStop(pid int, stop <-chan struct{}) (syscall.WaitStatus, bool, error) {
+	var ws syscall.WaitStatus
+	select {
+	case <-stop:
+		return 0, false, nil
+	default:
+	}
+	if wpid, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil); wpid == pid {
+		return ws, true, nil
+	} else if err != nil && !errors.Is(err, syscall.EINTR) {
+		return 0, false, err
+	}
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			if wpid, werr := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil); wpid == pid {
+				return ws, true, nil
+			} else if werr != nil {
+				return 0, false, werr
+			}
+		}
+		return waitPidPollFallback(pid, stop)
+	}
+	defer syscall.Close(pidfd)
+	efd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	if err != nil {
+		return waitPidPollFallback(pid, stop)
+	}
+	defer syscall.Close(efd)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-stop:
+			one := [8]byte{1}
+			_, _ = syscall.Write(efd, one[:])
+		case <-done:
+		}
 	}()
-	s.attach(conn, p, Cursor{}, stdin)
+	for {
+		select {
+		case <-stop:
+			return 0, false, nil
+		default:
+		}
+		if wpid, werr := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil); wpid == pid {
+			return ws, true, nil
+		} else if werr != nil && !errors.Is(werr, syscall.EINTR) {
+			return 0, false, werr
+		}
+		fds := []unix.PollFd{
+			{Fd: int32(pidfd), Events: unix.POLLIN},
+			{Fd: int32(efd), Events: unix.POLLIN},
+		}
+		if _, perr := unix.Poll(fds, -1); perr != nil && !errors.Is(perr, syscall.EINTR) {
+			return waitPidPollFallback(pid, stop)
+		}
+	}
+}
+
+func waitPidPollFallback(pid int, stop <-chan struct{}) (syscall.WaitStatus, bool, error) {
+	var ws syscall.WaitStatus
+	t := time.NewTicker(50 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return 0, false, nil
+		default:
+		}
+		if wpid, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil); wpid == pid {
+			return ws, true, nil
+		} else if err != nil && !errors.Is(err, syscall.EINTR) {
+			return 0, false, err
+		}
+		select {
+		case <-stop:
+			return 0, false, nil
+		case <-t.C:
+		}
+	}
 }
 
 // writeExitFile writes exit.json by rename, so a reader sees all of it or
@@ -276,8 +441,9 @@ func writeExitFile(dir string, e Exit) error {
 // not nil, is the process's, fed from the connection's stdin frames and
 // closed when the connection ends. Signals act on the process's group.
 //
-// The connection going away, or a newer attach superseding this one,
-// ends the stream and leaves the process running.
+// The connection going away, a newer attach superseding this one, or
+// hostd detaching streams for a handover ends the stream and leaves the
+// process running.
 func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser) {
 	s.mu.Lock()
 	p.attachGen++
@@ -295,13 +461,17 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 	if err := writeJSON(conn, frameStarted, Started{PID: info.PID, ID: info.ID}); err != nil {
 		if stdin != nil {
 			stdin.Close()
+			s.mu.Lock()
+			p.stdinOpen = false
+			s.mu.Unlock()
+			s.signalChanged()
 		}
 		return
 	}
 	gone := make(chan struct{})
 	go func() {
 		defer close(gone)
-		s.control(conn, info, stdin)
+		s.control(conn, p, stdin)
 	}()
 	pump := func(name string, typ byte, at *int64) error {
 		f, err := os.Open(filepath.Join(info.Spool, name))
@@ -361,6 +531,11 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			s.release(info.ID, "its exit was read")
 			return
 		}
+		if s.handedOverNow() {
+			s.logf("hostd: detaching stream of %s %q (pid %d, id %s) for handover; the process keeps running",
+				info.Kind, info.Name, info.PID, info.ID)
+			return
+		}
 		s.mu.Lock()
 		superseded := p.attachGen != gen
 		s.mu.Unlock()
@@ -372,6 +547,7 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			s.logf("hostd: the daemon went away from %s %q (pid %d, id %s); it keeps running until it ends or reaches its deadline",
 				info.Kind, info.Name, info.PID, info.ID)
 			return
+		case <-s.handoverCh:
 		case <-p.done:
 		case <-ticker.C:
 		}
@@ -381,13 +557,24 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 // control reads a detached process's connection: stdin, its close, and
 // signals, until the connection ends. stdin is closed then -- input that
 // arrives while no daemon is attached is not kept.
-func (s *Server) control(conn net.Conn, info Process, stdin io.WriteCloser) {
+func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
+	s.mu.Lock()
+	info := p.info
+	s.mu.Unlock()
 	var once sync.Once
 	stdinCh := make(chan []byte, stdinBuffer)
 	closeStdin := func() {}
 	if stdin != nil {
+		doneStdin := make(chan struct{})
 		go func() {
-			defer stdin.Close()
+			defer close(doneStdin)
+			defer func() {
+				_ = stdin.Close()
+				s.mu.Lock()
+				p.stdinOpen = false
+				s.mu.Unlock()
+				s.signalChanged()
+			}()
 			for b := range stdinCh {
 				if _, err := stdin.Write(b); err != nil {
 					for range stdinCh {
@@ -396,7 +583,10 @@ func (s *Server) control(conn net.Conn, info Process, stdin io.WriteCloser) {
 				}
 			}
 		}()
-		closeStdin = func() { once.Do(func() { close(stdinCh) }) }
+		closeStdin = func() {
+			once.Do(func() { close(stdinCh) })
+			<-doneStdin
+		}
 	}
 	defer closeStdin()
 	open := stdin != nil
@@ -435,12 +625,28 @@ func (s *Server) control(conn net.Conn, info Process, stdin io.WriteCloser) {
 	}
 }
 
+func (s *Server) canAdoptLiveSpool(pid int) bool {
+	if pid <= 1 || s.StateDir == "" {
+		return false
+	}
+	want, err := os.ReadFile(filepath.Join(s.StateDir, strconv.Itoa(pid)))
+	if err != nil || len(want) == 0 {
+		return false
+	}
+	ppid, got, err := procStatFields(pid)
+	if err != nil || got != string(want) {
+		return false
+	}
+	return ppid == os.Getpid()
+}
+
 // loadSpools lists again what a previous hostd left in the spool root: a
 // detached process that ended with no daemon attached is attachable
-// still, for its final output and its exit. One without an exit record
-// was running when that hostd stopped, and went with it (systemd stops
-// the unit's whole cgroup, and ReapRecorded the rest), so its spool is
-// closed with an exit that says so.
+// still, for its final output and its exit; one still running as a child
+// of this process (after an in-place handover re-exec) is adopted live
+// with its deadline and process group intact. One without an exit record
+// whose process did not survive hostd stopping is closed with an
+// Exit.Draining record saying so.
 func (s *Server) loadSpools() {
 	if s.StateDir == "" {
 		return
@@ -462,16 +668,32 @@ func (s *Server) loadSpools() {
 		var exit Exit
 		b, err = os.ReadFile(filepath.Join(dir, spoolExit))
 		if err != nil || json.Unmarshal(b, &exit) != nil {
-			exit = Exit{Code: -1, Error: "grain hostd stopped while it ran", FinishedAt: time.Now().UTC()}
+			if s.canAdoptLiveSpool(info.PID) {
+				info.Spool = dir
+				info.Exited = false
+				info.Exit = nil
+				info.Attached = false
+				p := s.newDetachedProc(info, false)
+				s.add(info.ID, p)
+				go s.watchDetached(p)
+				s.logf("hostd: adopted live detached %s %q (pid %d, run %s, id %s)",
+					info.Kind, info.Name, info.PID, info.Run, info.ID)
+				continue
+			}
+			exit = Exit{Code: -1, Draining: true, Error: "the host agent stopped while it ran", FinishedAt: time.Now().UTC()}
 			_ = writeExitFile(dir, exit)
 		}
+		// The pid's start-time record is left for ReapRecorded, which runs
+		// next: a process that survived the previous hostd without being
+		// this one's child is still its to kill, not to leave running
+		// unsupervised while its spool says it ended.
 		info.Spool = dir
 		info.Exited = true
 		info.Exit = &exit
 		info.Attached = false
 		done := make(chan struct{})
 		close(done)
-		s.add(info.ID, &proc{info: info, detached: true, cancel: func() {}, done: done})
+		s.add(info.ID, &proc{info: info, detached: true, cancel: func(killKind) {}, done: done})
 		s.logf("hostd: kept the final spool of %s %q (run %s, id %s) for a daemon to read", info.Kind, info.Name, info.Run, info.ID)
 	}
 }

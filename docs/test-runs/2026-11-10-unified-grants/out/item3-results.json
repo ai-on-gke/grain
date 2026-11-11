@@ -1,0 +1,184 @@
+{
+  "pair1_parent_self_upgrade_only": {
+    "liveParentId": "2",
+    "relayParentId": "3",
+    "liveChildren": {
+      "self-debug": {
+        "id": "8",
+        "title": "child [live] task-2: self-debug",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-debug",
+          "https://grain.dev/capabilities/grain#source={}"
+        ]
+      },
+      "api#self-upgrade": {
+        "id": "9",
+        "title": "child [live] task-2: api#self-upgrade",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-upgrade"
+        ]
+      },
+      "api#secrets:write": {
+        "id": "10",
+        "title": "child [live] task-2: api#secrets:write",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#secrets:write"
+        ]
+      },
+      "api#tasks:read": {
+        "id": "11",
+        "title": "child [live] task-2: api#tasks:read",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#tasks:read"
+        ]
+      }
+    },
+    "relayChildren": {
+      "self-debug": {
+        "id": "16",
+        "title": "child [relay] task-3: self-debug",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-debug",
+          "https://grain.dev/capabilities/grain#source={}"
+        ]
+      },
+      "api#self-upgrade": {
+        "id": "17",
+        "title": "child [relay] task-3: api#self-upgrade",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-upgrade"
+        ]
+      },
+      "api#secrets:write": {
+        "id": "18",
+        "title": "child [relay] task-3: api#secrets:write",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#secrets:write"
+        ]
+      },
+      "api#tasks:read": {
+        "id": "19",
+        "title": "child [relay] task-3: api#tasks:read",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#tasks:read"
+        ]
+      }
+    },
+    "parityDiffs": []
+  },
+  "pair2_parent_self_upgrade_and_tasks_read": {
+    "liveParentId": "4",
+    "relayParentId": "5",
+    "liveChildren": {
+      "self-debug": {
+        "id": "12",
+        "title": "child [live] task-4: self-debug",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-debug",
+          "https://grain.dev/capabilities/grain#source={}"
+        ]
+      },
+      "api#self-upgrade": {
+        "id": "13",
+        "title": "child [live] task-4: api#self-upgrade",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-upgrade"
+        ]
+      },
+      "api#secrets:write": {
+        "id": "14",
+        "title": "child [live] task-4: api#secrets:write",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#secrets:write"
+        ]
+      },
+      "api#tasks:read": {
+        "id": "15",
+        "title": "child [live] task-4: api#tasks:read",
+        "state": "awaiting_reply",
+        "heldForPerson": false,
+        "autoMerge": true,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#tasks:read"
+        ]
+      }
+    },
+    "relayChildren": {
+      "self-debug": {
+        "id": "20",
+        "title": "child [relay] task-5: self-debug",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-debug",
+          "https://grain.dev/capabilities/grain#source={}"
+        ]
+      },
+      "api#self-upgrade": {
+        "id": "21",
+        "title": "child [relay] task-5: api#self-upgrade",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#self-upgrade"
+        ]
+      },
+      "api#secrets:write": {
+        "id": "22",
+        "title": "child [relay] task-5: api#secrets:write",
+        "state": "proposed",
+        "heldForPerson": true,
+        "autoMerge": false,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#secrets:write"
+        ]
+      },
+      "api#tasks:read": {
+        "id": "23",
+        "title": "child [relay] task-5: api#tasks:read",
+        "state": "queued",
+        "heldForPerson": false,
+        "autoMerge": true,
+        "capabilities": [
+          "https://grain.dev/capabilities/api#tasks:read"
+        ]
+      }
+    },
+    "parityDiffs": []
+  }
+}

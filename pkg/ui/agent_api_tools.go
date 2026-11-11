@@ -314,6 +314,7 @@ var routeDocs = map[string]string{
 	"POST /api/host/shutdown":                                              "Power off the machine grain runs on; it does not come back on its own.",
 	"POST /api/host/restart":                                               "Restart the grain service, without touching the machine it runs on.",
 	"POST /api/upgrade":                                                    "Start or schedule upgrading grain to a branch or image; set afterTasksFinish: true to drain running tasks and CI jobs first (your own run counts, so finish rather than polling), as false restarts grain immediately and discards in-flight work.",
+	"DELETE /api/upgrade/current":                                          "Cancel an upgrade currently in progress before its point of no return (returns 409 Conflict once cut-over or restart has begun).",
 	"DELETE /api/upgrade/scheduled":                                        "Cancel an upgrade waiting for running tasks to finish.",
 	"POST /api/persistent-sandboxes/{name}/{action}":                       "Act on a persistent sandbox: action is stop, start, restart or rebuild.",
 	"DELETE /api/pause":                                                    "Lift agent pauses: those of a connection (query connection, and model), of a team (team, and framework), or every pause the caller may lift.",
@@ -474,6 +475,7 @@ var routeBodies = map[string]any{
 	"POST /api/state-repo/secrets-key/wrap":                             secretsKeyWrapRequest{},
 	"POST /api/state-repo/secrets-repo":                                 secretsRepoRequest{},
 	"POST /api/upgrade":                                                 startUpgradeRequest{},
+	"DELETE /api/upgrade/current":                                       CancelUpgradeRequest{},
 	"POST /api/console/{id}/input":                                      consoleInputRequest{},
 	"POST /api/console/{id}/resize":                                     consoleResizeRequest{},
 	"POST /api/console-sessions":                                        CreateConsoleSessionRequest{},
@@ -645,6 +647,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/host/top":              {"lines": "At most this many processes."},
 	"GET /api/upgrade/targets":       listObjectQueryDocs("target name or kind", listPageMedium, nil),
 	"GET /api/upgrade/release-notes": {"branch": "The branch whose notes to read."},
+	"DELETE /api/upgrade/current":    {"reason": "Why the in-progress upgrade is being cancelled (also accepted in the JSON body)."},
 	"GET /api/logs/{source}": {
 		"lines": "At most this many of the newest lines.",
 		"unit": "For the daemon source on a host with both grain's system unit (grain-daemon.service) and its user unit (grain.service): which to read. " +

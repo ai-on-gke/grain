@@ -18,8 +18,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -82,6 +87,20 @@ var kmsKeyName = regexp.MustCompile(`^projects/[A-Za-z0-9_-]+/locations/[A-Za-z0
 func ValidateKMSKeyName(name string) error {
 	if !kmsKeyName.MatchString(name) {
 		return fmt.Errorf("secrets: %q is not a Cloud KMS key name (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>)", name)
+	}
+	return nil
+}
+
+// kmsKeyVersionName is a CryptoKeyVersion resource name: what an
+// asymmetric signing key is named by, since each version is its own key
+// pair. Its segments are held to the same characters as kmsKeyName's.
+var kmsKeyVersionName = regexp.MustCompile(`^projects/[A-Za-z0-9_-]+/locations/[A-Za-z0-9_-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+/cryptoKeyVersions/[0-9]+$`)
+
+// ValidateKMSKeyVersionName reports whether name is a CryptoKeyVersion
+// resource name.
+func ValidateKMSKeyVersionName(name string) error {
+	if !kmsKeyVersionName.MatchString(name) {
+		return fmt.Errorf("secrets: %q is not a Cloud KMS key version name (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>)", name)
 	}
 	return nil
 }
@@ -241,6 +260,10 @@ func DefaultKMSClient() *KMSClient {
 	return defaultKMSClient
 }
 
+// ResolvedEndpoint is the REST root c calls, after $GRAIN_KMS_ENDPOINT
+// and DefaultKMSEndpoint have been applied.
+func (c *KMSClient) ResolvedEndpoint() string { return c.endpoint() }
+
 func (c *KMSClient) endpoint() string {
 	ep := c.Endpoint
 	if ep == "" {
@@ -279,23 +302,32 @@ func (c *KMSClient) token(ctx context.Context) (string, error) {
 	return tok, nil
 }
 
-// call POSTs one KMS method on name and decodes its answer into out,
-// classifying a failure as a KMSError.
+// call calls one KMS method on name and decodes its answer into out,
+// classifying a failure as a KMSError. A nil in is a GET, of the
+// sub-resource method names (cryptoKeyVersions.getPublicKey is
+// GET v1/<version>/publicKey, not a :custom verb).
 func (c *KMSClient) call(ctx context.Context, name, method string, in, out any) error {
 	tok, err := c.token(ctx)
 	if err != nil {
 		return &KMSError{Key: name, Reason: "unreachable", Err: err}
 	}
-	body, err := json.Marshal(in)
-	if err != nil {
-		return err
+	verb, body, url := http.MethodGet, io.Reader(nil), c.endpoint()+name+"/"+method
+	if in != nil {
+		url = c.endpoint() + name + ":" + method
+		data, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		verb, body = http.MethodPost, bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint()+name+":"+method, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, verb, url, body)
 	if err != nil {
 		return &KMSError{Key: name, Reason: "unreachable", Err: err}
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Content-Type", "application/json")
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return &KMSError{Key: name, Reason: "unreachable", Err: err}
@@ -379,6 +411,57 @@ func (c *KMSClient) Decrypt(ctx context.Context, name string, ciphertext, aad []
 		return nil, false, &KMSError{Key: name, Reason: "refused", Err: errors.New("decrypt returned a plaintext that is not base64")}
 	}
 	return pt, out.UsedPrimary, nil
+}
+
+// AsymmetricSign signs a SHA-256 digest with the key version name, and
+// returns the ASN.1 DER signature an EC_SIGN_P256_SHA256 key answers in.
+func (c *KMSClient) AsymmetricSign(ctx context.Context, name string, digest [sha256.Size]byte) ([]byte, error) {
+	if err := ValidateKMSKeyVersionName(name); err != nil {
+		return nil, err
+	}
+	var out struct {
+		Signature string `json:"signature"`
+	}
+	in := map[string]any{"digest": map[string]string{"sha256": base64.StdEncoding.EncodeToString(digest[:])}}
+	if err := c.call(ctx, name, "asymmetricSign", in, &out); err != nil {
+		return nil, err
+	}
+	sig, err := base64.StdEncoding.DecodeString(out.Signature)
+	if err != nil || len(sig) == 0 {
+		return nil, &KMSError{Key: name, Reason: "refused", Err: errors.New("asymmetricSign returned no signature")}
+	}
+	return sig, nil
+}
+
+// GetPublicKey is the public half of the key version name, which must
+// be an EC_SIGN_P256_SHA256 key.
+func (c *KMSClient) GetPublicKey(ctx context.Context, name string) (*ecdsa.PublicKey, error) {
+	if err := ValidateKMSKeyVersionName(name); err != nil {
+		return nil, err
+	}
+	var out struct {
+		PEM       string `json:"pem"`
+		Algorithm string `json:"algorithm"`
+	}
+	if err := c.call(ctx, name, "publicKey", nil, &out); err != nil {
+		return nil, err
+	}
+	if out.Algorithm != "EC_SIGN_P256_SHA256" {
+		return nil, &KMSError{Key: name, Reason: "refused", Err: fmt.Errorf("the key's algorithm is %q, not EC_SIGN_P256_SHA256", out.Algorithm)}
+	}
+	block, _ := pem.Decode([]byte(out.PEM))
+	if block == nil {
+		return nil, &KMSError{Key: name, Reason: "refused", Err: errors.New("getPublicKey returned no PEM block")}
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, &KMSError{Key: name, Reason: "refused", Err: fmt.Errorf("getPublicKey: %w", err)}
+	}
+	ec, ok := pub.(*ecdsa.PublicKey)
+	if !ok || ec.Curve != elliptic.P256() {
+		return nil, &KMSError{Key: name, Reason: "refused", Err: errors.New("getPublicKey returned a key that is not ECDSA P-256")}
+	}
+	return ec, nil
 }
 
 // WrapKey wraps k under the KMS key name, and unwraps the result to

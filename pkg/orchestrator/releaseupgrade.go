@@ -267,6 +267,8 @@ func watchAutoUpgrade(ctx context.Context, deps Deps, now time.Time) error {
 			return err
 		}
 		record.Outcome = model.AutoUpgradeFailed
+	case upgrade.PhaseCancelled:
+		record.Outcome = model.AutoUpgradeCancelled
 	case upgrade.PhaseOK:
 		if err := clearUpgradeFailed(ctx, deps); err != nil {
 			return err

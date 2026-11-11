@@ -1409,6 +1409,21 @@ EOF
 # keyless would publish every digest to the public Rekor log. So
 # --tlog-upload=false, and verifiers pass --insecure-ignore-tlog=true.
 #
+# cosign is a v3 release, and v3 has two defaults this cannot keep, so
+# every sign and attest below passes $cosign_legacy_flags. v3 writes a
+# new-format bundle (an OCI referrer, tagged sha256-<hex> with no
+# suffix) that the v2.4.1 cosign bundled in every grain image before
+# v3.5.0 cannot find: its `verify` says "no signatures found", so each of
+# those deployments would refuse its next upgrade. --new-bundle-format=false
+# writes the legacy sha256-<hex>.sig / .att tags instead, which v2.4.1,
+# v2.6.5 and v3.1.4 all verify (docs/image-signing.md), and which
+# cmd/ghcr-prune groups by digest. v3 also refuses --tlog-upload=false
+# whenever a signing config is in play, and a signing config forces the
+# new bundle format, so --use-signing-config=false turns it off; v3.1.4
+# calls that flag deprecated and prints so, but it is the only way to a
+# legacy, tlog-free signature until the offline flag it promises lands.
+cosign_legacy_flags=(--tlog-upload=false --new-bundle-format=false --use-signing-config=false)
+#
 # No key, no signature: the release goes ahead unsigned and says so, as
 # every release before this did, unless REQUIRE_IMAGE_SIGNING=true. A key
 # with no cosign to use it is a failure, though -- a release that was
@@ -1424,12 +1439,15 @@ esac
 
 # cosign itself, from the Go module proxy when this sandbox has none:
 # pinned, so what signs a release is a version somebody chose. The
-# sandbox already has Go -- the guest build needs it.
-cosign_version="${COSIGN_VERSION:-v2.6.5}"
+# sandbox already has Go -- the guest build needs it. GOTOOLCHAIN=auto
+# because cosign v3 needs a newer Go than go.mod pins (v3.1.4 says go
+# 1.27), and a GOTOOLCHAIN=local Go refuses it outright; auto fetches the
+# toolchain the module asks for from the same proxy.
+cosign_version="${COSIGN_VERSION:-v3.1.4}"
 ensure_cosign() {
   command -v cosign >/dev/null 2>&1 && return 0
   echo "release-images.sh: installing cosign $cosign_version"
-  if ! GOBIN="${TMPDIR:-/tmp}/release-images-cosign" go install "github.com/sigstore/cosign/v2/cmd/cosign@$cosign_version"; then
+  if ! GOTOOLCHAIN=auto GOBIN="${TMPDIR:-/tmp}/release-images-cosign" go install "github.com/sigstore/cosign/v3/cmd/cosign@$cosign_version"; then
     echo "release-images.sh: a signing key is at $signing_key but cosign could not be installed, so nothing can be signed" >&2
     return 1
   fi
@@ -1462,7 +1480,7 @@ sign_image() {
   fi
   for attempt in 1 2 3; do
     if COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
-      registry_env cosign sign --yes --key "$signing_key" --tlog-upload=false "$digest_ref"; then
+      registry_env cosign sign --yes --key "$signing_key" "${cosign_legacy_flags[@]}" "$digest_ref"; then
       echo "release-images.sh: signed $digest_ref ($image)"
       attest_reviewed_merge "$digest_ref"
       return
@@ -1540,7 +1558,7 @@ attest_reviewed_merge() {
   [ -n "$reviewed_merge_record" ] || return 0
   for attempt in 1 2 3; do
     if COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
-      registry_env cosign attest --yes --key "$signing_key" --tlog-upload=false \
+      registry_env cosign attest --yes --key "$signing_key" "${cosign_legacy_flags[@]}" \
         --type "https://github.com/ai-on-gke/grain/reviewed-merge/v1" \
         --predicate "$reviewed_merge_record" "$digest_ref"; then
       echo "release-images.sh: attested the reviewed-merge record onto $digest_ref"
