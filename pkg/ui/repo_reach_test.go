@@ -537,3 +537,213 @@ printf '{"login":"bsalmon","permissions":{"pull":true,"push":true}}'
 		t.Fatalf("unsaved check with a lapsed login = %+v; want the tool's login sentence", got)
 	}
 }
+
+func TestHostlessTargetRepoSurfacesMismatchWarningInReachAndHealthWithoutRewriting(t *testing.T) {
+	t.Parallel()
+	srv, client, credentials := testServerWithCreds(t)
+	ctx := context.Background()
+
+	if err := credentials.SetToken("dotcom-cred", "tok-dotcom"); err != nil {
+		t.Fatal(err)
+	}
+	dotcomSim := githubsim.New("acme", "widgets", "", "main")
+	dotcomSim.Reachable = map[string][]githubsim.ReachableRepo{
+		"tok-dotcom": {{FullName: "acme/widgets", Push: true}},
+	}
+
+	if err := credentials.SetToken("forge-cred", "tok-forge"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetHost("forge-cred", gitproxy.CredentialHost{
+		Host: "depot.code.forge.test",
+		Kind: model.GitHostGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	forgeSim := githubsim.New("experimental", "bsalmon-test", "", "main")
+	forgeSim.Reachable = map[string][]githubsim.ReachableRepo{
+		"tok-forge": {
+			{FullName: "experimental/bsalmon-test", Push: true},
+			{FullName: "acme/widgets", Push: true},
+			{FullName: "custom/cloned", Push: true},
+		},
+	}
+
+	client.Config.GitReach = &gitproxy.Reach{
+		Credentials: credentials,
+		API:         dotcomSim,
+		Host:        "github.com",
+		Transports: map[string]github.Transport{
+			"depot.code.forge.test": forgeSim,
+		},
+	}
+
+	if err := client.Store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.GitConnections = []model.TeamGitConnection{
+			{Credential: "dotcom-cred", Host: "github.com"},
+			{Credential: "forge-cred", Host: "depot.code.forge.test"},
+		}
+		// acme/widgets exists on github.com too (no warning);
+		// experimental/bsalmon-test is reachable only on depot.code.forge.test (warns);
+		// custom/cloned has an explicit cloneURL (no warning).
+		c.TargetRepos = []string{"acme/widgets", "experimental/bsalmon-test", "custom/cloned"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:     model.RepoRef{Owner: "custom", Name: "cloned"},
+		CloneURL: "https://git.custom.test/custom/cloned.git",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:     model.RepoRef{Host: "depot.code.forge.test", Owner: "custom", Name: "cloned"},
+		CloneURL: "https://git.custom.test/custom/cloned.git",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, srv, "GET", "/api/deployment/reachable-repos", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET reachable-repos: %d %s", rec.Code, rec.Body.String())
+	}
+	var reachRes ui.ReachableReposResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &reachRes); err != nil {
+		t.Fatal(err)
+	}
+	if len(reachRes.HostMismatches) != 1 {
+		t.Fatalf("HostMismatches = %+v; want 1 entry for experimental/bsalmon-test", reachRes.HostMismatches)
+	}
+	m := reachRes.HostMismatches[0]
+	wantMsg := "this entry resolves to github.com; did you mean depot.code.forge.test/experimental/bsalmon-test?"
+	if m.Repo != "experimental/bsalmon-test" || m.ResolvesTo != "github.com" || m.Message != wantMsg {
+		t.Errorf("mismatch = %+v; want repo=experimental/bsalmon-test, message=%q", m, wantMsg)
+	}
+
+	// GET /api/sandboxes (grain health) surfaces the same warning.
+	healthRec := do(t, srv, "GET", "/api/sandboxes", "")
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/sandboxes: %d %s", healthRec.Code, healthRec.Body.String())
+	}
+	var healthRes ui.SandboxHealthResponse
+	if err := json.Unmarshal(healthRec.Body.Bytes(), &healthRes); err != nil {
+		t.Fatal(err)
+	}
+	if len(healthRes.TargetRepoHostWarnings) != 1 || healthRes.TargetRepoHostWarnings[0].Message != wantMsg {
+		t.Errorf("TargetRepoHostWarnings = %+v; want [%q]", healthRes.TargetRepoHostWarnings, wantMsg)
+	}
+
+	// Stored TargetRepos is never silently rewritten.
+	storedCfg, err := client.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStored := []string{"acme/widgets", "experimental/bsalmon-test", "custom/cloned"}
+	if len(storedCfg.TargetRepos) != len(wantStored) || storedCfg.TargetRepos[1] != "experimental/bsalmon-test" {
+		t.Errorf("stored TargetRepos = %v; must not be rewritten silently", storedCfg.TargetRepos)
+	}
+
+	// When the only hostless entry matching a non-default-host repo has an
+	// explicit cloneURL, reachable-repos still serializes "hostMismatches":[]
+	// so the UI never falls back to client-side inference over reach.repos.
+	if err := client.Store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.TargetRepos = []string{"acme/widgets", "custom/cloned"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cloneOnlyRec := do(t, srv, "GET", "/api/deployment/reachable-repos", "")
+	if cloneOnlyRec.Code != http.StatusOK {
+		t.Fatalf("GET reachable-repos (cloneURL only): %d %s", cloneOnlyRec.Code, cloneOnlyRec.Body.String())
+	}
+	if !strings.Contains(cloneOnlyRec.Body.String(), `"hostMismatches":[]`) {
+		t.Errorf("GET reachable-repos omitted empty hostMismatches array: %s", cloneOnlyRec.Body.String())
+	}
+}
+
+func TestReachableReposIntersectsRoleAndActingTaskOnReposAndHostMismatches(t *testing.T) {
+	h := newRoleHarness(t)
+	ctx := context.Background()
+	installScopeSets(t, model.APIScopeSet{
+		Name:    "widgets-only-repos",
+		Scopes:  []string{"repos:read"},
+		Repos:   []string{"acme/widgets"},
+		Version: 1,
+	})
+	h.allow(t, "user:alice@example.com", "widgets-only-repos")
+
+	credentials, err := gitproxy.LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetToken("dotcom-cred", "tok-dotcom"); err != nil {
+		t.Fatal(err)
+	}
+	dotcomSim := githubsim.New("acme", "widgets", "", "main")
+	dotcomSim.Reachable = map[string][]githubsim.ReachableRepo{
+		"tok-dotcom": {
+			{FullName: "acme/widgets", Push: true},
+			{FullName: "acme/secret", Push: true},
+		},
+	}
+	if err := credentials.SetToken("forge-cred", "tok-forge"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetHost("forge-cred", gitproxy.CredentialHost{
+		Host: "depot.code.forge.test",
+		Kind: model.GitHostGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	forgeSim := githubsim.New("experimental", "bsalmon-test", "", "main")
+	forgeSim.Reachable = map[string][]githubsim.ReachableRepo{
+		"tok-forge": {{FullName: "experimental/bsalmon-test", Push: true}},
+	}
+	h.client.Config.GitReach = &gitproxy.Reach{
+		Credentials: credentials,
+		API:         dotcomSim,
+		Host:        "github.com",
+		Transports: map[string]github.Transport{
+			"depot.code.forge.test": forgeSim,
+		},
+	}
+	if err := h.client.Store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.GitConnections = []model.TeamGitConnection{
+			{Credential: "dotcom-cred", Host: "github.com"},
+			{Credential: "forge-cred", Host: "depot.code.forge.test"},
+		}
+		c.TargetRepos = []string{"acme/widgets", "acme/secret", "experimental/bsalmon-test"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Task 99 holds unrestricted api:repos:read; attaching X-Grain-Acting-Task: 99
+	// must never widen alice@example.com past her widgets-only-repos role.
+	seedAPITask(t, h.client, "99", "acme/widgets", "api:repos:read")
+
+	for _, withActingTask := range []bool{false, true} {
+		hdrs := h.as("alice@example.com")
+		if withActingTask {
+			hdrs[ui.ActingTaskHeader] = "99"
+		}
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodGet, "/api/deployment/reachable-repos", "", hdrs)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET reachable-repos (actingTask=%v): %d %s", withActingTask, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		for _, forbidden := range []string{"acme/secret", "experimental/bsalmon-test", "depot.code.forge.test", "dotcom-cred", "forge-cred"} {
+			if strings.Contains(body, forbidden) {
+				t.Errorf("GET reachable-repos (actingTask=%v) leaked %q: %s", withActingTask, forbidden, body)
+			}
+		}
+		var rr ui.ReachableReposResult
+		if err := json.Unmarshal(rec.Body.Bytes(), &rr); err != nil {
+			t.Fatal(err)
+		}
+		if len(rr.Repos) != 1 || rr.Repos[0].Repo != "acme/widgets" || len(rr.HostMismatches) != 0 || len(rr.Connections) != 0 {
+			t.Errorf("GET reachable-repos (actingTask=%v) = %+v; want only acme/widgets with empty HostMismatches and Connections", withActingTask, rr)
+		}
+	}
+}

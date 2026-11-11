@@ -122,7 +122,7 @@ func importIssues(ctx context.Context, store *model.Store, client github.Client,
 		return out, fmt.Errorf("orchestrator: issue import for %s: source repository %q: %w", repo, cfg.IssueImport.Repo, err)
 	}
 	out.Source = source.String()
-	issues, err := client.ListIssues(source.Owner, source.Name, strings.TrimSpace(cfg.IssueImport.Label))
+	issues, err := client.ListIssues(source.StoredOwner(), source.Name, strings.TrimSpace(cfg.IssueImport.Label))
 	if err != nil {
 		return out, fmt.Errorf("orchestrator: issue import for %s: listing open issues on %s: %w",
 			repo, source, github.Readable(err))
@@ -176,7 +176,7 @@ func fileImportedIssue(ctx context.Context, store *model.Store, client github.Cl
 	}
 	// A read failure leaves the comments out rather than the issue: the
 	// task links the issue, and its agent can read the rest there.
-	comments, err := client.ListComments(source.Owner, source.Name, issue.Number)
+	comments, err := client.ListComments(source.StoredOwner(), source.Name, issue.Number)
 	if err != nil {
 		log.Printf("orchestrator: issue import: reading comments on %s#%d: %v", source, issue.Number, github.Readable(err))
 		comments = nil

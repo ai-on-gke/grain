@@ -17,7 +17,11 @@ import { Alert, Box, Button, Link } from "@mui/material";
 import api from "../../api.js";
 import { AlertsPanel } from "../AlertsButton.jsx";
 import { InstallNoticeAlert } from "../InstallNotice.jsx";
-import { SandboxOvercommitStatus } from "../SandboxHealthPage.jsx";
+import {
+  SandboxOvercommitStatus,
+  TargetRepoHostAlerts,
+} from "../SandboxHealthPage.jsx";
+import { targetRepoHostMismatches } from "../RepoList.jsx";
 import UnbackedStateDot, { stateDot } from "../UnbackedStateDot.jsx";
 import GitHubBudgetPanel from "./GitHubBudgetPanel.jsx";
 import HealthCountersPanel from "./HealthCountersPanel.jsx";
@@ -46,6 +50,8 @@ export default function HealthTab({
   // grain hostd's state (daemon.HostExecutorStatus), for a deployment
   // beside it: unreachable, or missing some of grain's own entries.
   const [hostExecutor, setHostExecutor] = useState(null);
+  const [reach, setReach] = useState(null);
+  const hasTargets = (config?.targetRepos || []).length > 0;
   useEffect(() => {
     let live = true;
     api("/api/settings")
@@ -54,10 +60,20 @@ export default function HealthTab({
     api("/api/settings/cli-run")
       .then((r) => live && setHostExecutor(r?.hostExecutor || null))
       .catch(() => {});
+    if (hasTargets) {
+      api("/api/deployment/reachable-repos")
+        .then((r) => live && setReach(r))
+        .catch(() => {});
+    }
     return () => {
       live = false;
     };
-  }, []);
+  }, [hasTargets]);
+  const hostMismatches = targetRepoHostMismatches(
+    reach,
+    config?.targetRepos,
+    config?.githubHost,
+  );
   const pending = settings?.pendingRestart || [];
   const unrunnable = settings?.unrunnable || [];
   const settingLink = (key) => {
@@ -92,6 +108,7 @@ export default function HealthTab({
         testId="health-install-notice"
       />
       <HostdHealthNote hostExecutor={hostExecutor} />
+      <TargetRepoHostAlerts warnings={hostMismatches} />
       {stateDot(config) && (
         <Alert
           severity="warning"

@@ -155,6 +155,30 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 	}
 }
 
+func TestGrainHealthListsTargetRepoHostWarnings(t *testing.T) {
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{
+			TargetRepoHostWarnings: []ui.TargetRepoHostMismatch{{
+				Repo:       "experimental/grain",
+				ResolvesTo: "github.com",
+				Candidates: []string{"git.forge.example/experimental/grain"},
+				Message:    "this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+			}},
+		})
+	})
+	for _, want := range []string{
+		"WARNING: target repositories missing their git host:",
+		"experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report when target repo host warnings exist:\n%s", out)
+	}
+}
+
 func TestGrainHealthNamesSchedulesThatStoppedRunning(t *testing.T) {
 	last := time.Date(2026, 10, 28, 7, 37, 0, 0, time.UTC)
 	out := captureStdout(t, func() {
