@@ -39,7 +39,13 @@ import { KeyboardService } from "./services/keyboard.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
 import { TipDirective } from "./shared/tip.directive";
-import { DESTINATIONS, type Destination, SETTINGS, hrefFor } from "./shell/nav";
+import {
+  CLASSIC_NEW_TASK,
+  DESTINATIONS,
+  type Destination,
+  SETTINGS,
+  hrefFor,
+} from "./shell/nav";
 import { CreateTaskService } from "./create/create-task.service";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
@@ -99,7 +105,11 @@ type CreateItem =
   },
   template: `
     <div class="app-shell">
-      <nav class="nav-rail" aria-label="Primary destinations">
+      <nav
+        class="nav-rail"
+        aria-label="Primary destinations"
+        [attr.inert]="createTask.isOpen() ? '' : null"
+      >
         <button
           type="button"
           class="rail-fab"
@@ -218,7 +228,7 @@ type CreateItem =
         }
       </ng-template>
 
-      <header class="top-bar">
+      <header class="top-bar" [attr.inert]="createTask.isOpen() ? '' : null">
         <div class="top-brand-cluster">
           <svg
             class="mobile-brand-mark"
@@ -291,11 +301,15 @@ type CreateItem =
         </div>
       </header>
 
-      <main class="main-stage" id="main">
+      <main
+        class="main-stage"
+        id="main"
+        [attr.inert]="createTask.isOpen() ? '' : null"
+      >
         <router-outlet />
       </main>
 
-      <footer class="bottom-bar">
+      <footer class="bottom-bar" [attr.inert]="createTask.isOpen() ? '' : null">
         <span class="muted bottom-version" [attr.title]="store.version()"
           >grain{{ store.version() ? " " + store.version() : "" }}</span
         >
@@ -330,7 +344,11 @@ type CreateItem =
         </button>
       }
 
-      <nav class="compact-nav" aria-label="Primary destinations (compact)">
+      <nav
+        class="compact-nav"
+        aria-label="Primary destinations (compact)"
+        [attr.inert]="createTask.isOpen() ? '' : null"
+      >
         @for (d of phoneDestinations; track d.id) {
           @if (d.route) {
             <a
@@ -452,8 +470,15 @@ type CreateItem =
       </ng-template>
 
       <!-- Loaded the first time it opens, to keep the shell's bundle small. -->
-      @defer (when createTask.isOpen()) {
+      @defer (when createTask.isOpen(); prefetch on idle) {
         <g-new-task-sheet />
+      } @error {
+        @if (createTask.isOpen()) {
+          <p class="banner banner-error defer-error" role="alert">
+            The New task form could not load.
+            <a [href]="classicNewTask">Use the classic form</a>
+          </p>
+        }
       }
       <g-snackbar />
     </div>
@@ -512,6 +537,7 @@ export class AppComponent implements OnInit, OnDestroy {
     },
   ];
   protected readonly createTask = inject(CreateTaskService);
+  protected readonly classicNewTask = CLASSIC_NEW_TASK;
   protected readonly onSessions = signal(false);
   protected readonly inboxCount = computed(() => this.store.entries().length);
   protected readonly createOpen = signal(false);

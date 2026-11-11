@@ -41,7 +41,16 @@ export interface FieldConfig {
   label: string;
   helpText: string;
   default: unknown;
+  // repo: whether "No repository" is offered (allow_no_repo).
+  allowNoRepo?: boolean;
+  // model, networkAccess: the values the picker offers (offered).
+  offered?: string[];
 }
+
+// NO_REPO is the repository picker's value for a task with no repository
+// (it answers in a comment). "" is the deployment's default target,
+// which the server fills in (Config.DefaultTarget).
+export const NO_REPO = "__none__";
 
 const BUILTIN: Record<FieldId, { visibility: Visibility; order: number }> = {
   title: { visibility: "shown", order: 10 },
@@ -89,6 +98,8 @@ interface FormLayer {
       label?: string;
       help_text?: string;
       default?: unknown;
+      allow_no_repo?: boolean;
+      offered?: string[];
     } | null
   >;
 }
@@ -138,15 +149,19 @@ export function resolveFields(
       if (fc.default !== undefined && fc.default !== null) {
         f.default = fc.default;
       }
+      if (typeof fc.allow_no_repo === "boolean")
+        f.allowNoRepo = fc.allow_no_repo;
+      if (Array.isArray(fc.offered)) f.offered = fc.offered;
     }
   }
   return out;
 }
 
-// knownRepos is what the repository picker offers (ui/src/state.js
-// knownRepos): the config repository, the deployment's target repos, and
-// every repo a task has used, case-insensitively unique and sorted.
-export function knownRepos(
+// targetableRepos is what the repository picker offers (ui/src/state.js
+// targetableRepos): the config repository plus the deployment's allowed
+// target repos; with no allowlist, every repo a task has used. Offering
+// repos off the allowlist would file tasks that only park.
+export function targetableRepos(
   config: GrainConfig | null,
   tasks: readonly Task[],
 ): string[] {
@@ -156,49 +171,78 @@ export function knownRepos(
     const k = r.toLowerCase();
     if (!seen.has(k)) seen.set(k, r);
   };
+  const dep = config?.["deployment"] as { targetRepos?: string[] } | undefined;
+  const allowed = [
+    ...((config?.["targetRepos"] as string[] | undefined) ?? []),
+    ...(dep?.targetRepos ?? []),
+  ];
   add(config?.["configRepo"]);
-  for (const r of (config?.["targetRepos"] as string[] | undefined) ?? []) {
-    add(r);
-  }
-  const dep = config?.["deployment"] as
-    { targetRepos?: string[]; repos?: { repo?: string }[] } | undefined;
-  for (const r of dep?.targetRepos ?? []) add(r);
-  for (const r of dep?.repos ?? []) add(r.repo);
-  for (const t of tasks) add(t.repo);
+  if (allowed.length) allowed.forEach(add);
+  else tasks.forEach((t) => add(t.repo));
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
-// defaultRepo is the deployment's default target when it is offered,
-// else the first option.
-export function defaultRepo(
+// defaultTargetIn is the deployment's default target when the picker
+// offers it, else "".
+export function defaultTargetIn(
   config: GrainConfig | null,
   options: readonly string[],
 ): string {
   const pref = config?.["defaultTarget"];
-  if (typeof pref === "string") {
-    const hit = options.find((o) => o.toLowerCase() === pref.toLowerCase());
-    if (hit) return hit;
-  }
-  return options[0] ?? "";
+  if (typeof pref !== "string") return "";
+  return options.find((o) => o.toLowerCase() === pref.toLowerCase()) ?? "";
 }
 
-// lastBaseForRepo is the base branch the newest task on a repo used, so
-// the next one starts there too (ui/src/state.js lastBaseForRepo).
+// openingRepo is where the picker starts (NewTaskOverlay.jsx): the
+// opener's repo, else the deployment's default target, else the form's
+// repo default ("none" meaning no repository), else "" -- the server's
+// default target -- never just the first repo alphabetically
+// (grain/task-1533).
+export function openingRepo(
+  config: GrainConfig | null,
+  options: readonly string[],
+  prefillRepo?: string,
+): string {
+  if (prefillRepo !== undefined) return prefillRepo;
+  const target = defaultTargetIn(config, options);
+  if (target) return target;
+  const formDefault = resolveFields(config).repo.default;
+  const d = typeof formDefault === "string" ? formDefault.trim() : "";
+  if (d.toLowerCase() === "none") return NO_REPO;
+  return d;
+}
+
+// Tasks that say nothing about where a repo's work lives now (state.js
+// suggestsBase): failed or closed ones, stacked reviews and repairs, and
+// anything not filed by a person.
+function suggestsBase(t: Task): boolean {
+  const x = t as Task & { stacked?: boolean; authorKind?: string };
+  if (x.state === "failed" || x.state === "closed") return false;
+  if (x.stacked) return false;
+  return !x.authorKind || x.authorKind === "human";
+}
+
+// lastBaseForRepo is the base branch the newest hand-filed task on a
+// repo used, so the next one starts there too (state.js lastBaseForRepo).
 export function lastBaseForRepo(tasks: readonly Task[], repo: string): string {
-  let best: { at: string; base: string } | null = null;
+  if (!repo || repo === NO_REPO) return "";
+  let latest: Task | null = null;
   for (const t of tasks) {
-    const base = (t as Task & { base?: string }).base;
-    if (!base || (t.repo ?? "").toLowerCase() !== repo.toLowerCase()) continue;
-    const at = t.createdAt ?? "";
-    if (!best || at > best.at) best = { at, base };
+    if (t.repo !== repo || !suggestsBase(t)) continue;
+    if (!latest || (t.createdAt ?? "") > (latest.createdAt ?? "")) latest = t;
   }
-  return best?.base ?? "";
+  return (latest as (Task & { base?: string }) | null)?.base ?? "";
+}
+
+// hasHistory says whether picking the repo has a base to suggest at all.
+export function hasHistory(tasks: readonly Task[], repo: string): boolean {
+  return tasks.some((t) => t.repo === repo && suggestsBase(t));
 }
 
 export interface NewTaskDraft {
   title: string;
   description: string;
-  repo: string; // "" means no repository
+  repo: string; // NO_REPO: none; "": the deployment's default target
   base: string;
   newBranch: boolean;
   newBranchName: string;
@@ -217,8 +261,8 @@ export function emptyDraft(
   tasks: readonly Task[],
   prefill: Partial<NewTaskDraft> = {},
 ): NewTaskDraft {
-  const repos = knownRepos(config, tasks);
-  const repo = prefill.repo ?? defaultRepo(config, repos);
+  const repos = targetableRepos(config, tasks);
+  const repo = openingRepo(config, repos, prefill.repo);
   const f = resolveFields(config, repo);
   return {
     title: "",
@@ -247,7 +291,7 @@ export function buildPayload(
   d: NewTaskDraft,
   config: GrainConfig | null,
 ): Record<string, unknown> {
-  const none = !d.repo;
+  const none = d.repo === NO_REPO;
   const creating = d.newBranch && !none;
   return {
     title: d.title.trim(),
@@ -273,11 +317,31 @@ export function buildPayload(
   };
 }
 
-// validate says what stops the draft being filed, or null.
-export function validate(d: NewTaskDraft): string | null {
-  if (!d.title.trim()) return "Give the task a title.";
-  if (d.newBranch && d.repo && !d.newBranchName.trim()) {
-    return "Name the new branch, or untick New branch.";
+export interface Problem {
+  field: "title" | "newBranchName";
+  message: string;
+}
+
+// validate says what stops the draft being filed, or null. A hidden New
+// branch field asks for no name: nobody could type one.
+export function validate(
+  d: NewTaskDraft,
+  fields?: Record<FieldId, FieldConfig>,
+): Problem | null {
+  if (!d.title.trim()) {
+    return { field: "title", message: "Give the task a title." };
+  }
+  const branchShown = !fields || fields.newBranch.visibility !== "hidden";
+  if (
+    branchShown &&
+    d.newBranch &&
+    d.repo !== NO_REPO &&
+    !d.newBranchName.trim()
+  ) {
+    return {
+      field: "newBranchName",
+      message: "Name the new branch, or untick the new-branch box.",
+    };
   }
   return null;
 }
@@ -292,8 +356,11 @@ export function directorMessage(d: NewTaskDraft): string {
     `**${d.title.trim() || "(no title yet)"}**`,
   ];
   if (d.description.trim()) lines.push("", d.description.trim());
-  lines.push("", `Repository: ${d.repo || "none"}`);
-  if (d.repo && d.base) lines.push(`Base branch: ${d.base}`);
+  lines.push(
+    "",
+    `Repository: ${d.repo === NO_REPO ? "none" : d.repo || "the default target"}`,
+  );
+  if (d.repo !== NO_REPO && d.base) lines.push(`Base branch: ${d.base}`);
   if (d.dependsOn.length) {
     lines.push(`Depends on: ${d.dependsOn.map((id) => `#${id}`).join(", ")}`);
   }

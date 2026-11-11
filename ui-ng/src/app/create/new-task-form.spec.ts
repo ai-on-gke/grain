@@ -14,13 +14,14 @@
 
 import type { GrainConfig, Task } from "../api/models";
 import {
+  NO_REPO,
   buildPayload,
-  defaultRepo,
   directorMessage,
   emptyDraft,
-  knownRepos,
   lastBaseForRepo,
+  openingRepo,
   resolveFields,
+  targetableRepos,
   validate,
 } from "./new-task-form";
 
@@ -31,7 +32,7 @@ const config: GrainConfig = {
   approvedByDefault: true,
   autoMergeByDefault: false,
   newestFirst: false,
-  deployment: { repos: [{ repo: "sidthe/grain" }], targetRepos: ["acme/web"] },
+  deployment: { targetRepos: ["acme/web", "sidthe/grain"] },
 };
 
 const tasks = [
@@ -52,25 +53,67 @@ const tasks = [
     base: "release-1",
     createdAt: "2026-11-05T00:00:00Z",
   },
+  // Newer, but no evidence: failed, stacked, or filed by automation.
+  {
+    id: "5",
+    title: "d",
+    state: "failed",
+    repo: "sidthe/grain",
+    base: "dead",
+    createdAt: "2026-11-06T00:00:00Z",
+  },
+  {
+    id: "6",
+    title: "e",
+    state: "queued",
+    repo: "sidthe/grain",
+    base: "grain/task-3",
+    stacked: true,
+    createdAt: "2026-11-07T00:00:00Z",
+  },
+  {
+    id: "7",
+    title: "f",
+    state: "queued",
+    repo: "sidthe/grain",
+    base: "suite-pass",
+    authorKind: "automation",
+    createdAt: "2026-11-08T00:00:00Z",
+  },
 ] as Task[];
 
 describe("new task form", () => {
-  it("offers the config repo, deployment repos and task repos once each, sorted", () => {
-    expect(knownRepos(config, tasks)).toEqual([
-      "acme/api",
+  it("offers the config repo and the allowlist only, or task repos when there is none", () => {
+    expect(targetableRepos(config, tasks)).toEqual([
       "acme/web",
       "grain/config",
       "sidthe/grain",
     ]);
+    expect(targetableRepos({ access: null }, tasks)).toEqual([
+      "acme/api",
+      "sidthe/grain",
+    ]);
   });
 
-  it("starts on the deployment's default target, matched case-insensitively", () => {
-    expect(defaultRepo(config, knownRepos(config, tasks))).toBe("sidthe/grain");
-    expect(defaultRepo({ access: null }, ["x/y"])).toBe("x/y");
+  it("starts on the default target, then the form's repo default, never the first repo", () => {
+    const opts = targetableRepos(config, tasks);
+    expect(openingRepo(config, opts)).toBe("sidthe/grain");
+    expect(openingRepo(config, opts, "acme/web")).toBe("acme/web");
+    expect(openingRepo({ access: null }, ["a/a", "b/b"])).toBe("");
+    expect(
+      openingRepo(
+        {
+          access: null,
+          newTaskForm: { default: { fields: { repo: { default: "none" } } } },
+        },
+        ["a/a"],
+      ),
+    ).toBe(NO_REPO);
   });
 
-  it("repeats the newest task's base branch for the repo", () => {
+  it("repeats the newest hand-filed, live task's base for the repo", () => {
     expect(lastBaseForRepo(tasks, "sidthe/grain")).toBe("release-1");
+    expect(lastBaseForRepo(tasks, "SIDTHE/grain")).toBe("");
     expect(lastBaseForRepo(tasks, "acme/web")).toBe("");
   });
 
@@ -128,9 +171,15 @@ describe("new task form", () => {
       newBranch: true,
       newBranchFrom: "release-1",
     });
-    const none = buildPayload({ ...d, repo: "", newBranch: true }, config);
+    const none = buildPayload({ ...d, repo: NO_REPO, newBranch: true }, config);
     expect(none).toMatchObject({ repo: "", noRepo: true, base: "" });
     expect(none).not.toHaveProperty("newBranch");
+    // "" is the deployment's default target: no repo named, but not
+    // "no repository" either.
+    expect(buildPayload({ ...d, repo: "" }, config)).toMatchObject({
+      repo: "",
+      noRepo: false,
+    });
     expect(
       buildPayload(
         { ...d, networkAccess: "none" },
@@ -144,9 +193,24 @@ describe("new task form", () => {
 
   it("says what stops filing", () => {
     const d = emptyDraft(config, tasks);
-    expect(validate(d)).toBe("Give the task a title.");
-    expect(validate({ ...d, title: "t", newBranch: true })).toMatch(/branch/);
+    expect(validate(d)).toEqual({
+      field: "title",
+      message: "Give the task a title.",
+    });
+    expect(validate({ ...d, title: "t", newBranch: true })?.field).toBe(
+      "newBranchName",
+    );
     expect(validate({ ...d, title: "t" })).toBeNull();
+    // A hidden New branch field cannot be filled in, so it asks for nothing.
+    const hidden = resolveFields({
+      access: null,
+      newTaskForm: {
+        default: {
+          fields: { newBranch: { visibility: "hidden", default: true } },
+        },
+      },
+    });
+    expect(validate({ ...d, title: "t", newBranch: true }, hidden)).toBeNull();
   });
 
   it("phrases the draft as a request to the Director", () => {

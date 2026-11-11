@@ -23,7 +23,20 @@ import type { NewTaskDraft } from "./new-task-form";
 export class CreateTaskService {
   readonly isOpen = signal(false);
   readonly prefill = signal<Partial<NewTaskDraft>>({});
+  // What Cancel or Escape left, offered again on the next plain opening.
+  readonly saved = signal<{
+    draft: NewTaskDraft;
+    edited: (keyof NewTaskDraft)[];
+  } | null>(null);
   private opener: HTMLElement | null = null;
+
+  keep(draft: NewTaskDraft, edited: (keyof NewTaskDraft)[]): void {
+    this.saved.set({ draft, edited });
+  }
+
+  clearSaved(): void {
+    this.saved.set(null);
+  }
 
   open(prefill: Partial<NewTaskDraft> = {}, opener?: Element | null): void {
     this.opener =
@@ -33,10 +46,16 @@ export class CreateTaskService {
     this.isOpen.set(true);
   }
 
-  close(): void {
+  // close puts focus back on the opener, unless the caller moves it
+  // somewhere else (a navigation that replaces the opener).
+  close(restoreFocus = true): void {
     this.isOpen.set(false);
     const el = this.opener;
     this.opener = null;
-    if (el?.isConnected) setTimeout(() => el.focus());
+    if (restoreFocus && el) {
+      setTimeout(() => {
+        if (el.isConnected) el.focus();
+      });
+    }
   }
 }

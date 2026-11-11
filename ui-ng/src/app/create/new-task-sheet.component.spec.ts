@@ -161,7 +161,7 @@ describe("NewTaskSheetComponent", () => {
     expect(api.calls).toHaveLength(0);
   });
 
-  it("files a proposal when Approve is off, and offers Open and Undo", async () => {
+  it("files a proposal when Approve is off, and offers Open and Discard", async () => {
     const api = new FakeApi();
     const f = await render(api);
     await open(f);
@@ -190,7 +190,7 @@ describe("NewTaskSheetComponent", () => {
     const snack = TestBed.inject(SnackbarService).current()!;
     expect(snack.message).toBe("Saved #42 as a proposal in the Inbox");
     expect(snack.secondary?.label).toBe("Open");
-    expect(snack.action?.label).toBe("Undo");
+    expect(snack.action?.label).toBe("Discard");
     await TestBed.inject(SnackbarService).runAction(snack.id);
     expect(api.calls[1]).toMatchObject({
       route: "POST /api/tasks/{id}/close",
@@ -269,5 +269,75 @@ describe("NewTaskSheetComponent", () => {
     expect(q('[data-testid="new-task-sheet"]')).toBeNull();
     expect(document.activeElement?.id).toBe("opener");
     vi.useRealTimers();
+  });
+
+  it("offers only Open after a started task: it cannot be taken back", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Run now");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    const snack = TestBed.inject(SnackbarService).current()!;
+    expect(snack.message).toBe("Filed #42; it starts when a slot is free");
+    expect(snack.action?.label).toBe("Open");
+    expect(snack.secondary).toBeUndefined();
+  });
+
+  it("keeps changes made while the config is still loading", async () => {
+    const api = new FakeApi();
+    let release!: () => void;
+    const f = await render(api);
+    api.config = () =>
+      new Promise((r) => (release = () => r(api.cfg))) as Promise<
+        typeof api.cfg
+      >;
+    await open(f);
+    const sw = q<HTMLButtonElement>('[data-testid="approved-switch"]')!;
+    sw.click();
+    await f.whenStable();
+    const chosen = sw.getAttribute("aria-checked");
+    type('[data-testid="nt-title"]', "typed early");
+    release();
+    await settle(f);
+    // The config's approvedByDefault does not undo the person's click.
+    expect(
+      q('[data-testid="approved-switch"]')!.getAttribute("aria-checked"),
+    ).toBe(chosen);
+    expect(q<HTMLInputElement>('[data-testid="nt-title"]')!.value).toBe(
+      "typed early",
+    );
+  });
+
+  it("brings a cancelled draft back on the next plain opening", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "half written");
+    q<HTMLButtonElement>('[data-testid="new-task-close"]')!.click();
+    await settle(f);
+    await open(f);
+    expect(q<HTMLInputElement>('[data-testid="nt-title"]')!.value).toBe(
+      "half written",
+    );
+  });
+
+  it("explains why filing is not allowed for this role", async () => {
+    const api = new FakeApi();
+    (api.cfg as Record<string, unknown>)["access"] = {
+      full: false,
+      role: "viewer",
+      roles: ["viewer"],
+      scopes: ["tasks:read"],
+    };
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+    expect(q('[data-testid="new-task-denied"]')?.textContent).toContain(
+      "tasks:write",
+    );
+    expect(
+      q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
+    ).toBe(true);
   });
 });

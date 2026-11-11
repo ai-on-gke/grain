@@ -2909,6 +2909,15 @@ button.more-sheet-item {
 @media (max-width: 599.95px), (max-height: 480px) and (orientation: landscape) {
   .side-sheet {
     width: 100vw;
+    height: 100dvh;
     border-radius: 0;
   }
+}
+
+.defer-error {
+  position: fixed;
+  z-index: 92;
+  right: 16px;
+  bottom: 96px;
+  max-width: 360px;
 }
