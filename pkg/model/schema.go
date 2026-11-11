@@ -649,7 +649,15 @@ import "strconv"
 // (model.Config.HubEnvironmentName): the environment name a Grain Hub last
 // supplied as this deployment's default, so a rename of its hub entry can
 // replace it without overwriting a name the operator chose (grain/task-4200).
-const SchemaVersion = 137
+// 138 adds `grain_config`.`sandbox_shape_limits`
+// (model.Config.SandboxShapeLimits): the deployment-wide and per-role
+// ceilings on the sandbox shape a task may ask for (grain/task-4018).
+// 139 adds `grain_config`.`auto_upgrade_min_interval_hours`
+// (model.Config.AutoUpgradeMinIntervalHours, default 6; 0 = off) and
+// `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
+// the minimum interval between two completed automatic upgrades in release
+// mode, and when the last automatic upgrade succeeded (grain/task-4230).
+const SchemaVersion = 140
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -750,7 +758,14 @@ const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_even
   ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
-  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`notification_id`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`subject`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`severity`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`summary`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`approval_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`script`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`decision`" + `         TEXT     NOT NULL DEFAULT ''
 )`
 
 // secretEntriesTable is the `secret_entries` catalogue for
@@ -1558,6 +1573,8 @@ var Tables = []string{
 	// many finished rows over a store's lifetime (one per attempt) and
 	// only the currently-open one must be unique.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ` + "`task_run_open_task`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `) WHERE ` + "`finished_at`" + ` IS NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_attempt`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`attempt`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_outcome_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`outcome`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_started`" + ` ON ` + "`task_run`" + ` (` + "`started_at`" + `)`,
 
@@ -1947,6 +1964,8 @@ var Tables = []string{
 )`,
 
 	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task_id`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task_handover`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `, ` + "`handover`" + `, ` + "`id`" + `)`,
 
 	// One row per file (bwsalmon/agents#522), content included -- the same
 	// "the store is durable; nothing needs to stay reachable to read it
@@ -2695,6 +2714,8 @@ var Tables = []string{
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
   ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`sandbox_shape_limits`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_upgrade_min_interval_hours`" + ` INTEGER NOT NULL DEFAULT 6,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3151,6 +3172,7 @@ var Tables = []string{
   ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`scheduled_at`" + ` DATETIME NULL,
   ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`succeeded_at`" + ` DATETIME NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

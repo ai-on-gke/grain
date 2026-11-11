@@ -896,6 +896,11 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	// And once more for a person's comment no run has been shown.
+	undelivered, err := c.Store.UndeliveredPersonComments(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// And once for goals, which name what a resting goal task waits for.
 	goalKinds, err := c.Store.TaskGoalKinds(ctx)
 	if err != nil {
@@ -927,6 +932,9 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 			task.QuestionSummary = pendingQuestions[t.ID].Summary
 			task.QuestionCommentID = pendingQuestions[t.ID].CommentID
 			task.AwaitingAccess = accessRequests[t.ID]
+			if p, ok := undelivered[t.ID]; ok {
+				task.UnansweredCommentFrom = p.ID
+			}
 		}
 		var wait *model.GrantWait
 		if w, ok := grantWaits[t.ID]; ok {
@@ -1038,6 +1046,8 @@ func (t Task) replyFacts(obs *model.Observation) model.ReplyFacts {
 		Question: t.QuestionSummary != "" || (obs != nil && obs.PendingSecret != ""),
 		Access:   t.AwaitingAccess,
 		Stopped:  t.TurnStopped,
+		// A person's comment no run has been shown (UnansweredCommentFrom).
+		UnansweredComment: t.UnansweredCommentFrom != "",
 	}
 }
 
@@ -1228,7 +1238,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	runs, err := c.Store.Runs(ctx, id)
+	runs, err := c.Store.LatestRunsForState(ctx, id)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1247,16 +1257,20 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		task.RunNowStale = runNowStale(obs.RunNowAt, runs)
 	}
 	// Which ask an awaiting_reply task is parked on, before its reason,
-	// which is told apart by it (withReasons).
+	// which is told apart by it (withReasons). Read the pending question
+	// comment directly by id rather than loading the whole thread.
 	if state == model.StateAwaitingReply {
-		comments, err := c.Store.Comments(ctx, id)
+		pending, err := c.pendingQuestionComment(ctx, id, obs, nil)
 		if err != nil {
 			return Task{}, err
 		}
-		task.TurnStopped = turnStopped(state, obs, comments)
-		task.QuestionSummary = questionSummary(state, obs, comments)
+		task.TurnStopped = turnStoppedComment(state, obs, pending)
+		task.QuestionSummary = questionSummaryComment(state, obs, pending)
 		task.QuestionCommentID = questionCommentID(state, obs)
 		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
+		if task.UnansweredCommentFrom, err = c.unansweredCommentFrom(ctx, id, state, obs); err != nil {
+			return Task{}, err
+		}
 	}
 	task = c.withReasons(task, *t, obs, wait)
 	if err := c.attachPause(ctx, &task); err != nil {
@@ -1292,6 +1306,23 @@ func (c *Client) targetStates(ctx context.Context, links []model.Link) (map[stri
 
 // GetTask returns one task plus its conversation.
 func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
+	return c.getTask(ctx, id, TaskPage{}, false, nil)
+}
+
+// GetTaskPage returns one task plus a bounded page of its comments and runs,
+// built directly from the store rather than trimmed from a whole TaskDetail
+// (durable-tasks.design.md#DT-15).
+func (c *Client) GetTaskPage(ctx context.Context, id string, page TaskPage) (TaskDetail, error) {
+	return c.getTask(ctx, id, page, true, nil)
+}
+
+// GetTaskSince returns one task plus only the comments created strictly after
+// since (?comments_since=), optionally further bounded by page.
+func (c *Client) GetTaskSince(ctx context.Context, id string, since time.Time, page TaskPage, paged bool) (TaskDetail, error) {
+	return c.getTask(ctx, id, page, paged, &since)
+}
+
+func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bool, since *time.Time) (TaskDetail, error) {
 	t, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return TaskDetail{}, err
@@ -1308,13 +1339,71 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		return TaskDetail{}, err
 	}
 
-	comments, err := c.Store.Comments(ctx, id)
-	if err != nil {
-		return TaskDetail{}, err
-	}
-	attachments, err := c.Store.AttachmentMetas(ctx, id)
-	if err != nil {
-		return TaskDetail{}, err
+	var (
+		comments      []model.Comment
+		olderComments int
+		attachments   []model.AttachmentMeta
+	)
+	switch {
+	case since != nil:
+		comments, err = c.Store.CommentsCreatedAfter(ctx, id, *since)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		if paged {
+			if page.CommentsBefore > 0 {
+				end := len(comments)
+				for end > 0 && comments[end-1].ID >= page.CommentsBefore {
+					end--
+				}
+				comments = comments[:end]
+			}
+			if page.CommentsLimit > 0 && len(comments) > page.CommentsLimit {
+				olderComments = len(comments) - page.CommentsLimit
+				comments = comments[olderComments:]
+			}
+		}
+		var minCID, maxCID int64
+		if len(comments) > 0 {
+			minCID, maxCID = comments[0].ID, comments[len(comments)-1].ID
+		}
+		attachments, err = c.Store.AttachmentMetasInRange(ctx, id, minCID, maxCID)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+	case paged:
+		cLimit := page.CommentsLimit
+		if cLimit <= 0 {
+			cLimit = maxTaskDetailPage
+		}
+		var more bool
+		comments, more, err = c.Store.CommentsBefore(ctx, id, page.CommentsBefore, cLimit)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		if more && len(comments) > 0 {
+			olderComments, err = c.Store.CountCommentsBefore(ctx, id, comments[0].ID)
+			if err != nil {
+				return TaskDetail{}, err
+			}
+		}
+		var minCID, maxCID int64
+		if len(comments) > 0 {
+			minCID, maxCID = comments[0].ID, comments[len(comments)-1].ID
+		}
+		attachments, err = c.Store.AttachmentMetasInRange(ctx, id, minCID, maxCID)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+	default:
+		comments, err = c.Store.Comments(ctx, id)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		attachments, err = c.Store.AttachmentMetas(ctx, id)
+		if err != nil {
+			return TaskDetail{}, err
+		}
 	}
 	// byComment groups attachments under the comment they were posted
 	// alongside; the rest (CommentID nil) belong to the task's own body
@@ -1363,22 +1452,34 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	// The span comes from the store rather than from the runs this
-	// function goes on to read: which ending counts as a task's own is a
-	// rule with one home (model.TaskSpan), and a detail that answered it
-	// differently from the list would put two different bars on screen for
-	// one task.
 	span, err := c.Store.TaskSpanOf(ctx, id)
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	// Read here rather than further down where the attempt list is built,
-	// because the stall note below is measured from this task's own runs
-	// -- the live one's start, the last finished one's ending
-	// (model.StateTimesFrom). One read serves both.
-	runs, err := c.Store.Runs(ctx, id)
-	if err != nil {
-		return TaskDetail{}, err
+	var (
+		runs          []model.Run
+		tailRuns      []model.Run
+		olderAttempts int
+	)
+	if paged {
+		rLimit := page.AttemptsLimit
+		if rLimit <= 0 {
+			rLimit = maxTaskDetailPage
+		}
+		runs, olderAttempts, err = c.Store.RunsBefore(ctx, id, page.AttemptsBefore, rLimit)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		tailRuns, err = c.Store.LatestRunsForState(ctx, id)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+	} else {
+		runs, err = c.Store.Runs(ctx, id)
+		if err != nil {
+			return TaskDetail{}, err
+		}
+		tailRuns = runs
 	}
 	goal, err := c.Store.TaskGoal(ctx, id)
 	if err != nil {
@@ -1388,17 +1489,35 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		t.GoalKind = goal.Kind
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
-		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
+		c.stallNote(state, model.StateTimesFrom(*t, obs, tailRuns), c.now()))
+	pendingComment, err := c.pendingQuestionComment(ctx, id, obs, comments)
+	if err != nil {
+		return TaskDetail{}, err
+	}
 	// Which ask an awaiting_reply task is parked on, before its reason,
 	// which is told apart by it (withReasons).
-	task.TurnStopped = turnStopped(state, obs, comments)
-	task.QuestionSummary = questionSummary(state, obs, comments)
+	task.TurnStopped = turnStoppedComment(state, obs, pendingComment)
+	task.QuestionSummary = questionSummaryComment(state, obs, pendingComment)
 	task.QuestionCommentID = questionCommentID(state, obs)
 	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
+	if task.UnansweredCommentFrom, err = c.unansweredCommentFrom(ctx, id, state, obs); err != nil {
+		return TaskDetail{}, err
+	}
+	if state == model.StateAwaitingReply {
+		if cm := model.UncountedAgentComment(comments, obs, id); cm != nil {
+			task.UncountedAgentReplyFrom = sessionLabel(cm.Author.Actor, cm.Author.OnBehalfOf, c.sessionTitles(ctx))
+			task.UncountedAgentReplyID = cm.ID
+		}
+	}
 	detail := TaskDetail{
-		Task:        c.withReasons(task, *t, obs, wait),
-		Comments:    make([]Comment, 0, len(comments)),
-		Attachments: taskAttachments,
+		Task:          c.withReasons(task, *t, obs, wait),
+		Comments:      make([]Comment, 0, len(comments)),
+		OlderComments: olderComments,
+		OlderAttempts: olderAttempts,
+		Attachments:   taskAttachments,
+	}
+	if tc, err := c.Store.TaskContext(ctx, id); err == nil {
+		detail.CompactedThrough = tc.CompactedThrough
 	}
 	detail.Goal = goal
 	if err := c.attachPause(ctx, &detail.Task); err != nil {
@@ -1421,17 +1540,6 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	if err != nil {
 		return TaskDetail{}, err
 	}
-	// Guarded the same way model.StateOf and model.Transitions both guard
-	// a failure streak against a task that has since completed or closed:
-	// orchestrator.salvagePushedBranch turns a pushed branch into a pull
-	// request (and the task into StateCompleted) even for a run whose own
-	// outcome stays "failed" forever -- see model.Transitions' own doc
-	// comment on why (bwsalmon/agents#502) -- which leaves task_streak
-	// sitting at 1 or more permanently, since only a "succeeded" outcome
-	// ever resets it. Left unguarded, GetTask kept reporting "1
-	// consecutive failed attempt" on a task that plainly succeeded
-	// (bwsalmon/agents#514), the same bogus signal #502 already fixed for
-	// the task's state and its timeline, just surfacing here instead.
 	completedOrClosed := obs != nil && (obs.CompletedAt != nil || obs.ClosedAt != nil)
 	detail.Parked = detail.Blocked && streak != nil && streak.LastOutcome == model.ParkedOutcome
 	if streak != nil && streak.Count > 0 && !completedOrClosed {
@@ -1440,41 +1548,66 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		detail.LastFailureAt = &lastFailureAt
 		detail.LastFailureReason = streak.LastFailureDetail
 	}
-	// One query for every attempt's prompt size rather than one per
-	// attempt, and sizes rather than the prompts themselves: a task with
-	// ten attempts holds ten prompts a detail view wants no word of
-	// (Store.RunPromptSizes). A failure to measure is not a failure to
-	// show the task -- an instrument that can 500 a task page is worse
-	// than one that is sometimes silent -- so the map stays nil and every
-	// attempt reads as unmeasured.
-	promptBytes, err := c.Store.RunPromptSizes(ctx, id)
-	if err != nil {
-		log.Printf("ui: task %s: measuring its attempts' prompts: %v", id, err)
-		promptBytes = nil
+	var minAttempt, maxAttempt int
+	if paged && len(runs) > 0 {
+		minAttempt, maxAttempt = runs[0].Attempt, runs[len(runs)-1].Attempt
 	}
-	// Counted the same way and for the same reason: one query, and a
-	// failure leaves every attempt reading as having none.
-	auditCounts, err := c.Store.RunCapabilityAuditCounts(ctx, id)
-	if err != nil {
-		log.Printf("ui: task %s: counting its attempts' capability audit records: %v", id, err)
-		auditCounts = nil
-	}
-	runHostds, err := c.Store.TaskRunHostds(ctx, id)
-	if err != nil {
-		log.Printf("ui: task %s: reading its attempts' hostds: %v", id, err)
-		runHostds = nil
-	}
-	c.markDeletedRunHostds(ctx, runHostds)
-	// What each attempt spent at its provider (model.RunUsage), read
-	// once for the task; a failure leaves every attempt unmeasured.
-	runUsage := map[string]model.RunUsage{}
-	if usages, err := c.Store.TaskRunUsages(ctx, id); err != nil {
-		log.Printf("ui: task %s: reading its attempts' token usage: %v", id, err)
-	} else {
-		for _, u := range usages {
-			runUsage[u.RunID] = u
+	var (
+		promptBytes map[int]int
+		auditCounts map[int]int
+		runHostds   map[string]model.TaskRunHostd
+	)
+	if !paged || len(runs) > 0 {
+		promptBytes, err = c.Store.RunPromptSizesInRange(ctx, id, minAttempt, maxAttempt)
+		if err != nil {
+			log.Printf("ui: task %s: measuring its attempts' prompts: %v", id, err)
+			promptBytes = nil
 		}
-		detail.Usage = taskUsageOf(usages)
+		auditCounts, err = c.Store.RunCapabilityAuditCountsInRange(ctx, id, minAttempt, maxAttempt)
+		if err != nil {
+			log.Printf("ui: task %s: counting its attempts' capability audit records: %v", id, err)
+			auditCounts = nil
+		}
+		runHostds, err = c.Store.TaskRunHostdsInRange(ctx, id, minAttempt, maxAttempt)
+		if err != nil {
+			log.Printf("ui: task %s: reading its attempts' hostds: %v", id, err)
+			runHostds = nil
+		}
+		c.markDeletedRunHostds(ctx, runHostds)
+	}
+	runUsage := map[string]model.RunUsage{}
+	if paged {
+		if sum, err := c.Store.SummarizeTaskUsage(ctx, id); err != nil {
+			log.Printf("ui: task %s: reading its attempts' token usage: %v", id, err)
+		} else if sum != nil {
+			detail.Usage = &TaskUsage{
+				Runs:             sum.Runs,
+				InputTokens:      sum.InputTokens,
+				OutputTokens:     sum.OutputTokens,
+				CacheReadTokens:  sum.CacheReadTokens,
+				CacheWriteTokens: sum.CacheWriteTokens,
+				CostUSD:          sum.CostUSD,
+				Billable:         sum.Billable,
+			}
+		}
+		if len(runs) > 0 {
+			if usages, err := c.Store.TaskRunUsagesInRange(ctx, id, minAttempt, maxAttempt); err != nil {
+				log.Printf("ui: task %s: reading its attempts' token usage: %v", id, err)
+			} else {
+				for _, u := range usages {
+					runUsage[u.RunID] = u
+				}
+			}
+		}
+	} else {
+		if usages, err := c.Store.TaskRunUsages(ctx, id); err != nil {
+			log.Printf("ui: task %s: reading its attempts' token usage: %v", id, err)
+		} else {
+			for _, u := range usages {
+				runUsage[u.RunID] = u
+			}
+			detail.Usage = taskUsageOf(usages)
+		}
 	}
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
@@ -1488,10 +1621,12 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		detail.Attempts = append(detail.Attempts, a)
 	}
 
-	transitions := model.Transitions(*t, obs, runs, streak, askedAt(obs, comments))
-	// Who closed or reopened it, which the record above cannot say. A
-	// failure to read them leaves the timeline as the record alone has it.
-	if events, err := c.Store.TaskEvents(ctx, id); err != nil {
+	transitions := model.TransitionsWindow(*t, obs, runs, tailRuns, streak, askedAtComment(pendingComment))
+	eventLimit := 0
+	if paged {
+		eventLimit = maxTaskDetailPage
+	}
+	if events, err := c.Store.TaskEventsLatest(ctx, id, eventLimit); err != nil {
 		log.Printf("ui: task %s: reading its closes and reopens: %v", id, err)
 	} else {
 		transitions = model.MergeTaskEvents(transitions, events)
@@ -1500,13 +1635,8 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	for _, tr := range transitions {
 		var proposingAttempt int
 		if tr.State == model.StateProposed && tr.ProposingTaskID != "" && tr.ProposingRunID != "" {
-			if pRuns, rerr := c.Store.Runs(ctx, tr.ProposingTaskID); rerr == nil {
-				for _, pr := range pRuns {
-					if pr.ID == tr.ProposingRunID {
-						proposingAttempt = pr.Attempt
-						break
-					}
-				}
+			if att, rerr := c.Store.RunAttempt(ctx, tr.ProposingTaskID, tr.ProposingRunID); rerr == nil {
+				proposingAttempt = att
 			}
 		}
 		detail.Transitions = append(detail.Transitions, transitionFromWithAttempt(tr, proposingAttempt))
@@ -1515,7 +1645,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	detail.PullRequestEvents = pullRequestEventsFrom(obs)
 	if obs != nil {
 		detail.RunNowAt = obs.RunNowAt
-		detail.RunNowStale = runNowStale(obs.RunNowAt, runs)
+		detail.RunNowStale = runNowStale(obs.RunNowAt, tailRuns)
 	}
 	detail.PendingSecret = c.pendingSecretFor(obs)
 	if obs != nil {
@@ -1524,8 +1654,8 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
-	allStates, _ := c.Store.States(ctx)
-	detail.MergeGates = model.ComputeMergeGates(*t, obs, allStates)
+	gateStates, _ := c.mergeGateStates(ctx, *t)
+	detail.MergeGates = model.ComputeMergeGates(*t, obs, gateStates)
 	if ownerID, inPlace := t.CIOwner(); inPlace {
 		// A review working on the reviewed change's own branch has no CI
 		// of its own: its branch's verdict is the reviewed task's.
@@ -1807,36 +1937,76 @@ func (c *Client) Attachment(ctx context.Context, taskID string, id int64) (model
 	return *a, nil
 }
 
-// askedAt is the currently pending question's own CreatedAt, or nil once
-// there is none -- model.Transitions' own askedAt parameter, resolved
-// against the same comment list GetTask already fetched rather than a
-// second query.
-func askedAt(obs *model.Observation, comments []model.Comment) *time.Time {
-	if obs == nil || obs.PendingQuestionCommentID == nil {
+// mergeGateStates resolves only the task states ComputeMergeGates inspects
+// (review, security-review, and path-trigger tasks), avoiding a whole-store
+// States read on GetTask.
+func (c *Client) mergeGateStates(ctx context.Context, t model.Task) (map[string]model.State, error) {
+	if model.TaskPullRequest(t) == nil {
+		return nil, nil
+	}
+	states := map[string]model.State{}
+	lookup := func(id string) error {
+		if id == "" {
+			return nil
+		}
+		if _, seen := states[id]; seen {
+			return nil
+		}
+		st, err := c.Store.State(ctx, id)
+		if err != nil {
+			return err
+		}
+		if st != "" {
+			states[id] = st
+		}
 		return nil
 	}
-	for _, c := range comments {
-		if c.ID == *obs.PendingQuestionCommentID {
-			at := c.CreatedAt
-			return &at
+	for _, l := range t.Links {
+		switch l.Kind {
+		case model.LinkSecurityReviewTask, model.LinkReviewTask:
+			if err := lookup(l.Target); err != nil {
+				return nil, err
+			}
+		case model.LinkPathTriggerTask:
+			if _, tid, ok := strings.Cut(l.Target, "="); ok {
+				if err := lookup(tid); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
-	return nil
+	return states, nil
 }
 
-// turnStopped reports whether an awaiting_reply task is parked on the
-// comment Stop posts rather than on a question (Task.TurnStopped),
-// resolved against a comment list the caller already has.
-func turnStopped(state model.State, obs *model.Observation, comments []model.Comment) bool {
-	if state != model.StateAwaitingReply || obs == nil || obs.PendingQuestionCommentID == nil {
-		return false
+// pendingQuestionComment resolves the comment obs.PendingQuestionCommentID
+// names: from loaded when it is already on the page, or by a single id read
+// from the store when it is not.
+func (c *Client) pendingQuestionComment(ctx context.Context, taskID string, obs *model.Observation, loaded []model.Comment) (*model.Comment, error) {
+	if obs == nil || obs.PendingQuestionCommentID == nil {
+		return nil, nil
 	}
-	for _, c := range comments {
-		if c.ID == *obs.PendingQuestionCommentID {
-			return c.Body == model.TurnStoppedComment
+	want := *obs.PendingQuestionCommentID
+	for i := range loaded {
+		if loaded[i].ID == want {
+			return &loaded[i], nil
 		}
 	}
-	return false
+	return c.Store.Comment(ctx, taskID, want)
+}
+
+func askedAtComment(c *model.Comment) *time.Time {
+	if c == nil {
+		return nil
+	}
+	at := c.CreatedAt
+	return &at
+}
+
+func turnStoppedComment(state model.State, obs *model.Observation, c *model.Comment) bool {
+	if state != model.StateAwaitingReply || obs == nil || obs.PendingQuestionCommentID == nil || c == nil {
+		return false
+	}
+	return c.Body == model.TurnStoppedComment
 }
 
 // questionCommentID is the comment an awaiting_reply task is parked on
@@ -1848,25 +2018,38 @@ func questionCommentID(state model.State, obs *model.Observation) int64 {
 	return *obs.PendingQuestionCommentID
 }
 
-// questionSummary is the one line an awaiting_reply task's pending
-// question is shown by (Task.QuestionSummary): the summary its asker gave,
-// or one derived from its body for a question stored without one. "" for
-// a task not parked on a question, and for a stopped turn, which the UI
-// says in its own words.
-func questionSummary(state model.State, obs *model.Observation, comments []model.Comment) string {
-	if state != model.StateAwaitingReply || obs == nil || obs.PendingQuestionCommentID == nil {
+// unansweredCommentFrom is Task.UnansweredCommentFrom for one task: who
+// wrote the person's comment an awaiting_reply task still owes a run, or
+// "". Only the comments past the delivered mark are read
+// (Store.CommentsAfter), not the whole thread: those are the only ones
+// model.UndeliveredPersonComment can answer with.
+func (c *Client) unansweredCommentFrom(ctx context.Context, id string, state model.State, obs *model.Observation) (string, error) {
+	if state != model.StateAwaitingReply || obs == nil || obs.DeliveredCommentID == nil {
+		return "", nil
+	}
+	comments, err := c.Store.CommentsAfter(ctx, id, *obs.DeliveredCommentID)
+	if err != nil {
+		return "", err
+	}
+	if cm := model.UndeliveredPersonComment(comments, obs); cm != nil {
+		return model.PersonOf(cm.Author).ID, nil
+	}
+	return "", nil
+}
+
+// questionSummaryComment is the one line an awaiting_reply task's
+// pending question c is shown by (Task.QuestionSummary): the summary its
+// asker gave, or one derived from its body for a question stored without
+// one. "" for a task not parked on a question, and for a stopped turn,
+// which the UI says in its own words.
+func questionSummaryComment(state model.State, obs *model.Observation, c *model.Comment) string {
+	if state != model.StateAwaitingReply || obs == nil || obs.PendingQuestionCommentID == nil || c == nil || c.Body == model.TurnStoppedComment {
 		return ""
 	}
-	for _, c := range comments {
-		if c.ID != *obs.PendingQuestionCommentID || c.Body == model.TurnStoppedComment {
-			continue
-		}
-		if c.Summary != "" {
-			return c.Summary
-		}
-		return model.DeriveQuestionSummary(c.Body)
+	if c.Summary != "" {
+		return c.Summary
 	}
-	return ""
+	return model.DeriveQuestionSummary(c.Body)
 }
 
 // CreateTaskRequest is a new task's fields. Repo, Base and AutoMerge were
@@ -2636,6 +2819,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err := validateSandboxShape(req.SandboxCPUs, req.SandboxMemoryMB, req.SandboxDiskGB); err != nil {
 		return Task{}, err
 	}
+	if err := c.refuseSandboxShapeAboveMax(ctx, model.SandboxShape{CPUs: req.SandboxCPUs, MemoryMB: req.SandboxMemoryMB, DiskGB: req.SandboxDiskGB}); err != nil {
+		return Task{}, err
+	}
 	if err := c.refuseIgnoredSandboxShape(req.SandboxCPUs, req.SandboxMemoryMB, req.SandboxDiskGB); err != nil {
 		return Task{}, err
 	}
@@ -3273,7 +3459,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		// so neither permission queues a proposal that asks for one. Filed
 		// as asked, with a note saying which, and told to the run as what
 		// its permission does not cover.
-		if why := model.PersonOnlyProposalSettings(model.Task{Admission: askedAdmission, KeepRunning: keepRunning, Priority: priority}, *proposedBy); why != "" {
+		if why := model.PersonOnlyProposalSettings(model.Task{Admission: askedAdmission, KeepRunning: keepRunning, Priority: priority,
+			SandboxCPUs: req.SandboxCPUs, SandboxMemoryMB: req.SandboxMemoryMB, SandboxDiskGB: req.SandboxDiskGB}, *proposedBy); why != "" {
 			if autoSubmit || sessionQueued || req.Approved {
 				personOnlyNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 			}
@@ -4125,7 +4312,7 @@ func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, 
 			if via == model.GrantByDefault {
 				continue
 			}
-			return nil, validationErrorf("%s", grainci.Refusal())
+			return nil, validationErrorf("%s", grainci.Refusal("", ""))
 		}
 		normalizedIDs, err := c.normalizeCapabilityIDs(id)
 		if err != nil {
@@ -4275,33 +4462,14 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		grants = defaults
 	}
 	if target != nil {
-		usesGrainCI, err := c.teamRepoUsesGrainCI(ctx, teamID, *target)
+		// grain#ci on a repository grain CI gates; otherwise grain#ci is
+		// stripped and the task reads its own repository's CI through the
+		// default api:ci-read@<target> instead (model.RepoCIDefaults).
+		ciDefaults, err := c.teamRepoCIDefaults(ctx, teamID, *target)
 		if err != nil {
 			return nil, nil, err
 		}
-		if usesGrainCI {
-			found := false
-			for _, grant := range grants {
-				if grainci.IsGrant(grant.Capability) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{
-					Capability: grainci.Grant,
-					Via:        model.GrantByDefault,
-				})
-			}
-		} else {
-			filtered := make([]model.Grant, 0, len(grants))
-			for _, grant := range grants {
-				if !grainci.IsGrant(grant.Capability) {
-					filtered = append(filtered, grant)
-				}
-			}
-			grants = filtered
-		}
+		grants = model.AdjustRepoCIGrants(grants, *target, ciDefaults)
 	}
 	// A GCP key the deployment has not configured is refused when somebody
 	// asked for it, and dropped when it was only inherited: a deployment or
@@ -4341,6 +4509,21 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		allowed = append(allowed, g)
 	}
 	return allowed, droppedRefusals, nil
+}
+
+// teamRepoCIDefaults is the CI grant a task filed against repo is given by
+// default: grain#ci where grain CI gates it, else api:ci-read@<repo> unless
+// the capability policy denies that (model.RepoCIDefaultsFor).
+func (c *Client) teamRepoCIDefaults(ctx context.Context, teamID string, repo model.RepoRef) (model.RepoCIDefaults, error) {
+	usesGrainCI, err := c.teamRepoUsesGrainCI(ctx, teamID, repo)
+	if err != nil || usesGrainCI || c.Store == nil {
+		return model.RepoCIDefaults{GrainCI: usesGrainCI}, err
+	}
+	policy, _, err := c.capabilityPolicyFor(ctx)
+	if err != nil {
+		return model.RepoCIDefaults{}, err
+	}
+	return model.RepoCIDefaultsFor(false, policy, repo), nil
 }
 
 func (c *Client) teamRepoUsesGrainCI(ctx context.Context, teamID string, repo model.RepoRef) (bool, error) {
@@ -5066,6 +5249,9 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			diskGB = *req.SandboxDiskGB
 		}
 		if err := validateSandboxShape(cpus, memoryMB, diskGB); err != nil {
+			return Task{}, err
+		}
+		if err := c.refuseSandboxShapeAboveMax(ctx, model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}); err != nil {
 			return Task{}, err
 		}
 		// Asked of the three numbers this request *states* -- an unstated
@@ -6302,6 +6488,9 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if task.Approval != nil {
 		return nil
 	}
+	if err := c.refuseSandboxShapeAboveMax(ctx, model.TaskSandboxShape(*task)); err != nil {
+		return err
+	}
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
@@ -6714,6 +6903,72 @@ func (c *Client) AddCommentWithAuthor(ctx context.Context, id, body string, uplo
 	return c.commentWithAuthor(ctx, id, body, uploads, author, true)
 }
 
+// CommentNotDelivered is the commentDelivery a comment on a closed task
+// is answered with when it was not also asked to reopen the task
+// (POST /api/tasks/{id}/comments), and CommentNotDeliveredNotice the
+// sentence that says so.
+const (
+	CommentNotDelivered       = "not_delivered"
+	CommentNotDeliveredNotice = "This task is closed, so the comment was not delivered to an agent. Reopen the task (or comment with reopen) to send it to one."
+)
+
+// AddCommentReopening is AddCommentWithAuthor for "Reopen and send": the
+// comment is written first and a closed task is reopened after it, so
+// the reopen finds it past Observation.DeliveredCommentID and queues the
+// run that answers it (queueUndeliveredOnReopen). A task that is not
+// closed is only commented on. Whether the caller may reopen the task is
+// the route's question, asked before this is called.
+func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploads []AttachmentUpload, author string) error {
+	state, err := c.Store.State(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := c.AddCommentWithAuthor(ctx, id, body, uploads, author); err != nil {
+		return err
+	}
+	if state != model.StateClosed {
+		return nil
+	}
+	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
+// AddRelayedComment is a person's answer that a console session carries
+// to another task for them -- "tell task 2588 yes, use the staging
+// key" said in a director chat. It is written as the person's, via the
+// session ((human, via agent), model.RelayedVia), and does everything a
+// comment the person posted on the task themselves would: it lifts the
+// pending question and sends an awaiting_reply task back to the queue.
+// Whether session may speak for person on the task is the route's
+// question (Server.relayAttribution), asked before this is called.
+func (c *Client) AddRelayedComment(ctx context.Context, id, body string, uploads []AttachmentUpload, person model.Principal, session model.Principal) error {
+	if strings.TrimSpace(body) == "" && len(uploads) == 0 {
+		return validationErrorf("a comment needs a body, an attachment, or both")
+	}
+	if person.Kind != model.PrincipalHuman || session.Kind != model.PrincipalAgent {
+		return forbiddenErrorf("a relayed answer is a person's, carried by a session acting for them")
+	}
+	now := c.now()
+	attachments, err := decodeAttachments(uploads, now)
+	if err != nil {
+		return err
+	}
+	by := model.Attribution{Actor: person, OnBehalfOf: &session}
+	return c.addAttributedComment(ctx, id, body, attachments, by, now, true)
+}
+
+// CommentAwaitingPerson is the commentDelivery an agent's comment is
+// answered with when it lands on a task waiting for a person's reply and
+// does not count as one (Server.handleAddComment), and
+// CommentAwaitingPersonNotice the sentence that says so.
+const CommentAwaitingPerson = "awaiting_person"
+
+// CommentAwaitingPersonNotice says an agent's comment on task id was
+// recorded but left it waiting for a person.
+func CommentAwaitingPersonNotice(id string) string {
+	return fmt.Sprintf("Recorded; task %s is still waiting for a person's reply. An agent's comment does not answer it. "+
+		"A console session acting for a person can pass relay: true (grain task message --relay) to answer for them.", id)
+}
+
 // commentWithAuthor is AddCommentWithAuthor with the one thing a team
 // broadcast does differently: reopenAck false leaves a task in
 // model.StateAwaitingAck where it is (reopenAcknowledgeable). A
@@ -6875,7 +7130,8 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 // carries it like any other reply.
 //
 // Only awaiting_reply. A closed task stays closed (reopening it is its own
-// action), and a completed task with a pull request -- awaiting_submit,
+// action, and the reopen is what delivers a comment left meanwhile --
+// queueUndeliveredOnReopen), and a completed task with a pull request -- awaiting_submit,
 // or on the merge queue -- has its own ways forward that a comment must
 // not short-circuit; model.AwaitsAck already excludes every task with a
 // LinkFixes pull request, so the state alone draws that line. The caller
@@ -7565,6 +7821,9 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 				"their place: a person has to answer it or Run now it themselves", id, by.ID)
 		}
 	}
+	if err := c.refuseSandboxShapeAboveMax(ctx, model.TaskSandboxShape(*task)); err != nil {
+		return err
+	}
 	now := c.now()
 	if task.Approval == nil {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
@@ -7862,8 +8121,9 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if !closed {
 		if changed {
+			detail := c.queueUndeliveredOnReopen(ctx, id, now)
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
-				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason})
+				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: detail})
 		}
 		return nil
 	}
@@ -7901,6 +8161,55 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	// and leaves the same note itself (orchestrator's own
 	// salvagePushedBranch).
 	return c.noteOrphanedPullRequests(ctx, *task, opts, now)
+}
+
+// queueUndeliveredOnReopen is the second half of a reopen: a person's
+// comment left while the task was closed reached no agent
+// (reopenAcknowledgeable leaves a closed task closed), so a reopen that
+// lands the task back in model.StateAwaitingReply with such a comment
+// still past Observation.DeliveredCommentID sends it to the queue the
+// way the comment would have, had the task been open (task 3803). It
+// says what it did in a sentence for the reopen's event, "" for nothing.
+//
+// A task with a change of its own -- an open fixes pull request,
+// awaiting_submit or on the merge queue -- is left where its
+// observations put it: model.AwaitsAck draws that line for a comment and
+// draws it here. Only a person's comment counts (model.CommentByPerson);
+// what agents and grain say never sends a task anywhere. Best-effort
+// like the event itself: the reopen is written, and failing it now
+// would say it was not.
+func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now time.Time) string {
+	task, err := c.Store.GetTask(ctx, id)
+	if err != nil || task == nil || !model.AwaitsAck(*task) {
+		return ""
+	}
+	obs, err := c.Store.GetObservation(ctx, id)
+	if err != nil {
+		log.Printf("ui: reopening %s: reading its observation: %v", id, err)
+		return ""
+	}
+	comments, err := c.Store.Comments(ctx, id)
+	if err != nil {
+		log.Printf("ui: reopening %s: reading its comments: %v", id, err)
+		return ""
+	}
+	pending := model.UndeliveredPersonComment(comments, obs)
+	if pending == nil {
+		return ""
+	}
+	queued, err := c.reopenAcknowledgeable(ctx, id, pending.ID, now)
+	if err != nil {
+		log.Printf("ui: reopening %s: queueing it for comment %d: %v", id, pending.ID, err)
+		return ""
+	}
+	if !queued {
+		return ""
+	}
+	detail := "reopened with an unanswered comment from " + model.PersonOf(pending.Author).ID
+	if state, err := c.Store.State(ctx, id); err == nil && state == model.StateQueued {
+		return detail + "; queued"
+	}
+	return detail
 }
 
 // recordTaskEvent writes a close or reopen's event, and only logs a

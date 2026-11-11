@@ -55,8 +55,16 @@ type taskDetailCacheEntry struct {
 
 const taskDetailCacheEntries = 32
 
-// response is the body and ETag for GET /api/tasks/{id}.
+// response is the body and ETag for GET /api/tasks/{id} (whole or head page).
 func (c *taskDetailCache) response(ctx context.Context, client *Client, id string) ([]byte, string, error) {
+	return c.responseFor(ctx, client, id, TaskPage{}, false)
+}
+
+func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id string, page TaskPage, paged bool) ([]byte, string, error) {
+	cacheKey := id
+	if paged {
+		cacheKey = id + "?cl=" + strconv.Itoa(page.CommentsLimit) + "&al=" + strconv.Itoa(page.AttemptsLimit)
+	}
 	token := ""
 	if client.Store != nil {
 		if t, err := client.Store.ChangeToken(ctx); err == nil {
@@ -70,13 +78,21 @@ func (c *taskDetailCache) response(ctx context.Context, client *Client, id strin
 		if v := client.dispatchConditionVersion(); v != 0 {
 			token = token + ":dc=" + strconv.FormatUint(v, 10)
 		}
-		if entry, ok := c.hit(id, token); ok {
+		if entry, ok := c.hit(cacheKey, token); ok {
 			return entry.body, entry.etag, nil
 		}
 	}
 
 	c.builds.Add(1)
-	detail, err := client.GetTask(ctx, id)
+	var (
+		detail TaskDetail
+		err    error
+	)
+	if paged {
+		detail, err = client.GetTaskPage(ctx, id, page)
+	} else {
+		detail, err = client.GetTask(ctx, id)
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -86,7 +102,7 @@ func (c *taskDetailCache) response(ctx context.Context, client *Client, id strin
 	}
 	etag := etagOf(body)
 	if token != "" {
-		c.store(id, taskDetailCacheEntry{token: token, body: body, etag: etag})
+		c.store(cacheKey, taskDetailCacheEntry{token: token, body: body, etag: etag})
 	}
 	return body, etag, nil
 }

@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -151,5 +152,76 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 	}
 	if strings.Contains(out, "no counters") {
 		t.Errorf("grain health says there is nothing to report with a server down:\n%s", out)
+	}
+}
+
+func TestGrainHealthListsTargetRepoHostWarnings(t *testing.T) {
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{
+			TargetRepoHostWarnings: []ui.TargetRepoHostMismatch{{
+				Repo:       "experimental/grain",
+				ResolvesTo: "github.com",
+				Candidates: []string{"git.forge.example/experimental/grain"},
+				Message:    "this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+			}},
+		})
+	})
+	for _, want := range []string{
+		"WARNING: target repositories missing their git host:",
+		"experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report when target repo host warnings exist:\n%s", out)
+	}
+}
+
+func TestGrainHealthNamesSchedulesThatStoppedRunning(t *testing.T) {
+	last := time.Date(2026, 10, 28, 7, 37, 0, 0, time.UTC)
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{StaleSchedules: []model.StaleSchedule{{
+			ID: "repo:acme/widgets:workflow.live-agent", Repo: model.RepoRef{Owner: "acme", Name: "widgets"},
+			Workflow: "live-agent", Cadence: 24 * time.Hour, LastRunAt: &last,
+			Reason: "this repository uses github CI mode, so .grain/workflows/live-agent.yml's cron is dropped at every firing",
+		}}})
+	})
+	for _, want := range []string{
+		"FAILING: schedules with no run in more than twice their cadence",
+		"repo:acme/widgets:workflow.live-agent (workflow live-agent) on acme/widgets: every 24h0m0s, last ran 2026-10-28T07:37:00Z",
+		"why: this repository uses github CI mode",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report with a schedule gone quiet:\n%s", out)
+	}
+}
+
+// Declarations a repository merged that this daemon would not read
+// (grain/task-4392): the files, lines and messages, and what is in force.
+func TestGrainHealthNamesRefusedDeclarations(t *testing.T) {
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{RefusedDeclarations: []ui.RefusedDeclarations{{
+			Repo: "acme/widgets", InForce: "101381a0b1c2d3e4", HeldBack: true,
+			Error: ".grain/schedules/release-train.yml: yaml: unmarshal errors:\n  line 16: cannot unmarshal !!map into string",
+		}}})
+	})
+	for _, want := range []string{
+		"FAILING: repository declarations not read in full:",
+		"acme/widgets (files held back for a newer grain; in force: 101381a0b1c2)",
+		"    .grain/schedules/release-train.yml: yaml: unmarshal errors:",
+		"line 16: cannot unmarshal !!map into string",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report:\n%s", out)
 	}
 }

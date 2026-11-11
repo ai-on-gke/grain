@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -85,6 +86,54 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
+	if len(h.TargetRepoHostWarnings) > 0 {
+		fmt.Println("WARNING: target repositories missing their git host:")
+		for _, w := range h.TargetRepoHostWarnings {
+			fmt.Printf("  %s: %s\n", w.Repo, w.Message)
+		}
+		fmt.Println()
+	}
+	// Schedules that stopped running: a cron that comes due and is
+	// dropped every time looks exactly like one that is fine from
+	// everywhere else (the live model suites, two weeks dark).
+	if len(h.StaleSchedules) > 0 {
+		fmt.Println("FAILING: schedules with no run in more than twice their cadence:")
+		for _, s := range h.StaleSchedules {
+			last := "never"
+			if s.LastRunAt != nil {
+				last = s.LastRunAt.UTC().Format(time.RFC3339)
+			}
+			name := s.ID
+			if s.Workflow != "" {
+				name += " (workflow " + s.Workflow + ")"
+			}
+			fmt.Printf("  %s on %s: every %s, last ran %s\n", name, s.Repo, s.Cadence, last)
+			if s.Reason != "" {
+				fmt.Printf("    why: %s\n", s.Reason)
+			}
+		}
+		fmt.Println()
+	}
+	// Declarations a repository merged that this daemon would not read:
+	// until grain/task-4392 they were in the journal and nowhere else.
+	if len(h.RefusedDeclarations) > 0 {
+		fmt.Println("FAILING: repository declarations not read in full:")
+		for _, d := range h.RefusedDeclarations {
+			inForce := "nothing has loaded yet"
+			if d.InForce != "" {
+				inForce = "in force: " + shortSHA(d.InForce)
+			}
+			what := "refused"
+			if d.HeldBack {
+				what = "files held back for a newer grain"
+			}
+			fmt.Printf("  %s (%s; %s):\n", d.Repo, what, inForce)
+			for _, line := range strings.Split(d.Error, "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+		fmt.Println()
+	}
 	hasHubIssue := h.Hub != nil && (h.Hub.LastError != "" || len(h.Hub.ScopeConflicts) > 0)
 	if hasHubIssue {
 		fmt.Printf("hub (%s @ %s): %s\n", h.Hub.Entry, h.Hub.URL, h.Hub.State)
@@ -111,7 +160,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasHubIssue && len(h.CapabilityServers) == 0 {
+		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.StaleSchedules) == 0 && len(h.RefusedDeclarations) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return

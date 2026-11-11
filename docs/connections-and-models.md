@@ -318,9 +318,22 @@ and even then it only lowers the number of concurrent runs.
 per-connection/model table (used, limit, left, reset, burn rate, sustains),
 the deployment rollup, the advisory and the warnings, and sets the mode.
 `grain usage` prints the same, and `GET /api/usage` returns it as JSON
-(`deployment:read`). The settings (`usage_setting`), learned capacities and
-per-run rows are runtime state, so they are not exported to the state
-repository.
+(`deployment:read`).
+
+**In the state repository.** The settings themselves (mode, floor,
+retention and budgets) are exported to the state repository as
+`tables/usage_setting.json`, like the deployment's other settings, so a
+deployment rebuilt from `grain/config` keeps its budgets and its mode. A
+pull request that changes the file is applied on the next tick and is
+always held for a person's Submit, since it changes how many runs dispatch
+at once. `grain state check` refuses a value `grain usage` would refuse,
+and warns about a budget on a connection the dump's settings row lacks.
+The learned capacities and per-run rows are runtime state and stay in the
+database. A state repository written before this build has no
+`tables/usage_setting.json` until the deployment's next export, so a pull
+request branched before the upgrade and merged after it clears the
+settings (the state check warns about it); run `grain usage` again to set
+them back.
 
 ### The default model
 

@@ -458,4 +458,162 @@ test.describe("user and system settings walkthrough regressions", () => {
     await expect(page.getByTestId("capability-servers-back")).toHaveCount(0);
     await expect(page.locator("input[name=githubHost]")).toBeFocused();
   });
+
+  // Task 4230: release mode offers autoUpgradeMinIntervalHours (default 6;
+  // 0 = off) aligned beside Upgrade to on desktop and stacked on phone.
+  test("release auto-upgrade mode aligns and saves the minimum interval on desktop and phone", async ({
+    page,
+  }) => {
+    try {
+      await page.request.put("/api/settings", {
+        data: {
+          autoUpgradeOn: "off",
+          autoUpgradeChannel: "",
+          autoUpgradeMinIntervalHours: 6,
+        },
+      });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/settings/general#updates");
+
+      const modeSelect = page
+        .locator('[data-setting-id="autoUpgradeOn"]')
+        .getByRole("combobox");
+      await modeSelect.click();
+      await page
+        .getByRole("option", { name: "On each release (recommended)" })
+        .click();
+      await expect(page.getByTestId("settings-status")).toHaveText(
+        "All changes saved",
+      );
+
+      const targetField = page.locator(
+        '[data-setting-id="autoUpgradeChannel"]',
+      );
+      const intervalField = page.locator(
+        '[data-setting-id="autoUpgradeMinIntervalHours"]',
+      );
+      const intervalInput = page.locator(
+        "input[name=autoUpgradeMinIntervalHours]",
+      );
+      await expect(targetField).toBeVisible();
+      await expect(intervalField).toBeVisible();
+      await expect(intervalInput).toHaveValue("6");
+
+      const desktopTargetBox = await targetField.boundingBox();
+      const desktopIntervalBox = await intervalField.boundingBox();
+      expect(desktopTargetBox).not.toBeNull();
+      expect(desktopIntervalBox).not.toBeNull();
+      expect(Math.abs(desktopTargetBox.y - desktopIntervalBox.y)).toBeLessThan(
+        4,
+      );
+      expect(desktopIntervalBox.x).toBeGreaterThan(
+        desktopTargetBox.x + desktopTargetBox.width - 2,
+      );
+      const desktopOverflow = await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+      expect(desktopOverflow).toBeLessThanOrEqual(0);
+
+      await intervalInput.fill("-1");
+      await intervalInput.press("Tab");
+      await expect(page.getByTestId("settings-section")).toContainText(
+        "Couldn't save Minimum interval between release upgrades (hours)",
+      );
+      await expect(intervalInput).toHaveValue("6");
+
+      await intervalInput.fill("0");
+      await intervalInput.press("Tab");
+      await expect(page.getByTestId("settings-status")).toHaveText(
+        "All changes saved",
+      );
+      await expect
+        .poll(async () => {
+          const res = await page.request.get("/api/settings");
+          const json = await res.json();
+          return json.autoUpgradeMinIntervalHours;
+        })
+        .toBe(0);
+
+      await intervalInput.fill("12");
+      await intervalInput.press("Enter");
+      await expect(page.getByTestId("settings-status")).toHaveText(
+        "All changes saved",
+      );
+      await expect
+        .poll(async () => {
+          const res = await page.request.get("/api/settings");
+          const json = await res.json();
+          return json.autoUpgradeMinIntervalHours;
+        })
+        .toBe(12);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await intervalField.scrollIntoViewIfNeeded();
+      const phoneTargetBox = await targetField.boundingBox();
+      const phoneIntervalBox = await intervalField.boundingBox();
+      expect(phoneTargetBox).not.toBeNull();
+      expect(phoneIntervalBox).not.toBeNull();
+      expect(phoneIntervalBox.y).toBeGreaterThan(
+        phoneTargetBox.y + phoneTargetBox.height - 2,
+      );
+      const phoneOverflow = await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+      expect(phoneOverflow).toBeLessThanOrEqual(0);
+    } finally {
+      await page.request.put("/api/settings", {
+        data: {
+          autoUpgradeOn: "off",
+          autoUpgradeChannel: "",
+          autoUpgradeMinIntervalHours: 6,
+        },
+      });
+    }
+  });
+  // 2026-11-11 walkthrough: the filter answered "No setting matches" for
+  // Models' Token usage and budgets and Where each agent CLI runs cards and
+  // for Agents' Commit identity, which had no entries in its index.
+  test("the filter finds Models' usage and run-location cards and Agents' commit identity", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    for (const [query, label, path, anchor] of [
+      ["budget", "Token usage and budgets", "/settings/models", "usage"],
+      [
+        "run location",
+        "Where each agent CLI runs",
+        "/settings/models",
+        "cli-run",
+      ],
+      [
+        "commit identity",
+        "Commit identity",
+        "/settings/agents",
+        "commit-identity",
+      ],
+    ]) {
+      await page.goto("/settings/general");
+      await page.keyboard.press("/");
+      await page.getByRole("textbox", { name: "Filter settings" }).fill(query);
+      await expect(page.getByTestId("settings-no-match")).toHaveCount(0);
+      await page
+        .getByTestId("settings-result")
+        .filter({ hasText: label })
+        .first()
+        .click();
+      await expect(page).toHaveURL(new RegExp(`${path}#${anchor}$`));
+      const card = page.locator(`#${anchor}`);
+      await expect(card).toHaveClass(/setting-highlight/);
+      await expect
+        .poll(async () => {
+          const box = await card.boundingBox();
+          return Boolean(box && box.y < 600 && box.y + box.height > 0);
+        })
+        .toBe(true);
+    }
+  });
 });

@@ -1020,11 +1020,53 @@ describe("RepoPage", () => {
     vi.unstubAllGlobals();
   });
 
+  // grain/task-4287: an empty allowlist means unrestricted, so removing
+  // the only entry widens what new tasks may target rather than
+  // narrowing it. The confirmation says that, and does not promise that
+  // new tasks "won't be able to target it", which would be false.
+  it("warns that removing the only allowed repo allows any repo again", async () => {
+    routeApi();
+    const confirmed = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirmed);
+    const user = userEvent.setup();
+    renderPage({ tab: "advanced", config: { targetRepos: ["acme/widgets"] } });
+
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+
+    const msg = confirmed.mock.calls[0][0];
+    expect(msg).toContain("the only repo this deployment allows");
+    expect(msg).toContain("allows any repo again");
+    expect(msg).not.toContain("won't be able to target it");
+    // Declined: nothing is removed.
+    expect(api).not.toHaveBeenCalledWith("/api/repos/acme/widgets", {
+      method: "DELETE",
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the narrowing wording while other repos stay allowed", async () => {
+    routeApi();
+    const confirmed = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirmed);
+    const user = userEvent.setup();
+    renderPage({
+      tab: "advanced",
+      config: { targetRepos: ["acme/widgets", "acme/gadgets"] },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+
+    const msg = confirmed.mock.calls[0][0];
+    expect(msg).toContain("won't be able to target it");
+    expect(msg).not.toContain("allows any repo again");
+    vi.unstubAllGlobals();
+  });
+
   // grain/task-411: removing a repo with work in it is allowed -- the
   // daemon parks that work rather than running it into a repo the list
   // no longer names -- so the confirmation is where an operator finds
   // out what the click costs. The count is the daemon's own, asked as
-  // the very save this click makes (POST /api/settings/plan with the
+  // the very save this click makes (POST /api/repos/plan with the
   // repo dropped), because this page holds none of the work behind it.
   it("says what removing the repo would strand, in the daemon's own words", async () => {
     routeApi();
@@ -1033,7 +1075,7 @@ describe("RepoPage", () => {
       "`acme/widgets` comes off this deployment's target repo list, so 2 tasks " +
       "still in play there are parked instead of dispatched.";
     api.mockImplementation((path, opts) => {
-      if (path === "/api/settings/plan")
+      if (path === "/api/repos/plan")
         return Promise.resolve({
           targetReposStranded: [
             { repo: "acme/widgets", tasks: ["t1", "t2"], summary },
@@ -1053,7 +1095,7 @@ describe("RepoPage", () => {
 
     // Planned as the save it is: this repo gone, the rest of the list
     // exactly as it stands.
-    expect(api).toHaveBeenCalledWith("/api/settings/plan", {
+    expect(api).toHaveBeenCalledWith("/api/repos/plan", {
       method: "POST",
       body: JSON.stringify({ targetRepos: ["acme/gadgets"] }),
     });
@@ -1072,7 +1114,7 @@ describe("RepoPage", () => {
     routeApi();
     const routed = api.getMockImplementation();
     api.mockImplementation((path, opts) => {
-      if (path === "/api/settings/plan")
+      if (path === "/api/repos/plan")
         return Promise.reject(new Error("not found"));
       return routed(path, opts);
     });

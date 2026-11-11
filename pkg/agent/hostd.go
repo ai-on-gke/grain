@@ -74,6 +74,10 @@ type HostdHost struct {
 	//
 	// Deprecated: use HostLogin / LoginTargets.
 	CodexAuth string
+	// HookPolicy reports whether that hostd's hook subcommands accept
+	// -policy and evaluate a staged per-run hook policy file
+	// (hostd.Hello.Has(hostd.FeatureHookPolicy)).
+	HookPolicy bool
 }
 
 // HostLogin returns the symlink target path for the named CLI login on a
@@ -153,8 +157,11 @@ func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, e
 		Env:  c.Env,
 		Dir:  dir,
 	}, strings.NewReader(c.Stdin), out, &stderr)
-	if hostd.IsDraining(err) {
-		return "", fmt.Errorf("%w: %v", ErrHostdDraining, err)
+	if hostd.IsDraining(err) || exit.Draining {
+		if err == nil {
+			err = errors.New(exit.String())
+		}
+		return stdout.String(), fmt.Errorf("%w: %v", ErrHostdDraining, err)
 	}
 	if errors.Is(err, ErrDetached) || errors.Is(err, hostd.ErrDetached) {
 		return stdout.String(), ErrDetached

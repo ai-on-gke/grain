@@ -420,7 +420,7 @@ func hostdProcesses(ctx context.Context, exec HostExecutor) []HostdProcess {
 
 // hostdUpdating is what Settings and a refused run say while grain hostd
 // drains for its own upgrade.
-const hostdUpdating = "the host agent is updating (draining for its own upgrade): new host runs wait until it is back, and runs already going carry on"
+const hostdUpdating = "the host agent is updating (draining for its own upgrade): new host runs wait until it is back, and runs still going at drain_cap are interrupted and re-queued"
 
 // hostdHello fills st's handshake fields from a hello to exec's hostd,
 // and returns why no new host run can start there, or "".
@@ -557,6 +557,12 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
 			return nil, fmt.Errorf("%s is set to run on the host, through the host agent that dials in: %w", cliBinaryName(r.Framework), err)
 		}
+	} else {
+		hctx, cancel := context.WithTimeout(context.Background(), hostdOffersTimeout)
+		if hello, err := h.Client.Hello(hctx); err == nil {
+			h.HookPolicy = hello.Has(hostd.FeatureHookPolicy)
+		}
+		cancel()
 	}
 	return h, nil
 }
@@ -589,6 +595,7 @@ func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 	} else {
 		h.CodexAuth = hello.CodexAuth
 	}
+	h.HookPolicy = hello.Has(hostd.FeatureHookPolicy)
 	return nil
 }
 

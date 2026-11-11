@@ -35,6 +35,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import { readNumberBox } from "../numberBox.js";
 import GrainMark from "./GrainMark.jsx";
 import UpgradeReleaseNotes from "./UpgradeReleaseNotes.jsx";
 import {
@@ -84,6 +85,7 @@ const STEP_MARKS = {
   done: "✓",
   failed: "✗",
   skipped: "–",
+  cancelled: "⊘",
 };
 
 // MARK_SIZE is how big the brand mark is while an upgrade is running.
@@ -1320,6 +1322,153 @@ export function ExternallyManagedUpgradeNotice({
   );
 }
 
+function shortPreviousLabel(status) {
+  if (!status) return "";
+  if (status.previousImageLabel) return status.previousImageLabel;
+  if (status.previousImage) {
+    const [named, digest] = status.previousImage.split("@");
+    if (!digest) return named;
+    const shortDigest = digest.startsWith("sha256:")
+      ? `sha256:${digest.slice(7, 19)}`
+      : digest;
+    const tag = imageTagOf(status.previousImage);
+    const targetTag = (status.branch || "").replaceAll("/", "..");
+    if (!tag || (targetTag && tag === targetTag)) {
+      return `${named}@${shortDigest}`;
+    }
+    return named;
+  }
+  if (status.previousRelease) return status.previousRelease;
+  if (status.previousCommit) return status.previousCommit.slice(0, 7);
+  return "";
+}
+
+function hasRollbackTarget(status) {
+  if (!status || status.phase !== "ok" || status.unchanged) return false;
+  if (status.previousImage) {
+    return status.previousImage !== status.running?.image;
+  }
+  // A source deployment rolls back to the commit it replaced, by object
+  // id; a release recorded without one has nothing the rollback can
+  // check out, so it is shown only as the commit's label.
+  if (status.previousCommit) {
+    return status.previousCommit !== status.running?.commit;
+  }
+  return false;
+}
+
+function RollbackPreviousAlert({ status, disabled, rollingBack, onRollback }) {
+  if (disabled || !hasRollbackTarget(status)) return null;
+  const fullPrevious =
+    status.previousImage ||
+    status.previousRelease ||
+    (status.previousCommit ? status.previousCommit.slice(0, 7) : "");
+  const label = shortPreviousLabel(status);
+  if (!fullPrevious || !label) return null;
+  return (
+    <Alert
+      id="upgrade-rollback"
+      severity="info"
+      className="upgrade-rollback"
+      data-testid="upgrade-rollback"
+      sx={{ mb: 2, "& .MuiAlert-message": { width: "100%" } }}
+    >
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={1.5}
+        alignItems={{ xs: "flex-start", sm: "center" }}
+        justifyContent="space-between"
+      >
+        <Box sx={{ minWidth: 0 }}>
+          Replaced{" "}
+          <Box
+            component="code"
+            sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+          >
+            {fullPrevious}
+          </Box>
+          .
+        </Box>
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={onRollback}
+          disabled={rollingBack}
+          data-testid="upgrade-rollback-button"
+          sx={{ flexShrink: 0 }}
+        >
+          {rollingBack ? "Rolling back…" : `Roll back to ${label}`}
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
+function RunningUpgradeBanner({ status, now, onCancel, cancelling }) {
+  const blockedReason = status?.cancelBlockedReason || "";
+  const isRunning = status?.phase === "running";
+  if (!isRunning && !blockedReason) return null;
+
+  const graceMs = status?.graceUntil
+    ? new Date(status.graceUntil).getTime() - now
+    : 0;
+  const graceSeconds =
+    isRunning && !blockedReason && graceMs > 0 ? Math.ceil(graceMs / 1000) : 0;
+  const canCancel =
+    isRunning && status?.cancellable !== false && !blockedReason;
+
+  return (
+    <Alert
+      id="upgrade-running-banner"
+      severity={graceSeconds > 0 ? "warning" : "info"}
+      className="upgrade-running-banner"
+      data-testid="upgrade-running-banner"
+      sx={{ mt: 2, "& .MuiAlert-message": { width: "100%" } }}
+    >
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={1.5}
+        alignItems={{ xs: "flex-start", sm: "center" }}
+        justifyContent="space-between"
+      >
+        <Box sx={{ minWidth: 0 }}>
+          {blockedReason ? (
+            <span
+              className="upgrade-cancel-blocked"
+              data-testid="upgrade-cancel-blocked"
+            >
+              {blockedReason}
+            </span>
+          ) : graceSeconds > 0 ? (
+            <span
+              className="upgrade-grace-countdown"
+              data-testid="upgrade-grace-countdown"
+            >
+              {`Starting upgrade in ${graceSeconds}s \u2014 cancel now if this was started by mistake.`}
+            </span>
+          ) : (
+            <span>
+              Upgrade in progress &mdash; you can cancel until cut-over and
+              restart begin.
+            </span>
+          )}
+        </Box>
+        <Button
+          color={canCancel ? "error" : "inherit"}
+          variant="outlined"
+          size="small"
+          onClick={() => onCancel(graceSeconds > 0)}
+          disabled={!canCancel || cancelling}
+          data-testid="cancel-running-upgrade"
+          sx={{ flexShrink: 0, whiteSpace: "nowrap" }}
+        >
+          {cancelling ? "Cancelling…" : "Cancel upgrade"}
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
 export default function UpgradePanel({
   showError = defaultShowError,
   config,
@@ -1354,6 +1503,8 @@ export default function UpgradePanel({
   // still ticked from last week would be one nobody meant to tick.
   const [afterTasksFinish, setAfterTasksFinish] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [cancellingCurrent, setCancellingCurrent] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
   // Why the last status read failed, shown only while there is no status
   // at all: a read that fails mid-upgrade is the restart it ends in, and
   // the pane keeps what it last knew through that.
@@ -1368,6 +1519,7 @@ export default function UpgradePanel({
     try {
       const next = await api("/api/upgrade");
       if (next.phase === "running") sawRunning.current = true;
+      setNow(Date.now());
       setStatus(next);
       setLoadError("");
       // The channel this deployment follows (latest, candidate, main, or
@@ -1403,7 +1555,14 @@ export default function UpgradePanel({
   // to notice for itself -- nothing on this page asked for it, so
   // nothing else would.
   useEffect(() => {
-    if (!status || (status.phase !== "running" && !status.scheduled)) return;
+    if (
+      !status ||
+      (status.phase !== "running" &&
+        !status.scheduled &&
+        !status.cancelBlockedReason)
+    ) {
+      return;
+    }
     const interval = setInterval(refresh, STATUS_POLL_MS);
     return () => clearInterval(interval);
   }, [status, refresh]);
@@ -1449,7 +1608,8 @@ export default function UpgradePanel({
 
   useEffect(() => {
     if (!status || status.phase !== "running") return;
-    const tick = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    const period = status.graceUntil ? 250 : CLOCK_TICK_MS;
+    const tick = setInterval(() => setNow(Date.now()), period);
     return () => clearInterval(tick);
   }, [status]);
 
@@ -1468,6 +1628,7 @@ export default function UpgradePanel({
         body: JSON.stringify(body),
       });
       if (next.phase === "running") sawRunning.current = true;
+      setNow(Date.now());
       setStatus(next);
     } catch (err) {
       reportError(err);
@@ -1514,6 +1675,50 @@ export default function UpgradePanel({
       reportError(err);
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const cancelCurrent = async (duringGrace = false) => {
+    setCancellingCurrent(true);
+    try {
+      const next = await api("/api/upgrade/current", {
+        method: "DELETE",
+        body: JSON.stringify({
+          reason: duringGrace
+            ? "cancelled during grace window"
+            : "cancelled from Upgrade pane",
+        }),
+      });
+      setStatus(next);
+    } catch (err) {
+      reportError(err);
+      await refresh();
+    } finally {
+      setCancellingCurrent(false);
+    }
+  };
+
+  const rollbackPrevious = async () => {
+    if (!status) return;
+    setRollingBack(true);
+    setUnchangedBranch("");
+    try {
+      // The daemon picks the target from its own record of the build the
+      // last upgrade replaced (a digest-pinned image, or on a source
+      // deployment the commit, checked out by id): naming it here as a
+      // branch would build whatever branch carries that name.
+      const payload = { rollback: true };
+      const next = await api("/api/upgrade", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (next.phase === "running") sawRunning.current = true;
+      setNow(Date.now());
+      setStatus(next);
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setRollingBack(false);
     }
   };
 
@@ -1600,6 +1805,12 @@ export default function UpgradePanel({
               about where the deployment already was (2026-11-08
               deployment-operations walkthrough, task 3617). */}
           <RunningNow running={fallbackRunning} />
+          <RollbackPreviousAlert
+            status={status}
+            disabled={running || Boolean(status.cancelBlockedReason)}
+            rollingBack={rollingBack}
+            onRollback={rollbackPrevious}
+          />
           <DiscardedRCAlert
             discardedRc={status.discardedRc || targetsData?.discardedRc}
             disabled={running}
@@ -1735,8 +1946,12 @@ export default function UpgradePanel({
               sx={{ display: "flex", mt: 1 }}
             />
             <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>
-              <Button type="submit" variant="contained" disabled={running}>
-                {running
+              <Button
+                type="submit"
+                variant="contained"
+                disabled={running || Boolean(status.cancelBlockedReason)}
+              >
+                {running || status.cancelBlockedReason
                   ? "Upgrading…"
                   : afterTasksFinish
                     ? "Schedule upgrade"
@@ -1746,6 +1961,12 @@ export default function UpgradePanel({
               </Button>
             </Stack>
           </form>
+          <RunningUpgradeBanner
+            status={status}
+            now={now}
+            onCancel={cancelCurrent}
+            cancelling={cancellingCurrent}
+          />
           {running && <UpgradeMark branch={status.branch} />}
           {unchangedTarget && (
             <Alert severity="info" className="upgrade-unchanged" sx={{ mt: 2 }}>
@@ -1754,7 +1975,7 @@ export default function UpgradePanel({
             </Alert>
           )}
           {status.phase && (
-            <dl className="upgrade-status">
+            <dl id="upgrade-status" className="upgrade-status">
               <dt>Branch</dt>
               <dd>{status.branch}</dd>
               <dt>Status</dt>
@@ -1803,7 +2024,12 @@ export default function UpgradePanel({
 // Shown even on a deployment with no upgrader wired: the setting is
 // stored either way, and a deployment configured for upgrading later
 // should not have to discover afterwards that this choice existed.
-export function UpgradeCheckSettings({ settings, onSave }) {
+export function UpgradeCheckSettings({
+  settings,
+  onSave,
+  onIntBlur,
+  onEnterKey,
+}) {
   const modes = settings.upgradeCheckModes || ["off", "approve", "auto"];
   const [mode, setMode] = useState(settings.upgradeCheckMode || "auto");
   const [pauses, setPauses] = useState(!!settings.upgradeCheckPausesPipeline);
@@ -1861,7 +2087,12 @@ export function UpgradeCheckSettings({ settings, onSave }) {
         }
         sx={{ display: "flex", mt: 1 }}
       />
-      <AutoUpgradeSettings settings={settings} onSave={onSave} />
+      <AutoUpgradeSettings
+        settings={settings}
+        onSave={onSave}
+        onIntBlur={onIntBlur}
+        onEnterKey={onEnterKey}
+      />
       <Typography variant="caption" color="text.secondary">
         Changes to these choices save immediately.
       </Typography>
@@ -1901,16 +2132,49 @@ function autoUpgradeMode(settings) {
 // mode a channel saved some other way (the CLI, a settings import) that
 // is not one of the three is offered too, so the picker can show what is
 // actually set.
-export function AutoUpgradeSettings({ settings, onSave }) {
+export function AutoUpgradeSettings({
+  settings,
+  onSave,
+  onIntBlur,
+  onEnterKey,
+}) {
   const [mode, setMode] = useState(autoUpgradeMode(settings));
   const [channel, setChannel] = useState(settings.autoUpgradeChannel || "");
   const [time, setTime] = useState(settings.autoUpgradeTime || "03:00");
+  const defaultMinIntervalHours =
+    settings.autoUpgradeMinIntervalHoursDefault ?? 6;
+  const minIntervalHours =
+    settings.autoUpgradeMinIntervalHours ?? defaultMinIntervalHours;
   const zone = settings.timeZone || "UTC";
   const channels =
     AUTO_UPGRADE_CHANNELS.includes(channel) || !channel
       ? AUTO_UPGRADE_CHANNELS
       : [...AUTO_UPGRADE_CHANNELS, channel];
   const releaseTarget = channel === "latest" ? "latest" : "exact";
+  const blurOnEnter =
+    onEnterKey ||
+    ((e) => {
+      if (e.key === "Enter") e.target.blur();
+    });
+  const handleMinIntervalBlur = onIntBlur
+    ? onIntBlur("autoUpgradeMinIntervalHours", {
+        defaultVal: defaultMinIntervalHours,
+        emptyVal: defaultMinIntervalHours,
+      })
+    : (e) => {
+        const read = readNumberBox(e.target, {
+          integer: true,
+          min: 0,
+          label: "Minimum interval (hours)",
+        });
+        if (read.error) return;
+        const next = read.empty ? defaultMinIntervalHours : read.value;
+        if (next !== minIntervalHours) {
+          onSave({ autoUpgradeMinIntervalHours: next });
+        } else if (read.empty) {
+          e.target.value = e.target.defaultValue ?? "";
+        }
+      };
 
   const chooseMode = (next) => {
     setMode(next);
@@ -1948,11 +2212,13 @@ export function AutoUpgradeSettings({ settings, onSave }) {
         slotProps={{ inputLabel: { shrink: true } }}
         helperText={
           mode === "release"
-            ? "Within about an hour of a new release appearing on this " +
-              "deployment's image channel, grain holds the queue, lets the work " +
-              "in flight finish, and upgrades. Release candidates are never " +
-              "followed. A failed upgrade is reported in the Inbox and is not " +
-              "retried until the next release."
+            ? "Once a new release has stood for an hour" +
+              (minIntervalHours > 0
+                ? ` and at least ${minIntervalHours}h has passed since the last automatic upgrade`
+                : "") +
+              ", grain holds the queue, lets the work in flight finish, and upgrades " +
+              "to the newest release. Release candidates are never followed. A failed " +
+              "upgrade is reported in the Inbox and is not retried until the next release."
             : mode === "daily"
               ? `Upgrade onto ${channel || "latest"} once a day, after the work in flight finishes.`
               : "grain upgrades only when somebody presses Upgrade. " +
@@ -1966,29 +2232,46 @@ export function AutoUpgradeSettings({ settings, onSave }) {
         ))}
       </TextField>
       {mode === "release" && (
-        <TextField
-          select
-          name="autoUpgradeTarget"
-          data-setting-id="autoUpgradeChannel"
-          label="Upgrade to"
-          value={releaseTarget}
-          onChange={(e) => {
-            const next = e.target.value === "latest" ? "latest" : "";
-            setChannel(next);
-            onSave({ autoUpgradeChannel: next });
-          }}
-          fullWidth
-          margin="normal"
-          slotProps={{ inputLabel: { shrink: true } }}
-          helperText={
-            releaseTarget === "latest"
-              ? "Follows the latest tag, which moves with each release."
-              : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
-          }
-        >
-          <MenuItem value="latest">latest</MenuItem>
-          <MenuItem value="exact">The exact release tag</MenuItem>
-        </TextField>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+          <TextField
+            select
+            name="autoUpgradeTarget"
+            data-setting-id="autoUpgradeChannel"
+            label="Upgrade to"
+            value={releaseTarget}
+            onChange={(e) => {
+              const next = e.target.value === "latest" ? "latest" : "";
+              setChannel(next);
+              onSave({ autoUpgradeChannel: next });
+            }}
+            fullWidth
+            margin="normal"
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText={
+              releaseTarget === "latest"
+                ? "Follows the latest tag, which moves with each release."
+                : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
+            }
+          >
+            <MenuItem value="latest">latest</MenuItem>
+            <MenuItem value="exact">The exact release tag</MenuItem>
+          </TextField>
+          <TextField
+            key={`minInterval-${minIntervalHours}`}
+            type="number"
+            name="autoUpgradeMinIntervalHours"
+            data-setting-id="autoUpgradeMinIntervalHours"
+            label="Minimum interval (hours)"
+            defaultValue={String(minIntervalHours)}
+            onBlur={handleMinIntervalBlur}
+            onKeyDown={blurOnEnter}
+            inputProps={{ min: 0, step: 1 }}
+            slotProps={{ inputLabel: { shrink: true } }}
+            fullWidth
+            margin="normal"
+            helperText={`Hours after a completed automatic upgrade before draining again, onto the newest release (default ${defaultMinIntervalHours}; 0 = off).`}
+          />
+        </Stack>
       )}
       {mode === "daily" && (
         <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>

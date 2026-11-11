@@ -63,6 +63,19 @@ custom-fields:                     # optional; this deployment's declared fields
   team: security
 ```
 
+This review is the one attached to a task, and it is stacked on the task's
+branch to fix what it finds. The reviews a gating path trigger files work
+differently: one per pull request head and review template however many
+triggers match, posting findings rather than pushing fixes unless asked to,
+and re-reading only what a new push changed. See "Gating reviews" under
+`.grain/triggers/<name>.yml`.
+
+To review every pull request with findings only, declare a gating
+trigger on `paths: ["**"]` naming a review template rather than a
+default review. Do not declare both, or every task is reviewed twice.
+This repository's `.grain/triggers/every-pr.yml` and
+`.grain/templates/pr-review.yml` are a worked example.
+
 ### `.grain/settings.yml`
 
 A repository can declare five of its own settings, in `.grain/settings.yml`
@@ -396,13 +409,31 @@ changes to `.grain` files are protected by repository-owned path triggers
 `.grain/**` (with `gate: true`, `human: required`, `sensitive: true`) so that
 pull requests modifying `.grain` declarations require human review and approval.
 
-**Team approval.** Declared access needs no approval beyond what the work
-already gets. The task files as its template would file it: approved when
-a schedule or suite files it, and decided by whoever files it by hand.
-The access only takes effect from the default branch, so the authority
-behind it is the authority to merge `.grain/templates`. It is guarded the
-way `.grain/workflows` is (see "Sensitive paths" below for the
+**Team approval.** Ordinary declared access needs no approval beyond what
+the work already gets. The task files as its template would file it:
+approved when a schedule or suite files it, and decided by whoever files
+it by hand. The access only takes effect from the default branch, so the
+authority behind it is the authority to merge `.grain/templates`. It is
+guarded the way `.grain/workflows` is (see "Sensitive paths" below for the
 recommended trigger).
+
+What only a person may grant is different. That is a GCP key, a host
+script, a GitHub credential, a dangerous or person-only `api:<scope>`
+(`model.DeclaredGrantNeedsPerson`), an `admission:` above `standard`, or
+`network_access: open`. A repository's declaration only asks for these.
+A firing of a declared schedule, or of a declared template, whose
+composition carries one is filed unapproved, with a note naming what
+waits for a person (`model.DeclaredFiringHold`). The same applies to a
+declared suite with `require_approval: false`. This lasts until a person
+accepts that declaration's set on **Settings → Capabilities → Repository
+declarations**. Accepting takes `capabilities:admin` for a capability
+server's grant, and the scope itself for an `api:` grant. From then on
+its firings land approved again, while it asks for nothing beyond the
+accepted set. A declaration that widens past that set is held again, and
+shows as awaiting acceptance, until a person accepts the new set. Schedules
+and templates an operator wrote are a person's standing approval already
+and are never held this way. CI jobs are accepted the same way; see
+[`docs/ci-capabilities.md`](ci-capabilities.md).
 
 **Proposals.** A proposal from such a task is held to the existing
 inheritance rules (`model.UngrantedReads`, `model.UngrantedWrites`). It
@@ -639,6 +670,7 @@ per: change                # change (default): one task per merge range / per pu
                            #         directly under the matched path's literal prefix
 gate: false                # pull_request only: hold the change's merge until the task is done
 human: on-findings         # gate only: required | on-findings (default) | no
+fixes: false               # gate only: let the review push fixes (see "Reviews post findings")
 auto-approve: false        # whether the filed task lands approved, with no human
 ```
 
@@ -678,12 +710,9 @@ finds its head at a commit it has not judged, against the pull request's
 files (its diff from the merge base). Variables: `{{trigger}}`,
 `{{paths}}`, `{{group}}`, `{{pr}}`, `{{head_sha}}` and `{{base_sha}}`
 (the base commit the rule was read at). Without `gate`, the task is an
-ordinary one in the repository. With `gate: true` it is a review stacked
-on the change's branch (with a branch and pull request of its own that
-merge back into the change's -- unlike grain's own trust-boundary security
-review, which pushes its fixes to the change's branch directly), the
-change's auto-merge is withdrawn, and the
-change and its pull request say which trigger demanded what. The hold is
+ordinary one in the repository. With `gate: true` it is a review of the
+change (see "Gating reviews" below), the change's auto-merge is withdrawn,
+and the change and its pull request say which trigger demanded what. The hold is
 released the way the security hold is: `on-findings` once every gating
 task has finished with no findings and any fixes it pushed have merged
 back into the change's branch, `no` once every one has finished whatever
@@ -695,8 +724,64 @@ does with what it finds"). Several gating triggers matching one change
 all have to finish, under the strictest `human` among them. A change whose
 file list cannot be read in full is held by every gating trigger.
 
+#### Gating reviews
+
+grain/task-4093. What a pull request's gating triggers file is one review
+per (pull request, head, kind), where the kind is the review template a
+trigger names (`sensitive: true` with no `template:` is grain's security
+review):
+
+- **One review for every trigger that names it.** Triggers that match the
+  same head and name the same template file a single review, never one
+  each. Its body lists the union of what they matched, by trigger, and it
+  is held under the strictest of their settings: the strictest `human`,
+  `sensitive` if any is, approved automatically only if every one says
+  `auto-approve`, and allowed to fix only if every one says `fixes`. Each
+  sensitive `human: required` trigger still asks its own approvers.
+  Triggers naming different templates file one review each. `per: folder`
+  does not split a gating review.
+- **The trust-boundary review counts.** When grain's security hold has
+  already filed its security review of the same head and that review covers
+  every path a security-review kind matched, no second one is filed.
+- **Idempotent.** The review carries a `path-trigger-review:<pr>:<kind>`
+  tag and a `path-trigger-head:<sha>` tag; judging a head that already has
+  its review files nothing.
+
+**Reviews post findings.** A gating review posts what it finds on the
+pull request (`add_review_comment`, which also puts it to the reviewed
+task's owner) and on the reviewed task, and its run never opens a pull
+request -- grain refuses to open one for it, and anything it pushes is
+left where it is. Two exceptions fix what they find: grain's security
+review, whose own instructions ask for fixes and which works on the
+change's own branch (so a fix lands in the change's pull request, never a
+second one), and a review whose triggers all say `fixes: true`, which is
+stacked on the change's branch with a pull request of its own merged back
+into it before the change can land.
+
+**Incremental, debounced re-review.** When the head moves, the review of
+each kind is filed again for the new head:
+
+- If the last review of that kind finished -- clean, or with findings the
+  push may have addressed -- or is still running, the new one is
+  *incremental*: it reads `git diff <last reviewed head> <new head>`,
+  lists the change's files those commits touch, and re-checks that the
+  earlier review's findings were addressed.
+- It is a *full* review instead when the new head does not descend from
+  the old one (a rebase or force-push), when commits from the base brought
+  in a file the kind's triggers watch, or when more than 20 of the
+  change's own files moved since the last review
+  (`incrementalReviewMaxFiles`).
+- A re-review is filed deferred for three minutes (`reviewDebounce`). A
+  push in that window supersedes it, so a burst of pushes gets one review,
+  of the head that stayed put. The first review of a change is filed when
+  its run finishes and is not deferred.
+- A review for an older head that has not been dispatched yet is
+  superseded by the new one, which keeps its incremental base; one already
+  running is waited on.
+
 **One runnable task per key.** A key is (repository, branch, trigger,
-group) for a merge and (pull request, trigger, group) for a pull request.
+group) for a merge and (pull request, trigger, group) for a pull request
+-- (pull request, review kind) for a gating review.
 A new firing for a key whose task has never been dispatched supersedes it
 (a merge keeps the earliest `from_sha` and every file since); one whose
 task is running, parked or has a pull request open is filed depending on
@@ -1383,6 +1468,54 @@ What that transaction does:
   is recorded against it (`repo_declaration_sync.last_error`, shown on the
   repository's own settings). Silently switching off a deployment's
   standing work over a syntax error would be much the worse failure.
+- A refusal is never only in the journal. It is the repository's
+  `refusedDeclarations` entry in `grain health` (and `deploy://health`,
+  which is the same response), the `last_error` on its row of
+  `deploy://state/tables/repo_declaration_sync` where the deployment
+  exports its full state, the error beside the repository in Settings →
+  Repos, and one Inbox notice (`declarations.refused:<owner>/<repo>:…`)
+  for each new error text. All of them name the files, lines and
+  messages and the commit whose declarations are still in force. The same
+  error read again on the next poll raises nothing new; a different error
+  clears the old notice and raises a new one; a clean read clears it. A
+  repository that cannot be *reached* is recorded the same way but raises
+  no notice, since there is no file to fix.
+
+### Declarations newer than the daemon
+
+`main` and the daemon reading it are not the same version. `grain
+declarations check` in CI validates a pull request against the code on
+its branch, so a declaration that needs a newer grain merges cleanly and
+then meets a deployment still running an older build. (That is what
+happened when `overlap:` became a mapping: a daemon that only decoded
+`overlap: skip` refused the whole repository's `.grain` with it, and the
+new schedules never loaded.)
+
+The policy is **forward-compatible parsing, one file at a time**:
+
+- A template, suite or schedule file that is well-formed YAML but that
+  this build cannot decode -- a key it does not know, or a known key in a
+  shape it has no case for -- is *held back*. Everything else in the
+  repository loads as usual.
+- A held-back file that the deployment already has a version of keeps
+  that version, exactly as it was, and its provenance row keeps the
+  commit it was read at. A held-back file that is new in this commit is
+  not loaded at all.
+- A held-back file's name still resolves for the files that name it, so a
+  suite naming a held-back template runs the version already in force. If
+  something names a held-back file that has *no* earlier version, the
+  whole set is refused instead, as any name that resolves to nothing is.
+- Everything else is still a refusal of the whole set: a file that is not
+  YAML, a key a repository may never set, a value out of range, a name
+  that resolves to nothing, a trigger, settings or merge-rules file of any
+  kind. Those are mistakes in the file whatever version reads it.
+- The held-back files are reported the way a refusal is (above), under
+  `declarations held back by this grain build:`, and they load the first
+  time the deployment upgrades to a build that reads them.
+
+`grain declarations check` is not forward-compatible: in CI a file that
+the code on the branch cannot decode is an error, as it always was. Only
+the daemon, which may be older than the tree it reads, holds files back.
 
 ## Editing one
 

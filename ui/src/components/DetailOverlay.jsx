@@ -12,8 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import api from "../api.js";
+import {
+  mergeFreshDetail,
+  prependEarlierPage,
+  taskEarlierPath,
+} from "../taskDetailPages.js";
 import AppIcon, { ExternalLinkIcon } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
@@ -170,7 +182,7 @@ function SuiteRunLink({ origin, onOpenSuiteRun }) {
 }
 
 export default function DetailOverlay({
-  task: t,
+  task: propTask,
   tasks,
   config,
   templates,
@@ -189,10 +201,53 @@ export default function DetailOverlay({
   onFilterExternalRef: rawFilterExternalRef,
   act,
   showError,
+  onLoadEarlier = null,
   // animate: false when this pane takes the place of one already on
   // screen (Overlay's own note), so the swap does not fade.
   animate = true,
 }) {
+  const [localTask, setLocalTask] = useState(null);
+  useEffect(() => {
+    setLocalTask((prev) => {
+      if (!prev || String(prev.id) !== String(propTask?.id)) return null;
+      return mergeFreshDetail(prev, propTask);
+    });
+  }, [propTask]);
+  const t = !onLoadEarlier && localTask ? localTask : propTask;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const effectiveLoadEarlier = useCallback(
+    async (opts = {}) => {
+      if (onLoadEarlier) return onLoadEarlier(opts);
+      const cur = tRef.current;
+      const path = taskEarlierPath(cur, opts);
+      if (!path) return null;
+      const wantComments =
+        (cur.olderComments || 0) > 0 &&
+        Array.isArray(cur.comments) &&
+        cur.comments.length > 0;
+      const wantAttempts =
+        !opts.commentsOnly &&
+        (cur.olderAttempts || 0) > 0 &&
+        Array.isArray(cur.attempts) &&
+        cur.attempts.length > 0;
+      try {
+        const earlier = await api(path);
+        if (!earlier) return null;
+        setLocalTask((prev) =>
+          prependEarlierPage(prev || propTask, earlier, {
+            loadedComments: wantComments,
+            loadedAttempts: wantAttempts,
+          }),
+        );
+        return earlier;
+      } catch (err) {
+        if (showError) showError(err);
+        return null;
+      }
+    },
+    [onLoadEarlier, propTask, showError],
+  );
   const byId = useMemo(
     () => new Map((tasks || []).map((other) => [other.id, other])),
     [tasks],
@@ -731,10 +786,10 @@ export default function DetailOverlay({
               and is not hidden behind anything. */}
           {/* A /tasks/<id>#comment=<id> link scrolls to its comment,
               wherever on this pane that is drawn (commentLinks.js). */}
-          <CommentDeepLink t={t} />
+          <CommentDeepLink t={t} onLoadEarlier={effectiveLoadEarlier} />
           {t.interactive ? (
             <>
-              <TaskChat t={t} act={act} />
+              <TaskChat t={t} act={act} onLoadEarlier={effectiveLoadEarlier} />
               <details className="task-chat-history">
                 <summary>Task history</summary>
                 <Timeline
@@ -743,6 +798,7 @@ export default function DetailOverlay({
                   act={act}
                   showError={showError}
                   onOpenTask={onOpenTask}
+                  onLoadEarlier={effectiveLoadEarlier}
                 />
               </details>
             </>
@@ -753,6 +809,7 @@ export default function DetailOverlay({
               act={act}
               showError={showError}
               onOpenTask={onOpenTask}
+              onLoadEarlier={effectiveLoadEarlier}
             />
           )}
         </div>

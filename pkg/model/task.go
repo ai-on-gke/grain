@@ -144,7 +144,11 @@ func (p Principal) Verified() bool {
 // OnBehalfOf is what a signature marker gestures at with one bit. Grain
 // relaying an agent's question is (automation, on behalf of agent); grain
 // restarting a task because a human commented is (automation, on behalf
-// of human); a human acting directly is (human, nil).
+// of human); a human acting directly is (human, nil). A person's answer
+// a console session relayed for them at their word is (human, via agent)
+// -- the one shape with a human actor and an agent behind it, which
+// RelayedVia reads: the words are the person's and count as theirs, and
+// OnBehalfOf names the session that carried them.
 type Attribution struct {
 	Actor      Principal
 	OnBehalfOf *Principal
@@ -926,7 +930,7 @@ func AlignDefaultBases(child, parent Task, defaultBranch func(RepoRef) string) T
 func AutoSubmitRefusedOnLanding(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		!LandsWhereGranted(child, parent)
 }
@@ -1062,7 +1066,7 @@ var AutoSubmitPrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-submit"
 func AutoSubmits(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		LandsWhereGranted(child, parent)
 }
@@ -1433,6 +1437,18 @@ const (
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
 	LinkPathTriggersRead LinkKind = "path-triggers-read"
+	// LinkPathTriggerReviewed records the last review of one kind grain
+	// filed for this task's pull request from its pull-request triggers
+	// (-> "<review template>=<review task ID>@<head sha>"), one per kind:
+	// what the next push's review starts its incremental diff from
+	// (orchestrator's pathtriggerreview.go).
+	LinkPathTriggerReviewed LinkKind = "path-trigger-reviewed"
+	// LinkReviewCommentsOnly marks a review that posts its findings and
+	// fixes nothing (-> the reviewed task's ID): its run never opens a
+	// pull request, whatever it pushed. Grain files every review that
+	// way unless what asked for it asked for fixes
+	// (docs/declarations.md#gating-reviews).
+	LinkReviewCommentsOnly LinkKind = "review-comments-only"
 	// LinkApprovalRequired records that a rule this task's change matched
 	// lets only named people release it (-> "<rule>=<approver>,..."),
 	// and LinkApprovedBy that one of them has (-> "<rule>=<user>"). A
@@ -1499,6 +1515,17 @@ const (
 	// replaced is closed, so there is nothing for either to hold up.
 	LinkSupersedes   LinkKind = "supersedes"
 	LinkSupersededBy LinkKind = "superseded-by"
+	// LinkRolledOverFrom records that this task was filed to carry on a
+	// durable task whose record had grown past its limits (-> the
+	// predecessor's ID), and LinkRolledOverTo is the same fact written on
+	// the predecessor (-> the successor's ID). One writer for both:
+	// Store.Rollover (design/design/durable-tasks.design.md#DT-15).
+	//
+	// LinkSupersedes' shape: both directions stored, provenance only,
+	// neither blocks. A reader resolving a closed task with a
+	// LinkRolledOverTo forwards to the successor.
+	LinkRolledOverFrom LinkKind = "rolled-over-from"
+	LinkRolledOverTo   LinkKind = "rolled-over-to"
 	// LinkGoogleChat records the Google Chat space linked to this task
 	// (-> space resource name like "spaces/AAAAAAAAAAA" or space URL).
 	// Provenance/external reference only, never blocks dispatch.

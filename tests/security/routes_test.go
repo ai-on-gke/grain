@@ -161,6 +161,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/tasks/{id}/context":                                   trusted,
 	"POST /api/tasks/{id}/compact":                                  trusted,
 	"POST /api/tasks/{id}/brief":                                    trusted,
+	"POST /api/tasks/{id}/rollover":                                 trusted,
 	"POST /api/tasks/{id}/pull-request":                             trusted,
 	"POST /api/pull-requests/adopt":                                 trusted,
 	"POST /api/pull-requests/review":                                trusted,
@@ -202,6 +203,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/tasks/{id}/attempts/{number}/transcript":              trusted,
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":        trusted,
 	"GET /api/tasks/{id}/prompt":                                    trusted,
+	"GET /api/tasks/{id}/diff-preview":                              trusted,
 	"GET /api/tasks/{id}/tree":                                      trusted,
 
 	"GET /api/memory":                           trusted,
@@ -218,6 +220,7 @@ var routeAuthorization = map[string]authLevel{
 
 	// Repos: their configuration, releases and branches.
 	"POST /api/repos":                                                      trusted,
+	"POST /api/repos/plan":                                                 trusted,
 	"DELETE /api/repos/{owner}/{name}":                                     trusted,
 	"GET /api/repos/{owner}/{name}/ci-capabilities":                        trusted,
 	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        trusted,
@@ -438,6 +441,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/host/top":                       trusted,
 	"GET /api/upgrade":                        trusted,
 	"POST /api/upgrade":                       trusted,
+	"DELETE /api/upgrade/current":             trusted,
 	"DELETE /api/upgrade/scheduled":           trusted,
 	"GET /api/upgrade/targets":                trusted,
 	"GET /api/upgrade/release-notes":          trusted,

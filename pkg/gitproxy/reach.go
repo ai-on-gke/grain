@@ -152,11 +152,11 @@ func (r *Reach) apiFor(name string, h CredentialHost) (github.Transport, error) 
 		// deployment's own API is on.
 		return r.Credentials.ambientTransportFor(name, h.Host)
 	}
+	if h.Recorded && r.Transports != nil && r.Transports[h.Host] != nil {
+		return r.Transports[h.Host], nil
+	}
 	if !h.Recorded || r.Host == "" || model.SameGitHost(h.Host, r.Host, model.DefaultGitHost) {
 		return r.API, nil
-	}
-	if r.Transports != nil && r.Transports[h.Host] != nil {
-		return r.Transports[h.Host], nil
 	}
 	if r.Credentials.IsAmbient(name) {
 		return r.Credentials.ambientTransportFor(name, h.Host)
@@ -253,7 +253,7 @@ func (r *Reach) entryForHost(name, host string) (*reachEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing the repositories the %q credential can reach: %w", name, err)
 	}
-	if normHost != "" && r.Host != "" && !model.SameGitHost(normHost, r.Host, model.DefaultGitHost) {
+	if normHost != "" && (r.Host != "" || api != r.API) && !model.SameGitHost(normHost, r.Host, model.DefaultGitHost) {
 		prefix := normHost + "/"
 		for i := range repos {
 			if !strings.HasPrefix(repos[i].Repo, prefix) {

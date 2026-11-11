@@ -76,8 +76,9 @@ export function taskReason(t) {
   if (t.state === "awaiting_reply")
     return {
       id: "reply",
-      text:
-        t.questionSummary || t.pendingSecret
+      text: t.unansweredCommentFrom
+        ? `has an unanswered question from ${t.unansweredCommentFrom}`
+        : t.questionSummary || t.pendingSecret
           ? "asked a question"
           : "answered in a comment",
     };

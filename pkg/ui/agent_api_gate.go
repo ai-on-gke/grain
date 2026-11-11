@@ -410,6 +410,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 			return call, err
 		}
 	}
+	if err := agentRouteAdminScope("task "+taskID, set, pattern); err != nil {
+		return call, err
+	}
 	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
 		if !set.Allows("capabilities:admin", call.repo) {
 			return call, fmt.Errorf("task %s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
@@ -443,6 +446,34 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		}
 	}
 	return call, nil
+}
+
+// agentRouteAdminScopes are routes whose routeScopes entry is not all an
+// agent needs to call them: the call must also be allowed the scope named
+// here, on the whole deployment.
+//
+// POST /api/state-repo/remote is settings:write in routeScopes, but
+// repointing the config repository hands everything it grants -- host
+// scripts, scope sets, secrets bindings -- to whoever can push there, and
+// the same body turns require_verified off or accepts a held commit
+// (docs/external-config-repo.md). A person needs an unlimited role for it
+// (operatorOnlyRoutes, task 3965); an agent, in-grain or external, needs
+// capabilities:admin as well as settings:write (task 4007).
+var agentRouteAdminScopes = map[string]APIScope{
+	"POST /api/state-repo/remote": "capabilities:admin",
+}
+
+// agentRouteAdminScope refuses who's call to pattern when the route is in
+// agentRouteAdminScopes and set does not allow its scope deployment-wide.
+func agentRouteAdminScope(who string, set APIGrantSet, pattern string) error {
+	need, ok := agentRouteAdminScopes[pattern]
+	if !ok || set.Allows(need, "") {
+		return nil
+	}
+	return fmt.Errorf("%s holds no api grant for scope %s, which %s needs as well as %s: "+
+		"it repoints or re-verifies the config repository, which is an administrator's call -- "+
+		"ask a person to make it, or to grant api:%s (docs/external-config-repo.md)",
+		who, need, pattern, routeScopes[pattern], need)
 }
 
 // agentCapabilityAllowsRoute reports whether releases:read lets a release
@@ -949,6 +980,13 @@ func (c *Client) externalApprovalWithin(ctx context.Context, principal string, t
 			"work it could have filed itself (docs/agent-api.md)", principal, task.ID, field, why)
 	}
 	for _, g := range task.Grants {
+		// The default read of the task's own repository's CI is one the
+		// credential's own filing would have carried as well
+		// (model.DefaultCIReadGrant), so it is not a grant it is asked
+		// to make.
+		if task.Target != nil && model.IsDefaultCIReadGrant(g, *task.Target) {
+			continue
+		}
 		if err := agentGrantRefusal(held, g.Capability, normalize); err != nil {
 			return refuse("capabilities", fmt.Sprintf("it holds %s, which the credential cannot grant", strings.TrimSpace(g.Capability)))
 		}
@@ -1983,6 +2021,23 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			for _, name := range grantNamesFromField(pattern, f, opts.stored, opts.normalize) {
 				if err := roleGrantRefusal(opts.role, key, name, opts.normalize); err != nil {
 					return err
+				}
+			}
+		}
+		if shape := sandboxShapeOfField(key, raw); !shape.IsZero() {
+			switch {
+			case opts.role != nil:
+				if err := s.roleSandboxShapeRefusal(ctx, opts.role, shape, "set "+key); err != nil {
+					return err
+				}
+			case opts.external != nil:
+				// Held to the deployment's maximum, which the handler asks
+				// of every caller (refuseSandboxShapeAboveMax).
+			case opts.acting != nil:
+				if above := shape.Above(model.EffectiveSandboxShape(*opts.acting)); len(above) > 0 {
+					return fmt.Errorf("an agent cannot ask for a larger sandbox than its own task %s runs in (%s); "+
+						"propose the work with propose_task instead, which files it for a person to approve",
+						opts.acting.ID, strings.Join(above, ", "))
 				}
 			}
 		}
@@ -3166,6 +3221,9 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		}
 		return call, fmt.Errorf("%s holds %s, but not on %s", principal, missingScope, call.repo)
 	}
+	if err := agentRouteAdminScope(principal, set, pattern); err != nil {
+		return call, err
+	}
 	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
 		if !set.Allows("capabilities:admin", call.repo) {
 			return call, fmt.Errorf("%s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
@@ -3587,6 +3645,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
 	"POST /api/tasks/{id}/compact":                 taskRespNone,
 	"POST /api/tasks/{id}/brief":                   taskRespNone,
+	"POST /api/tasks/{id}/rollover":                taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
 	"POST /api/tasks/{id}/submit":                  taskRespSingle,
@@ -3705,6 +3764,16 @@ func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, ki
 		for _, k := range []string{"id", "state"} {
 			if v, ok := full[k]; ok {
 				redacted[k] = v
+			}
+		}
+		if call.pattern == "POST /api/tasks/{id}/comments" {
+			// What became of the comment is the caller's own to know --
+			// whether it was relayed as a person's answer, and whether the
+			// task is still waiting for one (commentResponse).
+			for _, k := range []string{"commentDelivery", "notice", "relayed"} {
+				if v, ok := full[k]; ok {
+					redacted[k] = v
+				}
 			}
 		}
 		if kind == taskRespPatch {

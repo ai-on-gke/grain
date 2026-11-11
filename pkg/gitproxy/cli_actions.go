@@ -366,6 +366,15 @@ type CLIGitHubCheckActions interface {
 	WaitForGitHubChecks(ctx context.Context, taskID string, timeout, poll time.Duration, onPoll func(waited time.Duration)) (mcp.GitHubCheckWaitResult, error)
 }
 
+// CLIReportChecker checks a draft closing report against the records the
+// run has read so far: the check grain runs on the report once it is posted
+// (orchestrator's stewardReportCheck), run early so the agent can fix the
+// report first. failed is whether that check would flag it; text says why,
+// line by line.
+type CLIReportChecker interface {
+	CheckReportDraft(ctx context.Context, taskID, runID, report string) (text string, failed bool, err error)
+}
+
 // proxyHandoverWriter writes a standing handover comment for a task run.
 // Implemented by *model.Store.
 type proxyHandoverWriter interface {
@@ -402,6 +411,7 @@ var cliActionRoutes = map[string]string{
 	"pr/review-comment": http.MethodPost,
 	"status":            http.MethodPost,
 	"handover":          http.MethodPost,
+	"report/check":      http.MethodPost,
 	"notify":            http.MethodPost,
 	"tasks/wait":        http.MethodPost,
 	"proposals":         http.MethodPost,
@@ -455,6 +465,10 @@ func (p *GitProxy) serveCLIAction(w http.ResponseWriter, r *http.Request, scope 
 	}
 	if route == "handover" {
 		p.serveHandover(w, r, scope)
+		return true
+	}
+	if route == "report/check" {
+		p.serveReportCheck(w, r, scope)
 		return true
 	}
 	if p.CLIActions == nil {
@@ -586,7 +600,7 @@ func writeActionResult(w http.ResponseWriter, res CLIActionResult, err error) {
 // that decides whether its branch goes through grain CI at all.
 func requireOwnCI(scope namespace.Scope) error {
 	if !scope.MayReadCI && !scope.MayReadAllCI {
-		return namespace.RefuseCapability("grain ci", model.GrainCIRef)
+		return namespace.RefuseGrainCIAction("grain ci")
 	}
 	if scope.TaskRepo == "" || scope.TaskBranch == "" {
 		return errNoTaskRepo
@@ -1259,6 +1273,36 @@ func (p *GitProxy) serveHandover(w http.ResponseWriter, r *http.Request, scope n
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, "Recorded standing handover summary (%d bytes).\n", len(handover))
+}
+
+// serveReportCheck answers POST /cli/report/check (check_report). A report
+// the check flags is answered 422, so grain report check exits non-zero.
+func (p *GitProxy) serveReportCheck(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	var req struct {
+		Report string `json:"report"`
+	}
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	report := strings.TrimSpace(req.Report)
+	if report == "" {
+		http.Error(w, "report text is required: grain report check (<text> | --file <f> | -)", http.StatusBadRequest)
+		return
+	}
+	if p.ReportChecker == nil || scope.RunID == "" {
+		http.Error(w, "this deployment's sandbox proxy cannot check reports", http.StatusNotImplemented)
+		return
+	}
+	text, failed, err := p.ReportChecker.CheckReportDraft(r.Context(), scope.TaskIDStr, scope.RunID, report)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if failed {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}
+	fmt.Fprint(w, strings.TrimRight(text, "\n")+"\n")
 }
 
 // serveNotify answers POST /cli/notify (notify_operator).

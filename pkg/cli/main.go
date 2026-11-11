@@ -428,6 +428,7 @@ Commands:
                                        back to an agent for more work on its own branch
   compact [-handover-file f] <id>      fold a task's conversation into a handover for later prompts
   brief [-file f -reason r] <id>       show or replace a task's current brief and handover age
+  rollover <id>                        close a durable task as rolled over to a fresh successor
   config                               show the capabilities this deployment offers
   settings [flags]                     show, or change, the daemon's stored configuration (bwsalmon/agents#320)
   sandbox-budget                       whether one sandbox of this deployment's shape fits in its sandbox budget,
@@ -509,6 +510,7 @@ Commands:
                                        release back -- a person's act; an agent is refused
   release approval-key                 the public key GitHub's promote-release.yml verifies an Inbox approval
                                        with (repository variable GRAIN_RELEASE_APPROVAL_KEY)
+  upgrade status|start|cancel|rollback inspect, start, cancel or roll back an in-place upgrade (Settings -> Upgrade)
 `
 
 // defaultServerURL is loopback on the port every installer binds the
@@ -651,8 +653,7 @@ func runCLI(args []string) error {
 		c.HTTP, c.Socket = cliSocketHTTPClient(sock, *connectTimeout, *callTimeout), sock
 		target.tokenSource = "the API socket " + sock
 	}
-	err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
-	if err == nil {
+	if err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target); err == nil {
 		warnIfCommandSkillStale(rest[0], sel)
 	}
 	return err
@@ -689,7 +690,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapability(ctx, c, out, cmdArgs)
 	case "comment":
 		return cmdComment(ctx, c, out, cmdArgs)
-	case "reply", "inbox", "wait", "logs", "compact", "brief":
+	case "reply", "inbox", "wait", "logs", "compact", "brief", "rollover":
 		return externalCommands[cmd](ctx, c, out, cmdArgs)
 	case "close", "delete":
 		return cmdClose(ctx, c, out, cmdArgs)
@@ -753,10 +754,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":
 		return cmdDefaultModel(ctx, c, out, cmdArgs)
-	case "broadcast", "notify":
-		return cmdBroadcast(ctx, c, out, cmdArgs)
-	case "release":
-		return cmdRelease(ctx, c, out, cmdArgs)
+	case "broadcast", "notify", "release", "upgrade":
+		return operatorCommands[cmd](ctx, c, out, cmdArgs)
 	default:
 		return unknownCommandError{cmd}
 	}

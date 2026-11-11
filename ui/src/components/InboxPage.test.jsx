@@ -359,6 +359,13 @@ describe("InboxPage", () => {
   // grain/task-372: the inbox has a figure of its own now -- the tray --
   // and this heading carries it at heading size, the way every other
   // page carries the figure of the rail entry that opened it.
+  it("links to the new Inbox", () => {
+    renderInbox();
+    expect(
+      screen.getByRole("link", { name: "Try the new Inbox" }),
+    ).toHaveAttribute("href", "/next/inbox");
+  });
+
   it("heads the pane with the inbox figure", () => {
     const { container } = renderInbox({ tasks });
     expect(
@@ -1026,7 +1033,7 @@ describe("InboxPage", () => {
   describe("replying to a parked question", () => {
     it("shows only the question's summary on the row, and the whole question on expanding it", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1081,7 +1088,7 @@ describe("InboxPage", () => {
 
     it("expands and collapses the question from the keyboard", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1114,7 +1121,7 @@ describe("InboxPage", () => {
 
     it("falls back to the task's derived questionSummary for a question asked without a comment summary", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1143,7 +1150,7 @@ describe("InboxPage", () => {
 
     it("renders a closing report whole without QuestionDisclosure when no question summary is present", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1192,7 +1199,7 @@ describe("InboxPage", () => {
 
     it("shows the question and posts the answer as a comment", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",

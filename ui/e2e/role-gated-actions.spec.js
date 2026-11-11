@@ -274,6 +274,31 @@ test("a viewer's refused task controls keep the pane's own spacing", async ({
   await expectGatesFilled(page, page.locator(".actions"));
 });
 
+// The pane's grants, goal and owner were left out of the gating: a viewer
+// was offered Remove on each grant, "Add grant…", Add goal and the
+// owner's Change, every one a write the server refuses that role
+// (docs/test-runs/2026-11-11-responsive-navigation-live-sessions.md).
+test("a viewer is offered no grant, goal or owner edits on a task", async ({
+  page,
+}) => {
+  await asViewer(page);
+  await page.goto("/tasks/1");
+  const pane = page.getByRole("dialog").first();
+  await expect(
+    pane.getByRole("button", { name: "Add goal", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    pane.getByRole("button", { name: "Change owner", exact: true }),
+  ).toBeDisabled();
+  await expect(pane.getByRole("button", { name: /^Add grant/ })).toHaveCount(0);
+  await expect(pane.getByRole("button", { name: /^Remove / })).toHaveCount(0);
+  // The grants are still listed, read only.
+  await expect(
+    pane.getByRole("button", { name: /^About / }).first(),
+  ).toBeVisible();
+  await expectGatesFilled(page, pane);
+});
+
 // A refused control must sit where the allowed one does: SuiteOverlay's
 // "+ New template" kept its own margin inside a wrapper that carried it
 // too, and the wrapper's line box added more, so it and everything under
@@ -312,7 +337,7 @@ test("a viewer's access request Grant and Deny are disabled, and say why", async
   page,
 }) => {
   await asViewer(page);
-  await page.route(/\/api\/tasks\/1$/, async (route) => {
+  await page.route(/\/api\/tasks\/1(\?.*)?$/, async (route) => {
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];
     await rewriteJSON(

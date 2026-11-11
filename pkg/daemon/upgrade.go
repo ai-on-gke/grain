@@ -19,12 +19,14 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -65,7 +67,7 @@ func startUpgrade(upgrader *upgrade.Upgrader) func(string) error {
 	if upgrader == nil {
 		return nil
 	}
-	return upgrader.Start
+	return upgrader.StartScheduled
 }
 
 // upgradeUnchanged is orchestrator.Config.UpgradeUnchanged: the cheap
@@ -197,13 +199,17 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 		// cluster can pull both artifacts before Recreate stops this pod.
 		return upgrade.New(upgrade.Config{
 			Kube: &upgrade.KubeConfig{
-				Repository:       cfg.UpgradeImage,
-				Track:            track,
-				Deployment:       cfg.K8sDeployment,
-				Container:        cfg.K8sContainer,
-				Namespace:        cfg.K8sNamespace,
-				Kubectl:          cfg.K8sKubectl,
-				VerifyCmd:        cfg.UpgradeVerifyCmd,
+				Repository: cfg.UpgradeImage,
+				Track:      track,
+				Deployment: cfg.K8sDeployment,
+				Container:  cfg.K8sContainer,
+				Namespace:  cfg.K8sNamespace,
+				Kubectl:    cfg.K8sKubectl,
+				VerifyCmd:  cfg.UpgradeVerifyCmd,
+				// And whether a reviewed commit went into the image,
+				// read from the registry by the signed digest and asked
+				// of the forge (pkg/upgrade/reviewed.go).
+				ReviewedMerge:    upgradeReviewedMerge(cfg),
 				SandboxImageArgs: []string{"k8s-sandbox-image"},
 				// And whether the candidate build would accept the args
 				// this Deployment hands it. Those args were applied once
@@ -237,6 +243,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			// returns (upgrade.Upgrader.restarts).
 			StatusFile:      filepath.Join(cfg.DataDir, "upgrade-status.json"),
 			AllowedBranches: cfg.UpgradeAllowedBranches,
+			GraceWindow:     cfg.UpgradeGraceWindow,
 		})
 	case cfg.UpgradeImage != "" && (!KubernetesMode(cfg) || cfg.UpgradeImageRefFile != ""):
 		// The container path: no checkout, no build, no install -- pull
@@ -306,6 +313,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			Refusal:         hostModeUpgradeRefusal(cfg, systemHostModeProbe()),
 			StatusFile:      filepath.Join(cfg.DataDir, "upgrade-status.json"),
 			AllowedBranches: cfg.UpgradeAllowedBranches,
+			GraceWindow:     cfg.UpgradeGraceWindow,
 		})
 	case cfg.UpgradeSrcDir != "":
 		return upgrade.New(upgrade.Config{
@@ -335,6 +343,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			Stopping:        cfg.shutdownStarted,
 			StatusFile:      filepath.Join(cfg.DataDir, "upgrade-status.json"),
 			AllowedBranches: cfg.UpgradeAllowedBranches,
+			GraceWindow:     cfg.UpgradeGraceWindow,
 		})
 	}
 	return nil
@@ -429,9 +438,9 @@ func upgradeRestartRequest(cfg Config) func(branch string) {
 	}
 }
 
-// upgradeReviewedMerge is the image path's reviewed-merge check, from
-// -upgrade-reviewed-merge-repo and the flags beside it, or nil when that
-// is not set.
+// upgradeReviewedMerge is the image and Kubernetes paths' reviewed-merge
+// check, from -upgrade-reviewed-merge-repo and the flags beside it, or
+// nil when that is not set.
 func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
 	repo := strings.TrimSpace(cfg.UpgradeReviewedMergeRepo)
 	if repo == "" {
@@ -442,6 +451,8 @@ func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
 		// A file that cannot be read leaves the token empty, and the
 		// forge's refusal of the anonymous read says why.
 		forge.Token = readTrimmed(path)
+	} else if client, ok := reviewedMergeAmbientClient(repo); ok {
+		forge.Client = client
 	}
 	return &upgrade.ReviewedMergeConfig{
 		Policy: reviewedmerge.Policy{
@@ -453,6 +464,26 @@ func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
 		Compare: forge.Compare,
 	}
 }
+
+// reviewedMergeAmbientClient is the HTTP client for repo's forge API
+// when its host is one only a host tool reaches (a command-backed
+// ambient source, gitproxy.AmbientHostHTTPClient): every read is one
+// `<tool> api` run as the daemon's account -- through grain hostd's
+// host-git entry when the daemon runs beside it (gitproxy.UseHostGit) --
+// since a plain request there is answered with a login page. ok is false
+// for any other host, which is read over plain HTTPS.
+func reviewedMergeAmbientClient(repo string) (*http.Client, bool) {
+	host, _, _, err := reviewedmerge.SplitRepo(repo)
+	if err != nil {
+		// The forge's own refusal of the repository says why.
+		return nil, false
+	}
+	return gitproxy.AmbientHostHTTPClient(gitproxy.CredentialHost{Host: host, Kind: model.GitHostGitHub}, "", reviewedMergeAPITimeout)
+}
+
+// reviewedMergeAPITimeout bounds one read of the reviewed-merge check's
+// forge API through a host tool.
+const reviewedMergeAPITimeout = 60 * time.Second
 
 func readTrimmed(path string) string {
 	b, err := os.ReadFile(path)

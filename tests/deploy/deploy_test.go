@@ -1096,9 +1096,12 @@ func TestEveryBranchTagSubstitutionMatchesTagForBranch(t *testing.T) {
 // `${{ secrets.* }}` to either would hand a model credential to code no human
 // has read.
 //
-// The trigger is asserted for the same reason: no `push` and no
-// `pull_request`, since those events run code from branches that have not
-// been reviewed.
+// The trigger is asserted for the same reason: no `push`, no
+// `pull_request` and no `pull_request_target`, since those events run
+// code from branches (or forks) that have not been reviewed. And every
+// live job takes its credentials from the `live-models` environment,
+// whose deployment branch rule admits main alone, runs only on main, and
+// holds contents: read and nothing more.
 func TestOnlyDefaultBranchLiveJobsHoldAModelCredential(t *testing.T) {
 	for name, text := range map[string]string{
 		"tests.yml":   testsWorkflow(t),
@@ -1113,13 +1116,14 @@ func TestOnlyDefaultBranchLiveJobsHoldAModelCredential(t *testing.T) {
 	triggers := upTo(t, live, "jobs:")
 	contains(t, triggers, "schedule:")
 	contains(t, triggers, "workflow_dispatch:")
-	for _, forbidden := range []string{"push:", "pull_request:"} {
+	for _, forbidden := range []string{"push:", "pull_request:", "pull_request_target:"} {
 		if strings.Contains(triggers, forbidden) {
 			t.Errorf("live-agent.yml triggers on %s: the model credential it holds would then be readable by any branch", forbidden)
 		}
 	}
 
 	nightly := namedJob(t, live, "live-agy")
+	assertLiveModelsJob(t, "live-agent.yml", nightly)
 	contains(t, nightly, "GRAIN_LIVE_AGENT_TEST")
 	// The whole of tests/e2e's live set, by prefix rather than by name:
 	// a job naming one test is a job that silently stops running the next
@@ -1140,7 +1144,7 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	live := stripComments(liveFrameworksWorkflow(t))
 	contains(t, live, "schedule:")
 	contains(t, live, "workflow_dispatch:")
-	for _, forbidden := range []string{"push:", "pull_request:"} {
+	for _, forbidden := range []string{"push:", "pull_request:", "pull_request_target:"} {
 		if strings.Contains(upTo(t, live, "jobs:"), forbidden) {
 			t.Errorf("live-frameworks.yml triggers on %s: the two credentials it holds would then be readable by any branch, which is what the environments exist to prevent", forbidden)
 		}
@@ -1156,7 +1160,8 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 		{"live-codex", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "./pkg/agent/codex/"},
 	} {
 		text := namedJob(t, live, job.name)
-		contains(t, text, job.secret)
+		assertLiveModelsJob(t, "live-frameworks.yml", text)
+		contains(t, text, "secrets."+job.secret)
 		if strings.Contains(text, job.otherSecret) {
 			t.Errorf("the %s job reads %s as well: a job holding both credentials turns revoking one key into two frameworks losing their nightly", job.name, job.otherSecret)
 		}
@@ -1186,8 +1191,8 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 		t.Error("live-frameworks.yml pins a codex version of its own: it should read ARG CODEX_CLI_VERSION out of the Dockerfile, so bumping the image's codex is also what points this job at it")
 	}
 
-	// And both of codex's credential-free probes run *before* the
-	// credential gate. Neither spends a token, and between them they
+	// And both of codex's credential-free probes run whether or not the
+	// optional credential is there. Neither spends a token, and between them they
 	// measure the two facts about a live codex that this repository
 	// cannot check any other way: that grain's config is one codex loads
 	// (TestLiveCodexLoads...), and that `codex exec resume` still does
@@ -1196,7 +1201,7 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	// nothing at all on a night when no secret has been created -- which,
 	// as this file's own OPENAI_API_KEY assertion above is a reminder,
 	// has been every night so far.
-	free := between(t, codex, "Live codex probes (no credential)", "Require a credential")
+	free := between(t, codex, "Live codex probes (no credential)", "Live codex run")
 	for _, probe := range []string{"TestLiveCodexLoads", "TestLiveCodexResumes"} {
 		contains(t, free, probe)
 	}
@@ -1213,17 +1218,36 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	}
 }
 
+// assertLiveModelsJob holds one live job of name to how a model
+// credential may be held on GitHub Actions: from the live-models
+// environment, on main only, with a read-only token, and failing --
+// never skipping -- when a credential it requires is missing.
+func assertLiveModelsJob(t *testing.T, name, job string) {
+	t.Helper()
+	contains(t, job, "environment: live-models")
+	contains(t, job, "if: github.ref == 'refs/heads/main'")
+	contains(t, job, "permissions:\n      contents: read\n")
+	contains(t, job, "GRAIN_LIVE_AGENT_TEST")
+	if strings.Contains(job, "id-token") {
+		t.Errorf("%s: a live job asks for id-token, which no model credential needs", name)
+	}
+	if strings.Contains(job, "printenv") || strings.Contains(job, "env |") {
+		t.Errorf("%s: a live job prints its environment, which holds a model credential", name)
+	}
+}
+
 // Every workflow that installs an agent CLI at runtime must force IPv4 and
 // retry on transient network errors, matching the Dockerfile builds.
 func TestWorkflowCLIDownloadsForceIPv4AndRetry(t *testing.T) {
-	for _, name := range []string{
-		"live-frameworks.yml",
-		"live-agent.yml",
-		"codex-surface.yml",
-		"claude-surface.yml",
-		"agy-surface.yml",
+	for _, path := range [][]string{
+		{".github", "workflows", "live-frameworks.yml"},
+		{".github", "workflows", "live-agent.yml"},
+		{".grain", "workflows", "codex-surface.yml"},
+		{".grain", "workflows", "claude-surface.yml"},
+		{".grain", "workflows", "agy-surface.yml"},
 	} {
-		content := stripComments(read(t, ".grain", "workflows", name))
+		name := path[len(path)-1]
+		content := stripComments(read(t, path...))
 		for _, line := range strings.Split(content, "\n") {
 			if !strings.Contains(line, "curl ") {
 				continue
@@ -3469,7 +3493,7 @@ func TestGitHubWorkflowCosignDownloadsAreChecksummed(t *testing.T) {
 func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
 	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
 		content := stripComments(read(t, ".github", "workflows", name))
-		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:")
+		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:")
 		for _, line := range strings.Split(content, "\n") {
 			if !strings.Contains(line, "curl ") || strings.Contains(line, "curl -fsSIL") {
 				continue

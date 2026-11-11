@@ -106,7 +106,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
-	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
@@ -194,6 +193,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	postgresURL := fs.String("postgres-url", "", "PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)")
 	secretsBackend := fs.String("secrets-backend", secrets.BackendFile, "secret store backend (\"file\" or \"secretmanager\"); defaults to $GRAIN_SECRETS_BACKEND, then \"file\"")
 	secretsSMPrefix := fs.String("secrets-sm-prefix", "", "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
+	releaseApprovalKMSKey := fs.String("release-approval-kms-key", "", "Cloud KMS EC_SIGN_P256_SHA256 key version "+
+		"(projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; "+
+		"empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's "+
+		"GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY")
 	objectStoreURI := fs.String("object-store", "", "object store URI (gs://<bucket>/instances/<name>/ or file:///abs/dir) for flushing run transcripts, uploaded CI artifacts, and durable agent-sessions archives with local read-through caching (defaults to $GRAIN_OBJECT_STORE)")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
 		"and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it "+
@@ -492,6 +495,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	upgradeDrainWindow := fs.Duration("upgrade-drain-window", 0,
 		"maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade "+
 			"(0 waits indefinitely for runs to complete normally)")
+	upgradeGraceWindow := fs.Duration("upgrade-grace-window", upgrade.DefaultGraceWindow,
+		"grace window between confirming a manual upgrade and starting its work, during which the Upgrade pane "+
+			"shows a countdown with Cancel (0 disables the countdown; $GRAIN_UPGRADE_GRACE_WINDOW when unset)")
 	upgradeImageRefFile := fs.String("upgrade-image-ref-file", "",
 		"file a successful -upgrade-image upgrade rewrites with the image the service should run, as one "+
 			"GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile "+
@@ -512,7 +518,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) "+
 			"and hide in-VM upgrade controls in the UI in favour of external lifecycle management "+
 			"($GRAIN_DISABLE_SELF_UPGRADE when unset)")
-	hubManaged := registerHubManagedFlags(fs)
+	managementURL := fs.String("management-url", "",
+		"optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed "+
+			"(for example its registry entry page), shown in place of in-VM self-upgrade controls when "+
+			"-disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)")
+	defaultEnvironmentName := fs.String("default-environment-name", "",
+		"the environment name (the UI's tab title and sidebar badge) this deployment takes when it has none, "+
+			"or still has the one this flag gave it before: never one its operator set in Settings or its state repo. "+
+			"A Grain Hub sets it to a hosted instance's entry display name ($GRAIN_DEFAULT_ENVIRONMENT_NAME when unset)")
 
 	// How the UI's "reboot host" button reboots (pkg/ui/host.go). The
 	// default is the `sudo systemctl reboot` this always ran, which is
@@ -686,58 +699,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"select sandbox backend \"none\": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)")
 	nativeSandboxes := fs.Bool("native-sandboxes", true,
 		"enable native sandboxes on this host; set to false to disable native sandboxes")
-	// A flag rather than a setting, unlike the switch that decides
-	// whether sandboxes use the cache at all (Settings' own "Package
-	// cache"): this is how much of *this host's* disk the daemon may
-	// spend, which is the same kind of fact as -data-dir and belongs
-	// with the deployment rather than in a row a UI edits.
-	packageCacheGB := fs.Int("package-cache-size-gb", int(pkgcache.DefaultMaxBytes>>30),
-		"how much disk, in GiB, this deployment's package cache may use before it starts evicting the "+
-			"packages it fetched longest ago. 0 leaves it at the default")
-	packageCacheDir := fs.String("package-cache-dir", "",
-		"root directory for the package cache -- defaults to <sandbox-dir>/cache/packages when -sandbox-dir is set, and <data-dir>/cache/packages otherwise")
-	// Where the cache fills itself from, for the installation that
-	// already has a mirror. Flags for the same reason -package-cache-dir
-	// and -package-cache-size-gb are, and not for the reason the switch
-	// beside them is a stored setting: which mirror this host can reach
-	// is a fact about the network this deployment was installed on --
-	// the same kind of fact as -data-dir or -container-git-proxy-host --
-	// rather than a decision anybody makes per task. They are also read
-	// once, when the cache's listeners come up: pkgcache.Server takes
-	// its upstreams at construction and has no live path, so a row in
-	// Settings would be a control that appears to work and takes effect
-	// on the next restart, which is worse than a flag that says what it
-	// is.
-	//
-	// Nothing about a *sandbox* changes when one of these is set. A
-	// sandbox goes on resolving and asking for deb.debian.org,
-	// pypi.org and registry-1.docker.io, and the files that point it
-	// here (pkgcache.SandboxFiles) name those same hosts; this is only
-	// where the cache itself goes on a miss.
-	var packageCacheAptUpstream stringSliceFlag
-	fs.Var(&packageCacheAptUpstream, "package-cache-apt-upstream",
-		"fetch one intercepted archive from a mirror instead of from itself, as \"archive-host=base-url\" "+
-			"(deb.debian.org=http://mirror.internal/debian) -- repeat for each. The host is one this cache "+
-			"already serves, and is what sandboxes go on asking for; the URL is what this service fetches "+
-			"from, with the request's own path appended. An archive not named here is fetched from itself")
-	packageCachePyPIIndex := fs.String("package-cache-pypi-index", "",
-		"the PyPI simple index this cache proxies, for a deployment running a mirror of its own "+
-			"(http://mirror.internal/pypi/simple). Defaults to https://pypi.org/simple")
-	packageCacheNPMRegistry := fs.String("package-cache-npm-registry", "",
-		"the npm registry this cache proxies, for a deployment running a mirror of its own "+
-			"(http://mirror.internal/npm). Defaults to https://registry.npmjs.org")
-	packageCacheGoProxy := fs.String("package-cache-go-proxy", "",
-		"the Go module proxy this cache forwards to, for a deployment running an Athens of its own "+
-			"(http://athens.internal). Defaults to https://proxy.golang.org")
-	packageCacheDockerRegistry := fs.String("package-cache-docker-registry", "",
-		"the registry this cache mirrors for Docker Hub, for a deployment running a pull-through cache of "+
-			"its own (https://registry.internal). Defaults to https://registry-1.docker.io")
-	packageCacheGHCRRegistry := fs.String("package-cache-ghcr-registry", "",
-		"the registry this cache mirrors for GitHub Container Registry, for a deployment running a "+
-			"pull-through cache of its own (https://registry.internal/ghcr). Defaults to https://ghcr.io")
-	packageCacheGCRRegistry := fs.String("package-cache-gcr-registry", "",
-		"the registry this cache mirrors for Google Container Registry, for a deployment running a "+
-			"pull-through cache of its own (https://registry.internal/gcr). Defaults to https://gcr.io")
+	packageCache := registerPackageCacheFlags(fs)
 	actionsCacheDir := fs.String("actions-cache-dir", "",
 		"root directory for the GitHub Actions cache -- defaults to <sandbox-dir>/cache/actions when -sandbox-dir is set, and <data-dir>/cache/actions otherwise")
 	// The other cache on this host's disk. A seed rather than the last
@@ -1084,16 +1046,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	unitFlags := append([]string{}, unknownFlags...)
 	fs.Visit(func(f *flag.Flag) { unitFlags = append(unitFlags, "-"+f.Name) })
 	slices.Sort(unitFlags)
-	if !passed["secrets-backend"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_BACKEND")); env != "" {
-			*secretsBackend = env
-		}
-	}
-	if !passed["secrets-sm-prefix"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")); env != "" {
-			*secretsSMPrefix = env
-		}
-	}
+	envDefault(passed, "secrets-backend", "GRAIN_SECRETS_BACKEND", secretsBackend)
+	envDefault(passed, "secrets-sm-prefix", "GRAIN_SECRETS_SM_PREFIX", secretsSMPrefix)
+	envDefault(passed, "release-approval-kms-key", "GRAIN_RELEASE_APPROVAL_KMS_KEY", releaseApprovalKMSKey)
 	if !passed["db-driver"] {
 		if env := os.Getenv("GRAIN_DB_DRIVER"); env != "" {
 			*dbDriver = env
@@ -1140,26 +1095,24 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*disableSelfUpgrade = v
 		}
 	}
-	hubManaged.applyEnv(passed)
-	if !passed["deployment-owner"] {
-		if env := strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv)); env != "" {
-			*deploymentOwner = env
+	if !passed["upgrade-grace-window"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_UPGRADE_GRACE_WINDOW")); env != "" {
+			d, err := time.ParseDuration(env)
+			if err != nil || d < 0 {
+				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_UPGRADE_GRACE_WINDOW=%q must be a non-negative duration (e.g. 10s or 0)", env)
+			}
+			*upgradeGraceWindow = d
 		}
 	}
-	if !passed["host-accounts"] {
-		if env := strings.TrimSpace(os.Getenv(ui.HostAccountsEnv)); env != "" {
-			*hostAccounts = env
-		}
-	}
+	envDefault(passed, "management-url", "GRAIN_MANAGEMENT_URL", managementURL)
+	envDefault(passed, "default-environment-name", "GRAIN_DEFAULT_ENVIRONMENT_NAME", defaultEnvironmentName)
+	envDefault(passed, "deployment-owner", ui.DeploymentOwnerEnv, deploymentOwner)
+	envDefault(passed, "host-accounts", ui.HostAccountsEnv, hostAccounts)
 	parsedHostAccounts, err := ui.ParseHostAccounts(*hostAccounts)
 	if err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
-	if !passed["object-store"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
-			*objectStoreURI = env
-		}
-	}
+	envDefault(passed, "object-store", "GRAIN_OBJECT_STORE", objectStoreURI)
 	if !passed["db-dsn"] {
 		if env := os.Getenv("GRAIN_DB_DSN"); env != "" {
 			*dbDSN = env
@@ -1253,8 +1206,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
 		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN,
 		SecretsBackend: *secretsBackend, SecretsSMPrefix: *secretsSMPrefix,
-		ObjectStoreURI: *objectStoreURI,
-		SandboxDir:     *sandboxDir, DockerRootDir: *dockerRootDir,
+		ReleaseApprovalKMSKey: strings.TrimSpace(*releaseApprovalKMSKey),
+		ObjectStoreURI:        *objectStoreURI,
+		SandboxDir:            *sandboxDir, DockerRootDir: *dockerRootDir,
 		MaxWorkers: *maxWorkers, MaxMergers: *maxMergers, MaxCIJobs: model.DefaultMaxCIJobs,
 		Ledger:        &model.Ledger{},
 		CpuOvercommit: *cpuOvercommit, MemoryOvercommit: *memoryOvercommit, MemoryReserveMB: *memoryReserveMB,
@@ -1300,9 +1254,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
+		UpgradeGraceWindow:     *upgradeGraceWindow,
 		DisableSelfUpgrade:     *disableSelfUpgrade,
-		ManagementURL:          hubManaged.managementURL(),
-		DefaultEnvironmentName: hubManaged.defaultEnvironmentName(),
+		ManagementURL:          strings.TrimSpace(*managementURL),
+		DefaultEnvironmentName: strings.TrimSpace(*defaultEnvironmentName),
 		RebootCmd:              rebootCmd,
 		ShutdownCmd:            shutdownCmd,
 		RestartCmd:             restartCmd,
@@ -1323,16 +1278,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		CiRunOutputKB:    *ciRunOutputKB,
 
 		DisableNativeSandboxes: *disableNativeSandboxes || (passed["native-sandboxes"] && !*nativeSandboxes),
-		PackageCacheDir:        *packageCacheDir,
-		PackageCacheGB:         *packageCacheGB,
-
-		PackageCacheAptUpstream:    packageCacheAptUpstream,
-		PackageCachePyPIIndex:      *packageCachePyPIIndex,
-		PackageCacheNPMRegistry:    *packageCacheNPMRegistry,
-		PackageCacheGoProxy:        *packageCacheGoProxy,
-		PackageCacheDockerRegistry: *packageCacheDockerRegistry,
-		PackageCacheGHCRRegistry:   *packageCacheGHCRRegistry,
-		PackageCacheGCRRegistry:    *packageCacheGCRRegistry,
 
 		ActionsCacheDir: *actionsCacheDir,
 		ActionsCacheGB:  *actionsCacheGB,
@@ -1382,19 +1327,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	}
 	grit.Apply(&cfg)
 	hubFlags.apply(&cfg, passed)
+	packageCache.apply(&cfg)
 	cfg.UpgradeImage = *upgradeImage
 	if cfg.HostdRemote, err = daemon.NewHostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
 	cfg, err = local(cfg, passed)
 	return cfg, fs, unknownFlags, err
-}
-
-// checkConfig validates the flags parsed into cfg (daemon.CheckDaemonFlags plus
-// the CLI's own package-cache upstream syntax check).
-func checkConfig(cfg daemon.Config) error {
-	if err := daemon.CheckDaemonFlags(cfg, daemon.LocalSandboxes != nil, checkPackageCacheUpstreams); err != nil {
-		return err
-	}
-	return checkHubConfig(cfg)
 }

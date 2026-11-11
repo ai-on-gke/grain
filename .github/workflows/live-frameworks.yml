@@ -1,0 +1,254 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GitHub Actions port of the retired .grain/workflows/live-frameworks.yml:
+# the live claude and codex probes against the real providers, nightly and
+# on demand, plus tests/e2e's TestLiveClaude* -- the api:* grant case that
+# hands Claude the grain-controller tools list.
+#
+# As live-agent.yml: no pull_request or pull_request_target trigger, main
+# only, and every credential a secret of the `live-models` environment
+# (deployment branch: main). CLAUDE_CODE_OAUTH_TOKEN is required, and a
+# run without it fails naming it. OPENAI_API_KEY is optional: without it
+# the codex job runs its credential-free probes and says, as a warning
+# annotation, that the credentialed half did not run.
+#
+# Spend: the claude job is roughly 10 claude sessions of a few turns each
+# and the codex job roughly 10 codex execs, on GRAIN_LIVE_CLAUDE_MODEL
+# (default claude-haiku-4-5, the cheapest model the probes accept) and
+# codex's default model.
+name: live-frameworks
+
+on:
+  schedule:
+    - cron: "19 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-frameworks
+  cancel-in-progress: false
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  live-claude:
+    name: live claude run
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: live-models
+    permissions:
+      contents: read
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      GRAIN_LIVE_AGENT_TEST: "1"
+      GRAIN_LIVE_CLAUDE_MODEL: ${{ vars.GRAIN_LIVE_CLAUDE_MODEL || 'claude-haiku-4-5' }}
+      ANTHROPIC_MODEL: ${{ vars.GRAIN_LIVE_CLAUDE_MODEL || 'claude-haiku-4-5' }}
+    steps:
+      - name: Require the live-models secrets
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error title=live-frameworks::set secret CLAUDE_CODE_OAUTH_TOKEN in environment live-models (Settings -> Environments -> live-models; mint one with \`claude setup-token\`)"
+            exit 1
+          fi
+          echo "::add-mask::${CLAUDE_CODE_OAUTH_TOKEN}"
+          echo "CLAUDE_CODE_OAUTH_TOKEN is present (${#CLAUDE_CODE_OAUTH_TOKEN} characters)"
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install sandbox dependencies
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Install the claude CLI
+        id: install
+        run: |
+          set -euo pipefail
+          curl -4 -fsSL --max-time 120 --retry 3 --retry-delay 2 --retry-all-errors https://claude.ai/install.sh -o /tmp/claude-install.sh
+          test -s /tmp/claude-install.sh
+          bash /tmp/claude-install.sh
+          rm -f /tmp/claude-install.sh
+          test -x "$HOME/.local/bin/claude"
+          sudo ln -sf "$HOME/.local/bin/claude" /usr/local/bin/claude
+          claude --version
+
+      - name: Live claude run
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            echo "live claude run, attempt $attempt of 2"
+            if go test ./pkg/agent/claude/ -run 'TestLive' \
+                 -count=1 -v -timeout 15m; then
+              exit 0
+            fi
+            echo "attempt $attempt failed"
+          done
+          echo "::error title=live-frameworks::the live claude tests failed twice"
+          exit 1
+
+      - name: Live claude api-grant run
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            echo "live claude api-grant run, attempt $attempt of 2"
+            if go test ./tests/e2e/ -run 'TestLiveClaude' \
+                 -count=1 -v -timeout 10m; then
+              exit 0
+            fi
+            echo "attempt $attempt failed"
+          done
+          echo "::error title=live-frameworks::the live claude api-grant test failed twice"
+          exit 1
+
+  live-codex:
+    name: live codex run
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: live-models
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GRAIN_LIVE_AGENT_TEST: "1"
+    steps:
+      - name: Check for the optional OpenAI secret
+        id: key
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::warning title=live-frameworks::OPENAI_API_KEY is not set in environment live-models, so only the credential-free codex probes ran; set it there to run the live codex tests"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::add-mask::${OPENAI_API_KEY}"
+          echo "OPENAI_API_KEY is present (${#OPENAI_API_KEY} characters)"
+          echo "present=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install sandbox dependencies
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Install the codex CLI
+        id: install
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^ARG CODEX_CLI_VERSION=//p' Dockerfile | head -n1)"
+          if [ -z "$version" ]; then
+            echo "could not read ARG CODEX_CLI_VERSION out of the Dockerfile; this job installs the codex the image would carry, and has nothing to install without it" >&2
+            exit 1
+          fi
+          echo "installing codex $version, the release the Dockerfile pins"
+          sudo mkdir -p /opt/codex
+          curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://github.com/openai/codex/releases/download/${version}/codex-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/codex.tar.gz
+          test -s /tmp/codex.tar.gz
+          sudo tar -xzf /tmp/codex.tar.gz -C /opt/codex
+          rm -f /tmp/codex.tar.gz
+          codex="$(find /opt/codex -type f -name 'codex*' -perm -u+x | head -n1)"
+          test -n "$codex"
+          sudo chmod -R a+rX /opt/codex
+          sudo ln -sf "$codex" /usr/local/bin/codex
+          curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://github.com/openai/codex/releases/download/${version}/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/codex-code-mode-host.tar.gz
+          test -s /tmp/codex-code-mode-host.tar.gz
+          sudo tar -xzf /tmp/codex-code-mode-host.tar.gz -C /opt/codex
+          rm -f /tmp/codex-code-mode-host.tar.gz
+          code_mode_host="$(find /opt/codex -type f -name 'codex-code-mode-host*' -perm -u+x | head -n1)"
+          test -n "$code_mode_host"
+          sudo ln -sf "$code_mode_host" /opt/codex/codex-code-mode-host
+          sudo ln -sf /opt/codex/codex-code-mode-host /usr/local/bin/codex-code-mode-host
+          sudo chmod -R a+rX /opt/codex
+          /opt/codex/codex-code-mode-host --help >/dev/null
+          codex --version
+
+      - name: Live codex probes (no credential)
+        env:
+          OPENAI_API_KEY: ""
+        run: |
+          go test ./pkg/agent/codex/ -count=1 -v -timeout 10m \
+            -run '^(TestLiveCodexMCPOnlyAcrossModelProfiles|TestLiveCodexLoadsTheConfigGrainWrites|TestLiveCodexResumesAThreadAcrossExecs|TestLiveCodexRefusesAThreadItDoesNotHave|TestLiveCodexRetriesARefusedTurnItself|TestLiveCodexReportsA429GrainCanClassify|TestLiveCodexRetryResumesTheRunAfterARefusal|TestLiveCodexFallsBackWhenAResumeIsRefused|TestLiveCodexSharedLoginSurvivesConcurrentRefresh)$'
+
+      - name: Live codex run
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.key.outputs.present == 'true' }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            echo "live codex run, attempt $attempt of 2"
+            if go test ./pkg/agent/codex/ -run 'TestLive' \
+                 -count=1 -v -timeout 15m; then
+              exit 0
+            fi
+            echo "attempt $attempt failed"
+          done
+          echo "::error title=live-frameworks::the live codex tests failed twice"
+          exit 1

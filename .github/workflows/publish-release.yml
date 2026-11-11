@@ -162,10 +162,10 @@ jobs:
             exit 0
           fi
           if ! command -v cosign >/dev/null 2>&1; then
-            cosign_version="v2.6.5"
+            cosign_version="v3.1.4"
             curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
               -o /usr/local/bin/cosign
-            echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  /usr/local/bin/cosign" | sha256sum -c -
+            echo "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa  /usr/local/bin/cosign" | sha256sum -c -
             chmod +x /usr/local/bin/cosign
           fi
           key_file="${RUNNER_TEMP}/image-signing.key"

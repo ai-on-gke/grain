@@ -1230,7 +1230,12 @@ func TestOutboundTunnelConnectPeerForwardingReconnectGraceAndImmediateRevocation
 			time.Sleep(10 * time.Millisecond)
 		}
 
+		// Let the redial finish before the replicas are torn down, so a failure
+		// here is reported as itself rather than as a refused dial.
+		redialed := make(chan struct{})
+		defer func() { <-redialed }()
 		go func() {
+			defer close(redialed)
 			time.Sleep(120 * time.Millisecond)
 			_, respA := dialTestTunnelClient(t, mainA.URL+"/api/entries/alice-tunnel/connect", "alice-tunnel", http.Header{
 				"X-Test-Email": []string{"runner@proj.iam.gserviceaccount.com"},
@@ -1364,6 +1369,100 @@ func TestReconnectGraceSurvivesAStaleWake(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK || rec.Body.String() != "reconnected" {
 		t.Fatalf("expected request held across a stale wake to reach the reconnected tunnel, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if elapsed := time.Since(start); elapsed >= grace {
+		t.Fatalf("request took %s, longer than its %s reconnect_grace", elapsed, grace)
+	}
+}
+
+// TestReconnectGraceSurvivesAWakeWhoseSessionIsAlreadyGone pins down the
+// race behind the reconnect_grace flake that outlived
+// TestReconnectGraceSurvivesAStaleWake's fix. The tunnel cache's writers -- the
+// NOTIFY handlers, the 3s poll and the request path's own refreshes -- apply
+// what they read from PostgreSQL in no particular order, so a refresh that read
+// the old session re-marks it active and wakes the waiters, and one that read it
+// released lands straight after and marks it disconnected again. A waiter that
+// looks in between those two finds no active session at all; it must go on
+// waiting out its grace rather than answer 503 entry_offline at once.
+func TestReconnectGraceSurvivesAWakeWhoseSessionIsAlreadyGone(t *testing.T) {
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       testIdentityVerifier{},
+		AllowedDomains: []string{"example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	const grace = 10 * time.Second
+	rt, err := NewRouter(RouterOptions{
+		HubHost:        "registry.example.com",
+		InstanceDomain: "instances.example.com",
+		ReplicaID:      "replica-a",
+		ReconnectGrace: grace,
+		Admitter:       admitter,
+		Signer:         newTestAssertionSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer rt.Close()
+
+	newPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "reconnected")
+	}))
+	defer newPeer.Close()
+
+	tc := rt.TunnelCache()
+	tc.MarkDisconnected("alice-tunnel", 0, time.Now(), "disconnected")
+
+	entry := &store.EntryRow{Name: "alice-tunnel", Kind: api.KindConnected, OwnerEmail: "alice@example.com"}
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodGet, "https://alice-tunnel.instances.example.com/hello", nil)
+		req.Host = "alice-tunnel.instances.example.com"
+		rt.routeConnectedEntry(rec, req, entry, false, time.Time{})
+	}()
+
+	waitForWaiter := func() {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for tc.ActiveWaiters("alice-tunnel") == 0 && time.Now().Before(deadline) {
+			select {
+			case <-done:
+				t.Fatalf("request finished before its reconnect_grace ran out: %d %s", rec.Code, rec.Body.String())
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+		if tc.ActiveWaiters("alice-tunnel") == 0 {
+			t.Fatalf("request never entered reconnect_grace")
+		}
+	}
+	waitForWaiter()
+
+	// Wake the waiter as a stale refresh's SetActive does, with the session
+	// already marked disconnected again by the time the waiter reads the cache.
+	tc.mu.Lock()
+	woken := tc.waiters["alice-tunnel"]
+	delete(tc.waiters, "alice-tunnel")
+	tc.mu.Unlock()
+	tc.MarkDisconnected("alice-tunnel", 0, time.Now(), "disconnected")
+	for ch := range woken {
+		close(ch)
+	}
+	waitForWaiter()
+
+	// The tunnel really reconnects, on another replica.
+	tc.SetActive(TunnelCacheEntry{Name: "alice-tunnel", SessionEpoch: 2, ReplicaID: "replica-c", PeerAddr: newPeer.Listener.Addr().String()})
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("request still waiting after the tunnel reconnected")
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != "reconnected" {
+		t.Fatalf("expected request woken with no active session to keep waiting and reach the reconnected tunnel, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	if elapsed := time.Since(start); elapsed >= grace {
 		t.Fatalf("request took %s, longer than its %s reconnect_grace", elapsed, grace)

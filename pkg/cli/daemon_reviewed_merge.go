@@ -33,14 +33,15 @@ type reviewedMergeFlags struct {
 func registerReviewedMergeFlags(fs *flag.FlagSet) reviewedMergeFlags {
 	return reviewedMergeFlags{
 		repoFlag: fs.String("upgrade-reviewed-merge-repo", "",
-			"owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach "+
+			"owner/name (github.com) or host/owner/name (a GitHub Enterprise Server, asked at https://<host>/api/v3) of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach "+
 				"its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the "+
 				"forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. "+
 				"Omitted, nothing is asked"),
 		loginsFlag: fs.String("upgrade-reviewed-merge-logins", "",
 			"comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed"),
 		tokenFileFlag: fs.String("upgrade-reviewed-merge-token-file", "",
-			"file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously)"),
+			"file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read through the host's own forge tool "+
+				"when a command-backed ambient source claims its host, and anonymously otherwise)"),
 	}
 }
 

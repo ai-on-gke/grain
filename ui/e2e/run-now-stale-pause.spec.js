@@ -33,7 +33,7 @@ test("stale Run now button and hints align inside the actions column across hold
   const { id } = await created.json();
   try {
     let mode = "suspension";
-    await page.route(`**/api/tasks/${id}`, async (route) => {
+    await page.route(new RegExp(`/api/tasks/${id}(\\?.*)?$`), async (route) => {
       const resp = await route.fetch();
       const body = await resp.json();
       body.state = "queued";

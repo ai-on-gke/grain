@@ -58,17 +58,28 @@ import (
 // UpgradePanel.jsx reads, spelled the same way, so a rename that broke
 // the panel would break this too.
 type upgradeResponse struct {
-	Enabled    bool            `json:"enabled"`
-	Mode       string          `json:"mode"`
-	Running    *upgradeRunning `json:"running"`
-	Channel    string          `json:"channel"`
-	Branch     string          `json:"branch"`
-	Phase      string          `json:"phase"`
-	Detail     string          `json:"detail"`
-	Unchanged  bool            `json:"unchanged"`
-	Steps      []upgradeStep   `json:"steps"`
-	StartedAt  *time.Time      `json:"startedAt"`
-	FinishedAt *time.Time      `json:"finishedAt"`
+	Enabled             bool            `json:"enabled"`
+	Mode                string          `json:"mode"`
+	Running             *upgradeRunning `json:"running"`
+	Channel             string          `json:"channel"`
+	Branch              string          `json:"branch"`
+	Phase               string          `json:"phase"`
+	Detail              string          `json:"detail"`
+	Unchanged           bool            `json:"unchanged"`
+	Steps               []upgradeStep   `json:"steps"`
+	StartedAt           *time.Time      `json:"startedAt"`
+	FinishedAt          *time.Time      `json:"finishedAt"`
+	GraceUntil          *time.Time      `json:"graceUntil"`
+	GraceWindowSeconds  int             `json:"graceWindowSeconds"`
+	Cancellable         bool            `json:"cancellable"`
+	CancelBlockedReason string          `json:"cancelBlockedReason"`
+	CancelledBy         string          `json:"cancelledBy"`
+	CancelReason        string          `json:"cancelReason"`
+	PreviousImage       string          `json:"previousImage"`
+	PreviousImageLabel  string          `json:"previousImageLabel"`
+	PreviousRelease     string          `json:"previousRelease"`
+	PreviousCommit      string          `json:"previousCommit"`
+	Cancelled           bool            `json:"cancelled"`
 
 	ImageRepo        string               `json:"imageRepo"`
 	DefaultImageRepo string               `json:"defaultImageRepo"`
@@ -920,4 +931,114 @@ func TestUpgradeStatusAndTargetsReportDiscardedRC(t *testing.T) {
 		status.DiscardedRC.Latest != "v2.1.1" || status.DiscardedRC.ReplacementRC != "v2.3.0-rc.2" {
 		t.Errorf("status.DiscardedRC = %+v, want running=v2.3.0-rc.1 latest=v2.1.1 replacementRc=v2.3.0-rc.2", status.DiscardedRC)
 	}
+}
+
+func TestCancelCurrentUpgradeRouteAuditAndConflict(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prevDigest := "sha256:" + strings.Repeat("1", 64)
+	newDigest := "sha256:" + strings.Repeat("2", 64)
+	prevRef := "docker.io/grainai/grain:v3.1.0@" + prevDigest
+	refFile := filepath.Join(dir, "image.env")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+prevRef+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inRestart := filepath.Join(dir, "in-restart")
+	releaseRestart := filepath.Join(dir, "release-restart")
+	stopping := make(chan struct{})
+
+	_, store, ctx := testClient(t)
+	_ = store.PutConfig(ctx, model.DefaultConfig())
+	up := upgrade.New(upgrade.Config{
+		GraceWindow: 20 * time.Second,
+		Image: &upgrade.ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+			PullCmd:    []string{"true"},
+			DigestCmd:  []string{"sh", "-c", `echo "docker.io/grainai/grain@` + newDigest + `"`, "sh"},
+			RunCmd:     []string{"true"},
+			ListCmd:    []string{"true"},
+		},
+		HealthCheckArgs: []string{"schema-version"},
+		RestartCmd:      []string{"sh", "-c", `touch ` + inRestart + `; while [ ! -f ` + releaseRestart + ` ]; do sleep 0.02; done`},
+		Stopping:        stopping,
+		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+	})
+	srv := ui.NewServer(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		Upgrader:     up,
+	}, store)
+
+	// Idle cancel returns 200 with cancelled: false.
+	idleRec := do(t, srv, http.MethodDelete, "/api/upgrade/current", "")
+	if idleRec.Code != http.StatusOK {
+		t.Fatalf("idle DELETE /api/upgrade/current = %d: %s", idleRec.Code, idleRec.Body)
+	}
+	if idle := decode[upgradeResponse](t, idleRec); idle.Cancelled {
+		t.Fatalf("idle cancel reported cancelled=true")
+	}
+
+	// Start a manual upgrade: it enters the grace window and is cancellable.
+	startRec := do(t, srv, http.MethodPost, "/api/upgrade", `{"branch":"v3.2.0"}`)
+	if startRec.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/upgrade = %d: %s", startRec.Code, startRec.Body)
+	}
+	started := decode[upgradeResponse](t, startRec)
+	if !started.Cancellable || started.GraceUntil == nil || started.GraceWindowSeconds != 20 {
+		t.Fatalf("started = %+v, want cancellable=true graceUntil!=nil graceWindowSeconds=20", started)
+	}
+
+	// Cancel during grace window: ends in cancelled phase and writes config_audit.
+	cancelRec := do(t, srv, http.MethodDelete, "/api/upgrade/current", `{"reason":"wrong edition"}`)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/upgrade/current = %d: %s", cancelRec.Code, cancelRec.Body)
+	}
+	cancelled := decode[upgradeResponse](t, cancelRec)
+	if !cancelled.Cancelled || cancelled.Phase != string(upgrade.PhaseCancelled) {
+		t.Fatalf("cancelled response = %+v, want cancelled=true phase=cancelled", cancelled)
+	}
+	if !strings.Contains(cancelled.Detail, "wrong edition") {
+		t.Errorf("cancelled Detail = %q, want reason included", cancelled.Detail)
+	}
+	audits, err := store.ConfigAudit(ctx, 5)
+	if err != nil || len(audits) == 0 {
+		t.Fatalf("ConfigAudit = %+v, %v", audits, err)
+	}
+	if audits[0].Surface != "upgrade" || !strings.Contains(audits[0].Summary, "cancelled upgrade to v3.2.0 (wrong edition)") {
+		t.Errorf("audit[0] = %+v, want upgrade cancellation with reason", audits[0])
+	}
+
+	// Now start a scheduled/immediate-without-grace upgrade so it reaches stepRestart
+	// (past the point of no return), and verify 409 Conflict with the exact copy.
+	if err := up.StartScheduled("v3.2.0"); err != nil {
+		t.Fatalf("StartScheduled: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(inRestart); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for restart step")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	wantConflict := "restarting onto v3.2.0 — too late to cancel; upgrade back to docker.io/grainai/grain:v3.1.0 afterwards"
+	stDuringRestart := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
+	if stDuringRestart.Cancellable || stDuringRestart.CancelBlockedReason != wantConflict {
+		t.Errorf("GET /api/upgrade during restart: cancellable=%v cancelBlockedReason=%q, want %q",
+			stDuringRestart.Cancellable, stDuringRestart.CancelBlockedReason, wantConflict)
+	}
+
+	lateRec := do(t, srv, http.MethodDelete, "/api/upgrade/current", `{"reason":"too late"}`)
+	if lateRec.Code != http.StatusConflict || !strings.Contains(lateRec.Body.String(), wantConflict) {
+		t.Errorf("late DELETE /api/upgrade/current = %d %s, want 409 %q", lateRec.Code, lateRec.Body.String(), wantConflict)
+	}
+
+	close(stopping)
+	_ = os.WriteFile(releaseRestart, []byte("1"), 0o644)
+	<-up.Done()
 }

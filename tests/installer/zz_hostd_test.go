@@ -599,7 +599,10 @@ while [ $i -lt %[1]d ]; do
   i=$((i+1))
   sleep 0.5
 done
-url=$(sed -n 's/^url = "\(.*\)"/\1/p' "$CODEX_HOME/config.toml")
+# The wrapper appends grain's own server last; a task holding an api grant
+# (every task on a GitHub-CI repository holds api:ci-read by default) also
+# has a grain-controller server in the base config, with a url of its own.
+url=$(sed -n 's/^url = "\(.*\)"/\1/p' "$CODEX_HOME/config.toml" | tail -n1)
 auth=$(sed -n 's/^http_headers = { Authorization = "\(.*\)" }/\1/p' "$CODEX_HOME/config.toml")
 curl -fsS -X POST "$url" \
   -H "Authorization: $auth" \
@@ -689,15 +692,15 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 
 	// 6c. A hostd upgrade: the extractor grain-daemon.service runs before
 	// every start takes a new image's grain into a version of its own and
-	// moves the current link, and grain-hostd-upgrade.path cuts hostd over
-	// onto it. A hostd on the same protocol keeps taking starts: the run it
-	// holds carries on to its end, a host run filed meanwhile starts at
-	// once rather than waiting, and hostd exits for the new version the
-	// first moment nothing runs.
+	// moves the current link, and grain-hostd-upgrade.path hands hostd over
+	// onto it in place (syscall.Exec). Live detached runs keep running
+	// uninterrupted with the same pid and are adopted from their spools,
+	// hostd serves from the new build right away without waiting for them to
+	// end, and a host run filed meanwhile starts at once.
 	next := f.hostdImage(t, d, "next")
 	original := f.hostdVersion(t)
-	t.Run("a hostd upgrade cuts over: the running child carries on, a new host run starts, and hostd moves to the new build once idle", func(t *testing.T) {
-		const ticks = 120 // 60 s: long enough to file a run during the cutover
+	t.Run("a hostd upgrade hands live detached runs over in place without waiting or blocking new starts", func(t *testing.T) {
+		const ticks = 120 // 60 s: still running while hostd re-execs onto upgraded
 		report := filepath.Join(f.reports, "agy-hostd-upgrade.report")
 		task := f.start(t, ctx, model.AgentFrameworkAntigravity, "fake agy across a hostd upgrade",
 			fmt.Sprintf("mode=steady ticks=%d report=%s", ticks, report))
@@ -714,24 +717,20 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		if upgraded == original {
 			t.Fatalf("the current link still names %s after extracting %s", original, next)
 		}
-		waitFor(t, "grain-hostd-upgrade.path to cut hostd over", time.Minute, func() error {
-			if st := f.hostdStatus(t, d); !strings.Contains(st, "cutting over to a new build") {
-				return fmt.Errorf("hostd says %q", st)
-			}
-			return nil
-		})
+		// Handover re-execs onto upgraded immediately while steady agy is still running.
+		f.waitForHostdOn(t, d, upgraded)
+		if err := gone([]string{pid}); err == nil {
+			t.Fatalf("the host-run agy (pid %s) did not outlive hostd's handover onto %s", pid, upgraded)
+		}
 		if got, body := f.cliRun(t, ctx, d); got.HostExecutor.Hostd.Updating {
-			t.Errorf("Settings mid-cutover says hostd is updating, which holds host runs back: %s", body)
+			t.Errorf("Settings after handover says hostd is updating, which holds host runs back: %s", body)
 		}
 
-		// Filed now, it starts: a cutover refuses nothing.
+		// Filed now, it starts immediately on the upgraded hostd.
 		startedReport := filepath.Join(f.reports, "agy-during-hostd-cutover.report")
-		during := f.start(t, ctx, model.AgentFrameworkAntigravity, "fake agy filed during a hostd cutover", "report="+startedReport)
+		during := f.start(t, ctx, model.AgentFrameworkAntigravity, "fake agy filed after hostd handover", "report="+startedReport)
 		defer f.client.Close(ctx, during, ui.CloseOptions{})
-		if err := gone([]string{pid}); err == nil {
-			t.Fatalf("the host-run agy (pid %s) did not outlive the start of hostd's cutover", pid)
-		}
-		waitFor(t, "the run filed during the cutover to start", 3*time.Minute, func() error {
+		waitFor(t, "the run filed after handover to start", 3*time.Minute, func() error {
 			if !sudoTest("-e", startedReport) {
 				return errors.New("it has not run yet")
 			}
@@ -739,19 +738,14 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		})
 
 		detail := f.waitForFinished(t, ctx, task)
-		if a := detail.Attempts[0]; len(detail.Attempts) != 1 || a.Outcome == model.InterruptedOutcome {
-			t.Fatalf("the run was not carried through hostd's cutover: %d attempt(s), the first %s: %s",
+		if a := detail.Attempts[0]; len(detail.Attempts) != 1 || a.Outcome == model.InterruptedOutcome || a.Outcome == "failed" {
+			t.Fatalf("the run was not carried through hostd's handover: %d attempt(s), the first %s: %s",
 				len(detail.Attempts), a.Outcome, a.Detail)
 		}
 		if got := strings.TrimSpace(sudoRead(report + ".pid")); got != pid {
 			t.Fatalf("the fake agy was started again (pid %s, then %s)", pid, got)
 		}
-		// The run filed during the cutover is seen to start, not to end:
-		// left running into the rollback below, it is a run on the
-		// upgraded hostd that that cutover has to wait out (drain_cap is an
-		// hour), and the rollback times out on this subtest's leftover.
 		f.waitForFinished(t, ctx, during)
-		f.waitForHostdOn(t, d, upgraded)
 	})
 
 	// 6d. A rollback to the image before: the extractor points current
@@ -768,14 +762,14 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		f.waitForHostdOn(t, d, original)
 	})
 
-	// 6e. A child that never ends holds a cutover only until the
-	// allowlist's drain_cap, and the drain that follows it for drain_cap
-	// again: then hostd cancels it, says so, and restarts on the new
+	// 6e. An explicit SIGUSR1 drain holds up to the allowlist's drain_cap,
+	// then cancels a stuck child with Exit.Draining (so the attempt ends
+	// interrupted rather than failed), logs it, and restarts on the new
 	// version.
-	t.Run("a stuck host run is cancelled at the drain cap", func(t *testing.T) {
+	t.Run("a stuck host run is cancelled as interrupted at the drain cap", func(t *testing.T) {
 		f.editAllowlist(t, "\nclis:\n", "\ndrain_cap: 20s\nclis:\n")
 		report := filepath.Join(f.reports, "agy-drain-cap.report")
-		task := f.start(t, ctx, model.AgentFrameworkAntigravity, "fake agy that never ends, across a hostd upgrade", "mode=hang report="+report)
+		task := f.start(t, ctx, model.AgentFrameworkAntigravity, "fake agy that never ends, across a hostd drain", "mode=hang report="+report)
 		defer f.client.Close(ctx, task, ui.CloseOptions{})
 		pids := f.waitForPids(t, report)
 		since := fmt.Sprintf("@%d", time.Now().Unix())
@@ -783,14 +777,18 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 			return sudo("journalctl", "-u", "grain-hostd.service", "-u", "grain-hostd-upgrade.service",
 				"--since", since, "--no-pager").stdout
 		}
+		hostdPID := strings.TrimSpace(run("systemctl", "show", "-p", "MainPID", "--value", "grain-hostd.service").stdout)
+		if hostdPID == "" || hostdPID == "0" {
+			t.Fatal("grain-hostd.service has no main process")
+		}
+		if r := sudo("kill", "-USR1", hostdPID); r.exitCode != 0 {
+			t.Fatalf("sending SIGUSR1 to hostd (%s): %s", hostdPID, r)
+		}
 		f.extractHostd(t, next)
 		upgraded := f.hostdVersion(t)
-		// The cap the drain counts is the one hostd logs as it starts: a
-		// drain that never started, or one on another cap, fails here
-		// saying so rather than as a run still going 90 s on.
-		waitFor(t, "hostd to start cutting over with the allowlist's drain_cap", 30*time.Second, func() error {
-			if log := journal(); !strings.Contains(log, "cutting over to a new build") || !strings.Contains(log, "drain_cap 20s") {
-				return fmt.Errorf("hostd's journal since the upgrade:\n%s", tail(log, 3000))
+		waitFor(t, "hostd to start draining with the allowlist's drain_cap", 30*time.Second, func() error {
+			if log := journal(); !strings.Contains(log, "draining for an upgrade") || !strings.Contains(log, "drain_cap 20s") {
+				return fmt.Errorf("hostd's journal since the drain:\n%s", tail(log, 3000))
 			}
 			return nil
 		})
@@ -800,7 +798,7 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		}
 		waitFor(t, "hostd to cancel the stuck agy at the drain cap", 90*time.Second, func() error {
 			if err := gone(pids); err != nil {
-				return fmt.Errorf("%v; hostd's journal since the upgrade:\n%s", err, tail(journal(), 3000))
+				return fmt.Errorf("%v; hostd's journal since the drain:\n%s", err, tail(journal(), 3000))
 			}
 			return nil
 		})
@@ -808,6 +806,20 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 			t.Errorf("hostd's journal does not say it cancelled at the drain cap:\n%s", tail(log, 3000))
 		}
 		f.waitForHostdOn(t, d, upgraded)
+		waitFor(t, "the cancelled drain-cap attempt to be recorded as interrupted", 30*time.Second, func() error {
+			detail, err := f.client.GetTask(ctx, task)
+			if err != nil {
+				return err
+			}
+			if len(detail.Attempts) == 0 || detail.Attempts[0].FinishedAt == nil {
+				return errors.New("first attempt still live")
+			}
+			if detail.Attempts[0].Outcome != model.InterruptedOutcome {
+				t.Fatalf("drain-cap cancelled attempt outcome = %q (%s), want %q",
+					detail.Attempts[0].Outcome, detail.Attempts[0].Detail, model.InterruptedOutcome)
+			}
+			return nil
+		})
 	})
 
 	// 7. hostd enforces the entry's max_duration itself, whatever the

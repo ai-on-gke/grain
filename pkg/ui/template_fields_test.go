@@ -139,7 +139,7 @@ func TestCreateTaskFromATemplateFillsInTheHoles(t *testing.T) {
 	if !task.AutoMerge {
 		t.Errorf("autoMerge = false, want the template's")
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubSandboxRepoGrant {
+	if len(withoutDefaultCIRead(task.Capabilities)) != 1 || withoutDefaultCIRead(task.Capabilities)[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want the template's", task.Capabilities)
 	}
 	if len(task.Reads) != 1 || task.Reads[0] != "acme/shared-lib" {

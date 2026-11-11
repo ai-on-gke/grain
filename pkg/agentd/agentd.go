@@ -37,10 +37,12 @@
 // allowlist can name agent CLIs and nothing else, and an agent CLI already
 // runs as the user with the user's shell.
 //
-// `grain-agentd install -server URL [-name NAME]` sets it up for the user
-// running it (install.go): the binary in ~/.local/bin, the token (prompted
-// for, or $GRAIN_HOSTD_TOKEN) in ~/.config/grain, an allowlist with agy,
-// and a systemd --user unit, started.
+// `grain-agentd install -server URL [-join CODE | -name NAME]` sets it up for
+// the user running it (install.go): the binary in ~/.local/bin, an allowlist
+// filled in from the controller's /hostd/install template for the CLIs present
+// on this machine, the credential in ~/.config/grain, and a systemd --user
+// unit, started. `grain-agentd allow <name>` adds one CLI entry from the same
+// controller template after confirmation on the host (allow.go).
 //
 // The package stays small on purpose: it links pkg/hostd and the leaf hook
 // packages and nothing of the daemon's (no pkg/ui, pkg/daemon, pkg/model
@@ -99,6 +101,8 @@ func Main(args []string) int {
 			return 0
 		case "install":
 			return install(args[2:], os.Stdout, os.Stderr)
+		case "allow":
+			return allow(args[2:], os.Stdin, os.Stdout, os.Stderr)
 		case "hostd":
 			// Accepted for symmetry with `grain hostd`.
 			return run(args[2:], os.Stdout, os.Stderr)
@@ -361,7 +365,7 @@ func checkAgentsOnly(path string, owners []uint32) error {
 	a, err := hostd.LoadAllowlist(path, owners)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("no allowlist at %s: write one with a clis: entry for each agent CLI this machine runs (capabilities: stays empty)", path)
+			return fmt.Errorf("no allowlist at %s: run `%s allow <name>` or write one with a clis: entry for each agent CLI this machine runs (capabilities: stays empty)", path, Program)
 		}
 		return err
 	}
@@ -370,7 +374,7 @@ func checkAgentsOnly(path string, owners []uint32) error {
 		return fmt.Errorf("%s names capabilities (%s): %s runs agent CLIs only; remove them, or run `grain host`, which serves capabilities too", path, strings.Join(names, ", "), Program)
 	}
 	if len(a.CLIs) == 0 {
-		return fmt.Errorf("%s offers no agent CLIs: add a clis: entry (agy, claude or codex)", path)
+		return fmt.Errorf("%s offers no agent CLIs: run `%s allow <name>` or add a clis: entry", path, Program)
 	}
 	return nil
 }

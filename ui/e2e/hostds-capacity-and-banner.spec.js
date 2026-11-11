@@ -56,7 +56,12 @@ test("editing a host validates capacity, clears blanked capacity, and dismisses 
       page.getByTestId("enrollment-code-chip-walk-banner-code"),
     ).toBeVisible();
     await expect(durationBanner).toBeHidden({ timeout: 2000 });
+    // Revoke code asks first; confirm it so the throwaway code goes.
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Revoke code" }).click();
+    await expect(
+      page.getByTestId("enrollment-code-chip-walk-banner-code"),
+    ).toContainText("revoked");
 
     // 2. Client refusal on non-integer Capacity raises the banner; clearing Capacity
     //    saves capacity=0 (removing cap=6) and dismisses the banner immediately.

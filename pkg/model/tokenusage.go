@@ -32,7 +32,11 @@ package model
 //   - usage_setting: one row, the operator's budgets and the concurrency
 //     mode (UsageSettings), as JSON.
 //
-// All three are runtime state, off SettingsTables like usage_limit_pause.
+// The first two are runtime state, off SettingsTables like
+// usage_limit_pause. usage_setting is the operator's own choice and is a
+// settings table (staterepo.SettingsTables): it is in the state
+// repository as tables/usage_setting.json, so a deployment rebuilt from
+// that repository keeps its budgets and mode.
 
 import (
 	"context"
@@ -194,6 +198,57 @@ func (s *Store) TaskRunUsages(ctx context.Context, taskID string) ([]RunUsage, e
 		return nil, fmt.Errorf("listing task %s's run usage: %w", taskID, err)
 	}
 	return scanRunUsages(rows)
+}
+
+// TaskRunUsagesInRange is TaskRunUsages bounded to attempts [minAttempt,
+// maxAttempt] when maxAttempt > 0.
+func (s *Store) TaskRunUsagesInRange(ctx context.Context, taskID string, minAttempt, maxAttempt int) ([]RunUsage, error) {
+	if maxAttempt <= 0 {
+		return s.TaskRunUsages(ctx, taskID)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT `u`.`run_id`,`u`.`task_id`,`u`.`connection_id`,`u`.`team`,`u`.`model`,`u`.`framework`,`u`.`hostd`,"+
+			"`u`.`input_tokens`,`u`.`output_tokens`,`u`.`cache_read_tokens`,`u`.`cache_write_tokens`,`u`.`cost_micro_usd`,`u`.`turns`,`u`.`started_at`,`u`.`finished_at` "+
+			"FROM `task_run_usage` AS `u` JOIN `task_run` AS `r` ON `r`.`id` = `u`.`run_id` "+
+			"WHERE `u`.`task_id` = ? AND `r`.`attempt` >= ? AND `r`.`attempt` <= ? ORDER BY `u`.`finished_at`, `u`.`run_id`",
+		taskID, minAttempt, maxAttempt)
+	if err != nil {
+		return nil, fmt.Errorf("listing task %s's run usage: %w", taskID, err)
+	}
+	return scanRunUsages(rows)
+}
+
+// TaskUsageSummary is the aggregate token usage recorded across all runs of one task.
+type TaskUsageSummary struct {
+	Runs             int
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	CostUSD          float64
+	Billable         int64
+}
+
+// SummarizeTaskUsage sums taskID's recorded run usage in SQL without loading
+// every run's row when only a page of runs is displayed. Returns nil when no
+// run of taskID has recorded usage.
+func (s *Store) SummarizeTaskUsage(ctx context.Context, taskID string) (*TaskUsageSummary, error) {
+	var sum TaskUsageSummary
+	var costMicros int64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*), COALESCE(SUM(`input_tokens`), 0), COALESCE(SUM(`output_tokens`), 0), "+
+			"COALESCE(SUM(`cache_read_tokens`), 0), COALESCE(SUM(`cache_write_tokens`), 0), COALESCE(SUM(`cost_micro_usd`), 0) "+
+			"FROM `task_run_usage` WHERE `task_id` = ?", taskID).Scan(
+		&sum.Runs, &sum.InputTokens, &sum.OutputTokens, &sum.CacheReadTokens, &sum.CacheWriteTokens, &costMicros)
+	if err != nil {
+		return nil, fmt.Errorf("summarising task %s's run usage: %w", taskID, err)
+	}
+	if sum.Runs == 0 {
+		return nil, nil
+	}
+	sum.CostUSD = float64(costMicros) / 1e6
+	sum.Billable = sum.InputTokens + sum.OutputTokens + sum.CacheWriteTokens
+	return &sum, nil
 }
 
 // PruneRunUsage deletes the rows of runs that finished before before,

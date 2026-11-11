@@ -1,0 +1,164 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GitHub Actions port of the retired .grain/workflows/live-agent.yml: the
+# broad live agy (Gemini) suite -- tests/e2e's TestLive* and
+# pkg/agent/antigravity's live probes -- against the real provider,
+# nightly and on demand.
+#
+# It moved here because grain stopped firing scheduled grain CI workflows
+# once ai-on-gke/grain went `ci_mode: github`, and this suite then ran
+# nowhere, silently, for two weeks (docs/github-actions-ci.md, "Live
+# real-model suites").
+#
+# The key never reaches untrusted code: there is no pull_request or
+# pull_request_target trigger, the job runs only on main, and
+# GEMINI_API_KEY is a secret of the `live-models` environment, whose
+# deployment branch rule admits main alone. A missing key fails the job
+# naming the secret; it never skips.
+#
+# Spend: one run is roughly 15-25 agy sessions of at most 15 turns each
+# (the e2e cases, the api-grant case and the retry/resume probes), on
+# GRAIN_LIVE_AGY_MODEL when set, else agy's default model.
+name: live-agent
+
+on:
+  schedule:
+    - cron: "37 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-agent
+  cancel-in-progress: false
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  live-agy:
+    name: live agy run
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: live-models
+    permissions:
+      contents: read
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GRAIN_LIVE_AGENT_TEST: "1"
+      # The cheapest model agy accepts for these cases; empty is agy's
+      # default. Set the live-models environment variable to override.
+      GRAIN_LIVE_AGY_MODEL: ${{ vars.GRAIN_LIVE_AGY_MODEL }}
+    steps:
+      - name: Require the live-models secrets
+        run: |
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "::error title=live-agent::set secret GEMINI_API_KEY in environment live-models (Settings -> Environments -> live-models)"
+            exit 1
+          fi
+          echo "::add-mask::${GEMINI_API_KEY}"
+          echo "GEMINI_API_KEY is present (${#GEMINI_API_KEY} characters)"
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install sandbox dependencies
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Install the agy CLI
+        id: install
+        run: |
+          set -euo pipefail
+          cli_version="$(sed -n 's/^ARG AGY_CLI_VERSION=//p' Dockerfile | head -n1)"
+          cli_build="$(sed -n 's/^ARG AGY_CLI_BUILD=//p' Dockerfile | head -n1)"
+          cli_sha="$(sed -n 's/^ARG AGY_CLI_SHA256_AMD64=//p' Dockerfile | head -n1)"
+          test -n "$cli_version" && test -n "$cli_build" && test -n "$cli_sha"
+          curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors \
+            "https://storage.googleapis.com/antigravity-public/antigravity-cli/${cli_version}-${cli_build}/linux-x64/cli_linux_x64.tar.gz" \
+            -o /tmp/agy.tar.gz
+          echo "$cli_sha  /tmp/agy.tar.gz" | sha256sum -c -
+          sudo mkdir -p /opt/antigravity
+          sudo tar -xzf /tmp/agy.tar.gz -C /opt/antigravity
+          rm -f /tmp/agy.tar.gz
+          agy="$(find /opt/antigravity -type f -name antigravity -perm -u+x 2>/dev/null | head -n1 || true)"
+          test -n "$agy"
+          sudo ln -sf "$agy" /usr/local/bin/agy
+          test "$(agy --version | head -n1)" = "$cli_version"
+
+      - name: Measure agy's own API retry
+        run: |
+          go test ./pkg/agent/antigravity/ \
+            -run 'TestLiveAgy(RetriesARefusedTurnItself|LosesTheProvidersRefusalText|BoundsARefusedTurn)' \
+            -count=1 -v -timeout 12m
+
+      - name: Measure agy's cross-dispatch resume
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          go test ./pkg/agent/antigravity/ \
+            -run 'TestLiveAgy(Resumes|OpensANewConversation)' \
+            -count=1 -v -timeout 10m
+
+      - name: Check agy still honours the auto-update switch
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          go test ./pkg/agent/antigravity/ \
+            -run TestLiveAgyDoesNotReplaceItsOwnBinary \
+            -count=1 -v -timeout 12m
+
+      # Every tests/e2e live case but the Claude ones, which
+      # live-frameworks.yml runs where the claude CLI is installed --
+      # including TestLiveAgyAcceptsTheControllerToolsOfAnAPIGrant, the
+      # api:* grant case that hands Gemini the grain-controller tools.
+      - name: Live agy run
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            echo "live agy run, attempt $attempt of 2"
+            if go test ./tests/e2e/ -run 'TestLive' -skip 'TestLiveClaude' \
+                 -count=1 -v -timeout 15m; then
+              exit 0
+            fi
+            echo "attempt $attempt failed"
+          done
+          echo "::error title=live-agent::the live agy tests failed twice"
+          exit 1

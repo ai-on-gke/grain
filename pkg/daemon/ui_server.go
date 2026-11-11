@@ -340,6 +340,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		DBDriver:                   cfg.DbDriver,
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
+		ReleaseApprovalKMSKey:      cfg.ReleaseApprovalKMSKey,
 		SourceDB:                   db,
 		// The fixed set grain ships providers for, plus the api rows appended
 		// last as a marker that this picker offers the agent API (pickerCapabilities).
@@ -431,12 +432,12 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		Reboot:      HostAction(cfg, newRestartRequests(cfg.DataDir).wrap("the reboot button", rebootHost(cfg.RebootCmd))),
 		Shutdown:    HostAction(cfg, shutdownHost(cfg.ShutdownCmd)),
 		Restart:     HostAction(cfg, newRestartRequests(cfg.DataDir).wrap("the restart button", restartDaemon(cfg.RestartCmd))),
-		RepoNames:   repoNameGate{},
+		RepoNames:   repoNameGate{store: store, defaultHost: cfg.GithubHost},
 		Credentials: uiCredentials,
 		// What each of those credentials reaches on GitHub, so a task is
 		// refused at filing against a repository its team cannot reach
 		// and the New task pickers can offer what it can (grain/task-1850).
-		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: cfg.GithubHost},
+		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: restClientHost(cfg.GithubHost)},
 		GitHubBranches:         githubClient,
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
@@ -817,9 +818,6 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		log.Print(upgradeImageNote(cfg))
 		if len(cfg.UpgradeVerifyCmd) == 0 {
 			log.Print("grain daemon: warning: upgrades do not verify image signatures (no -upgrade-verify-cmd), so they run whatever the registry serves")
-		}
-		if strings.TrimSpace(cfg.UpgradeReviewedMergeRepo) != "" && deploymentMode(cfg) == upgrade.ModeKube {
-			log.Print("grain daemon: warning: -upgrade-reviewed-merge-repo is checked only on the host image path; upgrades of this Kubernetes deployment do not ask how their commit was merged")
 		}
 	case cfg.UpgradeSrcDir != "":
 		log.Printf("grain daemon: upgrades build in %s and install to %s%s",
