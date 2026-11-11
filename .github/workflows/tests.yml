@@ -972,8 +972,19 @@ jobs:
       - name: Build frontend
         run: make frontend
 
+      # --with-deps runs apt-get, which fails the whole job on one
+      # unreachable archive (see scripts/ci-apt-install.sh), so the
+      # download is retried with a growing pause.
       - name: Download the browsers the suite drives
-        run: make playwright-browsers
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if make playwright-browsers; then exit 0; fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "playwright-browsers: attempt $attempt of 5 failed; retrying in $((attempt * 20))s" >&2
+              sleep $((attempt * 20))
+            fi
+          done
+          exit 1
 
       - name: Test e2e
         run: |
