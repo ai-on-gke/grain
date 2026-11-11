@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -788,6 +789,35 @@ const accessHistoryLimit = 100
 // recorded under.
 const accessAuditSurface = "access"
 
+// accessHistoryEntries is what Settings -> Access lists as the access
+// history: changes to who may sign in (surface access) and, beside them,
+// every mutating request the access code authenticated (surface
+// access-code, recordAccessCodeUse), newest first, at most
+// maxConfigAudit. docs/access-code.md promised the second there, but the
+// history read only the first, so a code session's writes showed only
+// under Settings -> Audit (docs/test-runs/2026-11-11-caller-identity.md,
+// F2).
+func (s *Server) accessHistoryEntries(ctx context.Context) ([]model.ConfigAuditEntry, error) {
+	var out []model.ConfigAuditEntry
+	for _, surface := range []string{accessAuditSurface, accessCodeAuditSurface} {
+		entries, err := s.tasks.Store.ConfigAuditOfSurface(ctx, surface, maxConfigAudit)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, entries...)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].At.Equal(out[j].At) {
+			return out[i].At.After(out[j].At)
+		}
+		return out[i].ID > out[j].ID
+	})
+	if len(out) > maxConfigAudit {
+		out = out[:maxConfigAudit]
+	}
+	return out, nil
+}
+
 // handleAccessHistory is GET /api/access/history: the config_audit rows of
 // surface "access", so Settings -> Access shows who changed which role,
 // when and why to a caller holding access:read without settings:read.
@@ -813,7 +843,7 @@ func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 	// maxConfigAudit changes of every surface and keeping the access
 	// ones answered nothing once that many settings or capability-server
 	// edits were newer than the last access change.
-	entries, err := s.tasks.Store.ConfigAuditOfSurface(r.Context(), accessAuditSurface, maxConfigAudit)
+	entries, err := s.accessHistoryEntries(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
