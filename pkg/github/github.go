@@ -57,6 +57,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ai-on-gke/grain/pkg/infrasig"
 )
 
 // ApiResponse is one HTTP response, decoupled from net/http so a Transport
@@ -1336,6 +1338,17 @@ type JobLog struct {
 	// spending limit needs to be increased" is a thing no amount of
 	// reasoning from a conclusion and a job name arrives at.
 	RunFailureReason string
+	// RunID, RunAttempt and RunUpdatedAt are the workflow run this entry
+	// came from -- the run a job ran in, or the run standing in for its
+	// jobs -- as GitHub reported it: its id, which attempt of it is the
+	// latest (1 for a run nobody has re-run), and when it last changed.
+	// Zero when unknown. They are what a caller re-running the failed
+	// jobs of an infrastructure failure (OnlyInfraFailures) needs: which
+	// run to ask about, how many re-runs it has already had, and how long
+	// ago it concluded.
+	RunID        int64
+	RunAttempt   int
+	RunUpdatedAt time.Time
 }
 
 // IsRunFailure reports whether this entry stands for a whole workflow
@@ -1476,6 +1489,43 @@ func OnlyStartupFailures(logs []JobLog) bool {
 	}
 	for _, l := range logs {
 		if !l.NoJobStarted() {
+			return false
+		}
+	}
+	return true
+}
+
+// InfraSignature is the infrastructure signature this entry's log tail
+// ends on (infrasig.JobLog) -- a hosted runner whose resolver stopped
+// answering, a runner lost mid-step, a registry rate limit -- or "" for
+// an entry whose failure may be the tree's. A run standing in for jobs
+// it has no log from has nothing to read and answers "".
+func (l JobLog) InfraSignature() string {
+	if l.IsRunFailure() {
+		return ""
+	}
+	return infrasig.JobLog(l.Log)
+}
+
+// OnlyInfraFailures reports whether every failing job behind these
+// entries failed on the machine it ran on rather than on the tree, read
+// off the tail of each job's own log against pkg/infrasig's list, and
+// there is at least one. It is OnlyStartupFailures' question for a job
+// that did start: on 2026-11-11 every hosted runner's apt-get died on
+// "Temporary failure resolving" for three hours, and the merge queue
+// spent automatic repairs on pull requests no commit could have
+// cleared.
+//
+// One entry without a signature -- a real `--- FAIL`, or a run with no
+// log to read -- answers false: a mixed build has a part worth sending
+// an agent at. An empty slice answers false for the reason it does in
+// OnlyStartupFailures.
+func OnlyInfraFailures(logs []JobLog) bool {
+	if len(logs) == 0 {
+		return false
+	}
+	for _, l := range logs {
+		if l.InfraSignature() == "" {
 			return false
 		}
 	}
@@ -3525,6 +3575,7 @@ func (c *RESTClient) FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error
 			tail, truncated := tailOf(text, JobLogTailBytes)
 			logs = append(logs, JobLog{
 				Name: job.Name, URL: job.URL, Log: tail, Truncated: truncated,
+				RunID: run.ID, RunAttempt: run.Attempt, RunUpdatedAt: run.UpdatedAt,
 			})
 		}
 		// A failed run that yielded no log at all still has something to
@@ -3543,6 +3594,9 @@ func (c *RESTClient) FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error
 				// `startup_failure` means is already in its conclusion.
 				RunJobsNeverStarted: len(jobs) > 0 && noJobRanAStep(jobs),
 				RunFailureReason:    c.jobsFailureReason(owner, repo, jobs),
+				RunID:               run.ID,
+				RunAttempt:          run.Attempt,
+				RunUpdatedAt:        run.UpdatedAt,
 			})
 		}
 	}
@@ -3702,6 +3756,8 @@ type runRef struct {
 	Status     string
 	Conclusion string
 	URL        string
+	Attempt    int
+	UpdatedAt  time.Time
 }
 
 // finished reports whether GitHub has concluded this run, which is the
@@ -3757,16 +3813,24 @@ func (c *RESTClient) commitRuns(owner, repo, headSHA string) ([]runRef, error) {
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
 				HTMLURL    string `json:"html_url"`
+				RunAttempt int    `json:"run_attempt"`
+				// UpdatedAt is a pointer so a run GitHub (or a double)
+				// served without one decodes as unknown, not as year 1.
+				UpdatedAt *time.Time `json:"updated_at"`
 			} `json:"workflow_runs"`
 		}
 		if err := json.Unmarshal(resp.Body, &data); err != nil {
 			return nil, err
 		}
 		for _, run := range data.WorkflowRuns {
-			runs = append(runs, runRef{
+			ref := runRef{
 				ID: run.ID, Name: run.Name, Status: run.Status,
-				Conclusion: run.Conclusion, URL: run.HTMLURL,
-			})
+				Conclusion: run.Conclusion, URL: run.HTMLURL, Attempt: run.RunAttempt,
+			}
+			if run.UpdatedAt != nil {
+				ref.UpdatedAt = *run.UpdatedAt
+			}
+			runs = append(runs, ref)
 		}
 		path = nextPagePath(resp.Headers["Link"])
 	}
