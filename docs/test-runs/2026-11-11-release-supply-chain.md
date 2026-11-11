@@ -41,7 +41,7 @@ Everything is in [`2026-11-11-release-supply-chain/`](2026-11-11-release-supply-
 | F3 | low (stale comment) | `nightly.yml`'s `stage-1` comment says "The KVM and real-kubernetes jobs are not required yet and are left out". But `stage-1` `needs` them, and `candidate-gate.sh`'s `CHECK_QUALIFICATION_JOBS` requires them (`kvm-sandboxes`, `kvm-route-stress`, `real-kubernetes`). An rc whose run lacks them fails Stage 1 ("did not run on …, and Stage 1 requires it"). For the same reason the 2026-11-10 `daycap-ticks.sh` helper, which seeds 14 jobs, now judges every rc red. | Not fixed here: editing `.github/workflows/*` brings in the security review. Filed as a follow-up. |
 | F4 | note (design) | A passing flake retry (`workflow_dispatch` with `jobs=<one job>`) closes the open Stage 1 repair, because `nightlyGreenReading` counts the skipped jobs as green (2f). That is right when the retried job was the only red one, as here. It would also close a repair that still holds a red from another run on another job, such as 2b's `sustained load` on `main`. The playbook says "the next fully green Stage 1". | Reported, not changed: a retry passing is how the train qualifies an rc (`candidate-gate.sh`), so this is a design call. |
 | F5 | low | `scan-images.sh` copies a pack's guest disk out with `docker create <ref>`, which fails ("no command specified") for an image with neither `CMD` nor `ENTRYPOINT`. Real packs have `ENTRYPOINT granule-shim`, checked on `docker.io/grainai/sandbox:latest`, so only the walkthrough's synthetic pack hit it. | Not fixed; the harness gives its pack an `ENTRYPOINT`. |
-| F6 | cosmetic | `REQUIRE_REVIEWED_MERGE=0` and `=no` skip correctly, but the warning always says `REQUIRE_REVIEWED_MERGE=false`. | Not fixed (`release-images.sh` waits for a person's Submit through `release-promotion`). |
+| F6 | cosmetic | `REQUIRE_REVIEWED_MERGE=0` and `=no` skip correctly, but the warning always says `REQUIRE_REVIEWED_MERGE=false`. | Not fixed here: `release-images.sh` waits for a person's Submit through `release-promotion`. Filed as a follow-up. |
 
 Nothing else misbehaved.
 
@@ -68,13 +68,17 @@ Every line says "RELEASE_MAX_PER_DAY is 0, so there is no daily cap".
 **Overlap group.** Both schedules declare `overlap: {skip: true, group:
 release-train}`, and the daemon loaded them that way (`overlapGroup:
 "release-train"` on both in `/api/schedules`). On the real daemon, Stage 1
-verdicts arrived while tick #2 was open: the Stage 1-triggered schedule fired
-once (#2) and recorded each later verdict as a dropped skip behind #2, never a
-second tick (`daemon-items.log`, "release-train ticks: 1"). The 20-minute
-backstop was not due within the run, so the cross-schedule hold rests on
-`TestAnOverlapGroupHoldsAnotherSchedulesFiringUntilTheFirstCloses`
-(`pkg/model`) and the `OverlapGroupInFlight` branch of
-`scheduledworkflow.go`, which this run read but did not trigger.
+verdicts arrived while tick #2 was open. The Stage 1-triggered schedule
+fired once (#2) and recorded each later verdict as a dropped skip behind #2,
+never as a second tick ("release-train ticks: 1"). Then the 20-minute
+backstop's first occurrence came due (21:40) and was **held by the other
+schedule's open tick**: "#2 from schedule "Release train (Stage 1 verdict)"
+(…release-train-on-stage1) in overlap group "release-train" is still open
+(failed)" (end of `daemon-items.log`). So the two schedules cannot race for
+the same tags. A failed tick holds the group until somebody retries or closes
+it. Loop-idle is what surfaces that ("newest tick … failed", item 3d). The
+daemon binary predates the F2 fix, which is why the Stage 1 trigger's own
+skips in that log still say "(state unknown)".
 
 ## 2. One repair per red Stage 1 (`daemon-items.log`, items 2a–2f)
 
@@ -97,7 +101,8 @@ injected into its store.
 | 2f | a flake retry (`workflow_dispatch`): the failed job green, the rest `skipped` | repair 4 closed (F4) |
 
 Throughout, the train's Stage 1-triggered schedule fired once (#2). Each
-later verdict was recorded as a dropped skip behind #2, the record F2 fixes.
+later verdict was recorded as a dropped skip behind #2: the "(state unknown)"
+record that F2 fixes.
 `pipeline.nightly-red-unattended` (1h queued / 3h waiting) was not walked in
 real time. `TestAnUnattendedStage1RepairRaisesANotification` covers it.
 
@@ -176,7 +181,13 @@ the WARNING, returned 0 and left no record to attest (F6 for the message).
 
 **Cosign pins.** Not walked separately: nothing was signed or published, so no cosign was downloaded.
 
+## Not done
+
+- The daemon items ran on SQLite only, not PostgreSQL as well: PostgreSQL is not installed in the sandbox, and there was no time to provision it.
+- Run on this daemon, `pipeline.nightly-red-unattended`'s 1h/3h timers and loop-idle's rc-blocker, rc-hold and rc-failed suppressions rest on their unit tests (named above).
+
 ## Gates on this change
 
 - No `scripts/release*`, `scripts/release-train-task.sh`, `promote*.yml` or `.github/workflows/*` file changed, so neither the `release-promotion` Submit nor the workflow security review applies. F3 and F6 are left as follow-ups for that reason.
 - `pkg/orchestrator/scheduledworkflow.go` is not a classified path.
+- `go test ./tests/e2e/... ./tests/deploy/...` passed locally on this branch before `main` was merged in.

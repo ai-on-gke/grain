@@ -66,3 +66,11 @@
 === every notification the daemon holds
     [warning] pipeline.release-loop-idle:acme/widgets raised 2026-11-11T21:29:29.502067878Z cleared 2026-11-11T21:31:29.555457088Z
     [warning] pipeline.release-loop-idle:acme/widgets raised 2026-11-11T21:25:24.955116839Z cleared 2026-11-11T21:27:28.989514445Z
+
+=== afterwards (captured by hand at 21:44Z): the 20-minute backstop's first occurrence
+    repo:schedule:acme:widgets:release-train-on-stage1: overlapGroup=release-train skips:
+      skipped at 2026-11-11 21:21 UTC: #2 from the previous firing is still open (state unknown)
+      skipped at 2026-11-11 21:21 UTC: #2 from the previous firing is still open (state unknown)
+      skipped at 2026-11-11 21:21 UTC: #2 from the previous firing is still open (state unknown)
+    repo:schedule:acme:widgets:release-train: overlapGroup=release-train skips:
+      skipped at 2026-11-11 21:40 UTC: #2 from schedule "Release train (Stage 1 verdict)" (repo:schedule:acme:widgets:release-train-on-stage1) in overlap group "release-train" is still open (failed)
