@@ -246,3 +246,116 @@ test("at a phone width the inspector is a full-screen sheet, and axe passes", as
   await page.getByRole("button", { name: "Close inspector" }).click();
   await expect(sheet).toBeHidden();
 });
+
+// The change's diff beside a submit decision (GET
+// /api/tasks/{id}/diff-preview, answered here so the demo needs no
+// pushed branch): it sits inside the inspector at a phone width without
+// widening the page, a long line scrolls its own hunk rather than the
+// sheet, every line of a hunk is tinted the same width however far it
+// scrolls, and axe passes on the tinted lines in light and dark.
+test("shows a submit decision's diff in the inspector, tinted edge to edge", async ({
+  page,
+}) => {
+  const preview = {
+    repo: "acme/widgets",
+    base: "main",
+    head: "grain/task-6",
+    totalFiles: 2,
+    totalHunks: 3,
+    truncated: true,
+    files: [
+      {
+        path: "pkg/probe/cache.go",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        hunks: [
+          {
+            header: "@@ -1,3 +1,4 @@ package probe",
+            lines: [
+              { kind: "ctx", text: "package probe" },
+              { kind: "del", text: "const ttl = 0" },
+              { kind: "add", text: "const ttl = 30 * time.Second" },
+              { kind: "add", text: `const banner = "${"x".repeat(160)}"` },
+            ],
+          },
+        ],
+        hunksOmitted: 1,
+      },
+      {
+        path: "docs/readiness.md",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        hunks: [
+          {
+            header: "@@ -0,0 +1 @@",
+            lines: [{ kind: "add", text: "# Readiness" }],
+          },
+        ],
+      },
+    ],
+  };
+  await page.route(
+    (url) => /^\/api\/tasks\/[^/]+\/diff-preview$/.test(url.pathname),
+    (route) => route.fulfill({ json: preview }),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.themeMode", "light"),
+  );
+  await page.goto("/next/inbox");
+  await row(page, "Cache the capability readiness probe")
+    .first()
+    .locator(".row-main")
+    .click();
+  const diff = page.getByTestId("inspector-diff");
+  await expect(diff).toContainText("2 files changed");
+  await expect(page.getByTestId("diff-truncated")).toContainText(
+    "first 2 of 3",
+  );
+
+  const layout = await diff.evaluate((el) => {
+    const card = el.getBoundingClientRect();
+    return {
+      pageOverflow:
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+      filesInside: [...el.querySelectorAll(".diff-file")].every((f) => {
+        const b = f.getBoundingClientRect();
+        return b.left >= card.left - 1 && b.right <= card.right + 1;
+      }),
+      hunks: [...el.querySelectorAll(".diff-hunk")].map((h) => ({
+        scrolls: h.scrollWidth > h.clientWidth,
+        widths: [
+          ...new Set(
+            [...h.querySelectorAll(".diff-line")].map((l) =>
+              Math.round(l.getBoundingClientRect().width),
+            ),
+          ),
+        ],
+        visible: Math.round(h.clientWidth),
+      })),
+    };
+  });
+  expect(layout.pageOverflow).toBeLessThanOrEqual(0);
+  expect(layout.filesInside).toBe(true);
+  const [long, short] = layout.hunks;
+  expect(long.scrolls).toBe(true);
+  expect(long.widths).toHaveLength(1);
+  expect(long.widths[0]).toBeGreaterThan(long.visible);
+  expect(short.scrolls).toBe(false);
+  expect(short.widths).toEqual([short.visible]);
+
+  const light = await new AxeBuilder({ page })
+    .include('[data-testid="inspector-diff"]')
+    .analyze();
+  expect(light.violations).toEqual([]);
+  await page.evaluate(() =>
+    document.documentElement.setAttribute("data-theme", "dark"),
+  );
+  const dark = await new AxeBuilder({ page })
+    .include('[data-testid="inspector-diff"]')
+    .analyze();
+  expect(dark.violations).toEqual([]);
+});
