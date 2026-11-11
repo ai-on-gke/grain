@@ -981,6 +981,13 @@ var Migrations = []Migration{
 			taskBriefEditTaskIndex,
 		},
 	},
+	{
+		Version:     137,
+		Description: "add grain_config.hub_environment_name, the environment name a Grain Hub last supplied as this deployment's default (grain/task-4200)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `hub_environment_name` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

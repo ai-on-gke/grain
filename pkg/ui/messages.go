@@ -333,7 +333,7 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 	if target == nil {
 		return Message{}, &NotFoundError{ID: to}
 	}
-	var signature, authorLabel string
+	var signature, authorLabel, notice string
 	if strings.HasPrefix(from, "external:") {
 		signature = fmt.Sprintf("external agent %s (%s)", strings.TrimPrefix(from, "external:"), from)
 		authorLabel = from
@@ -347,13 +347,16 @@ func (c *Client) PostMessageToAgent(ctx context.Context, from, to, body string, 
 			signature = fmt.Sprintf("task %s (%s)", from, strings.TrimSpace(sender.Title))
 		}
 		authorLabel = "task " + from
+		// A sender narrower than to is untrusted input to to's run
+		// (agentCrossTaskRail lets only a parent or child send one).
+		notice = c.untrustedAgentInputNotice(ctx, sender, target)
 	}
 	now := c.now()
 	attachments, err := decodeAttachments(uploads, now)
 	if err != nil {
 		return Message{}, err
 	}
-	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s", signature, body)
+	signed := fmt.Sprintf("Message from %s to this task's agent:\n\n%s%s", signature, notice, body)
 	// Signed as the sender, with the person it is acting for when the
 	// request is that sender's own (operator-attribution spec §3.2).
 	author := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: from}}
