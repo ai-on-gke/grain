@@ -5786,7 +5786,7 @@ type NoTeamGitCredentialError struct {
 
 func (e *NoTeamGitCredentialError) Error() string {
 	if e.Host != "" {
-		return fmt.Sprintf("the deployment has no GitHub credential for host %s -- add a git connection "+
+		return fmt.Sprintf("the deployment has no git credential for host %s -- add a git connection "+
 			"for that host in Settings -> Git (/settings/git)", e.Host)
 	}
 	return "the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)"
