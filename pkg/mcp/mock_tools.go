@@ -410,12 +410,6 @@ func (s *MockSink) ProposedTasks() []ProposedTask {
 	return out
 }
 
-func (s *MockSink) RecordProposedTask(task ProposedTask) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.proposedTasks = append(s.proposedTasks, task)
-}
-
 func (s *MockSink) ReviewComments() []ReviewComment {
 	s.mu.Lock()
 	defer s.mu.Unlock()

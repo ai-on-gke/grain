@@ -166,10 +166,6 @@ func (d DaemonChangeChecks) ChangeCIRefusal(ctx context.Context, tool string) (s
 
 type DaemonTasks struct {
 	Client *ui.HTTPClient
-	// taskID is the task this run belongs to, sent with a broadcast so
-	// that the daemon checks that task's own team and grants rather than
-	// taking this process's word for them.
-	taskID string
 }
 
 func (d DaemonTasks) ListTasks(ctx context.Context) ([]mcp.TaskSummary, error) {
