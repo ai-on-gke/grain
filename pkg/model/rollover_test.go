@@ -179,6 +179,19 @@ func TestRolloverRefusesConsoleSessions(t *testing.T) {
 	}
 }
 
+// Only a durable task rolls over: any other is closed or superseded.
+func TestRolloverRefusesATaskThatIsNotDurable(t *testing.T) {
+	store, ctx := open(t)
+	tk := queuedTask(t, store, ctx, "9102", &widgets)
+	if _, err := store.Rollover(ctx, tk.ID, model.Attribution{Actor: human}, "", now); !errors.Is(err, model.ErrRolloverRefused) ||
+		!strings.Contains(err.Error(), "not a durable task") {
+		t.Fatalf("rollover of a task that is not durable = %v, want refused", err)
+	}
+	if state, _ := store.State(ctx, tk.ID); state == model.StateClosed {
+		t.Errorf("the refused task was closed")
+	}
+}
+
 func TestRolloverRecordPastLimit(t *testing.T) {
 	created := now.Add(-model.RolloverAgeLimit)
 	for _, tc := range []struct {

@@ -1093,7 +1093,9 @@ for the reason under "Routes and scopes"). As built:
   its goal *move*; tags (which bind a schedule's standing task) are
   copied, and with the predecessor closed only the successor answers to
   them.
-- Rollover is refused for a closed task, a running one (the reconciler
+- Rollover is refused for a task that is not durable (closing one asks
+  `tasks:write`, which `dispatch:write` must not stand in for), a closed
+  task, a running one (the reconciler
   tries again once the run ends) and a console session, whose session
   tag cannot be shared and which already rolls over by being closed and
   refiled. Telling the director it is past the limit is not built yet.

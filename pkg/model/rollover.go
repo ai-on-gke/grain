@@ -159,6 +159,9 @@ var ErrRolloverRefused = errors.New("cannot roll over")
 //     closed session is filed again the next cycle and carries its
 //     handover (orchestrator.reconcileConsoleSession), and its binding is
 //     its session tag, which two tasks cannot share.
+//   - A task that is not durable has no record limit to be past: it is
+//     closed, superseded or replaced, and rolling it over would let a
+//     dispatch:write caller close it, which closing asks tasks:write for.
 func RolloverRefusal(t Task, state State) string {
 	switch {
 	case state == StateClosed:
@@ -172,6 +175,9 @@ func RolloverRefusal(t Task, state State) string {
 	if _, ok := ConsoleSessionIDOf(t); ok {
 		return "it is a console session, which rolls over by being closed: grain files it " +
 			"again the next cycle, carrying its handover"
+	}
+	if !t.IsDurable() {
+		return "it is not a durable task; only a durable task rolls over to a successor"
 	}
 	return ""
 }
