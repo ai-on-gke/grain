@@ -455,6 +455,7 @@ func TestDefaultHostInviteInstall(t *testing.T) {
 }
 
 func TestHostdInstallServesAgentdAllowlistTemplate(t *testing.T) {
+	LogToTest(t)
 	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
@@ -491,13 +492,10 @@ func TestHostdInstallServesAgentdAllowlistTemplate(t *testing.T) {
 	for _, target := range []string{
 		hostdInstallShortPath + "?template=agentd",
 		hostdInstallPath + "?agentd=template",
-		hostdInstallShortPath,
+		hostdInstallShortPath + "?agentd-template=1",
 	} {
 		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com"+target, nil)
 		req.RemoteAddr = "203.0.113.9:4242"
-		if target == hostdInstallShortPath {
-			req.Header.Set("Accept", "application/json")
-		}
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

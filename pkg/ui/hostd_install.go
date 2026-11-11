@@ -108,18 +108,9 @@ func (s *Server) handleHostdInstallScript(w http.ResponseWriter, r *http.Request
 
 func wantsAgentdAllowlistTemplate(r *http.Request) bool {
 	q := r.URL.Query()
-	if q.Get(hostd.InstallTemplateQuery) == hostd.InstallTemplateAgentd ||
+	return q.Get(hostd.InstallTemplateQuery) == hostd.InstallTemplateAgentd ||
 		q.Get("agentd") == "template" ||
-		q.Get("agentd-template") == "1" {
-		return true
-	}
-	for _, part := range strings.Split(r.Header.Get("Accept"), ",") {
-		media, _, _ := strings.Cut(strings.TrimSpace(part), ";")
-		if strings.EqualFold(strings.TrimSpace(media), "application/json") {
-			return true
-		}
-	}
-	return false
+		q.Get("agentd-template") == "1"
 }
 
 // RegisterHostCLICandidates prepends candidate binary paths for CLI name in
