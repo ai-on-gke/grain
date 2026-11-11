@@ -4288,6 +4288,23 @@ fieldset legend {
 .timeline-newest-first .timeline-list {
   margin-bottom: 0;
 }
+/* A closed task's note sits over the reply box (Timeline.jsx), taking
+   the box's own top margin so the pair spaces like the box alone. */
+.comment-form-closed {
+  margin: 0.85rem 0 0;
+}
+.comment-form-closed + .comment-form {
+  margin-top: 0.4rem;
+}
+.timeline-newest-first .comment-form-closed {
+  margin-top: 0;
+}
+/* Two buttons beside the textarea ("Reopen and send", "Comment only")
+   keep a label on one line each rather than squeezing it onto two. */
+.comment-form > .MuiButton-root {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 /* An attempt's own row opens AttemptTranscriptOverlay on click or on
    Enter/Space while focused (bwsalmon/agents#446) -- cursor and a subtle
    hover background are this row's only visual difference from a plain

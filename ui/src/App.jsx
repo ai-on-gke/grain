@@ -23,8 +23,11 @@ import {
 import { kindNarrowing } from "./processFilters.js";
 import api, {
   isUnreachable,
+  isVerifierUnavailable,
   RESTARTING_REASON,
   unreachableReason,
+  VERIFIER_ACTION_REASON,
+  verifierTroubleSustained,
 } from "./api.js";
 import {
   buildPath,
@@ -125,6 +128,9 @@ import ConfigUnavailable from "./components/ConfigUnavailable.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import AccessDenied from "./components/AccessDenied.jsx";
 import DisconnectedBanner from "./components/DisconnectedBanner.jsx";
+import VerifierBanner, {
+  useVerifierTrouble,
+} from "./components/VerifierBanner.jsx";
 import { InstallNoticeBanner } from "./components/InstallNotice.jsx";
 import AlertsButton from "./components/AlertsButton.jsx";
 import {
@@ -159,6 +165,10 @@ import {
 // Exported for App.test.jsx, whose poll test runs a fake clock forward
 // by exactly this rather than by a 3000 written out again beside it.
 export const POLL_INTERVAL_MS = 3000;
+
+// TASKS_STALE_AFTER is how many /api/tasks reads in a row have to fail,
+// with a list already held, before the rail says it is not refreshing.
+export const TASKS_STALE_AFTER = 3;
 
 // CONFIG_POLL_TIMEOUT_MS is how long the main poll waits for its
 // GET /api/config before counting the daemon unreachable
@@ -402,6 +412,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // and a page that would say nothing is waiting must not say it.
   const [tasksListed, setTasksListed] = useState(false);
   const [tasksError, setTasksError] = useState(null);
+  // tasksFailures is how many /api/tasks reads in a row have failed since
+  // the last one that answered. Once a list is held, one failure is not
+  // worth "not refreshing" on the rail: a single 5xx or network blip, or
+  // the sign-in verifier briefly unable to check the caller, is retried
+  // by the next tick, and the subtitle flickered on and off with each.
+  // tasksError waits for TASKS_STALE_AFTER of them -- or, for verifier
+  // refusals, for those to have gone on VERIFIER_SUSTAINED_MS.
+  const tasksFailures = useRef(0);
+  const tasksListedRef = useRef(false);
+  tasksListedRef.current = tasksListed;
   // closedSearch is the search box's text while the task views could
   // show closed work, "" otherwise: what useClosedTasks asks the server
   // to search closed tasks for (set below, once the narrowing is known).
@@ -763,6 +783,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the two would flap it on and off every tick (grain/task-1854's
   // per-poll counting, kept through the merge with task-26).
   const [disconnection, setDisconnection] = useState(null);
+  // verifierSince is when the current run of verifier_unavailable
+  // refusals began (api.js), which VerifierBanner says something about
+  // once it has lasted.
+  const verifierSince = useVerifierTrouble();
   const unreachableFrom = useRef(new Set());
   const unreachableStreak = useRef(new Map());
   // restartingRef is the last GET /api/config's `restarting`: the daemon
@@ -1068,6 +1092,19 @@ function AppContent({ onReload = () => window.location.reload() }) {
       setConfigRefusal(err.configRefusal);
       return;
     }
+    // The sign-in verifier briefly unable to check the caller: the
+    // daemon is up and a read is retried by whatever polls it, so a toast
+    // per refused poll said "temporarily unavailable" every few seconds
+    // over a working page. VerifierBanner speaks for a run of them that
+    // lasts. An action of the operator's own, which nothing will retry,
+    // is told in words about sign-in rather than about reaching grain.
+    if (isVerifierUnavailable(err)) {
+      const method = err.method || "GET";
+      if (method === "GET" || method === "HEAD") return;
+      errorIsUnreachable.current = false;
+      setError(VERIFIER_ACTION_REASON);
+      return;
+    }
     const message = String(err?.message || err);
     const unexplained = isUnreachable(err) && !err.explained;
     if (unexplained && disconnectedRef.current) return;
@@ -1113,13 +1150,25 @@ function AppContent({ onReload = () => window.location.reload() }) {
         // Given up on by the poll tick that asked (its signal, below):
         // that tick has already said why, and this read failed nothing.
         if (opts?.signal?.aborted) throw err;
-        setTasksError(
-          isUnreachable(err) && !err?.explained
-            ? unreachableReason(err)
-            : String(err?.message || err),
-        );
+        tasksFailures.current += 1;
+        const verifier = isVerifierUnavailable(err);
+        const stale = !tasksListedRef.current
+          ? true
+          : verifier
+            ? verifierTroubleSustained()
+            : tasksFailures.current >= TASKS_STALE_AFTER;
+        if (stale) {
+          setTasksError(
+            verifier
+              ? "sign-in verification could not check your identity"
+              : isUnreachable(err) && !err?.explained
+                ? unreachableReason(err)
+                : String(err?.message || err),
+          );
+        }
         throw err;
       }
+      tasksFailures.current = 0;
       setTasksError(null);
       setTasksListed(true);
       if (next === UNCHANGED) return;
@@ -2522,12 +2571,21 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const actBatch = useCallback(
     async (ids, mutate) => {
       const results = await Promise.allSettled(ids.map((id) => mutate(id)));
-      await refreshList();
+      // The re-read failing is the poll's to report (refreshList's
+      // tasksError), not a reason to leave the batch's own outcome unsaid.
+      await refreshList().catch((err) =>
+        console.warn("grain: list re-read after a batch failed", err),
+      );
       const failed = results.filter((r) => r.status === "rejected");
       if (failed.length > 0) {
+        const first = failed[0].reason;
         showError(
           new Error(
-            `${failed.length} of ${ids.length} task(s) failed: ${failed[0].reason?.message || failed[0].reason}`,
+            `${failed.length} of ${ids.length} task(s) failed: ${
+              isVerifierUnavailable(first)
+                ? VERIFIER_ACTION_REASON
+                : first?.message || first
+            }`,
           ),
         );
       }
@@ -3950,6 +4008,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           standing warning is a row in the alerts panel the top bar's
           bell opens (alerts.js, components/AlertsButton.jsx). */}
         <DisconnectedBanner disconnection={disconnection} />
+        {disconnection === null && <VerifierBanner since={verifierSince} />}
         {/* And the one fact about the deployment that stands above the
           top bar too: an install still in host mode, which v2.3.0 no
           longer supports and whose CLIs may have nowhere to run until

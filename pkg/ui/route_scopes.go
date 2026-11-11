@@ -169,6 +169,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/brief":                                           "dispatch:write",
 	"GET /api/tasks/{id}/tree":                                             "tasks:read",
 	"POST /api/repos":                                                      "repos:write",
+	"POST /api/repos/plan":                                                 "repos:read",
 	"DELETE /api/repos/{owner}/{name}":                                     "repos:write",
 	"GET /api/repos/{owner}/{name}/ci-capabilities":                        "capabilities:read",
 	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        "capabilities:admin",

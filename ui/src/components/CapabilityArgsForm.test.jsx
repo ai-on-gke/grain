@@ -609,4 +609,86 @@ describe("CapabilityArgsForm", () => {
     });
     expect(combosAfter[1].textContent).toBe("token (recommended, no keys)");
   });
+
+  it("unsets optional booleans when switched off while keeping false for required ones", async () => {
+    const user = userEvent.setup();
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["confirmed"],
+      properties: {
+        all: { type: "boolean", description: "Read every artifact." },
+        confirmed: { type: "boolean", description: "Explicit confirmation." },
+      },
+    };
+    render(<Harness schema={schema} />);
+    expect(value()).toEqual({});
+
+    const allSwitch = screen.getByRole("switch", { name: /^all/ });
+    await user.click(allSwitch);
+    expect(value()).toEqual({ all: true });
+    await user.click(allSwitch);
+    expect(value()).toEqual({});
+    expect("all" in value()).toBe(false);
+
+    const confirmedSwitch = screen.getByRole("switch", { name: /^confirmed/ });
+    await user.click(confirmedSwitch);
+    expect(value()).toEqual({ confirmed: true });
+    await user.click(confirmedSwitch);
+    expect(value()).toEqual({ confirmed: false });
+  });
+
+  it("leaves optional minItems arrays unset initially and when the last item is removed", async () => {
+    const user = userEvent.setup();
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["required_urls"],
+      properties: {
+        urls: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string", minLength: 1 },
+        },
+        required_urls: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string", minLength: 1 },
+        },
+      },
+    };
+    render(<Harness schema={schema} />);
+    expect(value()).toEqual({ required_urls: [] });
+    expect("urls" in value()).toBe(false);
+
+    const urls = screen.getByRole("group", { name: "urls" });
+    await user.click(within(urls).getByRole("button", { name: "Add urls" }));
+    await user.type(
+      within(urls).getByRole("textbox"),
+      "https://artifacts.example.com/a",
+    );
+    expect(value().urls).toEqual(["https://artifacts.example.com/a"]);
+
+    await user.click(
+      within(urls).getByRole("button", { name: "Remove urls 1" }),
+    );
+    expect("urls" in value()).toBe(false);
+    expect(within(urls).queryByText(/needs at least 1 item/)).toBeNull();
+
+    // A required array keeps [] when its last item is removed so minItems fails on it.
+    const reqUrls = screen.getByRole("group", { name: /^required_urls/ });
+    await user.click(
+      within(reqUrls).getByRole("button", { name: "Add required_urls" }),
+    );
+    await user.type(
+      within(reqUrls).getByRole("textbox"),
+      "https://artifacts.example.com/b",
+    );
+    expect(value().required_urls).toEqual(["https://artifacts.example.com/b"]);
+    await user.click(
+      within(reqUrls).getByRole("button", { name: "Remove required_urls 1" }),
+    );
+    expect(value().required_urls).toEqual([]);
+    expect(within(reqUrls).getByText("needs at least 1 item")).toBeTruthy();
+  });
 });

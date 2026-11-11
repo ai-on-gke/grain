@@ -142,6 +142,7 @@ Why these choices:
 | `proposed/unapproved` | a person: "Approve" | -- | -- |
 | `awaiting_reply/question` | a person: "Reply" (a question or secret request) | -- | -- |
 | `awaiting_reply/answered` | a person: "Reply" (a run that answered in a comment and opened no pull request) | -- | -- |
+| `awaiting_reply/unanswered_comment` | a run to answer a person's comment no run has been shown (`ui.Task.UnansweredCommentFrom`); see [comments-and-closed-tasks.md](../../docs/comments-and-closed-tasks.md) | -- | person ("Run now") |
 | `awaiting_reply/your_message` | a person: "Reply" (an interactive task or console session's next message) | -- | -- |
 | `awaiting_reply/access_request` | a person: "Grant" (a `request_access` call) | -- | -- |
 | `awaiting_reply/stopped` | a person: "Reply" (a turn a person stopped) | -- | -- |
@@ -149,7 +150,7 @@ Why these choices:
 | `failed/consecutive_failures` | a person: "Retry" | -- | -- |
 | `deferred/no_wake_time` | a person: "Undefer" | -- | -- |
 | `deferred/wake_time` | the wake time | reconcileWake | person ("Undefer") |
-| `closed/closed` | a person: "Reopen" | -- | -- |
+| `closed/closed` | a person: "Reopen" (which queues a run for a person's comment left while closed) | -- | -- |
 
 The task lane's escalation to a person is the inbox's stalled group:
 `TaskStallNote` sets `ui.Task.Stall`, and `waitsOnUser` admits the task.
@@ -161,7 +162,8 @@ its open dependencies, whether a usage-limit pause covers its dispatch,
 a pause. An `awaiting_reply` task's sub-case names the ask it is parked
 on, from the facts the frontend's `askedCase` reads (`model.ReplyFacts`
 and `Task.Interactive`), in the same order: a stopped turn, then an
-access request, then an interactive task or console session, then a
+access request, then a person's comment no run has been shown, then an
+interactive task or console session, then a
 pending question or secret request, and otherwise an answer. The reader
 resolves those facts (`ui.Task`'s `TurnStopped`, `AwaitingAccess` and
 `QuestionSummary`, and `Observation.PendingSecret`) before it asks for

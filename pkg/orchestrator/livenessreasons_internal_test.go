@@ -166,7 +166,7 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 	wake := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
 	given := wake.Add(-time.Hour)
 	tasks := []model.Task{{ID: "1"}, {ID: "1", DeferredUntil: &wake}, {ID: "1", Interactive: true}}
-	askedFacts := []model.ReplyFacts{{}, {Question: true}, {Access: true}, {Stopped: true}}
+	askedFacts := []model.ReplyFacts{{}, {Question: true}, {Access: true}, {Stopped: true}, {UnansweredComment: true}}
 	for _, kind := range model.GoalKinds() {
 		tasks = append(tasks, model.Task{ID: "1", GoalKind: kind})
 	}
@@ -257,6 +257,9 @@ func TestAwaitingReplyReasonNamesTheAsk(t *testing.T) {
 		{chat, model.ReplyFacts{Question: true}, taskReasonYourMessage, "Reply"},
 		{chat, model.ReplyFacts{Access: true}, taskReasonAccessRequest, "Grant"},
 		{chat, model.ReplyFacts{Stopped: true}, taskReasonStopped, "Reply"},
+		{plain, model.ReplyFacts{UnansweredComment: true}, taskReasonUnansweredComment, "Run now"},
+		{chat, model.ReplyFacts{UnansweredComment: true}, taskReasonUnansweredComment, "Run now"},
+		{plain, model.ReplyFacts{UnansweredComment: true, Stopped: true}, taskReasonStopped, "Reply"},
 	} {
 		got := TaskReason(c.task, model.StateAwaitingReply, nil, nil, nil, c.asked, "", "")
 		if got.Reason != c.want || got.Control != c.label || got.Class != string(livenessAwaitingPerson) {
