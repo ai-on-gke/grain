@@ -852,7 +852,7 @@ _No flags._
 
 `approve` and `reject` call `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `rollback` calls `POST /api/releases/{version}/rollback` (`RollbackRelease`), passing `-to` (`vA.B.C`) and `-reason` when given; `-bad` is an alias for the positional `vX.Y.Z`. `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
 
-`grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against.
+`grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against. A daemon started with `-release-approval-kms-key` signs with that Cloud KMS key version and reports its public key; changing the flag (or the store-held key it otherwise uses) means updating the variable to match.
 
 Errors, each printed after the usage:
 - an unknown verb: `unknown release command "<v>": approve, reject or rollback`;
@@ -909,6 +909,52 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `TestGrainReleaseRollbackCLI` in `pkg/cli/release_test.go`.
+
+### 4.10a `grain upgrade [status|start|cancel|rollback]` {#CLI-111}
+
+Manages in-place upgrades of a running `grain daemon` deployment (`GET /api/upgrade`, `POST /api/upgrade`, `DELETE /api/upgrade/current`, `DELETE /api/upgrade/scheduled`). Requires `deployment:upgrade` on mutating subcommands (`deployment:read` for `status`).
+
+- `grain upgrade` / `grain upgrade status` reads `GET /api/upgrade` and prints the running image or commit, any pending scheduled upgrade, whether an in-progress upgrade is still cancellable (with any remaining manual grace window or the point-of-no-return message), and the image or commit the last completed upgrade replaced.
+- `grain upgrade start [-after-tasks-finish] [-image <ref>] [<branch>]` posts `POST /api/upgrade` to start an immediate upgrade (subject to `-upgrade-grace-window`) or schedule one after active tasks and CI jobs drain.
+- `grain upgrade cancel [-reason <why>] [-scheduled]` cancels an upgrade currently in progress via `DELETE /api/upgrade/current`, recording the operator and reason in `config_audit` and ending progress in `cancelled`. If no upgrade is running and a scheduled upgrade is waiting to drain, it cancels `DELETE /api/upgrade/scheduled` (`-scheduled` cancels only a scheduled upgrade). Once the upgrade has reached its point of no return, the daemon returns `409 Conflict` (`restarting onto <target> — too late to cancel; upgrade back to <previous> afterwards`).
+- `grain upgrade rollback` posts `POST /api/upgrade` with `rollback: true`, starting a rollback onto the build the last completed upgrade replaced: its digest-pinned `previousImage`, or on source deployments its `previousCommit`, checked out by object id. The daemon reads the target from its own status file, and a rollback always starts now (it cannot be scheduled).
+- For Grain Hub entries: `connected` instances run `pkg/upgrade` and support per-instance `grain -context <name> upgrade cancel`; hosted `instance` VMs run with `-disable-self-upgrade` and upgrade externally by VM replacement (`grain hub upgrade <name>`).
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade status`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade status -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade start`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade start -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-after-tasks-finish` | bool |  |  | hold the queue and wait for running tasks and CI jobs to finish before upgrading |
+| `-image` | string |  |  | explicit image repository, repo:tag or repo@sha256:<digest> to pull (-upgrade-image deployments only) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade cancel`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade cancel -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-reason` | string |  |  | why the upgrade is being cancelled (recorded in the deployment's audit log) |
+| `-scheduled` | bool |  |  | cancel only a scheduled upgrade waiting for tasks to finish |
+<!-- END GENERATED FLAGS -->
+
+#### `grain upgrade rollback`
+
+<!-- BEGIN GENERATED FLAGS: grain upgrade rollback -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `TestGrainUpgradeCLI` in `pkg/cli/upgrade_cmd_test.go`.
 
 ### 4.11 `grain metrics`, `grain failures`, `grain usage` and `grain health` {#CLI-40}
 
@@ -1547,7 +1593,7 @@ _No flags._
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the hub (defaults to -hub-url) |
 | `-registry-token` | value |  |  | deprecated: renamed to -hub-token |
 | `-registry-url` | value |  |  | deprecated: renamed to -hub-url |
-| `-version` | string |  |  | target grain release version (defaults to hub's current pinned release) |
+| `-version` | string |  |  | target grain release version for hosted VM replacement (defaults to hub's current pinned release; connected entries run in-place upgrades via "grain -context <name> upgrade") |
 <!-- END GENERATED FLAGS -->
 
 #### `grain hub resize`
@@ -1931,6 +1977,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-relay-session-lifetime` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-token` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-url` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
+| `-release-approval-kms-key` | string |  | $GRAIN_RELEASE_APPROVAL_KMS_KEY | Cloud KMS EC_SIGN_P256_SHA256 key version (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY |
 | `-repair-reserve-sandboxes` | int | `1` |  | how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) |
 | `-repo` | value |  |  | a repository this workstation works on, as a local checkout's path or owner/name or URL; repeatable. Each is added to the -policy file's repos, added to the default team's target repositories when that list restricts them, and the first is -default-target-repo unless that is set |
 | `-restart-cmd` | value |  |  | one argument of the command the UI's restart-grain button runs to restart this daemon alone, without rebooting the host -- repeat for every argument. Defaults to sudo systemctl restart grain-daemon.service. |
@@ -1979,13 +2026,14 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ui-require-verifier` | string |  | $GRAIN_REQUIRE_VERIFIER | require network callers to sign in through the named IdentityVerifier (e.g. "iap", "registry", or a registered verifier): accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers (or through a verifier that declares AccessCodeWins), and serve no "Enter access code" page (-ui-require-iap is an alias for -ui-require-verifier=iap). Defaults to $GRAIN_REQUIRE_VERIFIER |
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
+| `-upgrade-grace-window` | duration | `10s` | $GRAIN_UPGRADE_GRACE_WINDOW | grace window between confirming a manual upgrade and starting its work, during which the Upgrade pane shows a countdown with Cancel (0 disables the countdown; $GRAIN_UPGRADE_GRACE_WINDOW when unset) |
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
 | `-upgrade-restart-cmd` | value |  |  | one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below. |
 | `-upgrade-reviewed-merge-logins` | string |  |  | comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed |
-| `-upgrade-reviewed-merge-repo` | string |  |  | owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked |
-| `-upgrade-reviewed-merge-token-file` | string |  |  | file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously) |
+| `-upgrade-reviewed-merge-repo` | string |  |  | owner/name (github.com) or host/owner/name (a GitHub Enterprise Server, asked at https://<host>/api/v3) of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked |
+| `-upgrade-reviewed-merge-token-file` | string |  |  | file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read through the host's own forge tool when a command-backed ambient source claims its host, and anonymously otherwise) |
 | `-upgrade-src-dir` | string |  |  | git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature |
 | `-upgrade-verify-cmd` | value |  |  | one argument of the command that verifies an -upgrade-image image's signature before anything runs it -- repeat for every argument, e.g. -upgrade-verify-cmd=cosign -upgrade-verify-cmd=verify -upgrade-verify-cmd=--key=/etc/grain/cosign.pub -upgrade-verify-cmd=--insecure-ignore-tlog=true (docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead unverified and say so. |
 <!-- END GENERATED FLAGS -->
@@ -2141,7 +2189,7 @@ On the bare machine, `grain host` runs the host agent: the allowlisted host CLIs
 | `-check` | bool |  |  | check the allowlist, print what it offers, and exit |
 | `-command` | string | `"/usr/local/bin/grain"` |  | with -ensure-builtins: the grain binary on the host the added entries run |
 | `-disconnect-grace` | duration | `10s` |  | how long a process may outlive the daemon connection that started it |
-| `-drain` | bool |  |  | ask the host agent serving -socket to drain for an upgrade, and exit: it refuses new starts, waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. A host agent speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to the host agent drains |
+| `-drain` | bool |  |  | ask the host agent serving -socket to drain for an upgrade, and exit: it refuses new starts, waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. A host agent speaking this build's protocol with handover re-execs onto the new binary in place while keeping live detached runs up; one without handover cuts over at the first moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to the host agent drains |
 | `-ensure-builtins` | bool |  |  | add to -allowlist the capabilities entries grain's own servers need in this build (host-git, grain-gcp, ... and the edition's, registered by the build's edition) that it has no entry of that name for, print each one added, and exit. An entry already there is never changed, only reported when it differs from the default. Run as root on the host, by grain-hostd.service before each start and by the upgrade step; the host agent re-reads the allowlist on every request, so nothing needs restarting |
 | `-iap-audience` | string |  |  | with -server: the OAuth client ID of the GCP Identity-Aware Proxy in front of the daemon, to send its OIDC token |
 | `-join` | string |  | $GRAIN_HOST_JOIN_CODE | with -server: enroll this host using an enrollment code from Settings -> Hosts -> Invite hosts ($GRAIN_HOST_JOIN_CODE), generating -key-file and waiting for the deployment owner to accept it |
@@ -2309,7 +2357,7 @@ This covers where the installation's state repository lives and what it holds. T
 | `reformat` | record that the schema changed, so the next start replaces the dump |
 | `restore-snapshot DIR` | restore the settings and memory tables from a snapshot |
 | `prepare-upgrade` | export a store this build cannot open, for the next start to migrate. Prints `prepared FROM TO DIR`, `current N` or `none` |
-| `check [-migrate] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive |
+| `check [-migrate] [-base REV] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive. `-base` (string) names the git revision the change is against: a credential typed into a capability server rather than referenced as `$secret:<name>` fails the check when the change adds it and is a warning when the base already held it (without `-base`, or with `-migrate`, every one is a warning). The check grain posts on its own configuration repositories reads the base from the clone's `origin/HEAD` |
 | `key show` / `key path` | print the secrets public key / where the private key is read from |
 | `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
 | `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |

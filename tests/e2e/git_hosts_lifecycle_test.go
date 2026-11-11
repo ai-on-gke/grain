@@ -32,9 +32,10 @@ package e2e
 // to by a scripted agent through the real git proxy, and carried through
 // a state-repo export and import; at every step its host must survive,
 // and every upstream must only ever be sent its own host's credential.
-// Opening the pull request and the merge queue on a command-backed host
-// are pkg/daemon/forgeroute_test.go's, one layer down: the forge router
-// they go through is the daemon's own.
+// What happens to a pushed branch afterwards -- the pull request, its
+// checks, the plain git server's no-PR ending -- goes through the
+// daemon's own forge router, and is git_hosts_daemon_test.go's, through a
+// real daemon.Run.
 
 import (
 	"bytes"
@@ -48,6 +49,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -174,7 +176,10 @@ type hostUpstream struct {
 	// kind names the host in failures.
 	kind string
 	// secret is the one credential this host may ever be sent.
-	secret  string
+	secret string
+	// repo is the repository's name on this host: gitHostsRepo unless a
+	// test gives each host its own (git_hosts_daemon_test.go).
+	repo    string
 	dir     string
 	backend http.Handler
 
@@ -185,7 +190,7 @@ type hostUpstream struct {
 
 func newHostUpstream(t *testing.T, kind, host, secret string) *hostUpstream {
 	dir := t.TempDir()
-	return &hostUpstream{t: t, kind: kind, host: host, secret: secret, dir: dir, backend: gitHTTPBackend(dir)}
+	return &hostUpstream{t: t, kind: kind, host: host, secret: secret, repo: gitHostsRepo, dir: dir, backend: gitHTTPBackend(dir)}
 }
 
 func (u *hostUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +256,12 @@ func (u *hostUpstream) label() string {
 
 // ref is acme/widgets on this host.
 func (u *hostUpstream) ref() model.RepoRef {
-	return model.RepoRef{Host: u.host, Owner: gitHostsOwner, Name: gitHostsRepo}
+	return model.RepoRef{Host: u.host, Owner: gitHostsOwner, Name: u.repo}
+}
+
+// bare is this host's bare repository.
+func (u *hostUpstream) bare() string {
+	return filepath.Join(u.dir, gitHostsOwner, u.repo+".git")
 }
 
 // newRepo seeds acme/widgets on this host with one commit on main, and a
@@ -259,11 +269,11 @@ func (u *hostUpstream) ref() model.RepoRef {
 func (u *hostUpstream) newRepo() {
 	t := u.t
 	t.Helper()
-	bare := initBareRepo(t, filepath.Join(u.dir, gitHostsOwner, gitHostsRepo+".git"), "main")
+	bare := initBareRepo(t, u.bare(), "main")
 	run(t, u.dir, "git", "-C", bare, "config", "http.receivepack", "true")
 	seed := filepath.Join(t.TempDir(), "seed")
 	run(t, u.dir, "git", "clone", "-q", bare, seed)
-	mustWriteFile(t, filepath.Join(seed, "README.md"), "acme/widgets on "+u.label()+"\n")
+	mustWriteFile(t, filepath.Join(seed, "README.md"), gitHostsOwner+"/"+u.repo+" on "+u.label()+"\n")
 	run(t, seed, "git", "add", "README.md")
 	run(t, seed, "git", "-c", "user.email=s@e", "-c", "user.name=s", "commit", "-q", "-m", "initial commit")
 	run(t, seed, "git", "push", "-q", "origin", "HEAD:main")
@@ -272,7 +282,7 @@ func (u *hostUpstream) newRepo() {
 // branchTip is the subject of branch's tip on this host, "" when the
 // branch is not there.
 func (u *hostUpstream) branchTip(branch string) string {
-	bare := filepath.Join(u.dir, gitHostsOwner, gitHostsRepo+".git")
+	bare := u.bare()
 	out, err := exec.Command("git", "--git-dir", bare, "log", "-1", "--format=%s", "refs/heads/"+branch).Output()
 	if err != nil {
 		return ""
@@ -627,6 +637,16 @@ func TestTaskLifecycleOnEveryKindOfGitHost(t *testing.T) {
 // gitproxy.IsAccessRefusal knows, so the orchestrator's own clone retries
 // such a task rather than parking it on that fix: filed from
 // grain/task-4345.)
+// readsAsMissingRepo reports whether git's output says the repository was
+// not there: "not found", or a 404 status. 404 is matched as a number of
+// its own, since the output also quotes the git proxy's URL, and a random
+// port such as 127.0.0.1:40439 contains it.
+func readsAsMissingRepo(out string) bool {
+	return strings.Contains(out, "not found") || status404.MatchString(out)
+}
+
+var status404 = regexp.MustCompile(`\b404\b`)
+
 func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	r := newHostsRig(t)
 	depot := r.hosts[3]
@@ -644,9 +664,10 @@ func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	if !strings.Contains(out, gitproxytest.Summary) && !strings.Contains(out, gitproxytest.Action) {
 		t.Errorf("a lapsed login on %s said %q, want the source's login fix (%q)", depotHost, out, gitproxytest.Summary)
 	}
-	if strings.Contains(out, "not found") || strings.Contains(out, "404") {
+	if readsAsMissingRepo(out) {
 		t.Errorf("a lapsed login on %s read as a missing repository: %q", depotHost, out)
 	}
+	assertParksOnRenewingTheLogin(t, "a lapsed login", out, gitproxytest.Action)
 
 	depot.fail(hostUnauthorized)
 	task = r.fileTask(t, depot, "push with a refused credential", nil, nil)
@@ -659,8 +680,27 @@ func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	if fix := "GH_HOST=" + depotHost + " forgecli auth login"; !strings.Contains(out, fix) {
 		t.Errorf("a refused credential on %s said %q, want the login renewed (%q)", depotHost, out, fix)
 	}
-	if strings.Contains(out, "not found") || strings.Contains(out, "404") {
+	if readsAsMissingRepo(out) {
 		t.Errorf("a refused credential on %s read as a missing repository: %q", depotHost, out)
+	}
+	assertParksOnRenewingTheLogin(t, "a refused credential", out, "GH_HOST="+depotHost+" forgecli auth login")
+}
+
+// assertParksOnRenewingTheLogin checks that a refused clone's output is
+// one the dispatcher parks the task on, saying to renew the host's login
+// (gitproxy.LoginLapsed, orchestrator's hostLoginLapsedError) -- not one
+// it retries towards the failure limit, nor one it reads as the
+// credential lacking access to the repository (gitproxy.IsAccessRefusal).
+func assertParksOnRenewingTheLogin(t *testing.T, what, out, fix string) {
+	t.Helper()
+	said, ok := gitproxy.LoginLapsed(out)
+	if !ok {
+		t.Errorf("%s on %s is not one the dispatcher parks on renewing the login: %q", what, depotHost, out)
+	} else if !strings.Contains(said, fix) {
+		t.Errorf("%s on %s parks on %q; want it to say %q", what, depotHost, said, fix)
+	}
+	if gitproxy.IsAccessRefusal(out) {
+		t.Errorf("%s on %s reads as the credential lacking access: %q", what, depotHost, out)
 	}
 }
 

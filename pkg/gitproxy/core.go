@@ -137,6 +137,10 @@ type GitProxy struct {
 	// review-comment, and grain git revert's revert-info
 	// (cli_actions.go). Nil answers each of them 501.
 	CLIActions CLIActions
+	// ReportChecker, when set, answers POST /cli/report/check (grain
+	// report check): a draft closing report checked against what the run
+	// has read so far. Nil answers it 501.
+	ReportChecker CLIReportChecker
 	// WaitCredit, when set, credits the time /cli/ci/wait and
 	// /cli/ci/run-job block back to the run's wall-clock deadline.
 	WaitCredit   CLIWaitCreditor
@@ -833,6 +837,11 @@ func upstreamFailedDenial(err error, credential Credential) ProxyResponse {
 	reason := err.Error()
 	if credential.Token != nil && *credential.Token != "" {
 		reason = strings.ReplaceAll(reason, *credential.Token, "[token]")
+	}
+	if _, ok := AsLoginRedirect(err); ok {
+		// No answer from the host because a front end before it wants
+		// the grain host's own login renewed (LoginLapsedMarker).
+		return Denial(502, LoginLapsedMarker+"upstream request failed: "+reason)
 	}
 	return Denial(502, "upstream request failed: "+reason)
 }

@@ -1,0 +1,42 @@
+NOTICE:  database "walk_i3" does not exist, skipping
+
+== 3a. invalid -management-url values are refused at startup
+javascript:alert(1)                           -> management-url must be an absolute http:// or https:// URL without user credentials, got "javascript:alert(1)"
+ftp://registry.example.test/x                 -> management-url must be an absolute http:// or https:// URL without user credentials, got "ftp://registry.example.test/x"
+https://ops:hunter2@registry.example.test/x   -> management-url must be an absolute http:// or https:// URL without user credentials, got "https://registry.example.test/x"
+/instances/acme                               -> management-url must be an absolute http:// or https:// URL without user credentials, got "/instances/acme"
+https://                                      -> management-url must be an absolute http:// or https:// URL without user credentials, got "https://"
+data:text/html,hi                             -> management-url must be an absolute http:// or https:// URL without user credentials, got "data:text/html,hi"
+password echoed in the last refusal: 0
+
+== 3b. a valid http:// URL is accepted (the flag allows http as well as https)
+{"selfUpgradeDisabled":true,"managementUrl":"http://registry.example.test/instances/acme"}
+
+== 3c. -disable-self-upgrade -management-url https://registry.example.test/instances/acme (with an -upgrade-image configured)
+2026/11/08 02:44:33 grain daemon: in-VM self-upgrade is disabled (-disable-self-upgrade); upgrades are managed externally at https://registry.example.test/instances/acme
+{"selfUpgradeDisabled":true,"managementUrl":"https://registry.example.test/instances/acme"}
+{"enabled":false,"selfUpgradeDisabled":true,"managementUrl":"https://registry.example.test/instances/acme"}
+POST /api/upgrade            -> {"error":"in-VM self-upgrade is disabled on this deployment (-disable-self-upgrade); upgrades are managed externally"}
+ [404]
+
+PUT /api/upgrade/source      -> {"error":"in-VM self-upgrade is disabled on this deployment (-disable-self-upgrade); upgrades are managed externally"}
+ [404]
+
+DELETE /api/upgrade/scheduled -> {"error":"in-VM self-upgrade is disabled on this deployment (-disable-self-upgrade); upgrades are managed externally"}
+ [404]
+
+GET /api/upgrade/targets     -> {"error":"in-VM self-upgrade is disabled on this deployment (-disable-self-upgrade); upgrades are managed externally"}
+ [404]
+
+GET /api/upgrade/release-notes -> {"error":"in-VM self-upgrade is disabled on this deployment (-disable-self-upgrade); upgrades are managed externally"}
+ [404]
+
+{"driver":"postgres","migrate":null}
+
+== 3d. automatic upgrades due right now are not acted on
+{"configured":true,"pollInterval":"10s","pollIntervalDefault":"10s","maxWorkers":10,"maxMergesPerRepo":5,"maxAutoSubmitDepth":2,"maxAutoSubmitFanOut":5,"geminiEfforts":["low","medium","high"],"codexEfforts":["none","minimal","low","medium","high","xhigh","max","ultra"],"maxAgentTurns":0,"githubHost"
+ [200]
+{"autoUpgradeOn":"daily","autoUpgradeChannel":"main","autoUpgradeTime":"02:44"}
+auto_upgrade_run rows: 0
+upgrade start/hold lines in the daemon log: 0
+{"enabled":false,"state":null,"scheduled":null}

@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,19 @@ const (
 	IntegrationEventTaskQuestion IntegrationEventType = "task.question"
 	IntegrationEventTaskComment  IntegrationEventType = "task.comment"
 	IntegrationEventTaskCI       IntegrationEventType = "task.ci"
+
+	// The notification events: a notification raised (new, or raised
+	// again at a higher severity, which re-surfaces it), acknowledged, or
+	// cleared. TaskID and Repo are the notification's own, when it has
+	// them, and readers are filtered by Repo as for task events.
+	IntegrationEventNotificationRaised  IntegrationEventType = "notification.raised"
+	IntegrationEventNotificationAcked   IntegrationEventType = "notification.acked"
+	IntegrationEventNotificationCleared IntegrationEventType = "notification.cleared"
+
+	// The host-script approval events: a host-script call waiting for a
+	// person, and that call answered (approved, denied, or expired).
+	IntegrationEventLocalScriptPending  IntegrationEventType = "local_script.pending"
+	IntegrationEventLocalScriptAnswered IntegrationEventType = "local_script.answered"
 )
 
 // ValidIntegrationEventTypes lists every event type GET /api/events serves.
@@ -42,18 +56,16 @@ var ValidIntegrationEventTypes = []IntegrationEventType{
 	IntegrationEventTaskQuestion,
 	IntegrationEventTaskComment,
 	IntegrationEventTaskCI,
+	IntegrationEventNotificationRaised,
+	IntegrationEventNotificationAcked,
+	IntegrationEventNotificationCleared,
+	IntegrationEventLocalScriptPending,
+	IntegrationEventLocalScriptAnswered,
 }
 
 // Valid reports whether t is a recognized integration event type.
 func (t IntegrationEventType) Valid() bool {
-	switch t {
-	case IntegrationEventTaskState,
-		IntegrationEventTaskQuestion,
-		IntegrationEventTaskComment,
-		IntegrationEventTaskCI:
-		return true
-	}
-	return false
+	return slices.Contains(ValidIntegrationEventTypes, t)
 }
 
 // MaxRetainedIntegrationEvents bounds how many rows integration_event keeps
@@ -84,7 +96,19 @@ type IntegrationEvent struct {
 	CICommit        string
 	CIConclusion    string
 	CIDetail        string
-	Actor           Attribution
+	// NotificationID, Subject and Severity identify a notification.*
+	// event's notification; Summary is its one-line title, or a
+	// local_script.* event's script call.
+	NotificationID int64
+	Subject        string
+	Severity       string
+	Summary        string
+	// ApprovalID and Script identify a local_script.* event's call, and
+	// Decision is how a local_script.answered one was answered.
+	ApprovalID string
+	Script     string
+	Decision   string
+	Actor      Attribution
 }
 
 // IntegrationEventFilter narrows a read of integration_event.
@@ -367,8 +391,9 @@ func insertIntegrationEventTx(ctx context.Context, tx *sql.Tx, e IntegrationEven
 			"`type`,`at`,`task_id`,`repo`,`previous_state`,`state`,`question_summary`,`comment_id`,"+
 			"`external_ref`,`origin`,`pull_request`,`filed_via`,"+
 			"`ci_provider`,`ci_run_id`,`ci_commit`,`ci_conclusion`,`ci_detail`,"+
-			"`actor_kind`,`actor_id`,`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source`"+
-			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			"`actor_kind`,`actor_id`,`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source`,"+
+			"`notification_id`,`subject`,`severity`,`summary`,`approval_id`,`script`,`decision`"+
+			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		string(e.Type), at, e.TaskID, e.Repo, string(e.PreviousState), string(e.State),
 		e.QuestionSummary, e.CommentID,
 		e.ExternalRef, e.Origin, e.PullRequest, e.FiledVia,
@@ -377,6 +402,8 @@ func insertIntegrationEventTx(ctx context.Context, tx *sql.Tx, e IntegrationEven
 		behalfColumn(behalf, func(p Principal) string { return string(p.Kind) }),
 		behalfColumn(behalf, func(p Principal) string { return p.ID }),
 		sourceOf(behalf),
+		e.NotificationID, e.Subject, e.Severity, clampSingleLine(e.Summary, MaxQuestionSummaryLen),
+		e.ApprovalID, e.Script, e.Decision,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("recording integration event %s on task %s: %w", e.Type, e.TaskID, err)
@@ -679,7 +706,8 @@ func (s *Store) ListIntegrationEvents(ctx context.Context, filter IntegrationEve
 		"`id`,`type`,`at`,`task_id`,`repo`,`previous_state`,`state`,`question_summary`,`comment_id`," +
 		"`external_ref`,`origin`,`pull_request`,`filed_via`," +
 		"`ci_provider`,`ci_run_id`,`ci_commit`,`ci_conclusion`,`ci_detail`," +
-		"`actor_kind`,`actor_id`,`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source` " +
+		"`actor_kind`,`actor_id`,`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source`," +
+		"`notification_id`,`subject`,`severity`,`summary`,`approval_id`,`script`,`decision` " +
 		"FROM `integration_event` WHERE " + strings.Join(conds, " AND ") +
 		" ORDER BY `id` ASC LIMIT ?"
 	args = append(args, limit)
@@ -701,6 +729,7 @@ func (s *Store) ListIntegrationEvents(ctx context.Context, filter IntegrationEve
 			&e.ExternalRef, &e.Origin, &e.PullRequest, &e.FiledVia,
 			&e.CIProvider, &e.CIRunID, &e.CICommit, &e.CIConclusion, &e.CIDetail,
 			&actorKind, &actorID, &actorSource, &behalfKind, &behalfID, &behalfSource,
+			&e.NotificationID, &e.Subject, &e.Severity, &e.Summary, &e.ApprovalID, &e.Script, &e.Decision,
 		); err != nil {
 			return nil, fmt.Errorf("scanning integration event: %w", err)
 		}
@@ -725,4 +754,44 @@ func (s *Store) ListIntegrationEvents(ctx context.Context, filter IntegrationEve
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// RecordIntegrationEvent records e outside any other write: the
+// local_script.* events, whose approvals live in the daemon's memory
+// rather than the store. A TaskID with no Repo takes the task's own.
+func (s *Store) RecordIntegrationEvent(ctx context.Context, e IntegrationEvent) error {
+	return s.write(ctx, "record integration event "+string(e.Type), func(tx *sql.Tx) error {
+		return recordIntegrationEventTx(ctx, tx, e)
+	})
+}
+
+// recordIntegrationEventTx inserts e, filling its Repo from its task
+// when it names one and has none, and its actor from ctx when unset.
+func recordIntegrationEventTx(ctx context.Context, tx *sql.Tx, e IntegrationEvent) error {
+	if e.TaskID != "" && e.Repo == "" {
+		meta, ok, err := taskEventMetaTx(ctx, tx, e.TaskID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			e.Repo = meta.repo
+		}
+	}
+	e.Actor = eventActorOr(ctx, e.Actor)
+	_, err := insertIntegrationEventTx(ctx, tx, e)
+	return err
+}
+
+// notificationEventTx records a notification.* event for n.
+func notificationEventTx(ctx context.Context, tx *sql.Tx, typ IntegrationEventType, n Notification, at time.Time) error {
+	return recordIntegrationEventTx(ctx, tx, IntegrationEvent{
+		Type:           typ,
+		At:             at,
+		TaskID:         n.TaskID,
+		Repo:           n.Repo,
+		NotificationID: n.ID,
+		Subject:        n.Subject,
+		Severity:       string(n.Severity),
+		Summary:        n.Title,
+	})
 }

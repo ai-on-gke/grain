@@ -1561,6 +1561,20 @@ describe("unionCapabilities", () => {
     expect(unionCapabilities(undefined, undefined)).toEqual([]);
     expect(unionCapabilities(["gcp-key"], null)).toEqual(["gcp-key"]);
   });
+
+  it("deduplicates canonical api# references against legacy api: strings", () => {
+    expect(
+      unionCapabilities(
+        [
+          'https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}',
+        ],
+        ["api:tasks:read@acme/widgets", "api:ci:read"],
+      ),
+    ).toEqual([
+      'https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}',
+      "api:ci:read",
+    ]);
+  });
 });
 
 describe("defaultCapabilitiesFor", () => {

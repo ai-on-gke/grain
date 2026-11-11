@@ -1514,6 +1514,12 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	if task.NoteSummary, err = c.noteSummary(ctx, task); err != nil {
 		return TaskDetail{}, err
 	}
+	if state == model.StateAwaitingReply {
+		if cm := model.UncountedAgentComment(comments, obs, id); cm != nil {
+			task.UncountedAgentReplyFrom = sessionLabel(cm.Author.Actor, cm.Author.OnBehalfOf, c.sessionTitles(ctx))
+			task.UncountedAgentReplyID = cm.ID
+		}
+	}
 	detail := TaskDetail{
 		Task:          c.withReasons(task, *t, obs, wait),
 		Comments:      make([]Comment, 0, len(comments)),
@@ -4493,33 +4499,14 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		grants = defaults
 	}
 	if target != nil {
-		usesGrainCI, err := c.teamRepoUsesGrainCI(ctx, teamID, *target)
+		// grain#ci on a repository grain CI gates; otherwise grain#ci is
+		// stripped and the task reads its own repository's CI through the
+		// default api:ci-read@<target> instead (model.RepoCIDefaults).
+		ciDefaults, err := c.teamRepoCIDefaults(ctx, teamID, *target)
 		if err != nil {
 			return nil, nil, err
 		}
-		if usesGrainCI {
-			found := false
-			for _, grant := range grants {
-				if grainci.IsGrant(grant.Capability) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{
-					Capability: grainci.Grant,
-					Via:        model.GrantByDefault,
-				})
-			}
-		} else {
-			filtered := make([]model.Grant, 0, len(grants))
-			for _, grant := range grants {
-				if !grainci.IsGrant(grant.Capability) {
-					filtered = append(filtered, grant)
-				}
-			}
-			grants = filtered
-		}
+		grants = model.AdjustRepoCIGrants(grants, *target, ciDefaults)
 	}
 	// A GCP key the deployment has not configured is refused when somebody
 	// asked for it, and dropped when it was only inherited: a deployment or
@@ -4559,6 +4546,21 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		allowed = append(allowed, g)
 	}
 	return allowed, droppedRefusals, nil
+}
+
+// teamRepoCIDefaults is the CI grant a task filed against repo is given by
+// default: grain#ci where grain CI gates it, else api:ci-read@<repo> unless
+// the capability policy denies that (model.RepoCIDefaultsFor).
+func (c *Client) teamRepoCIDefaults(ctx context.Context, teamID string, repo model.RepoRef) (model.RepoCIDefaults, error) {
+	usesGrainCI, err := c.teamRepoUsesGrainCI(ctx, teamID, repo)
+	if err != nil || usesGrainCI || c.Store == nil {
+		return model.RepoCIDefaults{GrainCI: usesGrainCI}, err
+	}
+	policy, _, err := c.capabilityPolicyFor(ctx)
+	if err != nil {
+		return model.RepoCIDefaults{}, err
+	}
+	return model.RepoCIDefaultsFor(false, policy, repo), nil
 }
 
 func (c *Client) teamRepoUsesGrainCI(ctx context.Context, teamID string, repo model.RepoRef) (bool, error) {
@@ -6965,6 +6967,43 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 		return nil
 	}
 	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
+// AddRelayedComment is a person's answer that a console session carries
+// to another task for them -- "tell task 2588 yes, use the staging
+// key" said in a director chat. It is written as the person's, via the
+// session ((human, via agent), model.RelayedVia), and does everything a
+// comment the person posted on the task themselves would: it lifts the
+// pending question and sends an awaiting_reply task back to the queue.
+// Whether session may speak for person on the task is the route's
+// question (Server.relayAttribution), asked before this is called.
+func (c *Client) AddRelayedComment(ctx context.Context, id, body string, uploads []AttachmentUpload, person model.Principal, session model.Principal) error {
+	if strings.TrimSpace(body) == "" && len(uploads) == 0 {
+		return validationErrorf("a comment needs a body, an attachment, or both")
+	}
+	if person.Kind != model.PrincipalHuman || session.Kind != model.PrincipalAgent {
+		return forbiddenErrorf("a relayed answer is a person's, carried by a session acting for them")
+	}
+	now := c.now()
+	attachments, err := decodeAttachments(uploads, now)
+	if err != nil {
+		return err
+	}
+	by := model.Attribution{Actor: person, OnBehalfOf: &session}
+	return c.addAttributedComment(ctx, id, body, attachments, by, now, true)
+}
+
+// CommentAwaitingPerson is the commentDelivery an agent's comment is
+// answered with when it lands on a task waiting for a person's reply and
+// does not count as one (Server.handleAddComment), and
+// CommentAwaitingPersonNotice the sentence that says so.
+const CommentAwaitingPerson = "awaiting_person"
+
+// CommentAwaitingPersonNotice says an agent's comment on task id was
+// recorded but left it waiting for a person.
+func CommentAwaitingPersonNotice(id string) string {
+	return fmt.Sprintf("Recorded; task %s is still waiting for a person's reply. An agent's comment does not answer it. "+
+		"A console session acting for a person can pass relay: true (grain task message --relay) to answer for them.", id)
 }
 
 // commentWithAuthor is AddCommentWithAuthor with the one thing a team

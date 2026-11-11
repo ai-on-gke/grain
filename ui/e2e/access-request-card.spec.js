@@ -85,8 +85,17 @@ async function fakeAccessRequest(page, id, pending = pendingAccess) {
     if (route.request().method() !== "GET") return route.fallback();
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];
-    const response = await route.fetch({ headers });
-    const body = await response.json();
+    // The page polls this route. Under load one poll's response can be
+    // disposed before it is read ("Response has been disposed"), and a
+    // throw here fails the test; let that one through unfaked instead --
+    // the next poll is faked, and the card is still asserted below.
+    let response, body;
+    try {
+      response = await route.fetch({ headers });
+      body = await response.json();
+    } catch {
+      return route.fallback().catch(() => {});
+    }
     await route.fulfill({
       response,
       headers: { "content-type": "application/json" },

@@ -164,6 +164,26 @@ func (u *Upgrader) validateRepository(repo string) error {
 	return installtrack.ValidateTargetRepository(base, repo, u.cfg.Image.AllowedRepositories...)
 }
 
+// isRecordedRollbackImage reports whether image is the exact PreviousImage a
+// completed upgrade recorded in StatusFile, so "Roll back to <previous>" works
+// even when the previous build was pinned to a sha-... tag or digest alone.
+// Only a digest-pinned reference counts: it skips the repository and branch
+// allow-lists, which is safe only for content this deployment already ran,
+// and a tag alone names whatever was last pushed to it.
+func (u *Upgrader) isRecordedRollbackImage(image string) bool {
+	if u.cfg.StatusFile == "" {
+		return false
+	}
+	prev, err := readStatus(u.cfg.StatusFile)
+	if err != nil || prev.PreviousImage == "" {
+		return false
+	}
+	if _, pinned := kubeDigestRef(prev.PreviousImage); !pinned {
+		return false
+	}
+	return strings.TrimSpace(image) == strings.TrimSpace(prev.PreviousImage)
+}
+
 // ValidateImage is the check StartImage makes of an image: it returns the
 // branch the upgrade is recorded under and the reference it would pull.
 // A tag in image names the branch (TagForBranch, inverted) and wins over
@@ -190,24 +210,55 @@ func (u *Upgrader) ValidateImageWith(branch, image string, o ImageOptions) (stri
 // the upgrade is to record (nil for none).
 func (u *Upgrader) validateImage(branch, image string, opts ImageOptions) (string, string, *EditionSwitch, error) {
 	branch = strings.TrimSpace(branch)
-	if u.Mode() != ModeImage {
+	if u.Mode() != ModeImage && u.Mode() != ModeKube {
 		return "", "", nil, errors.New("an explicit image only applies to a deployment that upgrades by pulling an image (-upgrade-image)")
 	}
 	o, err := ParseImageOverride(image)
 	if err != nil {
 		return "", "", nil, err
 	}
-	if err := u.validateRepository(o.Repository); err != nil {
-		return "", "", nil, err
+	isRollback := u.isRecordedRollbackImage(image)
+	// A Kubernetes deployment takes an explicit image for one thing only:
+	// rolling back to the exact image its last upgrade replaced. Anything
+	// else would be a new way to point its Deployment at an image of the
+	// caller's choosing, and one without the edition guard the image path
+	// has (deploymentEdition reads only ImageConfig's track) -- so it is
+	// refused, as every explicit image on this path was before rollback.
+	if u.Mode() == ModeKube && !isRollback {
+		return "", "", nil, errors.New("an explicit image only applies to a deployment that upgrades by pulling an image (-upgrade-image); " +
+			"a Kubernetes deployment accepts one only to roll back to the image its last upgrade replaced")
 	}
-	sw, err := u.editionSwitchFor(o.Repository, opts)
+	if !isRollback {
+		if err := u.validateRepository(o.Repository); err != nil {
+			return "", "", nil, err
+		}
+	} else if u.cfg.Refusal != "" {
+		return "", "", nil, errors.New(u.cfg.Refusal)
+	}
+	effOpts := opts
+	if isRollback {
+		if _, cross := u.otherEdition(o.Repository); cross {
+			effOpts.SwitchEdition = true
+		}
+	}
+	sw, err := u.editionSwitchFor(o.Repository, effOpts)
 	if err != nil {
 		return "", "", nil, err
 	}
 	if o.Tag != "" {
 		branch = branchForTag(o.Tag)
+	} else if isRollback && branch == "" {
+		if o.Digest != "" && len(o.Digest) >= len("sha256:")+12 {
+			branch = "sha256-" + o.Digest[len("sha256:"):len("sha256:")+12]
+		} else {
+			branch = "rollback"
+		}
 	}
-	if err := u.checkBranch(branch); err != nil {
+	if !isRollback {
+		if err := u.checkBranch(branch); err != nil {
+			return "", "", nil, err
+		}
+	} else if err := validateBranch(branch); err != nil {
 		return "", "", nil, err
 	}
 	ref, err := u.imageRefIn(o.Repository, branch)
@@ -246,7 +297,7 @@ func (u *Upgrader) StartImageWith(branch, image string, opts ImageOptions) error
 		log.Printf("upgrade: refusing an upgrade to image %q: %v", image, err)
 		return err
 	}
-	return u.start(branch, ref, sw)
+	return u.startWithOptions(branch, ref, sw, true, "")
 }
 
 // editionSwitchFor is the edition switch an upgrade onto repo records,
@@ -287,6 +338,16 @@ func (u *Upgrader) overrideRef() string {
 // to pull instead of the branch's tag ("" for none) and sw the edition
 // switch the operator asked for (nil for none).
 func (u *Upgrader) start(branch, ref string, sw *EditionSwitch) error {
+	return u.startWithOptions(branch, ref, sw, true, "")
+}
+
+// startWithOptions is start, with manual false for an upgrade that already
+// drained through a schedule (no grace window), and commit the object id
+// to check out instead of branch on the source pipeline ("" for none; only
+// StartRollback passes one).
+func (u *Upgrader) startWithOptions(branch, ref string, sw *EditionSwitch, manual bool, commit string) error {
+	prevImg, prevRel, prevCommit := u.snapshotPrevious()
+
 	u.mu.Lock()
 	if u.done != nil {
 		u.mu.Unlock()
@@ -295,11 +356,40 @@ func (u *Upgrader) start(branch, ref string, sw *EditionSwitch) error {
 	}
 	u.done = make(chan struct{})
 	u.override = ref
+	u.commit = commit
 	u.switching = sw
+	u.cancelled = false
+	u.cancelledBy = ""
+	u.cancelReason = ""
+	u.irreversible = false
+	u.cancelFn = nil
+	u.targetLabel = branch
+	u.previousLabel = previousDisplayFromStatus(Status{
+		Branch:          branch,
+		PreviousImage:   prevImg,
+		PreviousRelease: prevRel,
+		PreviousCommit:  prevCommit,
+	})
 	u.mu.Unlock()
 
 	now := time.Now().UTC()
-	status := Status{Branch: branch, Phase: PhaseRunning, StartedAt: &now, Process: processID}
+	var graceUntil *time.Time
+	graceWindow := time.Duration(0)
+	if manual && u.GraceWindow() > 0 {
+		graceWindow = u.GraceWindow()
+		until := now.Add(graceWindow)
+		graceUntil = &until
+	}
+	status := Status{
+		Branch:          branch,
+		Phase:           PhaseRunning,
+		StartedAt:       &now,
+		GraceUntil:      graceUntil,
+		PreviousImage:   prevImg,
+		PreviousRelease: prevRel,
+		PreviousCommit:  prevCommit,
+		Process:         processID,
+	}
 	if sw != nil {
 		recorded := *sw
 		status.EditionSwitch = &recorded
@@ -326,11 +416,13 @@ func (u *Upgrader) start(branch, ref string, sw *EditionSwitch) error {
 			branch, sw.From, to, who, ref)
 	case ref != "":
 		log.Printf("upgrade: %s: requested, pulling %s", branch, ref)
+	case commit != "":
+		log.Printf("upgrade: %s: requested, rolling back to commit %s", branch, commit)
 	default:
 		log.Printf("upgrade: %s: requested", branch)
 	}
 
-	go u.run(branch, status)
+	go u.run(branch, status, graceWindow)
 	return nil
 }
 

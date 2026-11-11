@@ -343,6 +343,8 @@ Usage of grain daemon:
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-url string
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
+  -release-approval-kms-key string
+    	Cloud KMS EC_SIGN_P256_SHA256 key version (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY
   -repair-reserve-sandboxes int
     	how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) (default 1)
   -repo value
@@ -439,6 +441,8 @@ Usage of grain daemon:
     	comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here (default "main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*")
   -upgrade-drain-window duration
     	maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally)
+  -upgrade-grace-window duration
+    	grace window between confirming a manual upgrade and starting its work, during which the Upgrade pane shows a countdown with Cancel (0 disables the countdown; $GRAIN_UPGRADE_GRACE_WINDOW when unset) (default 10s)
   -upgrade-image string
     	image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required
   -upgrade-image-ref-file string
@@ -450,9 +454,9 @@ Usage of grain daemon:
   -upgrade-reviewed-merge-logins string
     	comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed
   -upgrade-reviewed-merge-repo string
-    	owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked
+    	owner/name (github.com) or host/owner/name (a GitHub Enterprise Server, asked at https://<host>/api/v3) of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked
   -upgrade-reviewed-merge-token-file string
-    	file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously)
+    	file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read through the host's own forge tool when a command-backed ambient source claims its host, and anonymously otherwise)
   -upgrade-src-dir string
     	git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature
   -upgrade-verify-cmd value

@@ -40,7 +40,6 @@ package orchestrator
 // bounds.
 
 import (
-	"regexp"
 	"strings"
 	"time"
 
@@ -372,14 +371,6 @@ func isTaskIDAPIRoute(name string) bool {
 	return false
 }
 
-var (
-	batchTaskTokenRe  = regexp.MustCompile(`(?i)\b(?:task[- ])?#?([0-9]+)\b`)
-	batchTaskLineRe   = regexp.MustCompile(`^([0-9]+)\s+\[`)
-	batchRunIDRe      = regexp.MustCompile(`\b(ci-[a-zA-Z0-9_-]+|run-[a-zA-Z0-9_-]+)\b`)
-	jsonTaskIDFieldRe = regexp.MustCompile(`"id"\s*:\s*"([0-9]+)"`)
-	jsonCIRunIDRe     = regexp.MustCompile(`"id"\s*:\s*"(ci-[a-zA-Z0-9_-]+)"`)
-)
-
 // extractAPICallTargetIDs extracts comma-separated task or CI run IDs targeted
 // or returned by call. Errored calls return "" so a failed read cannot count as
 // having read its requested target.
@@ -464,10 +455,8 @@ func extractAPICallTargetIDs(call agent.ToolCall) string {
 		}
 	}
 
-	switch call.Name {
-	case "list_grain_tasks", "read_pipeline_changes", "query_merge_queue", "list_ci_runs",
-		"api_list_tasks", "api_list_ci_runs", "grain_list_tasks":
-		for _, id := range extractBatchOutputIDs(call.Name, call.Text) {
+	if model.ReadsIDsFromOutput(call.Name) {
+		for _, id := range model.ReadOutputIDs(call.Name, call.Text) {
 			if !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)
@@ -476,63 +465,4 @@ func extractAPICallTargetIDs(call agent.ToolCall) string {
 	}
 
 	return strings.Join(ids, ",")
-}
-
-func extractBatchOutputIDs(tool, text string) []string {
-	var ids []string
-	seen := map[string]bool{}
-	add := func(id string) {
-		if id != "" && !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	if tool == "api_list_tasks" || tool == "grain_list_tasks" {
-		for _, m := range jsonTaskIDFieldRe.FindAllStringSubmatch(text, -1) {
-			if len(m) == 2 {
-				add(model.NormalizeTaskID(m[1]))
-			}
-		}
-	}
-	if tool == "api_list_ci_runs" {
-		for _, m := range jsonCIRunIDRe.FindAllStringSubmatch(text, -1) {
-			if len(m) == 2 {
-				add(m[1])
-			}
-		}
-	}
-	for _, line := range strings.Split(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "next:") {
-			continue
-		}
-		if tool == "list_grain_tasks" && !strings.HasPrefix(line, " ") {
-			if m := batchTaskLineRe.FindStringSubmatch(line); len(m) == 2 {
-				add(model.NormalizeTaskID(m[1]))
-			}
-		}
-		if tool == "read_pipeline_changes" {
-			fields := strings.Fields(trimmed)
-			if len(fields) >= 2 && strings.EqualFold(fields[0], "task") {
-				add(model.NormalizeTaskID(fields[1]))
-			}
-		}
-		for _, m := range batchTaskTokenRe.FindAllStringSubmatch(line, -1) {
-			if len(m) == 2 && (strings.Contains(strings.ToLower(m[0]), "task") || strings.Contains(m[0], "#")) {
-				add(model.NormalizeTaskID(m[1]))
-			}
-		}
-		if tool == "list_ci_runs" {
-			for _, m := range batchRunIDRe.FindAllStringSubmatch(line, -1) {
-				if len(m) == 2 {
-					add(m[1])
-				}
-			}
-			fields := strings.Fields(trimmed)
-			if len(fields) >= 2 && strings.HasPrefix(fields[0], "ci-") {
-				add(fields[0])
-			}
-		}
-	}
-	return ids
 }

@@ -1290,7 +1290,7 @@ func TestSyncPullRequestsRepairNamesTheJobAndStepWhenNoLogIsServedYet(t *testing
 		"Actions only serves a job's log once its run has finished",
 		// ...and the move that gets the log itself, from a sandbox that
 		// starts minutes after this read.
-		"`pull_request_status`",
+		"`grain ci wait`",
 	} {
 		if !strings.Contains(bodies[0], want) {
 			t.Errorf("the repair comment does not carry %q:\n%s", want, bodies[0])
@@ -1353,7 +1353,7 @@ func TestSyncPullRequestsRepairSaysWhenTheFailingCheckIsNotActions(t *testing.T)
 	// these answers cannot fetch this one, rather than sending the run
 	// after a log that is never coming: it reads the same Actions
 	// endpoints this read.
-	if !strings.Contains(bodies[0], "neither can `pull_request_status`") {
+	if !strings.Contains(bodies[0], "neither can `grain ci wait`") {
 		t.Errorf("the repair comment leaves the run to try for a log nothing can fetch:\n%s", bodies[0])
 	}
 }
