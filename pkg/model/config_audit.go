@@ -66,13 +66,39 @@ func (s *Store) RecordConfigAudit(ctx context.Context, e ConfigAuditEntry) (int6
 // ConfigAudit is the config audit log, newest first, at most limit
 // entries (all of them for limit <= 0).
 func (s *Store) ConfigAudit(ctx context.Context, limit int) ([]ConfigAuditEntry, error) {
+	return s.configAudit(ctx, "", limit)
+}
+
+// ConfigAuditOfSurface is the config audit log of one surface (`access`,
+// `settings`, ...), newest first, at most limit entries (all of them for
+// limit <= 0). The surface is matched in the query, before the limit, so
+// a run of newer changes to other surfaces never crowds this one's out
+// of the answer: GET /api/access/history read the newest entries of
+// every surface and kept the access ones, and answered nothing at all
+// once enough capability-server edits were newer than the last access
+// change (docs/test-runs/2026-11-10-agent-api-paging.md, F7).
+func (s *Store) ConfigAuditOfSurface(ctx context.Context, surface string, limit int) ([]ConfigAuditEntry, error) {
+	if strings.TrimSpace(surface) == "" {
+		return nil, fmt.Errorf("reading the config audit log: no surface")
+	}
+	return s.configAudit(ctx, surface, limit)
+}
+
+func (s *Store) configAudit(ctx context.Context, surface string, limit int) ([]ConfigAuditEntry, error) {
 	if limit <= 0 {
 		limit = -1
 	}
+	query := "SELECT `id`,`at`,`actor_kind`,`actor_id`,`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source`," +
+		"`surface`,`summary` FROM `config_audit`"
+	args := []any{}
+	if surface != "" {
+		query += " WHERE `surface` = ?"
+		args = append(args, surface)
+	}
+	query += " ORDER BY `at` DESC, `id` DESC LIMIT ?"
+	args = append(args, limit)
 	var out []ConfigAuditEntry
-	err := each(ctx, s.db,
-		"SELECT `id`,`at`,`actor_kind`,`actor_id`,`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source`,"+
-			"`surface`,`summary` FROM `config_audit` ORDER BY `at` DESC, `id` DESC LIMIT ?", limit,
+	err := each(ctx, s.db, query, args,
 		func(rows *sql.Rows) error {
 			var e ConfigAuditEntry
 			var kind, source, behalfSource string

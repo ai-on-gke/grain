@@ -74,6 +74,12 @@ const (
 	// FeatureFeatures: Hello.Features itself. Listed so that a peer's
 	// silence about every other feature is a statement, not an omission.
 	FeatureFeatures Feature = "features"
+	// FeatureEnvOpen: an allowlist entry's env may include "*" to admit any
+	// variable name outside EnvDeny (identity variables, LD_*, and the
+	// interpreter/shell injection variables), path/paths_under/cwd_under
+	// accept ~/ relative to hostd's home, and top-level and entry-level x-*
+	// keys are ignored.
+	FeatureEnvOpen Feature = "env_open"
 	// FeatureHookPolicy: the host's agy-tool-hook and claude-stop-hook
 	// subcommands accept -policy <path> and evaluate a staged per-run
 	// hook policy file instead of a compiled-in tool roster or stop rule.
@@ -93,6 +99,7 @@ var Features = []Feature{
 	FeatureLogins,
 	FeatureAgentsOnly,
 	FeatureFeatures,
+	FeatureEnvOpen,
 	FeatureHookPolicy,
 }
 

@@ -876,24 +876,24 @@ out before cursors carried a key still reads on from its offset.
 | `GET /api/tasks/{id}/messages` | 10 | author, summary or body | `after`, `agents`, `wait_ms` |
 | `GET /api/inbox` | 20 | task, title, repo, summary, subject or pull request | `repo`, `kind`. `items` is the page. |
 | `GET /api/notifications` | 20 | subject or title | `open`, `family`, `after`, `fields=list` |
-| `GET /api/ci/runs` | 10 (`view=full`) / 20 (`view=compact`) | id, repository, ref, commit, event, task id (`requestedBy`), job or workflow | `view=compact` (recommended), `repo`, `ref`, `conclusion`, `job`, `workflow`, `since`, `until`, `sort`, `order`, `provider`. `runs` is the page; `matched` (with `stored`) is the count. |
+| `GET /api/ci/runs` | 10 (`view=full`) / 20 (`view=compact`) | id, repository, ref, commit, event, task id (`requestedBy`), job or workflow | `view=compact` (recommended), `repo`, `ref`, `conclusion`, `job`, `workflow`, `since`, `until`, `sort`, `order`, `provider`, `fields=full`. `runs` is the page; `matched` (with `stored`) is the count. Unless `fields=full` is passed, an agent's row carries at most 5 jobs (`view=full`) or 10 job lines (`view=compact`), the failed, errored and cancelled ones first; `jobCount` and `jobsTruncated` report the full count, and `GET /api/ci/runs/{id}` has every job. An agent's `view=full` row cuts `error` and its jobs' errors to 500 bytes (`errorTruncated` marks the run's), and its `faults` are the shared faults seen on that page's own runs (at most 5), each cut as a paged `GET /api/ci/faults` row is; `GET /api/ci/faults` lists them all. |
 | `GET /api/ci/workflows` | 20 | workflow path or name | `repo`, `ref` (both required: the workflows are read from the repository at that ref). `workflows` is the page. |
 | `GET /api/ci/runs/{id}/artifacts` | 50 | job or artifact name | `artifacts` is the page. |
-| `GET /api/ci/faults` | 20 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. |
+| `GET /api/ci/faults` | 10 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. A paged row names its first 3 `runs`, 5 `refs` and 5 `paths`; `runCount`, `refCount` and `pathCount` report the full counts of what was cut, and `trimmed` says something was. `fields=full` carries them all. |
 | `GET /api/merge-batches` | 20 | repository, branch, ref or run id | `repo=owner/name`. `batches` is the page. |
-| `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. |
+| `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. A paged row leaves out `detail` (the finding in prose, ~650 B) unless `fields=full`. |
 | `GET /api/memory` | 5 | repository, author or text | `repo=owner/name` for one repository's standing memory; `repo=` (empty) for the deployment's own. |
 | `GET /api/memory/documents` | 20 | name, repo or summary | `repo=owner/name` for one repository's documents; `repo=` (empty) for the deployment's own. |
 | `GET /api/templates` | 5 (`fields=summary`: 20) | id, name, title or repository | `repo=owner/name`; `fields=summary` omits each template's prompt description. |
 | `GET /api/schedules` | 10 | name, id, repository, template, suite, source or declared path | `kind` (`schedule`, `workflow`), `sort`, `f`, `fields=full` (inline prompt descriptions are omitted on paged calls unless `fields=full`). |
 | `GET /api/suites` | 20 | id or name | |
-| `GET /api/suite-runs` | 20 | suite name or id | `repo=owner/name` |
+| `GET /api/suite-runs` | 10 | suite name or id | `repo=owner/name`. A paged row carries its first 3 `tasks` (`taskCount` and `tasksTruncated` report the full count); `fields=full`, or `GET /api/suite-runs/{id}`, has every task. |
 | `GET /api/boards` | 20 | id, name or folder | |
 | `GET /api/release-notes` | 20 | week period, title or author | |
 | `GET /api/release-notes/versions` | 50 | version string | `versions` is the page. |
 | `GET /api/state-repo/files` | 100 | file path | `entries` is the page. |
-| `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo` |
-| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls, and a row's `status.methods` is capped at 40 (`methodCount` and `methodsTruncated` report the full count); use `GET /api/capability-methods` for every method. |
+| `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo`. A paged row cuts `description` to 500 bytes and each array in `args` (an enum of configured spaces, say) to 10 items; `descriptionTruncated`, `argsTruncated` and `argItemCounts` (each cut array's full length by its path in the schema) say so. Ask with `fields=full` and `q=<ref>` for a whole row. |
+| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls, and a row's `status.methods` is capped at 40 (`methodCount` and `methodsTruncated` report the full count); use `GET /api/capability-methods` for every method. Each array in a paged row's `config.config` (gchat's `spaces`, one per room) is cut to 10 items; `configTruncated` says so and `configItemCounts` gives each cut array's full length by its path. `fields=full` carries whole rows. |
 | `GET /api/capability-servers/usage` | 20 | capability_id | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
 | `GET /api/capability-servers/gchat-usage` | 50 | space or transport | `id` |
 | `GET /api/capability-servers/host-entries` | 50 | allowlist entry name | `entries` is the page. |
@@ -901,7 +901,7 @@ out before cursors carried a key still reads on from its offset.
 | `GET /api/api-scope-sets/usage` | 20 | scope set name | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
 | `GET /api/external-agents/tokens` | 20 | id, name, owner or scope set | Per-row `resolvedScopes` (scopes times repositories) is left out of paged calls: `resolvedScopeCount` says how many there are, `resolvedScopesTruncated` is set, and `scopeSet`, `scopes` and `repos` are complete. |
 | `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
-| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
+| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. The surface is matched in the database query, so newer changes to other surfaces never push access changes out of the answer. |
 | `GET /api/hostds` | 50 | host name or owner | |
 | `GET /api/gcp-keys` | 20 | key name, project id or service account email | |
 | `GET /api/github-tokens` | 20 | credential name, capability or connection scope | `tokens` is the page; per-row `connections` is capped on paged calls (`connectionCount` and `connectionsTruncated`). |
@@ -1044,6 +1044,31 @@ To tell another task's running agent something, use
   target's state is the same afterwards.
 
 It is refused on the caller's own task.
+
+### Steering a task with wider grants
+
+An agent may edit, re-queue or speak in another task only when that
+task is within its own task's envelope. `PATCH /api/tasks/{id}`,
+`retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
+`PUT /api/tasks/{id}/goal`, `agent-messages` and `notes` are refused
+with `403` on a target that carries a grant the calling task does not
+hold (a capability, an `api:*` scope, or the secrets and credentials a
+capability's arguments bind), writes to or reads a repository the
+calling task cannot, has wider network access, or has `autoMerge` the
+calling task lacks. A repository default grant the calling task lacks
+counts only when it is dangerous (only a person may grant it). Holding `api:tasks:write` on the repository is not
+enough: otherwise a less-privileged run could have a more-privileged
+one act on its behalf. Ask a person to act on that task instead.
+`run-now` is not refused this way: on an approved task it only moves
+when the task runs (`api:dispatch-control`'s job), and on an unapproved
+one the approval rail already applies.
+
+Two kinds of target are exempt: the calling task's own proposals
+(directly or down its proposal chain), which were held to its ceilings
+when filed, and -- for `agent-messages` and `notes` only -- its parent
+or child. A message from a narrower parent or child reaches the
+recipient prefixed with an `[Untrusted agent input: ...]` notice, so the
+receiving run weighs it as information rather than instructions.
 
 Two other routes look like they do this, but don't:
 

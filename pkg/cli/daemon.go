@@ -507,6 +507,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"(docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the "+
 			"command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead "+
 			"unverified and say so.")
+	reviewedMerge := registerReviewedMergeFlags(fs)
 	disableSelfUpgrade := fs.Bool("disable-self-upgrade", false,
 		"disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) "+
 			"and hide in-VM upgrade controls in the UI in favour of external lifecycle management "+
@@ -515,6 +516,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed "+
 			"(for example its registry entry page), shown in place of in-VM self-upgrade controls when "+
 			"-disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)")
+	defaultEnvironmentName := fs.String("default-environment-name", "",
+		"the environment name (the UI's tab title and sidebar badge) this deployment takes when it has none, "+
+			"or still has the one this flag gave it before: never one its operator set in Settings or its state repo. "+
+			"A Grain Hub sets it to a hosted instance's entry display name ($GRAIN_DEFAULT_ENVIRONMENT_NAME when unset)")
 
 	// How the UI's "reboot host" button reboots (pkg/ui/host.go). The
 	// default is the `sudo systemctl reboot` this always ran, which is
@@ -1147,6 +1152,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*managementURL = env
 		}
 	}
+	if !passed["default-environment-name"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_DEFAULT_ENVIRONMENT_NAME")); env != "" {
+			*defaultEnvironmentName = env
+		}
+	}
 	if !passed["deployment-owner"] {
 		if env := strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv)); env != "" {
 			*deploymentOwner = env
@@ -1302,11 +1312,13 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		IapBackendService: *iapBackendService,
 		IapResource:       *iapResource,
 		UpgradeSrcDir:     *upgradeSrcDir, UpgradeInstallPath: *upgradeInstallPath, UpgradeRestartCmd: upgradeRestartCmd, UpgradeVerifyCmd: upgradeVerifyCmd,
+		UpgradeReviewedMergeRepo: reviewedMerge.repo(), UpgradeReviewedMergeLogins: reviewedMerge.logins(), UpgradeReviewedMergeTokenFile: reviewedMerge.tokenFile(),
 		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
 		DisableSelfUpgrade:     *disableSelfUpgrade,
 		ManagementURL:          strings.TrimSpace(*managementURL),
+		DefaultEnvironmentName: strings.TrimSpace(*defaultEnvironmentName),
 		RebootCmd:              rebootCmd,
 		ShutdownCmd:            shutdownCmd,
 		RestartCmd:             restartCmd,

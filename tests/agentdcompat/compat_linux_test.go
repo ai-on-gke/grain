@@ -73,7 +73,7 @@ func binaries(t *testing.T) map[string]string {
 
 func TestReleasedAgentdsWorkWithThisDaemon(t *testing.T) {
 	for label, bin := range binaries(t) {
-		t.Run(label, func(t *testing.T) { exercise(t, bin) })
+		t.Run(label, func(t *testing.T) { exercise(t, label, bin) })
 	}
 }
 
@@ -187,7 +187,7 @@ type agent struct {
 	log    *bytes.Buffer
 }
 
-func exercise(t *testing.T, bin string) {
+func exercise(t *testing.T, label, bin string) {
 	// A short root: the agent's unix socket must fit in sun_path.
 	root, err := os.MkdirTemp("", "agc")
 	if err != nil {
@@ -301,6 +301,73 @@ func exercise(t *testing.T, bin string) {
 		var r *hostd.RefusedError
 		if !errors.As(err, &r) {
 			t.Fatalf("an env name the entry does not accept: err = %v, want a refusal", err)
+		}
+	})
+
+	t.Run("env_open", func(t *testing.T) {
+		baseAllowlist, err := os.ReadFile(allowlist)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.WriteFile(allowlist, baseAllowlist, 0o644) })
+
+		if label == "head" && !peer.Has(hostd.FeatureEnvOpen) {
+			t.Fatalf("head build hello %+v does not advertise %q", peer, hostd.FeatureEnvOpen)
+		}
+		if !peer.Has(hostd.FeatureEnvOpen) {
+			// An older host does not advertise env_open: snippets rendered for it
+			// must omit "*", "~/" and x- keys so it still accepts the file.
+			snippet := "clis:\n" + hostd.CLIEntryYAML("fake", cli, home, []string{stage}, []string{"COMPAT_MARK"}, nil, peer)
+			if strings.Contains(snippet, `"*"`) || strings.Contains(snippet, "~/") {
+				t.Fatalf("snippet for host without env_open used env_open syntax:\n%s", snippet)
+			}
+			if err := os.WriteFile(allowlist, []byte(snippet), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if _, err := c.Run(ctx, hostd.Request{Kind: hostd.KindCLI, Name: "fake", Env: []string{"COMPAT_MARK=legacy-ok"}, Dir: stageRoot}, nil, &out, io.Discard); err != nil {
+				t.Fatalf("older agent refused the closed-env snippet rendered for it: %v\n%s", err, snippet)
+			}
+			if !strings.Contains(out.String(), "env:legacy-ok") {
+				t.Errorf("stdout %q lacks env:legacy-ok", out.String())
+			}
+			return
+		}
+
+		homeBin := filepath.Join(home, ".local", "bin", "fake-cli")
+		if err := os.MkdirAll(filepath.Dir(homeBin), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(homeBin, []byte(fakeCLI), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		openAllowlist := "x-compat-note: ignored\nclis:\n" +
+			hostd.CLIEntryYAML("fake", homeBin, home, []string{stage}, []string{"COMPAT_MARK"}, nil, peer) +
+			"    x-entry-note: ignored\n"
+		if !strings.Contains(openAllowlist, `env: ["*"]`) || !strings.Contains(openAllowlist, "path: ~/.local/bin/fake-cli") {
+			t.Fatalf("snippet for env_open host did not use env: [\"*\"] and ~/:\n%s", openAllowlist)
+		}
+		if err := os.WriteFile(allowlist, []byte(openAllowlist), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if _, err := c.Run(ctx, hostd.Request{
+			Kind: hostd.KindCLI,
+			Name: "fake",
+			Env:  []string{"COMPAT_MARK=open-ok", "UNLISTED_FUTURE_VAR=1"},
+			Dir:  stageRoot,
+		}, nil, &out, io.Discard); err != nil {
+			t.Fatalf("env_open run failed: %v", err)
+		}
+		if !strings.Contains(out.String(), "env:open-ok") {
+			t.Errorf("stdout %q lacks env:open-ok", out.String())
+		}
+		for _, denied := range []string{"HOME=" + stageRoot, "LD_PRELOAD=" + homeBin, "PYTHONPATH=" + stageRoot, "NODE_OPTIONS=--eval=1"} {
+			_, err := c.Run(ctx, hostd.Request{Kind: hostd.KindCLI, Name: "fake", Env: []string{denied}}, nil, io.Discard, io.Discard)
+			var r *hostd.RefusedError
+			if !errors.As(err, &r) {
+				t.Errorf("denied variable %q under env: [\"*\"]: err = %v, want a refusal", denied, err)
+			}
 		}
 	})
 
