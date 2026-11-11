@@ -104,6 +104,10 @@ type ResumeOn struct {
 	// Actions), or ResumeOnMyBranch for the latest verdict on the task's
 	// own branch: the task is queued again once it has a verdict.
 	CI string `json:"ci,omitempty"`
+	// Head is the commit the task's branch was at when the CI wait was
+	// taken, where grain could read it: the branch moving off it is a
+	// verdict of its own, since whatever was being waited for is stale.
+	Head string `json:"head,omitempty"`
 	// Message is "or when anybody posts to this task".
 	Message bool `json:"message,omitempty"`
 	// Goal is "or when the task's goal moves it" (TaskGoal): what a goal

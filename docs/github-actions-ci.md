@@ -144,8 +144,8 @@ Grain CI runs jobs inside a pre-provisioned VM/container image built from `Granu
 1. **Grain Dialect Keys Removed**:
    - Grain-only keys (`capabilities:`, `optional-capabilities:`, `sandbox:`, `infrastructure:`, `guest-cache:`, and job-level `paths:` / `paths-ignore:` / `artifacts:`) are removed or translated to standard GitHub Actions equivalents (`actions/upload-artifact`).
 2. **Checkout and Toolchains (`actions/checkout`, `actions/setup-go`, `actions/setup-node`)**:
-   - Grain sandboxes start with the repository pre-checked-out and Go `1.26.10` + Node.js `20` pre-installed.
-   - Every GitHub Actions job checks out the repository with `actions/checkout` (`persist-credentials: false`; jobs that invoke `scripts/export-source.sh` or inspect git tags/history pass `fetch-depth: 0`), installs Go from `go.mod`'s `toolchain` directive (`go1.26.10`) via `actions/setup-go`, and installs Node.js `20` via `actions/setup-node` where needed.
+   - Grain sandboxes start with the repository pre-checked-out and Go `1.26.11` + Node.js `20` pre-installed.
+   - Every GitHub Actions job checks out the repository with `actions/checkout` (`persist-credentials: false`; jobs that invoke `scripts/export-source.sh` or inspect git tags/history pass `fetch-depth: 0`), installs Go from `go.mod`'s `toolchain` directive (`go1.26.11`) via `actions/setup-go`, and installs Node.js `20` via `actions/setup-node` where needed.
    - Jobs that run Go tests launching `git` subprocesses with scrubbed environments configure system and global `git config user.name` and `user.email`.
 3. **Explicit Caching (`actions/cache`)**:
    - Go jobs cache `~/go/pkg/mod` and `~/.cache/go-build` keyed on `hashFiles('go.sum', 'third_party/granule/go.sum')`.
