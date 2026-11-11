@@ -1048,6 +1048,15 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		}{Counters: healthCounterSections()})
 		return
 	}
+	// ?section=staleSchedules is only the schedules that stopped running,
+	// which the CI pane reads to say so beside the repository's runs --
+	// a store read, not worth a sandbox sweep on every poll of that pane.
+	if r.URL.Query().Get("section") == "staleSchedules" {
+		writeJSON(w, http.StatusOK, struct {
+			StaleSchedules []model.StaleSchedule `json:"staleSchedules"`
+		}{StaleSchedules: s.tasks.staleSchedules(r.Context())})
+		return
+	}
 	// Config.Daemon counts here too: a deployment whose sandbox pool and
 	// host readings are both unavailable can still be one that has
 	// restarted forty times this hour, and that is the pane's most
