@@ -332,20 +332,22 @@ jobs:
           rot_file=""
           cleanup() { rm -f "${key_file}" "${rot_file}"; }
           trap cleanup EXIT
-          if [ -n "${SIGNING_KEY_PEM:-}" ]; then
+          dry_run="${INPUT_DRY_RUN:-false}"
+          # A dry run never writes the signing key to the runner's disk.
+          if [ "${dry_run}" != "true" ] && [ -n "${SIGNING_KEY_PEM:-}" ]; then
             key_file="${RUNNER_TEMP}/agentd-signing.key"
             printf '%s\n' "${SIGNING_KEY_PEM}" > "${key_file}"
             chmod 600 "${key_file}"
             export AGENTD_RELEASE_SIGNING_KEY="${key_file}"
           fi
-          if [ -n "${ROTATIONS_JSON:-}" ]; then
+          if [ "${dry_run}" != "true" ] && [ -n "${ROTATIONS_JSON:-}" ]; then
             rot_file="${RUNNER_TEMP}/agentd-rotations.json"
             printf '%s\n' "${ROTATIONS_JSON}" > "${rot_file}"
             export AGENTD_RELEASE_ROTATIONS="${rot_file}"
           fi
           args=()
-          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+          if [ "${dry_run}" = "true" ]; then
             args+=(--dry-run)
           fi
-          bash ./scripts/release-assets.sh agentd-sign "${RUNNER_TEMP}/release-agentd"
+          bash ./scripts/release-assets.sh "${args[@]}" agentd-sign "${RUNNER_TEMP}/release-agentd"
           bash ./scripts/release-assets.sh "${args[@]}" agentd-publish "${RELEASE_VERSION}" "${RUNNER_TEMP}/release-agentd"

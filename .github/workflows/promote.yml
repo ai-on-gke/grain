@@ -663,5 +663,5 @@ jobs:
           if [ -z "${PROMOTE_VERSION:-}" ]; then
             export RELEASE_AGENTD_SKIP_UNRELEASED=true
           fi
-          bash ./scripts/release-assets.sh agentd-sign "${RUNNER_TEMP}/release-agentd"
+          bash ./scripts/release-assets.sh "${args[@]}" agentd-sign "${RUNNER_TEMP}/release-agentd"
           bash ./scripts/release-assets.sh "${args[@]}" agentd-publish "${RELEASE_VERSION}" "${RUNNER_TEMP}/release-agentd"

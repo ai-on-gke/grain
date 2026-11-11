@@ -102,8 +102,8 @@
 #           is configured unless REQUIRE_AGENTD_SIGNING=true.
 #   agentd-publish <release> [DIR]
 #           upload DIR's grain-agentd binaries and manifests to <release>
-#           (vX.Y.Z or vX.Y.Z-rc.N), manifests last. A release whose
-#           manifests are already signed is never overwritten.
+#           (vX.Y.Z or vX.Y.Z-rc.N), manifests last. A release already
+#           carrying all four grain-agentd assets is never overwritten.
 #
 # --dry-run (or DRY_RUN=true) does everything that reads and prints every
 # write it would make instead of making it.
@@ -1273,6 +1273,13 @@ agentd_sign() {
   esac
   validate_agentd "$d"
   if [ -z "$key_file" ]; then
+    # A dry run is never handed the signing key (the workflows keep it
+    # off the runner's disk), so it says what it would sign instead of
+    # failing REQUIRE_AGENTD_SIGNING.
+    if [ "$dry_run" = true ]; then
+      say "[dry-run] would sign grain-agentd manifests in $d with AGENTD_RELEASE_SIGNING_KEY"
+      return 0
+    fi
     if [ "$require_signing" = true ]; then
       die "AGENTD_RELEASE_SIGNING_KEY is not set and REQUIRE_AGENTD_SIGNING=true"
     fi
