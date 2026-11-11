@@ -38,8 +38,9 @@ import (
 //  2. Narrowing or removing the sole full admin returns 403 last_admin directly
 //     (before confirm_self), while self_escalation still blocks DELETE?confirmSelf=1
 //     followed by POST wider and blocks group-to-user persistence.
-//  3. Both acting-task and external gma_ agent credentials receive 403 even on
-//     an idempotent POST of an already-listed entry.
+//  3. An external gma_ agent credential receives 403 even on an idempotent
+//     POST of an already-listed entry (acting-task credentials take the same
+//     checkAccessWriteCaller path; this test does not mint one).
 //  4. Unchecked group entries fail closed as potentially matching the caller.
 func TestVerifiedAdminAccessGuardrailsAndReasonSanitization(t *testing.T) {
 	ui.ResetIAPConfig()
