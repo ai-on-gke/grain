@@ -177,3 +177,67 @@ test("the inbox's stalled group offers each stuck task its sub-case's control, o
     }
   }
 });
+
+// On a phone the row wraps and its loose chips sort to the end, so the
+// control has to sort with them: it once stayed on the title's line,
+// a screen's height of row away from the sub-case chip naming what it
+// does. A role without the control's scope sees it disabled, in the same
+// place (2026-11-11 walkthrough).
+test("a stuck row's control stays beside its chip on a phone, and is gated for a viewer", async ({
+  page,
+}) => {
+  await withStalls(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const viewer of [false, true]) {
+    if (viewer) {
+      await page.route(
+        (u) => u.pathname === "/api/config",
+        async (route) => {
+          const headers = { ...route.request().headers() };
+          delete headers["if-none-match"];
+          const response = await route.fetch({ headers });
+          const body = await response.json();
+          await route.fulfill({
+            response,
+            json: {
+              ...body,
+              access: {
+                role: "grain/viewer",
+                roles: ["grain/viewer"],
+                full: false,
+                scopes: ["tasks:read", "settings:read"],
+              },
+            },
+          });
+        },
+      );
+    }
+    await page.goto("/");
+    const queued = page.locator(".task-row", { hasText: STUCK_QUEUED });
+    const chip = queued.locator(".task-reason");
+    const control = queued.locator(".task-reason-control");
+    await expect(control).toHaveText("Run now");
+    if (viewer) {
+      await expect(control).toBeDisabled();
+      await expect(
+        queued.locator('[data-access-denied="dispatch:write"]'),
+      ).toHaveCount(1);
+    } else {
+      await expect(control).toBeEnabled();
+    }
+    const [row, chipBox, controlBox] = await Promise.all([
+      box(queued),
+      box(chip),
+      box(control),
+    ]);
+    expect(controlBox.x).toBeGreaterThanOrEqual(chipBox.x + chipBox.width);
+    expect(controlBox.x + controlBox.width).toBeLessThanOrEqual(
+      row.x + row.width + 1,
+    );
+    expect(
+      Math.abs(
+        controlBox.y + controlBox.height / 2 - (chipBox.y + chipBox.height / 2),
+      ),
+    ).toBeLessThanOrEqual(2);
+  }
+});

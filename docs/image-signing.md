@@ -263,9 +263,13 @@ It is asked in two places:
   commit runs to decide. The check runs in the `signature` step, after
   the signature. It needs `-upgrade-verify-cmd`: without a signature the
   label is only what the registry says, so the check refuses when that
-  flag is missing. It covers the host image path and the release-notes
-  preview. It does not cover the Kubernetes path yet, and the daemon
-  warns at startup when the check is configured there.
+  flag is missing. It covers the host image path, the Kubernetes path
+  and both release-notes previews. The Kubernetes path pulls nothing
+  before a pod runs the image, so it reads the label from the registry
+  by the digest the verifier signed off on. It holds the manifest, and
+  the config blob the manifest names, to their digests. For an index it
+  reads every platform's manifest, and all of them must name the same
+  commit.
 
 Whether a missing `-upgrade-verify-cmd` should refuse everywhere has the
 same answer as the section above. It refuses for a deployment that asked
