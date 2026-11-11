@@ -482,6 +482,62 @@ func TestReachableReposReportsEachConnection(t *testing.T) {
 	}
 }
 
+// Test on an ambient connection to a command-backed forge that is not
+// saved yet goes through the forge's tool, as the saved one's does: its
+// repositories are what `forgecli api` says, and a lapsed login is the
+// tool's own sentence -- never a direct request to the host, whose
+// front end answers with a sign-in page.
+func TestUnsavedForgeCLICheckGoesThroughTheTool(t *testing.T) {
+	srv, _, _ := testServerWithCreds(t)
+	t.Setenv("GRAIN_IN_CONTAINER", "0")
+
+	bin, state := t.TempDir(), t.TempDir()
+	forgecli := `#!/bin/sh
+if [ "$1 $2" = "auth token" ]; then echo "forgecli-token-$GH_HOST"; exit 0; fi
+[ "$1" = api ] || exit 2
+echo "$@" >> "` + state + `/calls"
+if [ -f "` + state + `/corp-login" ]; then
+  printf 'HTTP/2.0 302 Found\r\nLocation: https://login.forge.test/?authLevel=2000000\r\n\r\n'
+  exit 1
+fi
+printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n'
+printf '{"login":"bsalmon","permissions":{"pull":true,"push":true}}'
+`
+	if err := os.WriteFile(filepath.Join(bin, "forgecli"), []byte(forgecli), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	check := func() ui.TeamGitHubCredentialCheck {
+		t.Helper()
+		rec := do(t, srv, http.MethodPost, "/api/deployment/git-connections/check",
+			`{"type":"ambient","host":"`+gitproxytest.Host+`","source":"`+gitproxytest.Source+`","scope":"experimental/grain"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("check: %d %s", rec.Code, rec.Body)
+		}
+		var got ui.TeamGitHubCredentialCheck
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	got := check()
+	if !got.OK || got.Saved || got.Login != "bsalmon" || len(got.Repos) != 1 || !got.Repos[0].Read || !got.Repos[0].Push {
+		t.Fatalf("unsaved check = %+v; want forgecli's answer", got)
+	}
+	if calls, err := os.ReadFile(filepath.Join(state, "calls")); err != nil || !strings.Contains(string(calls), "repos/experimental/grain") {
+		t.Fatalf("forgecli api calls = %q (%v); want the repository asked through the tool", calls, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(state, "corp-login"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = check()
+	if got.OK || len(got.Repos) != 0 || !strings.Contains(got.Error, gitproxytest.Summary+": run `forgecli-login` as ") {
+		t.Fatalf("unsaved check with a lapsed login = %+v; want the tool's login sentence", got)
+	}
+}
+
 func TestHostlessTargetRepoSurfacesMismatchWarningInReachAndHealthWithoutRewriting(t *testing.T) {
 	t.Parallel()
 	srv, client, credentials := testServerWithCreds(t)

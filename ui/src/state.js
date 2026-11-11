@@ -1026,6 +1026,27 @@ const REASON_CONTROLS = {
   },
 };
 
+// actionScope is the role scope the request behind one of a row's
+// answers needs (pkg/ui's roleScopeOf for POST /api/tasks/{id}<post>), or
+// null for an answer that only reads -- opening the task, or a link out.
+// AccessGate disables the button for a role without it and says why,
+// rather than leaving a grain/viewer an Approve whose click ends in a 403
+// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
+export function actionScope(action) {
+  if (action.open || action.href) return null;
+  if (action.forceMerge || action.overrideReviewGates) return "merge:force";
+  switch (action.post) {
+    case "/approve":
+      return "tasks:admin";
+    case "/run-now":
+      return "dispatch:write";
+    case "/retry-merge":
+      return "merge:write";
+    default:
+      return "tasks:write";
+  }
+}
+
 // reasonControl is the button that ends this task's wait, as a row
 // offers it ({label, post, ...}), or null where its sub-case names no
 // control a row can press. A merge-queue sub-case's own control (Retry

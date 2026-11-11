@@ -4306,7 +4306,7 @@ func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, 
 			if via == model.GrantByDefault {
 				continue
 			}
-			return nil, validationErrorf("%s", grainci.Refusal())
+			return nil, validationErrorf("%s", grainci.Refusal("", ""))
 		}
 		normalizedIDs, err := c.normalizeCapabilityIDs(id)
 		if err != nil {
