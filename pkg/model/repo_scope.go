@@ -87,7 +87,12 @@ func RepoAllowed(allowed []string, target RepoRef) bool {
 			if parsed.Same(target) {
 				return true
 			}
-			if strings.EqualFold(parsed.Owner, target.Owner) && (parsed.Name == "*" || parsed.Name == "") {
+			// An owner wildcard is that owner on its own host only: one
+			// owner/name can exist on two hosts as two repositories, and
+			// `host/owner/*` must not admit the default host's owner/name
+			// (nor `owner/*` another host's), just as Same compares hosts.
+			if strings.EqualFold(parsed.Owner, target.Owner) && (parsed.Name == "*" || parsed.Name == "") &&
+				parsed.OffDefaultHost() == target.OffDefaultHost() {
 				return true
 			}
 		}
