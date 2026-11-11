@@ -244,16 +244,16 @@ func (s *Server) HostAccountHandler(accounts func() HostAccounts) http.Handler {
 }
 
 // ListenAPISocket listens on path, in a directory only this account may
-// enter (0700), replacing a socket a previous run left there. Anything
-// else at path is left alone and refused.
+// enter (0700) unless an operator grants another account search on it,
+// replacing a socket a previous run left there. Anything else at path is
+// left alone and refused.
 func ListenAPISocket(path string) (net.Listener, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	// Tightened on every start rather than trusted to have stayed so.
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("restricting %s: %w", dir, err)
+	if err := restrictAPISocketDir(dir); err != nil {
+		return nil, err
 	}
 	if fi, err := os.Lstat(path); err == nil {
 		if fi.Mode()&os.ModeSocket == 0 {
@@ -267,11 +267,46 @@ func ListenAPISocket(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	// The directory is the gate (0700, plus whatever search an operator
+	// grants another account with setfacl, docs/access-code.md), and the
+	// uid map the second; the socket itself must be writable by every
+	// account that gets through the directory, or connect(2) refuses the
+	// very accounts -host-accounts names
+	// (docs/test-runs/2026-11-11-caller-identity.md, F4).
+	if err := os.Chmod(path, 0o666); err != nil {
 		_ = ln.Close()
-		return nil, fmt.Errorf("restricting %s: %w", path, err)
+		return nil, fmt.Errorf("opening %s to the accounts its directory admits: %w", path, err)
 	}
 	return ln, nil
+}
+
+// restrictAPISocketDir tightens the socket's directory on every start
+// rather than trusting it to have stayed so: nobody but this account may
+// write to it, and nobody it has not granted search (setfacl) may enter.
+// Two things it must not do (docs/test-runs/2026-11-11-caller-identity.md,
+// F5): chmod 0700 over a directory an operator had granted another account
+// search on with setfacl, which zeroes the ACL mask and so revoked that
+// grant on every restart; and chmod a directory somebody else shares (an
+// -api-socket in /tmp or /run, say), which it now refuses instead.
+func restrictAPISocketDir(dir string) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	perm := fi.Mode().Perm()
+	if fi.Mode()&os.ModeSticky != 0 || perm&0o002 != 0 || !ownedByThisAccount(fi) {
+		return fmt.Errorf("%s is shared with other accounts (mode %v): put the API socket in a directory of its own "+
+			"(-api-socket <dir>/grain.sock, with <dir> new or this account's alone)", dir, fi.Mode())
+	}
+	// Group search is kept, so the ACL mask a setfacl -m u:<account>:x
+	// leaves stays --x; group read and write, and everything for others,
+	// go.
+	if want := perm & 0o710; want != perm {
+		if err := os.Chmod(dir, want); err != nil {
+			return fmt.Errorf("restricting %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // HostAPISocket is the socket the host CLI dials in place of a loopback

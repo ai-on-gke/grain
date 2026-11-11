@@ -18,6 +18,7 @@ package ui
 
 import (
 	"errors"
+	"io/fs"
 	"net"
 )
 
@@ -26,3 +27,7 @@ import (
 func peerUID(net.Conn) (uint32, error) {
 	return 0, errors.New("peer credentials (SO_PEERCRED) are only read on Linux")
 }
+
+// ownedByThisAccount is true where ownership cannot be read: the API
+// socket is refused on these platforms anyway (peerUID).
+func ownedByThisAccount(fs.FileInfo) bool { return true }

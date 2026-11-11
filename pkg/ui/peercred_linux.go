@@ -17,9 +17,18 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
+	"os"
 	"syscall"
 )
+
+// ownedByThisAccount reports whether fi, a directory, is owned by the
+// account this process runs as (restrictAPISocketDir).
+func ownedByThisAccount(fi fs.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Geteuid()
+}
 
 // peerUID is the uid of the process at the other end of c, a unix socket
 // connection, as the kernel recorded it when that process connected

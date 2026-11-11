@@ -508,8 +508,10 @@ also records who presented it, as the principal `access-code:<name>`
 
 The daemon also serves its API on a unix socket,
 `<data-dir>/api/grain.sock`, in a directory only its own account may
-enter (mode `0700`). `-api-socket` names another path, and `none` turns
-it off. For each connection the daemon asks the kernel which account
+enter (mode `0700`). `-api-socket` names another path, in a directory
+of its own (a new one, or one only the daemon's account owns and may
+write: a shared directory such as `/tmp` is refused rather than
+restricted), and `none` turns it off. For each connection the daemon asks the kernel which account
 connected (`SO_PEERCRED`) and maps that uid to a person:
 
 - `-host-accounts 1000=alice@example.com,1001=bob@example.com`
@@ -546,7 +548,10 @@ The directory's `0700` means that by default only the daemon's account
 (and root) can connect, which is what the CLI wrapper `scripts/setup.sh`
 installs runs as. To let another account in, grant it search on the
 directory (`setfacl -m u:alice:x <data-dir>/api`) and name its uid in
-`-host-accounts`. Being able to connect admits nobody on its own.
+`-host-accounts`. The socket itself is mode `0666`, so the directory is
+the gate, and a restart keeps the group search bit that holds the ACL's
+mask, so the grant survives it. Being able to connect admits nobody on
+its own.
 
 ### Elsewhere: `grain login` through IAP or an identity proxy
 
