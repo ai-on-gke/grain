@@ -69,7 +69,9 @@ test("a scope set is created, edited and removed from the card", async ({
 
     await row.getByRole("button", { name: "Remove" }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText(`Nothing grants https://grain.dev/capabilities/api#${NAME}.`);
+    await expect(dialog).toContainText(
+      `Nothing grants https://grain.dev/capabilities/api#${NAME}.`,
+    );
     await dialog.getByRole("button", { name: "Remove" }).click();
     await expect(row).toHaveCount(0);
 
