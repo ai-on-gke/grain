@@ -500,6 +500,7 @@ Usage: `grain notify --subject <key> --title <one-line> [--body <md> | --file <f
 | `task prompt <id>` / `task transcript <id>` | reads `task://<id>/[attempts/<n>/]prompt.md` / `transcript.md`. `transcript` reports the file's size on stderr |
 | `task wait <id>…` | `POST /cli/tasks/wait {"ids", "until", "timeout_seconds"}`. Prints `Task wait (<status>, waited <d>…):` and the summary. When not settled, it adds how to keep waiting and how to park. `--park` or `--resume-at` is refused: `parking a task ends the run and is a model-only control operation: call the wait_for_task (park: true) or resume_later MCP tool instead` |
 | `task message <id> <body…> \| --body \| --file` | `POST /cli/tasks/<id>/notes {"body"}` |
+| `task message <id> <body…> --relay` | `POST /api/tasks/<id>/comments {"body", "relay": true}`: a console session relays the answer of the person it acts for, written as "<person> via <session>" and counted as their reply |
 | `task propose` | `POST /cli/proposals`. Always files **unapproved** with `auto_merge=false`. Refuses `--supersedes`, `--auto-merge` and `--hold-for-approval=false` with messages pointing at the `propose_task` tool. Requires `--title` (status 2) and `--body`/`--file` (`--body (or --file) is required: run 'grain help propose' for usage`). `--custom-field` must be `key=value`; `--priority` must be a positive integer; `--not-before` must be `YYYY-MM-DD` or RFC 3339 |
 
 <!-- BEGIN GENERATED FLAGS: grain task list -->
@@ -562,12 +563,13 @@ Usage: `grain task wait <id>... [--until closed|merged] [--timeout 9m]`
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain task message -->
-Usage: `grain task message <id> (<body> | --body <b> | --file <f>)`
+Usage: `grain task message <id> (<body> | --body <b> | --file <f>) [--relay]`
 
 | Flag | Type |
 |---|---|
 | `--body` | string |
 | `--file` | string |
+| `--relay` | bool |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain task propose -->

@@ -134,7 +134,42 @@ func (c *sandboxCLI) taskMessage(p sandboxArgs) error {
 			return err
 		}
 	}
+	if p.has("relay") {
+		return c.relayAnswer(id, body)
+	}
 	return c.post("/cli/tasks/"+url.PathEscape(id)+"/notes", map[string]any{"body": body}, c.out)
+}
+
+// relayAnswer is grain task message --relay: the body goes to POST
+// /api/tasks/{id}/comments with relay: true, written as the answer of the
+// person this console session is acting for, and the answer says whether
+// it counted as their reply.
+func (c *sandboxCLI) relayAnswer(id, body string) error {
+	raw, err := json.Marshal(map[string]any{"body": body, "relay": true})
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := c.doAPI(http.MethodPost, "/api/tasks/"+url.PathEscape(id)+"/comments", raw, "", &buf); err != nil {
+		return err
+	}
+	var ans struct {
+		ID      string      `json:"id"`
+		State   model.State `json:"state"`
+		Relayed bool        `json:"relayed"`
+		Notice  string      `json:"notice"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &ans); err != nil {
+		_, _ = c.out.Write(buf.Bytes())
+		return nil
+	}
+	if ans.Relayed {
+		fmt.Fprintf(c.out, "Relayed the answer onto task #%s as the person's reply (task is now %s).\n", model.NormalizeTaskID(id), ans.State)
+	}
+	if ans.Notice != "" {
+		fmt.Fprintln(c.out, ans.Notice)
+	}
+	return nil
 }
 
 func (c *sandboxCLI) taskWait(p sandboxArgs) error {

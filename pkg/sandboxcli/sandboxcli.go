@@ -228,7 +228,7 @@ var sandboxCommandFlags = map[string][]string{
 	"task prompt":           {"attempt", "tail", "offset", "limit", "lines", "n"},
 	"task transcript":       {"attempt", "tail", "offset", "limit", "lines", "n"},
 	"task wait":             {"until", "timeout", "json", "park", "resume-at"},
-	"task message":          {"body", "file"},
+	"task message":          {"body", "file", "relay"},
 	"task propose":          {"title", "body", "file", "id", "repo", "branch", "no-repo", "depends-on", "capability", "fixes-base-branch", "no-port", "keep-running", "origin", "read", "design", "custom-field", "not-before", "priority", "json", "supersedes", "auto-merge", "hold-for-approval"},
 	"api":                   {"scope", "json", "body", "file", "field", "reason"},
 	"memory list":           nil,
@@ -933,6 +933,7 @@ var sandboxBoolFlags = map[string]bool{
 	"no-repo": true, "fixes-base-branch": true, "no-port": true, "keep-running": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
 	"hold-for-approval": true, "at-front": true, "stalled": true, "unresolved": true,
+	"relay": true,
 }
 
 func parseSandboxArgs(args []string) (sandboxArgs, error) {
