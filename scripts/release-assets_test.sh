@@ -427,6 +427,13 @@ for plat in linux-amd64 linux-arm64; do
     '{schema: 1, version: "v3.4.0", platform: $p, asset: $a, sha256: $s, size: $sz, min_contract_features: ["start"], features: ["start","features"]}' \
     > "$agentd_dir/grain-agentd-$plat.manifest.json"
 done
+run env -u AGENTD_RELEASE_SIGNING_KEY REQUIRE_AGENTD_SIGNING=true bash "$assets" agentd-sign "$agentd_dir"
+check "agentd-sign refuses to leave manifests unsigned under REQUIRE_AGENTD_SIGNING=true" \
+  '[ "$status" != 0 ] && grep -q "REQUIRE_AGENTD_SIGNING=true" <<< "$out"'
+run env -u AGENTD_RELEASE_SIGNING_KEY REQUIRE_AGENTD_SIGNING=true bash "$assets" --dry-run agentd-sign "$agentd_dir"
+check "a dry run, which is never handed the signing key, plans agentd-sign under REQUIRE_AGENTD_SIGNING=true" \
+  '[ "$status" = 0 ] && grep -q "\[dry-run\] would sign grain-agentd manifests" <<< "$out" &&
+   ! grep -q "\"signature\"" "$agentd_dir/grain-agentd-linux-amd64.manifest.json"'
 run env AGENTD_RELEASE_SIGNING_KEY="$work/agentd-key.pem" AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" \
   bash "$assets" agentd-sign "$agentd_dir"
 check "agentd-sign signs both platform manifests and validates them against the pinned public key" \
