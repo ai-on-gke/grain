@@ -72,6 +72,7 @@ var settingsAppliedLive = map[string]string{
 	"sandboxMemoryOvercommit": "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskOvercommit":   "the budget the next sandbox is admitted against, and on Kubernetes the next pod's ephemeral-storage request (liveConfig.refresh, via config.budget and SetOvercommit)",
 	"sandboxOvercommit":       "the auto overcommit controller's mode and bounds (runOvercommit reconfigures it each step, and config.budget reads its ratios)",
+	"sandboxShapeLimits":      "the ceilings on a task's own sandbox shape (Client.sandboxShapeLimits reads grain_config on every filing, edit, approval and run-now)",
 	"sessionSandboxIdleTtl":   "how long a session's sandbox and in-process agent wait stay warm between turns (RunCycle refreshes deps.Config.SessionSandboxIdleTTL from grain_config each cycle)",
 	"sandboxMemoryReserveMb":  "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskFloorShare": "how much of each volume the next admission is held over (cmd/grain's diskWatch, which asks " +
@@ -126,6 +127,8 @@ var settingsAppliedLive = map[string]string{
 		"(reconcileAutoUpgrade)",
 	"autoUpgradeOn": "orchestrator's auto-upgrade and release-upgrade reconcilers, which read grain_config every cycle " +
 		"(reconcileAutoUpgrade, reconcileReleaseUpgrade)",
+	"autoUpgradeMinIntervalHours": "orchestrator's release-upgrade reconciler, which reads grain_config every cycle " +
+		"(reconcileReleaseUpgrade)",
 	"taskBranchTemplate":    "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"deploymentId":          "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"externalAgentApi":      "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",

@@ -15,9 +15,9 @@
 package agentd
 
 // `grain-agentd install`: set grain-agentd up for the user running it,
-// with no root -- the binary, the token, an agents-only allowlist,
-// whatever a registered transport prepares, and a systemd --user unit --
-// and start it.
+// with no root -- the binary, an agents-only allowlist filled in from the
+// controller's /hostd/install template, whatever a registered transport
+// prepares, the credential, and a systemd --user unit -- and start it.
 
 import (
 	"context"
@@ -29,10 +29,12 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"text/template"
+	"time"
 
 	"golang.org/x/term"
 
@@ -48,41 +50,25 @@ var (
 	agyPaths   []string
 )
 
-// RegisterAgyPath adds path to where install looks for agy before $PATH:
-// for a build whose machines install agy somewhere of their own. The
-// first executable registered path wins.
+// RegisterAgyPath adds path to the offline fallback's candidate list for agy.
+//
+// Deprecated: register candidate paths on the controller via
+// hostd.RegisterCLICandidates (or ui.RegisterHostCLICandidates) so new paths
+// reach hosts as data through /hostd/install without a new grain-agentd binary.
 func RegisterAgyPath(path string) {
 	agyPathsMu.Lock()
 	defer agyPathsMu.Unlock()
 	agyPaths = append(agyPaths, path)
 }
 
-// findAgy is where agy is on this machine: a registered path, else agy on
-// $PATH, else ~/.local/bin/agy; "" when none is an executable.
-func findAgy(home string, isExec func(string) bool) string {
-	agyPathsMu.RLock()
-	candidates := append([]string(nil), agyPaths...)
-	agyPathsMu.RUnlock()
-	if p, err := exec.LookPath("agy"); err == nil {
-		if abs, err := filepath.Abs(p); err == nil {
-			candidates = append(candidates, abs)
-		}
+// executable and lookPath are seams for tests.
+var (
+	executable = func(path string) bool {
+		st, err := os.Stat(path)
+		return err == nil && !st.IsDir() && st.Mode()&0o111 != 0
 	}
-	candidates = append(candidates, filepath.Join(home, ".local", "bin", "agy"))
-	for _, c := range candidates {
-		if isExec(c) {
-			return c
-		}
-	}
-	return ""
-}
-
-// executable reports whether path is an executable regular file; a seam
-// for tests.
-var executable = func(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && !st.IsDir() && st.Mode()&0o111 != 0
-}
+	lookPath = exec.LookPath
+)
 
 // systemctl and loginctl run those commands; seams for tests.
 var (
@@ -95,6 +81,70 @@ var (
 		return exec.Command("loginctl", args...).Output()
 	}
 )
+
+// offlineAllowlistTemplate is the minimal fallback kept in the binary when an
+// install runs offline and cannot reach /hostd/install on the controller. It
+// carries no CLI-specific closed variable lists: this binary supports
+// FeatureEnvOpen ("*"), and agy's per-run staged HOME is the one identity
+// variable that requires an exact name.
+func offlineAllowlistTemplate() hostd.AllowlistTemplate {
+	agyPathsMu.RLock()
+	extraAgy := slices.Clone(agyPaths)
+	agyPathsMu.RUnlock()
+	agyCandidates := make([]string, 0, len(extraAgy)+2)
+	for _, p := range extraAgy {
+		p = strings.TrimSpace(p)
+		if p != "" && !slices.Contains(agyCandidates, p) {
+			agyCandidates = append(agyCandidates, p)
+		}
+	}
+	agyCandidates = append(agyCandidates, "agy", "~/.local/bin/agy")
+	return hostd.AllowlistTemplate{
+		Version: hostd.AllowlistTemplateVersion,
+		CLIs: []hostd.CLITemplateEntry{
+			{
+				Name:       "agy",
+				Aliases:    []string{"antigravity"},
+				Candidates: agyCandidates,
+				Env:        []string{"HOME"},
+				PassEnv:    slices.Clone(hostd.ProxyVars),
+			},
+			{
+				Name:       "claude",
+				Candidates: []string{"claude", "~/.local/bin/claude"},
+				PassEnv:    slices.Clone(hostd.ProxyVars),
+			},
+			{
+				Name:       "codex",
+				Candidates: []string{"codex", "~/.local/bin/codex"},
+				PassEnv:    slices.Clone(hostd.ProxyVars),
+			},
+		},
+	}
+}
+
+func resolveInstallTemplate(ctx context.Context, serverURL, iapAudience string) (tmpl hostd.AllowlistTemplate, offline bool, fetchErr error) {
+	var idTok func(context.Context) (string, error)
+	if iapAudience != "" {
+		idTok = hostd.NewIAPTokenProvider(iapAudience).Token
+	}
+	fetched, err := hostd.FetchAllowlistTemplate(ctx, hostd.FetchTemplateOptions{
+		ServerURL: serverURL,
+		IDToken:   idTok,
+		Timeout:   5 * time.Second,
+	})
+	if err == nil {
+		return fetched, false, nil
+	}
+	if raw := strings.TrimSpace(os.Getenv(hostd.AgentdTemplateEnv)); raw != "" {
+		if parsed, parseErr := hostd.ParseAllowlistTemplate([]byte(raw)); parseErr == nil {
+			if parsed.Server == "" || strings.TrimRight(parsed.Server, "/") == strings.TrimRight(serverURL, "/") {
+				return parsed, false, nil
+			}
+		}
+	}
+	return offlineAllowlistTemplate(), true, err
+}
 
 func install(args []string, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
@@ -134,6 +184,9 @@ func install(args []string, stdout, stderr io.Writer) int {
 	}
 	step := func(format string, a ...any) { fmt.Fprintf(stdout, "==> "+format+"\n", a...) }
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+
 	// 1. The binary.
 	self, err := os.Executable()
 	if err != nil {
@@ -148,23 +201,50 @@ func install(args []string, stdout, stderr io.Writer) int {
 		step("installed %s", p.Bin)
 	}
 
-	// 2. The allowlist (prepared before enrollment so any -join request
-	// reports the configured agent CLIs).
+	// 2. A registered transport's own preparation, done before contacting the
+	// controller so template fetches, enrollment and the first start can use it.
+	unit := unitConfig{Bin: p.Bin, Server: *server, Name: *name, IAPAudience: *iapAudience,
+		Token: p.Token, Allowlist: p.Allowlist, StateDir: p.StateDir}
+	if t := transportFor(u); t != nil && t.Prepare != nil {
+		extra, err := t.Prepare(ctx, InstallConfig{Server: u, Home: home, StateDir: p.StateDir})
+		if err != nil {
+			fmt.Fprintf(stderr, "%s install: %s: %v\n", Program, t.Name, err)
+			return 1
+		}
+		unit.Extra = extra
+		step("prepared %s for %s", t.Name, u.Host)
+	}
+
+	// 3. The allowlist (prepared from the controller's template before
+	// enrollment so any -join request reports the configured agent CLIs).
 	if _, err := os.Stat(p.Allowlist); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(p.Stage, 0o700); err != nil {
 			fmt.Fprintln(stderr, Program+" install: "+err.Error())
 			return 1
 		}
-		agy := findAgy(home, executable)
-		if agy == "" {
-			fmt.Fprintf(stderr, "%s install: no agent CLI found (looked for agy on $PATH and in ~/.local/bin); write %s by hand\n", Program, p.Allowlist)
+		tmpl, offline, fetchErr := resolveInstallTemplate(ctx, *server, *iapAudience)
+		if offline {
+			step("note: could not reach %s for the allowlist template (%v); using minimal offline fallback", *server, fetchErr)
+		}
+		resolved := tmpl.ResolveAll(home, lookPath, executable)
+		if len(resolved) == 0 {
+			fmt.Fprintf(stderr, "%s install: no agent CLI found on this machine (looked for %s); install one first, or write %s by hand\n",
+				Program, strings.Join(tmpl.Names(), ", "), p.Allowlist)
 			return 1
 		}
+		peer := hostd.ThisHello(version.Get().Release)
+		rendered, err := hostd.RenderAgentdAllowlist(Program, *server, home, p.Stage, resolved, peer)
+		if err != nil {
+			fmt.Fprintln(stderr, Program+" install: rendering the allowlist: "+err.Error())
+			return 1
+		}
+		step("writing %s:", p.Allowlist)
+		fmt.Fprint(stdout, indentLines(rendered, "  "))
 		if err := os.MkdirAll(filepath.Dir(p.Allowlist), 0o700); err != nil {
 			fmt.Fprintln(stderr, Program+" install: "+err.Error())
 			return 1
 		}
-		if err := writeFileAtomic(p.Allowlist, []byte(defaultAllowlist(p.Stage, *server, agy)), 0o644); err != nil {
+		if err := writeFileAtomic(p.Allowlist, []byte(rendered), 0o644); err != nil {
 			fmt.Fprintln(stderr, Program+" install: writing the allowlist: "+err.Error())
 			return 1
 		}
@@ -177,20 +257,6 @@ func install(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	// 3. A registered transport's own preparation, done now so enrollment
-	// or the first start can use it immediately.
-	unit := unitConfig{Bin: p.Bin, Server: *server, Name: *name, IAPAudience: *iapAudience,
-		Token: p.Token, Allowlist: p.Allowlist, StateDir: p.StateDir}
-	if t := transportFor(u); t != nil && t.Prepare != nil {
-		extra, err := t.Prepare(context.Background(), InstallConfig{Server: u, Home: home, StateDir: p.StateDir})
-		if err != nil {
-			fmt.Fprintf(stderr, "%s install: %s: %v\n", Program, t.Name, err)
-			return 1
-		}
-		unit.Extra = extra
-		step("prepared %s for %s", t.Name, u.Host)
-	}
-
 	// 4. The credential: enroll with -join (generating an Ed25519 keypair +
 	// SAS pairing code handshake) or fall back to a per-host token.
 	if err := os.MkdirAll(filepath.Dir(p.Token), 0o700); err != nil {
@@ -199,8 +265,6 @@ func install(args []string, stdout, stderr io.Writer) int {
 	}
 	_ = os.Chmod(filepath.Dir(p.Token), 0o700)
 	if strings.TrimSpace(*joinCode) != "" {
-		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
-		defer stop()
 		var idTok func(context.Context) (string, error)
 		if *iapAudience != "" {
 			idTok = hostd.NewIAPTokenProvider(*iapAudience).Token
@@ -285,6 +349,26 @@ func install(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// AllowlistFromTemplate fills in tmpl against the executables on this host and
+// renders the first allowlist targeting peer, writing only keys peer advertises.
+func AllowlistFromTemplate(tmpl hostd.AllowlistTemplate, peer hostd.Hello, home, stage, server string) (string, error) {
+	resolved := tmpl.ResolveAll(home, lookPath, executable)
+	if len(resolved) == 0 {
+		return "", fmt.Errorf("no agent CLI found (looked for %s)", strings.Join(tmpl.Names(), ", "))
+	}
+	return hostd.RenderAgentdAllowlist(Program, server, home, stage, resolved, peer)
+}
+
+func indentLines(text, prefix string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	for i, l := range lines {
+		if l != "" {
+			lines[i] = prefix + l
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
 // readTokenFile is the token path holds, "" when it holds none.
 func readTokenFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
@@ -292,29 +376,6 @@ func readTokenFile(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
-}
-
-// agyClosedEnv is the closed env: list written for hosts that do not
-// advertise FeatureEnvOpen.
-var agyClosedEnv = []string{"HOME", "AGY_CLI_DISABLE_AUTO_UPDATE", "GEMINI_API_KEY", "GOOGLE_API_KEY"}
-
-// defaultAllowlist is a first allowlist for this build of grain-agentd.
-func defaultAllowlist(stage, server, agyPath string) string {
-	home, _ := os.UserHomeDir()
-	return AllowlistFor(hostd.ThisHello(""), home, stage, server, agyPath)
-}
-
-// AllowlistFor renders a first allowlist targeting a host that reported peer:
-// an entry for agy at agyPath confined to stage, using env: [HOME, "*"] and
-// ~/-relative paths only when peer advertises FeatureEnvOpen, and an empty
-// capabilities section.
-func AllowlistFor(peer hostd.Hello, home, stage, server, agyPath string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# %s's allowlist: the agent CLIs the grain daemon at\n# %s may start on this machine, as you. %s re-reads it on\n# every request. %s runs agent CLIs only: capabilities: stays empty.\n", Program, server, Program, Program)
-	b.WriteString("clis:\n")
-	b.WriteString(hostd.CLIEntryYAML("agy", agyPath, home, []string{stage}, agyClosedEnv, hostd.ProxyVars, peer))
-	b.WriteString("capabilities: {}\n")
-	return b.String()
 }
 
 type unitConfig struct {

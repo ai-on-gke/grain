@@ -330,10 +330,10 @@ export default function RepoList({
   };
 
   // strandedByAdding is what the work already stored loses to this click,
-  // in the daemon's own words: POST /api/settings/plan with the list this
+  // in the daemon's own words: POST /api/repos/plan with the list this
   // add would write answers with the tasks, schedules and qualification
   // plans left behind in the repos it leaves out
-  // (ui.Settings.TargetReposStranded, grain/task-411).
+  // (ui.TargetReposPlan, grain/task-411 and grain/task-4288).
   //
   // The sentence above says which repos fall off, which this page can
   // work out for itself; how much work falls with them is the store's to
@@ -343,7 +343,7 @@ export default function RepoList({
   // which costs the confirmation the paragraph and nothing else.
   const strandedByAdding = async (repo) => {
     try {
-      const plan = await api("/api/settings/plan", {
+      const plan = await api("/api/repos/plan", {
         method: "POST",
         body: JSON.stringify({ targetRepos: [...targetRepos, repo] }),
       });

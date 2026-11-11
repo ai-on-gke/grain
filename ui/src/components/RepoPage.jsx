@@ -831,9 +831,9 @@ export default function RepoPage({
   const removeRepo = async () => {
     // What this removal would strand is asked of the daemon before the
     // click is honoured, and asked as the very save it is: POST
-    // /api/settings/plan with this repo dropped from targetRepos answers
+    // /api/repos/plan with this repo dropped from targetRepos answers
     // with the tasks, schedules and qualification plan left behind in it
-    // (ui.Settings.TargetReposStranded, grain/task-411).
+    // (ui.TargetReposPlan, grain/task-411 and grain/task-4288).
     //
     // Asked rather than worked out here, for planChanges' own reason: the
     // work behind a repo is the store's to count, and this page holds
@@ -847,7 +847,7 @@ export default function RepoPage({
       const targetRepos = (config?.targetRepos || []).filter(
         (r) => r.toLowerCase() !== repo.toLowerCase(),
       );
-      const plan = await api("/api/settings/plan", {
+      const plan = await api("/api/repos/plan", {
         method: "POST",
         body: JSON.stringify({ targetRepos }),
       });
