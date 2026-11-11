@@ -658,9 +658,11 @@ test-upgrade:
 # third_party/granule is excluded. It is a separate module of vendored
 # upstream code -- `go vet ./...` and `go test ./...` do not reach into
 # it either -- and a red build over formatting we would not be the ones
-# to fix is a gate nobody can act on.
+# to fix is a gate nobody can act on. So is anything under a
+# node_modules directory: some npm packages ship Go sources of their own
+# (ui-ng/go.mod says which), and their formatting is not ours either.
 fmt:
-	@files="$$(find . -name '*.go' -not -path './third_party/*')"; \
+	@files="$$(find . -name '*.go' -not -path './third_party/*' -not -path '*/node_modules/*')"; \
 	unformatted="$$(gofmt -l $$files)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needed on:"; echo "$$unformatted"; echo; \
