@@ -35,7 +35,8 @@ type ReplyFacts struct {
 	Access bool
 	// Stopped is a turn a person stopped: the pending comment is
 	// TurnStoppedComment.
-	Stopped bool // UnansweredComment is a person's comment no run has been shown
+	Stopped bool
+	// UnansweredComment is a person's comment no run has been shown
 	// (UndeliveredPersonComment): the task is waiting on a run, not on
 	// its owner's Reply.
 	UnansweredComment bool
