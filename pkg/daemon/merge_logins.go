@@ -33,35 +33,35 @@ const mergeLoginsTTL = 15 * time.Minute
 // mergeLoginWarnings is ui.Config.MergeLoginWarnings: the reviewed-merge
 // logins that belong to a user account, for `grain health`, across the
 // deployment's target repositories' GRAIN_MERGE_LOGINS and the daemon's
-// own -upgrade-reviewed-merge-logins. A health read never waits on the
-// forge: a stale answer is handed back while a fresh one is read in the
-// background, so the first read after a start says nothing yet.
+// own -upgrade-reviewed-merge-logins. One answer stands for
+// mergeLoginsTTL. It is read inside the health request that asks, never
+// in a goroutine of its own, so nothing reaches the forge once that
+// request has ended; a second request arriving while one reads is
+// answered with the last result rather than waiting.
 func mergeLoginWarnings(cfg Config, store *model.Store, forge mergelogins.Forge) func(context.Context) []mergelogins.Warning {
 	if store == nil || forge == nil {
 		return nil
 	}
 	var (
-		mu         sync.Mutex
-		last       []mergelogins.Warning
-		at         time.Time
-		refreshing bool
+		mu      sync.Mutex
+		last    []mergelogins.Warning
+		at      time.Time
+		reading bool
 	)
-	refresh := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
+	return func(ctx context.Context) []mergelogins.Warning {
+		mu.Lock()
+		if reading || (!at.IsZero() && time.Since(at) <= mergeLoginsTTL) {
+			out := append([]mergelogins.Warning(nil), last...)
+			mu.Unlock()
+			return out
+		}
+		reading = true
+		mu.Unlock()
 		got := mergelogins.Check(forge, mergeLoginSettings(ctx, cfg, store))
 		mu.Lock()
-		last, at, refreshing = got, time.Now(), false
+		last, at, reading = got, time.Now(), false
 		mu.Unlock()
-	}
-	return func(context.Context) []mergelogins.Warning {
-		mu.Lock()
-		defer mu.Unlock()
-		if !refreshing && (at.IsZero() || time.Since(at) > mergeLoginsTTL) {
-			refreshing = true
-			go refresh()
-		}
-		return append([]mergelogins.Warning(nil), last...)
+		return append([]mergelogins.Warning(nil), got...)
 	}
 }
 

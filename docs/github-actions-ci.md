@@ -391,9 +391,8 @@ repository whose connection names one:
   `<slug>[bot]`. It reads the variable with the repository's push
   credential, which needs Actions variables read (a classic token's `repo`
   scope); a read it cannot make is logged, not warned about. An
-  organization-level variable is not read. The check is refreshed every
-  15 minutes in the background, so the first `grain health` after a
-  restart says nothing yet.
+  organization-level variable is not read. One check stands for 15
+  minutes; the health read that finds it stale makes the next one.
 
 A repository's own `RepoConfig.GitCredential` override changes what it
 pushes with, not what it merges with: the merge credential comes from the
