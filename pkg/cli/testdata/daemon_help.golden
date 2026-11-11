@@ -343,6 +343,8 @@ Usage of grain daemon:
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-url string
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
+  -release-approval-kms-key string
+    	Cloud KMS EC_SIGN_P256_SHA256 key version (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY
   -repair-reserve-sandboxes int
     	how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) (default 1)
   -repo value
