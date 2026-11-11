@@ -93,7 +93,7 @@ func renameSessionTool(renamer SessionRenamer) Tool {
 			"its first line, which is the best name anything can give it before the " +
 			"conversation has a shape; you know the shape, so replace it with a short " +
 			"overview of the subject, the way a chat app names a conversation -- " +
-			"\"Nightly CI failure\", \"Granting api:ci-read to the release session\" -- " +
+			"\"Nightly CI failure\", \"Granting CI read to the release session\" -- " +
 			"rather than the opening words. This is a one-time naming of an auto-titled " +
 			"session: call it at most once, early in the first exchange. Once the session " +
 			"has been named -- by you, an earlier run of it, or a person -- the name is " +

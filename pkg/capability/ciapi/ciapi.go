@@ -391,13 +391,13 @@ func DynamicProvider(endpoint *Endpoint, cfg Config) model.DynamicProvider {
 
 // Spec implements model.CapabilityProvider.
 func (p *Provider) Spec() model.CapabilitySpec {
-	label := "Grain API (CI): " + strings.TrimPrefix(p.grant.Name, model.APIGrantPrefix)
+	label := "Grain API (CI): " + strings.TrimPrefix(strings.TrimPrefix(p.grant.Name, model.APIGrantPrefix), model.APICapabilityServerID+"#")
 	description := "Let a trusted CI job call grain's API for its own repository, through a per-job token " +
 		"worth the routes of " + p.grant.Name + " only"
-	if p.name == model.ReleaseGateReadCapability {
+	if p.name == model.ReleaseGateReadCapability || p.grant.Preset == model.ReleaseGateReadCapability {
 		label = "Release gate (read)"
 		description = "Let a release workflow's job read this deployment's CI runs, persistent sandboxes and tasks " +
-			"for its own repository, and file its release-notes task: the api:release-gate-read preset, held through a per-job token"
+			"for its own repository, and file its release-notes task: the https://grain.dev/capabilities/api#release-gate-read preset, held through a per-job token"
 	}
 	return model.CapabilitySpec{
 		Name:        p.name,

@@ -70,6 +70,30 @@ describe("ConfigManagedNotice", () => {
   });
 });
 
+describe("ConfigManagedNotice wording", () => {
+  afterEach(() => api.mockReset());
+
+  it("agrees with a plural subject by default and a singular one when asked", async () => {
+    api.mockResolvedValue({ entries: [] });
+    const { rerender } = render(
+      <ConfigManagedNotice paths={["tables/repo_config.json"]} />,
+    );
+    expect(screen.getByTestId("config-managed-notice")).toHaveTextContent(
+      "These settings live in the config repo and are read-only here. Change them with",
+    );
+    rerender(
+      <ConfigManagedNotice
+        what="acme/widgets's qualification plan"
+        singular
+        paths={["tables/qualification_config.json"]}
+      />,
+    );
+    expect(screen.getByTestId("config-managed-notice")).toHaveTextContent(
+      "acme/widgets's qualification plan lives in the config repo and is read-only here. Change it with",
+    );
+  });
+});
+
 describe("ReadOnlyGrants", () => {
   afterEach(() => api.mockReset());
 

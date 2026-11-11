@@ -52,7 +52,7 @@ test("lists the API presets before every scope, with what each preset grants", a
   const { grants, menu } = await openMenu(page, task.id);
   await expect(
     grants.locator('[data-grant="https://grain.dev/capabilities/api#ci:read"]'),
-  ).toContainText("api:ci:read");
+  ).toContainText("api#ci:read");
 
   const kinds = await menu
     .locator(".api-grant-row")
@@ -190,7 +190,7 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   const newTaskGroup = page.getByTestId("new-task-grants");
   // The demo's deployment defaults are what self-debug became
   // (api:self-debug and grain#source), pre-filled in the Grants section.
-  await expect(newTaskGroup).toContainText("api:self-debug");
+  await expect(newTaskGroup).toContainText("api#self-debug");
   await expect(newTaskGroup).toContainText("grain › source");
   await newTaskGroup.getByRole("button", { name: "Add grant…" }).click();
   const newTaskMenu = page.getByRole("menu", { name: "Grants to add" });

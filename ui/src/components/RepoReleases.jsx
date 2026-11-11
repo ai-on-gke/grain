@@ -824,6 +824,7 @@ export default function RepoReleases({
         {configRepoOnly && (
           <ConfigManagedNotice
             what={`${repo}'s qualification plan`}
+            singular
             paths={QUALIFICATION_CONFIG_PATHS}
           />
         )}
