@@ -1033,4 +1033,3 @@ func writeBranchStatusRun(w http.ResponseWriter, run ci.Run) {
 		fmt.Fprintf(w, "  %s: %s\n", job.Name, verdict)
 	}
 }
-

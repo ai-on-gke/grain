@@ -1633,8 +1633,8 @@ func runCIAccessOf(task model.Task) runCIAccess {
 // grainCLICIBullet is the CI & pull request bullet of grainCLISection,
 // naming only the commands this run can use (task 4364). Every command
 // it lists for a GitHub-CI run answers for GitHub Actions runs
-// (gha:<owner>:<name>:<run>); run-job, retrigger and test-history drive
-// or read grain CI alone and are not offered there. A run that cannot
+// (gha:<owner>:<name>:<run>); run-job and retrigger drive grain CI alone
+// and are not offered there. A run that cannot
 // read its CI is told the one grant that would let it, once -- never
 // grain#ci, which no repository GitHub Actions gates can grant and which
 // is what agents told only "forbidden" kept asking a person for.
@@ -1652,7 +1652,7 @@ func grainCLICIBullet(repo string, access runCIAccess) string {
 	gated := "GitHub Actions gates this repository's pull requests"
 	if access.read {
 		return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
-			"`grain ci list`, `grain ci log [<run-id>] [--job <j>] [--tail N]`, `grain pr status`, " +
+			"`grain ci list`, `grain ci log [<run-id>] [--job <j>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
 			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
 			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
 			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +

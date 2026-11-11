@@ -554,6 +554,67 @@ and the forge is not asked.
 | `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
 | `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
 
+### A task's own CI: the default `api:ci-read`
+
+A task filed against a repository grain CI does not gate holds
+`api:ci-read@<owner>/<name>`, which is
+`https://grain.dev/capabilities/api#ci-read={"repo":"<owner>/<name>"}`
+on its own repository, by default. This applies to `ci_mode: github`
+and to any repository without "Use Grain CI". The grant is recorded on
+the task like the default `grain#ci` is on a grain-CI repository, as
+`Via: default` credited to the repository layer
+(`model.DefaultCIReadGrant`). Every filing point attaches it: a person
+or the API (`POST /api/tasks`), `propose_task`, schedules, suites,
+templates, path triggers, reviews and GitHub-event tasks. With it, the
+run's own CI reads answer for its GitHub Actions runs
+(`gha:<owner>:<name>:<run>`):
+
+| Command | Route |
+|---|---|
+| `grain ci list` (and `--task <id>` for a task in the same repository) | `/cli/ci/runs`, `GET /api/ci/runs` |
+| `grain ci show <run-id>`, `grain ci log [<run-id>] [--job <j>] [--tail N]` | `/cli/ci/show`, `GET /api/ci/runs/{id}`, `GET /api/ci/runs/{id}/log` |
+| `grain pr status` (and `--task <id>`, `--ref <branch>`) | `/cli/pr/status`: every workflow's newest run at the branch's newest commit, with each job's verdict |
+| `grain pr base-status` | `/cli/pr/base-status`, the same for the base branch |
+| `grain ls/read ci://<owner>/<name>/...` | the namespace's `ci://` tree |
+
+`grain ci test-history <test>` reads the same runs. `grain ci wait` and
+`grain pr open` work without the grant. `grain ci run-job` and `grain ci
+retrigger` drive grain CI only, and are not offered on a GitHub-CI
+repository.
+
+**The trade-off.** The grant is read-only (`ci:read` alone: runs, jobs,
+logs and artifact lists, with no `ci:write`, tasks, merges or memory). It
+reaches only the task's own repository. It mints no credential, since
+Actions reads go through the daemon's forge connection, and it changes
+no merge gate. `grain#ci`, which would also change gating, is still
+never attached on these repositories. What it adds is that a run can
+read its own repository's CI logs, which may contain anything that
+repository's CI prints. Without the grant, runs got `forbidden` from
+`grain ci log` and asked a person for `grain#ci`, which no GitHub-CI
+repository can grant.
+
+**Turning it off.** Add a capability policy deny rule on
+`https://grain.dev/capabilities/api#ci-read`. Without `repos` it applies
+to every repository. With `repos` it applies only to the repositories it
+names:
+
+```json
+{"rules": [{"capability": "https://grain.dev/capabilities/api#ci-read", "repos": ["acme/secret-ci"], "deny": true}]}
+```
+
+The default is then not attached at all; it is not attached and then
+dropped. The same rule refuses the grant to anybody who asks for it.
+A run without it reads in its prompt that to read CI logs it should
+`request_access` for `https://grain.dev/capabilities/api#ci-read` on its
+repository, never `grain#ci`. A CI read it attempts anyway is refused in
+the same words.
+
+Like a default `grain#ci`, the default `api:ci-read` on the proposal's
+own repository is not an escalation. A run's `propose_task` carrying it
+still queues on the proposer's permission
+(`model.GrantsBeyondCIReadDefault`), and an external credential approving
+such a task need not hold `ci:read` itself.
+
 Notes:
 
 - **Who sees Actions rows by default.** A call from an agent gets the

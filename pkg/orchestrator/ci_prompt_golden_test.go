@@ -95,7 +95,7 @@ func TestCIPromptNamesOnlyUsableCommands(t *testing.T) {
 			t.Errorf("GitHub-CI bullet with ci:read = %q, want %s", read, want)
 		}
 	}
-	for _, unwanted := range []string{"`grain ci run-job <job>`", "`grain ci retrigger`,", "test-history", "--jobs"} {
+	for _, unwanted := range []string{"`grain ci run-job <job>`", "`grain ci retrigger`,", "--jobs"} {
 		if strings.Contains(read, unwanted) {
 			t.Errorf("GitHub-CI bullet with ci:read = %q offers %s", read, unwanted)
 		}
@@ -107,7 +107,7 @@ func TestCIPromptNamesOnlyUsableCommands(t *testing.T) {
 			t.Errorf("GitHub-CI bullet without ci:read = %q, want %s", none, want)
 		}
 	}
-	for _, unwanted := range []string{"`grain ci list`", "`grain ci log", "`grain pr status`", "`grain pr base-status`", "run-job", "retrigger"} {
+	for _, unwanted := range []string{"`grain ci list`", "`grain ci log", "test-history", "`grain pr status`", "`grain pr base-status`", "run-job", "retrigger"} {
 		if strings.Contains(none, unwanted) {
 			t.Errorf("GitHub-CI bullet without ci:read = %q offers %s, which answers forbidden", none, unwanted)
 		}
