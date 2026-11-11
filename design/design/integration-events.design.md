@@ -41,6 +41,12 @@ Events are appended inside the same SQLite / Postgres write transaction (`Store.
 - `task.question`: Emitted when a comment carrying a question/request summary (`ask_question`, `request_secret`, `request_access`, or parked agent question) is recorded on a task.
 - `task.comment`: Emitted when an ordinary conversation comment (human reply, external agent note, or agent closing/progress note without a question summary) is added to a task. Internal handover checkpoints and turn-stopped markers are excluded.
 - `task.ci`: Emitted when a task's grain CI run (`Observation.CI`) or a GitHub check/workflow job (`GitHubCIJob`) on an open task's branch records a conclusion (`success`, `failure`, `cancelled`, `timed_out`, etc.).
+- `notification.raised`: Emitted when a notification is raised for the first time, or raised again at a higher severity (which re-surfaces an acknowledged one). A repeat raise that only bumps its count emits nothing. Carries `notificationId`, `subject`, `severity`, `summary` (its title), and the notification's `taskId` and `repo` when it has them (`repo` falls back to the task's).
+- `notification.acked` / `notification.cleared`: Emitted when a notification is acknowledged or cleared, by a person or by its `clears_when` condition, with the same fields.
+- `local_script.pending`: Emitted when a host-script call (`approve: true`) starts waiting for a person. Carries the call's `taskId`, the task's `repo`, `approvalId`, `script`, and `summary` (the script and how many arguments it was given).
+- `local_script.answered`: Emitted when that call is answered, with `decision` set to `approved`, `denied`, or `expired` (its run stopped waiting first).
+
+Readers are filtered by `repo` for every type alike: a repo-scoped reader hears only its repositories' notifications and calls, and a notification with neither a task nor a repository reaches only unrestricted readers. Notification bodies and a call's arguments and stdin are never carried.
 
 ### 3.3 Wire Shape and Redaction Rules
 
@@ -80,7 +86,7 @@ Each event serializes as compact JSON with identifiers and actionable metadata o
 - `wait`: Optional long-poll hold duration in seconds (`0`..`25`; values above `25` are clamped to `25`, matching `GET /api/restart-watch` and `ghwebhook`). Omitted or `0` answers immediately in JSON mode. When `wait > 0` and `since` is omitted, the hold starts from the current head sequence.
 - `limit`: Maximum events returned in one JSON response (`1`..`500`, default `100`).
 - `repo`: Optional repository filter (`owner/name`).
-- `types`: Optional comma-separated filter over `task.state`, `task.question`, `task.comment`, `task.ci`.
+- `types`: Optional comma-separated filter over `task.state`, `task.question`, `task.comment`, `task.ci`, `notification.raised`, `notification.acked`, `notification.cleared`, `local_script.pending`, `local_script.answered`.
 - `stream`: `1` / `true` (or `Accept: text/event-stream`) selects Server-Sent Events mode.
 
 ### 4.2 JSON Poll and Long-Poll Response

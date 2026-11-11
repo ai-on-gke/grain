@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
@@ -479,6 +480,100 @@ func TestSecretsCLISecretManagerLifecycleAndRedaction(t *testing.T) {
 	}
 	if strings.TrimSpace(afterDel) != "no secrets set" {
 		t.Errorf("list after delete = %q, want %q", afterDel, "no secrets set")
+	}
+}
+
+// TestSecretsCLIRefusesANewSQLiteCatalogueBesideAPostgresDaemon is the
+// 2026-11-07 walkthrough's orphaned secret: -data-dir alone resolved to
+// SQLite next to a daemon writing to PostgreSQL, and `grain secrets set`
+// catalogued the secret in a brand-new <data-dir>/store.
+func TestSecretsCLIRefusesANewSQLiteCatalogueBesideAPostgresDaemon(t *testing.T) {
+	t.Setenv(secrets.SecretManagerEndpointEnv, "http://127.0.0.1:1")
+	t.Setenv(secrets.SecretManagerTokenEnv, "sm-test-token")
+	t.Setenv("GRAIN_SECRETS_BACKEND", secrets.BackendSecretManager)
+	t.Setenv("GRAIN_SECRETS_SM_PREFIX", "projects/987654321/secrets/grain-inst-alice-")
+	for _, env := range []string{"GRAIN_DB_DRIVER", "GRAIN_DB_DSN", "GRAIN_POSTGRES_URL", "DATABASE_URL"} {
+		t.Setenv(env, "")
+	}
+	dataDir := t.TempDir()
+	mark := `{"lastTaskId":3,"store":"PostgreSQL at postgres://grain:%2A%2A%2A%2A%2A%2A@db:5432/grain"}`
+	if err := os.WriteFile(filepath.Join(dataDir, "store-highwater.json"), []byte(mark), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	valFile := filepath.Join(t.TempDir(), "v.txt")
+	if err := os.WriteFile(valFile, []byte("v"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := runSecrets([]string{"-data-dir", dataDir, "set", "-value-file", valFile, "deploy", "token"})
+	if err == nil || !strings.Contains(err.Error(), "-db-driver postgres -db-dsn") || !strings.Contains(err.Error(), "PostgreSQL at postgres://grain:%2A") {
+		t.Fatalf("runSecrets set = %v, want a refusal naming the PostgreSQL store and -db-driver/-db-dsn", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "store")); !os.IsNotExist(statErr) {
+		t.Fatalf("%s/store was created (stat err %v); want no new SQLite catalogue", dataDir, statErr)
+	}
+}
+
+// TestConnectionsImportUnderSecretManagerStoresTheCredentialThere is the
+// 2026-11-07 walkthrough's missing model key: under
+// GRAIN_SECRETS_BACKEND=secretmanager, `grain connections import` wrote
+// the credential to <data-dir>/secrets, which that daemon never reads.
+func TestConnectionsImportUnderSecretManagerStoresTheCredentialThere(t *testing.T) {
+	ctx := context.Background()
+	fake, srv := newFakeCLISecretManager(t, "987654321", "grain-inst-alice-", "sm-test-token")
+	t.Setenv(secrets.SecretManagerEndpointEnv, srv.URL)
+	t.Setenv(secrets.SecretManagerTokenEnv, "sm-test-token")
+	t.Setenv("GRAIN_SECRETS_BACKEND", secrets.BackendSecretManager)
+	t.Setenv("GRAIN_SECRETS_SM_PREFIX", "projects/987654321/secrets/grain-inst-alice-")
+	for _, env := range []string{"GRAIN_DB_DRIVER", "GRAIN_DB_DSN", "GRAIN_POSTGRES_URL", "DATABASE_URL"} {
+		t.Setenv(env, "")
+	}
+	dataDir := t.TempDir()
+	s, db, err := daemon.OpenStore("", "", dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutConfig(ctx, model.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	dir := t.TempDir()
+	key := filepath.Join(dir, "claude.token")
+	if err := os.WriteFile(key, []byte("sk-ant-oat01-seed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seed := filepath.Join(dir, "seed.yaml")
+	if err := os.WriteFile(seed, []byte("models:\n  - id: claude\n    framework: claude\n    credential_file: "+key+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConnections(ctx, []string{"-data-dir", dataDir, "import", seed}, io.Discard); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	s, db, err = daemon.OpenStore("", "", dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sm, err := daemon.OpenSecretsForConfig(daemon.Config{
+		DataDir: dataDir, SecretsBackend: secrets.BackendSecretManager,
+		SecretsSMPrefix: "projects/987654321/secrets/grain-inst-alice-",
+	}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := secrets.AgentBackendCredentialSecret("claude") + "/" + secrets.AgentCredentialKey
+	got, err := sm.Resolve(ctx, name)
+	if err != nil || got != "sk-ant-oat01-seed" {
+		t.Fatalf("credential in Secret Manager = (%q, %v), want the imported key", got, err)
+	}
+	fake.mu.Lock()
+	n := len(fake.secrets)
+	fake.mu.Unlock()
+	if n == 0 {
+		t.Fatal("no secret was created in Secret Manager")
+	}
+	if has, _ := daemon.OpenSecrets(dataDir).Has(secrets.AgentBackendCredentialSecret("claude"), secrets.AgentCredentialKey); has {
+		t.Fatal("credential also written to <data-dir>/secrets")
 	}
 }
 

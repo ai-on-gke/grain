@@ -69,6 +69,33 @@ import (
 // declarations, because a suite naming a template that failed to parse
 // is not a suite anybody meant to run.
 func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
+	return load(tree, repo, false)
+}
+
+// LoadForwardCompatible is Load as a running deployment reads a
+// repository: a template, suite or schedule file this build cannot decode
+// (SchemaError -- an unknown key, or a known key in a newer shape) is held
+// back rather than refusing everything else the tree declares.
+//
+// A held-back file is listed in the result's Refused, with the decoder's
+// own message, and its stem still counts as declared for the files that
+// name it: a suite naming a template whose file is held back is a suite
+// naming whatever version of that template the deployment already has.
+// Store.SyncRepoDeclarations is what keeps that version (or refuses the
+// sync, where there is none and something names it).
+//
+// Every other error is Load's: a file that is not YAML, a key a
+// repository may not set, a value out of range, a name that resolves to
+// nothing -- none of them is a newer format, and all of them still refuse
+// the whole set. `grain declarations check` uses Load, so CI refuses a
+// held-back file outright; this is for the daemon, which may be older than
+// the tree it reads (docs/declarations.md, "Declarations newer than the
+// daemon").
+func LoadForwardCompatible(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
+	return load(tree, repo, true)
+}
+
+func load(tree fs.FS, repo model.RepoRef, forward bool) (model.RepoDeclarations, error) {
 	templateFiles, err := readDir(tree, model.TemplateDeclarationDir)
 	if err != nil {
 		return model.RepoDeclarations{}, err
@@ -92,6 +119,18 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 
 	var declared model.RepoDeclarations
 	var errs []error
+	// holdBack is LoadForwardCompatible's half: it reports whether err
+	// held file back, which also leaves the file's stem resolvable.
+	holdBack := func(kind model.DeclarationKind, f file, err error) bool {
+		var schema *SchemaError
+		if !forward || !errors.As(err, &schema) {
+			return false
+		}
+		declared.Refused = append(declared.Refused, model.RefusedDeclaration{
+			Kind: kind, Path: f.path, Stem: f.stem, Message: err.Error(),
+		})
+		return true
+	}
 
 	if len(reviewFiles) > 1 {
 		errs = append(errs, fmt.Errorf("%s: %s already declares %q -- one file per declaration",
@@ -115,6 +154,10 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 	for _, file := range templateFiles {
 		tmpl, push, err := parseTemplate(file, repo)
 		if err != nil {
+			if holdBack(model.DeclaredTemplate, file, err) {
+				templates[file.stem] = true
+				continue
+			}
 			errs = append(errs, err)
 			continue
 		}
@@ -137,7 +180,11 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 		} else {
 			tmpl, push, err := parseTemplate(file, repo)
 			if err != nil {
-				errs = append(errs, err)
+				if holdBack(model.DeclaredTemplate, file, err) {
+					templates[model.DefaultReviewStem] = true
+				} else {
+					errs = append(errs, err)
+				}
 			} else {
 				templates[model.DefaultReviewStem] = true
 				declared.Templates = append(declared.Templates, model.DeclaredTemplateFile{Path: file.path, Template: tmpl, Push: push})
@@ -150,6 +197,10 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 	for _, file := range suiteFiles {
 		suite, qualification, err := parseSuite(file, repo, templates)
 		if err != nil {
+			if holdBack(model.DeclaredSuite, file, err) {
+				suites[file.stem] = true
+				continue
+			}
 			errs = append(errs, err)
 			continue
 		}
@@ -167,6 +218,9 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 	for _, file := range scheduleFiles {
 		sched, err := parseSchedule(file, repo, templates, suites, workflows, workflowErr == nil)
 		if err != nil {
+			if holdBack(model.DeclaredSchedule, file, err) {
+				continue
+			}
 			errs = append(errs, err)
 			continue
 		}
