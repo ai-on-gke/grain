@@ -72,7 +72,8 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		"   - Count:\n" +
 		"     - `claims`: distinct factual claims about tasks, pull requests, branches, or CI runs in the wake's report.\n" +
 		"     - `uncited`: claims that assert a fact about a task or run without citing a `#<id>` or run id.\n" +
-		"     - `unread`: cited task or run ids that the wake did not read before making the claim.\n" +
+		"     - `unread`: cited task or run ids that the wake did not read before making the claim. A read through the `grain` CLI in a `run_command` call counts (`grain task read <id>`, `grain read task://<id>/...`, `grain ci log`), and so does every task a `grain read deploy://pipeline-changes`, `grain task list` or `grain merge-queue` page it read showed.\n" +
+		"     - Lines under the report's `" + PipelineStewardUnverifiedHeading + "` heading are the steward saying it could not ground them: they are not claims, and you do not count them.\n" +
 		"     - `mismatched`: claims whose description of a cited task's kind (`port`, `repair`, `session`, `proposal`, `durable`), state, title, or relationship to another task contradicts the record.\n" +
 		"4. Finish with `comment_on_issue`. Include one machine-readable summary line per audited wake in your closing comment using this exact format:\n\n" +
 		"```\n" +
