@@ -195,9 +195,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	secretsBackend := fs.String("secrets-backend", secrets.BackendFile, "secret store backend (\"file\" or \"secretmanager\"); defaults to $GRAIN_SECRETS_BACKEND, then \"file\"")
 	secretsSMPrefix := fs.String("secrets-sm-prefix", "", "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
 	releaseApprovalKMSKey := fs.String("release-approval-kms-key", "", "Cloud KMS EC_SIGN_P256_SHA256 key version "+
-		"(projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, "+
-		"so the private key never leaves KMS; empty keeps the key in the secrets store (secret release-approval-key). "+
-		"Changing it changes the public key grain release approval-key reports, so each repository's "+
+		"(projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; "+
+		"empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's "+
 		"GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY")
 	objectStoreURI := fs.String("object-store", "", "object store URI (gs://<bucket>/instances/<name>/ or file:///abs/dir) for flushing run transcripts, uploaded CI artifacts, and durable agent-sessions archives with local read-through caching (defaults to $GRAIN_OBJECT_STORE)")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
