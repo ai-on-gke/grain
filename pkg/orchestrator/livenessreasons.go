@@ -459,19 +459,6 @@ func waitingCIReasonOf(e queueEntry, runner ci.Runner) string {
 	return mergeReasonCINotStarted
 }
 
-// stalledDriver is the classification whose driver a stall comment names:
-// the sub-case's own where it has one, the state's otherwise.
-func stalledDriver(state stateLiveness, reason reasonLiveness) stateLiveness {
-	if reason.class == livenessAwaitingExternal {
-		state.class = livenessAwaitingExternal
-		return state
-	}
-	if reason.driver != "" && reason.driver != state.driver {
-		return stateLiveness{class: livenessDriven, driver: reason.driver}
-	}
-	return state
-}
-
 // mergeReasonOfState is the sub-case a merge-queue state is recorded with
 // when its writer did not work one out (queueStatus.reason): the state's
 // broadest reason, as mergeReasonOf gives an entry with no particulars.

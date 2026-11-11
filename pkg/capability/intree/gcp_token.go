@@ -111,17 +111,6 @@ func (t *gcpTokens) release(attemptID string) {
 	t.mu.Unlock()
 }
 
-// held is how many attempts hold a token of each set.
-func (t *gcpTokens) held() map[string]int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	out := map[string]int{}
-	for _, a := range t.attempts {
-		out[a.set]++
-	}
-	return out
-}
-
 // lookup is attemptID's grant when presented is its per-attempt token.
 func (t *gcpTokens) lookup(attemptID, presented string) (gcpTokenAttempt, bool) {
 	t.mu.Lock()
