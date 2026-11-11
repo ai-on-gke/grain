@@ -1323,7 +1323,9 @@ task by task:
   state, CI checks passed, open questions and pull requests.
   `grain list -external-ref CA-204` lists the tasks themselves.
 - `GET /api/events` (`tasks:read`) is an ordered, cursor-resumable feed of
-  `task.state`, `task.question`, `task.comment` and `task.ci` events
+  `task.state`, `task.question`, `task.comment` and `task.ci` events, and
+  of `notification.raised`/`acked`/`cleared` and host-script
+  `local_script.pending`/`answered` events
   ([integration-events.design.md](../design/design/integration-events.design.md)).
   It answers a JSON page (`?since=<event id>`, `limit` 1 to 500, default
   100; `since=now` starts at the head), long-polls with `&wait=<seconds>`
@@ -1333,6 +1335,12 @@ task by task:
   the caller reads. Events carry ids, one-line summaries, external
   references and attribution, never comment bodies, prompts, transcripts
   or CI logs, and the store keeps the latest 10,000.
+- `GET /api/tasks/{id}/diff-preview?max=N` (`tasks:read`) is the first
+  `N` hunks (default 6, at most 30) of the task's branch against its
+  base, file by file: each hunk cut to 40 lines of 240 characters, the
+  whole diff passed through the deployment's secret redactor, and the
+  change's total file and hunk counts beside them. A task whose branch
+  has nothing pushed yet answers 404.
 
 `grain skill install [-jetski|-claude|-codex|-gemini|-dir D] [-project]`
 writes a `SKILL.md` for the active context into the coding agent's skill

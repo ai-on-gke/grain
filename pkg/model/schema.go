@@ -657,7 +657,7 @@ import "strconv"
 // `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
 // the minimum interval between two completed automatic upgrades in release
 // mode, and when the last automatic upgrade succeeded (grain/task-4230).
-const SchemaVersion = 139
+const SchemaVersion = 140
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -758,7 +758,14 @@ const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_even
   ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
-  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`notification_id`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`subject`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`severity`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`summary`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`approval_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`script`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`decision`" + `         TEXT     NOT NULL DEFAULT ''
 )`
 
 // secretEntriesTable is the `secret_entries` catalogue for
