@@ -13,7 +13,8 @@
 // limitations under the License.
 
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { provideRouter } from "@angular/router";
+import { Router, provideRouter } from "@angular/router";
+import { SnackbarService } from "../services/snackbar.service";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
@@ -359,6 +360,229 @@ describe("InboxPageComponent", () => {
     expect(q(f, '[data-testid="next-inbox-headline"]')?.textContent).toContain(
       "Nothing waiting on you",
     );
+  });
+
+  function proposals(api: FakeApi): void {
+    api.taskList = [
+      { id: "9", title: "Bump Go", state: "proposed" },
+      { id: "10", title: "Pin Node", state: "proposed" },
+      {
+        id: "4",
+        title: "Fix the stall",
+        state: "awaiting_reply",
+        questionSummary: "Fix both?",
+      },
+    ];
+  }
+
+  function widen(f: ComponentFixture<unknown>, px: number): void {
+    const split = q(f, ".inbox-split")!;
+    Object.defineProperty(split, "clientWidth", {
+      configurable: true,
+      value: px,
+    });
+    split.getBoundingClientRect = () => ({
+      left: 0,
+      top: 0,
+      right: px,
+      bottom: 0,
+      width: px,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    });
+    window.dispatchEvent(new Event("resize"));
+  }
+
+  it("starts at 30 / 70 and moves the divider by keyboard, with a wide range", async () => {
+    localStorage.clear();
+    const api = new FakeApi();
+    proposals(api);
+    const f = await render(api);
+    widen(f, 1000);
+    await f.whenStable();
+    const sep = q(f, '[data-testid="inbox-resizer"]')!;
+    expect(sep.getAttribute("role")).toBe("separator");
+    expect(sep.getAttribute("aria-valuenow")).toBe("30");
+    expect(sep.getAttribute("aria-valuemin")).toBe("20");
+    expect(sep.getAttribute("aria-valuemax")).toBe("68");
+    sep.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "End",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await f.whenStable();
+    expect(sep.getAttribute("aria-valuenow")).toBe("68");
+    sep.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowLeft",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await f.whenStable();
+    expect(sep.getAttribute("aria-valuenow")).toBe("63");
+    // Enter hides the list; the inspector's control brings it back.
+    sep.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await f.whenStable();
+    expect(q(f, ".inbox-split")!.classList).toContain("is-collapsed");
+    (q(f, '[data-testid="split-toggle"]') as HTMLButtonElement).click();
+    await f.whenStable();
+    expect(q(f, ".inbox-split")!.classList).not.toContain("is-collapsed");
+    // Double-click resets to the default.
+    sep.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    await f.whenStable();
+    expect(sep.getAttribute("aria-valuenow")).toBe("30");
+    expect(localStorage.getItem("grain.inbox.splitRatio")).toBe("0.3000");
+  });
+
+  it("drags the divider anywhere in range, and Escape puts it back", async () => {
+    localStorage.clear();
+    const api = new FakeApi();
+    proposals(api);
+    const f = await render(api);
+    widen(f, 1000);
+    await f.whenStable();
+    const sep = q(f, '[data-testid="inbox-resizer"]')!;
+    const ptr = (type: string, x: number) =>
+      sep.dispatchEvent(
+        Object.assign(
+          new MouseEvent(type, { bubbles: true, clientX: x, button: 0 }),
+          { pointerId: 1 },
+        ),
+      );
+    ptr("pointerdown", 300);
+    ptr("pointermove", 620);
+    await f.whenStable();
+    expect(q(f, ".inbox-resizer-badge")?.textContent).toContain("62 / 38");
+    ptr("pointerup", 620);
+    await f.whenStable();
+    expect(sep.getAttribute("aria-valuenow")).toBe("62");
+    ptr("pointerdown", 620);
+    ptr("pointermove", 150);
+    await f.whenStable();
+    // Clamped at the 200px minimum.
+    expect(sep.getAttribute("aria-valuenow")).toBe("20");
+    sep.dispatchEvent(new Event("pointercancel"));
+    await f.whenStable();
+    expect(sep.getAttribute("aria-valuenow")).toBe("62");
+  });
+
+  it("approves a whole group after a confirmation, with Undo that withdraws approval", async () => {
+    const api = new FakeApi();
+    proposals(api);
+    const f = await render(api);
+    const btn = q(
+      f,
+      '[data-testid="group-approve-approve"], [data-testid^="group-approve-"]',
+    ) as HTMLButtonElement;
+    expect(btn.textContent).toContain("Approve all 2");
+    btn.click();
+    await f.whenStable();
+    const accept = [
+      ...(f.nativeElement as HTMLElement).querySelectorAll("button"),
+    ].find((b) => b.textContent?.trim() === "Approve 2")!;
+    accept.click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    const approved = api.posts.filter(
+      (p) => p.route === "POST /api/tasks/{id}/approve",
+    );
+    expect(approved.map((p) => (p.params as { id: string }).id).sort()).toEqual(
+      ["10", "9"],
+    );
+    const snacks = TestBed.inject(SnackbarService);
+    expect(snacks.current()?.message).toBe("Approved 2 tasks");
+    await snacks.runAction(snacks.current()!.id);
+    const withdrawn = api.posts.filter(
+      (p) => p.route === "POST /api/tasks/{id}/withdraw-approval",
+    );
+    expect(withdrawn).toHaveLength(2);
+  });
+
+  it("keeps failed rows selected after a batch", async () => {
+    const api = new FakeApi();
+    proposals(api);
+    api.onPost = (route, params) => {
+      if (route === "POST /api/tasks/{id}/approve" && params["id"] === "10")
+        throw new Error("conflict");
+    };
+    const f = await render(api);
+    const store = TestBed.inject(InboxStore);
+    store.checked.set(
+      new Set(
+        store
+          .entries()
+          .filter((e) => e.taskId !== "4")
+          .map((e) => e.key),
+      ),
+    );
+    const r = await store.actAll("approve");
+    await f.whenStable();
+    expect(r).toEqual({ done: ["9"], failed: 1 });
+    expect([...store.checked()]).toEqual([
+      store.entries().find((e) => e.taskId === "10")?.key,
+    ]);
+  });
+
+  it("selects everything in the filter with *, says what is outside it, and opens help with ?", async () => {
+    const api = new FakeApi();
+    proposals(api);
+    const f = await render(api);
+    const store = TestBed.inject(InboxStore);
+    const press = (key: string, init: KeyboardEventInit = {}) =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+    store.filter.set("proposals");
+    await f.whenStable();
+    press("*");
+    await f.whenStable();
+    expect(store.checked().size).toBe(2);
+    store.filter.set("asked");
+    await f.whenStable();
+    expect(q(f, '[data-testid="outside-filter"]')?.textContent).toContain(
+      "2 outside this filter",
+    );
+    press("?");
+    await f.whenStable();
+    expect(q(f, '[data-testid="inbox-help"]')).toBeTruthy();
+    press("Escape");
+    await f.whenStable();
+    expect(q(f, '[data-testid="inbox-help"]')).toBeNull();
+  });
+
+  it("opens the full task with Enter", async () => {
+    const api = new FakeApi();
+    proposals(api);
+    const f = await render(api);
+    const nav = vi
+      .spyOn(TestBed.inject(Router), "navigate")
+      .mockResolvedValue(true);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await f.whenStable();
+    expect(nav).toHaveBeenCalledWith(["/task", expect.any(String)]);
   });
 });
 

@@ -15,6 +15,7 @@
 import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
+import type { RouteKey } from "../api/generated-routes";
 import type {
   DiffPreview,
   LocalScriptApproval,
@@ -348,26 +349,67 @@ export class InboxStore {
     }
   }
 
-  // actAll gives every checked row that offers it the same answer, then
-  // reads the queue once, and reports how many did not land.
-  async actAll(actionId: string): Promise<void> {
-    const targets = this.checkedEntries()
-      .map((e) => e.actions.find((a) => a.id === actionId))
-      .filter((a): a is InboxAction => !!a && this.access.can(a.route, a.repo));
+  // actAll gives every checked row (or the given keys) that offers it the
+  // same answer, reads the queue once, and reports which tasks it landed
+  // on, so the caller can offer Undo. Rows that failed stay selected.
+  async actAll(
+    actionId: string,
+    keys?: readonly string[],
+  ): Promise<{ done: string[]; failed: number }> {
+    const pool = keys
+      ? this.entries().filter((e) => keys.includes(e.key))
+      : this.checkedEntries();
+    const targets = pool
+      .map((e) => ({ e, a: e.actions.find((x) => x.id === actionId) }))
+      .filter(
+        (t): t is { e: InboxEntry; a: InboxAction } =>
+          !!t.a && this.access.can(t.a.route, t.a.repo),
+      );
     this.busy.set(actionId);
     this.actionError.set(null);
+    // Each call is its own promise, so one that throws at once still
+    // leaves the others to finish.
     const results = await Promise.allSettled(
-      targets.map((a) => this.api.post(a.route, a.params, a.body)),
+      targets.map((t) =>
+        Promise.resolve().then(() =>
+          this.api.post(t.a.route, t.a.params, t.a.body),
+        ),
+      ),
     );
-    const failed = results.filter((r) => r.status === "rejected").length;
+    const done: string[] = [];
+    const landed = new Set<string>();
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") {
+        landed.add(targets[i].e.key);
+        if (targets[i].e.taskId) done.push(targets[i].e.taskId as string);
+      }
+    });
+    const failed = results.length - landed.size;
     if (failed > 0) {
       this.actionError.set(
-        `${failed} of ${targets.length} did not go through.`,
+        `${failed} of ${targets.length} did not go through; they stay selected.`,
       );
     }
-    this.clearChecked();
+    this.checked.update((c) => new Set([...c].filter((k) => !landed.has(k))));
     await this.refresh();
     this.busy.set(null);
+    return { done, failed };
+  }
+
+  // undoAll reverses a batch answer on the tasks it landed on, where the
+  // server has an inverse: approve -> withdraw approval, defer -> undefer,
+  // close or decline -> reopen.
+  async undoAll(actionId: string, taskIds: readonly string[]): Promise<void> {
+    const inverse: Record<string, RouteKey> = {
+      approve: "POST /api/tasks/{id}/withdraw-approval",
+      defer: "POST /api/tasks/{id}/undefer",
+      close: "POST /api/tasks/{id}/reopen",
+      decline: "POST /api/tasks/{id}/reopen",
+    };
+    const route = inverse[actionId];
+    if (!route) return;
+    await Promise.allSettled(taskIds.map((id) => this.api.post(route, { id })));
+    await this.refresh();
   }
 
   async reply(taskId: string, body: string): Promise<boolean> {
