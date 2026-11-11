@@ -732,8 +732,9 @@ export function classifyLocalScript(a: LocalScriptApproval): InboxEntry {
     rationale:
       "The script runs on a host, so a person approves the exact call.",
     taskId: a.taskId,
-    taskLink: `/tasks/${encodeURIComponent(a.taskId)}`,
-    externalLink: null,
+    // Host-script approvals live on the classic task page for now.
+    taskLink: null,
+    externalLink: `/tasks/${encodeURIComponent(a.taskId)}`,
     localScript: a,
     actions: [
       {

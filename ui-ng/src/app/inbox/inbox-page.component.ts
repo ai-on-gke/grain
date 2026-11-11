@@ -365,8 +365,8 @@ export function questionOf(
                       This run asked for the credential
                       <code>{{ secret.name }}</code
                       >. Set it from the
-                      <a [routerLink]="sel.taskLink">task</a>; the value never
-                      comes back to the page.
+                      <a [href]="'/tasks/' + sel.taskId">task</a>; the value
+                      never comes back to the page.
                     </p>
                   }
                   <textarea

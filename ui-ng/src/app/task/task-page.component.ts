@@ -109,12 +109,19 @@ export function duration(from?: string, to?: string): string {
               >
             }
           </div>
-          <h1 class="view-headline task-title" id="task-title">
+          <h1
+            class="view-headline task-title"
+            id="task-title"
+            tabindex="-1"
+            #heading
+          >
             <span class="muted">#{{ t.id }}</span> {{ t.title }}
           </h1>
           <div class="task-actions" role="group" aria-label="Task actions">
             @if (
-              t.state === "proposed" && can("POST /api/tasks/{id}/approve")
+              (t.state === "proposed" ||
+                (t.state === "deferred" && !$any(t).approved)) &&
+              can("POST /api/tasks/{id}/approve")
             ) {
               <button
                 type="button"
@@ -126,7 +133,7 @@ export function duration(from?: string, to?: string): string {
                 Approve
               </button>
             }
-            @if (t.state === "awaiting_reply") {
+            @if (t.state === "awaiting_reply" && !parked()) {
               <button
                 type="button"
                 class="btn-primary"
@@ -148,7 +155,11 @@ export function duration(from?: string, to?: string): string {
                 Stop
               </button>
             }
-            @if (t.state === "failed" && can("POST /api/tasks/{id}/retry")) {
+            @if (
+              (t.state === "failed" ||
+                (t.state === "awaiting_reply" && t.turnStopped)) &&
+              can("POST /api/tasks/{id}/retry")
+            ) {
               <button
                 type="button"
                 class="btn-primary"
@@ -156,7 +167,7 @@ export function duration(from?: string, to?: string): string {
                 [disabled]="store.isBusy('retry')"
                 (click)="retry()"
               >
-                Retry
+                {{ t.state === "failed" ? "Retry" : "Resume" }}
               </button>
             }
             @if (
@@ -167,7 +178,7 @@ export function duration(from?: string, to?: string): string {
                 type="button"
                 class="btn-primary"
                 data-testid="act-submit"
-                gTip="Put the pull request on the merge queue"
+                gTip="Submit the pull request; review gates still apply"
                 [disabled]="store.isBusy('submit')"
                 (click)="submit()"
               >
@@ -185,6 +196,21 @@ export function duration(from?: string, to?: string): string {
                 (click)="defer()"
               >
                 Defer
+              </button>
+            }
+            @if (
+              (t.state === "queued" ||
+                (t.state === "deferred" && $any(t).approved)) &&
+              can("POST /api/tasks/{id}/withdraw-approval")
+            ) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="act-withdraw"
+                gTip="Send it back to Needs approval; nothing runs until it is approved again"
+                (click)="withdraw()"
+              >
+                Withdraw approval
               </button>
             }
             @if (
@@ -223,27 +249,41 @@ export function duration(from?: string, to?: string): string {
               }
             } @else if (can("POST /api/tasks/{id}/close")) {
               @if (confirmClose()) {
-                <span class="confirm-inline" data-testid="close-confirm">
-                  {{ closeWarning() }}
+                <span
+                  class="confirm-inline"
+                  role="group"
+                  aria-label="Confirm closing"
+                  data-testid="close-confirm"
+                >
+                  <span role="alert">{{ closeWarning() }}</span>
+                  @if (prUrl()) {
+                    <label class="check-row">
+                      <input
+                        type="checkbox"
+                        data-testid="close-pr"
+                        [checked]="closePr()"
+                        (change)="closePr.set(!closePr())"
+                      />
+                      <span>Close the pull request too</span>
+                    </label>
+                  }
                   <button
                     type="button"
+                    #closeYes
                     class="btn-text danger"
                     data-testid="close-yes"
                     (click)="close(true)"
                   >
                     Close
                   </button>
-                  <button
-                    type="button"
-                    class="btn-text"
-                    (click)="confirmClose.set(false)"
-                  >
+                  <button type="button" class="btn-text" (click)="keep()">
                     Keep
                   </button>
                 </span>
               } @else {
                 <button
                   type="button"
+                  #closeBtn
                   class="btn-text"
                   data-testid="act-close"
                   (click)="close(false)"
@@ -307,6 +347,14 @@ export function duration(from?: string, to?: string): string {
             <div class="task-tab-body">
               @switch (current()) {
                 @case ("conversation") {
+                  <h2 class="sr-only">Conversation</h2>
+                  @if (parked(); as what) {
+                    <div class="banner park-card" data-testid="park">
+                      This task is waiting for {{ what }}. Grant or set it on
+                      the <a [href]="'/tasks/' + t.id">classic task page</a>; a
+                      credential must never go into the conversation.
+                    </div>
+                  }
                   @if (t.questionSummary && t.state === "awaiting_reply") {
                     <div class="question-card" data-testid="question">
                       <strong>Asked:</strong> {{ t.questionSummary }}
@@ -316,7 +364,6 @@ export function duration(from?: string, to?: string): string {
                     class="chat-log task-log"
                     role="log"
                     aria-label="Conversation"
-                    tabindex="0"
                   >
                     @for (c of comments(); track c.id) {
                       <article
@@ -347,7 +394,9 @@ export function duration(from?: string, to?: string): string {
                     }
                   </div>
                   @if (
-                    can("POST /api/tasks/{id}/comments") && t.state !== "closed"
+                    can("POST /api/tasks/{id}/comments") &&
+                    t.state !== "closed" &&
+                    !parked()
                   ) {
                     <form class="chat-composer" (submit)="send($event)">
                       <textarea
@@ -394,6 +443,7 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("runs") {
+                  <h2 class="sr-only">Runs</h2>
                   @if (attempts().length === 0) {
                     <p class="empty-state">No runs yet.</p>
                   } @else {
@@ -424,7 +474,7 @@ export function duration(from?: string, to?: string): string {
                             <td class="tabular">{{ a.number }}</td>
                             <td>
                               <span [class]="'status-pill ' + outcomeTone(a)">{{
-                                a.outcome || "running"
+                                outcomeLabel(a)
                               }}</span>
                               @if (a.detail) {
                                 <div class="muted run-detail">
@@ -443,6 +493,9 @@ export function duration(from?: string, to?: string): string {
                                 type="button"
                                 class="btn-text"
                                 [attr.data-testid]="'transcript-' + a.number"
+                                [attr.aria-label]="
+                                  'Transcript of run ' + a.number
+                                "
                                 [attr.aria-pressed]="
                                   store.transcriptFor() === a.number
                                 "
@@ -478,9 +531,11 @@ export function duration(from?: string, to?: string): string {
                         } @else if (!store.transcript()) {
                           <p class="muted">Nothing recorded yet.</p>
                         } @else {
-                          <pre class="transcript-text" tabindex="0">{{
-                            store.transcript()
-                          }}</pre>
+                          <pre
+                            class="transcript-text"
+                            tabindex="0"
+                            aria-labelledby="transcript-h"
+                            >{{ store.transcript() }}</pre>
                         }
                       </section>
                     }
@@ -488,6 +543,7 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("changes") {
+                  <h2 class="sr-only">Changes and CI</h2>
                   <dl class="facts" data-testid="changes">
                     <dt>Branch</dt>
                     <dd class="mono">{{ t.branch || "—" }}</dd>
@@ -525,6 +581,7 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("tree") {
+                  <h2 class="sr-only">Work tree</h2>
                   @let tree = store.tree();
                   @if (store.treeError(); as err) {
                     <p class="banner banner-error" role="alert">{{ err }}</p>
@@ -598,7 +655,7 @@ export function duration(from?: string, to?: string): string {
                     [attr.aria-label]="
                       'Priority, ' + level(prio(t)).name + ' ' + prio(t)
                     "
-                    (change)="setPriority($event)"
+                    (change)="pendingPriority.set(+$any($event.target).value)"
                   >
                     @for (l of levels; track l.value) {
                       <option
@@ -614,6 +671,18 @@ export function duration(from?: string, to?: string): string {
                       </option>
                     }
                   </select>
+                  @if (
+                    pendingPriority() !== null && pendingPriority() !== prio(t)
+                  ) {
+                    <button
+                      type="button"
+                      class="btn-text"
+                      data-testid="task-priority-apply"
+                      (click)="applyPriority()"
+                    >
+                      Set
+                    </button>
+                  }
                 } @else {
                   {{ level(prio(t)).name }} {{ prio(t) }}
                 }
@@ -710,6 +779,13 @@ export class TaskPageComponent implements OnDestroy {
   protected readonly author = authorOf;
   protected readonly human = isHuman;
   protected readonly confirmClose = signal(false);
+  protected readonly closePr = signal(false);
+  protected readonly pendingPriority = signal<number | null>(null);
+  private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
+  private readonly closeYes =
+    viewChild<ElementRef<HTMLButtonElement>>("closeYes");
+  private readonly closeBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("closeBtn");
 
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
@@ -717,7 +793,26 @@ export class TaskPageComponent implements OnDestroy {
   protected readonly t = computed(() => this.store.detail());
   protected readonly current = computed<TaskTab>(() => {
     const v = this.tab();
+    // Details sits beside the tabs on a wide screen; its tab there would
+    // show it twice.
+    if (
+      v === "details" &&
+      typeof matchMedia === "function" &&
+      matchMedia("(min-width: 1080px)").matches
+    ) {
+      return "conversation";
+    }
     return isTab(v) ? v : "conversation";
+  });
+  // What a parked task waits for, if it is a grant rather than a reply:
+  // those are never answered with a comment.
+  protected readonly parked = computed(() => {
+    const t = this.t() as (Record<string, unknown> & { state?: string }) | null;
+    if (!t || t.state !== "awaiting_reply") return "";
+    if (t["pendingSecret"]) return "a secret";
+    if (t["pendingAccess"]) return "an access grant";
+    if (t["pendingConfigChange"]) return "a configuration change";
+    return "";
   });
   // Details is a tab only where it is not beside the tabs (CSS hides the
   // aside below 1080px); the tab is always reachable by URL.
@@ -776,46 +871,50 @@ export class TaskPageComponent implements OnDestroy {
         ? "Closing leaves its pull request behind. This cannot be undone."
         : "Close this task?",
   );
+  // The pull request is "owner/repo#N" (pkg/ui Task.PullRequest).
   protected readonly prUrl = computed(() => {
-    const pr = this.t()?.pullRequest as unknown;
-    if (!pr) return null;
-    if (typeof pr === "object") return (pr as { url?: string }).url ?? null;
-    const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(String(pr));
+    const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(
+      String(this.t()?.pullRequest ?? ""),
+    );
     return m ? `https://github.com/${m[1]}/pull/${m[2]}` : null;
   });
-  protected readonly prLabel = computed(() => {
-    const pr = this.t()?.pullRequest as unknown;
-    if (pr && typeof pr === "object") {
-      const p = pr as { repo?: string; number?: number };
-      return `${p.repo ?? ""}#${p.number ?? ""}`;
-    }
-    return String(pr ?? "");
-  });
+  protected readonly prLabel = computed(() =>
+    String(this.t()?.pullRequest ?? ""),
+  );
 
   constructor() {
     effect(() => {
       const id = this.id();
       untracked(() => {
         this.confirmClose.set(false);
+        this.pendingPriority.set(null);
         this.store.open(id);
       });
     });
-    // The work tree is read when its tab opens.
+    // The work tree is read when its tab opens (or the task changes).
     effect(() => {
-      if (this.current() === "tree" && this.t()) {
+      if (this.current() === "tree") {
+        this.id();
         untracked(() => void this.store.loadTree());
       }
     });
-    // Runs opens on the newest attempt's transcript.
+    // Runs opens on the newest run's transcript; leaving Runs forgets it,
+    // and a live run's polling stops with one last read once it finishes.
     effect(() => {
       if (this.current() !== "runs") {
-        untracked(() => this.store.stopTranscript());
+        untracked(() => this.store.resetTranscript());
         return;
       }
-      const newest = this.attempts()[0];
-      if (newest && untracked(() => this.store.transcriptFor()) === null) {
-        untracked(() => this.showTranscript(newest));
-      }
+      const attempts = this.attempts();
+      untracked(() => {
+        const n = this.store.transcriptFor();
+        if (n === null) {
+          if (attempts[0]) this.showTranscript(attempts[0]);
+          return;
+        }
+        const a = attempts.find((x) => x.number === n);
+        if (a?.finishedAt && this.watchingLive) this.showTranscript(a);
+      });
     });
   }
 
@@ -849,7 +948,7 @@ export class TaskPageComponent implements OnDestroy {
   protected outcomeTone(a: Attempt): string {
     if (!a.outcome) return "setup";
     if (a.outcome === "succeeded") return "healthy";
-    if (a.outcome === "failed" || a.outcome === "error") return "error";
+    if (/fail|error/.test(a.outcome)) return "error";
     return "neutral";
   }
 
@@ -863,103 +962,154 @@ export class TaskPageComponent implements OnDestroy {
     return !!a && !a.finishedAt;
   }
 
+  private watchingLive = false;
+
   protected showTranscript(a: Attempt): void {
+    this.watchingLive = !a.finishedAt;
     this.store.watchTranscript(a.number, !a.finishedAt);
+  }
+
+  protected outcomeLabel(a: Attempt): string {
+    const o = a.outcome ?? "";
+    if (!o) return a.finishedAt ? "Ended" : "Running";
+    const labels: Record<string, string> = {
+      succeeded: "Succeeded",
+      failed: "Failed",
+      "setup-failed": "Setup failed",
+      "finish-failed": "Finishing failed",
+      nothing_needed: "Nothing needed",
+      paused: "Paused",
+      cancelled: "Cancelled",
+      interrupted: "Interrupted",
+    };
+    return labels[o] ?? o.replace(/[-_]/g, " ");
   }
 
   // ---------- actions ----------
 
+  // After an action the button that was pressed may be gone with the old
+  // state, so focus goes to the heading; the snackbar announces the rest.
   private done(message: string): void {
     this.snackbar.show(message);
+    setTimeout(() => this.heading()?.nativeElement.focus());
+  }
+
+  private post(route: Parameters<GrainApi["post"]>[0], body?: unknown) {
+    return (x: string) => this.api.post(route, { id: x }, body);
   }
 
   protected async approve(): Promise<void> {
+    const id = this.id();
     if (
-      await this.store.act("approve", (id) =>
-        this.api.post("POST /api/tasks/{id}/approve", { id }),
+      await this.store.act(
+        "approve",
+        this.post("POST /api/tasks/{id}/approve"),
+        id,
       )
     ) {
-      this.done(`Approved #${this.id()}; it is in the Backlog`);
+      this.done(`Approved #${id}; it is in the Backlog`);
     }
   }
 
   protected reply(): void {
-    void this.router.navigate([], {
-      queryParams: { tab: "conversation" },
-      queryParamsHandling: "merge",
-    });
-    setTimeout(() => this.composer()?.nativeElement.focus());
+    void this.router
+      .navigate([], {
+        queryParams: { tab: "conversation" },
+        queryParamsHandling: "merge",
+      })
+      .then(() => setTimeout(() => this.composer()?.nativeElement.focus()));
   }
 
   protected async stop(): Promise<void> {
+    const id = this.id();
     if (
-      await this.store.act("stop", (id) =>
-        this.api.post("POST /api/tasks/{id}/stop", { id }),
-      )
+      await this.store.act("stop", this.post("POST /api/tasks/{id}/stop"), id)
     ) {
-      this.done(`Stopped #${this.id()}; it waits for your reply`);
+      this.done(`Stopped #${id}; it waits for your reply`);
     }
   }
 
   protected async retry(): Promise<void> {
+    const id = this.id();
     if (
-      await this.store.act("retry", (id) =>
-        this.api.post("POST /api/tasks/{id}/retry", { id }),
-      )
+      await this.store.act("retry", this.post("POST /api/tasks/{id}/retry"), id)
     ) {
-      this.done(`Retrying #${this.id()}`);
+      this.done(`Retrying #${id}`);
     }
   }
 
   protected async submit(): Promise<void> {
+    const id = this.id();
     if (
-      await this.store.act("submit", (id) =>
-        this.api.post("POST /api/tasks/{id}/submit", { id }),
+      await this.store.act(
+        "submit",
+        this.post("POST /api/tasks/{id}/submit"),
+        id,
       )
     ) {
-      this.done(`Submitted #${this.id()} to the merge queue`);
+      this.done(`Submitted #${id}`);
     }
   }
 
   protected async defer(): Promise<void> {
     const id = this.id();
     if (
-      await this.store.act("defer", (x) =>
-        this.api.post(
-          "POST /api/tasks/{id}/defer",
-          { id: x },
-          { deferredUntil: "" },
-        ),
+      await this.store.act(
+        "defer",
+        this.post("POST /api/tasks/{id}/defer", { deferredUntil: "" }),
+        id,
       )
     ) {
+      this.done(`Deferred #${id}`);
       this.snackbar.show(`Deferred #${id}`, {
         label: "Undo",
         run: async () => {
-          await this.store.act("undefer", (x) =>
-            this.api.post("POST /api/tasks/{id}/undefer", { id: x }),
+          await this.store.act(
+            "undefer",
+            this.post("POST /api/tasks/{id}/undefer"),
+            id,
           );
         },
       });
     }
   }
 
-  protected async undefer(): Promise<void> {
+  protected async withdraw(): Promise<void> {
+    const id = this.id();
     if (
-      await this.store.act("undefer", (id) =>
-        this.api.post("POST /api/tasks/{id}/undefer", { id }),
+      await this.store.act(
+        "withdraw",
+        this.post("POST /api/tasks/{id}/withdraw-approval"),
+        id,
       )
     ) {
-      this.done(`Brought back #${this.id()}`);
+      this.done(`Withdrew approval of #${id}; it is back in Needs approval`);
+    }
+  }
+
+  protected async undefer(): Promise<void> {
+    const id = this.id();
+    if (
+      await this.store.act(
+        "undefer",
+        this.post("POST /api/tasks/{id}/undefer"),
+        id,
+      )
+    ) {
+      this.done(`Brought back #${id}`);
     }
   }
 
   protected async reopen(): Promise<void> {
+    const id = this.id();
     if (
-      await this.store.act("reopen", (id) =>
-        this.api.post("POST /api/tasks/{id}/reopen", { id }),
+      await this.store.act(
+        "reopen",
+        this.post("POST /api/tasks/{id}/reopen"),
+        id,
       )
     ) {
-      this.done(`Reopened #${this.id()}`);
+      this.done(`Reopened #${id}`);
     }
   }
 
@@ -970,26 +1120,31 @@ export class TaskPageComponent implements OnDestroy {
     const reversible = ["queued", "proposed", "deferred"].includes(state);
     if (!reversible && !confirmed) {
       this.confirmClose.set(true);
+      // Focus moves onto the confirmation, which replaced the button.
+      setTimeout(() => this.closeYes()?.nativeElement.focus());
       return;
     }
     this.confirmClose.set(false);
     const id = this.id();
-    const ok = await this.store.act("close", (x) =>
-      this.api.post(
-        "POST /api/tasks/{id}/close",
-        { id: x },
-        { close_pull_request: false },
-      ),
+    const ok = await this.store.act(
+      "close",
+      this.post("POST /api/tasks/{id}/close", {
+        close_pull_request: this.closePr(),
+      }),
+      id,
     );
     if (!ok) return;
+    this.done(`Closed #${id}`);
     this.snackbar.show(
       `Closed #${id}`,
       reversible
         ? {
             label: "Undo",
             run: async () => {
-              await this.store.act("reopen", (x) =>
-                this.api.post("POST /api/tasks/{id}/reopen", { id: x }),
+              await this.store.act(
+                "reopen",
+                this.post("POST /api/tasks/{id}/reopen"),
+                id,
               );
             },
           }
@@ -997,23 +1152,38 @@ export class TaskPageComponent implements OnDestroy {
     );
   }
 
-  protected async setPriority(ev: Event): Promise<void> {
-    const p = Number((ev.target as HTMLSelectElement).value);
+  protected keep(): void {
+    this.confirmClose.set(false);
+    setTimeout(() => this.closeBtn()?.nativeElement.focus());
+  }
+
+  // Priority is set with an explicit Set, never on change: arrowing
+  // through a select must not send a PATCH per step (WCAG 3.2.2).
+  protected async applyPriority(): Promise<void> {
+    const p = this.pendingPriority();
+    const id = this.id();
     const before = priorityOf(this.t()!);
-    if (!(p > 0) || p === before) return;
-    const ok = await this.store.act("priority", (id) =>
-      this.api.patch("PATCH /api/tasks/{id}", { id }, { priority: p }),
+    if (p === null || !(p > 0) || p === before) return;
+    const ok = await this.store.act(
+      "priority",
+      (x) =>
+        this.api.patch("PATCH /api/tasks/{id}", { id: x }, { priority: p }),
+      id,
     );
+    this.pendingPriority.set(null);
     if (ok) {
-      this.snackbar.show(`Priority set to ${levelOf(p).name} ${p}`, {
+      this.snackbar.show(`Priority of #${id} set to ${levelOf(p).name} ${p}`, {
         label: "Undo",
         run: async () => {
-          await this.store.act("priority", (id) =>
-            this.api.patch(
-              "PATCH /api/tasks/{id}",
-              { id },
-              { priority: before },
-            ),
+          await this.store.act(
+            "priority",
+            (x) =>
+              this.api.patch(
+                "PATCH /api/tasks/{id}",
+                { id: x },
+                { priority: before },
+              ),
+            id,
           );
         },
       });

@@ -73,10 +73,11 @@ export class TaskStore {
       this.id.set(id);
       this.detail.set(null);
       this.tree.set(null);
+      this.treeError.set(null);
       this.loadError.set(null);
       this.actionError.set(null);
       this.draft.set("");
-      this.stopTranscript();
+      this.resetTranscript();
     }
     void this.refresh();
     this.eventSub ??= this.events.events().subscribe(() => {
@@ -101,12 +102,27 @@ export class TaskStore {
     this.timer = null;
     this.eventSub?.unsubscribe();
     this.eventSub = null;
-    this.stopTranscript();
+    this.resetTranscript();
   }
+
+  // resetTranscript forgets which run was being read, so another task (or
+  // a later visit to Runs) starts on its own newest run.
+  resetTranscript(): void {
+    this.stopTranscript();
+    this.transcriptFor.set(null);
+    this.transcript.set(null);
+    this.transcriptError.set(null);
+  }
+
+  private seq = 0;
+  private applied = 0;
 
   async refresh(): Promise<void> {
     const id = this.id();
     if (!id) return;
+    // Reads can overlap (the poll and an event); an older answer must not
+    // overwrite a newer one.
+    const mine = ++this.seq;
     try {
       const r = await this.api.getIfChanged<TaskDetail>(
         "GET /api/tasks/{id}",
@@ -114,7 +130,8 @@ export class TaskStore {
         DETAIL_QUERY,
       );
       // A navigation to another task while the read was out wins.
-      if (this.id() !== id) return;
+      if (this.id() !== id || mine < this.applied) return;
+      this.applied = mine;
       if (r.changed || !this.detail()) this.detail.set(r.body);
       this.loadError.set(null);
     } catch (err) {
@@ -140,7 +157,11 @@ export class TaskStore {
         this.treeError.set(null);
       }
     } catch (err) {
-      this.treeError.set(`The work tree could not be read: ${errorText(err)}`);
+      if (this.id() === id) {
+        this.treeError.set(
+          `The work tree could not be read: ${errorText(err)}`,
+        );
+      }
     }
   }
 
@@ -179,9 +200,11 @@ export class TaskStore {
         this.transcriptError.set(null);
       }
     } catch (err) {
-      this.transcriptError.set(
-        `The transcript could not be read: ${errorText(err)}`,
-      );
+      if (this.id() === id && this.transcriptFor() === attempt) {
+        this.transcriptError.set(
+          `The transcript could not be read: ${errorText(err)}`,
+        );
+      }
     }
   }
 
@@ -191,11 +214,13 @@ export class TaskStore {
 
   // act makes one call on this task and reads it again; the caller says
   // what happened, or the error shows on the page.
+  // The id is fixed when the action starts: an Undo pressed after
+  // navigating to another task still acts on this one.
   async act(
     key: string,
     call: (id: string) => Promise<unknown>,
+    id: string | null = this.id(),
   ): Promise<boolean> {
-    const id = this.id();
     if (!id || this.isBusy(key)) return false;
     this.mark(key, true);
     this.actionError.set(null);

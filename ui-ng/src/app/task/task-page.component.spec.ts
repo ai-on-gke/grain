@@ -288,6 +288,62 @@ describe("TaskPageComponent", () => {
       "There is no task #7",
     );
   });
+
+  it("never offers a reply on a task parked for a secret", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pendingSecret: { name: "GH_TOKEN" },
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="act-reply"]')).toBeNull();
+    expect(q(f, '[data-testid="task-composer"]')).toBeNull();
+    expect(q(f, '[data-testid="park"]')!.textContent).toContain("a secret");
+  });
+
+  it("offers Resume for a stopped turn and Withdraw approval for queued work", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, turnStopped: true };
+    let f = await render(api);
+    expect(q(f, '[data-testid="act-retry"]')!.textContent).toContain("Resume");
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+    api.detail = { ...api.detail, state: "queued", turnStopped: false };
+    f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-withdraw"]')!.click();
+    await settle(f);
+    expect(api.calls[0]).toMatchObject({
+      route: "POST /api/tasks/{id}/withdraw-approval",
+    });
+  });
+
+  it("undoes on the task that was acted on, even after moving to another", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "queued" };
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-defer"]')!.click();
+    await settle(f);
+    const snacks = TestBed.inject(SnackbarService);
+    const undo = snacks.current()!;
+    f.componentRef.setInput("id", "99");
+    await settle(f);
+    await snacks.runAction(undo.id);
+    expect(api.calls.at(-1)).toMatchObject({
+      route: "POST /api/tasks/{id}/undefer",
+      params: { id: "7" },
+    });
+  });
+
+  it("forgets the transcript when moving to another task", async () => {
+    const api = new FakeApi();
+    const f = await render(api, "runs");
+    const store = TestBed.inject(TaskStore);
+    expect(store.transcriptFor()).toBe(2);
+    store.open("99");
+    expect(store.transcriptFor()).toBeNull();
+    expect(store.transcript()).toBeNull();
+    await settle(f);
+  });
 });
 
 describe("duration", () => {
