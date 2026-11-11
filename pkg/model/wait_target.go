@@ -397,9 +397,8 @@ func pullRequestStillRead(task Task, obs *Observation, now time.Time) bool {
 	return false
 }
 
-// closingNote is the most recent comment taskID's own runs posted, bounded
-// to maxClosingNote -- the agent's own words (comment_on_issue,
-// nothing_needed), never a human's, which are not the task's to report.
+// latestClosingNote is closingNote over taskID's conversation, read a page
+// at a time from the newest back until one of its runs' comments turns up.
 func (s *Store) latestClosingNote(ctx context.Context, taskID string) (string, error) {
 	var before int64
 	for {
@@ -417,6 +416,9 @@ func (s *Store) latestClosingNote(ctx context.Context, taskID string) (string, e
 	}
 }
 
+// closingNote is the most recent comment taskID's own runs posted, bounded
+// to maxClosingNote -- the agent's own words (comment_on_issue,
+// nothing_needed), never a human's, which are not the task's to report.
 func closingNote(comments []Comment, taskID string) string {
 	for i := len(comments) - 1; i >= 0; i-- {
 		c := comments[i]

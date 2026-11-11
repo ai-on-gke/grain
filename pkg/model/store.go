@@ -3843,6 +3843,11 @@ func (s *Store) LatestRunFinishedBefore(ctx context.Context, taskID string, befo
 	return at.UTC(), nil
 }
 
+// streakBatchSize is the first page FailureStreak and ConsecutiveOOMRuns
+// read of a task's finished runs, newest first; each further page doubles,
+// since both stop at the first run that ends the streak.
+const streakBatchSize = 32
+
 // FailureStreak is taskID's own failure streak (Count), plus the most
 // recent finished run's own outcome/detail and BackoffCount -- what
 // task_observation.streak_count (computeStreakForTask, which task_state
@@ -3862,8 +3867,6 @@ func (s *Store) LatestRunFinishedBefore(ctx context.Context, taskID string, befo
 // comment). Their LastFinishedAt/LastOutcome still describe them where
 // they are the most recent run, since those two fields answer "what
 // happened last", not "how badly is this task going".
-const streakBatchSize = 32
-
 func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStreak, error) {
 	var since time.Time
 	if obs, err := getObservation(ctx, s.db, taskID); err != nil {
@@ -3913,15 +3916,40 @@ func (s *Store) FailureStreak(ctx context.Context, taskID string) (*FailureStrea
 				break
 			}
 			if suspended.Valid {
+				// Skipped, not counted and not a boundary: a suspended run
+				// (task_run.suspend_kind, model.SuspensionKind) was stopped
+				// for a reason that is evidence about the deployment and none
+				// at all about this task, so it neither adds to the streak
+				// behind it nor clears it. computeStreakForTask skips the same
+				// rows the same way.
+				//
+				// BackoffCount is incremented for a capacity suspension alone.
+				// Nothing stops dispatch while a provider is overloaded, so
+				// without it the task would be sent back at the same refusal
+				// on every poll for as long as the outage lasted, rebuilding a
+				// sandbox each time. Every other kind either stops dispatch
+				// for as long as it lasts (a usage limit pauses the
+				// deployment) or should be resumed without waiting.
 				if SuspensionKind(suspended.String) == SuspendCapacity {
 					streak.BackoffCount++
 				}
 				continue
 			}
 			if outcome == EnvironmentOutcome {
+				// Skipped from Count and from BackoffCount: a host whose
+				// credentials expired says nothing about this task
+				// (EnvironmentOutcome's doc comment), and the task is parked
+				// until a human has fixed the host and replied, so there is
+				// no retry here to space out.
 				continue
 			}
 			if StoppedByPerson(outcome, detail.String) {
+				// Skipped from Count and from BackoffCount, and not a
+				// boundary either: a person closing the task under a live run
+				// (TaskClosedDetail) or stopping its turn (TurnStoppedDetail)
+				// made a decision about the task, which says nothing about
+				// whether it fails. Reopening it, or replying, should
+				// dispatch it at once rather than wait out a backoff.
 				continue
 			}
 			if streak.Count == 0 {
