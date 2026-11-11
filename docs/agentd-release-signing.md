@@ -127,5 +127,5 @@ Hosts that cannot reach `github.com` fetch both the manifest and binary from the
 The controller resolves each platform's asset in order:
 
 1. A local distribution directory (`$GRAIN_AGENTD_DIST_DIR`, defaulting to `/usr/local/share/grain/agentd`) carrying a **signed** manifest and binary verified against the pinned release public key -- for air-gapped controllers where an operator mirrors the signed release assets onto disk.
-2. Lazy fetch and on-disk cache from `$GRAIN_AGENTD_RELEASE_URL` (defaulting to `$GRAIN_CLI_RELEASE_URL`, else GitHub Releases; set `GRAIN_AGENTD_RELEASE_URL=off` to disable) for the controller's own release version, verified before serving.
+2. Lazy fetch and on-disk cache from `$GRAIN_AGENTD_RELEASE_URL` (defaulting to `$GRAIN_CLI_RELEASE_URL`, else GitHub Releases; set `GRAIN_AGENTD_RELEASE_URL=off` to disable) for the controller's own release version, verified against the pinned key before serving (an unsigned upstream release is refused), and cached in a 0700 directory of the controller's own.
 3. The static binaries and manifests baked into `/usr/local/share/grain/agentd` inside the controller image (`Dockerfile`), so bootstrap installs still work when both the host and the controller are offline.

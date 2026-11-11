@@ -640,3 +640,44 @@ func TestControllerRefusesTamperedLocalAgentdManifestSignature(t *testing.T) {
 		t.Fatalf("manifest signed by unpinned key returned %d, want 404", rec.Code)
 	}
 }
+
+func TestControllerRefusesUnsignedAgentdFromReleaseURL(t *testing.T) {
+	pub, _, _ := agentdrelease.GenerateKeyPair()
+	pubPEM, _ := agentdrelease.FormatPublicKeyPEM(pub)
+
+	// The hash matches, but nothing signed it: whoever serves the release
+	// URL wrote both, so it proves nothing.
+	binPayload := []byte("upstream-unsigned-agentd-binary")
+	const rel = "v9.4.3"
+	m, _ := agentdrelease.NewManifestForBinary(rel, "linux/amd64", binPayload, nil)
+	rawManifest, _ := json.Marshal(m)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/" + rel + "/grain-agentd-linux-amd64.manifest.json":
+			_, _ = w.Write(rawManifest)
+		case "/releases/" + rel + "/grain-agentd-linux-amd64":
+			_, _ = w.Write(binPayload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	t.Setenv(agentdDistDirEnv, t.TempDir()) // empty local dir
+	t.Setenv(agentdReleaseURLEnv, upstream.URL+"/releases")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+	oldRel := cliInstallRelease
+	cliInstallRelease = func() string { return rel }
+	t.Cleanup(func() { cliInstallRelease = oldRel })
+
+	srv := NewServer(Config{}, nil)
+	for _, p := range []string{"/api/hostd/agentd/linux/amd64", "/api/hostd/agentd/linux/amd64/manifest.json"} {
+		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com"+p, nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s with an unsigned upstream release = %d, want 404", p, rec.Code)
+		}
+	}
+}

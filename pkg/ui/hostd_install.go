@@ -497,6 +497,9 @@ type cachedAgentdRelease struct {
 type agentdReleaseCache struct {
 	mu      sync.Mutex
 	entries map[string]cachedAgentdRelease
+	// dir holds the verified binaries fetched from the release URL,
+	// created 0700 on first use.
+	dir string
 }
 
 func (s *Server) handleHostdAgentdBinary(w http.ResponseWriter, r *http.Request) {
@@ -572,6 +575,7 @@ func (s *Server) resolveAgentdRelease(ctx context.Context, platform string) (cac
 	// 2. When the daemon knows its release and upstream fetching is enabled,
 	// fetch and verify the signed release manifest + binary once from the
 	// release URL so hosts without internet access receive the signed release.
+	// An unsigned upstream release is refused rather than hash-checked.
 	if rel := cliInstallRelease(); rel != "" {
 		if base := agentdReleaseBaseURL(); base != "" && base != "off" {
 			if entry, ok := s.fetchAndCacheAgentdRelease(ctx, base, rel, platform); ok {
@@ -714,26 +718,30 @@ func (s *Server) fetchAndCacheAgentdRelease(ctx context.Context, baseURL, rel, p
 		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
 		return cachedAgentdRelease{}, false
 	}
-	if m.Signature != "" {
-		pinnedPub, err := controllerPinnedAgentdKey()
-		if err != nil {
-			c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
-			return cachedAgentdRelease{}, false
-		}
-		if _, err := agentdrelease.VerifyBinary(m, binBytes, pinnedPub); err != nil {
-			c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
-			return cachedAgentdRelease{}, false
-		}
-	} else if err := agentdrelease.VerifyBinaryHash(m, binBytes); err != nil {
+	// What comes from the network is served only signed by the pinned
+	// key: an unsigned manifest's hash vouches for nothing, since it
+	// arrived beside the binary it describes.
+	pinnedPub, err := controllerPinnedAgentdKey()
+	if err != nil {
+		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+		return cachedAgentdRelease{}, false
+	}
+	if _, err := agentdrelease.VerifyBinary(m, binBytes, pinnedPub); err != nil {
 		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
 		return cachedAgentdRelease{}, false
 	}
 
-	cacheDir := filepath.Join(os.TempDir(), "grain-agentd-release-cache")
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
-		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
-		return cachedAgentdRelease{}, false
+	// A directory of this process's own, so nobody else sharing the temp
+	// directory can plant or swap the binary served from it.
+	if c.dir == "" {
+		dir, err := os.MkdirTemp("", "grain-agentd-release-cache-")
+		if err != nil {
+			c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+			return cachedAgentdRelease{}, false
+		}
+		c.dir = dir
 	}
+	cacheDir := c.dir
 	binPath := filepath.Join(cacheDir, m.SHA256+"-"+binName)
 	if st, err := os.Stat(binPath); err != nil || st.Size() != m.Size {
 		tmp := fmt.Sprintf("%s.tmp.%d", binPath, os.Getpid())
