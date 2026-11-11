@@ -77,6 +77,13 @@ async function awaitingTask(request) {
   return list.find((t) => t.title === TITLE);
 }
 
+// The task page polls its detail on its own, so a poll can still be
+// inside the handler below when the page reloads or the test closes it.
+// Its response is then disposed under it ("apiResponse.json: Response
+// has been disposed"), and nobody is waiting for that answer any more,
+// so the handler lets it go rather than failing the test.
+const goneAway = (err) => /disposed|closed|cancel|handled/i.test(String(err));
+
 // fakeAccessRequest answers task id's detail as parked on pendingAccess,
 // and records each decision posted rather than letting it reach the
 // store.
@@ -85,17 +92,27 @@ async function fakeAccessRequest(page, id, pending = pendingAccess) {
     if (route.request().method() !== "GET") return route.fallback();
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];
-    const response = await route.fetch({ headers });
-    const body = await response.json();
-    await route.fulfill({
-      response,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...body,
-        awaitingAccess: true,
-        pendingAccess: pending,
-      }),
-    });
+    let response, body;
+    try {
+      response = await route.fetch({ headers });
+      body = await response.json();
+    } catch (err) {
+      if (goneAway(err)) return;
+      throw err;
+    }
+    await route
+      .fulfill({
+        response,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          awaitingAccess: true,
+          pendingAccess: pending,
+        }),
+      })
+      .catch((err) => {
+        if (!goneAway(err)) throw err;
+      });
   });
   const decisions = [];
   await page.route(
