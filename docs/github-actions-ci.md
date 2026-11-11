@@ -11,7 +11,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 
 - **Triggers (`on:`)**:
   - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch` (with optional comma-separated `jobs` input for selective job execution)
-  - `nightly.yml`: `push` of release-candidate tags (`v*-rc.*`, excluding `v*-rc.*-*` markers such as `-discarded`), `schedule` (`cron: "11 2 * * *"`, a safety net on `main`; its `idle-gate` job skips every other job, `stage-1` included, when a `vX.Y.Z-rc.N` run concluded in the last 24h) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `upgrade-test` for a single-job flake retry on an RC, or `kvm-route-stress`). It is Stage 1 of RC qualification (`design/playbook/releases.playbook.md`); runs on `main` and on `refs/tags/v*` are never cancelled by a later run on the same ref, and its `stage-1` job fails unless all 14 hosted Stage 1 jobs ended `success` (a skipped job fails it). A tag pushed with the default `GITHUB_TOKEN` starts no `push` workflow, so a train pushing with it must dispatch `nightly.yml` on the tag instead
+  - `nightly.yml`: `push` of release-candidate tags (`v*-rc.*`, excluding `v*-rc.*-*` markers such as `-discarded`), `schedule` (`cron: "11 2 * * *"`, a safety net on `main`; its `idle-gate` job skips every other job, `stage-1` included, when a `vX.Y.Z-rc.N` run concluded in the last 24h) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `upgrade-test` for a single-job flake retry on an RC, or `kvm-route-stress`). It is Stage 1 of RC qualification (`design/playbook/releases.playbook.md`); runs on `main` and on `refs/tags/v*` are never cancelled by a later run on the same ref, and its `stage-1` job fails unless all 18 hosted Stage 1 jobs ended `success` (a skipped job fails it). A tag pushed with the default `GITHUB_TOKEN` starts no `push` workflow, so a train pushing with it must dispatch `nightly.yml` on the tag instead
   - `post-reset-e2e.yml`: `schedule` (`cron: "23 5 * * *"`) and `workflow_dispatch`
   - `gcp-smoke.yml`: `schedule` (`cron: "41 4 * * *"`) and `workflow_dispatch`
 - **Concurrency (`concurrency:`)**:
@@ -65,7 +65,7 @@ Because GitHub Actions only supports native `paths:` / `paths-ignore:` filters a
 
 ### 2. Nightly Suite (`.grain/workflows/nightly.yml` -> `.github/workflows/nightly.yml`)
 
-Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_dispatch` (optional `jobs`). The `stage-1` job (`stage 1 qualification verdict`) needs `idle-gate` and the 15 hosted jobs from `go-long` through `upgrade-test` below (KVM and `real-kubernetes` excluded until they are required) and is the run's Stage 1 verdict. Every job needs `idle-gate`, which outputs `run=false` only on a `schedule` run within 24h of an rc's Stage 1 (playbook §15), so that run skips cleanly instead of failing.
+Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_dispatch` (optional `jobs`). The `stage-1` job (`stage 1 qualification verdict`) needs `idle-gate` and the 18 hosted jobs from `go-long` through `real-kubernetes` below (the KVM jobs and `real-kubernetes` included) and is the run's Stage 1 verdict. Every job needs `idle-gate`, which outputs `run=false` only on a `schedule` run within 24h of an rc's Stage 1 (playbook §15), so that run skips cleanly instead of failing.
 
 | Job ID | Display Name | Grain CI (`.grain/workflows/nightly.yml`) | GitHub Actions (`.github/workflows/nightly.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |

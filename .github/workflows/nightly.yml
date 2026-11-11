@@ -1834,6 +1834,9 @@ jobs:
       - image-vulns
       - cmd-grain-stress
       - upgrade-test
+      - kvm-sandboxes
+      - kvm-route-stress
+      - real-kubernetes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

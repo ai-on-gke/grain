@@ -46,6 +46,7 @@ var stage1Jobs = []string{
 	"go-long", "staterepo-soak", "loadtest", "scalability", "merge-stress",
 	"long-term-test", "long-sim", "postgres-stress", "tunnel-stress",
 	"ui-e2e-long", "installer-variants", "vulns", "image-vulns", "cmd-grain-stress", "upgrade-test",
+	"kvm-sandboxes", "kvm-route-stress", "real-kubernetes",
 }
 
 type nightlyWorkflowFile struct {
