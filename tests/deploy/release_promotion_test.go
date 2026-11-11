@@ -740,10 +740,10 @@ func TestReleaseReviewAndWatchdogHoldReadOnlyTaskAndSuiteScopes(t *testing.T) {
 	decl := declarations(t)
 	repo := model.GrainSourceRepo().String()
 	wantGrants := []string{
-		model.APIGrantPrefix + "ci-read@" + repo,
-		model.APIGrantPrefix + "self-debug",
-		model.APIGrantPrefix + "suites:read@" + repo,
-		model.APIGrantPrefix + "releases:read@" + repo,
+		model.APIGrantString("ci-read", repo),
+		model.APIGrantString("self-debug", ""),
+		model.APIGrantString("suites:read", repo),
+		model.APIGrantString("releases:read", repo),
 	}
 	targets := map[string]bool{
 		".grain/templates/release-process-review.yml": false,

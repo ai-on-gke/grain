@@ -1427,7 +1427,7 @@ func TestOnlyTheScheduledSecretsRepoJobHoldsAGitHubCredential(t *testing.T) {
 
 	contains(t, live, "schedule:")
 	contains(t, live, "workflow_dispatch:")
-	contains(t, live, "capabilities: [github-sandbox]")
+	contains(t, live, `capabilities: ["https://grain.dev/capabilities/github#sandbox-repo"]`)
 	// The gate's own failure mode: without this the tests skip, and a
 	// skip and a pass are the same `ok` in go test's summary.
 	contains(t, live, "GRAIN_LIVE_SECRETS_REPO_TEST")
@@ -4249,7 +4249,7 @@ func TestThePruneJobIsDeliberateAndOutOfBranchReach(t *testing.T) {
 
 	contains(t, prune, "name: Prune GHCR packages")
 	contains(t, prune, "cmd/ghcr-prune")
-	contains(t, prune, `capabilities: ["api:ci-read@ai-on-gke/grain"]`)
+	contains(t, prune, `capabilities: [{capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}]`)
 	contains(t, prune, "Prune old package versions")
 
 	// And it is a maintenance tool, not the deployment's: nothing on a host runs
