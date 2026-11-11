@@ -146,7 +146,7 @@ or open network access -- asks for it with the turn-ending
  "requests": [
    {"kind": "read", "repo": "acme/docs"},
    {"kind": "write", "repo": "acme/lib", "base": "release-2"},
-   {"kind": "grant", "capability": "api:tasks:admin"},
+   {"kind": "grant", "capability": "https://grain.dev/capabilities/api#tasks:admin"},
    {"kind": "grant", "capability": "<server>#gcp-key", "with": {"permission_set": "reader"}},
    {"kind": "network", "access": "open"}]}
 ```
@@ -454,7 +454,10 @@ A workflow job can hold the same grants, in its `capabilities:`:
 ```yaml
 jobs:
   cut-or-promote:
-    capabilities: ["api:ci:read", "api:tasks:read", release-gate-read]
+    capabilities:
+      - "https://grain.dev/capabilities/api#ci:read"
+      - "https://grain.dev/capabilities/api#tasks:read"
+      - "https://grain.dev/capabilities/api#release-gate-read"
 ```
 
 A job has no agent to serve tools to, so its api grants are worth one
@@ -530,7 +533,8 @@ templates through grain's API.
 
 `release-gate-read`, the release train's capability
 (`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
-`api:release-gate-read`. A job may declare it under either name.
+`https://grain.dev/capabilities/api#release-gate-read`. A job may still declare it by its retired names,
+`release-gate-read` or `api:release-gate-read`, for one release.
 
 ## GitHub Actions runs
 
@@ -1550,11 +1554,12 @@ A director session granted the following can do the whole cut through
 generated tools:
 
 ```
-api:tasks:write  api:merge:write  api:ci:read  api:ci:write
-api:schedules:write  api:releases:write
+https://grain.dev/capabilities/api#tasks:write      https://grain.dev/capabilities/api#merge:write
+https://grain.dev/capabilities/api#ci:read          https://grain.dev/capabilities/api#ci:write
+https://grain.dev/capabilities/api#schedules:write  https://grain.dev/capabilities/api#releases:write
 ```
 
-Or grant `api:release-manager`, which also adds the reads.
+Or grant `https://grain.dev/capabilities/api#release-manager`, which also adds the reads.
 
 | Step | Tool | Arguments |
 |---|---|---|

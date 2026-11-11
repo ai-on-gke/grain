@@ -146,19 +146,19 @@ var apiPresets = []APIPreset{
 	{Name: "release-manager", Description: "Cut, qualify and promote release candidates, run schedules, and drive their CI and merges",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write",
 			"schedules:read", "schedules:write", "releases:read", "releases:write", "repos:read"}},
-	{Name: "self-debug", Description: "What the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)",
+	{Name: "self-debug", Description: "Read tasks, runs, metrics and deployment status over the REST API (formerly the self-debug capability, whose source checkout is now grain#source)",
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
-	{Name: "self-upgrade", Description: "What the self-upgrade capability granted: read and start upgrades",
+	{Name: "self-upgrade", Description: "Read and start upgrades (formerly the self-upgrade capability)",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
-	{Name: "pipeline-control", Description: "What the pipeline-control capability granted: pause and resume dispatch",
+	{Name: "pipeline-control", Description: "Pause and resume dispatch (formerly the pipeline-control capability)",
 		Scopes: []APIScope{"dispatch:read", "dispatch:write"}},
-	{Name: "team-broadcast", Description: "What the team-broadcast capability granted: post a comment to every active task",
+	{Name: "team-broadcast", Description: "Post a comment to every active task (formerly the team-broadcast capability)",
 		Scopes: []APIScope{"teams:broadcast"}},
-	{Name: "memory", Description: "What the memory capability granted: read and write memory and memory documents",
+	{Name: "memory", Description: "Read and write memory and memory documents (formerly the memory capability)",
 		Scopes: []APIScope{"memory:read", "memory:write"}},
-	{Name: "release-notes", Description: "What the release-notes capability granted: read cluster stats and weekly release notes, and publish weekly release notes",
+	{Name: "release-notes", Description: "Read cluster stats and weekly release notes, and publish weekly release notes (formerly the release-notes capability)",
 		Scopes: []APIScope{"release-notes:read", "release-notes:write"}},
-	{Name: "test-quarantine", Description: "What the test-quarantine capability granted: quarantine flaky or failing tests and file follow-up repair tasks",
+	{Name: "test-quarantine", Description: "Quarantine flaky or failing tests and file follow-up repair tasks (formerly the test-quarantine capability)",
 		Scopes: []APIScope{"tests:write"}},
 	{Name: ReleaseGateReadCapability, Description: "What a release workflow reads and files: its repository's CI runs " +
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
@@ -318,7 +318,7 @@ func GCPKeyServerGrant(permissionSet string) string {
 		With:       map[string]any{"permission_set": set, "primary": true},
 	})
 	if err != nil {
-		panic(fmt.Sprintf("model: encoding gcp-key grant for %q: %v", set, err))
+		panic(fmt.Sprintf("model: encoding gcp#gcp-key grant for %q: %v", set, err))
 	}
 	return s
 }

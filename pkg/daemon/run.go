@@ -1511,6 +1511,11 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// A trusted release runs only from a branch the repository has
 			// reviewed into, whoever asked for it (grain/task-949).
 			ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
+			// And the same branches are the only ones whose jobs write the
+			// shared Go build cache every sandbox reads.
+			if pkgCache != nil {
+				WithCIGoCacheWriters(ciService, pkgCache.GoCacheJobs, CiReleaseRefRefusal(store, githubClient))
+			}
 			// The attached capability servers a job's capability references
 			// are minted through, the same ones a task's are.
 			WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
