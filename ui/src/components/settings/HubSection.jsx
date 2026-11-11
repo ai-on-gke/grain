@@ -392,7 +392,12 @@ export default function HubSection({ s }) {
               fullWidth
             >
               <MenuItem value="">
-                Auto-detect ({snapshot?.effectiveHostKind || "workstation"})
+                {/* The effective kind is the chosen one while a kind is
+                  chosen, so it says nothing about what Auto-detect would
+                  pick then. */}
+                {!reg.hostKind && snapshot?.effectiveHostKind
+                  ? `Auto-detect (${snapshot.effectiveHostKind})`
+                  : "Auto-detect"}
               </MenuItem>
               <MenuItem value="workstation">Workstation</MenuItem>
               <MenuItem value="kubernetes">Kubernetes</MenuItem>
@@ -449,7 +454,12 @@ export default function HubSection({ s }) {
               <Checkbox
                 name="registryListed"
                 data-setting-id="registryListed"
-                checked={reg.listed !== false}
+                // Unset is unlisted: the daemon registers an entry with
+                // listed only when this is true, and a saved false is
+                // omitted from the settings (2026-11-11 walkthrough: the
+                // box showed ticked for an unlisted grain, and unticking
+                // it came back ticked).
+                checked={reg.listed === true}
                 onChange={(evt) =>
                   updateRegistry({ listed: evt.target.checked })
                 }
