@@ -19,7 +19,7 @@ package antigravity
 // tests/e2e/live_resume_test.go asks a real agy and a real Gemini whether
 // a second exec can pick up the first one's conversation. It is the
 // better question and it stays; what it needs is GEMINI_API_KEY, and no
-// such secret has ever reached .grain/workflows/live-agent.yml's job --
+// such secret has ever reached .github/workflows/live-agent.yml's job --
 // so until this file, every claim `--conversation` rests on was neither
 // green nor red anywhere, and resume.go said so at length.
 //
