@@ -134,6 +134,28 @@ func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome,
 			susp = &Suspension{Kind: kind, Detail: detail, CreatedAt: at}
 		}
 	}
+	// The wake condition resume_later recorded while the run was live
+	// (Store.HoldResumeOn) outlives however the run is then recorded as
+	// ending: its task was deferred at that moment, and a run that went on
+	// to fail, time out or meet a usage limit before its result was
+	// processed must not leave that deferral with nothing that can wake it.
+	var held sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		"SELECT `resume_on` FROM `task_suspension` WHERE `run_id` = ? AND `kind` = ?",
+		runID, string(SuspendRequested)).Scan(&held); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if susp != nil && susp.ResumeOn == "" && held.String != "" {
+		carried := *susp
+		carried.ResumeOn = held.String
+		susp = &carried
+	}
+	if susp == nil && held.String != "" {
+		// Kept as it is, and the run's suspend_kind left unset: the hold
+		// is the task's, and the run's own ending is judged as it was.
+		_, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = NULL WHERE `id` = ?", runID)
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM `task_suspension` WHERE `run_id` = ?", runID); err != nil {
 		return err
 	}
@@ -141,26 +163,9 @@ func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome,
 		_, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = NULL WHERE `id` = ?", runID)
 		return err
 	}
-	var standing sql.NullString
-	if err := tx.QueryRowContext(ctx, "SELECT `standing` FROM `task_run` WHERE `id` = ?", runID).
-		Scan(&standing); err != nil {
+	standing, err := runStandingTx(ctx, tx, runID, taskID)
+	if err != nil {
 		return err
-	}
-	if !standing.Valid {
-		// A run started before standings were recorded: snapshot what it
-		// has now, with the request it spent, which is the best there is.
-		var spent sql.NullTime
-		if err := tx.QueryRowContext(ctx, "SELECT `run_now_at` FROM `task_run` WHERE `id` = ?", runID).
-			Scan(&spent); err != nil {
-			return err
-		}
-		st, err := dispatchStandingOf(ctx, tx, taskID, timePtr(spent))
-		if err != nil {
-			return err
-		}
-		if standing.String, err = standingJSON(st); err != nil {
-			return err
-		}
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE `task_run` SET `suspend_kind` = ? WHERE `id` = ?",
 		string(susp.Kind), runID); err != nil {
@@ -170,12 +175,81 @@ func recordSuspensionTx(ctx context.Context, tx *sql.Tx, runID, taskID, outcome,
 	if created.IsZero() || created.Before(at) {
 		created = at
 	}
-	_, err := tx.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO `task_suspension` (`run_id`,`task_id`,`kind`,`detail`,`resume_on`,`resume_at`,"+
 			"`standing`,`model_hint`,`created_at`) VALUES (?,?,?,?,?,?,?,?,?)",
 		runID, taskID, string(susp.Kind), susp.Detail, nullable(susp.ResumeOn), timeOf(susp.ResumeAt),
-		standing.String, nullable(susp.ModelHint), created.UTC())
+		standing, nullable(susp.ModelHint), created.UTC())
 	return err
+}
+
+// runStandingTx is the standing runID started with, as task_suspension
+// stores it.
+func runStandingTx(ctx context.Context, tx *sql.Tx, runID, taskID string) (string, error) {
+	var standing sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT `standing` FROM `task_run` WHERE `id` = ?", runID).
+		Scan(&standing); err != nil {
+		return "", err
+	}
+	if standing.Valid {
+		return standing.String, nil
+	}
+	// A run started before standings were recorded: snapshot what it
+	// has now, with the request it spent, which is the best there is.
+	var spent sql.NullTime
+	if err := tx.QueryRowContext(ctx, "SELECT `run_now_at` FROM `task_run` WHERE `id` = ?", runID).
+		Scan(&spent); err != nil {
+		return "", err
+	}
+	st, err := dispatchStandingOf(ctx, tx, taskID, timePtr(spent))
+	if err != nil {
+		return "", err
+	}
+	return standingJSON(st)
+}
+
+// HoldResumeOn records what a live run's resume_later waits for on the
+// run itself, at the moment ui.Client.ResumeLater defers its task: a
+// requested suspension of the task's unfinished run, which the run's
+// finish then keeps (recordSuspensionTx) whether or not its result is
+// ever processed. Before it, the condition was written only by
+// orchestrator.processResult, so a run that called resume_later and then
+// ended in an error -- a usage limit, its runtime cap, the idle
+// watchdog -- left its task deferred with nothing waiting on the CI
+// verdict, until a person pressed Undefer.
+//
+// Only CI and message waits are held here: a time is the deferral's own
+// wake time, and tasks are depends-on links. A task with no unfinished
+// run -- a person calling it -- holds nothing.
+func (s *Store) HoldResumeOn(ctx context.Context, taskID string, when ResumeOn, at time.Time) error {
+	if when.CI == "" && !when.Message {
+		return nil
+	}
+	return s.write(ctx, "hold task "+taskID+"'s resume_later", func(tx *sql.Tx) error {
+		var runID string
+		err := tx.QueryRowContext(ctx,
+			"SELECT `id` FROM `task_run` WHERE `task_id` = ? AND `finished_at` IS NULL "+
+				"ORDER BY `started_at` DESC LIMIT 1", taskID).Scan(&runID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		standing, err := runStandingTx(ctx, tx, runID, taskID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_suspension` WHERE `run_id` = ?", runID); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			"INSERT INTO `task_suspension` (`run_id`,`task_id`,`kind`,`detail`,`resume_on`,`resume_at`,"+
+				"`standing`,`created_at`) VALUES (?,?,?,?,?,?,?,?)",
+			runID, taskID, string(SuspendRequested), RequestedDetail("", when), nullable(when.JSON()),
+			timeOf(when.At), standing, at.UTC())
+		return err
+	})
 }
 
 // resumeSuspensionsTx marks taskID's open suspensions resumed by runID,
