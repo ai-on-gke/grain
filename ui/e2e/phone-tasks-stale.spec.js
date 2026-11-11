@@ -30,6 +30,13 @@ import path from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.js";
 
+// STALE_WAIT is how long the shell may take to call the list stale: one
+// failed /api/tasks poll is retried quietly, and only TASKS_STALE_AFTER
+// (App.jsx) in a row -- spaced out by the poll's backoff once the 502s
+// count as unreachable -- say "not refreshing".
+const STALE_WAIT = 25_000;
+test.describe.configure({ timeout: 60_000 });
+
 const LIVE_POLL = /\/api\/tasks(\?(?!.*state=closed).*)?$/;
 
 function inside(inner, outer, slack = 0.5) {
@@ -103,7 +110,7 @@ for (const colorScheme of ["light", "dark"]) {
       }),
     );
     try {
-      await expect(chip).toBeVisible({ timeout: 10_000 });
+      await expect(chip).toBeVisible({ timeout: STALE_WAIT });
       await expect(chip).toContainText("Task list not refreshing");
       await expect(chip).toHaveAccessibleName(/not refreshing/);
       await expect(chip).toHaveAttribute("title", /synthetic tasks 502/);
@@ -190,7 +197,7 @@ test("the desktop shell has no phone stale chip: the rail says it there (1440px)
   );
   try {
     await expect(page.getByText("not refreshing").first()).toBeVisible({
-      timeout: 10_000,
+      timeout: STALE_WAIT,
     });
     await expect(page.getByTestId("phone-tasks-stale")).toHaveCount(0);
   } finally {
