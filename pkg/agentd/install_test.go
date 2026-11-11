@@ -126,6 +126,12 @@ func TestInstall(t *testing.T) {
 	if want := "ExecStart=" + p.Bin + " -server https://grain.example.com -token-file " + p.Token + " -allowlist " + p.Allowlist + " -state-dir " + p.StateDir + " -name ws-1"; !strings.Contains(string(unit), want) {
 		t.Errorf("unit lacks %q:\n%s", want, unit)
 	}
+	// A drain or cutover exits 0 for the new binary to take over, so the
+	// unit must restart on any exit (the 2026-11-11 §9 walkthrough found a
+	// drained host left offline under Restart=on-failure).
+	if !strings.Contains(string(unit), "\nRestart=always\n") || strings.Contains(string(unit), "Restart=on-failure") {
+		t.Errorf("unit does not restart a drained grain-agentd (want Restart=always):\n%s", unit)
+	}
 	// Started, and lingering enabled.
 	want := []string{
 		"systemctl --user daemon-reload",

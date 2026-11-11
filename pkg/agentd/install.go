@@ -440,13 +440,21 @@ func (u unitConfig) commandLine() string {
 	return u.Bin + " " + strings.Join(u.args(), " ")
 }
 
+// unitTemplate restarts grain-agentd whenever it exits, not only on a
+// failure: a drain or cutover (OpDrain) ends with grain-agentd exiting 0
+// so the binary ~/.local/bin/grain-agentd now names takes over, as
+// grain-hostd.service does with Restart=always. With Restart=on-failure a
+// drained host stayed offline, and a run whose Exit frame raced the drain
+// waited out the daemon's re-attach window
+// (docs/test-runs/2026-11-11-host-agent-contract.md). systemctl --user
+// stop still stops it: a stop is never restarted.
 var unitTemplate = template.Must(template.New("unit").Parse(`[Unit]
 Description={{.Program}}: agent CLIs for the grain daemon at {{.Server}}
 After=network-online.target
 
 [Service]
 ExecStart={{.Command}}
-Restart=on-failure
+Restart=always
 RestartSec=10
 
 [Install]
