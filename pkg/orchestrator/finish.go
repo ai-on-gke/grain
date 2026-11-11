@@ -869,28 +869,30 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if closed {
 		return true, noteOrphanedPullRequests(ctx, store, client, task.ID, now)
 	}
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
-				host := task.Target.GitHost()
-				note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
-				if !strings.Contains(reason, "a plain git host") {
-					note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
-				}
-				if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
-					return true, err
-				}
-				if taskKeepRunning(ctx, store, task) {
-					markKeepRunningRequeued(store, task.ID, "", false)
-					return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-						o.CompletedAt = nil
-					})
-				}
+	// Asked of the client rather than of a *github.RESTClient's Tokens:
+	// the daemon's client is a StateRepoPullRequestClient around one, and
+	// a type assertion to the REST client never saw a plain git host
+	// through it (tests/e2e/git_hosts_daemon_test.go).
+	if src, ok := client.(github.GitOnlySource); ok {
+		if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
+			host := task.Target.GitHost()
+			note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
+			if !strings.Contains(reason, "a plain git host") {
+				note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
+			}
+			if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
+				return true, err
+			}
+			if taskKeepRunning(ctx, store, task) {
+				markKeepRunningRequeued(store, task.ID, "", false)
 				return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-					o.CompletedAt = &now
-					o.RetryRequestedAt = nil
+					o.CompletedAt = nil
 				})
 			}
+			return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.CompletedAt = &now
+				o.RetryRequestedAt = nil
+			})
 		}
 	}
 	if err := finishWithPullRequest(ctx, store, client, task, now); err != nil {
@@ -1005,11 +1007,9 @@ var (
 // plain git host asks about a different repository on GitHub, and a 404
 // from that read every pushed branch there as one nobody could check.
 func targetBranchExists(client github.Client, target model.RepoRef, branch string) (bool, error) {
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitBranchSource); ok {
-			if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
-				return exists, err
-			}
+	if src, ok := client.(github.GitBranchSource); ok {
+		if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
+			return exists, err
 		}
 	}
 	return branchExistsSettled(client, target.Owner, target.Name, branch)
