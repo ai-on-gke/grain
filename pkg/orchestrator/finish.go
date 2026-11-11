@@ -1963,6 +1963,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// dropped here, as a non-string entry always was, since the
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
+		var ciReads []model.RepoRef
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
@@ -1993,6 +1994,22 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// matching ui.Client.creationGrants so a relayed proposal stores
 			// the exact same grant set as its live twin.
 			for _, expanded := range expandProposalGrant(cap) {
+				// A CI capability (model.TaskGrantCIOnlyRefusal) is
+				// refused here, as ui.CreateTask refuses the identical
+				// call filed live, rather than filed onto a task every
+				// dispatch of which would then refuse it (task 4532). A
+				// repository read is the one with a task equivalent, and
+				// is filed as that reads entry -- for UngrantedReads below
+				// to judge like any other -- rather than dropped.
+				if why := model.TaskGrantCIOnlyRefusal(expanded); why != "" {
+					if repo, ok := model.RepoReadTarget(expanded); ok {
+						ciReads = append(ciReads, repo)
+						body += ciReadGrantAsReadsNote(cap, repo)
+					} else {
+						body += ciOnlyGrantRefusedNote(cap, why)
+					}
+					continue
+				}
 				found := false
 				for _, g := range grants {
 					if g.Capability == expanded {
@@ -2120,6 +2137,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			return fmt.Errorf("orchestrator: placing proposed task %q in the backlog: %w", title, err)
 		}
 		reads := proposedReads(p, target)
+		for _, repo := range ciReads {
+			if (target == nil || !repo.Same(*target)) && !slices.ContainsFunc(reads, repo.Same) {
+				reads = append(reads, repo)
+			}
+		}
 		writes := proposedWrites(p, target, base)
 		reviewTemplateID, reviewTemplateNote, err := proposedReviewTemplate(ctx, store, task, p, target)
 		if err != nil {
@@ -4378,6 +4400,23 @@ func parkedOn(ctx context.Context, store *model.Store, taskID string, result *ag
 		}
 	}
 	return parked, nil
+}
+
+// ciReadGrantAsReadsNote is the line added to a proposal whose grant was
+// a CI job's read access to repo (repo-read:<repo>), filed as the reads
+// entry a task reads another repository through instead.
+func ciReadGrantAsReadsNote(grant string, repo model.RepoRef) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, a CI capability that no task "+
+		"run is handed, so it was filed with `reads: [%q]` instead -- a task's own read access to %s.",
+		grant, repo.String(), repo)
+}
+
+// ciOnlyGrantRefusedNote is the line added to a proposal whose grant was
+// a CI capability with no task equivalent (model.TaskGrantCIOnlyRefusal),
+// dropped for it with grain's own reason.
+func ciOnlyGrantRefusedNote(grant, why string) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, so it was filed without that "+
+		"grant: %s", grant, why)
 }
 
 // reviewOfGrantRefusedNote is the line added to a proposal whose grant

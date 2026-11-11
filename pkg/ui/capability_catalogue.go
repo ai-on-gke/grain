@@ -157,6 +157,9 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 // A grant the catalogue refuses outright is not this check's business:
 // dispatch holds that task whoever approves it (orchestrator.catalogueHold).
 func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
+	if err := ciOnlyGrantApprovalRefusal(task); err != nil {
+		return err
+	}
 	if isDelegatedRequest(ctx) {
 		var personOnly []string
 		for _, g := range task.Grants {
@@ -394,6 +397,26 @@ func (c *Client) validateCatalogueRepoDefaults(ctx context.Context, repo model.R
 		})
 		if err := merged.Validate(); err != nil {
 			return fieldValidationError("ciCapabilities", err)
+		}
+	}
+	return nil
+}
+
+// ciOnlyGrantApprovalRefusal refuses to approve a task holding a CI
+// capability (capabilityRefusal's CI-only ids: repository access, a
+// method with a CI-only rule, a CI-only provider), whoever approves it.
+// Filing refuses one now, but a task filed before it did -- task 4532,
+// relayed holding repo-read:<repo> -- would otherwise be approved onto
+// the queue only for every dispatch to refuse it a sandbox; refused
+// here, the person approving is told which grant to take off, and for a
+// repository read which reads entry stands in for it, before it queues.
+func ciOnlyGrantApprovalRefusal(task model.Task) error {
+	for _, g := range task.Grants {
+		if why := model.TaskGrantCIOnlyRefusal(g.Capability); why != "" {
+			return validationErrorf("task %s cannot be approved holding %s: %s", task.ID, g.Capability, why)
+		}
+		if ciOnlyCapability(g.Capability) {
+			return validationErrorf("task %s cannot be approved holding %s: %s", task.ID, g.Capability, model.CIOnlyRefusal(g.Capability))
 		}
 	}
 	return nil
