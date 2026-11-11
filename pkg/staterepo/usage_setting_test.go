@@ -97,3 +97,34 @@ func TestUsageSettingsSurviveARebuildFromTheStateRepository(t *testing.T) {
 		t.Fatalf("%s differs after a rebuild:\n%s\n---\n%s", path, a, b)
 	}
 }
+
+// A store migrated in place reaches ExportConfig before migration 130
+// has created usage_setting (the daemon's schema-upgrade paths export the
+// old database first). That export leaves the table out, and drops a
+// stale copy of its file, rather than failing on a table it cannot
+// describe.
+func TestExportConfigLeavesOutAUsageSettingTableTheStorePredates(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openUsageStore(t)
+	if _, err := store.DB().ExecContext(ctx, "DROP TABLE `usage_setting`"); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	stale := filepath.Join(dir, staterepo.TablesDir, "usage_setting.json")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("[]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := staterepo.ExportConfig(ctx, store.DB(), dir); err != nil {
+		t.Fatalf("ExportConfig on a store without usage_setting: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("%s survived an export from a store without the table (%v)", stale, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, staterepo.TablesDir, "grain_config.json")); err != nil {
+		t.Errorf("the rest of the settings were not exported: %v", err)
+	}
+}
