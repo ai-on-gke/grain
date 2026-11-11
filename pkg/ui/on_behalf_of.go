@@ -50,15 +50,7 @@ func agentOnBehalfOf(ctx context.Context, store *model.Store, acting model.Task)
 // service principal acted on a human's behalf (AU-26). Plain service
 // principals, agents and automations return nil (AU-26.4).
 func attributedHuman(a model.Attribution) *model.Principal {
-	if a.Actor.Kind == model.PrincipalHuman {
-		p := a.Actor
-		return &p
-	}
-	if a.Actor.Kind == model.PrincipalService && a.OnBehalfOf != nil && a.OnBehalfOf.Kind == model.PrincipalHuman {
-		p := *a.OnBehalfOf
-		return &p
-	}
-	return nil
+	return model.PersonOf(a)
 }
 
 // sessionTurnAuthor is the author of the most recent person's message

@@ -1065,6 +1065,13 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 				verb = "resume"
 			case "POST /api/tasks/{id}/comments":
 				verb = "comment on"
+				// "Reopen and send" (addCommentRequest.Reopen) is a reopen
+				// as well as a comment, and answers to both.
+				if commentAsksReopen(r) {
+					if err := s.tasks.roleTaskWithin(ctx, a, *task, "reopen", allowedRepo, normalize); err != nil {
+						return err
+					}
+				}
 			case "POST /api/tasks/{id}/reply":
 				verb = "reply to"
 			}

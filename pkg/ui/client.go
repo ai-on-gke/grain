@@ -896,6 +896,11 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	// And once more for a person's comment no run has been shown.
+	undelivered, err := c.Store.UndeliveredPersonComments(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// And once for goals, which name what a resting goal task waits for.
 	goalKinds, err := c.Store.TaskGoalKinds(ctx)
 	if err != nil {
@@ -927,6 +932,9 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 			task.QuestionSummary = pendingQuestions[t.ID].Summary
 			task.QuestionCommentID = pendingQuestions[t.ID].CommentID
 			task.AwaitingAccess = accessRequests[t.ID]
+			if p, ok := undelivered[t.ID]; ok {
+				task.UnansweredCommentFrom = p.ID
+			}
 		}
 		var wait *model.GrantWait
 		if w, ok := grantWaits[t.ID]; ok {
@@ -1038,6 +1046,8 @@ func (t Task) replyFacts(obs *model.Observation) model.ReplyFacts {
 		Question: t.QuestionSummary != "" || (obs != nil && obs.PendingSecret != ""),
 		Access:   t.AwaitingAccess,
 		Stopped:  t.TurnStopped,
+		// A person's comment no run has been shown (UnansweredCommentFrom).
+		UnansweredComment: t.UnansweredCommentFrom != "",
 	}
 }
 
@@ -1257,6 +1267,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		task.QuestionSummary = questionSummary(state, obs, comments)
 		task.QuestionCommentID = questionCommentID(state, obs)
 		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
+		task.UnansweredCommentFrom = unansweredCommentFrom(state, obs, comments)
 	}
 	task = c.withReasons(task, *t, obs, wait)
 	if err := c.attachPause(ctx, &task); err != nil {
@@ -1395,6 +1406,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	task.QuestionSummary = questionSummary(state, obs, comments)
 	task.QuestionCommentID = questionCommentID(state, obs)
 	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
+	task.UnansweredCommentFrom = unansweredCommentFrom(state, obs, comments)
 	detail := TaskDetail{
 		Task:        c.withReasons(task, *t, obs, wait),
 		Comments:    make([]Comment, 0, len(comments)),
@@ -1846,6 +1858,18 @@ func questionCommentID(state model.State, obs *model.Observation) int64 {
 		return 0
 	}
 	return *obs.PendingQuestionCommentID
+}
+
+// unansweredCommentFrom is Task.UnansweredCommentFrom for one task: who
+// wrote the person's comment an awaiting_reply task still owes a run, or "".
+func unansweredCommentFrom(state model.State, obs *model.Observation, comments []model.Comment) string {
+	if state != model.StateAwaitingReply {
+		return ""
+	}
+	if c := model.UndeliveredPersonComment(comments, obs); c != nil {
+		return model.PersonOf(c.Author).ID
+	}
+	return ""
 }
 
 // questionSummary is the one line an awaiting_reply task's pending
@@ -6714,6 +6738,35 @@ func (c *Client) AddCommentWithAuthor(ctx context.Context, id, body string, uplo
 	return c.commentWithAuthor(ctx, id, body, uploads, author, true)
 }
 
+// CommentNotDelivered is the commentDelivery a comment on a closed task
+// is answered with when it was not also asked to reopen the task
+// (POST /api/tasks/{id}/comments), and CommentNotDeliveredNotice the
+// sentence that says so.
+const (
+	CommentNotDelivered       = "not_delivered"
+	CommentNotDeliveredNotice = "This task is closed, so the comment was not delivered to an agent. Reopen the task (or comment with reopen) to send it to one."
+)
+
+// AddCommentReopening is AddCommentWithAuthor for "Reopen and send": the
+// comment is written first and a closed task is reopened after it, so
+// the reopen finds it past Observation.DeliveredCommentID and queues the
+// run that answers it (queueUndeliveredOnReopen). A task that is not
+// closed is only commented on. Whether the caller may reopen the task is
+// the route's question, asked before this is called.
+func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploads []AttachmentUpload, author string) error {
+	state, err := c.Store.State(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := c.AddCommentWithAuthor(ctx, id, body, uploads, author); err != nil {
+		return err
+	}
+	if state != model.StateClosed {
+		return nil
+	}
+	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
 // commentWithAuthor is AddCommentWithAuthor with the one thing a team
 // broadcast does differently: reopenAck false leaves a task in
 // model.StateAwaitingAck where it is (reopenAcknowledgeable). A
@@ -6875,7 +6928,8 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 // carries it like any other reply.
 //
 // Only awaiting_reply. A closed task stays closed (reopening it is its own
-// action), and a completed task with a pull request -- awaiting_submit,
+// action, and the reopen is what delivers a comment left meanwhile --
+// queueUndeliveredOnReopen), and a completed task with a pull request -- awaiting_submit,
 // or on the merge queue -- has its own ways forward that a comment must
 // not short-circuit; model.AwaitsAck already excludes every task with a
 // LinkFixes pull request, so the state alone draws that line. The caller
@@ -7862,8 +7916,9 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if !closed {
 		if changed {
+			detail := c.queueUndeliveredOnReopen(ctx, id, now)
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
-				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason})
+				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: detail})
 		}
 		return nil
 	}
@@ -7901,6 +7956,55 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	// and leaves the same note itself (orchestrator's own
 	// salvagePushedBranch).
 	return c.noteOrphanedPullRequests(ctx, *task, opts, now)
+}
+
+// queueUndeliveredOnReopen is the second half of a reopen: a person's
+// comment left while the task was closed reached no agent
+// (reopenAcknowledgeable leaves a closed task closed), so a reopen that
+// lands the task back in model.StateAwaitingReply with such a comment
+// still past Observation.DeliveredCommentID sends it to the queue the
+// way the comment would have, had the task been open (task 3803). It
+// says what it did in a sentence for the reopen's event, "" for nothing.
+//
+// A task with a change of its own -- an open fixes pull request,
+// awaiting_submit or on the merge queue -- is left where its
+// observations put it: model.AwaitsAck draws that line for a comment and
+// draws it here. Only a person's comment counts (model.CommentByPerson);
+// what agents and grain say never sends a task anywhere. Best-effort
+// like the event itself: the reopen is written, and failing it now
+// would say it was not.
+func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now time.Time) string {
+	task, err := c.Store.GetTask(ctx, id)
+	if err != nil || task == nil || !model.AwaitsAck(*task) {
+		return ""
+	}
+	obs, err := c.Store.GetObservation(ctx, id)
+	if err != nil {
+		log.Printf("ui: reopening %s: reading its observation: %v", id, err)
+		return ""
+	}
+	comments, err := c.Store.Comments(ctx, id)
+	if err != nil {
+		log.Printf("ui: reopening %s: reading its comments: %v", id, err)
+		return ""
+	}
+	pending := model.UndeliveredPersonComment(comments, obs)
+	if pending == nil {
+		return ""
+	}
+	queued, err := c.reopenAcknowledgeable(ctx, id, pending.ID, now)
+	if err != nil {
+		log.Printf("ui: reopening %s: queueing it for comment %d: %v", id, pending.ID, err)
+		return ""
+	}
+	if !queued {
+		return ""
+	}
+	detail := "reopened with an unanswered comment from " + model.PersonOf(pending.Author).ID
+	if state, err := c.Store.State(ctx, id); err == nil && state == model.StateQueued {
+		return detail + "; queued"
+	}
+	return detail
 }
 
 // recordTaskEvent writes a close or reopen's event, and only logs a

@@ -188,6 +188,9 @@ export function displayCounts(counts) {
 // answered in a comment and opened no pull request), "message" (an
 // interactive task or console session waiting for its next message),
 // "access" (an agent's request_access -- ui.Task.AwaitingAccess),
+// "unanswered" (a person's comment no run has been shown --
+// ui.Task.UnansweredCommentFrom, which a reply to it would otherwise
+// hide behind a plain "Answered in a comment" for the owner),
 // "stopped" (a turn the reader stopped -- ui.Task.TurnStopped) or
 // "submit" (awaiting_submit); title is the chip's tooltip; action is what
 // ends it, "reply", "grant" or "submit".
@@ -235,6 +238,12 @@ export function askedCase(t) {
     return { kind: "stopped", title: "Stopped by you", action: "reply" };
   if (t.awaitingAccess)
     return { kind: "access", title: "Asked for access", action: "grant" };
+  if (t.unansweredCommentFrom)
+    return {
+      kind: "unanswered",
+      title: `Unanswered question from ${t.unansweredCommentFrom}`,
+      action: "reply",
+    };
   if (t.interactive || t.consoleSession)
     return {
       kind: "message",
@@ -1163,9 +1172,7 @@ export function baseRepairWaitReason(t) {
       return `waiting on review questions from #${t.reviewQuestions}`;
     }
     if (t.state === "awaiting_reply") {
-      return t.questionSummary || t.pendingSecret
-        ? "waiting for a reply to its question"
-        : "answered in a comment";
+      return awaitingReplyPhrase(t);
     }
     if (t.state === "failed") {
       return "failed and waiting for retry";
@@ -1194,9 +1201,7 @@ export function baseRepairWaitReason(t) {
     return `stalled (${t.stall})`;
   }
   if (t.state === "awaiting_reply") {
-    return t.questionSummary || t.pendingSecret
-      ? "waiting for a reply to its question"
-      : "answered in a comment";
+    return awaitingReplyPhrase(t);
   }
   if (t.state === "failed") {
     return "failed and waiting for retry";
@@ -1211,6 +1216,18 @@ export function baseRepairWaitReason(t) {
     return t.repairing ? "queued for repair" : "queued";
   }
   return "waiting in the merge queue";
+}
+
+// awaitingReplyPhrase is what an awaiting_reply task is waiting on, for
+// the phrase above: a person's comment no run has been shown is named
+// first, since it is waiting on an agent and not on the owner.
+function awaitingReplyPhrase(t) {
+  if (t.unansweredCommentFrom) {
+    return `unanswered question from ${t.unansweredCommentFrom}`;
+  }
+  return t.questionSummary || t.pendingSecret
+    ? "waiting for a reply to its question"
+    : "answered in a comment";
 }
 
 // redBaseRepairSentence formats the banner and inbox sentence for a waiting
