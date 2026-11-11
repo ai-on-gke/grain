@@ -1091,16 +1091,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	unitFlags := append([]string{}, unknownFlags...)
 	fs.Visit(func(f *flag.Flag) { unitFlags = append(unitFlags, "-"+f.Name) })
 	slices.Sort(unitFlags)
-	if !passed["secrets-backend"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_BACKEND")); env != "" {
-			*secretsBackend = env
-		}
-	}
-	if !passed["secrets-sm-prefix"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_SECRETS_SM_PREFIX")); env != "" {
-			*secretsSMPrefix = env
-		}
-	}
+	applyEnvFallbacks(passed, []envFallback{
+		{"secrets-backend", "GRAIN_SECRETS_BACKEND", secretsBackend},
+		{"secrets-sm-prefix", "GRAIN_SECRETS_SM_PREFIX", secretsSMPrefix},
+		{"management-url", "GRAIN_MANAGEMENT_URL", managementURL},
+		{"default-environment-name", "GRAIN_DEFAULT_ENVIRONMENT_NAME", defaultEnvironmentName},
+		{"deployment-owner", ui.DeploymentOwnerEnv, deploymentOwner},
+		{"host-accounts", ui.HostAccountsEnv, hostAccounts},
+		{"object-store", "GRAIN_OBJECT_STORE", objectStoreURI},
+	})
 	if !passed["db-driver"] {
 		if env := os.Getenv("GRAIN_DB_DRIVER"); env != "" {
 			*dbDriver = env
@@ -1147,34 +1146,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*disableSelfUpgrade = v
 		}
 	}
-	if !passed["management-url"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_MANAGEMENT_URL")); env != "" {
-			*managementURL = env
-		}
-	}
-	if !passed["default-environment-name"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_DEFAULT_ENVIRONMENT_NAME")); env != "" {
-			*defaultEnvironmentName = env
-		}
-	}
-	if !passed["deployment-owner"] {
-		if env := strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv)); env != "" {
-			*deploymentOwner = env
-		}
-	}
-	if !passed["host-accounts"] {
-		if env := strings.TrimSpace(os.Getenv(ui.HostAccountsEnv)); env != "" {
-			*hostAccounts = env
-		}
-	}
 	parsedHostAccounts, err := ui.ParseHostAccounts(*hostAccounts)
 	if err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
-	}
-	if !passed["object-store"] {
-		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
-			*objectStoreURI = env
-		}
 	}
 	if !passed["db-dsn"] {
 		if env := os.Getenv("GRAIN_DB_DSN"); env != "" {
