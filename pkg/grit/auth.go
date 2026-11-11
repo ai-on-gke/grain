@@ -233,6 +233,11 @@ func (l *clientRateLimiter) allowTreeUpload(c ClientRecord, nBytes int64, now ti
 	if uploaded+nBytes > c.TreeUploadBytesPerMinute {
 		return false
 	}
-	w.uploads = append(w.uploads, windowEvent{at: now, n: nBytes})
+	// An empty upload counts for nothing, so it is not kept either: a
+	// client sending them as fast as it can would otherwise grow the
+	// window by one event a request.
+	if nBytes > 0 {
+		w.uploads = append(w.uploads, windowEvent{at: now, n: nBytes})
+	}
 	return true
 }
