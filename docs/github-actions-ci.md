@@ -288,6 +288,7 @@ Configure the following in `ai-on-gke/grain` under **GitHub Repository -> Settin
 | `RELEASE_IMAGES` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` only if `release-from-trunk.sh` should skip invoking `scripts/release-images.sh`; leave unset for normal operation. |
 | `RELEASE_NOTES_TASK` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip filing the `release-notes` task when staging `vX.Y.0-pending`; leave unset for normal operation. |
 | `RELEASE_NOTIFY` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip sending the `release-pending` notification; leave unset for normal operation. |
+| `GRAIN_MERGE_LOGINS` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional (unset: only forge-approved merges publish) | Comma-separated forge logins grain merges as. `scripts/release-images.sh`'s reviewed-merge check (`cmd/reviewed-merge`) publishes an image for a commit merged by one of them without asking for a review, so it must name only an identity no person merges as by hand: a GitHub App's `<slug>[bot]` that grain merges through (see [A merge identity of grain's own](#a-merge-identity-of-grains-own)), never a person's login. `grain health` warns when it names a user account. |
 | `RELEASE_QUALIFICATION_APP` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | **Required** for an rc to pass Stage 2, unless `scripts/release.conf` sets it | Slug or numeric id of the GitHub App grain's forge connection posts the `grain/release-qualification` and `grain/rc-hold` check runs as. `scripts/candidate-gate.sh` judges only that app's check run and reports a same-named one from any other app (an Actions workflow with `checks: write`, another installed app) as `IGNORED`. Empty here, `scripts/release-from-trunk.sh` reads `RELEASE_QUALIFICATION_APP` from `scripts/release.conf` as `main` has it; unset in both, it trusts no check run and the train stops at Stage 2 rather than guess. Set explicitly to `none` (for a forge connection that is a personal access token, which cannot post check runs), it trusts no check run and skips Stage 2, so Stage 1 (`nightly.yml`) alone qualifies an rc, and no `grain/rc-hold` holds the next one. It is never `none` by default. A numeric id also narrows the GitHub query (`app_id=`). |
 
 ### Setting Up Workload Identity Federation for `gcp-smoke.yml`
@@ -323,6 +324,150 @@ Re-running `./scripts/setup-gcp-smoke-wif.sh <gcp-project-id>` is safe and conve
 6. **Cost and cleanup**:
    - **Per-run cost**: ~$0.01–$0.04 per ~14-minute run (`e2-micro` + 10 GB disk for ~90s is <$0.001; a 1->2 node `e2-medium` zonal GKE cluster with 50 GB `pd-balanced` disks for ~12m is ~$0.012 in compute/disk, plus $0 GKE cluster fee under the billing account's single free zonal cluster tier or ~$0.025 without it). Running once daily costs ~$0.40–$1.20/month (plus ~$1.00/month if `gcp-smoke-nat` was created in a project with no existing Cloud NAT). WIF pools, providers, service accounts, and firewall rules cost $0.
    - **Cleanup on failure**: both `scripts/gce-vm-smoke.sh` and `scripts/gke-cluster-smoke.sh` register `trap cleanup EXIT` to delete `$VM` (and verify its auto-delete boot disk is gone) and `$CLUSTER` (including node VMs and disks) on normal exit, `set -e` errors, or interrupts. As a second layer, `.github/workflows/gcp-smoke.yml` runs `Delete anything left behind` under `if: always() && steps.auth.outcome == 'success'`, sweeping both any `gce-smoke-*` VM or `gke-smoke-*` cluster created by the current workflow run and any stale `labels.purpose=gce-vm-smoke` / `resourceLabels.purpose=gke-cluster-smoke` resources older than 2 hours.
+
+## A merge identity of grain's own
+
+Task 4386. The reviewed-merge gate (`scripts/release-images.sh`
+`check_reviewed_merge`, `pkg/reviewedmerge`, `cmd/reviewed-merge`;
+[image-signing.md](image-signing.md)) publishes an image only for a commit
+that reached `main` through a reviewed merge: approved on the forge by
+somebody other than its author, or merged by a login in
+`vars.GRAIN_MERGE_LOGINS`. The second path is only as good as the
+identity behind those logins. When grain's git connection is a person's
+token, grain merges *as that person*: the forge's `merged_by` reads the
+same login for grain's merges and for the merges the person makes by hand,
+so trusting grain means trusting every hand merge too.
+
+### The options
+
+| | (a) A GitHub App for everything | (b) A dedicated machine user | (c) The person's token for clone and push, an App for merges |
+| :--- | :--- | :--- | :--- |
+| What `merged_by` reads | `<slug>[bot]` | the machine user's login | `<slug>[bot]` |
+| Can a person merge by hand as it? | Only by extracting the App's private key, which the App's settings and the audit log record | Yes: whoever holds its password, 2FA or a token signs in as it | As (a) |
+| GitHub side | Create an App, install it on the repository | A second account (GitHub's terms allow one free machine account per person), an organization seat, its own PAT and 2FA | As (a), with the App doing only merges |
+| `cla/google` | Commits and pull requests would be the App's: grain's run identity follows its credential (`<slug>[bot] <id+slug[bot]@users.noreply.github.com>`, [git-hosts.md](git-hosts.md)), and a bot author is not CLA-covered unless the CLA check is told about it. **Breaks the check** without that. | Its commits need its own CLA coverage | **Unchanged**: commits are still authored, and pull requests opened, by the CLA-covered person's credential. `cla/google` reads commit authors, not who merged. |
+| Branch protection and rulesets | The App needs `contents: write` and `pull_requests: write`; it is held to required reviews and checks like anybody, and must be on the "restrict who can push" allowance where that is on. Give it **no** ruleset bypass. | The same, as a user | As (a) |
+| `grain health` | quiet | still warns: it is a user account, and the gate cannot tell it from a person | quiet |
+
+**Recommendation: (c).** It is the smallest change that gives the gate an
+identity no person merges as, and it leaves `cla/google`, commit
+attribution and pull request authorship exactly as they are. (a) is (c)
+plus moving clone and push to the App, which only makes sense once the CLA
+check accepts the App's commits. (b) replaces "grain is a person" with
+"grain is an account somebody can sign in to", which is the problem
+again, and costs a seat.
+
+What (c) does not remove: anyone holding the App's private key, or a task
+granted the App's credential as a `repo#credential`, can merge as the App.
+Keep the key only in grain's credential store, and never grant the App's
+credential to a task.
+
+### What grain does
+
+A git connection may name a **merge credential**: `merge_credential`
+beside `credential` (`model.TeamGitConnection.MergeCredential`, stored in
+`grain_config.git_connections`' JSON, so no schema change). For a
+repository whose connection names one:
+
+- the merge (`PUT /repos/{owner}/{repo}/pulls/{n}/merge`) and the hand-off
+  to GitHub's own merge queue (`enqueuePullRequest`) go out under the merge
+  credential's token, and nothing else does: cloning, pushing, opening and
+  commenting on the pull request and reading checks stay on `credential`
+  (`github.MergeTokenSource`, `credentialTokenSource.MergeTokenFor`);
+- a merge credential that gives no token (an App whose installation token
+  cannot be minted, a credential not in the store) **refuses the merge**
+  (`github.ErrNoMergeToken`, shown as the merge queue's refusal). grain
+  never falls back to merging under the push credential: that would be
+  the merge-as-a-person the setting is there to stop;
+- after each merge the merge queue records who merged it as a
+  `merged-as` task event, with the forge's `merged_by` and the merge
+  credential used ("`acme/widgets#7 merged by grain-merge[bot] through
+  merge credential grain-merge (grain-merge[bot])`"), in the task's
+  pipeline change feed;
+- `grain health` (and `GET /api/sandboxes`' `mergeLoginWarnings`) warns
+  when a target repository's `GRAIN_MERGE_LOGINS` variable, or the
+  daemon's `-upgrade-reviewed-merge-logins`, names a GitHub **user**
+  account (`GET /users/{login}` type `User`) rather than an App's
+  `<slug>[bot]`. It reads the variable with the repository's push
+  credential, which needs Actions variables read (a classic token's `repo`
+  scope); a read it cannot make is logged, not warned about. An
+  organization-level variable is not read. One check stands for 15
+  minutes; the health read that finds it stale makes the next one.
+
+A repository's own `RepoConfig.GitCredential` override changes what it
+pushes with, not what it merges with: the merge credential comes from the
+deployment connection that covers the repository.
+
+### Switching a repository's merges to an App (operator steps)
+
+The order matters. The gate checks every first-parent commit since the
+last published image, so commits merged as the person before the switch
+still need the person's login in `GRAIN_MERGE_LOGINS` until an image
+whose chain covers them has published.
+
+1. **Create the App.** GitHub -> your account (or the organization) ->
+   Settings -> Developer settings -> GitHub Apps -> **New GitHub App**.
+   Name it (its slug, say `grain-merge`, gives the login
+   `grain-merge[bot]`); untick **Webhook -> Active**; set **Repository
+   permissions**: *Contents: Read and write*, *Pull requests: Read and
+   write*, *Metadata: Read-only*, and *Workflows: Read and write* (GitHub
+   refuses an App's merge of a pull request that changes
+   `.github/workflows/*` without it). Nothing else. **Where can this
+   GitHub App be installed?** -> *Only on this account*. Create it, note
+   the **App ID**, and under **Private keys** generate one (a `.pem`
+   download).
+2. **Install it** on the repository only: the App's page -> **Install
+   App** -> the owner -> *Only select repositories* -> the repository.
+   The installation's URL ends in its **installation ID**.
+3. **Let it merge where protection restricts who may.** Repository ->
+   Settings -> Branches (or Rules -> Rulesets) -> the rule for `main` and
+   `release/v*`: if *Restrict who can push to matching branches* (or a
+   ruleset's *Restrict updates*) is on, add the App to the allowed
+   actors. Leave required reviews and required checks as they are, and do
+   **not** add the App to any bypass list.
+4. **Store the App's credential in grain**, as material only (not as a
+   connection): write `secrets/github/grain-merge.app.json` under the
+   daemon's data directory, mode `0600`:
+
+   ```json
+   {"app_id": "<App ID>", "installation_id": "<installation ID>",
+    "private_key": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"}
+   ```
+
+   and delete the downloaded `.pem`.
+5. **Point the repository's connection's merges at it.** With a seed file
+   naming the connection the repository already uses (its `credential`
+   unchanged) plus `merge_credential`:
+
+   ```yaml
+   git:
+     - credential: <the push credential the repository uses now>
+       scope: <owner>/<repo>
+       merge_credential: grain-merge
+   ```
+
+   run `grain connections -data-dir DIR import seed.yaml`. An entry
+   replaces the connection for the same host and scope, so naming the
+   scope the repository's connection already has changes only its merges.
+   (A repository covered only by an owner-wide or host-default connection
+   gets the `merge_credential` on that entry instead, which switches every
+   repository it covers.) Then restart the daemon, which reads a new
+   credential file at start.
+6. **Check the first merge.** The next pull request grain merges there
+   shows `merged by grain-merge[bot]` on GitHub, and its task has a
+   `merged-as` event saying so. A merge refused with "gave no token"
+   means the App's ID, installation or key is wrong.
+7. **Trust the App in the gate**: set `GRAIN_MERGE_LOGINS` to
+   `grain-merge[bot],<person>` (Settings -> Secrets and variables ->
+   Actions -> Variables).
+8. **Once an image built after the switch has published, drop the
+   person**: set `GRAIN_MERGE_LOGINS=grain-merge[bot]`. From then on the
+   person's hand merges need a forge approval like anybody's, and `grain
+   health` stops warning. A deployment that also passes
+   `-upgrade-reviewed-merge-logins` changes that flag the same way.
+
+The same App can be the one `RELEASE_QUALIFICATION_APP` names, if grain
+is given it for posting check runs too; that is a separate decision.
 
 # Reading Actions runs from an agent
 
