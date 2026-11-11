@@ -174,3 +174,23 @@ func TestAgentAPICrossTaskRailExceptionsAndUntrustedMarking(t *testing.T) {
 		t.Errorf("parent comments = %+v, want the child's message and note", comments)
 	}
 }
+
+// TestAgentAPIRefusesClearingAWiderSiblingsGoal pins the 2026-11-11
+// caller-identity walkthrough's F1: PUT /api/tasks/{id}/goal was on the
+// cross-task rail but DELETE was not, so a narrower sibling could not set
+// a wider task's goal yet could clear it.
+func TestAgentAPIRefusesClearingAWiderSiblingsGoal(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "401", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "402", "acme/widgets", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "403", "acme/widgets", "api:tasks:write")
+
+	code, body := asAgent(t, srv, "401", http.MethodDelete, "/api/tasks/402/goal", "", "testing")
+	if code != http.StatusForbidden || !strings.Contains(body, "cannot clear the goal of task 402") ||
+		!strings.Contains(body, "grant api:tasks:admin") {
+		t.Errorf("DELETE goal of a wider sibling = %d %s, want 403 naming the grant it lacks", code, body)
+	}
+	if code, body := asAgent(t, srv, "401", http.MethodDelete, "/api/tasks/403/goal", "", "testing"); code != http.StatusOK {
+		t.Errorf("DELETE goal of an equal-grant sibling = %d %s, want 200", code, body)
+	}
+}

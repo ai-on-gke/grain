@@ -1124,7 +1124,7 @@ It is refused on the caller's own task.
 An agent may edit, re-queue or speak in another task only when that
 task is within its own task's envelope. `PATCH /api/tasks/{id}`,
 `retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
-`PUT /api/tasks/{id}/goal`, `agent-messages` and `notes` are refused
+`PUT` and `DELETE /api/tasks/{id}/goal`, `agent-messages` and `notes` are refused
 with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
 capability's arguments bind), writes to or reads a repository the
