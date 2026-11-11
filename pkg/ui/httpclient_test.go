@@ -111,7 +111,7 @@ func TestHTTPClientUpdateSetCapabilityCommentCloseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Task: %v", err)
 	}
-	if len(withCap.Capabilities) != 1 || withCap.Capabilities[0] != model.GitHubSandboxRepoGrant {
+	if len(withoutDefaultCIRead(withCap.Capabilities)) != 1 || withoutDefaultCIRead(withCap.Capabilities)[0] != model.GitHubSandboxRepoGrant {
 		t.Fatalf("capabilities after attach = %+v, want [gemini-key]", withCap.Capabilities)
 	}
 	if err := c.SetCapability(ctx, created.ID, model.GitHubSandboxRepoGrant, false); err != nil {

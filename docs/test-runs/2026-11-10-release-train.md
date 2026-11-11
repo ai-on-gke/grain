@@ -137,7 +137,14 @@ Over `grain demo -github-sim -fake-ci` in Chromium:
 Not done here: driving the simulator to fail a dispatched run *after* the
 approve, to time the "marked failed within seconds" poll and the re-raise.
 The failed-dispatch state was seeded as a notification instead. This is
-filed as a follow-up. The screenshots were written by the spec
+filed as a follow-up. (Follow-up, task 3975: walking it found that the
+sim's `workflow_dispatch` queued its run with no workflow path, so the
+release watch never listed it and never saw it fail. The sim now gives
+the run its workflow path and can finish it with a chosen conclusion and
+log (`POST /api/e2e/github-sim/.../actions/runs/{id}/complete`), and
+`release-dispatch-failure-sim.spec.js` checks the rest: the re-raise
+3.9 s after the run fails, Inbox and bell matching, and an immediate
+retry.) The screenshots were written by the spec
 (`RELEASE_TRAIN_SHOTS`) and attached to the task; this sandbox could not
 show the images, so they were checked by the bounding-box assertions only.
 

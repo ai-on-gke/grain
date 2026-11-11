@@ -661,6 +661,7 @@ func TestContributorRoleCannotEscalateThroughFiling(t *testing.T) {
 		{"personScopeSet", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","capabilities":["api:person-ci-reader"]}`, "capabilities"},
 		{"templateId", http.MethodPost, "/api/tasks", `{"repo":"acme/widgets","title":"x","templateId":"tmpl-priv"}`, "templateId"},
 		{"submit", http.MethodPost, "/api/tasks/7/submit", `{}`, "autoMerge"},
+		{"prSubmit", http.MethodPost, "/api/pull-requests/submit", `{"pr":"acme/widgets#7"}`, "autoMerge"},
 	} {
 		code, body := h.call("con@example.com", tc.method, tc.path, tc.body)
 		if code != http.StatusForbidden || !strings.Contains(body, "grain/contributor") || !strings.Contains(body, tc.wantKey) {

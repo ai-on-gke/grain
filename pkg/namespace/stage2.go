@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/safepath"
 )
 
@@ -40,6 +41,43 @@ func RefuseCapability(subject, capability string) error {
 		"%w: %s: that tool belongs to the %q capability, and this run does not hold it (this run does not hold the %q capability). "+
 			"Nothing you can do from inside this run will add it -- a human attaches it to the task.",
 		ErrForbidden, subject, capability, capability)
+}
+
+// RefuseCIRead is the ErrForbidden a run without CI read access gets
+// from grain ci list/show/log, grain pr status and ci://. grain#ci is
+// not something a run can usefully ask for: the repository's CI Mode
+// grants it, and on a ci_mode: github repository nothing grants it at
+// all (grainci.Refusal). So rather than RefuseCapability's "a human
+// attaches it", it names what does work without any grant and the
+// grant that does open these reads -- a run told only the former asked
+// for grain#ci and parked on a request nobody could grant (task 4361).
+// repo is the repository the read was about, "" when none is known.
+func RefuseCIRead(subject, repo string) error {
+	ciRead := "https://grain.dev/capabilities/api#ci-read scoped to the repository"
+	if repo = strings.TrimSpace(repo); repo != "" {
+		ciRead = fmt.Sprintf("https://grain.dev/capabilities/api#ci-read with {repo: %q} (api:ci-read@%s)", repo, repo)
+	}
+	return fmt.Errorf(
+		"%w: %s: this run may not read CI runs and logs. `grain ci wait` and `grain pr open` work without a grant: "+
+			"they report this branch's checks, GitHub Actions included, and the end of each failing job's log. "+
+			"For the run listings and full logs these commands read, request_access for %s. "+
+			"Do not ask for %s: the repository's CI Mode grants it, never a person",
+		ErrForbidden, subject, ciRead, model.GrainCIRef)
+}
+
+// RefuseGrainCIAction is the ErrForbidden a run without grain#ci gets
+// from the commands that drive grain's own CI on its branch -- grain ci
+// run-job and retrigger, and grain ci wait where grain CI, not GitHub, is
+// what judges the branch. grain#ci follows from the repository's CI Mode,
+// so asking a person for it gets nothing; what the run can do is say so,
+// or -- on a repository gated by GitHub Actions -- use what reports those
+// checks without a grant.
+func RefuseGrainCIAction(subject string) error {
+	return fmt.Errorf(
+		"%w: %s: grain's own CI does not judge this run's branch: this run does not hold %q, which a repository's CI Mode "+
+			"(\"Use Grain CI\") grants to its tasks -- a person cannot attach it, so do not request it. "+
+			"On a repository gated by GitHub Actions, `grain ci wait` (with no --jobs) and `grain pr open` report its checks without a grant",
+		ErrForbidden, subject, model.GrainCIRef)
 }
 
 // TaskAttemptView is one attempt's addressable prompt and transcript under

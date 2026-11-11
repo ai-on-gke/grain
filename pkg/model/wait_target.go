@@ -212,6 +212,9 @@ type WaitTarget struct {
 	// Outcome is one word for how a task ended (WaitOutcome*), or "" for
 	// one that has not.
 	Outcome string `json:"outcome,omitempty"`
+	// RolledOverTo is the successor of a task closed by rolling it over
+	// (WaitOutcomeRolledOver): the task carrying its work on.
+	RolledOverTo string `json:"rolledOverTo,omitempty"`
 	// ClosingNote is the last thing the task's own runs said in its
 	// conversation, bounded to maxClosingNote.
 	ClosingNote string `json:"closingNote,omitempty"`
@@ -234,6 +237,10 @@ const (
 	// MaxConsecutiveFailures attempts in a row failed (StateFailed), and
 	// nothing retries it until a human does.
 	WaitOutcomeFailed = "failed"
+	// WaitOutcomeRolledOver is a durable task closed by rolling it over
+	// to a successor (Store.Rollover). Its RolledOverTo names the
+	// successor, which a wait on it was moved onto.
+	WaitOutcomeRolledOver = RolloverOutcome
 )
 
 // ClosedPullRequestWindow is how long after a task closes grain goes on
@@ -295,6 +302,12 @@ func (s *Store) WaitTargetAt(ctx context.Context, id string, now time.Time) (*Wa
 	}
 	target := &WaitTarget{ID: task.ID, Title: task.Title, State: state, Closed: state == StateClosed}
 	switch {
+	case target.Closed && RolledOverTo(*task) != "":
+		// Its pull request, if it had one, went with the work to the
+		// successor (Store.Rollover), so a merge is the successor's to
+		// report.
+		target.Outcome = RolloverOutcome
+		target.RolledOverTo = RolledOverTo(*task)
 	case target.Closed && obs != nil && obs.PrMergedAt != nil:
 		target.Merged = true
 		target.Outcome = WaitOutcomeMerged
@@ -311,11 +324,11 @@ func (s *Store) WaitTargetAt(ctx context.Context, id string, now time.Time) (*Wa
 	}
 	if target.Closed || state == StateFailed || state == StateCompleted ||
 		state == StateAwaitingSubmit || state == StateAwaitingReply {
-		comments, err := s.Comments(ctx, task.ID)
+		note, err := s.latestClosingNote(ctx, task.ID)
 		if err != nil {
 			return nil, err
 		}
-		target.ClosingNote = closingNote(comments, task.ID)
+		target.ClosingNote = note
 	}
 	return target, nil
 }
@@ -395,6 +408,25 @@ func pullRequestStillRead(task Task, obs *Observation, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// latestClosingNote is closingNote over taskID's conversation, read a page
+// at a time from the newest back until one of its runs' comments turns up.
+func (s *Store) latestClosingNote(ctx context.Context, taskID string) (string, error) {
+	var before int64
+	for {
+		page, more, err := s.CommentsBefore(ctx, taskID, before, 32)
+		if err != nil {
+			return "", err
+		}
+		if note := closingNote(page, taskID); note != "" {
+			return note, nil
+		}
+		if !more || len(page) == 0 {
+			return "", nil
+		}
+		before = page[0].ID
+	}
 }
 
 // closingNote is the most recent comment taskID's own runs posted, bounded

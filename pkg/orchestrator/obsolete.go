@@ -153,11 +153,12 @@ func closeObsoleteReviews(ctx context.Context, store *model.Store, now time.Time
 			errs = append(errs, err)
 			break
 		}
-		if reviewed, err := store.GetTask(ctx, r.ReviewedID); err == nil && reviewed != nil && hasBaseRepairBypass(*reviewed) {
+		if reviewed, err := store.GetTask(ctx, r.ReviewedID); err == nil && reviewed != nil &&
+			mergedThroughOverrideOrBypass(ctx, store, *reviewed) {
 			if obs, err := store.GetObservation(ctx, r.ReviewedID); err == nil && obs != nil && obs.PrMergedAt != nil {
 				baseBranch := resolveTaskBaseBranch(*reviewed, "")
 				_ = store.UpdateTask(ctx, r.ReviewID, func(t *model.Task) error {
-					if t.Base == reviewed.BranchName() {
+					if t.Base == reviewed.BranchName() || linkTarget(*t, LinkPostMergeReviewCommit) != "" {
 						// A review is never classified on its own account
 						// (holdForTrustBoundary, pullRequestTriggersApply skip
 						// it: it merges into the branch it reviews). Moved onto
@@ -166,6 +167,9 @@ func closeObsoleteReviews(ctx context.Context, store *model.Store, now time.Time
 						t.Base = baseBranch
 						t.AutoMerge = false
 						detachFromReviewedBranch(t)
+						if linkTarget(*t, LinkPostMergeReviewCommit) == "" {
+							t.Links = append(t.Links, model.Link{Kind: LinkPostMergeReviewCommit, Target: "HEAD"})
+						}
 					}
 					return nil
 				})
@@ -233,7 +237,8 @@ func stopOnMissingBase(ctx context.Context, store *model.Store, task model.Task,
 
 	if isReviewTask(task) {
 		if id := linkTarget(task, model.LinkProposedBy); id != "" {
-			if reviewed, err := store.GetTask(ctx, id); err == nil && reviewed != nil && hasBaseRepairBypass(*reviewed) {
+			if reviewed, err := store.GetTask(ctx, id); err == nil && reviewed != nil &&
+				isPostMergeReview(ctx, store, task, *reviewed) {
 				baseBranch := resolveTaskBaseBranch(*reviewed, "")
 				if gone.Base != baseBranch {
 					return store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -241,6 +246,7 @@ func stopOnMissingBase(ctx context.Context, store *model.Store, task model.Task,
 						// would land there unclassified (closeSecurityReviewOnSettle).
 						t.Base = baseBranch
 						t.AutoMerge = false
+						detachFromReviewedBranch(t)
 						return nil
 					})
 				}
@@ -305,12 +311,12 @@ func stopOnAccessRefused(ctx context.Context, store *model.Store, task model.Tas
 		TaskID: task.ID,
 		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 		Body: fmt.Sprintf(
-			"This task could not be dispatched: the deployment's GitHub credential cannot reach %s, so cloning "+
-				"it was refused. The git proxy said:\n\n```\n%s\n```\n\n"+
+			"This task could not be dispatched: the git credential this deployment clones %s with cannot reach "+
+				"it, so cloning it was refused. The git proxy said:\n\n```\n%s\n```\n\n"+
 				"Every attempt would fail the same way, before an agent exists, so grain has stopped rather "+
-				"than retrying. Give the credential access to %s on GitHub, or choose another in "+
+				"than retrying. Give that credential access to %s on %s, or choose another in "+
 				"Settings → Git (/settings/git), and reply here to have it dispatched again -- or close it if the "+
-				"work is no longer needed.", refused.Repo, refused.Output, refused.Repo),
+				"work is no longer needed.", refused.Repo, refused.Output, refused.Repo, refused.Repo.GitHost()),
 		CreatedAt: now,
 	})
 	if err != nil {
@@ -341,7 +347,7 @@ func stopOnExpiredHostCredentials(ctx context.Context, store *model.Store, task 
 		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 		Body: fmt.Sprintf(
 			"This task's run could not start: %s.\n\n"+
-				"Every run on this host fails the same way until then, whatever the task, so grain has "+
+				"Every run on this host fails the same way until that is done, whatever the task, so grain has "+
 				"parked this one rather than retrying it, and has not counted the attempt against it. "+
 				"Reply here once that has been done to have it dispatched again.", strings.TrimRight(why, ".")),
 		CreatedAt: now,

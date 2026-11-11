@@ -4,9 +4,9 @@ This page covers operational details for a single-machine Linux deployment insta
 
 ## Release channels and image selection
 
-By default, a fresh `scripts/setup.sh` deployment runs the `latest` channel (the last promoted `vX.Y.Z` release) loaded from checksum-verified GitHub release assets ([release-assets.md](release-assets.md)), so the host needs no container registry credential.
+By default, a fresh `scripts/setup.sh` deployment runs the `latest` channel (the last promoted `vX.Y.Z` release) pulled from Docker Hub (`docker.io/grainai/grain`), so the host needs no container registry credential.
 
-- **Pull from Docker Hub instead:** set `GRAIN_IMAGE=docker.io/grainai/grain`.
+- **Override the image repository:** set `GRAIN_IMAGE=<registry>/<repo>` (defaults to `docker.io/grainai/grain`).
 - **Switch channels:** pass `--channel candidate` (`GRAIN_CHANNEL=candidate`) for the current release candidate, or `--channel main` (`GRAIN_CHANNEL=main`) for the latest build of `main`.
 - **Pin one build:** set `GRAIN_IMAGE_TAG=vX.Y.Z` or `GRAIN_IMAGE_TAG=sha-<short-sha>`.
 - **Verify signatures:** pass `GRAIN_IMAGE_VERIFY_KEY=/path/to/cosign.pub` ([image-signing.md](image-signing.md)).

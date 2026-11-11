@@ -163,6 +163,25 @@ check "select-lkg: advisory suites are reported and never block" 0 "LKG $c5" \
   "advisory live-agent.yml: infra at ${c4:0:12} (does not block)" \
   "advisory post-reset-e2e.yml: failure at ${c5:0:12}"
 
+# The live real-model suites' freshness policy: warns, never blocks.
+lacks "select-lkg: a live suite with a verdict is not reported as having none" "WARNING live live-agent.yml: no verdict"
+check "select-lkg: a live suite that only errored is warned about" 0 "LKG $c5" \
+  "WARNING live live-agent.yml: newest is infra at ${c4:0:12} and it has never passed here (does not block)." \
+  "WARNING live live-frameworks.yml: no verdict on any commit of this ref"
+
+old_pass=$((now - 5 * 86400))
+f="$(runs_file live-fresh "${r[@]}" "$(run_json "$c3" live-agent success "$old_pass")" "$(run_json "$c4" live-agent failure)" \
+  "$(run_json "$c3" live-frameworks success "$old_pass")" "$(run_json "$c5" live-frameworks success)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg: a live suite whose newest run is red names its newest pass, and a fresh pass is reported" 0 "LKG $c5" \
+  "WARNING live live-agent.yml: newest is failure at ${c4:0:12}; newest pass at ${c3:0:12}, 119h old (does not block)." \
+  "live live-frameworks.yml: passed at ${c5:0:12}, 0h old."
+
+f="$(runs_file live-stale "${r[@]}" "$(run_json "$c3" live-agent success "$old_pass")" "$(run_json "$c5" live-frameworks success)")"
+run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
+check "select-lkg: a live suite with no pass in CANDIDATE_GATE_LIVE_MAX_AGE_DAYS is warned about" 0 "LKG $c5" \
+  "WARNING live live-agent.yml: newest pass at ${c3:0:12} is 119h old, past 3d -- is its schedule still firing? (does not block)."
+
 f="$(runs_file pending "$(run_json "$c5" tests "")" "$(run_json "$c5" release success)" "$(run_json "$c5" nightly success)")"
 run select-lkg --runs-json "$f" --floor-sha "$c0" --now "$now" --tasks-json "$work/no-tasks.json"
 check "select-lkg: a suite still running is not green" 1 "tests.yml pending"

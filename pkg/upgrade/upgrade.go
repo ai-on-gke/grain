@@ -74,6 +74,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -121,12 +122,6 @@ type Status struct {
 	// restarting because the version on Branch was still the one this
 	// deployment already ran.
 	Unchanged bool `json:"unchanged,omitempty"`
-	// Source records which image source ("release-assets" or "registry") an
-	// image-pipeline upgrade actually used, including after any fallback.
-	Source string `json:"source,omitempty"`
-	// FallbackNote explains why an image upgrade fell back from its primary
-	// source (for example "release has no image assets; pulled from <registry>").
-	FallbackNote string `json:"fallbackNote,omitempty"`
 	// Steps is the whole sequence this upgrade runs, in order, each one
 	// carrying where it stands and what it last had to say (progress.go,
 	// grain/task-37). It is written the moment an upgrade starts, with
@@ -142,6 +137,13 @@ type Status struct {
 	// so a later one reading "running" can tell a live upgrade from one
 	// a restart cut short -- see Upgrader.Status.
 	Process string `json:"process,omitempty"`
+	// EditionSwitch is set on an upgrade the operator explicitly asked
+	// to cross editions ("switch edition" on the upgrade pane): which
+	// edition the deployment was on, which it moved to, the repository
+	// it pulled and who asked. It is the record that the cross-edition
+	// move was deliberate; nil on every ordinary upgrade, which may not
+	// cross editions at all (edition.go).
+	EditionSwitch *EditionSwitch `json:"editionSwitch,omitempty"`
 }
 
 // Running is where a deployment already is, which is a different
@@ -442,6 +444,11 @@ type Upgrader struct {
 	// pull instead of the branch's tag (override.go); "" for an ordinary
 	// one, and reset with done.
 	override string
+	// switching is the edition switch the operator asked the upgrade in
+	// flight to make (StartImageWith's SwitchEdition, edition.go); nil
+	// for an upgrade that must stay in this deployment's edition, and
+	// reset with done.
+	switching *EditionSwitch
 
 	// tags caches the registry's tag list for Targets.
 	tags tagCache
@@ -457,7 +464,7 @@ type Upgrader struct {
 // the same as most of this package's callers.
 func New(cfg Config) *Upgrader {
 	u := &Upgrader{cfg: cfg}
-	u.loadImageSourceOverride()
+	u.migrateLegacyImageSource()
 	return u
 }
 
@@ -615,7 +622,10 @@ func ValidBranchName(branch string) (string, error) {
 // approved should store this.
 func (u *Upgrader) ValidateBranch(branch string) (string, error) {
 	branch = strings.TrimSpace(branch)
-	return branch, u.checkBranch(branch)
+	if err := u.checkBranch(branch); err != nil {
+		return branch, err
+	}
+	return branch, u.checkConfiguredEdition()
 }
 
 // Start validates branch and, if no upgrade started by this same
@@ -633,8 +643,15 @@ func (u *Upgrader) Start(branch string) error {
 		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
 		return err
 	}
+	// The repository an ordinary upgrade pulls from must carry this
+	// deployment's own edition: crossing editions is only ever done on
+	// purpose, through StartImageWith's SwitchEdition (edition.go).
+	if err := u.checkConfiguredEdition(); err != nil {
+		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
+		return err
+	}
 
-	return u.start(branch, "")
+	return u.start(branch, "", nil)
 }
 
 // Status reads the deployment's last (or current) upgrade attempt back
@@ -766,6 +783,7 @@ func (u *Upgrader) release() {
 	close(u.done)
 	u.done = nil
 	u.override = ""
+	u.switching = nil
 }
 
 // Mode reports which pipeline Start would run, without running it --
@@ -1111,7 +1129,15 @@ func (u *Upgrader) description() string {
 		return fmt.Sprintf("checking an image from %s and repointing deployment/%s at it",
 			u.EffectiveKubeRepository(), u.cfg.Kube.Deployment)
 	case ModeImage:
-		return fmt.Sprintf("pulling from %s and pointing %s at it", u.EffectiveRepository(), u.cfg.Image.RefFile)
+		// The repository actually pulled: an image named on the pane
+		// (StartImage) is pulled instead of the configured repository,
+		// and the line opening the log has to say so rather than name a
+		// repository this upgrade never touches (grain/task-4153).
+		repo := u.EffectiveRepository()
+		if override := u.overrideRef(); override != "" {
+			repo = repositoryOf(override)
+		}
+		return fmt.Sprintf("pulling from %s and pointing %s at it", repo, u.cfg.Image.RefFile)
 	}
 	return fmt.Sprintf("building in %s and installing to %s", u.cfg.SrcDir, u.cfg.InstallPath)
 }
@@ -1159,14 +1185,13 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		}
 	}
 
-	p.setSource(ImageSourceRegistry)
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
 	var ref string
 	if pullErr == nil {
 		ref, pullErr = u.pinImage(ctx, p, stepPull, tag)
 	}
 	if pullErr != nil {
-		if hint := registryHint(tag, pullErr); hint != "" {
+		if hint := registryHint(tag, installtrack.DefaultRepository(u.cfg.Image.Track), pullErr); hint != "" {
 			return "", fmt.Errorf("pull: %w -- %s", pullErr, hint)
 		}
 		return "", fmt.Errorf("pull: %w", pullErr)
@@ -1192,13 +1217,43 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 
 	// Who published it, before the health check below runs it: the pin
 	// says which bytes, and this says whose (verify.go).
-	if len(u.cfg.Image.VerifyCmd) > 0 {
+	// And which edition's build it is (edition.go): a deployment on one
+	// install track never cuts over to another edition's build unless
+	// this upgrade is an explicit edition switch.
+	_, checksEdition := u.deploymentEdition()
+	checksEdition = checksEdition && len(u.cfg.Image.EditionArgs) > 0
+	switch {
+	case len(u.cfg.Image.VerifyCmd) > 0 || u.cfg.Image.ReviewedMerge != nil || checksEdition:
 		p.start(stepVerify)
-		if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
+		var verified []string
+		if len(u.cfg.Image.VerifyCmd) > 0 {
+			if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
+				return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+			}
+			verified = append(verified, ref+" is signed")
+		} else if u.cfg.Image.ReviewedMerge == nil {
+			p.logf("%s: warning: %s", stepVerify, unverifiedNote)
+			verified = append(verified, unverifiedNote)
+		}
+		// And whether a reviewed commit went into it (reviewed.go): the
+		// signature says only that CI built it. With the check on and no
+		// signature verification, this refuses.
+		reviewed, err := u.checkImageReviewedMerge(ctx, p, stepVerify, ref)
+		if err != nil {
 			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 		}
-		p.done(stepVerify, ref+" is signed")
-	} else {
+		if reviewed != "" {
+			verified = append(verified, reviewed)
+		}
+		note, err := u.checkImageEdition(ctx, p, ref)
+		if err != nil {
+			return "", err
+		}
+		if note != "" {
+			verified = append(verified, note)
+		}
+		p.done(stepVerify, strings.Join(verified, "; "))
+	default:
 		p.logf("%s: warning: %s", stepVerify, unverifiedNote)
 		p.skip(stepVerify, unverifiedNote)
 	}

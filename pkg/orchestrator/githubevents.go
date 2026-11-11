@@ -24,7 +24,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -693,7 +692,11 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	if r.designReview {
 		b.WriteString(designReviewInstructions)
 	}
-	b.WriteString("Inspect the changes against the base branch, run relevant tests, and record each " +
+	b.WriteString("Inspect the changes against the base branch, read existing CI check statuses " +
+		"(`grain ci checks <sha>`, `grain ci list`, `grain ci log`) rather than re-running broad " +
+		"test suites or calling `grain ci wait` (run only a narrowly targeted test such as " +
+		"`go test ./pkg/x -run TestName` when needed to confirm or refute a specific finding, and " +
+		"say which tests you ran in your closing note), and record each " +
 		"finding with `add_review_comment` (supplying `path` and `line` for inline diff findings). " +
 		"If the pull request looks clean with no findings, summarize what you checked via `comment_on_issue`.")
 
@@ -832,14 +835,11 @@ func attributionForSender(sender string, trusted bool, trustedReason model.Origi
 }
 
 func defaultRepoGrants(ctx context.Context, store *model.Store, repo model.RepoRef) ([]model.Grant, error) {
-	usesGrainCI, err := store.RepoUsesGrainCI(ctx, repo)
+	ciDefaults, err := store.RepoCIDefaults(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("checking CI mode for %s: %w", repo, err)
 	}
-	if usesGrainCI {
-		return []model.Grant{{Capability: grainci.Grant, Via: model.GrantByDefault}}, nil
-	}
-	return nil, nil
+	return model.AdjustRepoCIGrants(nil, repo, ciDefaults), nil
 }
 
 func usableRepoBranch(client github.Client, repo model.RepoRef, preferred, fallback string) string {

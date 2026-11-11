@@ -106,6 +106,7 @@ func TestForbidden(t *testing.T) {
 		"pkg/agent/antigravity":          true,
 		"pkg/agent/antigravity/hook":     false,
 		"pkg/agent/claude/stophook":      false,
+		"pkg/agent/hookpolicy":           false,
 		"pkg/agent/stoprule":             false,
 		"pkg/hostd":                      false,
 		"pkg/uiutil-not-under-ui-really": false,

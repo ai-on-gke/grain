@@ -221,7 +221,7 @@ test("a slow task load shows the loading pane, never the last task's body under 
 }) => {
   await page.goto("/");
   await expect(page.locator(".task-row").first()).toBeVisible();
-  await page.route(/\/api\/tasks\/\d+$/, async (route) => {
+  await page.route(/\/api\/tasks\/\d+(\?.*)?$/, async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     await route.continue();
   });

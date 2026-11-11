@@ -261,3 +261,191 @@ test("the grant menu opens above the New task overlay, at phone width too", asyn
     )
     .toContain("cloud-key");
 });
+
+const ARTIFACTS = "https://capabilities.demo.grain.example/artifacts";
+const READ = `${ARTIFACTS}#read`;
+
+const ARTIFACTS_STDIO_SCRIPT = `
+const readline = require("node:readline");
+const tools = [{
+  name: "mint_read",
+  description: "Read build artifacts from allowed URLs, or every artifact when all is true.",
+  inputSchema: {
+    type: "object",
+    required: ["attempt_id", "deadline", "args"],
+    properties: {
+      attempt_id: { type: "string" },
+      deadline: { type: "string" },
+      args: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          urls: {
+            type: "array",
+            description: "Artifact URLs this run may read.",
+            minItems: 1,
+            items: { type: "string", minLength: 1 },
+          },
+          all: {
+            type: "boolean",
+            description: "Allow reading every artifact.",
+          },
+        },
+      },
+    },
+  },
+}];
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const req = JSON.parse(line);
+  if (req.id === undefined) return;
+  let result = {};
+  if (req.method === "initialize") {
+    result = {
+      protocolVersion: "2025-03-26",
+      capabilities: { tools: {} },
+      serverInfo: { name: "demo-artifacts", version: "1" },
+    };
+  } else if (req.method === "tools/list") {
+    result = { tools };
+  }
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result }) + "\\n");
+});
+`;
+
+test("saves a urls-only grant without an all key and unsets optional arrays when cleared", async ({
+  page,
+  request,
+}) => {
+  let createdTaskId = null;
+  try {
+    const added = await request.put("/api/capability-servers", {
+      data: {
+        id: ARTIFACTS,
+        config: {
+          command: "node",
+          args: ["-e", ARTIFACTS_STDIO_SCRIPT],
+        },
+      },
+    });
+    expect(added.ok()).toBeTruthy();
+    await expect
+      .poll(async () => {
+        const res = await request.get("/api/capability-methods");
+        if (!res.ok()) return false;
+        const body = await res.json();
+        const methods = Array.isArray(body) ? body : body.methods || [];
+        return methods.some((m) => m.ref === READ);
+      })
+      .toBe(true);
+
+    await page.goto("/");
+    const title = `E2E urls-only grant ${Date.now()}`;
+    await page.getByRole("button", { name: "+ New task" }).click();
+    await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
+    await page.getByLabel("Title").fill(title);
+    await chooseOption(page.getByLabel(/^Repos/), "none");
+
+    const grants = page.getByTestId("new-task-grants");
+    await grants.getByRole("button", { name: "Add grant…" }).click();
+    await page.getByLabel("Search grants").fill("artifacts");
+    await page.getByRole("menuitem", { name: /^read\b/ }).click();
+
+    // Optional urls (minItems: 1) and optional all (boolean) start unset, so
+    // the grant is held right away as {} rather than failing minItems on [].
+    const held = grants.locator(`[data-grant^="${READ}"]`);
+    await expect(held).toHaveCount(1);
+    await expect(held).toHaveAttribute("data-grant", `${READ}={}`);
+
+    const urls = held.locator("[data-arg-list='urls']");
+    const allSwitch = held.getByRole("switch", { name: /^all/ });
+    await urls.scrollIntoViewIfNeeded();
+    const sectionBox = await held.boundingBox();
+    const urlsBox = await urls.boundingBox();
+    expect(urlsBox.x).toBeGreaterThanOrEqual(sectionBox.x);
+    expect(urlsBox.x + urlsBox.width).toBeLessThanOrEqual(
+      sectionBox.x + sectionBox.width + 1,
+    );
+
+    await urls.getByRole("button", { name: "Add urls" }).click();
+    await urls
+      .locator("input")
+      .first()
+      .fill("https://artifacts.example.com/build/42");
+    await expect(held).toHaveAttribute(
+      "data-grant",
+      `${READ}={"urls":["https://artifacts.example.com/build/42"]}`,
+    );
+
+    // Toggling the optional boolean on and back off unsets its key instead of
+    // writing "all":false alongside urls.
+    await allSwitch.click();
+    await expect(held).toHaveAttribute(
+      "data-grant",
+      `${READ}={"all":true,"urls":["https://artifacts.example.com/build/42"]}`,
+    );
+    await allSwitch.click();
+    await expect(held).toHaveAttribute(
+      "data-grant",
+      `${READ}={"urls":["https://artifacts.example.com/build/42"]}`,
+    );
+
+    await page.getByRole("button", { name: "Create task" }).click();
+    await expect(page.getByRole("heading", { name: "New task" })).toHaveCount(
+      0,
+    );
+
+    const list = await (await request.get("/api/tasks")).json();
+    const tasks = Array.isArray(list) ? list : list.tasks;
+    const filed = tasks.find((t) => t.title === title);
+    expect(filed).toBeTruthy();
+    createdTaskId = filed.id;
+    expect(
+      (filed.capabilities || []).filter((c) => c.startsWith(READ)),
+    ).toEqual([`${READ}={"urls":["https://artifacts.example.com/build/42"]}`]);
+
+    // Removing the last item of an optional minItems array unsets the key.
+    await page.goto(`/tasks/${filed.id}`);
+    const taskGrants = page.getByTestId(`task-${filed.id}-grants`);
+    const taskHeld = taskGrants.locator(`[data-grant^="${READ}"]`);
+    await expect(taskHeld).toHaveAttribute(
+      "data-grant",
+      `${READ}={"urls":["https://artifacts.example.com/build/42"]}`,
+    );
+    await taskHeld.getByRole("button", { name: "Remove urls 1" }).click();
+    await expect(taskHeld).toHaveAttribute("data-grant", `${READ}={}`);
+    await expect(taskHeld.getByText(/needs at least 1 item/)).toHaveCount(0);
+
+    const updated = await (await request.get(`/api/tasks/${filed.id}`)).json();
+    expect(
+      (updated.capabilities || []).filter((c) => c.startsWith(READ)),
+    ).toEqual([`${READ}={}`]);
+  } finally {
+    if (createdTaskId) {
+      const cur = await request.get(`/api/tasks/${createdTaskId}`);
+      if (cur.ok()) {
+        const body = await cur.json();
+        for (const cap of (body.capabilities || []).filter((c) =>
+          c.startsWith(READ),
+        )) {
+          await request.post(`/api/tasks/${createdTaskId}/capabilities`, {
+            data: { capability: cap, attach: false },
+          });
+        }
+      }
+    }
+    await request.post("/api/capability-servers/remove", {
+      data: { id: ARTIFACTS },
+    });
+    await expect
+      .poll(async () => {
+        const res = await request.get("/api/capability-methods");
+        if (!res.ok()) return false;
+        const body = await res.json();
+        const methods = Array.isArray(body) ? body : body.methods || [];
+        return !methods.some((m) => m.ref === READ);
+      })
+      .toBe(true);
+  }
+});

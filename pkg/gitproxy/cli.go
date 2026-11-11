@@ -313,7 +313,7 @@ func (p *GitProxy) ciReadRepo(scope namespace.Scope, repo string) (string, ci.Ru
 		repo = scope.TaskRepo
 	}
 	if !scope.PermitsCI("") {
-		return "", nil, namespace.RefuseCapability("grain ci", model.GrainCIRef)
+		return "", nil, namespace.RefuseCIRead("grain ci", scope.TaskRepo)
 	}
 	if repo == "" && !scope.MayReadAllCI {
 		// An empty filter matches every repository's runs (ci.RunFilter),
@@ -358,7 +358,7 @@ type TaskRefLookup interface {
 func (p *GitProxy) taskCIRef(ctx context.Context, scope namespace.Scope, task string) (repo, branch string, err error) {
 	task = strings.TrimSpace(strings.TrimPrefix(task, "#"))
 	if !scope.PermitsCI("") {
-		return "", "", namespace.RefuseCapability("grain ci", model.GrainCIRef)
+		return "", "", namespace.RefuseCIRead("grain ci", scope.TaskRepo)
 	}
 	if own := scope.TaskIDStr; own != "" && strings.EqualFold(own, task) {
 		if scope.TaskRepo == "" {
@@ -732,7 +732,7 @@ func (p *GitProxy) serveCIRunRepo(w http.ResponseWriter, q url.Values, scope nam
 		return
 	}
 	if !scope.PermitsCI("") {
-		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
+		cliError(w, namespace.RefuseCIRead("grain ci", scope.TaskRepo))
 		return
 	}
 	if p.Namespace == nil || p.Namespace.CIStore == nil {
@@ -777,7 +777,7 @@ func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope nam
 		return
 	}
 	if !scope.PermitsCI("") {
-		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
+		cliError(w, namespace.RefuseCIRead("grain ci", scope.TaskRepo))
 		return
 	}
 	if p.Namespace == nil || p.Namespace.CIStore == nil {
@@ -959,8 +959,9 @@ func (p *GitProxy) servePRStatus(w http.ResponseWriter, r *http.Request, scope n
 	}
 }
 
-// serveBranchStatus reports the latest grain CI run on branch in repo
-// ("" is the task's own) and each of its jobs' verdicts.
+// serveBranchStatus reports the latest CI on branch in repo ("" is the
+// task's own) and each of its jobs' verdicts: the newest grain CI run, or
+// for GitHub Actions every workflow's newest run at the newest commit.
 func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scope, repo, branch, what string) {
 	repo, store, err := p.ciReadRepo(scope, repo)
 	if err != nil {
@@ -978,21 +979,58 @@ func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scop
 		fmt.Fprintf(w, "No branch is recorded for %s.\n", what)
 		return
 	}
-	page := store.Find(ci.RunFilter{Repo: repo, Ref: branch, Descending: true}, 20)
+	page := store.Find(ci.RunFilter{Repo: repo, Ref: branch, Descending: true}, 50)
+	var runs []ci.Run
 	for _, run := range page.Runs {
 		// Ref matches as a substring; a status is about the branch itself.
-		if !strings.EqualFold(run.Ref, branch) {
-			continue
+		if strings.EqualFold(run.Ref, branch) {
+			runs = append(runs, run)
 		}
-		fmt.Fprintf(w, "%s (%s) in %s -- latest grain CI run:\n%s\n", branch, what, repo, formatCIRunLine(run))
-		for _, job := range ci.SortJobRuns(run.Jobs) {
-			verdict := string(job.Conclusion)
-			if verdict == "" {
-				verdict = "running"
-			}
-			fmt.Fprintf(w, "  %s: %s\n", job.Name, verdict)
-		}
+	}
+	if len(runs) == 0 {
+		fmt.Fprintf(w, "%s (%s) in %s has no CI run recorded yet.\n", branch, what, repo)
 		return
 	}
-	fmt.Fprintf(w, "%s (%s) in %s has no grain CI run yet.\n", branch, what, repo)
+	latest := runs[0]
+	if ci.ProviderOf(latest) != ci.ProviderGitHubActions {
+		fmt.Fprintf(w, "%s (%s) in %s -- latest grain CI run:\n", branch, what, repo)
+		writeBranchStatusRun(w, latest)
+		return
+	}
+	// GitHub Actions runs one workflow run per workflow file for a push,
+	// so the branch's status is every workflow's newest run at the newest
+	// commit, not whichever of them reported last.
+	fmt.Fprintf(w, "%s (%s) in %s -- latest GitHub Actions runs", branch, what, repo)
+	if latest.Commit != "" {
+		fmt.Fprintf(w, " at %s", shortSHA(latest.Commit))
+	}
+	fmt.Fprint(w, ":\n")
+	seen := map[string]bool{}
+	for _, run := range runs {
+		if ci.ProviderOf(run) != ci.ProviderGitHubActions || run.Commit != latest.Commit {
+			continue
+		}
+		workflow := ""
+		if run.Actions != nil {
+			workflow = run.Actions.Workflow
+		}
+		if seen[workflow] {
+			continue
+		}
+		seen[workflow] = true
+		writeBranchStatusRun(w, run)
+	}
+}
+
+// writeBranchStatusRun is one run of a branch status: its line, then each
+// job's verdict.
+func writeBranchStatusRun(w http.ResponseWriter, run ci.Run) {
+	fmt.Fprintf(w, "%s\n", formatCIRunLine(run))
+	for _, job := range ci.SortJobRuns(run.Jobs) {
+		verdict := string(job.Conclusion)
+		if verdict == "" {
+			verdict = "running"
+		}
+		fmt.Fprintf(w, "  %s: %s\n", job.Name, verdict)
+	}
 }

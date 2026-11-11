@@ -395,6 +395,9 @@ func (c *Client) PostTaskNote(ctx context.Context, target, from, body string) (M
 		return Message{}, forbiddenErrorf("task %s may only message its parent or its children, and task %s is neither: "+
 			"message_task to any other task needs api:task-admin", from, target)
 	}
+	// A note from a parent or child narrower than recipient reaches its
+	// run marked as untrusted agent input (agentCrossTaskRail).
+	body = c.untrustedAgentInputNotice(ctx, sender, recipient) + body
 	now := c.now()
 	id, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    target,
@@ -494,7 +497,7 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 			notifications[i].Body = listNotificationBody(notifications[i])
 		}
 	}
-	writeList(w, notifications, list)
+	writeListBy(w, notifications, list, func(n model.Notification) string { return strconv.FormatInt(n.ID, 10) })
 }
 
 // pendingReleaseFamily is the release train's "approve this release"

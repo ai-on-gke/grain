@@ -531,7 +531,7 @@ func (s *Server) handlePutMemory(w http.ResponseWriter, r *http.Request) {
 // handleListMemoryDocuments answers GET /api/memory/documents: every
 // scope's documents without their text.
 func (s *Server) handleListMemoryDocuments(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageMedium)
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -548,7 +548,7 @@ func (s *Server) handleListMemoryDocuments(w http.ResponseWriter, r *http.Reques
 		docs = filterList(docs, func(d MemoryDocument) bool { return strings.EqualFold(d.Repo, repo) })
 	}
 	docs = filterList(docs, func(d MemoryDocument) bool { return list.matches(d.Name, d.Repo, d.Summary) })
-	writeList(w, docs, list)
+	writeListBy(w, docs, list, func(d MemoryDocument) string { return d.Repo + "\x00" + d.Name })
 }
 
 // handleGetMemoryDocument answers GET /api/memory/documents/{name}, with

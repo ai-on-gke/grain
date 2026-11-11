@@ -45,3 +45,19 @@ func TestGitHubWorkflowRunTriggerMatchesBranch(t *testing.T) {
 		t.Fatal("explicit Branches matched unlisted branch")
 	}
 }
+
+// A glob in branches matches as path.Match does: the release train's
+// Stage 1 trigger watches its release candidates' tags as "v*-rc.*".
+func TestGitHubWorkflowRunTriggerMatchesABranchGlob(t *testing.T) {
+	trig := GitHubWorkflowRunTrigger{Workflow: "nightly.yml", Branches: []string{"v*-rc.*"}}
+	for _, b := range []string{"v3.5.0-rc.1", "v10.0.0-rc.12"} {
+		if !trig.MatchesBranch(b, "") {
+			t.Errorf("v*-rc.* does not match %s", b)
+		}
+	}
+	for _, b := range []string{"main", "v3.5.0", "v3.5.0-rc.1-discarded/x"} {
+		if trig.MatchesBranch(b, "") {
+			t.Errorf("v*-rc.* matches %s", b)
+		}
+	}
+}

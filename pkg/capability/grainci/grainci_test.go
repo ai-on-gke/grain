@@ -23,11 +23,70 @@ import (
 )
 
 func TestRefusalNamesTheCIMode(t *testing.T) {
-	msg := grainci.Refusal()
-	for _, want := range []string{"grain-ci", model.GrainCIRef, "Use Grain CI", "CI Mode"} {
+	msg := grainci.Refusal("", "")
+	for _, want := range []string{"grain-ci", model.GrainCIRef, "Use Grain CI", "CI Mode", "api#ci-read"} {
 		if !strings.Contains(msg, want) {
-			t.Errorf("Refusal() = %q, want it to name %q", msg, want)
+			t.Errorf("Refusal(\"\", \"\") = %q, want it to name %q", msg, want)
 		}
+	}
+}
+
+// On a repository that deliberately uses GitHub Actions the refusal
+// offers the read grant that stands in for grain#ci, and the commands
+// that need nothing -- not switching the repository to grain CI.
+func TestRefusalOnAGitHubModeRepoOffersCIRead(t *testing.T) {
+	for _, mode := range []model.CIMode{model.CIModeGitHub, model.CIModeNone, ""} {
+		msg := grainci.Refusal(mode, "acme/widgets")
+		for _, want := range []string{model.GrainCIRef, "api#ci-read", `{repo: "acme/widgets"}`,
+			grainci.SubstituteGrant("acme/widgets"), "`grain ci wait`", "`grain pr open`"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("Refusal(%q, acme/widgets) = %q, want it to name %q", mode, msg, want)
+			}
+		}
+		if strings.Contains(msg, "Set the CI Mode") || strings.Contains(msg, "set its CI Mode") {
+			t.Errorf("Refusal(%q, acme/widgets) = %q, should not tell the person to switch the CI Mode", mode, msg)
+		}
+	}
+}
+
+func TestRefusalOnAGrainCIRepoSaysItIsHeld(t *testing.T) {
+	msg := grainci.Refusal(model.CIModeGrain, "acme/widgets")
+	if !strings.Contains(msg, "hold it already") || strings.Contains(msg, "api#ci-read") {
+		t.Errorf("Refusal(grain, acme/widgets) = %q, want it to say the tasks hold it already", msg)
+	}
+}
+
+func TestSubstituteGrantIsCIRead(t *testing.T) {
+	got := grainci.SubstituteGrant("acme/widgets")
+	if !model.APIGrantsOf([]string{got}).Allows("ci:read", "acme/widgets") {
+		t.Errorf("SubstituteGrant = %q, does not allow ci:read on acme/widgets", got)
+	}
+	if model.APIGrantsOf([]string{got}).Allows("ci:read", "acme/other") {
+		t.Errorf("SubstituteGrant = %q allows ci:read beyond acme/widgets", got)
+	}
+	capability, with := grainci.SubstituteRequest("acme/widgets")
+	if capability != model.APIRef("ci-read") || with["repo"] != "acme/widgets" {
+		t.Errorf("SubstituteRequest = %q %v", capability, with)
+	}
+}
+
+func TestModeOf(t *testing.T) {
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	for _, tc := range []struct {
+		cfg  *model.RepoConfig
+		want model.CIMode
+	}{
+		{nil, model.CIModeGitHub},
+		{&model.RepoConfig{CIMode: model.CIModeGrain}, model.CIModeGrain},
+		{&model.RepoConfig{IgnoreGitHubCI: true}, model.CIModeGrain},
+		{&model.RepoConfig{CIMode: model.CIModeNone}, model.CIModeNone},
+	} {
+		if got := grainci.ModeOf(tc.cfg, repo); got != tc.want {
+			t.Errorf("ModeOf(%+v) = %q, want %q", tc.cfg, got, tc.want)
+		}
+	}
+	if got := grainci.ModeOf(nil, model.ConfigRepo()); got != model.CIModeGrain {
+		t.Errorf("ModeOf(config repo) = %q, want grain", got)
 	}
 }
 

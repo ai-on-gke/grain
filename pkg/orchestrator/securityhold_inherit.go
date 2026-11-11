@@ -76,12 +76,17 @@ func carryClearance(ctx context.Context, store *model.Store, client github.Clien
 	if headSHA == "" || rules.Broken != "" || current.Target == nil {
 		return carriedClearance{}, false
 	}
+	approvedMarker := humanApprovalMarker(current)
+	approvedHead := model.HumanSubmittedHead(approvedMarker)
+	_, preRecordedSHA, preHasRecorded := strings.Cut(linkTarget(current, model.LinkTrustBoundaryCleared), "@")
+	humanApprovedRecorded := approvedMarker != "" && preHasRecorded && preRecordedSHA != "" &&
+		strings.EqualFold(approvedHead, preRecordedSHA) && len(model.PendingApprovals(current)) == 0 &&
+		!hasSecurityHold(current) && !model.HasPendingReviewHold(current)
 	for _, m := range matches {
-		// Neither is a review's to give, so neither is one to carry: an
-		// owner's approval and a human's Submit are about the head they
-		// read.
 		if m.Category.RequiresHuman || m.Category.OwnerApproval {
-			return carriedClearance{}, false
+			if !humanApprovedRecorded {
+				return carriedClearance{}, false
+			}
 		}
 	}
 	version := strings.TrimSuffix(clearedTarget("", rules), "@")
@@ -149,6 +154,11 @@ func inheritedClearance(ctx context.Context, store *model.Store, client github.C
 	sourceID := linkTarget(current, model.LinkPortOf)
 	if sourceID == "" {
 		return carriedClearance{}, false
+	}
+	for _, m := range matches {
+		if m.Category.RequiresHuman || m.Category.OwnerApproval {
+			return carriedClearance{}, false
+		}
 	}
 	source, err := store.GetTask(ctx, sourceID)
 	if err != nil || source == nil {
@@ -484,6 +494,10 @@ func keepClearance(ctx context.Context, store *model.Store, client github.Client
 
 	if carried.source == nil {
 		if err := store.UpdateTask(ctx, current.ID, func(t *model.Task) error {
+			// The clearance carries; a person's Submit does not move with
+			// it. It was about the head they read: an approval of it stays
+			// pinned there, and a `human: required` trigger judging this
+			// head asks for theirs again (applyPathTriggerGate).
 			t.Links = append(withoutLinks(t.Links, model.LinkTrustBoundaryCleared, model.LinkHumanSubmitted), cleared)
 			return nil
 		}); err != nil {

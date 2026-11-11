@@ -27,6 +27,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -116,23 +117,38 @@ type ConnectionReachError struct {
 	LoginNeeded bool `json:"loginNeeded,omitempty"`
 }
 
+// TargetRepoHostMismatch is a hostless TargetRepos entry that resolves to the
+// deployment's default git host while no connection reaches it there and a
+// connection on another git host lists the same owner/name -- the damage left
+// behind when an off-default repository was stored without its host prefix.
+// Surfaced in `grain health` and the Repos UI rather than rewritten silently.
+type TargetRepoHostMismatch struct {
+	Repo       string   `json:"repo"`
+	ResolvesTo string   `json:"resolvesTo"`
+	Candidates []string `json:"candidates"`
+	Message    string   `json:"message"`
+}
+
 // ReachableReposResult is GET /api/deployment/reachable-repos' answer.
 // Available, Reason and Repos are what the endpoint has always said;
 // Errors lists each connection whose listing failed, even when another's
 // succeeded; Connections is every connection's status, failed or not.
+// HostMismatches surfaces any stored hostless TargetRepos entry that is
+// reachable only on a non-default git host.
 // Total, Truncated and NextCursor are the page's bookkeeping
 // (list_page.go): how many repositories matched the call's filters
 // across every page, whether Repos was cut short by its limit, and when
 // it was, the cursor that reads on.
 type ReachableReposResult struct {
-	Available   bool                     `json:"available"`
-	Reason      string                   `json:"reason"`
-	Repos       []gitproxy.ReachableRepo `json:"repos"`
-	Errors      []ConnectionReachError   `json:"errors"`
-	Connections []ReachConnection        `json:"connections"`
-	Total       int                      `json:"total"`
-	Truncated   bool                     `json:"truncated"`
-	NextCursor  string                   `json:"nextCursor,omitempty"`
+	Available      bool                     `json:"available"`
+	Reason         string                   `json:"reason"`
+	Repos          []gitproxy.ReachableRepo `json:"repos"`
+	Errors         []ConnectionReachError   `json:"errors"`
+	Connections    []ReachConnection        `json:"connections"`
+	HostMismatches []TargetRepoHostMismatch `json:"hostMismatches"`
+	Total          int                      `json:"total"`
+	Truncated      bool                     `json:"truncated"`
+	NextCursor     string                   `json:"nextCursor,omitempty"`
 }
 
 // ReachableReposFilter narrows GET /api/deployment/reachable-repos to the
@@ -246,7 +262,7 @@ func (c *Client) ReachableReposFiltered(ctx context.Context, team string, f Reac
 // the picker to show rather than an empty list that reads as "nothing".
 func (c *Client) ReachableRepos(ctx context.Context, team string) (ReachableReposResult, error) {
 	out := ReachableReposResult{Repos: []gitproxy.ReachableRepo{}, Errors: []ConnectionReachError{},
-		Connections: []ReachConnection{}}
+		Connections: []ReachConnection{}, HostMismatches: []TargetRepoHostMismatch{}}
 	if team == "" {
 		team = model.DefaultTeamID
 	}
@@ -363,5 +379,236 @@ func (c *Client) ReachableRepos(ctx context.Context, team string) (ReachableRepo
 		return strings.ToLower(out.Repos[i].Repo) < strings.ToLower(out.Repos[j].Repo)
 	})
 	out.Available = true
+	out.HostMismatches = c.targetRepoHostMismatchesFromReach(ctx, out)
 	return out, nil
+}
+
+func (c *Client) reachDefaultHost(cfg *model.Config) string {
+	defaultHost := model.DefaultRepoHost()
+	if c.Config.GitReach != nil && c.Config.GitReach.Host != "" {
+		if h, err := model.NormalizeGitHost(c.Config.GitReach.Host); err == nil && h != "" {
+			defaultHost = h
+		}
+	} else if cfg != nil && cfg.GitHubHost != "" {
+		if h, err := model.NormalizeGitHost(cfg.GitHubHost); err == nil && h != "" {
+			defaultHost = h
+		}
+	}
+	return defaultHost
+}
+
+func (c *Client) targetRepoHostMismatchesFromReach(ctx context.Context, res ReachableReposResult) []TargetRepoHostMismatch {
+	out := []TargetRepoHostMismatch{}
+	if c.Store == nil || !res.Available || len(res.Repos) == 0 {
+		return out
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil || cfg == nil || len(cfg.TargetRepos) == 0 {
+		return out
+	}
+	defaultHost := c.reachDefaultHost(cfg)
+	var hasDefaultConn, anyDefaultOK bool
+	for _, conn := range res.Connections {
+		if model.SameGitHost(conn.Host, defaultHost, defaultHost) {
+			hasDefaultConn = true
+			if conn.OK {
+				anyDefaultOK = true
+			}
+		}
+	}
+	if hasDefaultConn && !anyDefaultOK {
+		return out
+	}
+
+	onDefault := map[string]bool{}
+	offDefault := map[string][]string{}
+	for _, item := range res.Repos {
+		ref, err := model.ParseRepo(item.Repo)
+		if err != nil {
+			continue
+		}
+		itemHost := defaultHost
+		if h, ok := explicitRepoHost(item.Repo); ok {
+			itemHost = h
+		}
+		key := strings.ToLower(ref.Owner + "/" + ref.Name)
+		if model.SameGitHost(itemHost, defaultHost, defaultHost) {
+			onDefault[key] = true
+			continue
+		}
+		if !slices.ContainsFunc(offDefault[key], func(existing string) bool {
+			return strings.EqualFold(existing, item.Repo)
+		}) {
+			offDefault[key] = append(offDefault[key], item.Repo)
+		}
+	}
+
+	for _, raw := range cfg.TargetRepos {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if _, hasHost := explicitRepoHost(entry); hasHost {
+			continue
+		}
+		parsed, err := model.ParseRepo(entry)
+		if err != nil || model.IsConfigRepo(parsed) || parsed.OffDefaultHost() != "" {
+			continue
+		}
+		if rc, err := c.Store.GetRepoConfig(ctx, parsed); err == nil && rc != nil && strings.TrimSpace(rc.CloneURL) != "" {
+			continue
+		}
+		key := strings.ToLower(parsed.Owner + "/" + parsed.Name)
+		if onDefault[key] {
+			continue
+		}
+		candidates := offDefault[key]
+		if len(candidates) == 0 {
+			continue
+		}
+		out = append(out, TargetRepoHostMismatch{
+			Repo:       entry,
+			ResolvesTo: defaultHost,
+			Candidates: candidates,
+			Message:    fmt.Sprintf("this entry resolves to %s; did you mean %s?", defaultHost, strings.Join(candidates, " or ")),
+		})
+	}
+	return out
+}
+
+// targetRepoHostWarnings reports any stored hostless TargetRepos entries that
+// match repositories reachable only on a non-default git host, skipping the
+// reachability check completely when the deployment has no hostless TargetRepos
+// entry or no non-default-host git connection.
+func (c *Client) targetRepoHostWarnings(ctx context.Context) []TargetRepoHostMismatch {
+	if c.Store == nil || c.Config.GitReach == nil {
+		return nil
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil || cfg == nil || len(cfg.TargetRepos) == 0 {
+		return nil
+	}
+	hasHostless := false
+	for _, raw := range cfg.TargetRepos {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if _, hasHost := explicitRepoHost(entry); hasHost {
+			continue
+		}
+		if parsed, err := model.ParseRepo(entry); err == nil && !model.IsConfigRepo(parsed) && parsed.OffDefaultHost() == "" {
+			hasHostless = true
+			break
+		}
+	}
+	if !hasHostless {
+		return nil
+	}
+
+	defaultHost := c.reachDefaultHost(cfg)
+	creds := c.Config.GitReach.Credentials
+	hasNonDefaultConn := false
+	checkConn := func(credName, host string) {
+		if hasNonDefaultConn {
+			return
+		}
+		credName = strings.TrimSpace(credName)
+		if credName == "" || credName == "anonymous" {
+			return
+		}
+		shown := strings.TrimSpace(host)
+		if shown == "" && creds != nil {
+			shown = creds.HostOf(credName).Host
+		}
+		if shown == "" {
+			return
+		}
+		if !model.SameGitHost(shown, defaultHost, defaultHost) {
+			hasNonDefaultConn = true
+		}
+	}
+	if defaultCred, err := c.Store.TeamGitCredential(ctx, model.DefaultTeamID, "", ""); err == nil {
+		checkConn(defaultCred, "")
+	}
+	for _, conn := range cfg.EffectiveGitConnections() {
+		checkConn(conn.Credential, conn.Host)
+	}
+	if !hasNonDefaultConn {
+		return nil
+	}
+
+	res, err := c.ReachableRepos(ctx, model.DefaultTeamID)
+	if err != nil || len(res.HostMismatches) == 0 {
+		return nil
+	}
+	return res.HostMismatches
+}
+
+// reposReadable reports which repositories r's caller holds repos:read on, and
+// whether that grant is unrestricted across every repository. When both a
+// limited RBAC role and an acting-task grant are present on r, only
+// repositories both reach are readable.
+func (s *Server) reposReadable(r *http.Request) (func(string) bool, bool) {
+	ctx := r.Context()
+	call, isAgent := agentCallFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	if role != nil && role.Full {
+		role = nil
+	}
+	if !isAgent && role == nil {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+			return func(string) bool { return false }, false
+		}
+		return func(string) bool { return true }, true
+	}
+	if (!isAgent || call.grants.Allows("repos:read", "")) && (role == nil || role.allows("repos:read", "")) {
+		return func(string) bool { return true }, true
+	}
+	return func(repo string) bool {
+		if repo == "" {
+			return false
+		}
+		if isAgent && !call.grants.Allows("repos:read", repo) {
+			return false
+		}
+		if role != nil && !role.allows("repos:read", repo) {
+			return false
+		}
+		return true
+	}, false
+}
+
+func (s *Server) reachableReposForRequest(r *http.Request, filter ReachableReposFilter) (ReachableReposResult, error) {
+	res, err := s.tasks.ReachableRepos(r.Context(), model.DefaultTeamID)
+	if err != nil {
+		return res, err
+	}
+	if readable, unrestricted := s.reposReadable(r); !unrestricted {
+		res.Repos = filterList(res.Repos, func(rr gitproxy.ReachableRepo) bool {
+			return readable(rr.Repo)
+		})
+		filteredMismatches := []TargetRepoHostMismatch{}
+		for _, m := range res.HostMismatches {
+			if !readable(m.Repo) {
+				continue
+			}
+			cands := filterList(m.Candidates, readable)
+			if len(cands) == 0 {
+				continue
+			}
+			m.Candidates = cands
+			m.Message = fmt.Sprintf("this entry resolves to %s; did you mean %s?", m.ResolvesTo, strings.Join(cands, " or "))
+			filteredMismatches = append(filteredMismatches, m)
+		}
+		res.HostMismatches = filteredMismatches
+		res.Connections = []ReachConnection{}
+		res.Errors = []ConnectionReachError{}
+	}
+	defaultHost := model.DefaultGitHost
+	if s.tasks.Config.GitReach != nil && s.tasks.Config.GitReach.Host != "" {
+		defaultHost = s.tasks.Config.GitReach.Host
+	}
+	filter.narrow(&res, defaultHost)
+	return res, nil
 }

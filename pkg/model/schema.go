@@ -633,7 +633,31 @@ import "strconv"
 // 133 adds repository skill discovery configuration (`skills` on
 // `grain_config`, `repo_config`, `task` and `template`, and `declared_skills`
 // on `repo_config`).
-const SchemaVersion = 133
+// 134 adds `schedule`.`overlap_group` (model.Schedule.OverlapGroup) and
+// `scheduled_firing_skip`.`held_by_schedule_id`
+// (model.ScheduleSkip.HeldByScheduleID): an overlap group shared by the
+// schedules of one repository, and the schedule that held a skipped
+// firing when it was another one in that group (grain/task-3895).
+// 135 adds `grain_config`.`ci_api_repos` (model.Config.CIAPIRepos): the
+// repositories whose trusted CI jobs may hold api grants, empty for
+// grain's own only (grain/task-4040).
+// 136 adds `task_context` and `task_brief_edit` (model.TaskContext,
+// model.TaskBriefEdit): a durable task's compaction cursor, handover
+// version and current brief, and every edit of that brief
+// (design/design/durable-tasks.design.md#DT-15, grain/task-4107).
+// 137 adds `grain_config`.`hub_environment_name`
+// (model.Config.HubEnvironmentName): the environment name a Grain Hub last
+// supplied as this deployment's default, so a rename of its hub entry can
+// replace it without overwriting a name the operator chose (grain/task-4200).
+// 138 adds `grain_config`.`sandbox_shape_limits`
+// (model.Config.SandboxShapeLimits): the deployment-wide and per-role
+// ceilings on the sandbox shape a task may ask for (grain/task-4018).
+// 139 adds `grain_config`.`auto_upgrade_min_interval_hours`
+// (model.Config.AutoUpgradeMinIntervalHours, default 6; 0 = off) and
+// `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
+// the minimum interval between two completed automatic upgrades in release
+// mode, and when the last automatic upgrade succeeded (grain/task-4230).
+const SchemaVersion = 139
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -1542,6 +1566,8 @@ var Tables = []string{
 	// many finished rows over a store's lifetime (one per attempt) and
 	// only the currently-open one must be unique.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ` + "`task_run_open_task`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `) WHERE ` + "`finished_at`" + ` IS NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_attempt`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`attempt`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_outcome_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`outcome`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_started`" + ` ON ` + "`task_run`" + ` (` + "`started_at`" + `)`,
 
@@ -1931,6 +1957,8 @@ var Tables = []string{
 )`,
 
 	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task_id`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task_handover`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `, ` + "`handover`" + `, ` + "`id`" + `)`,
 
 	// One row per file (bwsalmon/agents#522), content included -- the same
 	// "the store is durable; nothing needs to stay reachable to read it
@@ -2066,6 +2094,7 @@ var Tables = []string{
   ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   ` + "`grain_ci`" + `              INTEGER  NOT NULL DEFAULT 0,
+  ` + "`overlap_group`" + `         TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2676,6 +2705,10 @@ var Tables = []string{
   ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
+  ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
+  ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`sandbox_shape_limits`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_upgrade_min_interval_hours`" + ` INTEGER NOT NULL DEFAULT 6,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3026,7 +3059,8 @@ var Tables = []string{
   ` + "`resolved_at`" + `   DATETIME,
   ` + "`fired_task_id`" + ` TEXT     NOT NULL DEFAULT '',
   ` + "`folded`" + `        INTEGER  NOT NULL DEFAULT 0,
-  ` + "`noted_task_id`" + ` TEXT     NOT NULL DEFAULT ''
+  ` + "`noted_task_id`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`held_by_schedule_id`" + ` TEXT NOT NULL DEFAULT ''
 )`,
 
 	// What the merge queue had to do over again because something else
@@ -3131,6 +3165,7 @@ var Tables = []string{
   ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`scheduled_at`" + ` DATETIME NULL,
   ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`succeeded_at`" + ` DATETIME NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3509,6 +3544,35 @@ var Tables = []string{
   ` + "`path`" + `      TEXT NOT NULL,
   ` + "`commit`" + `    TEXT NOT NULL DEFAULT '',
   ` + "`synced_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
+	// A person's acceptance of what a repository's own declaration asks
+	// for that only a person may grant (model.DeclarationAcceptance, task
+	// 3971): one row per declared schedule, template, suite or CI job that
+	// has asked for any, with what it last asked for and what a person
+	// last accepted, who, holding which scopes, at which commit. Lists are
+	// JSON because nothing queries inside them.
+	//
+	// Grain's own record rather than settings (staterepo.SettingsTables):
+	// it is a person's grant, made through grain by somebody holding the
+	// scope, and importing one live from a branch of the state repository
+	// would let whoever can write there accept on a person's behalf. A
+	// restore brings it back with the rest of grain's record. Needs no
+	// SchemaVersion bump, for repo_workflow's own reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`declaration_acceptance`" + ` (
+  ` + "`id`" + `               TEXT     NOT NULL,
+  ` + "`kind`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`name`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`requested`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_commit`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`requested_at`" + `     DATETIME NOT NULL,
+  ` + "`accepted`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_by`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_scopes`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_commit`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_at`" + `      DATETIME NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -4328,6 +4392,11 @@ var Tables = []string{
 	taskRunUsageTaskIndex,
 	usageCapacityTable,
 	usageSettingTable,
+
+	// Durable task context (task_context.go, schema 136).
+	taskContextTable,
+	taskBriefEditTable,
+	taskBriefEditTaskIndex,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

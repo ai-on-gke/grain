@@ -166,6 +166,8 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 3.4.1. Adding or removing task dependencies (`depends_on` / `Store.AddDependency`) MUST NOT alter the stored or effective `Priority` of blocking tasks. Ready queries (`Store.Ready*`) filter out tasks with open dependencies and rank the remaining ready tasks by their own `task.priority`.
 
+3.4.2. The one automatic raise is a schedule's own starved firing (`Store.EscalateStarvedScheduleBlocker` in `pkg/model/schedule_starved.go`, `docs/schedules.md`). When an `overlap: skip` schedule's held occurrence has waited `ScheduleStarvedAfter` (1h), or `ScheduleStarvedOccurrences` (3) occurrences, on the task its previous firing filed, and that task is still `queued` and has never had a run, the reconciler raises that task's `Priority` to the highest `Priority` of any other queued task. It MUST NOT lower a priority, and it MUST NOT touch `order_key`.
+
 ## 4. Permissions, approval gates, and orthogonal ranks
 
 ### 4.1 Human writes {#TP-14}

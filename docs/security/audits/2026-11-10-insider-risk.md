@@ -28,7 +28,7 @@ holding the access code is an unlimited session.
 | 1c | Repointing grain/config at an external remote (`POST /api/state-repo/remote`) with `settings:write` | A, then B | **Fixed here** | Critical |
 | 1d | Write access to an *external* config repository | B | Open by design; follow-up filed | High |
 | 2a | Repo-declared schedule fires approved tasks carrying gcp-key, host-script, github-credential or dangerous `api:*` grants | B | **Fixed here** (firings held for a person) | High |
-| 2b | Repo-declared suites, CI workflow `capabilities:`, network/sizing on declarations, no per-declaration acceptance | B | Open; follow-up filed | Medium |
+| 2b | Repo-declared suites, CI workflow `capabilities:`, network/sizing on declarations, no per-declaration acceptance | B | Fixed (task 3971) | Medium |
 | 3 | Host-privileged code and release images from a forge-side merge | B | Open; follow-up filed | High (bounded by forge branch protection) |
 | 4 | Agent widening its own or its children's grants | agent | Closed (verified) | -- |
 | 5 | Attribution gaps (anonymous access code, shared git credential) | A, B | Tracked by #3873, #3239 | Medium |
@@ -124,7 +124,12 @@ would read it. Grain also does not check the applied commit against
 anything -- signed commits, a required review, or a merge grain itself
 made. Filed as a follow-up: document it, and offer a `require_verified`
 mode that applies only commits grain merged or commits whose forge review
-it can verify.
+it can verify. Task 3973 did both: docs/external-config-repo.md ("Who this
+makes an administrator") and the State pane now say it, and
+`require_verified` holds any commit that is not an approved or
+grain-merged pull request's merge, signed by an allowed key, or accepted
+by an unlimited role. It also narrowed `trustboundary.StateScopes` to the
+columns a change alters in `tables/grain_config.json`.
 
 ## 2. Repo-declared grants (.grain/templates, .grain/schedules)
 
@@ -175,19 +180,68 @@ granting a GCP key, a host script or `api:capabilities:admin` files
 unapproved and says why; a declared `api:ci-read` and an operator's GCP-key
 schedule still file approved; `TestDeclaredGrantNeedsPerson`.
 
-**Still open (2b), in a follow-up:**
+**Fix (2b, task 3971):** per-declaration acceptance replaces holding every
+firing. `model.DeclarationAcceptance` (table `declaration_acceptance`)
+records, per declaration, what it last asked for that only a person may
+give (`DeclaredCompositionHold`: each `DeclaredGrantNeedsPerson` grant, an
+admission above standard, `network_access: open`) and what a person last
+accepted: who, the scopes the set needs (`DeclaredItemScopes`), and the
+declaration's commit. A firing whose items are all within the accepted set
+lands approved; one that widened files unapproved, says it widened, and is
+listed as awaiting acceptance on Settings → Capabilities → Repository
+declarations (`GET /api/declarations`, `POST /api/declarations/accept`).
+Accepting takes a person acting directly (no agent, no delegating app)
+whose role holds `capabilities:admin` for a capability server's grant and
+the scope itself for a dangerous `api:*` grant (`capabilities:admin` does
+not stand in for `secrets:write`). The accept call carries the set the
+person was shown, and a set that moved in the meantime is refused.
 
-- Holding each firing is the interim. The ask's end state is a
-  per-declaration *acceptance*: a person with the corresponding scope
-  accepts a declaration's grant set once, and firings are approved while
-  the declared set stays within what was accepted.
-- Repo-declared **suites** (the items' templates' grants, `require_approval:
-  false`), `.grain/workflows` jobs' `capabilities:` (`daemon/ci_policy.go`),
-  and declared `network_access: open`, sandbox sizing and
-  `auto_approve_proposals` are not held. `auto_approve_proposals` is
-  bounded by the auto-approve ceilings and `IsPersonOnlyGrant` coverage,
-  and is used by several of this repository's own schedules, so it was
-  left alone here.
+- **Schedules and templates:** keyed by the declared schedule's id, or by
+  its declared template's when an operator's schedule fires one.
+- **Suites:** a declared suite with `require_approval: false` is accepted as
+  one set: every item's held items plus `require_approval: false` itself.
+  Until it is accepted, its tasks file unapproved, as if
+  `require_approval` were true. A declared template in an operator's suite
+  is accepted under the template. `require_approval: false` with nothing
+  else held is not held: it is what every schedule firing already is.
+- **CI jobs:** `ciDeclarationRefusal` (`pkg/daemon/ci_policy.go`, called
+  from `CiGrantReservations.Acquire`) refuses a job whose `capabilities:`
+  name a held grant nobody accepted for that job
+  (`CIJobDeclarationID`: repository plus job name), before anything is
+  minted, and records the request. grain's builtin jobs are not asked.
+  Workflows written in grain/config (`repo_workflow`) are asked too, since
+  a job carries nothing saying which file it came from.
+- **Catalogue `RequiresPerson`:** `catalogueHold` now also holds a queued
+  task whose catalogue verdict names grants as a person's decision when
+  nobody stands behind its approval (`Store.PersonStandsBehind`: a person
+  approved it, an operator's schedule fired it, or a declared schedule or
+  template fired it within its accepted set). The approval is withdrawn,
+  so the task goes back to the proposals for a person's Approve, with the
+  reason on its row.
+
+**Decided, not held:**
+
+- **Sandbox sizing:** templates and schedules cannot declare it (only a
+  filing or a proposal can), and a CI job's `sandbox:` size is bounded by
+  host capacity like every other job's. Nothing to hold.
+- **Standing-sandbox secrets:** standing sandboxes are defined only in
+  grain/config, never in a repository's `.grain/`, and a config change
+  touching `standing_sandbox_secret` already needs `secrets:write` (1b).
+- **`auto_approve_proposals`:** unchanged, for the reason given under 2a.
+
+**Coordination with #3904:** an acceptance is a recorded, attributed grant
+that names the scopes its acceptor held, which is the shape #3904's
+explicit-override record should take. If that design adds a general
+override record, acceptance should be written as one.
+
+**Tests:** `pkg/model/declared_grant_hold_test.go`. An accepted declared
+schedule fires approved, and widening it (a host script beside the GCP key)
+holds it again as awaiting. A declared template is accepted under its own
+id. A declared auto-approved suite is held until accepted. A CI job's GCP
+key needs acceptance. `PersonStandsBehind` behaves as described. Also
+`TestCatalogueHoldHoldsARequiresPersonGrantNobodyApproved` (orchestrator),
+`TestAcceptingADeclarationNeedsTheScopesItsGrantsNeed` (ui) and
+`TestACIJobsUnacceptedDeclarationRefusesIt` (daemon).
 
 ## 3. Host-privileged code from repositories
 
@@ -206,10 +260,13 @@ person. Two gaps remain, both profile B:
   CI built the image, not that a reviewed commit went into it, and with no
   `VerifyCmd` the check only warns. So "only images built from reviewed,
   merged commits" depends entirely on the forge's branch protection.
-  Follow-up filed: have release builds refuse a commit that did not reach
-  main through a reviewed merge (grain's merge marker, or the forge's
-  required-review record), and record that in the image's provenance for
-  the upgrade to check.
+  Follow-up (task 3972): release builds now refuse a commit, or a
+  first-parent chain, that did not reach main or release/v* through a
+  reviewed merge (grain's own merge, by its forge login, or the forge's
+  approval record; `pkg/reviewedmerge`). The record is attested onto the
+  images, and `-upgrade-reviewed-merge-repo` makes the upgrade ask the
+  forge the same question itself (`docs/image-signing.md`, "A signature
+  is not a review").
 - **A person's Submit skips the review** until #3904 lands. #3905 audits
   the six such merges; nothing more is added here.
 

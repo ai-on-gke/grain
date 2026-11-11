@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -57,6 +56,18 @@ func sanitizeManagementURL(raw string) string {
 		return ""
 	}
 	return u.String()
+}
+
+// upgradeNotices is upgrade.Notices with each DocsURL put through
+// sanitizeManagementURL, since the pane renders it as a link: a notice
+// whose docs link is not an http(s) URL keeps its message and loses the
+// link, rather than handing the browser a javascript: href.
+func upgradeNotices() []upgrade.Notice {
+	notices := upgrade.Notices()
+	for i := range notices {
+		notices[i].DocsURL = sanitizeManagementURL(notices[i].DocsURL)
+	}
+	return notices
 }
 
 func (s *Server) isSelfUpgradeDisabled() bool {
@@ -99,13 +110,11 @@ type upgradeStatusResponse struct {
 	// request that names no branch goes to (grain/task-3689). Empty when
 	// the deployment cannot say -- one pinned to a sha- build, or the
 	// source pipeline.
-	Channel      string `json:"channel,omitempty"`
-	Branch       string `json:"branch"`
-	Phase        string `json:"phase"`
-	Source       string `json:"source,omitempty"`
-	FallbackNote string `json:"fallbackNote,omitempty"`
-	Detail       string `json:"detail"`
-	Unchanged    bool   `json:"unchanged,omitempty"`
+	Channel   string `json:"channel,omitempty"`
+	Branch    string `json:"branch"`
+	Phase     string `json:"phase"`
+	Detail    string `json:"detail"`
+	Unchanged bool   `json:"unchanged,omitempty"`
 	// Steps is the upgrade's own plan and how far through it is
 	// (pkg/upgrade's Status.Steps): what the pane draws its progress bar
 	// and its running commentary from, rather than saying nothing but
@@ -164,12 +173,28 @@ type upgradeStatusResponse struct {
 	// reference for the channel the deployment follows, and the
 	// repositories an operator may choose instead (startUpgradeRequest's
 	// Image). All empty on any other pipeline.
-	ImageRepo        string                      `json:"imageRepo,omitempty"`
-	DefaultImageRepo string                      `json:"defaultImageRepo,omitempty"`
-	DefaultImageRef  string                      `json:"defaultImageRef,omitempty"`
-	ImageRepos       []string                    `json:"imageRepos,omitempty"`
-	ImageSource      *upgradeImageSourceResponse `json:"imageSource,omitempty"`
-	DiscardedRC      *upgrade.DiscardedRC        `json:"discardedRc,omitempty"`
+	ImageRepo        string   `json:"imageRepo,omitempty"`
+	DefaultImageRepo string   `json:"defaultImageRepo,omitempty"`
+	DefaultImageRef  string   `json:"defaultImageRef,omitempty"`
+	ImageRepos       []string `json:"imageRepos,omitempty"`
+	// ImageRepoWarning is upgrade.Upgrader.RepositoryWarning: ImageRepo
+	// names no registry host, so the Upgrade button would be refused,
+	// and what to set instead. Shown before anybody presses it.
+	ImageRepoWarning string `json:"imageRepoWarning,omitempty"`
+	// Edition is this deployment's edition as the pane names it ("oss",
+	// or its install track's name). OtherEditionImageRepos are the
+	// repositories it could pull from that carry another edition's
+	// builds -- never in ImageRepos, and offered only behind the pane's
+	// explicit "switch edition" override -- and EditionSwitchLosses is
+	// what that override's confirmation says switching gives up
+	// (pkg/upgrade/edition.go, grain/task-4153).
+	Edition                string                      `json:"edition,omitempty"`
+	OtherEditionImageRepos []upgrade.EditionRepository `json:"otherEditionImageRepos,omitempty"`
+	EditionSwitchLosses    []string                    `json:"editionSwitchLosses,omitempty"`
+	// EditionSwitch is the last upgrade's record of an explicit edition
+	// switch (upgrade.Status.EditionSwitch), nil for an ordinary one.
+	EditionSwitch *upgrade.EditionSwitch `json:"editionSwitch,omitempty"`
+	DiscardedRC   *upgrade.DiscardedRC   `json:"discardedRc,omitempty"`
 	// RetractedRelease is set when the release this deployment runs has
 	// been retracted since it upgraded onto it: the pane tells the
 	// operator to move.
@@ -179,6 +204,12 @@ type upgradeStatusResponse struct {
 	// management (optionally linking to ManagementURL).
 	SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled,omitempty"`
 	ManagementURL       string `json:"managementUrl,omitempty"`
+	// Notices are what the edition has to tell the operator about how
+	// this deployment upgrades (upgrade.RegisterNotice), each a warning
+	// on the pane with the command that fixes it. Reported whether or not
+	// an upgrader is configured: a notice is often about why one is not
+	// configured the way it should be. Absent when none is registered.
+	Notices []upgrade.Notice `json:"notices,omitempty"`
 }
 
 // upgradeScheduledResponse is the pending schedule and how close it is
@@ -299,8 +330,6 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 		Channel:      channel,
 		Branch:       status.Branch,
 		Phase:        string(status.Phase),
-		Source:       status.Source,
-		FallbackNote: status.FallbackNote,
 		Detail:       status.Detail,
 		Unchanged:    status.Unchanged,
 		Steps:        steps,
@@ -308,22 +337,20 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 		FinishedAt:   status.FinishedAt,
 		InFlightRuns: inFlightRuns,
 		Scheduled:    scheduled,
+		// The record that this upgrade crossed editions on purpose.
+		EditionSwitch: status.EditionSwitch,
 	}
 	if iu, ok := up.(imageUpgrader); ok {
 		if target, ok := iu.ImageTarget(); ok {
 			resp.ImageRepo = target.Repository
 			resp.DefaultImageRepo = target.DefaultRepository
 			resp.ImageRepos = target.Repositories
+			resp.ImageRepoWarning = target.RepositoryWarning
+			resp.Edition = target.Edition
+			resp.OtherEditionImageRepos = target.OtherEditionRepositories
+			resp.EditionSwitchLosses = target.EditionSwitchLosses
 			if channel != "" && target.Repository != "" {
 				resp.DefaultImageRef = target.Repository + ":" + upgrade.TagForBranch(channel)
-			}
-			if target.Source != "" {
-				resp.ImageSource = &upgradeImageSourceResponse{
-					Source:        string(target.Source),
-					SourceDefault: target.SourceDefault,
-					Locked:        target.SourceLocked,
-					Fallback:      string(target.Fallback),
-				}
 			}
 		}
 	}
@@ -349,7 +376,7 @@ type retractedReleaseReporter interface {
 // see where it would pull from before choosing. Optional for the same
 // reason upgradeTargeter is: only the real upgrader has an answer.
 type imageUpgrader interface {
-	StartImage(branch, image string) error
+	StartImageWith(branch, image string, opts upgrade.ImageOptions) error
 	ImageTarget() (upgrade.ImageTarget, bool)
 }
 
@@ -617,6 +644,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 			ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
 			Running:             running,
 			Database:            s.databaseStatus(),
+			Notices:             upgradeNotices(),
 		})
 		return
 	}
@@ -624,6 +652,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, upgradeStatusResponse{
 			Enabled:  false,
 			Database: s.databaseStatus(),
+			Notices:  upgradeNotices(),
 		})
 		return
 	}
@@ -634,6 +663,7 @@ func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	resp := s.upgradeStatusResponse(r, status)
 	resp.Database = s.databaseStatus()
+	resp.Notices = upgradeNotices()
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -707,6 +737,13 @@ type startUpgradeRequest struct {
 	// branch. Image deployments only, and only for an upgrade started
 	// now -- a schedule records a branch and nothing else.
 	Image string `json:"image,omitempty"`
+	// SwitchEdition is the explicit "switch edition" override: it lets
+	// Image be another edition's build (a Google-track deployment pulling
+	// the open-source image, or the reverse), which is otherwise refused
+	// (upgrade.ErrCrossEdition). It needs Image, cannot be scheduled, and
+	// is recorded on the upgrade's status as who switched from what to
+	// what (upgrade.Status.EditionSwitch).
+	SwitchEdition bool `json:"switchEdition,omitempty"`
 	// AfterTasksFinish asks for the upgrade to be scheduled rather than
 	// started: the queue shuts now, the work already under way is left to
 	// finish, and the cut-over happens once this deployment is idle
@@ -790,13 +827,33 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 	case req.Image != "" && !canChooseImage:
 		writeError(w, http.StatusBadRequest, errors.New("this deployment cannot upgrade onto an explicit image"))
 		return
+	case req.SwitchEdition && req.Image == "":
+		writeError(w, http.StatusBadRequest, errors.New("switching edition needs the image to switch to: "+
+			"name another edition's repository or image"))
+		return
+	case req.SwitchEdition && req.AfterTasksFinish:
+		writeError(w, http.StatusBadRequest, errors.New("an edition switch cannot be scheduled for after tasks finish: start it now"))
+		return
 	case req.AfterTasksFinish:
 		if err := s.scheduleUpgrade(r, req); err != nil {
 			writeClientError(w, err)
 			return
 		}
 	case req.Image != "":
-		if err := iu.StartImage(req.Branch, req.Image); err != nil {
+		opts := upgrade.ImageOptions{SwitchEdition: req.SwitchEdition}
+		if req.SwitchEdition {
+			// Who switched is part of the record: the agent a
+			// capability names, or this deployment's own actor for the
+			// operator at the console.
+			ctx, err := withAgentRequester(r.Context(), "an edition switch's requester", req.RequestedBy, req.RequestedByKind)
+			if err != nil {
+				writeClientError(w, err)
+				return
+			}
+			by := s.tasks.requestActor(ctx).Actor
+			opts.RequestedBy = strings.TrimSpace(string(by.Kind) + " " + by.ID)
+		}
+		if err := iu.StartImageWith(req.Branch, req.Image, opts); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -889,77 +946,4 @@ type cancelScheduledUpgradeResponse struct {
 	// Cancelled is whether this call is what called the upgrade off, as
 	// against finding none scheduled.
 	Cancelled bool `json:"cancelled"`
-}
-
-type upgradeImageSourceResponse struct {
-	Source        string `json:"source"`
-	SourceDefault bool   `json:"sourceDefault"`
-	Locked        bool   `json:"locked"`
-	Fallback      string `json:"fallback,omitempty"`
-}
-
-type imageSourceUpdater interface {
-	SetImageSource(ov upgrade.ImageSourceOverride) error
-}
-
-type updateUpgradeSourceRequest struct {
-	Mode             string `json:"mode,omitempty"`
-	Fallback         string `json:"fallback,omitempty"`
-	FallbackExplicit bool   `json:"fallbackExplicit,omitempty"`
-}
-
-func (s *Server) handleUpdateUpgradeSource(w http.ResponseWriter, r *http.Request) {
-	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
-		return
-	}
-	updater, ok := s.tasks.Config.Upgrader.(imageSourceUpdater)
-	if !ok {
-		writeError(w, http.StatusBadRequest, errors.New("this deployment's upgrader does not support configurable image sources"))
-		return
-	}
-	var req updateUpgradeSourceRequest
-	if !readJSON(w, r, &req) {
-		return
-	}
-	if err := updater.SetImageSource(upgrade.ImageSourceOverride{
-		Mode:             req.Mode,
-		Fallback:         req.Fallback,
-		FallbackExplicit: req.FallbackExplicit,
-	}); err != nil {
-		if errors.Is(err, upgrade.ErrImageSourceLocked) {
-			writeError(w, http.StatusConflict, err)
-			return
-		}
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	// The override lives in a file of the upgrader's, not the store, so
-	// no settings write records who made it: this row does (operator
-	// attribution spec §4.4).
-	s.tasks.auditUpgradeSource(r.Context(), req)
-	status, err := s.tasks.Config.Upgrader.Status()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	resp := s.upgradeStatusResponse(r, status)
-	resp.Database = s.databaseStatus()
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// auditUpgradeSource records a change to where image upgrades come from
-// in config_audit, with the person or agent who made it
-// (ui.RequestActor).
-func (c *Client) auditUpgradeSource(ctx context.Context, req updateUpgradeSourceRequest) {
-	if c == nil || c.Store == nil {
-		return
-	}
-	by := RequestActor(ctx)
-	summary := fmt.Sprintf("image source %q, fallback %q", req.Mode, req.Fallback)
-	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
-		By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: "upgrade:source", Summary: summary,
-	}); err != nil {
-		log.Printf("grain upgrade: recording the image source change in the config audit: %v", err)
-	}
 }

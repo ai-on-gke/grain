@@ -23,6 +23,7 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
+import { taskDetailPath } from "../taskDetailPages.js";
 import AccessGate from "./AccessGate.jsx";
 import LinkedNote from "../linkedNote.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../taskRefs.js";
@@ -34,11 +35,19 @@ import {
   mergeQueueStalled,
   pullRequestUrl,
   reasonControl,
+  actionScope,
   redBaseRepairSentence,
   waitingBaseRepair,
   askedCase,
 } from "../state.js";
 import { forceMergeOffered, promptForceMerge } from "../taskWrites.js";
+import GateOverrideDialog from "./GateOverrideDialog.jsx";
+import MergeGatesList, {
+  needsHumanApproval,
+  overrideReviewButtonLabel,
+  submitButtonLabel,
+  unsatisfiedReviewGates,
+} from "./MergeGatesList.jsx";
 import { useNotificationSetting } from "../inboxNotifications.js";
 import { NavGlyph } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
@@ -303,24 +312,37 @@ const GROUPS = [
   {
     id: "red_base_repair",
     title: "Base-branch repair waiting",
-    hint: "A base branch is red and its repair pull request is waiting. Submit it to the merge queue or force-merge it to unblock the branch.",
+    hint: "A base branch is red and its repair pull request is waiting. Submit it to record your approval, or explicitly override unsatisfied gates to unblock the branch.",
     match: (t) => waitingBaseRepair(t),
     note: (t) => redBaseRepairSentence(t),
+    showGates: true,
     actions: [
       {
-        label: "Submit",
+        label: (t) => submitButtonLabel(t),
         variant: "contained",
         post: "/submit",
-        when: (t) => !t.autoMerge,
+        when: (t) => needsHumanApproval(t),
         title:
-          "Put this base-branch repair pull request on grain's merge queue: it is merged once its checks pass.",
+          "Record your approval for this base-branch repair pull request: it merges automatically once all required gates pass.",
+      },
+      {
+        label: (t) => overrideReviewButtonLabel(unsatisfiedReviewGates(t)),
+        variant: "outlined",
+        color: "warning",
+        overrideReviewGates: true,
+        when: (t, config) =>
+          unsatisfiedReviewGates(t).length > 0 && forceMergeOffered(config, t),
+        title:
+          "Explicitly override unsatisfied review gates on this base-branch repair pull request.",
       },
       {
         label: "Force merge",
         variant: "outlined",
         color: "warning",
         forceMerge: true,
-        when: (t, config) => forceMergeOffered(config, t),
+        when: (t, config) =>
+          unsatisfiedReviewGates(t).length === 0 &&
+          forceMergeOffered(config, t),
         title:
           "Force-merge this base-branch repair pull request now, overriding the merge queue.",
       },
@@ -366,27 +388,40 @@ const GROUPS = [
   {
     id: "review_questions",
     title: "Review needs your decision",
-    hint: "Each change's review fixed what it could and left questions only you can settle. Reply with your decision and another run carries it out, or ship it as it stands.",
+    hint: "Each change's review fixed what it could and left questions only you can settle. Reply with your decision so another run carries it out and a fresh review clears the gate.",
     match: (t) => awaitsHumanSubmit(t) && !!t.reviewQuestions,
     reply: true,
+    showGates: true,
     actions: [
       {
-        label: "Ship as is",
+        label: (t) => submitButtonLabel(t),
         variant: "outlined",
         post: "/submit",
+        when: (t) => needsHumanApproval(t),
         title:
-          "Submit the change as it stands, leaving the review's questions open: it goes on grain's merge queue and lands once its checks pass.",
+          "Record your human approval now: the pull request still waits until the review gate passes or is explicitly overridden.",
+      },
+      {
+        label: (t) => overrideReviewButtonLabel(unsatisfiedReviewGates(t)),
+        variant: "outlined",
+        color: "warning",
+        overrideReviewGates: true,
+        when: (t, config) =>
+          unsatisfiedReviewGates(t).length > 0 && forceMergeOffered(config, t),
+        title:
+          "Explicitly override unsatisfied review gates and merge now (requires merge:force and a recorded reason).",
       },
     ],
   },
   {
     id: "awaiting_submit",
     title: "Asked: submit for merge",
-    hint: "Each pull request is on no queue -- some may still have a run waiting on their checks. Nothing lands them until you submit them.",
+    hint: "Each pull request needs its merge gates satisfied before landing. Submit records your approval and merges automatically once all required reviews and CI checks pass.",
     // awaitsHumanSubmit, not the state alone: a run that opened a pull
     // request it will not merge by itself is often still running, blocked
     // in wait_for_checks, and Submit is owed just the same.
     match: (t) => awaitsHumanSubmit(t) && !t.reviewQuestions,
+    showGates: true,
     // "Asked you to submit owner/repo#12", with the hold that keeps it
     // off the queue where there is one (state.js's askedCase).
     // A CL not yet submittable says why instead (ClSubmit.jsx).
@@ -406,17 +441,29 @@ const GROUPS = [
           "Submit this CL now: its review, presubmit and grain's reviews have all cleared.",
       },
       {
-        label: "Submit",
+        label: (t) => submitButtonLabel(t),
         variant: "contained",
         post: "/submit",
-        when: (t) => !t.clSubmit,
+        when: (t) => !t.clSubmit && needsHumanApproval(t),
         title:
-          "Put this pull request on grain's merge queue: it is merged once its checks pass.",
+          "Record your approval: grain merges this pull request once every required review and CI check passes.",
         bulk: {
           label: "Submit all",
           confirm: (n) =>
-            `Submit all ${n} finished changes for merge? Each pull request goes on grain's merge queue and lands once its checks pass.`,
+            `Approve all ${n} changes for merge? Each pull request merges automatically once its required reviews and CI checks pass.`,
         },
+      },
+      {
+        label: (t) => overrideReviewButtonLabel(unsatisfiedReviewGates(t)),
+        variant: "outlined",
+        color: "warning",
+        overrideReviewGates: true,
+        when: (t, config) =>
+          !t.clSubmit &&
+          unsatisfiedReviewGates(t).length > 0 &&
+          forceMergeOffered(config, t),
+        title:
+          "Explicitly override unsatisfied review gates and merge now (requires merge:force and a recorded reason).",
       },
     ],
   },
@@ -1138,25 +1185,9 @@ function groupTasks(tasks) {
 // under the reader's cursor, and a header full of "Approve all (1)"
 // teaches everybody to click past the confirm that matters.
 // inboxActionScope is the role scope the request behind one of a row's
-// answers needs (pkg/ui's roleScopeOf for POST /api/tasks/{id}<post>), or
-// null for an answer that only reads -- opening the task, or a link out.
-// AccessGate disables the button for a role without it and says why,
-// rather than leaving a grain/viewer an Approve whose click ends in a 403
-// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
-export function inboxActionScope(action) {
-  if (action.open || action.href) return null;
-  if (action.forceMerge) return "merge:force";
-  switch (action.post) {
-    case "/approve":
-      return "tasks:admin";
-    case "/run-now":
-      return "dispatch:write";
-    case "/retry-merge":
-      return "merge:write";
-    default:
-      return "tasks:write";
-  }
-}
+// answers needs (state.js's actionScope, which the task list's own
+// stalled-row control is gated on too).
+export const inboxActionScope = actionScope;
 
 // gated wraps a row's button in AccessGate when its answer writes.
 function gated(scope, repo, config, button) {
@@ -1206,6 +1237,61 @@ function NotificationSwitch() {
   );
 }
 
+function GateOverridesGroup({ tasks, onOpenTask }) {
+  const overridden = (tasks || []).filter((t) => Boolean(t?.gateOverride));
+  if (overridden.length === 0) return null;
+  return (
+    <CollapsibleInboxGroup
+      key="gate-overrides"
+      sectionId="gate-overrides"
+      title="Gate overrides"
+      count={overridden.length}
+      testId="inbox-gate-overrides"
+      hint="Changes merged or queued by explicitly overriding required merge gates. Recorded for operator audit; any running review continues against the merged commit on the base branch."
+    >
+      <ul className="task-list">
+        {overridden.map((t) => (
+          <li
+            className="inbox-item"
+            key={`override-${t.id}`}
+            data-testid="inbox-gate-override-item"
+          >
+            <div className="inbox-line">
+              <div className="inbox-gate">
+                <Button size="small" onClick={() => onOpenTask?.(t.id)}>
+                  Task {t.id}
+                </Button>
+                <span>{t.title}</span>
+              </div>
+            </div>
+            <MergeGatesList t={t} compact onOpenTask={onOpenTask} />
+          </li>
+        ))}
+      </ul>
+    </CollapsibleInboxGroup>
+  );
+}
+
+// preferNextInbox is the per-browser default the new UI's "Default to new
+// UI" switch sets (ui-ng's ThemeService, PREFER_NEXT_STORAGE_KEY): with it
+// on, opening the classic Inbox goes to /next/inbox instead -- unless the
+// address says ?classic=1, which is how the new Inbox links back here.
+// The query is read when this module loads, before App's own routing
+// rewrites the address without it.
+const PREFER_NEXT_KEY = "grain.ui.preferNext";
+const classicAsked =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location?.search || "").has("classic");
+
+export function preferNextInbox() {
+  if (classicAsked) return false;
+  try {
+    return localStorage.getItem(PREFER_NEXT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function InboxPage({
   tasks,
   tasksLoaded = true,
@@ -1222,9 +1308,16 @@ export default function InboxPage({
   // as tall as the question it is answering, and two of them open at
   // once turns a list of what is waiting into a page of forms.
   const [replyTo, setReplyTo] = useState(null);
+  const [overrideTask, setOverrideTask] = useState(null);
   const waiting = inboxTasks(tasks);
   const groups = groupTasks(waiting);
+  const overriddenTasks = (tasks || []).filter((t) => Boolean(t?.gateOverride));
   const [localScripts, reloadLocalScripts] = usePendingLocalScripts();
+  useEffect(() => {
+    if (window.location?.pathname === "/inbox" && preferNextInbox()) {
+      window.location.replace("/next/inbox");
+    }
+  }, []);
   const syncFailure = config?.stateRepoSyncFailure || null;
   const pendingReleases = notifications.filter(
     (n) => pendingReleaseOf(n) !== null,
@@ -1277,6 +1370,13 @@ export default function InboxPage({
         icon={<NavGlyph kind="inbox" size={20} />}
         action={<NotificationSwitch />}
       />
+      {/* The Angular rewrite's Inbox (ui-ng/, served at /next/inbox;
+          design/design/angular-ui.design.md). Same session, same API. */}
+      <p className="inbox-next-callout">
+        <a href="/next/inbox" className="inbox-try-next">
+          Try the new Inbox
+        </a>
+      </p>
       {/* Deliberately the same sentence it always was, and about tasks
           only: a line promising that every base branch is tested is the
           exact reassurance this page was extended to stop giving. */}
@@ -1291,6 +1391,7 @@ export default function InboxPage({
       )}
       {tasksLoaded &&
         groups.length === 0 &&
+        overriddenTasks.length === 0 &&
         localScripts.length === 0 &&
         notifications.length === 0 &&
         !syncFailure && (
@@ -1299,6 +1400,7 @@ export default function InboxPage({
             done.
           </ListEmpty>
         )}
+      <GateOverridesGroup tasks={overriddenTasks} onOpenTask={onOpenTask} />
       <NotificationsGroup
         notifications={operatorNotifications}
         onChanged={onNotificationsChanged}
@@ -1416,10 +1518,14 @@ export default function InboxPage({
                           .filter(
                             (action) => !action.when || action.when(t, config),
                           )
-                          .map((action) =>
-                            action.href ? (
+                          .map((action) => {
+                            const label =
+                              typeof action.label === "function"
+                                ? action.label(t)
+                                : action.label;
+                            return action.href ? (
                               <Button
-                                key={action.label}
+                                key={label}
                                 size="small"
                                 variant={action.variant || "outlined"}
                                 color={action.color}
@@ -1429,7 +1535,7 @@ export default function InboxPage({
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >
-                                {action.label}
+                                {label}
                               </Button>
                             ) : (
                               gated(
@@ -1437,32 +1543,33 @@ export default function InboxPage({
                                 t.repo,
                                 config,
                                 <Button
-                                  key={action.label}
+                                  key={label}
                                   size="small"
                                   variant={action.variant || "outlined"}
                                   color={action.color}
                                   title={action.title}
-                                  // `open` is the third kind of answer a row can
-                                  // carry, beside a link out and a request: the
-                                  // task's own pane, for a wait whose next step
-                                  // is reading rather than doing.
                                   onClick={() =>
                                     action.open
                                       ? onOpenTask(t.id)
-                                      : action.forceMerge
-                                        ? promptForceMerge(t, (fn) =>
-                                            onAct(fn, t.id),
-                                          )
-                                        : run(t, action)
+                                      : action.overrideReviewGates
+                                        ? setOverrideTask(t)
+                                        : action.forceMerge
+                                          ? promptForceMerge(t, (fn) =>
+                                              onAct(fn, t.id),
+                                            )
+                                          : run(t, action)
                                   }
                                 >
-                                  {action.label}
+                                  {label}
                                 </Button>,
                               )
-                            ),
-                          )}
+                            );
+                          })}
                       </div>
                     </div>
+                    {(group.showGates || t.gateOverride) && (
+                      <MergeGatesList t={t} compact onOpenTask={onOpenTask} />
+                    )}
                     {/* The note is grain's own sentence, and the page it
                         names -- the GitHub review an approval wait needs --
                         is a link here as it is in the task's pane. */}
@@ -1488,6 +1595,12 @@ export default function InboxPage({
           </CollapsibleInboxGroup>
         );
       })}
+      <GateOverrideDialog
+        open={Boolean(overrideTask)}
+        onClose={() => setOverrideTask(null)}
+        t={overrideTask}
+        onSubmit={(fn) => onAct(fn, overrideTask?.id)}
+      />
     </main>
   );
 }
@@ -1551,7 +1664,7 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
       if (!open) prefetchedIdRef.current = t.id;
       setFailed(false);
       Promise.resolve()
-        .then(() => api(`/api/tasks/${t.id}`))
+        .then(() => api(taskDetailPath(t.id)))
         .then((d) => {
           if (live && d) setDetail(d);
         })

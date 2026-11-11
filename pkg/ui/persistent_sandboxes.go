@@ -33,6 +33,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -89,7 +91,7 @@ func (s *Server) handleListPersistentSandboxes(w http.ResponseWriter, r *http.Re
 	list = filterList(list, func(st model.PersistentSandboxStatus) bool {
 		return page.matches(st.Name, st.Repo, st.State)
 	})
-	writeList(w, list, page)
+	writeListBy(w, list, page, func(st model.PersistentSandboxStatus) string { return st.Name })
 }
 
 // handlePersistentSandboxLogs is GET /api/persistent-sandboxes/{name}/logs:
@@ -105,6 +107,23 @@ func (s *Server) handlePersistentSandboxLogs(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, fmt.Errorf("persistent sandbox %q is not running", r.PathValue("name")))
 		return
 	}
+	redactor := grainlog.NewRedactor(nil)
+	if s.tasks != nil && s.tasks.Config.LogRedactor != nil {
+		var err error
+		redactor, err = s.tasks.Config.LogRedactor()
+		if err != nil || redactor == nil {
+			if err == nil {
+				err = errors.New("no redactor")
+			}
+			writeError(w, http.StatusInternalServerError, apierror.Expose(fmt.Errorf(
+				"this log cannot be shown: the credentials that would have to be redacted out of it "+
+					"could not be read, and it is not served unredacted instead: %w", err)))
+			return
+		}
+	}
+	// Text, not Line: the log is many lines, and a private key's body
+	// is only cut by the pass that sees the lines after its header.
+	logs, _ = redactor.Text(logs)
 	if r.URL.Query().Get("format") == "text" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

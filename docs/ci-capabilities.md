@@ -173,6 +173,21 @@ the run's own team connection, as the retired providers did. The bare
 names remain one-release aliases, and as references they reach only a job
 that declares them.
 
+## A person accepts what only a person may grant
+
+A workflow file is the repository's to write, so a job that declares a
+capability only a person may grant is asking for it, not granted it. That
+covers a GCP key, a host script, a GitHub credential or a dangerous
+`api:<scope>` (`model.DeclaredGrantNeedsPerson`). Such a job fails before
+anything is minted, with an error naming what it waits for, until a person
+accepts that set for the job. Accept it on **Settings → Capabilities →
+Repository declarations**. Accepting takes `capabilities:admin` for a
+capability server's grant, and the scope itself for an `api:` grant. Once
+accepted, the job runs as before while it declares nothing beyond the
+accepted set. A job that adds a held capability is refused again, and
+shows as awaiting acceptance, until a person accepts the new set.
+Acceptance is per job: the repository plus the job's name.
+
 ## Which trees are trusted with them
 
 These capabilities are granted to the trees on the repository's own
@@ -547,6 +562,32 @@ They are honoured only for jobs of grain's own repository
 (`model.GrainSourceRepo`, `ai-on-gke/grain`, unless the provider is configured
 with others), since the state they read belongs to the whole deployment, and a dangerous scope is refused
 outright.
+
+## A task's own CI on a GitHub-CI repository
+
+This page is about what CI *jobs* hold. One grant about CI goes to
+*tasks*, and it is often confused with `grain#ci`, so it is covered
+here as well.
+
+- **On a repository grain CI gates** (CI Mode "Use Grain CI"), a task
+  is filed holding `https://grain.dev/capabilities/grain#ci` by
+  default. That grant runs its branch through grain CI and reads that
+  CI.
+- **On any other repository** (`ci_mode: github`), `grain#ci` is never
+  attached, because it would change merge gating. Nobody can grant it
+  there by hand either. Instead the task is filed holding
+  `api:ci-read@<owner>/<name>` on its own repository by default.
+
+`api:ci-read@<owner>/<name>` is read-only and covers that one
+repository. It covers its CI runs, jobs and logs (GitHub Actions
+included) and nothing else. It is what `grain ci list/show/log`,
+`grain pr status/base-status` and `ci://` need there.
+
+A capability policy deny rule on
+`https://grain.dev/capabilities/api#ci-read` turns the default off.
+Without `repos` the rule covers every repository; with `repos`, only
+those named. See [agent-api.md](agent-api.md#a-tasks-own-ci-the-default-apici-read)
+for the routes, the trade-off and the opt-out.
 
 ## Repository access: declared in the repository, enforced by the team's credential
 
