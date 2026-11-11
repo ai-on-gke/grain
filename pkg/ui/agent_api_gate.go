@@ -410,6 +410,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 			return call, err
 		}
 	}
+	if err := agentRouteAdminScope("task "+taskID, set, pattern); err != nil {
+		return call, err
+	}
 	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
 		if !set.Allows("capabilities:admin", call.repo) {
 			return call, fmt.Errorf("task %s holds no api grant for scope capabilities:admin, which %s needs when editing task capabilities",
@@ -443,6 +446,34 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		}
 	}
 	return call, nil
+}
+
+// agentRouteAdminScopes are routes whose routeScopes entry is not all an
+// agent needs to call them: the call must also be allowed the scope named
+// here, on the whole deployment.
+//
+// POST /api/state-repo/remote is settings:write in routeScopes, but
+// repointing the config repository hands everything it grants -- host
+// scripts, scope sets, secrets bindings -- to whoever can push there, and
+// the same body turns require_verified off or accepts a held commit
+// (docs/external-config-repo.md). A person needs an unlimited role for it
+// (operatorOnlyRoutes, task 3965); an agent, in-grain or external, needs
+// capabilities:admin as well as settings:write (task 4007).
+var agentRouteAdminScopes = map[string]APIScope{
+	"POST /api/state-repo/remote": "capabilities:admin",
+}
+
+// agentRouteAdminScope refuses who's call to pattern when the route is in
+// agentRouteAdminScopes and set does not allow its scope deployment-wide.
+func agentRouteAdminScope(who string, set APIGrantSet, pattern string) error {
+	need, ok := agentRouteAdminScopes[pattern]
+	if !ok || set.Allows(need, "") {
+		return nil
+	}
+	return fmt.Errorf("%s holds no api grant for scope %s, which %s needs as well as %s: "+
+		"it repoints or re-verifies the config repository, which is an administrator's call -- "+
+		"ask a person to make it, or to grant api:%s (docs/external-config-repo.md)",
+		who, need, pattern, routeScopes[pattern], need)
 }
 
 // agentCapabilityAllowsRoute reports whether releases:read lets a release
@@ -3182,6 +3213,9 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 				principal, missingScope, strings.Join(set.Repos(missingScope), ", "), pattern)
 		}
 		return call, fmt.Errorf("%s holds %s, but not on %s", principal, missingScope, call.repo)
+	}
+	if err := agentRouteAdminScope(principal, set, pattern); err != nil {
+		return call, err
 	}
 	if pattern == "PATCH /api/tasks/{id}" && patchTouchesTaskGrants(body) {
 		if !set.Allows("capabilities:admin", call.repo) {
