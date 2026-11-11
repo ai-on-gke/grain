@@ -7032,6 +7032,27 @@ func (s *Store) OpenTaskWithTag(ctx context.Context, tag string) (*Task, error) 
 	return s.GetTask(ctx, id)
 }
 
+// NewestTaskWithTag is the newest task carrying tag, open or closed, or nil
+// when none has ever carried it -- OpenTaskWithTag without the unclosed
+// filter, for a caller reading what a schedule's most recent firing did even
+// after that task finished or failed.
+func (s *Store) NewestTaskWithTag(ctx context.Context, tag string) (*Task, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `tg`.`task_id` FROM `task_tag` AS `tg` "+
+			"JOIN `task` AS `t` ON `t`.`id` = `tg`.`task_id` "+
+			"WHERE `tg`.`tag` = ? "+
+			"ORDER BY `t`.`created_at` DESC, `tg`.`task_id` DESC LIMIT 1",
+		tag).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("looking up the newest task tagged %s: %w", tag, err)
+	}
+	return s.GetTask(ctx, id)
+}
+
 // OpenTasksWithTag is every task carrying tag that has not reached
 // StateClosed, oldest first -- OpenTaskWithTag's question asked for all of
 // them, for a caller closing a set out rather than reading the newest.
