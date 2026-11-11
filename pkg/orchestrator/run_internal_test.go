@@ -306,25 +306,35 @@ func TestSetupSectionTellsTheRunAFailedSetupIsNotItsChange(t *testing.T) {
 
 func TestSandboxToolingSectionNamesTheAbsencesAndTheirSubstitutes(t *testing.T) {
 	t.Parallel()
-	got := sandboxToolingSection(true, false)
+	// A GitHub-CI run that cannot read its CI logs is pointed at the two
+	// commands that answer on every sandbox -- never at the MCP CI tools,
+	// which a host's sandbox does not serve.
+	got := sandboxToolingSection(true, runCIAccess{})
 	for _, want := range []string{
-		"`gh`", "wait_for_checks", "pull_request_status", "base_branch_status",
+		"`gh`", "`grain ci wait`", "`grain pr open`",
 		"sudo apt-get update", "command -v", "127", "&&",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt section = %q, want it to mention %q", got, want)
 		}
 	}
-	// A grain-ci run reads CI with the `grain` CLI: its MCP roster has no
-	// CI tools (design/design/sandbox-first-agent-surface.design.md §6).
-	got = sandboxToolingSection(true, true)
-	for _, want := range []string{"`gh`", "`grain ci wait`", "`grain pr status`", "`grain pr base-status`"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("grain-ci prompt section = %q, want it to mention %q", got, want)
+	for _, unwanted := range []string{"wait_for_checks", "pull_request_status", "base_branch_status", "`grain pr status`"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("prompt section = %q names %s, which this run cannot use", got, unwanted)
 		}
 	}
-	if strings.Contains(got, "wait_for_checks") {
-		t.Errorf("grain-ci prompt section = %q names wait_for_checks, which its roster does not serve", got)
+	// A grain-ci run, and a GitHub-CI run holding ci:read on its
+	// repository, read CI with the `grain` CLI.
+	for _, access := range []runCIAccess{{grainCI: true, read: true}, {read: true}} {
+		got = sandboxToolingSection(true, access)
+		for _, want := range []string{"`gh`", "`grain ci wait`", "`grain pr status`", "`grain pr base-status`"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%+v prompt section = %q, want it to mention %q", access, got, want)
+			}
+		}
+		if strings.Contains(got, "wait_for_checks") {
+			t.Errorf("%+v prompt section = %q names wait_for_checks", access, got)
+		}
 	}
 }
 
@@ -334,7 +344,7 @@ func TestSandboxToolingSectionNamesTheAbsencesAndTheirSubstitutes(t *testing.T) 
 // hold for every run in one.
 func TestSandboxToolingSectionSkipsTheCITalkForATaskWithNoRepo(t *testing.T) {
 	t.Parallel()
-	got := sandboxToolingSection(false, false)
+	got := sandboxToolingSection(false, runCIAccess{})
 	for _, unwanted := range []string{"`gh`", "wait_for_checks", "base_branch_status"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("prompt section = %q, want nothing about %q for a task with no repo", got, unwanted)

@@ -72,8 +72,12 @@ func TestGrainHubBlamesTheHubWhenHubIsUnreachable(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr, want)
 			}
 		}
+		// Drop the dead hub's own URL before looking for daemon blame: its
+		// ephemeral port can begin with 4242 (e.g. 127.0.0.1:42429), which
+		// would otherwise match defaultServerURL as a substring.
+		withoutHub := strings.ReplaceAll(stderr, deadHub, "<hub>")
 		for _, wrong := range []string{"daemon", defaultServerURL, "GRAIN_SERVER", "-server"} {
-			if strings.Contains(stderr, wrong) {
+			if strings.Contains(withoutHub, wrong) {
 				t.Errorf("stderr = %q, must not blame %q", stderr, wrong)
 			}
 		}

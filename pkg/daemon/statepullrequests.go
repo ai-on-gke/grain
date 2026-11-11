@@ -59,6 +59,7 @@ var (
 	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
 	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
 	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
+	_ github.GitBranchSource          = (*StateRepoPullRequestClient)(nil)
 
 	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
@@ -1513,6 +1514,19 @@ func (c *StateRepoPullRequestClient) GitOnly(owner, name string) string {
 		return src.GitOnly(owner, name)
 	}
 	return ""
+}
+
+// GitBranchExists is the wrapped client's own (github.GitBranchSource):
+// a branch on a host with no forge API, read over git. The native config
+// repository is answered by BranchExists instead.
+func (c *StateRepoPullRequestClient) GitBranchExists(owner, name, branch string) (bool, bool, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return false, false, nil
+	}
+	if src, ok := c.Client.(github.GitBranchSource); ok {
+		return src.GitBranchExists(owner, name, branch)
+	}
+	return false, false, nil
 }
 
 // ListMatchingTags is the wrapped client's own, as ListTags is: what the

@@ -23,6 +23,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -332,6 +333,13 @@ type Task struct {
 	// replaced nothing and was replaced by nothing.
 	Supersedes   string `json:"supersedes,omitempty"`
 	SupersededBy string `json:"supersededBy,omitempty"`
+	// RolledOverFrom is the durable task this one was rolled over from,
+	// and RolledOverTo the successor this one was rolled over to --
+	// model.LinkRolledOverFrom and model.LinkRolledOverTo
+	// (design/design/durable-tasks.design.md#DT-15). RolledOverTo is the
+	// forward a reader of a closed task follows to the work's live task.
+	RolledOverFrom string `json:"rolledOverFrom,omitempty"`
+	RolledOverTo   string `json:"rolledOverTo,omitempty"`
 	// SupersedeMoved is the open dependents of the task this one
 	// superseded that now wait on this one instead
 	// (model.SupersedeResult.Moved), and SupersedeKept the ones left
@@ -382,6 +390,19 @@ type Task struct {
 	// ChangeTargetKind is the kind of non-git change this task's work is
 	// ("changelist"), or "" for a git task (model.ChangeTarget).
 	ChangeTargetKind string `json:"changeTargetKind,omitempty"`
+	// MergeGates lists each required merge gate on this task's pull request
+	// (CI, security review, configured/trigger code review, and human
+	// approval) and its current state.
+	MergeGates []model.MergeGate `json:"mergeGates,omitempty"`
+	// ReviewFindings lists any unresolved review-findings gate blocks on
+	// this task's pull request.
+	ReviewFindings []model.ReviewFindingsRecord `json:"reviewFindings,omitempty"`
+	// GateOverride is the most recent explicit merge:force gate override on
+	// this task, if any.
+	GateOverride *model.GateOverrideRecord `json:"gateOverride,omitempty"`
+	// HumanApprovedBy is who recorded a Submit approval for the current
+	// pull request head, if any.
+	HumanApprovedBy string `json:"humanApprovedBy,omitempty"`
 	// Reviewers is the person-set list of reviewer usernames for this task
 	// (model.Task.Reviewers, docs/design/changelists.md §5).
 	Reviewers []string `json:"reviewers,omitempty"`
@@ -532,6 +553,14 @@ type Task struct {
 	// straight to it (model.CommentPath), as GET /api/inbox's path does.
 	// 0 when the task is not parked.
 	QuestionCommentID int64 `json:"questionCommentId,omitempty"`
+	// UnansweredCommentFrom is who wrote the newest person's comment on an
+	// awaiting_reply task that no run has been shown yet
+	// (model.UndeliveredPersonComment), "" when there is none. A person's
+	// comment on such a task queues a run at once (reopenAcknowledgeable),
+	// so this is set only where something left one undelivered, and a row
+	// says "unanswered question from X" rather than offering the owner a
+	// plain Reply for a question that was never theirs to answer.
+	UnansweredCommentFrom string `json:"unansweredCommentFrom,omitempty"`
 	// AwaitingAccess is an awaiting_reply task parked on an access
 	// request (request_access) rather than a question: what it wants is
 	// a grant, which its card offers, not a reply.
@@ -786,6 +815,19 @@ type TaskDetail struct {
 	// agents#445: "show attempts and their status, in order, in the task
 	// view").
 	Attempts []Attempt `json:"attempts,omitempty"`
+	// OlderComments and OlderAttempts are how many comments and runs a
+	// paged read (?comments_limit=, ?attempts_limit=) left out before the
+	// ones it answered: 0 for the whole record, and for a page that
+	// reaches the start of it. Ask again with comments_before= the first
+	// answered comment's id (or attempts_before= the first answered run's
+	// number) for the page before.
+	OlderComments int `json:"olderComments,omitempty"`
+	OlderAttempts int `json:"olderAttempts,omitempty"`
+	// CompactedThrough is model.TaskContext.CompactedThrough: the last
+	// comment id folded into this task's compaction handover, or 0 for a
+	// task never compacted. Comments at or before it remain in the record
+	// and are collapsed under the handover on the task page (DT-15).
+	CompactedThrough int64 `json:"compactedThrough,omitempty"`
 	// Usage is every attempt's Usage summed: what the task has spent at
 	// its providers so far. Nil when no attempt reported any.
 	Usage *TaskUsage `json:"usage,omitempty"`
@@ -1310,6 +1352,12 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		if l.Kind == model.LinkSupersededBy {
 			out.SupersededBy = l.Target
 		}
+		if l.Kind == model.LinkRolledOverFrom {
+			out.RolledOverFrom = l.Target
+		}
+		if l.Kind == model.LinkRolledOverTo {
+			out.RolledOverTo = l.Target
+		}
 		if l.Kind == model.LinkReverts {
 			out.Reverts = l.Target
 		}
@@ -1348,7 +1396,24 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		if l.Kind.Blocks() && targetStates[l.Target] != model.StateClosed && !slices.Contains(out.BlockedBy, l.Target) {
 			out.BlockedBy = append(out.BlockedBy, l.Target)
 		}
+		if l.Kind == model.LinkHumanSubmitted {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		} else if l.Kind == model.LinkHumanApproved && out.HumanApprovedBy == "" {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		}
 	}
+	out.ReviewFindings = model.ReviewFindings(t)
+	if ov, ok := model.LatestGateOverride(t); ok {
+		out.GateOverride = &ov
+	}
+	synthObs := &model.Observation{
+		MergeQueueBlockedAt: mergeQueueBlockedAt,
+		MergeQueueState:     mergeQueue.State,
+		MergeQueueNote:      mergeQueue.Note,
+		PrMergedAt:          span.PrMergedAt,
+		PrClosedAt:          span.PrClosedAt,
+	}
+	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
 	return out
@@ -2574,29 +2639,46 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	body, etag, err := s.taskDetails.response(r.Context(), s.tasks, id)
+	q := r.URL.Query()
+	page, paged, err := parseTaskPage(q)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
 	// ?comments_since= (external-cli spec #XC-18) is a polling loop's
 	// cursor: the same detail, with only the conversation items written
-	// strictly after it. Never answered 304 -- the cached ETag is the
-	// whole detail's.
-	if raw := strings.TrimSpace(r.URL.Query().Get("comments_since")); raw != "" {
+	// strictly after it. Built from the store rather than the whole cached
+	// detail, and never answered 304.
+	if raw := strings.TrimSpace(q.Get("comments_since")); raw != "" {
 		since, perr := time.Parse(time.RFC3339Nano, raw)
 		if perr != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("comments_since %q is not an RFC 3339 time", raw))
 			return
 		}
-		var detail TaskDetail
-		if err := json.Unmarshal(body, &detail); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+		detail, err := s.tasks.GetTaskSince(r.Context(), id, since, page, paged)
+		if err != nil {
+			writeClientError(w, err)
 			return
 		}
-		detail.Comments = commentsAfter(detail.Comments, since)
 		w.Header().Set("Cache-Control", "no-cache")
 		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	// ?comments_before= / ?attempts_before= fetch an older slice on demand
+	// directly from the store without evicting open panes from taskDetailCache.
+	if paged && (page.CommentsBefore > 0 || page.AttemptsBefore > 0) {
+		detail, err := s.tasks.GetTaskPage(r.Context(), id, page)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	body, etag, err := s.taskDetails.responseFor(r.Context(), s.tasks, id, page, paged)
+	if err != nil {
+		writeClientError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
@@ -2953,6 +3035,21 @@ type addCommentRequest struct {
 	Attachments []AttachmentUpload `json:"attachments"`
 	Author      string             `json:"author,omitempty"`
 	Reviewers   *[]string          `json:"reviewers,omitempty"`
+	// Reopen asks for a closed task to be reopened along with the
+	// comment -- the UI's "Reopen and send" -- so the reopen queues the
+	// run that answers it (Client.AddCommentReopening). Held to whether
+	// the caller may reopen the task, as POST /api/tasks/{id}/reopen is.
+	// Ignored on a task that is not closed.
+	Reopen bool `json:"reopen,omitempty"`
+}
+
+// commentResponse is POST /api/tasks/{id}/comments' answer: the task as
+// it stands after the comment and, for one left on a task that is still
+// closed, CommentDelivery and Notice saying it reached no agent.
+type commentResponse struct {
+	Task
+	CommentDelivery string `json:"commentDelivery,omitempty"`
+	Notice          string `json:"notice,omitempty"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -2963,20 +3060,65 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
+	if req.Reopen {
+		if err := mayReopen(r); err != nil {
+			writeError(w, agentRefusalStatus(err), err)
+			return
+		}
+	}
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {
 			writeClientError(w, err)
 			return
 		}
 	}
-	if err := s.tasks.AddCommentWithAuthor(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
+	add := s.tasks.AddCommentWithAuthor
+	if req.Reopen {
+		add = s.tasks.AddCommentReopening
+	}
+	if err := add(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
 		writeClientError(w, err)
 		return
 	}
 	// Best effort: the comment is written, and a zone that failed to
 	// stick costs the next run only the time of day it is told.
 	_ = s.tasks.noteRequesterTimeZone(r.Context(), id, requestTimeZone(r))
-	s.respondWithTask(w, r, id)
+	task, err := s.tasks.Task(r.Context(), id)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	resp := commentResponse{Task: task}
+	if task.State == model.StateClosed {
+		resp.CommentDelivery = CommentNotDelivered
+		resp.Notice = CommentNotDeliveredNotice
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// mayReopen refuses an agent's comment a reopen: what an agent says
+// never sends a task to the queue, and a run may not reopen its own task
+// (selfMutableTaskRoutes), so the reopen would be one it could not make.
+// A person's role is asked about the reopen with the comment's own
+// (authorizeRoleCall's commentAsksReopen).
+func mayReopen(r *http.Request) error {
+	if _, ok := agentCallFromContext(r.Context()); ok {
+		return errors.New("an agent's comment cannot reopen a task: call POST /api/tasks/{id}/reopen separately")
+	}
+	return nil
+}
+
+// commentAsksReopen is whether a POST /api/tasks/{id}/comments body
+// carries reopen: true, read without consuming it (peekBody).
+func commentAsksReopen(r *http.Request) bool {
+	body, err := peekBody(r)
+	if err != nil || len(body) == 0 {
+		return false
+	}
+	var req struct {
+		Reopen bool `json:"reopen"`
+	}
+	return json.Unmarshal(body, &req) == nil && req.Reopen
 }
 
 // handleGetAttachment serves one attachment's raw content -- the only
@@ -3140,23 +3282,27 @@ type forceMergeRequest struct {
 	// request's head as it is when the request arrives. Either way it is
 	// for that one commit (bwsalmon/grain#2399).
 	Head string `json:"head,omitempty"`
+	// OverrideGates names each unsatisfied gate to skip under merge:force
+	// (e.g. ["security-review"]). Required whenever any review gate is
+	// unsatisfied; no default or shorthand skips a review gate.
+	OverrideGates []string `json:"overrideGates,omitempty"`
 }
 
-// handleForceMerge is the UI's own "Force merge" button, and `grain
-// force-merge`: an operator telling grain to land a change the merge
-// queue is not going to land on its own, with a reason recorded against
-// the task and the pull request. See Client.ForceMerge.
+// handleForceMerge is the UI's own "Force merge" / gate-override action, and
+// `grain force-merge`: an operator telling grain to land a change the merge
+// queue is not going to land on its own, with a reason recorded against the
+// task and the pull request. See Client.ForceMergeWithGates.
 //
 // It records the request and returns; the merge is grain's next
 // merge-queue cycle's to perform, which is what keeps grain's own state
-// consistent with what happened on GitHub. Nothing here talks to GitHub.
+// consistent with what happened on GitHub.
 func (s *Server) handleForceMerge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req forceMergeRequest
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	if err := s.tasks.ForceMerge(r.Context(), id, req.Reason, req.Head); err != nil {
+	if err := s.tasks.ForceMergeWithGates(r.Context(), id, req.Reason, req.Head, req.OverrideGates); err != nil {
 		writeClientError(w, err)
 		return
 	}
@@ -3482,13 +3628,59 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// commentsAfter is the comments created strictly after since, in order.
-func commentsAfter(comments []Comment, since time.Time) []Comment {
-	out := make([]Comment, 0, len(comments))
-	for _, c := range comments {
-		if c.CreatedAt.After(since) {
-			out = append(out, c)
-		}
+// maxTaskDetailPage is the most comments or runs one paged task detail
+// read answers.
+const maxTaskDetailPage = 500
+
+// TaskPage names a bounded slice of a task's conversation and runs on
+// GET /api/tasks/{id} (durable-tasks.design.md#DT-15).
+type TaskPage struct {
+	CommentsLimit  int
+	CommentsBefore int64
+	AttemptsLimit  int
+	AttemptsBefore int
+}
+
+// parseTaskPage parses ?comments_limit=, ?comments_before=, ?attempts_limit=
+// and ?attempts_before= on GET /api/tasks/{id}. paged is true when any of
+// those parameters was passed.
+func parseTaskPage(q url.Values) (TaskPage, bool, error) {
+	has := q.Has("comments_limit") || q.Has("comments_before") || q.Has("attempts_limit") || q.Has("attempts_before")
+	if !has {
+		return TaskPage{}, false, nil
 	}
-	return out
+	limit := func(name, raw string) (int, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > maxTaskDetailPage {
+			return 0, validationErrorf("%s must be an integer from 1 to %d", name, maxTaskDetailPage)
+		}
+		return n, nil
+	}
+	var p TaskPage
+	var err error
+	if p.CommentsLimit, err = limit("comments_limit", q.Get("comments_limit")); err != nil {
+		return TaskPage{}, false, err
+	}
+	if p.AttemptsLimit, err = limit("attempts_limit", q.Get("attempts_limit")); err != nil {
+		return TaskPage{}, false, err
+	}
+	if raw := strings.TrimSpace(q.Get("comments_before")); raw != "" {
+		before, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || before <= 0 {
+			return TaskPage{}, false, validationErrorf("comments_before must be a comment id")
+		}
+		p.CommentsBefore = before
+	}
+	if raw := strings.TrimSpace(q.Get("attempts_before")); raw != "" {
+		before, err := strconv.Atoi(raw)
+		if err != nil || before <= 0 {
+			return TaskPage{}, false, validationErrorf("attempts_before must be an attempt number")
+		}
+		p.AttemptsBefore = before
+	}
+	return p, true, nil
 }

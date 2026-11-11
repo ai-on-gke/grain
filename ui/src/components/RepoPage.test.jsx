@@ -1024,7 +1024,7 @@ describe("RepoPage", () => {
   // daemon parks that work rather than running it into a repo the list
   // no longer names -- so the confirmation is where an operator finds
   // out what the click costs. The count is the daemon's own, asked as
-  // the very save this click makes (POST /api/settings/plan with the
+  // the very save this click makes (POST /api/repos/plan with the
   // repo dropped), because this page holds none of the work behind it.
   it("says what removing the repo would strand, in the daemon's own words", async () => {
     routeApi();
@@ -1033,7 +1033,7 @@ describe("RepoPage", () => {
       "`acme/widgets` comes off this deployment's target repo list, so 2 tasks " +
       "still in play there are parked instead of dispatched.";
     api.mockImplementation((path, opts) => {
-      if (path === "/api/settings/plan")
+      if (path === "/api/repos/plan")
         return Promise.resolve({
           targetReposStranded: [
             { repo: "acme/widgets", tasks: ["t1", "t2"], summary },
@@ -1053,7 +1053,7 @@ describe("RepoPage", () => {
 
     // Planned as the save it is: this repo gone, the rest of the list
     // exactly as it stands.
-    expect(api).toHaveBeenCalledWith("/api/settings/plan", {
+    expect(api).toHaveBeenCalledWith("/api/repos/plan", {
       method: "POST",
       body: JSON.stringify({ targetRepos: ["acme/gadgets"] }),
     });
@@ -1072,7 +1072,7 @@ describe("RepoPage", () => {
     routeApi();
     const routed = api.getMockImplementation();
     api.mockImplementation((path, opts) => {
-      if (path === "/api/settings/plan")
+      if (path === "/api/repos/plan")
         return Promise.reject(new Error("not found"));
       return routed(path, opts);
     });

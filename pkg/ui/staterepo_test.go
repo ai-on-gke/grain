@@ -129,7 +129,7 @@ func (f *fakeStateRepo) File(_ context.Context, path string, limit int64) (ui.St
 	return file, nil
 }
 
-func stateRepoServer(t *testing.T, fake *fakeStateRepo) *ui.Server {
+func stateRepoServer(t *testing.T, fake ui.StateRepoManager) *ui.Server {
 	t.Helper()
 	_, client := testServer(t)
 	storeSettingsRow(t, client)
@@ -798,5 +798,73 @@ func TestExternalConfigRepoDeploymentNamesItsConfigRepoAsOwnerName(t *testing.T)
 	}
 	if got.ConfigCloneURL != "https://github.com/acme/grain-config.git" {
 		t.Errorf("GET /api/deployment configCloneURL = %q, want the remote", got.ConfigCloneURL)
+	}
+}
+
+// An exported file that carries a credential somebody typed in -- a
+// capability server header saved before saves refused one -- is shown
+// with it cut, since settings:read (grain/viewer's) reads the browser
+// (docs/security/audits/2026-11-10-credential-exposure.md).
+func TestStateRepoFileIsRedacted(t *testing.T) {
+	t.Parallel()
+	const token = "ghp_PLANTEDstateREPOtoken0123456789"
+	fake := &fakeStateRepo{files: map[string]ui.StateRepoFile{
+		"settings/capabilities.yml": {Path: "settings/capabilities.yml", Size: 60,
+			Content: "headers:\n  X-Api-Key: " + token + "\n"},
+	}}
+	srv := stateRepoServer(t, fake)
+	rec := do(t, srv, http.MethodGet, "/api/state-repo/file?path=settings%2Fcapabilities.yml", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	got := decode[ui.StateRepoFile](t, rec)
+	if strings.Contains(got.Content, token) || !strings.Contains(got.Content, "[redacted: github token]") {
+		t.Fatalf("content = %q, want the token redacted", got.Content)
+	}
+}
+
+// wrappingStateRepo is a fakeStateRepo that can also wrap its key.
+type wrappingStateRepo struct {
+	*fakeStateRepo
+	wrappedWith string
+	unwrapped   bool
+}
+
+func (f *wrappingStateRepo) WrapSecretsKey(_ context.Context, kmsKey string) (ui.SecretsKeyWrapResult, error) {
+	f.wrappedWith = kmsKey
+	return ui.SecretsKeyWrapResult{Protection: "kms", KMSKey: kmsKey, Status: ui.StateRepoStatus{SecretsKeyProtection: "kms", SecretsKMSKey: kmsKey}}, nil
+}
+
+func (f *wrappingStateRepo) UnwrapSecretsKey(context.Context) (ui.SecretsKeyWrapResult, error) {
+	f.unwrapped = true
+	return ui.SecretsKeyWrapResult{Protection: "file"}, nil
+}
+
+func TestTheSecretsKeyIsWrappedAndUnwrappedThroughTheManager(t *testing.T) {
+	t.Parallel()
+	const kmsKey = "projects/example-project/locations/us-central1/keyRings/grain/cryptoKeys/secrets-key"
+	fake := &wrappingStateRepo{fakeStateRepo: &fakeStateRepo{}}
+	srv := stateRepoServer(t, fake)
+	if rec := do(t, srv, http.MethodPost, "/api/state-repo/secrets-key/wrap", `{"kmsKey":"  "}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("wrap with no key: status %d: %s", rec.Code, rec.Body)
+	}
+	rec := do(t, srv, http.MethodPost, "/api/state-repo/secrets-key/wrap", `{"kmsKey":"`+kmsKey+`"}`)
+	if rec.Code != http.StatusOK || fake.wrappedWith != kmsKey {
+		t.Fatalf("wrap: status %d, manager got %q: %s", rec.Code, fake.wrappedWith, rec.Body)
+	}
+	if got := decode[ui.SecretsKeyWrapResult](t, rec); got.Status.SecretsKMSKey != kmsKey || !got.Status.Available {
+		t.Fatalf("wrap answered %+v", got)
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/state-repo/secrets-key/unwrap", `{}`); rec.Code != http.StatusOK || !fake.unwrapped {
+		t.Fatalf("unwrap: status %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestWrappingIsNotImplementedByAManagerThatCannot(t *testing.T) {
+	t.Parallel()
+	rec := do(t, stateRepoServer(t, &fakeStateRepo{}), http.MethodPost, "/api/state-repo/secrets-key/wrap",
+		`{"kmsKey":"projects/p/locations/l/keyRings/r/cryptoKeys/k"}`)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 }

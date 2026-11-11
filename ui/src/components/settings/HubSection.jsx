@@ -79,7 +79,8 @@ export default function HubSection({ s }) {
     readOnly,
   } = s;
 
-  const reg = settings.registry || {};
+  const reg = settings.hub || settings.registry || {};
+  const tokenSet = Boolean(settings.hubTokenSet ?? settings.registryTokenSet);
   const authMode = reg.authMode || "token";
   const rules = Array.isArray(reg.scopes) ? reg.scopes : [];
   const locked = Boolean(readOnly) || Boolean(s.configLocked);
@@ -103,20 +104,14 @@ export default function HubSection({ s }) {
 
   useEffect(() => {
     loadSnapshot();
-  }, [
-    loadSnapshot,
-    reg.url,
-    reg.entry,
-    reg.authMode,
-    settings.registryTokenSet,
-  ]);
+  }, [loadSnapshot, reg.url, reg.entry, reg.authMode, tokenSet]);
 
   const updateRegistry = (patch) => {
     const next = {
       ...reg,
       ...patch,
     };
-    saveChoice({ registry: next });
+    saveChoice({ hub: next });
   };
 
   const onRegistryTextBlur = (field) => (evt) => {
@@ -397,7 +392,12 @@ export default function HubSection({ s }) {
               fullWidth
             >
               <MenuItem value="">
-                Auto-detect ({snapshot?.effectiveHostKind || "workstation"})
+                {/* The effective kind is the chosen one while a kind is
+                  chosen, so it says nothing about what Auto-detect would
+                  pick then. */}
+                {!reg.hostKind && snapshot?.effectiveHostKind
+                  ? `Auto-detect (${snapshot.effectiveHostKind})`
+                  : "Auto-detect"}
               </MenuItem>
               <MenuItem value="workstation">Workstation</MenuItem>
               <MenuItem value="kubernetes">Kubernetes</MenuItem>
@@ -454,7 +454,12 @@ export default function HubSection({ s }) {
               <Checkbox
                 name="registryListed"
                 data-setting-id="registryListed"
-                checked={reg.listed !== false}
+                // Unset is unlisted: the daemon registers an entry with
+                // listed only when this is true, and a saved false is
+                // omitted from the settings (2026-11-11 walkthrough: the
+                // box showed ticked for an unlisted grain, and unticking
+                // it came back ticked).
+                checked={reg.listed === true}
                 onChange={(evt) =>
                   updateRegistry({ listed: evt.target.checked })
                 }
@@ -487,7 +492,7 @@ export default function HubSection({ s }) {
             name: "Registration token (grc_…)",
             secret: "registry-registration-token",
             key: "value",
-            set: Boolean(settings.registryTokenSet),
+            set: tokenSet,
           }}
           showError={showError || (() => {})}
           onChanged={handleSecretChanged}

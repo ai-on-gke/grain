@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +27,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
-	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // attributedRoute is one write path's row in operator-attribution spec
@@ -74,6 +71,18 @@ func fileTask(approved bool) func(*testing.T, *ui.Client, sender) string {
 		}
 		return task.ID
 	}
+}
+
+// fileDurableTask is an approved durable task: what
+// POST /api/tasks/{id}/rollover rolls over.
+func fileDurableTask(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	task, err := client.CreateTask(context.Background(), ui.CreateTaskRequest{Title: "attributed", Approved: true,
+		NoRepo: true, Admission: string(model.AdmissionDurable)})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	return task.ID
 }
 
 // taskParkedOnQuestion is a task whose run parked it on a question
@@ -363,27 +372,6 @@ func ciClient(t *testing.T) *ui.Client {
 	return client
 }
 
-// imageSourceClient is testClient's deployment on the image upgrade
-// pipeline, whose image source an operator may still change.
-func imageSourceClient(t *testing.T) *ui.Client {
-	t.Helper()
-	client, _, _ := testClient(t)
-	dir := t.TempDir()
-	refFile := filepath.Join(dir, "image-ref")
-	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/acme/grain:main\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	client.Config.Upgrader = upgrade.New(upgrade.Config{
-		StatusFile: filepath.Join(dir, "upgrade-status.json"),
-		Image: &upgrade.ImageConfig{
-			Repository:         "ghcr.io/acme/grain",
-			RefFile:            refFile,
-			SourceOverrideFile: filepath.Join(dir, "upgrade-image-source.json"),
-		},
-	})
-	return client
-}
-
 // cancelledBy is who the fake runner's last cancel was asked for by.
 func cancelledBy(t *testing.T, _ context.Context, client *ui.Client, _, _ string) model.Principal {
 	t.Helper()
@@ -409,6 +397,11 @@ var attributedRoutes = map[string]attributedRoute{
 		body:        `{"pr":"acme/widgets#7","design":true}`,
 		agentGrants: []string{"api:tasks:write", "api:repos:read"},
 		recorded:    adoptedFor,
+	},
+	"POST /api/pull-requests/submit": {
+		setup:    taskWithPullRequest,
+		body:     `{"pr":"acme/widgets#42"}`,
+		recorded: noted(model.TaskEventSubmitted),
 	},
 	"POST /api/tasks": {
 		body:        `{"title":"filed","noRepo":true}`,
@@ -463,6 +456,11 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/close": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
+		recorded:    lastEvent,
+	},
+	"POST /api/tasks/{id}/rollover": {
+		setup:       fileDurableTask,
+		agentGrants: []string{"api:dispatch:write"},
 		recorded:    lastEvent,
 	},
 	"POST /api/tasks/{id}/reopen": {
@@ -604,14 +602,6 @@ var attributedRoutes = map[string]attributedRoute{
 		path:     "/api/ci/runs/run-7",
 		bareID:   true,
 		recorded: cancelledBy,
-	},
-	// Where image upgrades come from: an override in a file of the
-	// upgrader's, so the handler writes the config_audit row itself.
-	"PUT /api/upgrade/source": {
-		client:      imageSourceClient,
-		body:        `{"mode":"registry"}`,
-		agentGrants: []string{"api:deployment-ops"},
-		recorded:    lastConfigAudit,
 	},
 	"PUT /api/memory": {
 		body:        `{"text":"remember this"}`,
@@ -845,6 +835,7 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/deployment/git-connections/check":         true,
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
+	"POST /api/repos/plan":                               true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
@@ -940,6 +931,8 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/state-repo/remote":                                          true,
 	"POST /api/state-repo/reset-notice":                                    true,
 	"POST /api/state-repo/secrets-key":                                     true,
+	"POST /api/state-repo/secrets-key/unwrap":                              true,
+	"POST /api/state-repo/secrets-key/wrap":                                true,
 	"POST /api/state-repo/secrets-repo":                                    true,
 	"POST /api/state-repo/sync":                                            true,
 	"POST /api/suite-runs":                                                 true,
@@ -969,6 +962,8 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/wait":          true,
 	"POST /api/tasks/{id}/messages":                                        true,
 	"POST /api/tasks/{id}/notes":                                           true,
+	"POST /api/tasks/{id}/compact":                                         true,
+	"POST /api/tasks/{id}/brief":                                           true,
 	"POST /api/tasks/{id}/notify":                                          true,
 	"POST /api/tasks/{id}/pull-request":                                    true,
 	"POST /api/tasks/{id}/resume":                                          true,

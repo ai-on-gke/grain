@@ -336,6 +336,13 @@ type Transition struct {
 // because task_ready never selects a failed task, so the streak that
 // tripped StateFailed can never grow past the run that tripped it.
 func Transitions(task Task, obs *Observation, runs []Run, streak *FailureStreak, askedAt *time.Time) []Transition {
+	return TransitionsWindow(task, obs, runs, runs, streak, askedAt)
+}
+
+// TransitionsWindow is Transitions over a bounded page of runs (runs, oldest
+// first), using tailRuns (the task's newest runs, e.g. Store.LatestRunsForState)
+// to judge whether a run is currently active and when the latest run finished.
+func TransitionsWindow(task Task, obs *Observation, runs []Run, tailRuns []Run, streak *FailureStreak, askedAt *time.Time) []Transition {
 	var out []Transition
 	add := func(s State, at *time.Time) {
 		if at != nil {
@@ -380,12 +387,10 @@ func Transitions(task Task, obs *Observation, runs []Run, streak *FailureStreak,
 		out = append(out, Transition{State: StateQueued, At: finished, Inferred: true})
 	}
 
-	activeRun := false
 	for i := range runs {
 		r := &runs[i]
 		add(StateRunning, &r.StartedAt)
 		if r.FinishedAt == nil {
-			activeRun = true
 			continue
 		}
 		// An attempt that was not the last one proves the task queued
@@ -398,13 +403,34 @@ func Transitions(task Task, obs *Observation, runs []Run, streak *FailureStreak,
 		}
 	}
 
+	activeRun := false
+	var lastTailFinished *time.Time
+	for i := range tailRuns {
+		if tailRuns[i].FinishedAt == nil {
+			activeRun = true
+			continue
+		}
+		lastTailFinished = latest(lastTailFinished, tailRuns[i].FinishedAt)
+	}
+	// If runs was an older slice (its last attempt predates tailRuns' latest),
+	// the last run in runs also requeued before the next attempt started.
+	if len(runs) > 0 && len(tailRuns) > 0 {
+		lastInPage := runs[len(runs)-1]
+		maxTailAttempt := tailRuns[len(tailRuns)-1].Attempt
+		if lastInPage.FinishedAt != nil && lastInPage.Attempt < maxTailAttempt {
+			requeue(*lastInPage.FinishedAt, nil)
+		}
+	}
+
 	failureCount := 0
 	if streak != nil {
 		failureCount = streak.Count
 	}
-	if current := StateOf(task, obs, activeRun, failureCount); current == StateQueued && len(runs) > 0 {
-		if last := runs[len(runs)-1].FinishedAt; last != nil {
-			requeue(*last, nil)
+	if current := StateOf(task, obs, activeRun, failureCount); current == StateQueued && lastTailFinished != nil {
+		// Only emit the trailing requeue when runs reaches the end of tailRuns
+		// (avoiding a duplicate when runs was an older slice above).
+		if len(runs) == 0 || runs[len(runs)-1].Attempt >= tailRuns[len(tailRuns)-1].Attempt {
+			requeue(*lastTailFinished, nil)
 		}
 	}
 

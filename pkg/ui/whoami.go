@@ -16,6 +16,7 @@ package ui
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,6 +116,9 @@ type ConfigAuditView struct {
 // maxConfigAudit bounds one read of GET /api/deployment/config-audit.
 const maxConfigAudit = 500
 
+// configAuditKey names a config audit row for paging (pageOfBy) by its id.
+func configAuditKey(v ConfigAuditView) string { return strconv.FormatInt(v.ID, 10) }
+
 func (s *Server) handleGetConfigAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	list, err := parseListQuery(r, listPageLarge)
@@ -156,5 +160,5 @@ func (s *Server) handleGetConfigAudit(w http.ResponseWriter, r *http.Request) {
 			out = append(out, view)
 		}
 	}
-	writeList(w, out, list)
+	writeListBy(w, out, list, configAuditKey)
 }

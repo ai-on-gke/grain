@@ -23,6 +23,7 @@ package githubsim
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -282,5 +283,66 @@ func TestHandlerServesTheSimOverHTTP(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotImplemented {
 		t.Fatalf("an endpoint the sim has no answer for: %d, want 501", resp.StatusCode)
+	}
+}
+
+func TestCompleteWorkflowRunFinishesTheDispatchedRunWithItsConclusionAndLog(t *testing.T) {
+	sim, sha := releaseSim(t)
+	// A workflow the repository has but has never run: its first dispatch's
+	// run is still listed under it, as GitHub lists it.
+	sim.WorkflowFiles = []string{"promote-release.yml"}
+	finished := time.Date(2026, 11, 10, 11, 30, 0, 0, time.UTC)
+	sim.Now = func() time.Time { return finished }
+	resp, err := sim.Request("POST", "/repos/acme/widgets/actions/workflows/promote-release.yml/dispatches", nil,
+		[]byte(`{"ref":"main","inputs":{"version":"v2.9.1","decision":"approve"}}`))
+	if err != nil || resp.Status != 204 {
+		t.Fatalf("dispatch: %d %s %v", resp.Status, resp.Body, err)
+	}
+	id := sim.Dispatches[0].RunID
+	resp, _ = sim.Request("GET", "/repos/acme/widgets/actions/workflows/promote-release.yml/runs?branch=main", nil, nil)
+	var listed struct {
+		WorkflowRuns []struct {
+			ID   int64  `json:"id"`
+			Path string `json:"path"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(resp.Body, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.WorkflowRuns) != 1 || listed.WorkflowRuns[0].ID != id || listed.WorkflowRuns[0].Path != ".github/workflows/promote-release.yml" {
+		t.Fatalf("promote-release.yml's runs after its first dispatch: %s", resp.Body)
+	}
+	refusal := "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set"
+	run, err := sim.CompleteWorkflowRun(id, "failure", []WorkflowJob{{Name: "approve the pending release", Log: refusal + "\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.ID != id || run.Event != "workflow_dispatch" || run.HeadBranch != "main" || run.HeadSHA != sha ||
+		run.Status != "completed" || run.Conclusion != "failure" || !run.UpdatedAt.Equal(finished) {
+		t.Fatalf("completed run: %+v", run)
+	}
+	resp, _ = sim.Request("GET", fmt.Sprintf("/repos/acme/widgets/actions/runs/%d/jobs", id), nil, nil)
+	var jobs struct {
+		Jobs []struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			Conclusion string `json:"conclusion"`
+		} `json:"jobs"`
+	}
+	if err := json.Unmarshal(resp.Body, &jobs); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.Jobs) != 1 || jobs.Jobs[0].Conclusion != "failure" || jobs.Jobs[0].Name != "approve the pending release" {
+		t.Fatalf("jobs: %s", resp.Body)
+	}
+	resp, _ = sim.Request("GET", fmt.Sprintf("/repos/acme/widgets/actions/jobs/%d/logs", jobs.Jobs[0].ID), nil, nil)
+	if !strings.Contains(string(resp.Body), refusal) {
+		t.Fatalf("job log: %d %s", resp.Status, resp.Body)
+	}
+	if _, err := sim.CompleteWorkflowRun(id, "success", nil); !errors.Is(err, ErrWorkflowRunCompleted) {
+		t.Fatalf("completing it again: %v", err)
+	}
+	if _, err := sim.CompleteWorkflowRun(1, "failure", nil); !errors.Is(err, ErrWorkflowRunNotFound) {
+		t.Fatalf("completing no run: %v", err)
 	}
 }

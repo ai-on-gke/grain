@@ -369,6 +369,18 @@ func (s *sandboxRecreation) recreate(ctx context.Context) (SandboxRecreation, er
 	return out, nil
 }
 
+// mintSandboxTokenFor returns a per-sandbox mint callback bound to (taskID, attempt)
+// when Deps.MintSandboxGrant is set, falling back to Deps.MintSandboxToken so a
+// rebuilt sandbox never downgrades its attempt-bound token to an unbound one.
+func mintSandboxTokenFor(deps Deps, taskID string, attempt int) func(string) (string, error) {
+	if deps.MintSandboxGrant != nil {
+		return func(sandbox string) (string, error) {
+			return deps.MintSandboxGrant(sandbox, taskID, attempt)
+		}
+	}
+	return deps.MintSandboxToken
+}
+
 // restoreGitCredentials mints this sandbox's proxy token again and
 // writes it back -- the same pair runOne does before a run's first
 // touch of the proxy, repeated because the credential file lived in the

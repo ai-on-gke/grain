@@ -323,6 +323,7 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 		{http.MethodPatch, "/api/tasks/2", `{"autoApproveProposals":true}`},
 		{http.MethodPatch, "/api/tasks/2", `{"auto_approve_proposals":true}`},
 		{http.MethodPost, "/api/tasks/2/submit", `{}`},
+		{http.MethodPost, "/api/pull-requests/submit", `{"pr":"acme/widgets#2"}`},
 		// Mailing a CL and publishing its replies are a person's.
 		{http.MethodPost, "/api/tasks/2/change-mail", `{"reviewers":["alice"]}`},
 		{http.MethodPost, "/api/tasks/2/change-publish", `{}`},
@@ -534,7 +535,11 @@ func TestAgentAPIChildNotesItsDirector(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(comments, func(c model.Comment) bool {
-		return c.Body == "finished the check" && c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
+		// The director holds grants its child does not, so the note
+		// arrives marked as untrusted agent input (agentCrossTaskRail).
+		return strings.HasSuffix(c.Body, "finished the check") &&
+			strings.HasPrefix(c.Body, "[Untrusted agent input: task 101 ") &&
+			c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
 	}) {
 		t.Errorf("director comments = %+v, want the child's note", comments)
 	}

@@ -111,11 +111,23 @@ func (s *Store) RunCapabilityAudit(ctx context.Context, taskID string, attempt i
 // attempts has, by attempt number -- what a task's detail carries, the
 // records themselves being their own fetch.
 func (s *Store) RunCapabilityAuditCounts(ctx context.Context, taskID string) (map[int]int, error) {
+	return s.RunCapabilityAuditCountsInRange(ctx, taskID, 0, 0)
+}
+
+// RunCapabilityAuditCountsInRange is RunCapabilityAuditCounts bounded to
+// attempts [minAttempt, maxAttempt] when maxAttempt > 0.
+func (s *Store) RunCapabilityAuditCountsInRange(ctx context.Context, taskID string, minAttempt, maxAttempt int) (map[int]int, error) {
 	out := map[int]int{}
+	where := "WHERE r.`task_id` = ?"
+	args := []any{taskID}
+	if maxAttempt > 0 {
+		where += " AND r.`attempt` >= ? AND r.`attempt` <= ?"
+		args = append(args, minAttempt, maxAttempt)
+	}
 	err := each(ctx, s.db,
 		"SELECT r.`attempt`, COUNT(*) FROM `task_run_capability_audit` a JOIN `task_run` r ON r.`id` = a.`run_id` "+
-			"WHERE r.`task_id` = ? GROUP BY r.`attempt`",
-		[]any{taskID},
+			where+" GROUP BY r.`attempt`",
+		args,
 		func(rows *sql.Rows) error {
 			var attempt, n int
 			if err := rows.Scan(&attempt, &n); err != nil {

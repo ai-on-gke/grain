@@ -164,11 +164,11 @@ func (s *Store) ComposeTriggerTask(ctx context.Context, templateID string, repo 
 	}
 	comp.CustomFields = fields
 	if comp.Target != nil {
-		usesGrainCI, err := querierRepoUsesGrainCI(ctx, s.db, *comp.Target)
+		ciDefaults, err := querierRepoCIDefaults(ctx, s.db, *comp.Target)
 		if err != nil {
 			return Composition{}, nil, err
 		}
-		applyGrainCIGrant(&comp, usesGrainCI)
+		applyRepoCIGrants(&comp, ciDefaults)
 	}
 	return comp, tmpl, nil
 }

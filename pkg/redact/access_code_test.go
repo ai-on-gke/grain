@@ -56,3 +56,26 @@ func TestTextRedactsBareExternalAgentToken(t *testing.T) {
 		t.Errorf("Text(%q) = %q, %d; want [redacted: external agent token] with n=2", line, got, n)
 	}
 }
+
+// A bare access code, the grain-local-<hex> token before it, and the
+// secrets store's private key are cut by shape, so `cat local-api-token`
+// or `cat secrets.key` in a transcript, a log or a console never shows
+// one even on a host whose redactor was built without them.
+func TestTextRedactsBareGrainCredentials(t *testing.T) {
+	code := "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
+	legacy := "grain-local-0123456789abcdef0123456789abcdef"
+	key := "grain-secret-key-v1:q83vEjRWeJq83vEjRWeJq83vEjRWeJq83vEjRWeJq80="
+	text := "code " + code + "\nlegacy " + legacy + "\nkey " + key + "\nsha 3f786850e387550fdab836ed7e6dc881de23001b\n"
+	got, n := (*redact.Redactor)(nil).Text(text)
+	for _, leaked := range []string{code, "ABCD-EFGH", legacy, key, "q83vEjRWeJ"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("Text left %q in:\n%s", leaked, got)
+		}
+	}
+	if n != 3 {
+		t.Errorf("Text counted %d redactions, want 3:\n%s", n, got)
+	}
+	if !strings.Contains(got, "3f786850e387550fdab836ed7e6dc881de23001b") {
+		t.Errorf("Text redacted a git SHA:\n%s", got)
+	}
+}

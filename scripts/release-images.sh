@@ -1425,7 +1425,7 @@ esac
 # cosign itself, from the Go module proxy when this sandbox has none:
 # pinned, so what signs a release is a version somebody chose. The
 # sandbox already has Go -- the guest build needs it.
-cosign_version="${COSIGN_VERSION:-v2.4.1}"
+cosign_version="${COSIGN_VERSION:-v2.6.5}"
 ensure_cosign() {
   command -v cosign >/dev/null 2>&1 && return 0
   echo "release-images.sh: installing cosign $cosign_version"
@@ -1464,7 +1464,8 @@ sign_image() {
     if COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
       registry_env cosign sign --yes --key "$signing_key" --tlog-upload=false "$digest_ref"; then
       echo "release-images.sh: signed $digest_ref ($image)"
-      return 0
+      attest_reviewed_merge "$digest_ref"
+      return
     fi
     if [ "$attempt" -lt 3 ]; then
       sleep $((20 * attempt))
@@ -1474,8 +1475,90 @@ sign_image() {
   return 1
 }
 
+# Whether $commit reached the release branches through a reviewed merge
+# (pkg/reviewedmerge, cmd/reviewed-merge;
+# docs/security/audits/2026-11-10-insider-risk.md, finding 3): the merge
+# commit of a pull request merged into main or release/v*, either by grain
+# -- one of $GRAIN_MERGE_LOGINS, the forge logins grain merges as, which
+# only grain's credential is and which merges only once grain's holds have
+# let a change go -- or with the forge's review record, an approval by an
+# owner, member or collaborator other than its author of the head that
+# was merged. So is every first-parent commit between $commit and the one
+# this branch's published grain image was built from, since a reviewed merge on top of an
+# unreviewed one carries it into the release too. Where that image is not
+# an ancestor of $commit (a branch with nothing published yet, such as a
+# new release/v*) the chain runs from where $commit's history leaves
+# main's: checking a release branch's tip alone would let a reviewed merge
+# on top of commits pushed onto that branch carry them in. A commit on
+# main itself with no ancestor published (an on-demand build of a
+# superseded commit) is checked alone: a newer published image was
+# checked with its own chain.
+#
+# Sets reviewed_merge_record to the record's file, which sign_image attests
+# onto each image it signs, as the image's provenance of how its commit
+# was reviewed. Refuses (returns 1) a commit that is not, or one whose
+# records cannot be read: the forge is read with $GITHUB_TOKEN, which needs
+# pull-requests: read. REQUIRE_REVIEWED_MERGE=false skips the check, says
+# so, and publishes the images with no record.
+#
+# This runs from the commit it checks, so a commit that also rewrote this
+# function gets past it. It stops an unreviewed commit being published by
+# a release that was not tampered with; what holds against one that was is
+# the same check made by the deployment before it upgrades
+# (-upgrade-reviewed-merge-repo, pkg/upgrade/reviewed.go), which runs
+# nothing from the commit to decide.
+reviewed_merge_record=""
+check_reviewed_merge() {
+  local since="" held out
+  case "${REQUIRE_REVIEWED_MERGE:-true}" in
+    0 | [Ff]alse | FALSE | [Nn]o | NO)
+      echo "release-images.sh: WARNING: REQUIRE_REVIEWED_MERGE=false, so $short is published without checking that it reached $GRAIN_CI_REF through a reviewed merge"
+      return 0
+      ;;
+  esac
+  held="$(image_revision "$root/grain:$branch")"
+  if [[ "$held" =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$held" "$commit" 2>/dev/null; then
+    since="$held"
+  else
+    since="$(git merge-base "$commit" refs/remotes/origin/main 2>/dev/null || true)"
+    [ "$since" != "$commit" ] || since=""
+  fi
+  out="${TMPDIR:-/tmp}/reviewed-merge-$short.json"
+  if ! go run ./cmd/reviewed-merge -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
+      -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" >"$out"; then
+    echo "release-images.sh: refusing to publish $short: it did not reach $GRAIN_CI_REF through a reviewed merge (above)" >&2
+    return 1
+  fi
+  echo "release-images.sh: $short reached $GRAIN_CI_REF through reviewed merges${since:+ since ${since:0:7}}: $(cat "$out")"
+  reviewed_merge_record="$out"
+}
+
+# Attest $reviewed_merge_record onto $1 (`repo@sha256:...`) with the
+# release key, as an in-toto statement whose predicate is the record.
+attest_reviewed_merge() {
+  local digest_ref="$1" attempt
+  [ -n "$reviewed_merge_record" ] || return 0
+  for attempt in 1 2 3; do
+    if COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
+      registry_env cosign attest --yes --key "$signing_key" --tlog-upload=false \
+        --type "https://github.com/ai-on-gke/grain/reviewed-merge/v1" \
+        --predicate "$reviewed_merge_record" "$digest_ref"; then
+      echo "release-images.sh: attested the reviewed-merge record onto $digest_ref"
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((20 * attempt))
+    fi
+  done
+  echo "could not attest the reviewed-merge record onto $digest_ref in three attempts" >&2
+  return 1
+}
+
 publish_images() {
   ensure_direct_registry_route "$registry"
+  # Nothing is signed, attested or tagged for a commit that did not reach
+  # the branch through a reviewed merge.
+  check_reviewed_merge || return 1
   # The two sandbox images' sha- tags were published by the build, which
   # had to have their digests to stamp into the grain image. They are
   # signed here, by those digests, now that the release's suites have

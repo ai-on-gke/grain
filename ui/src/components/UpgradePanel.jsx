@@ -28,12 +28,14 @@ import {
   DialogTitle,
   FormControlLabel,
   LinearProgress,
+  Link,
   MenuItem,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import { readNumberBox } from "../numberBox.js";
 import GrainMark from "./GrainMark.jsx";
 import UpgradeReleaseNotes from "./UpgradeReleaseNotes.jsx";
 import {
@@ -583,6 +585,50 @@ function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
   );
 }
 
+// UpgradeNotices are GET /api/upgrade's notices: what the edition has to
+// tell the operator about how this deployment upgrades
+// (upgrade.RegisterNotice), each a warning with the command that fixes
+// it. Drawn above everything else, whether or not this deployment can
+// upgrade itself, since a notice is often about why it cannot.
+function UpgradeNotices({ notices }) {
+  if (!notices?.length) return null;
+  return notices.map((notice, i) => (
+    <Alert
+      key={`${notice.kind}-${i}`}
+      severity="warning"
+      data-testid="upgrade-notice"
+      sx={{
+        mb: 2,
+        "& .MuiAlert-message": { minWidth: 0, overflowWrap: "anywhere" },
+      }}
+    >
+      {notice.message}
+      {notice.command && (
+        <Box sx={{ mt: 0.5 }}>
+          Run{" "}
+          <Box component="code" data-testid="upgrade-notice-command">
+            {notice.command}
+          </Box>
+          .
+        </Box>
+      )}
+      {notice.docsUrl && (
+        <Box sx={{ mt: 0.5 }}>
+          <Link
+            href={notice.docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            color="inherit"
+            underline="always"
+          >
+            Docs
+          </Link>
+        </Box>
+      )}
+    </Alert>
+  ));
+}
+
 // RetractedReleaseAlert says the promoted release this deployment runs has
 // been retracted (<running>-retracted in the registry; scripts/
 // release-from-trunk.sh rollback, design/playbook/releases.playbook.md
@@ -840,6 +886,92 @@ export function resolvedImage(image, repo, branch) {
   return `${from}:${tagForBranch(target)}`;
 }
 
+// EditionSwitchDialog is the confirmation an edition switch always
+// gets before it starts: from which edition to which, the image, and
+// what is lost (GET /api/upgrade's editionSwitchLosses) -- named here
+// rather than left to a general warning, because the cost of a switch
+// pressed by mistake is a deployment without its edition until
+// somebody upgrades back.
+function EditionSwitchDialog({ open, status, image, onClose, onConfirm }) {
+  if (!status) return null;
+  const repo = repositoryOfImage(image);
+  const to = (status.otherEditionImageRepos || []).find(
+    (o) => o.repository === repo,
+  )?.edition;
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      aria-labelledby="confirm-edition-switch-title"
+    >
+      <DialogTitle id="confirm-edition-switch-title">
+        Switch edition{status.edition ? ` from ${status.edition}` : ""}
+        {to ? ` to ${to}` : ""}?
+      </DialogTitle>
+      <DialogContent>
+        <DialogContentText component="div" sx={{ overflowWrap: "anywhere" }}>
+          <Box>
+            This upgrade pulls <code>{image.trim()}</code>, another
+            edition&apos;s build, and restarts this deployment on it. It loses:
+          </Box>
+          <EditionSwitchLosses losses={status.editionSwitchLosses} />
+          {status.inFlightRuns > 0 && (
+            <Box sx={{ mt: 1 }}>
+              {inFlightWarning(status.inFlightRuns, status.atRisk)}
+            </Box>
+          )}
+        </DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          variant="contained"
+          color="warning"
+          className="upgrade-switch-edition-confirm"
+          onClick={onConfirm}
+        >
+          Switch edition
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ImageRepoWarning is GET /api/upgrade's imageRepoWarning: the repository
+// this deployment upgrades from names no registry host -- typically an
+// -upgrade-image a release-asset-era installer wrote -- so the Upgrade
+// button would be refused rather than pull it from Docker Hub. Said before
+// anybody presses it, beside the build's own default, so the fix is in
+// view before an upgrade fails on it.
+function ImageRepoWarning({ status }) {
+  if (!status?.imageRepoWarning) return null;
+  const { imageRepo, defaultImageRepo, imageRepoWarning } = status;
+  return (
+    <Alert
+      severity="warning"
+      className="upgrade-image-repo-warning"
+      sx={{ mb: 2, overflowWrap: "anywhere" }}
+    >
+      <Box>
+        <strong>
+          This deployment&apos;s image repository names no registry host.
+        </strong>
+      </Box>
+      <Box sx={{ mt: 0.5 }}>
+        Configured: <code className="upgrade-configured-repo">{imageRepo}</code>
+        {defaultImageRepo && defaultImageRepo !== imageRepo && (
+          <>
+            {" "}
+            &middot; This build&apos;s default:{" "}
+            <code className="upgrade-default-repo">{defaultImageRepo}</code>
+          </>
+        )}
+      </Box>
+      <Box sx={{ mt: 0.5 }}>{imageRepoWarning}</Box>
+    </Alert>
+  );
+}
+
 // ImageChooser is where an image deployment says what the Upgrade button
 // will pull -- GET /api/upgrade's imageRepo, with the branch's tag -- and
 // lets an operator pull from another repository the daemon allows
@@ -852,17 +984,24 @@ function ImageChooser({
   onChange,
   disabled,
   scheduling,
+  switchEdition,
+  onSwitchEdition,
 }) {
+  const [showSwitch, setShowSwitch] = useState(false);
   if (!status?.imageRepo) return null;
   const repos = status.imageRepos || [];
+  const others = status.otherEditionImageRepos || [];
   const will = resolvedImage(scheduling ? "" : image, status.imageRepo, branch);
+  const switchingTo = switchEdition
+    ? others.find((o) => o.repository === repositoryOfImage(image))
+    : null;
   return (
     <Box className="upgrade-image" sx={{ mt: 1 }}>
       <TextField
         name="image"
         label="Image (optional)"
         value={image}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => onChange(e.target.value, false)}
         placeholder={status.imageRepo}
         helperText={
           scheduling
@@ -894,7 +1033,9 @@ function ImageChooser({
               label={
                 repo === status.defaultImageRepo ? `${repo} (default)` : repo
               }
-              onClick={() => onChange(repo === status.imageRepo ? "" : repo)}
+              onClick={() =>
+                onChange(repo === status.imageRepo ? "" : repo, false)
+              }
               disabled={disabled || scheduling}
             />
           ))}
@@ -907,9 +1048,161 @@ function ImageChooser({
           sx={{ mt: 1, overflowWrap: "anywhere" }}
         >
           Will pull <code className="upgrade-will-ref">{will}</code>
+          {switchEdition && (
+            <strong className="upgrade-will-switch">
+              {" "}
+              &middot; switches this deployment from the {status.edition}{" "}
+              edition to {switchingTo?.edition || "another"}
+            </strong>
+          )}
         </Typography>
       )}
+      {others.length > 0 && !scheduling && (
+        <EditionSwitchChooser
+          status={status}
+          others={others}
+          image={image}
+          open={showSwitch || switchEdition}
+          switchEdition={switchEdition}
+          disabled={disabled}
+          onOpen={() => setShowSwitch(true)}
+          onPick={(repo) => onSwitchEdition(repo)}
+          onCancel={() => {
+            setShowSwitch(false);
+            if (switchEdition) onChange("", false);
+          }}
+        />
+      )}
     </Box>
+  );
+}
+
+// repositoryOfImage is image without its tag or digest -- the part
+// GET /api/upgrade's repository lists name.
+export function repositoryOfImage(image) {
+  const named = (image || "").trim().split("@")[0];
+  const colon = named.lastIndexOf(":");
+  return colon > named.lastIndexOf("/") ? named.slice(0, colon) : named;
+}
+
+// EditionSwitchChooser is the one way the pane offers another edition's
+// image (grain/task-4153): GET /api/upgrade's otherEditionImageRepos are
+// never among the ordinary repository chips, because pulling one
+// restarts this deployment as a different edition. It stays folded
+// behind a clearly labelled "Switch edition…" button, says what a switch
+// gives up before anything is picked, and picking one turns on the
+// request's switchEdition -- which the Upgrade button then confirms
+// again (EditionSwitchDialog).
+function EditionSwitchChooser({
+  status,
+  others,
+  image,
+  open,
+  switchEdition,
+  disabled,
+  onOpen,
+  onPick,
+  onCancel,
+}) {
+  if (!open) {
+    return (
+      <Box sx={{ mt: 1 }}>
+        <Button
+          size="small"
+          color="warning"
+          variant="outlined"
+          className="upgrade-switch-edition-open"
+          onClick={onOpen}
+          disabled={disabled}
+        >
+          Switch edition…
+        </Button>
+      </Box>
+    );
+  }
+  const chosen = repositoryOfImage(image);
+  return (
+    <Alert
+      severity="warning"
+      className="upgrade-switch-edition"
+      sx={{ mt: 1, overflowWrap: "anywhere" }}
+    >
+      <Box>
+        <strong>Switch edition</strong>: this deployment runs the{" "}
+        <code>{status.edition}</code> edition. Upgrading onto another
+        edition&apos;s image replaces it with that edition&apos;s build.
+      </Box>
+      <EditionSwitchLosses losses={status.editionSwitchLosses} />
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        flexWrap="wrap"
+        sx={{ mt: 1 }}
+      >
+        {others.map((o) => (
+          <Chip
+            key={o.repository}
+            size="small"
+            color="warning"
+            className="upgrade-switch-edition-repo"
+            variant={
+              switchEdition && chosen === o.repository ? "filled" : "outlined"
+            }
+            label={`${o.repository} (${o.edition} edition)`}
+            onClick={() => onPick(o.repository)}
+            disabled={disabled}
+          />
+        ))}
+      </Stack>
+      <Box sx={{ mt: 1 }}>
+        <Button
+          size="small"
+          className="upgrade-switch-edition-cancel"
+          onClick={onCancel}
+          disabled={disabled}
+        >
+          {switchEdition ? "Don't switch edition" : "Close"}
+        </Button>
+      </Box>
+    </Alert>
+  );
+}
+
+// EditionSwitchLosses lists what switching edition gives up, as GET
+// /api/upgrade's editionSwitchLosses says it.
+function EditionSwitchLosses({ losses }) {
+  if (!losses?.length) return null;
+  return (
+    <Box
+      component="ul"
+      className="upgrade-switch-losses"
+      sx={{ my: 0.5, pl: 2.5 }}
+    >
+      {losses.map((loss) => (
+        <li key={loss}>{loss}</li>
+      ))}
+    </Box>
+  );
+}
+
+// LastEditionSwitch says, while the last upgrade's status is on screen,
+// that it crossed editions on purpose and who asked
+// (GET /api/upgrade's editionSwitch).
+function LastEditionSwitch({ editionSwitch }) {
+  if (!editionSwitch) return null;
+  const { from, to, repository, requestedBy } = editionSwitch;
+  return (
+    <Alert
+      severity="info"
+      className="upgrade-last-edition-switch"
+      sx={{ mb: 2, overflowWrap: "anywhere" }}
+    >
+      The last upgrade switched this deployment&apos;s edition
+      {from ? ` from ${from}` : ""}
+      {to ? ` to ${to}` : ""}, pulling from <code>{repository}</code>
+      {requestedBy ? `, as ${requestedBy} asked` : ""}.
+    </Alert>
   );
 }
 
@@ -1045,6 +1338,11 @@ export default function UpgradePanel({
   // branch's tag in the configured repository (ImageChooser); "" for
   // the usual.
   const [image, setImage] = useState("");
+  // switchEdition is whether image is another edition's, picked through
+  // the "Switch edition…" override -- the request's switchEdition, and
+  // the one thing that opens EditionSwitchDialog.
+  const [switchEdition, setSwitchEdition] = useState(false);
+  const [switchConfirmOpen, setSwitchConfirmOpen] = useState(false);
   // chosen is whether the operator has picked or typed a target, which
   // is when what it brings is previewed (UpgradeReleaseNotes).
   const [chosen, setChosen] = useState(false);
@@ -1162,13 +1460,13 @@ export default function UpgradePanel({
     setUnchangedBranch("");
     try {
       const chosenImage = afterTasksFinish ? "" : image.trim();
+      const body = chosenImage
+        ? { branch: trimmed, image: chosenImage, afterTasksFinish }
+        : { branch: trimmed, afterTasksFinish };
+      if (chosenImage && switchEdition) body.switchEdition = true;
       const next = await api("/api/upgrade", {
         method: "POST",
-        body: JSON.stringify(
-          chosenImage
-            ? { branch: trimmed, image: chosenImage, afterTasksFinish }
-            : { branch: trimmed, afterTasksFinish },
-        ),
+        body: JSON.stringify(body),
       });
       if (next.phase === "running") sawRunning.current = true;
       setStatus(next);
@@ -1188,6 +1486,12 @@ export default function UpgradePanel({
       isSameRunningVersion(trimmed, status, version, preview)
     ) {
       setUnchangedBranch(trimmed);
+      return;
+    }
+    // Switching edition is always confirmed, whatever is running: what it
+    // gives up is not runs but the edition itself.
+    if (chosenImage && switchEdition) {
+      setSwitchConfirmOpen(true);
       return;
     }
     // Only when there is something to lose, and only when the upgrade is
@@ -1252,6 +1556,7 @@ export default function UpgradePanel({
 
   return (
     <>
+      <UpgradeNotices notices={status.notices} />
       {selfUpgradeDisabled && (
         <>
           <RunningNow running={fallbackRunning} />
@@ -1316,6 +1621,8 @@ export default function UpgradePanel({
               setChosen(true);
             }}
           />
+          <ImageRepoWarning status={status} />
+          <LastEditionSwitch editionSwitch={status.editionSwitch} />
           <LastRestart report={status.lastRestart} />
           <ScheduledUpgrade
             scheduled={status.scheduled}
@@ -1353,6 +1660,16 @@ export default function UpgradePanel({
               </Button>
             </DialogActions>
           </Dialog>
+          <EditionSwitchDialog
+            open={switchConfirmOpen}
+            status={status}
+            image={image}
+            onClose={() => setSwitchConfirmOpen(false)}
+            onConfirm={async () => {
+              setSwitchConfirmOpen(false);
+              await executeUpgrade(branch);
+            }}
+          />
           <form onSubmit={submit}>
             <BranchPicker
               branch={branch}
@@ -1374,8 +1691,16 @@ export default function UpgradePanel({
               status={status}
               branch={branch}
               image={image}
-              onChange={(next) => {
+              onChange={(next, switching) => {
                 setImage(next);
+                setSwitchEdition(!!switching);
+                setUnchangedBranch("");
+              }}
+              switchEdition={switchEdition}
+              onSwitchEdition={(repo) => {
+                setImage(repo);
+                setSwitchEdition(true);
+                setAfterTasksFinish(false);
                 setUnchangedBranch("");
               }}
               disabled={running}
@@ -1416,7 +1741,9 @@ export default function UpgradePanel({
                   ? "Upgrading…"
                   : afterTasksFinish
                     ? "Schedule upgrade"
-                    : "Upgrade"}
+                    : switchEdition && image.trim()
+                      ? "Switch edition and upgrade"
+                      : "Upgrade"}
               </Button>
             </Stack>
           </form>
@@ -1435,18 +1762,6 @@ export default function UpgradePanel({
               <dd className={`upgrade-phase upgrade-phase-${status.phase}`}>
                 {status.phase}
               </dd>
-              {status.source && (
-                <>
-                  <dt>Image source</dt>
-                  <dd>{status.source}</dd>
-                </>
-              )}
-              {status.fallbackNote && (
-                <>
-                  <dt>Fallback</dt>
-                  <dd>{status.fallbackNote}</dd>
-                </>
-              )}
               {status.detail && (
                 <>
                   <dt>Detail</dt>
@@ -1489,7 +1804,12 @@ export default function UpgradePanel({
 // Shown even on a deployment with no upgrader wired: the setting is
 // stored either way, and a deployment configured for upgrading later
 // should not have to discover afterwards that this choice existed.
-export function UpgradeCheckSettings({ settings, onSave }) {
+export function UpgradeCheckSettings({
+  settings,
+  onSave,
+  onIntBlur,
+  onEnterKey,
+}) {
   const modes = settings.upgradeCheckModes || ["off", "approve", "auto"];
   const [mode, setMode] = useState(settings.upgradeCheckMode || "auto");
   const [pauses, setPauses] = useState(!!settings.upgradeCheckPausesPipeline);
@@ -1547,7 +1867,12 @@ export function UpgradeCheckSettings({ settings, onSave }) {
         }
         sx={{ display: "flex", mt: 1 }}
       />
-      <AutoUpgradeSettings settings={settings} onSave={onSave} />
+      <AutoUpgradeSettings
+        settings={settings}
+        onSave={onSave}
+        onIntBlur={onIntBlur}
+        onEnterKey={onEnterKey}
+      />
       <Typography variant="caption" color="text.secondary">
         Changes to these choices save immediately.
       </Typography>
@@ -1587,16 +1912,49 @@ function autoUpgradeMode(settings) {
 // mode a channel saved some other way (the CLI, a settings import) that
 // is not one of the three is offered too, so the picker can show what is
 // actually set.
-export function AutoUpgradeSettings({ settings, onSave }) {
+export function AutoUpgradeSettings({
+  settings,
+  onSave,
+  onIntBlur,
+  onEnterKey,
+}) {
   const [mode, setMode] = useState(autoUpgradeMode(settings));
   const [channel, setChannel] = useState(settings.autoUpgradeChannel || "");
   const [time, setTime] = useState(settings.autoUpgradeTime || "03:00");
+  const defaultMinIntervalHours =
+    settings.autoUpgradeMinIntervalHoursDefault ?? 6;
+  const minIntervalHours =
+    settings.autoUpgradeMinIntervalHours ?? defaultMinIntervalHours;
   const zone = settings.timeZone || "UTC";
   const channels =
     AUTO_UPGRADE_CHANNELS.includes(channel) || !channel
       ? AUTO_UPGRADE_CHANNELS
       : [...AUTO_UPGRADE_CHANNELS, channel];
   const releaseTarget = channel === "latest" ? "latest" : "exact";
+  const blurOnEnter =
+    onEnterKey ||
+    ((e) => {
+      if (e.key === "Enter") e.target.blur();
+    });
+  const handleMinIntervalBlur = onIntBlur
+    ? onIntBlur("autoUpgradeMinIntervalHours", {
+        defaultVal: defaultMinIntervalHours,
+        emptyVal: defaultMinIntervalHours,
+      })
+    : (e) => {
+        const read = readNumberBox(e.target, {
+          integer: true,
+          min: 0,
+          label: "Minimum interval (hours)",
+        });
+        if (read.error) return;
+        const next = read.empty ? defaultMinIntervalHours : read.value;
+        if (next !== minIntervalHours) {
+          onSave({ autoUpgradeMinIntervalHours: next });
+        } else if (read.empty) {
+          e.target.value = e.target.defaultValue ?? "";
+        }
+      };
 
   const chooseMode = (next) => {
     setMode(next);
@@ -1634,11 +1992,13 @@ export function AutoUpgradeSettings({ settings, onSave }) {
         slotProps={{ inputLabel: { shrink: true } }}
         helperText={
           mode === "release"
-            ? "Within about an hour of a new release appearing on this " +
-              "deployment's image channel, grain holds the queue, lets the work " +
-              "in flight finish, and upgrades. Release candidates are never " +
-              "followed. A failed upgrade is reported in the Inbox and is not " +
-              "retried until the next release."
+            ? "Once a new release has stood for an hour" +
+              (minIntervalHours > 0
+                ? ` and at least ${minIntervalHours}h has passed since the last automatic upgrade`
+                : "") +
+              ", grain holds the queue, lets the work in flight finish, and upgrades " +
+              "to the newest release. Release candidates are never followed. A failed " +
+              "upgrade is reported in the Inbox and is not retried until the next release."
             : mode === "daily"
               ? `Upgrade onto ${channel || "latest"} once a day, after the work in flight finishes.`
               : "grain upgrades only when somebody presses Upgrade. " +
@@ -1652,29 +2012,46 @@ export function AutoUpgradeSettings({ settings, onSave }) {
         ))}
       </TextField>
       {mode === "release" && (
-        <TextField
-          select
-          name="autoUpgradeTarget"
-          data-setting-id="autoUpgradeChannel"
-          label="Upgrade to"
-          value={releaseTarget}
-          onChange={(e) => {
-            const next = e.target.value === "latest" ? "latest" : "";
-            setChannel(next);
-            onSave({ autoUpgradeChannel: next });
-          }}
-          fullWidth
-          margin="normal"
-          slotProps={{ inputLabel: { shrink: true } }}
-          helperText={
-            releaseTarget === "latest"
-              ? "Follows the latest tag, which moves with each release."
-              : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
-          }
-        >
-          <MenuItem value="latest">latest</MenuItem>
-          <MenuItem value="exact">The exact release tag</MenuItem>
-        </TextField>
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+          <TextField
+            select
+            name="autoUpgradeTarget"
+            data-setting-id="autoUpgradeChannel"
+            label="Upgrade to"
+            value={releaseTarget}
+            onChange={(e) => {
+              const next = e.target.value === "latest" ? "latest" : "";
+              setChannel(next);
+              onSave({ autoUpgradeChannel: next });
+            }}
+            fullWidth
+            margin="normal"
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText={
+              releaseTarget === "latest"
+                ? "Follows the latest tag, which moves with each release."
+                : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
+            }
+          >
+            <MenuItem value="latest">latest</MenuItem>
+            <MenuItem value="exact">The exact release tag</MenuItem>
+          </TextField>
+          <TextField
+            key={`minInterval-${minIntervalHours}`}
+            type="number"
+            name="autoUpgradeMinIntervalHours"
+            data-setting-id="autoUpgradeMinIntervalHours"
+            label="Minimum interval (hours)"
+            defaultValue={String(minIntervalHours)}
+            onBlur={handleMinIntervalBlur}
+            onKeyDown={blurOnEnter}
+            inputProps={{ min: 0, step: 1 }}
+            slotProps={{ inputLabel: { shrink: true } }}
+            fullWidth
+            margin="normal"
+            helperText={`Hours after a completed automatic upgrade before draining again, onto the newest release (default ${defaultMinIntervalHours}; 0 = off).`}
+          />
+        </Stack>
       )}
       {mode === "daily" && (
         <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>

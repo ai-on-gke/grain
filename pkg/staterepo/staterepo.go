@@ -262,14 +262,16 @@ type Config struct {
 	// hazard this design is built around.
 	PostCheckRun func(ctx context.Context, post CheckRunPost) (int64, error)
 	// CheckTree, if set, replaces running the check as a subprocess: it
-	// is handed a checked-out tree and answers with what a reader of the
-	// check run should be shown, or an error whose message is that.
+	// is handed a checked-out tree and the commit it is checked against
+	// (the deployment's own branch head, `grain state check -base`), and
+	// answers with what a reader of the check run should be shown, or an
+	// error whose message is that.
 	//
 	// Only tests set it. What a deployment does instead is exec its own
 	// binary (runCheckSubprocess) -- see postChecks on why an unmerged
 	// pull request's tree is not something to import inside the daemon's
 	// own process.
-	CheckTree func(ctx context.Context, dir string) (string, error)
+	CheckTree func(ctx context.Context, dir, base string) (string, error)
 	// Now is this repository's clock -- the timestamp an export commit
 	// carries, and what the hourly work inside a sync is measured
 	// against (the workflow health check, git's own maintenance). nil
@@ -288,6 +290,11 @@ type Repo struct {
 
 	gitDirMu stdsync.Mutex
 	gitDir   string
+
+	// verifier is require_verified mode, nil when it is off; held is the
+	// commit it is holding (verify.go).
+	verifier *Verifier
+	held     *HeldCommit
 }
 
 // Dir returns the working tree.
@@ -765,6 +772,11 @@ func (r *Repo) Pull(ctx context.Context) (bool, error) {
 // where the external repository is the sole source of truth and local history
 // (including a prior internal grain/config history) is replaced rather than
 // merged or pushed.
+//
+// In require_verified mode (SetVerifier) it resets onto the newest commit
+// up to which everything since the last applied commit verifies, rather
+// than onto origin's tip, and Held names the first commit that does not;
+// ErrHeld is no verified commit at all.
 func (r *Repo) PullExternal(ctx context.Context) (bool, error) {
 	if r.cfg.Remote == "" {
 		return false, nil
@@ -776,7 +788,34 @@ func (r *Repo) PullExternal(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("%w: fetching %s: %w", ErrUnreachable, r.branch, err)
 	}
 	before, _ := r.git(ctx, "rev-parse", "HEAD")
-	if _, err := r.git(ctx, "checkout", "-f", "-B", r.branch, "FETCH_HEAD"); err != nil {
+	verified := false
+	if r.verifier != nil {
+		tip, err := r.git(ctx, "rev-parse", "FETCH_HEAD")
+		if err != nil {
+			return false, err
+		}
+		target, err := r.verifiedTarget(ctx, strings.TrimSpace(tip))
+		if err != nil {
+			return false, err
+		}
+		if target == "" {
+			return false, ErrHeld
+		}
+		// Named through a fixed ref, since checkout -B reads anything
+		// after its start point as a path.
+		if _, err := r.git(ctx, "update-ref", "--no-deref", "--end-of-options", verifiedHeadRef, target); err != nil {
+			return false, err
+		}
+		verified = true
+	}
+	checkout := func() (string, error) { return r.git(ctx, "checkout", "-f", "-B", r.branch, "FETCH_HEAD") }
+	if verified {
+		// verifiedHeadRef, spelled out for the argv check.
+		checkout = func() (string, error) {
+			return r.git(ctx, "checkout", "-f", "-B", r.branch, "refs/grain/verified-head")
+		}
+	}
+	if _, err := checkout(); err != nil {
 		return false, fmt.Errorf("staterepo: checking out origin/%s: %w", r.branch, err)
 	}
 	if _, err := r.git(ctx, "clean", "-fd"); err != nil {

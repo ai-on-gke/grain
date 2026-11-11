@@ -288,8 +288,8 @@ func cmdHubRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 		if sErr != nil {
 			return sErr
 		}
-		existingCfg = settings.Registry
-		daemonHasSecret = settings.RegistryTokenSet
+		existingCfg = settingsHubConfig(settings)
+		daemonHasSecret = settings.HubTokenSet || settings.RegistryTokenSet
 		configRepoOnly = settings.ConfigRepoOnly
 		if snap, snapErr := c.GetHub(ctx); snapErr == nil {
 			existingSnap = snap
@@ -642,7 +642,7 @@ func cmdHubUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 		if sErr != nil {
 			return sErr
 		}
-		existingCfg = settings.Registry
+		existingCfg = settingsHubConfig(settings)
 		configRepoOnly = settings.ConfigRepoOnly
 	}
 	if !*standalone && configRepoOnly && !reflect.DeepEqual(existingCfg, model.HubConfig{}) {

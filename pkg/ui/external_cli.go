@@ -181,7 +181,7 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	out := InboxResponse{Items: filtered}
 	if list.Paged {
-		page := pageOf(filtered, list)
+		page := pageOfBy(filtered, list, inboxItemKey)
 		out.Items = page.Items
 		out.Total = page.Total
 		out.Truncated = page.Truncated
@@ -191,14 +191,24 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// inboxItemKey names an inbox row for paging (pageOfBy): its kind with
+// the task, notification and pull request it is about, which together
+// tell any two rows apart.
+func inboxItemKey(it InboxItem) string {
+	return it.Kind + "\x00" + it.Task + "\x00" + strconv.FormatInt(it.Notification, 10) + "\x00" + it.PR + "\x00" + it.Path
+}
+
 // inboxReadable is which repositories the caller's tasks:read reaches:
-// an external-agent token's own grants, and everything for anyone else
-// (a person, the local CLI), whose task list is already the one they
-// may see.
+// an external-agent token's own grants; a limited role's, or an agent
+// run's, as the event stream reads them (eventsReadable); and everything
+// for anyone else (the access code, the local CLI). A role limited to
+// some repositories was once shown every repository's inbox -- titles,
+// questions and pending secret names included (task 3981).
 func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 	tok := externalTokenFromContext(r.Context())
 	if tok == nil {
-		return func(string) bool { return true }
+		readable, _ := s.eventsReadable(r)
+		return readable
 	}
 	_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 	if err != nil {
@@ -578,12 +588,8 @@ func (c *Client) taskWaitState(ctx context.Context, id string, now time.Time) (T
 		if obs.ClosedAt == nil && obs.PendingQuestionCommentID != nil {
 			pendingQ = strconv.FormatInt(*obs.PendingQuestionCommentID, 10)
 			st.PendingSecret = obs.PendingSecret
-			if comments, err := c.Store.Comments(ctx, id); err == nil {
-				for _, cm := range comments {
-					if cm.ID == *obs.PendingQuestionCommentID {
-						st.Question = cm.Body
-					}
-				}
+			if cm, err := c.Store.Comment(ctx, id, *obs.PendingQuestionCommentID); err == nil && cm != nil {
+				st.Question = cm.Body
 			}
 		}
 	}
@@ -686,7 +692,23 @@ func (c *HTTPClient) Reply(ctx context.Context, id, body string, attachments []A
 
 // Inbox is GET /api/inbox, narrowed to repo and kind when they are set.
 func (c *HTTPClient) Inbox(ctx context.Context, repo, kind string) (InboxResponse, error) {
+	return c.InboxPage(ctx, repo, kind, "", 0, "")
+}
+
+// InboxPage is Inbox asking for one page: at most limit items (0 for the
+// route's own default), starting at cursor (a previous answer's
+// NextCursor), narrowed by the substring search.
+func (c *HTTPClient) InboxPage(ctx context.Context, repo, kind, search string, limit int, cursor string) (InboxResponse, error) {
 	q := url.Values{}
+	if search != "" {
+		q.Set("q", search)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
 	if repo != "" {
 		q.Set("repo", repo)
 	}

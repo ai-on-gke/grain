@@ -1591,6 +1591,7 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 		return nil
 	}
 	known = append(known, knownGitHubTokens(secretsDir)...)
+	known = append(known, knownLooseCredentials(secretsDir)...)
 	return grainlog.NewRedactor(known)
 }
 
@@ -1697,6 +1698,7 @@ func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlo
 	}
 	if secretsDir != "" {
 		known = append(known, knownGitHubTokens(secretsDir)...)
+		known = append(known, knownLooseCredentials(secretsDir)...)
 	}
 	return grainlog.NewRedactor(known)
 }
@@ -2796,7 +2798,18 @@ func pullRequestToolsWithUpstream(dataDir, githubHost string, insecureHTTP bool,
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"grain mcpserver: pull_request_status and wait_for_checks are unavailable this run: %v\n", err)
-		return mcp.NewPullRequestTools(nil, nil, mcp.PullRequestScope{})
+		return nil
+	}
+	// With no GitHub reader -- a task with no repository, or a host's
+	// sandbox, whose mcpserver is started without -data-dir/-pr-repo --
+	// every one of these tools answers only "no GitHub repository
+	// configured", so they are left off the roster rather than offered to
+	// a run that can only ever get that error (task 4364). Such a run reads
+	// CI with `grain ci wait` and `grain pr open`, which answer through the
+	// daemon on every sandbox; a grain-CI run's own wait_for_checks is
+	// registered by the grain CI tool set, not here.
+	if client == nil {
+		return nil
 	}
 	return mcp.NewPullRequestTools(client, grainCI, scope)
 }

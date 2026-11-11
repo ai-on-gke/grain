@@ -811,9 +811,13 @@ function ScheduleOverlay({
                         }
                         discarded.current = true;
                       }
+                      // The task is opened over the pane rather than after
+                      // closing it, as a suite run's task rows do
+                      // (SuiteRunPane): closing first wrote the bare list
+                      // into history while the task was still loading, so
+                      // Back from the task skipped this schedule.
                       if (onOpenTask) {
                         e.preventDefault();
-                        onClose?.();
                         onOpenTask(schedule.suppressed.taskId);
                       }
                     }}

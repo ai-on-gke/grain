@@ -872,12 +872,12 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 	}
 	comp.CustomFields = fields
 	if comp.Target != nil {
-		usesGrainCI, err := querierRepoUsesGrainCI(ctx, s.db, *comp.Target)
+		ciDefaults, err := querierRepoCIDefaults(ctx, s.db, *comp.Target)
 		if err != nil {
 			return Composition{}, nil, err
 		}
-		applyGrainCIGrant(&comp, usesGrainCI)
-		if !usesGrainCI {
+		applyRepoCIGrants(&comp, ciDefaults)
+		if !ciDefaults.GrainCI {
 			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
 				applyWorkflowReviewCIReadGrant(&comp, from)
 			}
@@ -929,11 +929,11 @@ func composeSuitePass(ctx context.Context, q querier, suiteID string, items []Su
 		}
 		comp.CustomFields = fields
 		if comp.Target != nil {
-			usesGrainCI, err := querierRepoUsesGrainCI(ctx, q, *comp.Target)
+			ciDefaults, err := querierRepoCIDefaults(ctx, q, *comp.Target)
 			if err != nil {
 				return nil, err
 			}
-			applyGrainCIGrant(&comp, usesGrainCI)
+			applyRepoCIGrants(&comp, ciDefaults)
 		}
 		out = append(out, comp)
 	}
@@ -1048,11 +1048,11 @@ func (s *Store) TemplateComposition(ctx context.Context, tmpl Template, values m
 	}
 	comp.CustomFields = fields
 	if comp.Target != nil {
-		usesGrainCI, err := querierRepoUsesGrainCI(ctx, s.db, *comp.Target)
+		ciDefaults, err := querierRepoCIDefaults(ctx, s.db, *comp.Target)
 		if err != nil {
 			return Composition{}, err
 		}
-		applyGrainCIGrant(&comp, usesGrainCI)
+		applyRepoCIGrants(&comp, ciDefaults)
 	}
 	return comp, nil
 }

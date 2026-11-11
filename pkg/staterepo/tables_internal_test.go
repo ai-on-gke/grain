@@ -216,6 +216,11 @@ var notSettings = []string{
 	// would race the daemon writing new ones.
 	"task_comment",
 	"task_attachment",
+	// A durable task's compaction cursor, handover version and current
+	// brief, and the brief's edits (model.TaskContext): written by runs
+	// and people as the task goes, beside its comments.
+	"task_context",
+	"task_brief_edit",
 	// Who closed or reopened a task (model.TaskEvent): grain's record of
 	// what somebody did, written in the same breath as the closure.
 	"task_event",

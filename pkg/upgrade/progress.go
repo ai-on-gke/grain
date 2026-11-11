@@ -229,30 +229,6 @@ func (p *progress) logf(format string, args ...any) {
 	log.Printf(p.prefix+format, args...)
 }
 
-// setSource records which image source ("registry" or "release-assets") this
-// upgrade used on Status.Source.
-func (p *progress) setSource(source ImageSource) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.status.Source = string(source)
-	p.dirty = true
-}
-
-// setFallbackNote records why this upgrade fell back from its primary image
-// source (for example "release has no image assets; pulled from <registry>").
-func (p *progress) setFallbackNote(note string) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.status.FallbackNote = note
-	p.dirty = true
-}
-
 // start marks a step running. The step must be in the plan -- a
 // mismatch between the plan and what run actually does is a bug in this
 // package, and one that would otherwise show up as a pane that quietly
@@ -378,6 +354,17 @@ func (p *progress) isUnchanged() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.unchangedFlag
+}
+
+// recordEditionSwitch replaces the edition switch the status records
+// (Status.EditionSwitch) -- once the pulled image has said which
+// edition it is -- and writes it out at once: it is the record that a
+// cross-edition move was asked for, and must not wait on the next line.
+func (p *progress) recordEditionSwitch(sw *EditionSwitch) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.status.EditionSwitch = sw
+	p.flushLocked()
 }
 
 // unchanged closes the upgrade out as PhaseOK with Status.Unchanged set,

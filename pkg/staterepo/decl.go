@@ -1325,13 +1325,65 @@ func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[s
 		row[f.columns[0]] = v
 		return nil
 	default:
+		if f.key == "overlap" && node.Kind == yaml.MappingNode {
+			return decodeOverlapMapping(path, id, node, row)
+		}
 		v, err := nodeValue(node)
 		if err != nil {
 			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
 		}
+		if f.key == "overlap-group" && v == "" {
+			// `overlap: {group: g}` already said it; the blank key the
+			// export writes beside it does not unsay it.
+			if prev, ok := row["overlap_group"].(string); ok && prev != "" {
+				return nil
+			}
+		}
 		row[f.columns[0]] = v
 		return nil
 	}
+}
+
+// decodeOverlapMapping reads `overlap: {skip: true, group: <name>}`, the
+// form a repository's schedule file may use (repodecl's rawOverlap),
+// into the overlap and overlap_group columns, so a settings row written
+// the same way imports the same way (grain/task-3895). The export itself
+// always writes the plain `overlap:` and `overlap-group:` keys.
+func decodeOverlapMapping(path, id string, node *yaml.Node, row map[string]any) error {
+	policy := string(model.OverlapSkip)
+	var group string
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		v, err := nodeValue(node.Content[i+1])
+		if err != nil {
+			return fmt.Errorf("staterepo: %s, %s: overlap: %w", path, id, err)
+		}
+		switch k := node.Content[i].Value; k {
+		case "skip":
+			b, ok := v.(bool)
+			if !ok {
+				return fmt.Errorf("staterepo: %s, %s: overlap.skip is true or false", path, id)
+			}
+			if !b {
+				policy = string(model.OverlapAllow)
+			}
+		case "group":
+			s, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("staterepo: %s, %s: overlap.group is a name", path, id)
+			}
+			group = strings.TrimSpace(s)
+		default:
+			return fmt.Errorf("staterepo: %s, %s: overlap: unknown key %q", path, id, k)
+		}
+	}
+	if group != "" && policy == string(model.OverlapAllow) {
+		return fmt.Errorf("staterepo: %s, %s: overlap: `skip: false` cannot be combined with `group:`", path, id)
+	}
+	row["overlap"] = policy
+	if group != "" {
+		row["overlap_group"] = group
+	}
+	return nil
 }
 
 // fromBool turns the booleans these files are written with back into the

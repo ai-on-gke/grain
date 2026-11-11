@@ -45,21 +45,6 @@ cluster's rather than a number an operator sized by hand.
 
 Three things have to exist first.
 
-**Images from release assets, if you use them.** Grain also publishes its
-images as GitHub release assets
-([docs/release-assets.md](../../docs/release-assets.md)), which a cluster
-cannot `docker load`. To run a release from its assets rather than from
-`docker.io/grainai/*`, load and push it into a registry the cluster can pull
-from -- the deployment's own `sandbox_image_mirror`, for example an Artifact
-Registry repository in the cluster's project -- with
-`scripts/release-assets.sh mirror <release> <registry/prefix>`, and name the
-pushed refs in the Deployment's `image:` and `-k8s-sandbox-image`.
-`scripts/migrate-local-to-gke.sh --mirror <registry/path>` does the same push
-for a host that was installed from release assets. Never leave a
-`grain/<image>:sha-<12 hex>` manifest ref in a pod spec: it names no registry,
-so kubelet would look for it on Docker Hub, and the daemon refuses to hand it
-to a pod.
-
 **A sandbox image.** CI publishes `docker.io/grainai/sandbox-k8s`
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
 `bash`, `curl`, and a non-root user with a writable home. Each grain build
@@ -421,6 +406,64 @@ and grain reports that as `the cluster has no PriorityClass named
 create cluster-scoped objects, clear the three names in Settings
 instead, and drop `priorityClassName: grain-daemon` from the Deployment. The daemon itself needs no new RBAC: the classes come from the
 manifest, not from grain.
+
+## Wrapping the secrets key with Cloud KMS (Workload Identity)
+
+The secrets private key lives on the `grain-data` volume as
+`secrets/secrets.key`, so a PD snapshot of that volume holds every
+credential the deployment stores. On GKE, wrap it with a Cloud KMS key
+instead. The daemon unwraps it once at start with the Google service
+account the `grain` Kubernetes ServiceAccount (`grain.yaml`) is bound to
+through Workload Identity. That account's token comes from the GKE
+metadata server, the same way a GCE VM gets one, so nothing in
+`grain.yaml` names a credential.
+
+With Workload Identity enabled on the cluster and its node pool:
+
+```bash
+PROJECT=my-project REGION=us-central1 NS=grain
+GSA=grain-daemon@$PROJECT.iam.gserviceaccount.com
+
+# A Google service account for the daemon, which the grain KSA may act as.
+gcloud iam service-accounts create grain-daemon --project "$PROJECT"
+gcloud iam service-accounts add-iam-policy-binding "$GSA" \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:$PROJECT.svc.id.goog[$NS/grain]"
+kubectl -n "$NS" annotate serviceaccount grain \
+  iam.gke.io/gcp-service-account="$GSA"
+
+# A key ring and a key in the cluster's region, rotating every 90 days,
+# and the daemon's account on that key only.
+gcloud kms keyrings create grain-secrets --location "$REGION" --project "$PROJECT"
+gcloud kms keys create secrets-key --keyring grain-secrets --location "$REGION" \
+  --project "$PROJECT" --purpose encryption \
+  --rotation-period 90d --next-rotation-time "$(date -u -d '+90 days' +%Y-%m-%dT%H:%M:%SZ)"
+gcloud kms keys add-iam-policy-binding secrets-key --keyring grain-secrets \
+  --location "$REGION" --project "$PROJECT" \
+  --role roles/cloudkms.cryptoKeyEncrypterDecrypter --member "serviceAccount:$GSA"
+
+# Restart the pod so it picks up the annotation, then wrap, in the daemon.
+kubectl -n "$NS" rollout restart deployment/grain
+kubectl -n "$NS" exec deploy/grain -- grain state key wrap \
+  -kms "projects/$PROJECT/locations/$REGION/keyRings/grain-secrets/cryptoKeys/secrets-key"
+```
+
+`grain state key wrap` checks that the wrapped key unwraps to the same key
+before it replaces the file, and lists any plaintext copies it can still
+see. Delete those, and replace any copy of the plaintext key you escrowed
+elsewhere with the wrapped file's contents. From then on:
+
+- Each start makes one KMS decrypt call. If KMS is unreachable or the
+  binding is removed, the pod still starts and serves the UI. Anything
+  that needs a secret fails with `KMS unreachable for <key>` or
+  `KMS permission denied for <key>`, and the store retries with backoff.
+  Settings → State shows the protection mode, the key and the last
+  unwrap.
+- After KMS rotates the key, the next start rewraps the file under the
+  new primary version.
+- **Run `grain state key unwrap` before rolling back** to an image older
+  than the one that wrapped the key. An older build cannot read the
+  wrapped form.
 
 ## Operating notes
 

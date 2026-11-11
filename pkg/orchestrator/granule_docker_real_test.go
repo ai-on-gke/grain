@@ -1552,10 +1552,10 @@ func hostOutboundAddress(t *testing.T) string {
 	return ""
 }
 
-// startBridgeNeighbour runs a busybox HTTP server on port 8080 in a
-// container on the same docker network as vmContainer, and returns its
-// IPv4 address on that network.
-func startBridgeNeighbour(t *testing.T, vmContainer string) string {
+// startBridgeNeighbourWithPorts runs busybox HTTP listeners on ports in a
+// container on the same docker network as vmContainer, and returns its IPv4
+// address on that network.
+func startBridgeNeighbourWithPorts(t *testing.T, vmContainer string, ports ...string) string {
 	t.Helper()
 	netOut, err := exec.Command("docker", "inspect", "-f",
 		`{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}`, vmContainer).CombinedOutput()
@@ -1567,8 +1567,17 @@ func startBridgeNeighbour(t *testing.T, vmContainer string) string {
 		t.Fatalf("%s is on no docker network", vmContainer)
 	}
 	neighbour := vmContainer + "-neighbour"
+	var cmds []string
+	cmds = append(cmds, "mkdir -p /www && echo neighbour-ok > /www/index.html")
+	for i, p := range ports {
+		if i == len(ports)-1 {
+			cmds = append(cmds, "exec httpd -f -p "+p+" -h /www")
+		} else {
+			cmds = append(cmds, "httpd -p "+p+" -h /www")
+		}
+	}
 	out, err := exec.Command("docker", "run", "-d", "--rm", "--name", neighbour, "--network", network,
-		"busybox", "sh", "-c", "mkdir -p /www && echo neighbour-ok > /www/index.html && exec httpd -f -p 8080 -h /www").CombinedOutput()
+		"busybox", "sh", "-c", strings.Join(cmds, " && ")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("starting a neighbour container on %s: %v\n%s", network, err, out)
 	}
@@ -1583,6 +1592,141 @@ func startBridgeNeighbour(t *testing.T, vmContainer string) string {
 		t.Fatalf("neighbour container %s has no IPv4 address on %s", neighbour, network)
 	}
 	return ip
+}
+
+// startBridgeNeighbour runs a busybox HTTP server on port 8080 in a
+// container on the same docker network as vmContainer, and returns its
+// IPv4 address on that network.
+func startBridgeNeighbour(t *testing.T, vmContainer string) string {
+	t.Helper()
+	return startBridgeNeighbourWithPorts(t, vmContainer, "8080")
+}
+
+// TestGranuleSandboxOpenNetworkFenceBlocksMetadataHostAndPeers proves that a
+// NetworkOpen granule VM cannot reach cloud metadata (169.254.169.254 or IPv6
+// ULA fd20:ce::254), non-service host ports on the gateway, non-gateway host
+// addresses, or neighbouring sandboxes on the same bridge -- including on TCP
+// port 53 (task 3984) -- while allowed sandbox service ports on the gateway
+// continue to answer. Runs in nightly.yml's "real KVM sandboxes" job.
+func TestGranuleSandboxOpenNetworkFenceBlocksMetadataHostAndPeers(t *testing.T) {
+	granuleDockerRealTestPrereqs(t)
+	t.Cleanup(orchestrator.UseRealHostFirewall())
+
+	granuleDir := buildGranule(t)
+	image := buildGranuleGuestImage(t)
+	t.Setenv("PATH", granuleDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	service := serveOnWildcard(t, "grain-sandbox-service")
+	other := serveOnWildcard(t, "not-a-sandbox-service")
+
+	stateDir := t.TempDir()
+	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
+		StateDir: stateDir,
+		CreateArgs: []string{
+			"-kontur-image", image,
+			"-guest-port", "22",
+			"-guest-user", "debian",
+			"-disk-mode=overlay",
+		},
+		SSHUser:           "debian",
+		Workspace:         "/home/debian",
+		ReadyTimeout:      3 * time.Minute,
+		ReadyPollInterval: time.Second,
+		DefaultCPUs:       realVMDefaultCPUs(t),
+		DefaultMemoryMB:   realVMDefaultMemoryMB(t),
+		SandboxServicePorts: func() []orchestrator.SandboxServicePort {
+			return []orchestrator.SandboxServicePort{{Proto: "tcp", Port: service}}
+		},
+	})
+
+	name, err := k.VMNameFor("open-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := granule.Delete(context.Background(), stateDir, name); err != nil {
+			t.Logf("cleaning up real granule VM %q: %v", name, err)
+		}
+	})
+
+	sb, err := k.Acquire(context.Background(), "open-1", orchestrator.Shape{
+		NetworkAccess: model.NetworkOpen,
+	})
+	if err != nil {
+		t.Fatalf("Acquire NetworkOpen VM: %v", err)
+	}
+	defer sb.Release(context.Background())
+
+	tools, err := sb.Tools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runCommand *mcp.Tool
+	for i := range tools {
+		if tools[i].Name == "run_command" {
+			runCommand = &tools[i]
+			break
+		}
+	}
+	if runCommand == nil {
+		t.Fatal("no run_command tool returned")
+	}
+
+	gwOut, err := exec.Command("docker", "inspect", "-f",
+		`{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}`,
+		"granule-vm-"+name).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker inspect gateway: %v\n%s", err, gwOut)
+	}
+	gateway := string(bytes.TrimSpace(gwOut))
+	if gateway == "" {
+		t.Fatal("no gateway found for container")
+	}
+
+	// 1. Cloud metadata endpoints (IPv4 link-local & IPv6 ULA) must be dropped.
+	metaV4 := runCommand.Handler(context.Background(), map[string]any{
+		"command": "curl --connect-timeout 3 -sS -H 'Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/",
+	})
+	if !metaV4.IsError {
+		t.Errorf("NetworkOpen guest reached IPv4 metadata server 169.254.169.254: %s", metaV4.Text)
+	}
+	metaV6 := runCommand.Handler(context.Background(), map[string]any{
+		"command": "curl --connect-timeout 3 -g -sS -H 'Metadata-Flavor: Google' 'http://[fd20:ce::254]/computeMetadata/v1/'",
+	})
+	if !metaV6.IsError {
+		t.Errorf("NetworkOpen guest reached IPv6 metadata address fd20:ce::254: %s", metaV6.Text)
+	}
+
+	// 2. Allowed sandbox service port on gateway works; non-sandbox host port on gateway is dropped.
+	serviceRes := runCommand.Handler(context.Background(), map[string]any{
+		"command": fmt.Sprintf("curl --connect-timeout 5 -sS http://%s:%d/", gateway, service),
+	})
+	if serviceRes.IsError || !strings.Contains(serviceRes.Text, "grain-sandbox-service") {
+		t.Errorf("allowed sandbox service port on gateway unreachable from NetworkOpen guest: %s", serviceRes.Text)
+	}
+	otherRes := runCommand.Handler(context.Background(), map[string]any{
+		"command": fmt.Sprintf("curl --connect-timeout 3 -sS http://%s:%d/", gateway, other),
+	})
+	if !otherRes.IsError || strings.Contains(otherRes.Text, "not-a-sandbox-service") {
+		t.Errorf("non-sandbox host port on gateway answered NetworkOpen guest: %s", otherRes.Text)
+	}
+
+	// 3. Non-gateway host address is dropped even on a sandbox service port.
+	hostSrc := hostOutboundAddress(t)
+	if hostSrc != gateway {
+		if ok, out := guestTCPConnect(t, runCommand, hostSrc, strconv.Itoa(service)); ok {
+			t.Errorf("NetworkOpen guest reached host non-gateway address %s: %s", hostSrc, out)
+		}
+	}
+
+	// 4. Sibling container on the same bridge is unreachable on both :8080 and :53.
+	neighbourIP := startBridgeNeighbourWithPorts(t, "granule-vm-"+name, "8080", "53")
+	waitForNeighbour(t, neighbourIP)
+	for _, port := range []string{"8080", "53"} {
+		if ok, out := guestTCPConnect(t, runCommand, neighbourIP, port); ok {
+			t.Errorf("NetworkOpen guest reached sibling sandbox %s:%s across the bridge: %s", neighbourIP, port, out)
+		}
+	}
 }
 
 // waitForNeighbour waits until the host can fetch the neighbour's page.

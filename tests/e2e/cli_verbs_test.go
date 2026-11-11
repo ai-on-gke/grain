@@ -435,7 +435,7 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	storeDir := t.TempDir()
 	const capabilityID = "test-capability"
 	cap := &countingCapability{name: capabilityID}
-	cfg := orchestrator.Config{Capabilities: model.NewCapabilityRegistry(cap)}
+	cfg := orchestrator.Config{Capabilities: productionLikeRegistry(cap)}
 
 	// Task A: attached through the real CLI verb, left attached, and
 	// actually dispatched -- the capability must be materialized once and
@@ -457,7 +457,7 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 			t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
 		}
 	})
-	if len(attachedTask.Capabilities) != 1 || attachedTask.Capabilities[0] != capabilityID {
+	if caps := withoutDefaultCIRead(attachedTask.Capabilities); len(caps) != 1 || caps[0] != capabilityID {
 		t.Fatalf("capabilities after attach = %+v, want [%s]", attachedTask.Capabilities, capabilityID)
 	}
 
@@ -505,7 +505,7 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 			t.Fatalf("parsing grain capability detach -json output: %v\n%s", err, detached)
 		}
 	})
-	if len(detachedTask.Capabilities) != 0 {
+	if len(withoutDefaultCIRead(detachedTask.Capabilities)) != 0 {
 		t.Fatalf("capabilities after detach = %+v, want none", detachedTask.Capabilities)
 	}
 
