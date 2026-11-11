@@ -632,15 +632,15 @@ const learnLoginsTimeout = 10 * time.Second
 
 // learnLogins asks the hostd that just connected over sess for its hello
 // and keeps the agent CLI logins it reports (Hello.Logins) in its
-// status, for Settings' host pickers. It changes nothing a run reads,
-// and a hostd that does not answer -- or one too old to say -- simply
-// shows none known.
+// status, for Settings' host pickers. Has(FeatureLogins) distinguishes
+// an authoritative empty list ("no logins") from an older host that does
+// not report them ("not known").
 func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
 	ctx, cancel := context.WithTimeout(ctx, learnLoginsTimeout)
 	defer cancel()
 	c := Client{Dial: func(ctx context.Context) (net.Conn, error) { return sess.m.OpenStream(ctx) }}
 	h, err := c.Hello(ForDisplay(ctx))
-	if err != nil || h.Protocol < 2 {
+	if err != nil || (!h.Has(FeatureLogins) && len(h.Logins) == 0) {
 		return
 	}
 	r.mu.Lock()
