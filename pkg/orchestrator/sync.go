@@ -1447,6 +1447,14 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 				return err
 			}
 		}
+		// And the deployment's own repositories: a pull request open
+		// against one removed since it was opened is left open, its
+		// auto-merge withdrawn, rather than merged into a repository
+		// grain no longer works in (targetrepos.go). No override gets
+		// past this one while the repository stays off the list.
+		if held, err := withdrawForRemovedRepo(ctx, store, task, ref, now); err != nil || held {
+			return err
+		}
 		// And the repository's merge rules, where they say a person has
 		// to press Submit (`auto_merge: never`, mergerules.go).
 		if held, err := withdrawForMergePolicy(ctx, store, client, e.task, ref, e.policy, now); err != nil {

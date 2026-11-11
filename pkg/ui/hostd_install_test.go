@@ -15,15 +15,23 @@
 package ui
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -443,5 +451,137 @@ func TestDefaultHostInviteInstall(t *testing.T) {
 		if got := defaultHostInviteInstall(tc.c); strings.Join(got.Lines, "\n") != strings.Join(tc.want, "\n") || got.Note != "" {
 			t.Errorf("defaultHostInviteInstall(%+v) = %+v, want %q", tc.c, got, tc.want)
 		}
+	}
+}
+
+func TestHostdInstallServesAgentdAllowlistTemplate(t *testing.T) {
+	LogToTest(t)
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cfg := model.DefaultConfig()
+	cfg.AgentFramework = model.AgentFrameworkCodex
+	cfg.AgentBackends = []model.AgentBackend{{
+		ID:        "claude-conn",
+		Framework: model.AgentFrameworkClaude,
+		CLIPath:   "/opt/private-team/bin/claude",
+	}}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(RegisterHostCLICandidates("agy", "/opt/edition/bin/agy"))
+	t.Cleanup(RegisterHostCLITemplate(hostd.CLITemplateEntry{
+		Name:       "extra-cli",
+		Candidates: []string{"extra-cli", "~/.local/bin/extra-cli"},
+		Env:        []string{"EXTRA_API_KEY"},
+		PassEnv:    []string{"HTTPS_PROXY"},
+	}))
+
+	srv := NewServer(Config{LocalAPIToken: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"}, store)
+
+	// 1. Unauthenticated caller gets the template with deployment CLI ordering,
+	// registered candidates/templates, and closed env policies -- without private CLIPath.
+	for _, target := range []string{
+		hostdInstallShortPath + "?template=agentd",
+		hostdInstallPath + "?agentd=template",
+		hostdInstallShortPath + "?agentd-template=1",
+	} {
+		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com"+target, nil)
+		req.RemoteAddr = "203.0.113.9:4242"
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d: %s", target, rec.Code, rec.Body.String())
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("GET %s Content-Type = %q, want application/json", target, ct)
+		}
+		tmpl, err := hostd.ParseAllowlistTemplate(rec.Body.Bytes())
+		if err != nil {
+			t.Fatalf("GET %s invalid template: %v\n%s", target, err, rec.Body.String())
+		}
+		if wantOrder := []string{"codex", "claude", "agy", "extra-cli"}; !reflect.DeepEqual(tmpl.Names(), wantOrder) {
+			t.Errorf("GET %s names = %v, want %v", target, tmpl.Names(), wantOrder)
+		}
+		agyEntry, _ := tmpl.Lookup("antigravity")
+		if agyEntry.Name != "agy" || len(agyEntry.Candidates) == 0 || agyEntry.Candidates[0] != "/opt/edition/bin/agy" {
+			t.Errorf("agy entry = %+v, want registered candidate first", agyEntry)
+		}
+		if !reflect.DeepEqual(agyEntry.Env, antigravity.HostdEnv()) {
+			t.Errorf("agy env = %v, want %v", agyEntry.Env, antigravity.HostdEnv())
+		}
+		claudeEntry, _ := tmpl.Lookup("claude")
+		if !reflect.DeepEqual(claudeEntry.Env, claude.HostdEnv()) {
+			t.Errorf("claude env = %v, want %v", claudeEntry.Env, claude.HostdEnv())
+		}
+		if slices.Contains(claudeEntry.Candidates, "/opt/private-team/bin/claude") {
+			t.Errorf("stranger response leaked private CLIPath: %v", claudeEntry.Candidates)
+		}
+		codexEntry, _ := tmpl.Lookup("codex")
+		if !reflect.DeepEqual(codexEntry.Env, codex.HostdEnv()) {
+			t.Errorf("codex env = %v, want %v", codexEntry.Env, codex.HostdEnv())
+		}
+	}
+
+	// 2. Trusted caller also gets configured custom CLIPath appended as a candidate.
+	trustedReq := httptest.NewRequest(http.MethodGet, "https://grain.example.com"+hostdInstallShortPath+"?template=agentd", nil)
+	trustedReq.RemoteAddr = ""
+	trustedRec := httptest.NewRecorder()
+	srv.ServeHTTP(trustedRec, trustedReq)
+	trustedTmpl, err := hostd.ParseAllowlistTemplate(trustedRec.Body.Bytes())
+	if err != nil {
+		t.Fatalf("trusted template: %v", err)
+	}
+	if claudeEntry, ok := trustedTmpl.Lookup("claude"); !ok || !slices.Contains(claudeEntry.Candidates, "/opt/private-team/bin/claude") {
+		t.Errorf("trusted claude entry missing configured CLIPath: %+v", claudeEntry)
+	}
+}
+
+func TestHostdInstallScriptAgentdPassesAndPrintsTemplate(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "install.sh")
+	script := renderHostdInstallScript("https://grain.example.com", "v2.3.0", "")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// --agentd --print-template prints valid JSON AllowlistTemplate.
+	out, err := exec.Command("sh", scriptPath, "--agentd", "--print-template").CombinedOutput()
+	if err != nil {
+		t.Fatalf("sh install.sh --agentd --print-template: %v\n%s", err, out)
+	}
+	tmpl, err := hostd.ParseAllowlistTemplate(out)
+	if err != nil {
+		t.Fatalf("printed template invalid: %v\n%s", err, out)
+	}
+	if tmpl.Server != "https://grain.example.com" || len(tmpl.CLIs) < 3 {
+		t.Errorf("printed template = %+v", tmpl)
+	}
+
+	// --agentd exports GRAIN_AGENTD_TEMPLATE to the grain-agentd binary it invokes.
+	stubBin := filepath.Join(dir, "fake-grain-agentd")
+	envDump := filepath.Join(dir, "env.json")
+	stubScript := "#!/bin/sh\nprintf '%s' \"$GRAIN_AGENTD_TEMPLATE\" > '" + envDump + "'\n"
+	if err := os.WriteFile(stubBin, []byte(stubScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", scriptPath, "--agentd", "--agentd-bin", stubBin, "--no-start")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sh install.sh --agentd --agentd-bin: %v\n%s", err, out)
+	}
+	dumped, err := os.ReadFile(envDump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostd.ParseAllowlistTemplate(dumped); err != nil {
+		t.Fatalf("forwarded GRAIN_AGENTD_TEMPLATE invalid: %v\n%s", err, dumped)
 	}
 }

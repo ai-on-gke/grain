@@ -70,7 +70,9 @@ type ReviewedMergeConfig struct {
 	// alone. Nil checks the target alone.
 	Compare func(ctx context.Context, repo, base, head string) (reviewedmerge.Comparison, error)
 	// RevisionCmd prints a pulled image's revision label, with the image
-	// appended; docker image inspect's when nil.
+	// appended; docker image inspect's when nil. The image path's alone:
+	// the Kubernetes path has pulled nothing, and reads the label from
+	// the registry by the signed digest (reviewed_registry.go).
 	RevisionCmd []string
 	// RunningRevision is the commit this deployment runs now;
 	// version.Get().Revision when nil.
@@ -102,12 +104,43 @@ func (u *Upgrader) imageRevision(ctx context.Context, p *progress, step string, 
 	return rev, nil
 }
 
-// checkReviewedMerge refuses ref, an image already pinned and its
-// signature verified, unless its commit reached its branch through
-// reviewed merges. It returns what the step should say on success, and
-// "" when the deployment has not configured the check.
-func (u *Upgrader) checkReviewedMerge(ctx context.Context, p *progress, step string, verifyCmd []string, ref string) (string, error) {
+// kubeRevision is the commit ref, pinned to the digest the verifier
+// signed off on, says it was built from, read from the registry.
+func kubeRevision(ctx context.Context, ref string) (string, error) {
+	rev, err := registryImageRevision(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("reading the revision label of %s from its registry: %w", ref, err)
+	}
+	if !fullSHA.MatchString(rev) {
+		return "", fmt.Errorf("%s names no commit in its org.opencontainers.image.revision label (%q), so how it was reviewed cannot be asked", ref, rev)
+	}
+	return rev, nil
+}
+
+// checkImageReviewedMerge is checkReviewedMerge for the image path: ref
+// has been pulled, and its label is read from the local copy.
+func (u *Upgrader) checkImageReviewedMerge(ctx context.Context, p *progress, step, ref string) (string, error) {
 	rc := u.cfg.Image.ReviewedMerge
+	return u.checkReviewedMerge(ctx, p, step, rc, u.cfg.Image.VerifyCmd, ref, func(ctx context.Context) (string, error) {
+		return u.imageRevision(ctx, p, step, rc, ref)
+	})
+}
+
+// checkKubeReviewedMerge is checkReviewedMerge for the Kubernetes path:
+// ref is pinned to the digest verifyTag returned and nothing has pulled
+// it, so the label is read from the registry by that digest.
+func (u *Upgrader) checkKubeReviewedMerge(ctx context.Context, p *progress, step, ref string) (string, error) {
+	return u.checkReviewedMerge(ctx, p, step, u.cfg.Kube.ReviewedMerge, u.cfg.Kube.VerifyCmd, ref, func(ctx context.Context) (string, error) {
+		return kubeRevision(ctx, ref)
+	})
+}
+
+// checkReviewedMerge refuses ref, an image already pinned and its
+// signature verified, unless the commit revision reads out of it reached
+// its branch through reviewed merges. It returns what the step should
+// say on success, and "" when the deployment has not configured the
+// check.
+func (u *Upgrader) checkReviewedMerge(ctx context.Context, p *progress, step string, rc *ReviewedMergeConfig, verifyCmd []string, ref string, revision func(context.Context) (string, error)) (string, error) {
 	if rc == nil {
 		return "", nil
 	}
@@ -119,7 +152,7 @@ func (u *Upgrader) checkReviewedMerge(ctx context.Context, p *progress, step str
 	}
 	ctx, cancel := context.WithTimeout(ctx, reviewedTimeout)
 	defer cancel()
-	target, err := u.imageRevision(ctx, p, step, rc, ref)
+	target, err := revision(ctx)
 	if err != nil {
 		return "", err
 	}

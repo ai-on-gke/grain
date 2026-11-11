@@ -90,8 +90,18 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 		t.Errorf("base status: %d %s", rec.Code, rec.Body)
 	}
 	rec = get("tok-plain", "/cli/ci/runs")
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `does not hold the "https://grain.dev/capabilities/grain#ci" capability`) {
+	// The refusal names what works without a grant and the grant that
+	// opens CI reads, never "a human attaches grain#ci" (task 4361).
+	if rec.Code != http.StatusForbidden {
 		t.Errorf("ci runs without grain-ci: %d %s", rec.Code, rec.Body)
+	}
+	for _, want := range []string{"`grain ci wait`", "`grain pr open`", "api:ci-read@bwsalmon/grain", "api#ci-read"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("ci runs without grain-ci: %s does not name %q", rec.Body, want)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "a human attaches it") {
+		t.Errorf("ci runs without grain-ci: %s tells the run a human attaches grain#ci", rec.Body)
 	}
 	rec = get("tok-plain", "/cli/db/query")
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#sql"`) ||

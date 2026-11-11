@@ -2833,4 +2833,28 @@ describe("deployment time zone formatting on SandboxHealthPage", () => {
       `Started ${formatDateTime(liveStarted, "Asia/Tokyo")}`,
     );
   });
+
+  it("renders targetRepoHostWarnings alerts with a link to Repos", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      targetRepoHostWarnings: [
+        {
+          repo: "experimental/grain",
+          resolvesTo: "github.com",
+          candidates: ["git.forge.example/experimental/grain"],
+          message:
+            "this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+        },
+      ],
+    });
+    render(<SandboxHealthPage showError={() => {}} />);
+    const alert = await screen.findByTestId("repo-host-mismatch-alert");
+    expect(alert).toHaveTextContent(
+      "experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+    );
+    expect(within(alert).getByRole("link", { name: "Repos" })).toHaveAttribute(
+      "href",
+      "/repos",
+    );
+  });
 });

@@ -200,6 +200,7 @@ Each of these takes `<id>`, calls the route, and prints the task. `approve` and 
 | `run-now <id>` | `POST /api/tasks/{id}/run-now` | |
 | `compact [-handover-file f] <id>` | `POST /api/tasks/{id}/compact`. With a handover the task is compacted now, through every comment so far; without one its next run is asked to compact first (`design/design/durable-tasks.design.md#DT-15`) | |
 | `brief [-file f -reason r] <id>` | `GET /api/tasks/{id}/context` to show the current brief, handover age and compaction cursor; with `-file`, `POST /api/tasks/{id}/brief` replaces the brief (an empty file reverts to the original description) | |
+| `rollover <id>` | `POST /api/tasks/{id}/rollover`. Files a successor carrying the task's current brief, handover and settings, moves every reference to the task onto it, and closes the task as `rolled_over`; refused for a closed task, a running one, a console session, and a task that is not durable (`design/design/durable-tasks.design.md#DT-15`) | |
 | `resume <id>` | `POST /api/tasks/{id}/resume` | |
 | `capability <id> <capability-id> attach\|detach` | `POST /api/tasks/{id}/capabilities`. A bad verb gets `third argument must be attach or detach, got "<x>"`; fewer than three arguments get `usage: grain capability <id> <capability-id> attach\|detach` | admin |
 
@@ -242,6 +243,10 @@ _No flags._
 |---|---|---|---|---|
 | `-file` | string |  |  | replace the current brief with this file (- for stdin); an empty file reverts to the original description |
 | `-reason` | string |  |  | why the brief changed (required with -file) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain rollover -->
+_No flags._
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain resume -->
@@ -2353,7 +2358,7 @@ This covers where the installation's state repository lives and what it holds. T
 | `reformat` | record that the schema changed, so the next start replaces the dump |
 | `restore-snapshot DIR` | restore the settings and memory tables from a snapshot |
 | `prepare-upgrade` | export a store this build cannot open, for the next start to migrate. Prints `prepared FROM TO DIR`, `current N` or `none` |
-| `check [-migrate] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive |
+| `check [-migrate] [-base REV] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive. `-base` (string) names the git revision the change is against: a credential typed into a capability server rather than referenced as `$secret:<name>` fails the check when the change adds it and is a warning when the base already held it (without `-base`, or with `-migrate`, every one is a warning). The check grain posts on its own configuration repositories reads the base from the clone's `origin/HEAD` |
 | `key show` / `key path` | print the secrets public key / where the private key is read from |
 | `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
 | `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |

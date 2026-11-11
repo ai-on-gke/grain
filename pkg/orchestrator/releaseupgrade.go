@@ -59,9 +59,12 @@ const (
 // AutoUpgradeChannel is "latest" and the exact tag otherwise.
 //
 // A tag is acted on once it has been the newest for
-// releaseUpgradeSettle, and an automatic upgrade still draining is
-// re-pointed at a newer release rather than followed by another, so two
-// releases close together give one drain. Each release is acted on once
+// releaseUpgradeSettle, an automatic upgrade still draining is re-pointed
+// at a newer release rather than followed by another, and with
+// Config.AutoUpgradeMinIntervalHours > 0 a new drain waits until that
+// long after the last successful automatic upgrade
+// (model.AutoUpgradeRelease.SucceededAt) and then goes straight to
+// whatever release is newest then. Each release is acted on once
 // (model.AutoUpgradeRelease.Release): a release the deployment already
 // runs is recorded as such without holding the queue
 // (Config.UpgradeUnchanged), and one whose upgrade failed is not tried
@@ -103,13 +106,19 @@ func reconcileReleaseUpgrade(ctx context.Context, deps Deps, now time.Time) erro
 	if record.Release == newest {
 		return nil
 	}
+	minInterval := cfg.AutoUpgradeMinInterval()
 	if record.Newest != newest {
 		record.Newest, record.SeenAt = newest, now.UTC()
 		if err := deps.Store.SetAutoUpgradeRelease(ctx, *record); err != nil {
 			return fmt.Errorf("orchestrator: %w", err)
 		}
-		log.Printf("orchestrator: release %s is published; upgrading to it once it has stood for %s",
-			newest, releaseUpgradeSettle)
+		if minInterval > 0 && record.SucceededAt != nil && record.SucceededAt.Add(minInterval).After(now.Add(releaseUpgradeSettle)) {
+			log.Printf("orchestrator: release %s is published; upgrading once it has stood for %s and %s has passed since the last automatic upgrade",
+				newest, releaseUpgradeSettle, minInterval)
+		} else {
+			log.Printf("orchestrator: release %s is published; upgrading to it once it has stood for %s",
+				newest, releaseUpgradeSettle)
+		}
 	}
 	if now.Sub(record.SeenAt) < releaseUpgradeSettle {
 		return nil
@@ -145,6 +154,9 @@ func reconcileReleaseUpgrade(ctx context.Context, deps Deps, now time.Time) erro
 			log.Printf("orchestrator: the automatic upgrade still draining now goes to %s (release %s)", target, newest)
 		}
 		return act(model.AutoUpgradeScheduled, &at)
+	}
+	if minInterval > 0 && record.SucceededAt != nil && now.Sub(*record.SucceededAt) < minInterval {
+		return nil
 	}
 	underway, err := upgradeUnderway(ctx, deps)
 	if err != nil {
@@ -262,6 +274,13 @@ func watchAutoUpgrade(ctx context.Context, deps Deps, now time.Time) error {
 			return err
 		}
 		record.Outcome = model.AutoUpgradeSucceeded
+		if !status.Unchanged {
+			finished := now.UTC()
+			if status.FinishedAt != nil {
+				finished = status.FinishedAt.UTC()
+			}
+			record.SucceededAt = &finished
+		}
 	default:
 		return nil
 	}

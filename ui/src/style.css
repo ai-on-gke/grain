@@ -830,6 +830,21 @@ samp,
   margin-left: auto;
   align-self: center;
 }
+/* "Try the new Inbox": a quiet link under the header, to /next/inbox. */
+.inbox-next-callout {
+  margin: 0;
+  padding: 0.5rem 1.75rem 0;
+  font-size: 0.8125rem;
+  text-align: right;
+}
+:root[data-phone="true"] .inbox-next-callout {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+.inbox-try-next {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
 
 /* ---------- Status dot: a small colored circle stands in for the state
    pill everywhere a state is shown, in place of the filled badge. ---------- */
@@ -4609,6 +4624,15 @@ fieldset legend {
    title's line, taking width from the title that on a phone they have
    never taken. */
 :root[data-phone="true"] .task-row > .MuiChip-root {
+  order: 4;
+}
+/* So does the control that ends a stalled row's wait, which follows the
+   sub-case chip it answers -- bare, or inside AccessGate's wrapper for a
+   role that may not press it. Without an order it sorted up onto the
+   title's line, a screen's height of row away from the chip naming what
+   it does (2026-11-11 walkthrough). */
+:root[data-phone="true"] .task-row > .task-reason-control,
+:root[data-phone="true"] .task-row > .access-gate {
   order: 4;
 }
 :root[data-phone="true"] .chips {

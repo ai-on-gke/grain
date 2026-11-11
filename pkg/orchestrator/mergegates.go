@@ -34,12 +34,15 @@ import (
 const LinkPostMergeReviewCommit model.LinkKind = "post-merge-review-commit"
 
 // reviewGateOf identifies which merge gate a review task belongs to on reviewed.
-func reviewGateOf(reviewed model.Task, reviewID string) string {
+func reviewGateOf(reviewed model.Task, reviewID string, reviewTags ...string) string {
 	if reviewID != "" && linkTarget(reviewed, model.LinkSecurityReviewTask) == reviewID {
 		return model.GateSecurityReview
 	}
-	if trigger, ok := gatingTaskIDs(reviewed)[reviewID]; ok && trigger != "" {
-		return "trigger:" + trigger
+	if triggers := gatingTaskIDs(reviewed)[reviewID]; len(triggers) > 0 && triggers[0] != "" {
+		return "trigger:" + triggers[0]
+	}
+	if triggers := reviewTriggers(reviewTags); len(triggers) > 0 && triggers[0] != "" {
+		return "trigger:" + triggers[0]
 	}
 	return model.GateReview
 }
@@ -308,7 +311,7 @@ func clearReviewFindingsOnCleanReview(ctx context.Context, store *model.Store, r
 		return err
 	}
 	completedAt := obs.CompletedAt.UTC().Truncate(time.Second)
-	gate := reviewGateOf(*reviewed, review.ID)
+	gate := reviewGateOf(*reviewed, review.ID, review.Tags...)
 	records := model.ReviewFindingsForGate(*reviewed, gate)
 	if len(records) == 0 {
 		return nil
@@ -328,11 +331,13 @@ func clearReviewFindingsOnCleanReview(ctx context.Context, store *model.Store, r
 			return nil
 		case gate == model.GateReview && linkTarget(*t, model.LinkReviewTask) != "" && linkTarget(*t, model.LinkReviewTask) != review.ID:
 			return nil
+		case strings.HasPrefix(gate, "trigger:") && len(gatingTaskIDs(*t)) > 0 && len(gatingTaskIDs(*t)[review.ID]) == 0:
+			return nil
 		}
-		model.ClearReviewFindingsForGate(t, gate)
 		if q, ok := model.ReviewQuestionsOf(*t); ok && (q.ReviewTaskID == review.ID || q.ReviewTaskID != "") {
 			t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		}
+		model.ClearReviewFindingsForGate(t, gate)
 		if !hasSecurityHold(*t) && !hasPathTriggerHold(*t) && !heldForHuman(*t) &&
 			!model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
 			t.AutoMerge = true

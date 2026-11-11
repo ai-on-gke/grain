@@ -977,8 +977,7 @@ export default function Timeline({
     ) : null;
   // A closed task stays closed when commented on, so the box says before
   // it is used that the comment reaches no agent, and offers the reopen
-  // that would deliver it. The note stays for a role that may not reopen
-  // (AccessGate leaves the button out); Comment only is the plain post.
+  // that would deliver it. Comment only is the plain post.
   const closed = t.state === "closed";
   const closedNote = closed ? (
     <p className="hint comment-form-closed">
@@ -1025,9 +1024,14 @@ export default function Timeline({
             </Button>
           </AccessGate>
         )}
-        <Button variant="outlined" onClick={() => send()}>
-          {closed ? "Comment only" : "Comment"}
-        </Button>
+        {/* A comment is a task write (POST /api/tasks/{id}/comments
+            needs tasks:write), so a role without it sees the button
+            disabled with the reason rather than a 403 on send. */}
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <Button variant="outlined" onClick={() => send()}>
+            {closed ? "Comment only" : "Comment"}
+          </Button>
+        </AccessGate>
         {reopens}
       </div>
     </>

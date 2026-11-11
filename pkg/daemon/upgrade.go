@@ -197,13 +197,17 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 		// cluster can pull both artifacts before Recreate stops this pod.
 		return upgrade.New(upgrade.Config{
 			Kube: &upgrade.KubeConfig{
-				Repository:       cfg.UpgradeImage,
-				Track:            track,
-				Deployment:       cfg.K8sDeployment,
-				Container:        cfg.K8sContainer,
-				Namespace:        cfg.K8sNamespace,
-				Kubectl:          cfg.K8sKubectl,
-				VerifyCmd:        cfg.UpgradeVerifyCmd,
+				Repository: cfg.UpgradeImage,
+				Track:      track,
+				Deployment: cfg.K8sDeployment,
+				Container:  cfg.K8sContainer,
+				Namespace:  cfg.K8sNamespace,
+				Kubectl:    cfg.K8sKubectl,
+				VerifyCmd:  cfg.UpgradeVerifyCmd,
+				// And whether a reviewed commit went into the image,
+				// read from the registry by the signed digest and asked
+				// of the forge (pkg/upgrade/reviewed.go).
+				ReviewedMerge:    upgradeReviewedMerge(cfg),
 				SandboxImageArgs: []string{"k8s-sandbox-image"},
 				// And whether the candidate build would accept the args
 				// this Deployment hands it. Those args were applied once
@@ -432,9 +436,9 @@ func upgradeRestartRequest(cfg Config) func(branch string) {
 	}
 }
 
-// upgradeReviewedMerge is the image path's reviewed-merge check, from
-// -upgrade-reviewed-merge-repo and the flags beside it, or nil when that
-// is not set.
+// upgradeReviewedMerge is the image and Kubernetes paths' reviewed-merge
+// check, from -upgrade-reviewed-merge-repo and the flags beside it, or
+// nil when that is not set.
 func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
 	repo := strings.TrimSpace(cfg.UpgradeReviewedMergeRepo)
 	if repo == "" {

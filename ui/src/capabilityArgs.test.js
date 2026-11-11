@@ -96,6 +96,19 @@ describe("methodMenuLabel", () => {
       isSecretLooking("secret_values", { type: "string", writeOnly: true }),
     ).toBe(true);
   });
+
+  it("offers a boolean or a number whatever it is called, and still hides a secret-named string", () => {
+    expect(isSecretLooking("allow_sandbox_token", { type: "boolean" })).toBe(
+      false,
+    );
+    expect(isSecretLooking("token_ttl_minutes", { type: "integer" })).toBe(
+      false,
+    );
+    expect(isSecretLooking("api_token", { type: "string" })).toBe(true);
+    expect(
+      isSecretLooking("token_flag", { type: "boolean", writeOnly: true }),
+    ).toBe(true);
+  });
 });
 
 describe("describeGrant", () => {

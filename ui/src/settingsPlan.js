@@ -139,6 +139,8 @@ const SETTING_LABELS = {
   autoUpgradeChannel: "Automatic upgrade channel",
   autoUpgradeTime: "Automatic upgrade time of day",
   autoUpgradeOn: "Automatic upgrades",
+  autoUpgradeMinIntervalHours:
+    "Minimum interval between release upgrades (hours)",
   hub: "Hub",
   registryUrl: "Hub URL",
   registryEntry: "Entry name",
@@ -199,6 +201,7 @@ const SETTING_MINS = {
   ciArtifactDays: 0,
   ciArtifactRunMb: 0,
   ciArtifactFileMb: 0,
+  autoUpgradeMinIntervalHours: 0,
 };
 
 // settingMin is the lower bound for a numeric setting, or undefined when

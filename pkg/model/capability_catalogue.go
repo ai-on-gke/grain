@@ -848,8 +848,14 @@ func matchesRepo(patterns []string, repo *RepoRef) bool {
 			if p == CatalogueNoRepo {
 				return true
 			}
+		case p == "*/*":
+			return true
 		default:
-			if ok, _ := path.Match(p, strings.ToLower(repo.Owner+"/"+repo.Name)); ok {
+			// Matched against the repo's written form, host and all off
+			// the default host, so `owner/*` admits only the default
+			// host's owner and `host/owner/*` only that host's: one
+			// owner/name on two hosts is two repositories (RepoAllowed).
+			if ok, _ := path.Match(p, strings.ToLower(repo.String())); ok {
 				return true
 			}
 		}

@@ -2009,6 +2009,53 @@ describe("AutoUpgradeSettings", () => {
       screen.getByRole("option", { name: "release-2026" }),
     ).toBeInTheDocument();
   });
+
+  it("saves the minimum interval between release upgrades on blur or Enter, allowing 0", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <AutoUpgradeSettings
+        settings={{
+          ...settings,
+          autoUpgradeOn: "release",
+          autoUpgradeChannel: "latest",
+          autoUpgradeMinIntervalHours: 6,
+          autoUpgradeMinIntervalHoursDefault: 6,
+        }}
+        onSave={onSave}
+      />,
+    );
+
+    const interval = screen.getByLabelText(/minimum interval \(hours\)/i);
+    expect(interval).toHaveValue(6);
+    await user.clear(interval);
+    await user.type(interval, "0");
+    expect(onSave).not.toHaveBeenCalled();
+    await user.tab();
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeMinIntervalHours: 0,
+    });
+
+    rerender(
+      <AutoUpgradeSettings
+        settings={{
+          ...settings,
+          autoUpgradeOn: "release",
+          autoUpgradeChannel: "latest",
+          autoUpgradeMinIntervalHours: 0,
+          autoUpgradeMinIntervalHoursDefault: 6,
+        }}
+        onSave={onSave}
+      />,
+    );
+    const updated = screen.getByLabelText(/minimum interval \(hours\)/i);
+    expect(updated).toHaveValue(0);
+    await user.clear(updated);
+    await user.type(updated, "12{Enter}");
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeMinIntervalHours: 12,
+    });
+  });
 });
 
 describe("Registry image mode on UpgradePanel", () => {

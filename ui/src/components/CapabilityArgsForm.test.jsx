@@ -692,3 +692,162 @@ describe("CapabilityArgsForm", () => {
     expect(within(reqUrls).getByText("needs at least 1 item")).toBeTruthy();
   });
 });
+
+// REPO_WRITE is repo#write's args schema as GET /api/capability-methods
+// carries it (grainserver.buildRepoServerFor): a top-level oneOf.
+const REPO_ARG = { type: "string", pattern: "^[^/]+/[^/]+$" };
+const REPO_WRITE = {
+  title: "Kind of write",
+  oneOf: [
+    {
+      title: "CI push to another repo",
+      type: "object",
+      additionalProperties: false,
+      required: ["repo"],
+      properties: { repo: REPO_ARG },
+    },
+    {
+      title: "Write target (repo + base)",
+      type: "object",
+      additionalProperties: false,
+      required: ["repo", "base"],
+      properties: { repo: REPO_ARG, base: { type: "string" } },
+    },
+    {
+      title: "Push any branch/tag (refs + force)",
+      type: "object",
+      additionalProperties: false,
+      required: ["refs", "force"],
+      properties: {
+        refs: {
+          type: "array",
+          items: { type: "string", enum: ["refs/heads/*", "refs/tags/*"] },
+          minItems: 2,
+          maxItems: 2,
+          uniqueItems: true,
+        },
+        force: { type: "boolean", const: true },
+      },
+    },
+  ],
+};
+
+describe("CapabilityArgsForm top-level oneOf (repo#write)", () => {
+  it("is drawn as a form, not JSON", () => {
+    expect(unsupportedReason(REPO_WRITE)).toBe("");
+  });
+
+  it("names every option and what each is missing when none matches", () => {
+    const errors = validateValue(REPO_WRITE, REPO_WRITE, {});
+    expect(errors[""]).toBe(
+      "matches none of the options -- " +
+        "CI push to another repo: repo is required; " +
+        "Write target (repo + base): repo is required, base is required; " +
+        "Push any branch/tag (refs + force): refs is required, force is required",
+    );
+    expect(
+      validateValue(REPO_WRITE, REPO_WRITE, { repo: "a/b", base: "main" }),
+    ).toEqual({});
+  });
+
+  it("offers each variant by its title and draws its fields", async () => {
+    const user = userEvent.setup();
+    render(<Harness schema={REPO_WRITE} />);
+    const picker = screen.getByRole("combobox", { name: "Kind of write" });
+    await user.click(picker);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "CI push to another repo",
+      "Write target (repo + base)",
+      "Push any branch/tag (refs + force)",
+    ]);
+    await user.keyboard("{Escape}");
+
+    // {repo}: the first option, its field drawn and its error on it.
+    expect(screen.getAllByText("is required").length).toBe(1);
+    expect(screen.getByText(/matches none of the options --/)).toBeTruthy();
+    await user.type(screen.getByLabelText(/^repo/), "acme/lib");
+    expect(value()).toEqual({ repo: "acme/lib" });
+    expect(screen.queryByText(/matches none/)).toBeNull();
+
+    // {repo, base}.
+    await user.click(picker);
+    await user.click(
+      screen.getByRole("option", { name: "Write target (repo + base)" }),
+    );
+    expect(value()).toEqual({});
+    await user.type(screen.getByLabelText(/^repo/), "acme/lib");
+    await user.type(screen.getByLabelText(/^base/), "release/v1");
+    expect(value()).toEqual({ repo: "acme/lib", base: "release/v1" });
+    expect(screen.queryByText(/matches none/)).toBeNull();
+
+    // {refs, force}: valid as soon as it is picked -- force a fixed,
+    // ticked box, refs the two fixed chips.
+    await user.click(picker);
+    await user.click(
+      screen.getByRole("option", {
+        name: "Push any branch/tag (refs + force)",
+      }),
+    );
+    expect(value()).toEqual({
+      refs: ["refs/heads/*", "refs/tags/*"],
+      force: true,
+    });
+    const force = screen.getByRole("checkbox", { name: /force/ });
+    expect(force.checked).toBe(true);
+    expect(force.disabled).toBe(true);
+    const refs = screen.getByRole("group", { name: /refs/ });
+    expect(within(refs).getByText("refs/heads/*")).toBeTruthy();
+    expect(within(refs).getByText("refs/tags/*")).toBeTruthy();
+    expect(within(refs).queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/matches none/)).toBeNull();
+    expect(screen.queryByText("is required")).toBeNull();
+  });
+
+  it("opens a held grant on the variant it matches", () => {
+    render(
+      <Harness
+        schema={REPO_WRITE}
+        initial={{ force: true, refs: ["refs/tags/*", "refs/heads/*"] }}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Kind of write" }),
+    ).toHaveTextContent("Push any branch/tag (refs + force)");
+    expect(screen.getByRole("checkbox", { name: /force/ }).checked).toBe(true);
+  });
+});
+
+describe("CapabilityArgsForm Edit as JSON", () => {
+  it("switches any drawable form to JSON and back", async () => {
+    const user = userEvent.setup();
+    render(<Harness schema={REPO_WRITE} />);
+    await user.click(screen.getByRole("button", { name: "Edit as JSON" }));
+    expect(screen.queryByText(/cannot draw/)).toBeNull();
+    const editor = screen.getByLabelText("Arguments (JSON)");
+    expect(JSON.parse(editor.value)).toEqual({});
+    await user.clear(editor);
+    await user.click(editor);
+    await user.paste('{"refs":["refs/heads/*","refs/tags/*"],"force":true}');
+    expect(value()).toEqual({
+      refs: ["refs/heads/*", "refs/tags/*"],
+      force: true,
+    });
+    await user.click(screen.getByRole("button", { name: "Edit as form" }));
+    expect(
+      screen.getByRole("combobox", { name: "Kind of write" }),
+    ).toHaveTextContent("Push any branch/tag (refs + force)");
+  });
+
+  it("offers no toggle where JSON is the only editor", () => {
+    render(
+      <Harness
+        schema={{
+          type: "object",
+          properties: { b: { allOf: [{ type: "string" }] } },
+        }}
+      />,
+    );
+    expect(screen.getByText(/cannot draw/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit as JSON" })).toBeNull();
+  });
+});

@@ -1313,6 +1313,15 @@ describe("DetailOverlay timeline", () => {
     expect(
       screen.queryByRole("button", { name: "Reopen and send" }),
     ).not.toBeInTheDocument();
+    // A comment is a task write too (POST /api/tasks/{id}/comments needs
+    // tasks:write): Comment only is disabled with the reason, not a
+    // click that ends in a 403 (2026-11-11 walkthrough, Bug 2).
+    const commentOnly = screen.getByRole("button", { name: "Comment only" });
+    expect(commentOnly).toBeDisabled();
+    expect(commentOnly.closest("[data-access-denied]")).toHaveAttribute(
+      "data-access-denied",
+      "tasks:write",
+    );
   });
 
   it("posts a comment and clears the textarea", async () => {
