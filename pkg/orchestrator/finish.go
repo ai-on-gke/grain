@@ -429,7 +429,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if !staleBranch && !inPlace {
 		pushedCommit := true
 		if preRunBranchSHA != "" && client != nil && task.Target != nil {
-			if head, herr := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); herr == nil && head != nil {
+			if head, herr := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); herr == nil && head != nil {
 				pushedCommit = head.SHA != preRunBranchSHA
 			}
 		}
@@ -753,7 +753,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 	if sha == "" || client == nil || task.Target == nil {
 		return false, nil
 	}
-	head, err := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName())
+	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's branch head: %w", task.ID, err)
 	}
@@ -761,7 +761,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 		return false, nil
 	}
 	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
-	pr, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef)
+	pr, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: looking for a pull request open off %s's branch: %w", task.ID, err)
 	}
@@ -1012,7 +1012,7 @@ func targetBranchExists(client github.Client, target model.RepoRef, branch strin
 			return exists, err
 		}
 	}
-	return branchExistsSettled(client, target.Owner, target.Name, branch)
+	return branchExistsSettled(client, target.StoredOwner(), target.Name, branch)
 }
 
 // branchExistsSettled re-checks a "no such branch" answer before acting
@@ -3272,7 +3272,7 @@ func proposalDefaultBranches(client github.Client) func(model.RepoRef) string {
 		if def, ok := known[key]; ok {
 			return def
 		}
-		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name)
 		if err != nil {
 			log.Printf("orchestrator: reading %s's default branch to judge a proposal's base: %v "+
 				"-- comparing bases as written", repo, err)
@@ -3686,7 +3686,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 
 	branch := task.BranchName()
 	prRepo, headRef, crossRepo := taskPullRequestTarget(ctx, store, task)
-	if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err != nil {
+	if existing, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef); err != nil {
 		return github.PullRequest{}, landedWork{}, err
 	} else if existing != nil {
 		refreshPullRequest(ctx, store, client, task, existing.Number)
@@ -3719,7 +3719,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 
 	if !crossRepo && task.Target != nil {
 		if behind, err := branchIsBehind(client, *task.Target, base, branch); err == nil && behind {
-			_, mergeErr := client.MergeBranch(task.Target.Owner, task.Target.Name, branch, base, fmt.Sprintf("Merge %s into %s", base, branch))
+			_, mergeErr := client.MergeBranch(task.Target.StoredOwner(), task.Target.Name, branch, base, fmt.Sprintf("Merge %s into %s", base, branch))
 			if mergeErr != nil {
 				if github.IsMergeConflict(mergeErr) {
 					files := github.ConflictFiles(mergeErr)
@@ -3771,7 +3771,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	if landed.partial() {
 		body = landed.partialSentence() + "\n\n" + body
 	}
-	pr, err := client.CreatePullRequest(prRepo.Owner, prRepo.Name, headRef, base, title, body)
+	pr, err := client.CreatePullRequest(prRepo.StoredOwner(), prRepo.Name, headRef, base, title, body)
 	if err != nil && github.IsNoCommitsBetween(err) {
 		// The same condition, learnt from GitHub instead of from the
 		// compare: the read above failed, or the branch moved between the
@@ -3845,7 +3845,7 @@ func conflictError(err error) (*mergeConflictError, bool) {
 // branchIsBehind reports whether head is behind base on repo -- that is,
 // whether base carries commits that head does not yet contain.
 func branchIsBehind(client github.Client, repo model.RepoRef, base, head string) (bool, error) {
-	comp, err := client.CompareRefs(repo.Owner, repo.Name, base, head)
+	comp, err := client.CompareRefs(repo.StoredOwner(), repo.Name, base, head)
 	if err != nil {
 		if notFound(err) {
 			return false, nil
@@ -3899,7 +3899,7 @@ func branchIsBehind(client github.Client, repo model.RepoRef, base, head string)
 func pullRequestBase(ctx context.Context, store *model.Store, client github.Client, task model.Task) (base, retargetedFrom string, err error) {
 	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
 	if task.Base != "" {
-		exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, task.Base)
+		exists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, task.Base)
 		if err != nil {
 			return "", "", fmt.Errorf("orchestrator: checking %s's base branch %q: %w", task.ID, task.Base, err)
 		}
@@ -3908,13 +3908,13 @@ func pullRequestBase(ctx context.Context, store *model.Store, client github.Clie
 		}
 		if store != nil {
 			if targetBase, _, merged, err := store.MergedUpstreamTaskBase(ctx, *task.Target, task.Base); err == nil && merged && targetBase != "" && targetBase != task.Base && targetBase != task.BranchName() {
-				if targetExists, err := client.BranchExists(prRepo.Owner, prRepo.Name, targetBase); err == nil && targetExists {
+				if targetExists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, targetBase); err == nil && targetExists {
 					return targetBase, task.Base, nil
 				}
 			}
 		}
 	}
-	def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name)
+	def, err := client.DefaultBranch(prRepo.StoredOwner(), prRepo.Name)
 	if err != nil {
 		return "", "", err
 	}
@@ -3943,23 +3943,23 @@ func seedEmptyRepoBase(ctx context.Context, store *model.Store, client github.Cl
 	if targetBase == "" || targetBase == branch {
 		targetBase = "main"
 	}
-	head, err := client.GetBranchHead(task.Target.Owner, task.Target.Name, branch)
+	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, branch)
 	if err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("reading %s's tip on %s: %w", branch, task.Target, err)
 	}
 	if head == nil || head.SHA == "" {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("branch %q on %s has no head commit", branch, task.Target)
 	}
-	exists, err := client.BranchExists(task.Target.Owner, task.Target.Name, targetBase)
+	exists, err := client.BranchExists(task.Target.StoredOwner(), task.Target.Name, targetBase)
 	if err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("checking %q on %s: %w", targetBase, task.Target, err)
 	}
 	if !exists {
-		if err := client.CreateBranch(task.Target.Owner, task.Target.Name, targetBase, head.SHA); err != nil {
+		if err := client.CreateBranch(task.Target.StoredOwner(), task.Target.Name, targetBase, head.SHA); err != nil {
 			return github.PullRequest{}, landedWork{}, fmt.Errorf("initializing %q on empty repository %s: %w", targetBase, task.Target, err)
 		}
 	}
-	if err := client.SetDefaultBranch(task.Target.Owner, task.Target.Name, targetBase); err != nil {
+	if err := client.SetDefaultBranch(task.Target.StoredOwner(), task.Target.Name, targetBase); err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("setting default branch of %s to %q: %w", task.Target, targetBase, err)
 	}
 	if store != nil {
@@ -4072,11 +4072,11 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 	}
 	if prBaseRef == "" && client != nil {
 		if pr := model.TaskPullRequest(task); pr != nil && (pr.Repo.Same(*task.Target) || pr.Repo.Same(prRepo)) {
-			if detail, err := client.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number); err == nil {
+			if detail, err := client.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
-		} else if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err == nil && existing != nil {
-			if detail, err := client.GetPullRequest(prRepo.Owner, prRepo.Name, existing.Number); err == nil {
+		} else if existing, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef); err == nil && existing != nil {
+			if detail, err := client.GetPullRequest(prRepo.StoredOwner(), prRepo.Name, existing.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
 		}
@@ -4086,12 +4086,12 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 		if prBaseRef != "" && prBaseRef != oldBase {
 			newBase = prBaseRef
 		} else if newBase == "" && client != nil {
-			if def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name); err == nil && def != "" && def != task.BranchName() {
+			if def, err := client.DefaultBranch(prRepo.StoredOwner(), prRepo.Name); err == nil && def != "" && def != task.BranchName() {
 				newBase = def
 			}
 		}
 	} else if prBaseRef != "" && prBaseRef != oldBase && client != nil {
-		if exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, oldBase); err == nil && !exists {
+		if exists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, oldBase); err == nil && !exists {
 			merged = true
 			newBase = prBaseRef
 		}
@@ -4483,18 +4483,18 @@ func resolveContextCommitSHA(reach *gitproxy.Reach, client github.Client, repo m
 		ResolveCommitSHA(owner, repo, ref string) (string, error)
 	}
 	if r, ok := client.(shaResolver); ok {
-		if sha, err := r.ResolveCommitSHA(repo.Owner, repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
+		if sha, err := r.ResolveCommitSHA(repo.StoredOwner(), repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
 			return strings.ToLower(sha), nil
 		}
 	}
 	if client != nil {
 		lookup := ref
 		if lookup == "HEAD" {
-			if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && def != "" {
+			if def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && def != "" {
 				lookup = def
 			}
 		}
-		if head, err := client.GetBranchHead(repo.Owner, repo.Name, lookup); err == nil && head != nil && model.IsFullCommitSHA(head.SHA) {
+		if head, err := client.GetBranchHead(repo.StoredOwner(), repo.Name, lookup); err == nil && head != nil && model.IsFullCommitSHA(head.SHA) {
 			return strings.ToLower(head.SHA), nil
 		}
 	}

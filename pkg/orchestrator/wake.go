@@ -257,7 +257,7 @@ func pollGitHubCIResume(
 		if !hasAR {
 			return false, false, nil
 		}
-		wfRun, gerr := ar.GetActionsRun(h.Repo.Owner, h.Repo.Name, runID)
+		wfRun, gerr := ar.GetActionsRun(h.Repo.StoredOwner(), h.Repo.Name, runID)
 		if gerr != nil || wfRun == nil {
 			return false, false, gerr
 		}
@@ -274,7 +274,7 @@ func pollGitHubCIResume(
 	// ListCheckRuns + recordPolledChecks) and GitHub Actions workflow runs
 	// (via ActionsReader, the same source as `grain ci list --provider github-actions`).
 	var headSHA string
-	if head, herr := deps.Client.GetBranchHead(h.Repo.Owner, h.Repo.Name, h.Branch); herr == nil && head != nil {
+	if head, herr := deps.Client.GetBranchHead(h.Repo.StoredOwner(), h.Repo.Name, h.Branch); herr == nil && head != nil {
 		headSHA = strings.TrimSpace(head.SHA)
 	}
 
@@ -285,7 +285,7 @@ func pollGitHubCIResume(
 		extAfterHold int
 	)
 	if headSHA != "" {
-		checks, cerr := deps.Client.ListCheckRuns(h.Repo.Owner, h.Repo.Name, headSHA)
+		checks, cerr := deps.Client.ListCheckRuns(h.Repo.StoredOwner(), h.Repo.Name, headSHA)
 		if cerr != nil {
 			return false, false, cerr
 		}
@@ -327,7 +327,7 @@ func pollGitHubCIResume(
 		wfAfterHold int
 	)
 	if ar, ok := deps.Client.(github.ActionsReader); ok {
-		runs, rerr := ar.ListActionsRuns(h.Repo.Owner, h.Repo.Name, github.ActionsRunsQuery{Branch: h.Branch, Limit: 20})
+		runs, rerr := ar.ListActionsRuns(h.Repo.StoredOwner(), h.Repo.Name, github.ActionsRunsQuery{Branch: h.Branch, Limit: 20})
 		if rerr == nil && len(runs) > 0 {
 			hasHeadMatch := false
 			if headSHA != "" {

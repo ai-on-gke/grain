@@ -244,10 +244,10 @@ func newDaemonHostsRig(t *testing.T) *daemonHostsRig {
 	gheURL := newTestServer(t, r.ghe)
 	plainURL := newTestServer(t, r.plain)
 	r.ghe.host, r.plain.host = mustHost(t, gheURL), mustHost(t, plainURL)
-	// Each host's repository is named for it: the daemon's forge router
-	// finds the host of an owner/name passed without one only when it is
-	// on exactly one host (storeRepoHosts).
-	r.ghe.repo, r.plain.repo, r.depot.repo = "gadgets", "sprockets", "gizmos"
+	// Every host holds the same owner/name (gitHostsRepo), so a forge
+	// call that named the repository without its host would be resolved
+	// by storeRepoHosts to the default host -- which records it, and the
+	// tests below fail on it.
 	t.Setenv(fakeForgeCLIUpstreamEnv, newTestServer(t, r.depot))
 	r.ghe.start()
 	r.depot.start()
@@ -445,7 +445,7 @@ func TestADaemonFinishesARunOnEachHostThroughItsOwnForge(t *testing.T) {
 		found := false
 		r.ghe.with(func(s *githubsim.Sim) {
 			for _, c := range s.Calls {
-				if c.Method == http.MethodGet && strings.HasPrefix(c.Path, "/repos/acme/gadgets/commits/"+head+"/check-runs") {
+				if c.Method == http.MethodGet && strings.HasPrefix(c.Path, "/repos/acme/"+r.ghe.repo+"/commits/"+head+"/check-runs") {
 					found = true
 				}
 			}

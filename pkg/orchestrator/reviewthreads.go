@@ -140,7 +140,7 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	if !github.Polls().Due(poll, github.PollNormal, false, now) {
 		return nil
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		// Best effort, every cycle: the next one reads them again.
 		log.Printf("orchestrator: reading review comments on %s: %v", ref, err)
@@ -181,7 +181,7 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	threadOf := map[int]github.ReviewThread{}
 	threadsRead := false
 	if lister, ok := client.(reviewThreadLister); ok {
-		threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			log.Printf("orchestrator: reading review threads on %s (%v); counting every new one as open", ref, err)
 		} else {
@@ -288,12 +288,12 @@ func listUnresolvedThreads(client github.Client, ref model.PullRequestRef) ([]re
 	if !ok {
 		return nil, false
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		log.Printf("orchestrator: reading review threads on %s: %v", ref, err)
 		return nil, false
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		// Without the comments there is no ReviewID to tell grain's own
 		// draft-review threads (the owner's questions, which no agent run
@@ -521,11 +521,11 @@ func discoverRelayedThreads(client github.Client, ref model.PullRequestRef, revi
 	if !ok {
 		return nil
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return nil
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return nil
 	}
@@ -588,11 +588,11 @@ func syncRelayedReviewThreads(ctx context.Context, store *model.Store, client gi
 	if !ok {
 		return task, nil, nil
 	}
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return task, nil, nil
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return task, comments, nil
 	}
@@ -734,12 +734,12 @@ func resolveHandledRelayedThreads(ctx context.Context, store *model.Store, clien
 			continue
 		}
 		if canReply && !repliedTo[rt.CommentID] && len(th.CommentIDs) <= 1 && strings.TrimSpace(replyLine) != "" {
-			if _, err := replier.ReplyToReviewComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, rt.CommentID, replyLine); err != nil {
+			if _, err := replier.ReplyToReviewComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, rt.CommentID, replyLine); err != nil {
 				log.Printf("orchestrator: replying to relayed review comment %d on %s before resolving thread %s: %v",
 					rt.CommentID, ref, th.ID, err)
 			}
 		}
-		if err := resolver.ResolveReviewThread(ref.Repo.Owner, ref.Repo.Name, th.ID); err != nil {
+		if err := resolver.ResolveReviewThread(ref.Repo.StoredOwner(), ref.Repo.Name, th.ID); err != nil {
 			return resolved, fmt.Errorf("orchestrator: resolving relayed review thread %s on %s: %w", th.ID, ref, err)
 		}
 		resolved++
@@ -881,11 +881,11 @@ func unresolvedReviewThreads(client github.Client, task model.Task, ref model.Pu
 	if !ok {
 		return 0, nil
 	}
-	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return 0, nil
 	}
-	comments, _ := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, _ := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	commentByID := map[int]github.ReviewComment{}
 	for _, c := range comments {
 		commentByID[c.ID] = c

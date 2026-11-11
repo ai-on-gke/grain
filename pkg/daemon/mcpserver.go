@@ -2838,7 +2838,7 @@ func githubDefaultBranchReader(dataDir, githubHost string, insecureHTTP bool, cr
 		}
 		client := github.NewClient(transport, runCredentialSource(credentials, credential))
 		client.Caller = "agent tools"
-		return client.DefaultBranch(ref.Owner, ref.Name)
+		return client.DefaultBranch(ref.StoredOwner(), ref.Name)
 	}
 }
 

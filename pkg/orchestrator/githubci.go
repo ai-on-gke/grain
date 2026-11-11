@@ -401,7 +401,7 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 		if prBody == "" {
 			continue
 		}
-		if _, err := deps.Client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prBody); err != nil {
+		if _, err := deps.Client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prBody); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: commenting GitHub CI shared fault on %s: %w", ref, err))
 		}
 	}

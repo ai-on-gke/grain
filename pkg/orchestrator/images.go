@@ -236,7 +236,7 @@ func publishImages(ctx context.Context, store *model.Store, client github.Client
 		return
 	}
 	repo, _, crossRepo := taskPullRequestTarget(ctx, store, task)
-	detail, err := client.GetPullRequest(repo.Owner, repo.Name, number)
+	detail, err := client.GetPullRequest(repo.StoredOwner(), repo.Name, number)
 	if err != nil {
 		log.Printf("orchestrator: reading %s/%s#%d to add images to it: %v", repo.Owner, repo.Name, number, err)
 		return
@@ -249,7 +249,7 @@ func publishImages(ctx context.Context, store *model.Store, client github.Client
 	if crossRepo {
 		webURL = publishRepo.WebURL()
 	}
-	sha, err := publisher.PublishFiles(publishRepo.Owner, publishRepo.Name, imagesRef(task, note.CommentID),
+	sha, err := publisher.PublishFiles(publishRepo.StoredOwner(), publishRepo.Name, imagesRef(task, note.CommentID),
 		fmt.Sprintf("Images attached to grain task %s\n\nPublished for %s/%s#%d's description. "+
 			"This commit is on no branch and is never merged.", task.ID, repo.Owner, repo.Name, number),
 		note.At, note.Images)
@@ -259,7 +259,7 @@ func publishImages(ctx context.Context, store *model.Store, client github.Client
 		return
 	}
 	body := withImages(detail.Body, renderImages(task, webURL, sha, *note))
-	if err := client.UpdatePullRequestBody(repo.Owner, repo.Name, number, body); err != nil {
+	if err := client.UpdatePullRequestBody(repo.StoredOwner(), repo.Name, number, body); err != nil {
 		log.Printf("orchestrator: adding %s's images to %s/%s#%d: %v", task.ID, repo.Owner, repo.Name, number, err)
 	}
 }

@@ -319,8 +319,8 @@ forge router, so `tests/e2e/git_hosts_daemon_test.go` (grain/task-4378)
 runs it through a real `daemon.Run`: a githubsim behind the second GitHub
 host's loopback base URL (git at its root, REST under `/api/v3`), a
 second githubsim behind the `forgecli` forge, the plain git server, and a
-default host that records every request. Each host's repository has its
-own name there (see below). A stub agent pushes on each host, and the
+default host that records every request. Every host holds the same
+owner/name, `acme/widgets` (see below). A stub agent pushes on each host, and the
 test checks that the daemon's finish path opens the pull request on that
 host's own forge with that host's credential only. It also checks that the
 task records the pull request with its host, that the pull request's
@@ -346,12 +346,16 @@ Writing that test found three gaps, fixed beside it:
   filed on another host just after the last read then had its first
   finish read its branch from the default host, a 404, and was retried.
   A miss now re-reads the store (at most every 100ms).
-- still open: the reconcile loop, review threads and most other forge
-  calls name a repository by its bare owner. When one owner/name is on
-  two hosts, the router cannot tell which and sends them to the default
-  host, so a pull request on such a host is synced against the wrong
-  forge. That is why each host has its own repository name in the daemon
-  test.
+- the reconcile loop, review threads, the finish path's branch check and
+  most other forge calls named a repository by its bare owner. When one
+  owner/name was on two hosts, the router could not tell which and sent
+  them to the default host, so a pull request on such a host was synced
+  against the wrong forge (a 404 every cycle). Every caller holding a
+  `RepoRef` now passes `StoredOwner()` ("host/owner"), which the router
+  takes apart (grain/task-4463); `storeRepoHosts` is left for callers that
+  hold no `RepoRef`. The daemon test gives every host the same repository
+  name so a call that loses its host reaches the default host and fails
+  it.
 
 Merge-queue landing, review-thread replies, issue import, `propose_task`
 targets, reachable repositories and UI links on a non-default host are not

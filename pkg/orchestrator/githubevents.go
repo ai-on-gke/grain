@@ -197,7 +197,7 @@ func senderTrusted(client github.Client, cache map[string]bool, repo model.RepoR
 		cache[key] = false
 		return false, nil
 	}
-	perm, err := reader.CollaboratorPermission(repo.Owner, repo.Name, login)
+	perm, err := reader.CollaboratorPermission(repo.StoredOwner(), repo.Name, login)
 	if err != nil {
 		if github.IsPermissionDenied(err) || strings.Contains(err.Error(), "404") {
 			cache[key] = false
@@ -442,7 +442,7 @@ func fileTaskFromMention(ctx context.Context, deps Deps, repo model.RepoRef, num
 	if isPR && wantsReviewCommand(instruction) {
 		var prBody string
 		if headRef == "" && deps.Client != nil {
-			if detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+			if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 				headRef = detail.HeadRef
 				headSHA = detail.HeadSHA
 				baseRef = detail.BaseRef
@@ -462,7 +462,7 @@ func fileTaskFromMention(ctx context.Context, deps Deps, repo model.RepoRef, num
 		ref := model.PullRequestRef{Repo: repo, Number: number}
 		links = append(links, model.Link{Kind: model.LinkExternalPR, Target: ref.String()})
 		if headRef == "" && deps.Client != nil {
-			if detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+			if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 				headRef = detail.HeadRef
 				baseRef = detail.BaseRef
 				if subjectTitle == "" {
@@ -570,7 +570,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	eventKey, extraNote := r.eventKey, r.extraNote
 
 	if (headRef == "" || headSHA == "") && deps.Client != nil {
-		if detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+		if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 			if headRef == "" {
 				headRef = detail.HeadRef
 			}
@@ -621,7 +621,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	// Best-effort native GitHub Check Run while the review is queued/running.
 	if trusted && headSHA != "" && r.shepherdID == "" {
 		if checks, ok := deps.Client.(github.CheckRunWriter); ok {
-			checkID, err := checks.CreateCheckRun(repo.Owner, repo.Name, github.CheckRunWrite{
+			checkID, err := checks.CreateCheckRun(repo.StoredOwner(), repo.Name, github.CheckRunWrite{
 				Name:    externalReviewCheckName,
 				HeadSHA: headSHA,
 				Status:  "queued",
@@ -752,7 +752,7 @@ func completeExternalReviewOutcome(_ context.Context, client github.Client, task
 	if findings == 0 && summary != "" {
 		if submitter, ok := client.(github.ReviewSubmitter); ok {
 			body := fmt.Sprintf("Review from grain task %s:\n\n%s", task.ID, summary)
-			if _, err := submitter.SubmitReview(ref.Repo.Owner, ref.Repo.Name, ref.Number,
+			if _, err := submitter.SubmitReview(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number,
 				github.ReviewEventComment, body, nil); err != nil {
 				log.Printf("orchestrator: submitting clean review on %s for task %s: %v", ref, task.ID, err)
 			}
@@ -779,7 +779,7 @@ func completeExternalReviewOutcome(_ context.Context, client github.Client, task
 		checkSummary = fmt.Sprintf("Grain review task %s posted %s on %s.",
 			task.ID, countOf(findings, "finding"), ref)
 	}
-	if err := checks.UpdateCheckRun(ref.Repo.Owner, ref.Repo.Name, checkRunID, github.CheckRunWrite{
+	if err := checks.UpdateCheckRun(ref.Repo.StoredOwner(), ref.Repo.Name, checkRunID, github.CheckRunWrite{
 		Status:     "completed",
 		Conclusion: conclusion,
 		Output: &github.CheckRunOutput{
@@ -844,7 +844,7 @@ func defaultRepoGrants(ctx context.Context, store *model.Store, repo model.RepoR
 
 func usableRepoBranch(client github.Client, repo model.RepoRef, preferred, fallback string) string {
 	if preferred != "" && client != nil {
-		if exists, err := client.BranchExists(repo.Owner, repo.Name, preferred); err == nil && exists {
+		if exists, err := client.BranchExists(repo.StoredOwner(), repo.Name, preferred); err == nil && exists {
 			return preferred
 		}
 		if fallback != "" {
@@ -985,9 +985,9 @@ func reactEyes(client github.Client, repo model.RepoRef, commentID int64, inline
 	}
 	var err error
 	if inlineReview {
-		err = poster.CreateReviewCommentReaction(repo.Owner, repo.Name, commentID, "eyes")
+		err = poster.CreateReviewCommentReaction(repo.StoredOwner(), repo.Name, commentID, "eyes")
 	} else {
-		err = poster.CreateIssueCommentReaction(repo.Owner, repo.Name, commentID, "eyes")
+		err = poster.CreateIssueCommentReaction(repo.StoredOwner(), repo.Name, commentID, "eyes")
 	}
 	if err != nil {
 		log.Printf("orchestrator: posting reaction to comment %d on %s: %v", commentID, repo, err)

@@ -114,7 +114,7 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 	if err != nil || current == nil {
 		return err
 	}
-	detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s to judge it against its triggers: %w", ref, err)
 	}
@@ -124,11 +124,11 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 	if headSHA != "" && linkTarget(*current, model.LinkPathTriggersRead) == headSHA {
 		return nil
 	}
-	def, err := client.DefaultBranch(ref.Repo.Owner, ref.Repo.Name)
+	def, err := client.DefaultBranch(ref.Repo.StoredOwner(), ref.Repo.Name)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's default branch to judge %s: %w", ref.Repo, ref, err)
 	}
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	known := err == nil && len(files) < github.PullRequestFilesCap
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches for its triggers: %v -- "+
@@ -543,7 +543,7 @@ func pathTriggerNote(ctx context.Context, store *model.Store, client github.Clie
 		return nil
 	}
 	prBody := fmt.Sprintf("**grain path-trigger hold** (task %s)\n\n%s", taskID, body)
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prBody); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prBody); err != nil {
 		log.Printf("orchestrator: noting %s's path-trigger hold on %s: %v -- it is on the task only", taskID, ref, err)
 	}
 	return nil

@@ -153,7 +153,7 @@ func reconcileExternalCheckStall(
 	// whose HeadRef could collide with an unrelated branch in ref.Repo.
 	if sameRepoHeadBranch(ref.Repo, detail) {
 		result, mergeErr := client.MergeBranch(
-			ref.Repo.Owner, ref.Repo.Name,
+			ref.Repo.StoredOwner(), ref.Repo.Name,
 			detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail),
 		)
 		switch {
@@ -193,7 +193,7 @@ func reconcileExternalCheckStall(
 
 	// Branch is already up to date (or head ref cannot be merged into): push
 	// nothing, and re-request the check if the forge and app allow it.
-	rerequested, err := rerequestExternalChecks(client, ref.Repo.Owner, ref.Repo.Name, e.externalPending)
+	rerequested, err := rerequestExternalChecks(client, ref.Repo.StoredOwner(), ref.Repo.Name, e.externalPending)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: re-requesting stalled check on %s: %w", ref, err)
 	}
@@ -316,7 +316,7 @@ func clearExternalCheckStall(ctx context.Context, store *model.Store, taskID str
 }
 
 func postExternalNudgeNote(ctx context.Context, store *model.Store, client github.Client, taskID string, ref model.PullRequestRef, msg string, now time.Time) error {
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, msg); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, msg); err != nil {
 		return fmt.Errorf("orchestrator: commenting on %s after check nudge: %w", ref, err)
 	}
 	return queueComment(ctx, store, taskID, msg, now)

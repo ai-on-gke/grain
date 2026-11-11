@@ -180,7 +180,7 @@ func pathTriggerDefaultBranch(deps Deps, repo model.RepoRef, now time.Time) (str
 		!github.Polls().Due(poll, github.PollBackground, false, now) {
 		return cached.(string), nil
 	}
-	def, err := deps.Client.DefaultBranch(repo.Owner, repo.Name)
+	def, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		return "", err
 	}
@@ -246,7 +246,7 @@ func fireMergeTriggers(ctx context.Context, deps Deps, repo model.RepoRef, branc
 
 // comparedFiles is every path changed between two commits.
 func comparedFiles(client github.Client, repo model.RepoRef, from, to string) ([]string, error) {
-	cmp, err := client.CompareRefs(repo.Owner, repo.Name, from, to)
+	cmp, err := client.CompareRefs(repo.StoredOwner(), repo.Name, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +345,7 @@ func mergeOrigin(client github.Client, repo model.RepoRef, sha string) model.Wor
 	if client == nil {
 		return ""
 	}
-	pr, err := client.MergedPullRequestForCommit(repo.Owner, repo.Name, sha)
+	pr, err := client.MergedPullRequestForCommit(repo.StoredOwner(), repo.Name, sha)
 	if err != nil || pr == nil || pr.Number <= 0 {
 		return ""
 	}
