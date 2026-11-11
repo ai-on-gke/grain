@@ -203,8 +203,11 @@ func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Stor
 		// The acting /cli/ routes (grain ci wait, grain pr open, ...),
 		// through the UI/API server's own client once it is up, and the
 		// credit their waits earn (sandbox_cli.go).
-		CLIActions:      sandboxCLIGate{},
-		WaitCredit:      waitCreditAdapter{runWaitCredits},
+		CLIActions: sandboxCLIGate{},
+		WaitCredit: waitCreditAdapter{runWaitCredits},
+		// grain report check: a draft closing report checked the way it
+		// will be once posted (orchestrator.CheckStewardReportDraft).
+		ReportChecker:   reportCheckAdapter{store},
 		API:             LiveAPI,
 		ShutdownStarted: shutdownStarted,
 		// External capability tools a run or CI job may call from its

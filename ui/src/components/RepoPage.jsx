@@ -849,10 +849,19 @@ export default function RepoPage({
     // longer names -- so this is a confirmation that says what it costs,
     // not a gate.
     let stranded = [];
+    const allowed = config?.targetRepos || [];
+    const targetRepos = allowed.filter(
+      (r) => r.toLowerCase() !== repo.toLowerCase(),
+    );
+    // Taking the only entry off the allowlist does not narrow it to
+    // nothing: an empty allowlist is what means unrestricted
+    // (model.RepoAllowed), so that one click lets new tasks target any
+    // repo again, this one included. That is the behaviour, decided in
+    // grain/task-4287, and the confirmation says so in the words the
+    // repos list's own one-repo note uses rather than promising a
+    // narrowing that does not happen.
+    const unrestricts = allowed.length > 0 && targetRepos.length === 0;
     try {
-      const targetRepos = (config?.targetRepos || []).filter(
-        (r) => r.toLowerCase() !== repo.toLowerCase(),
-      );
       const plan = await api("/api/repos/plan", {
         method: "POST",
         body: JSON.stringify({ targetRepos }),
@@ -865,9 +874,12 @@ export default function RepoPage({
       // confirmation then says what it has always said.
     }
     const cost = stranded.map((s) => s.summary).join("\n\n");
+    const consequence = unrestricts
+      ? `Remove ${repo}, the only repo this deployment allows? An empty allowlist is what means unrestricted, so removing it allows any repo again: new tasks may target any repo, ${repo} included. To stay restricted, add the repo you want first.`
+      : `Remove ${repo} from target repos? New tasks won't be able to target it until it's added back, and it will drop off the repos list.`;
     if (
       !confirm(
-        `Remove ${repo} from target repos? New tasks won't be able to target it until it's added back, and it will drop off the repos list.` +
+        consequence +
           (cost === ""
             ? " Tasks already filed there are not affected."
             : `\n\n${cost}`),

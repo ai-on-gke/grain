@@ -225,7 +225,7 @@ func (p *GitProxy) ServeNamespaceHTTP(w http.ResponseWriter, r *http.Request) {
 	scope := toNamespaceScope(modelScope)
 	act := NamespaceRouteActivity(r.URL.Path, r.URL.Query())
 	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
-	cw := &countingResponseWriter{ResponseWriter: w}
+	cw := newCountingResponseWriter(w, act)
 	p.Namespace.ServeHTTP(cw, r, scope)
 	p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
 }

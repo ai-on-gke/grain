@@ -1892,6 +1892,17 @@ type fakeUpgrader struct {
 	// every test that is not about this field wants.
 	running    upgrade.Running
 	runningErr error
+	// rolledBack counts StartRollback calls.
+	rolledBack int
+}
+
+func (f *fakeUpgrader) StartRollback() error {
+	if f.startErr != nil {
+		return f.startErr
+	}
+	f.rolledBack++
+	f.status.Phase = upgrade.PhaseRunning
+	return nil
 }
 
 func (f *fakeUpgrader) Start(branch string) error {
@@ -1975,6 +1986,36 @@ func TestStartUpgradeRoute(t *testing.T) {
 	got = decode[map[string]any](t, rec)
 	if got["phase"] != "running" {
 		t.Fatalf("status phase = %v, want running", got["phase"])
+	}
+}
+
+// A rollback names no target: the route hands it to StartRollback, which
+// reads the previous build from the daemon's own status, and refuses a
+// rollback that also names a branch or an image, or asks to be scheduled,
+// rather than start an ordinary upgrade onto what the caller named.
+func TestStartUpgradeRollbackRoute(t *testing.T) {
+	t.Parallel()
+	fake := &fakeUpgrader{}
+	srv := testServerWithUpgrader(t, fake)
+	for _, body := range []string{
+		`{"rollback":true,"branch":"` + strings.Repeat("c", 40) + `"}`,
+		`{"rollback":true,"image":"docker.io/grainai/grain:v3.1.0"}`,
+		`{"rollback":true,"afterTasksFinish":true}`,
+	} {
+		rec := do(t, srv, http.MethodPost, "/api/upgrade", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s = %d, want 400: %s", body, rec.Code, rec.Body)
+		}
+	}
+	if fake.rolledBack != 0 || fake.started != "" {
+		t.Fatalf("a refused rollback started something: rolledBack=%d started=%q", fake.rolledBack, fake.started)
+	}
+	rec := do(t, srv, http.MethodPost, "/api/upgrade", `{"rollback":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST rollback = %d, want 202: %s", rec.Code, rec.Body)
+	}
+	if fake.rolledBack != 1 || fake.started != "" {
+		t.Fatalf("rolledBack=%d started=%q, want one StartRollback and no Start", fake.rolledBack, fake.started)
 	}
 }
 
