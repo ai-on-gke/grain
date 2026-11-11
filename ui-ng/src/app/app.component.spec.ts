@@ -25,6 +25,8 @@ import {
   SIDEBAR_HIDDEN_KEY,
   SIDEBAR_ORDER_KEY,
 } from "./services/nav-config.service";
+import { HelpService } from "./services/help.service";
+import { SnackbarService } from "./services/snackbar.service";
 import { TaskFeedStore } from "./services/task-feed.service";
 import { ThemeService } from "./services/theme.service";
 import { CHLADNI_ROSETTE_PATH } from "./shared/brand-mark";
@@ -287,6 +289,20 @@ describe("AppComponent shell", () => {
     const dialog = el(f).querySelector('[data-testid="help-dialog"]')!;
     expect(dialog).not.toBeNull();
     expect(dialog.textContent).toContain("About Workstreams");
+    expect(
+      dialog.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
+    ).toBe("Help sections");
+    expect(
+      dialog
+        .querySelector('[data-testid="help-tab-about"]')
+        ?.getAttribute("role"),
+    ).toBe("tab");
+    expect(
+      dialog
+        .querySelector('[data-testid="help-tab-about"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(dialog.querySelector('[role="tabpanel"]')).not.toBeNull();
 
     el(f)
       .querySelector<HTMLButtonElement>('[data-testid="help-tab-glossary"]')!
@@ -302,6 +318,11 @@ describe("AppComponent shell", () => {
       .querySelector<HTMLButtonElement>('[data-testid="help-tab-shortcuts"]')!
       .click();
     await f.whenStable();
+    const shortcutsText =
+      el(f).querySelector('[data-testid="help-shortcuts-list"]')?.textContent ??
+      "";
+    expect(shortcutsText).toContain("Open full task");
+    expect(shortcutsText).toContain("Approve selected");
     const sw = el(f).querySelector<HTMLButtonElement>(
       '[data-testid="help-shortcuts-switch"]',
     )!;
@@ -354,14 +375,75 @@ describe("AppComponent shell", () => {
     const navSpy = vi
       .spyOn(AccountPopoverComponent.prototype, "navigate")
       .mockImplementation(() => undefined);
-    pop
+    // While #account-popover is open, single-key shortcuts like "1" do not fire behind it,
+    // while "0" toggles it closed and restores focus to the avatar button.
+    const router = TestBed.inject(Router);
+    const routerSpy = vi.spyOn(router, "navigateByUrl");
+    press("1");
+    expect(routerSpy).not.toHaveBeenCalled();
+
+    press("0");
+    await f.whenStable();
+    expect(el(f).querySelector('[data-testid="account-popover"]')).toBeNull();
+    expect(document.activeElement).toBe(avatar);
+
+    // Re-open with "0" and verify safe /next/ fallback when redirect is empty or protocol-relative.
+    press("0");
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r, 10));
+    await f.whenStable();
+    const pop2 = el(f).querySelector('[data-testid="account-popover"]')!;
+    pop2
       .querySelector<HTMLButtonElement>('[data-testid="account-sign-out"]')!
       .click();
     await new Promise((r) => setTimeout(r, 10));
     await f.whenStable();
     expect(api.logoutCalls).toBe(1);
     expect(navSpy).toHaveBeenCalledWith("/signed-out");
+
+    // Unsafe //evil.example or empty redirect falls back to /next/.
+    api.logoutRedirect = "//evil.example/phish";
+    avatar.click();
+    await f.whenStable();
+    avatar.click();
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r, 10));
+    await f.whenStable();
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="account-sign-out"]')!
+      .click();
+    await new Promise((r) => setTimeout(r, 10));
+    await f.whenStable();
+    expect(navSpy).toHaveBeenLastCalledWith("/next/");
     navSpy.mockRestore();
+  });
+
+  it("recovers from @defer chunk failure and stuck modalOpen without leaving the shell inert", async () => {
+    const { fixture: f } = await render();
+    const help = TestBed.inject(HelpService);
+    const snacks = TestBed.inject(SnackbarService);
+    const comp = f.componentInstance as unknown as {
+      onDeferError(which: "create" | "help" | "account" | "customize"): void;
+    };
+
+    help.open("about");
+    expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(true);
+    comp.onDeferError("help");
+    await f.whenStable();
+    expect(help.isOpen()).toBe(false);
+    expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
+    expect(snacks.current()?.message).toContain("Help could not load");
+
+    // Safety net: if modalOpen() is true before any [aria-modal="true"] mounts, Escape clears it.
+    TestBed.inject(CreateTaskService).open();
+    f.detectChanges();
+    document
+      .querySelectorAll('[aria-modal="true"]')
+      .forEach((n) => n.removeAttribute("aria-modal"));
+    press("Escape");
+    await f.whenStable();
+    expect(TestBed.inject(CreateTaskService).isOpen()).toBe(false);
+    expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
   });
 
   it("customizes rail destinations (hide/reorder/reset) persisted in localStorage while keeping Inbox first and Settings last", async () => {

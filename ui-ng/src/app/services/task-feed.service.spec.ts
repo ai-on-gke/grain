@@ -97,6 +97,121 @@ describe("TaskFeedStore unified open-task feed (F9)", () => {
     feed.stop(true);
   });
 
+  it("tracks monotonic revision so coalesced 304 reads never skip WorkstreamsStore closed sync, and ensureLoaded does not subscribe to SSE", async () => {
+    const events$ = new Subject<GrainEvent>();
+    let openList: Task[] = [
+      {
+        id: "11",
+        title: "Child running",
+        state: "running",
+        origin: "task:10",
+        generatedFrom: "10",
+      },
+    ];
+    let closedList: Task[] = [
+      {
+        id: "10",
+        title: "Root goal",
+        state: "completed",
+        closedAt: "2026-11-11T09:00:00Z",
+      },
+    ];
+    let nextChangedFlag = true;
+    let closedReads = 0;
+    let openReads = 0;
+
+    const fakeApi = {
+      config: () => Promise.resolve({ access: null }),
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: (route: string, _p?: unknown, query?: string) => {
+        if (route === "GET /api/tasks" && query?.includes("state=closed")) {
+          closedReads++;
+          return Promise.resolve({ tasks: closedList });
+        }
+        return Promise.resolve({ sandboxes: [] });
+      },
+      getIfChanged: (route: string) => {
+        if (route === "GET /api/tasks") {
+          openReads++;
+          const changed = nextChangedFlag;
+          nextChangedFlag = false;
+          return Promise.resolve({
+            body: changed ? structuredClone(openList) : feedRef.tasks(),
+            changed,
+          });
+        }
+        return Promise.resolve({ body: { attempts: [] }, changed: true });
+      },
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        { provide: GrainEvents, useValue: { events: () => events$ } },
+      ],
+    });
+
+    const feedRef = TestBed.inject(TaskFeedStore);
+    const workstreams = TestBed.inject(WorkstreamsStore);
+    const agents = TestBed.inject(AgentsStore);
+    const tasks = TestBed.inject(TasksStore);
+
+    // ensureLoaded must not attach any SSE subscription when Workstreams is inactive.
+    workstreams.ensureLoaded(false);
+    expect(events$.observed).toBe(false);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const rev1 = feedRef.revision();
+    expect(rev1).toBe(1);
+
+    // Pure 304 with unchanged reference does not advance revision.
+    await feedRef.refresh();
+    expect(feedRef.revision()).toBe(rev1);
+
+    // Initial full load of WorkstreamsStore syncs closed pages at rev1.
+    await workstreams.refresh(true);
+    const closedAfterInit = closedReads;
+
+    // Now task #11 closes: another caller refreshes TaskFeedStore first (200 -> rev 2),
+    // and WorkstreamsStore.refresh() immediately after gets a coalesced 304 (changed: false).
+    openList = [];
+    closedList = [
+      ...closedList,
+      {
+        id: "11",
+        title: "Child running",
+        state: "completed",
+        origin: "task:10",
+        generatedFrom: "10",
+        closedAt: "2026-11-11T10:00:00Z",
+      },
+    ];
+    nextChangedFlag = true;
+    await feedRef.refresh();
+    expect(feedRef.revision()).toBe(rev1 + 1);
+
+    // nextChangedFlag is now false (simulating ETag 304 on WorkstreamsStore's call):
+    await workstreams.refresh(false);
+    expect(closedReads).toBe(closedAfterInit + 1);
+    expect(workstreams.closedTasks().map((t) => t.id)).toContain("11");
+
+    // Starting AgentsStore + TasksStore together shares TaskFeedStore's single SSE listener.
+    openReads = 0;
+    nextChangedFlag = true;
+    agents.start();
+    tasks.start();
+    await new Promise((r) => setTimeout(r, 10));
+    const beforeBurst = openReads;
+    nextChangedFlag = true;
+    events$.next({ type: "task.updated", id: "11" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(openReads - beforeBurst).toBe(1);
+
+    agents.stop();
+    tasks.stop();
+  });
+
   it("maps CVD status icons and shape-coded actor kinds distinctly", () => {
     const shapes = new Set([
       statusShapeFor("reply", "reply"),

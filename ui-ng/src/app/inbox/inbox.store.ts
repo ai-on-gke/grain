@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
+import {
+  Injectable,
+  NgZone,
+  OnDestroy,
+  computed,
+  inject,
+  signal,
+} from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { RouteKey } from "../api/generated-routes";
@@ -98,7 +105,7 @@ function errorText(err: unknown): string {
 // the reader has narrowed it, what is selected, and the calls that
 // answer it. Everything the page shows is a computed signal over it.
 @Injectable({ providedIn: "root" })
-export class InboxStore {
+export class InboxStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
@@ -308,10 +315,18 @@ export class InboxStore {
       this.started = false;
       this.feed.stop(false);
     }
+    if (this.debounce) {
+      clearTimeout(this.debounce);
+      this.debounce = null;
+    }
     this.eventSub?.unsubscribe();
     this.eventSub = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  ngOnDestroy(): void {
+    this.stop();
   }
 
   private debounce: ReturnType<typeof setTimeout> | null = null;

@@ -119,9 +119,8 @@ export const SETTINGS: Destination = {
   tip: "Models, access, repositories and this deployment's configuration.",
 };
 
-// The classic UI's create paths, used until this app has its own sheets.
+// The classic UI's create path, used as a fallback if the New task sheet fails to load.
 export const CLASSIC_NEW_TASK = "/new";
-export const CLASSIC_NEW_SESSION = "/session";
 
 // hrefFor is where a destination's link points: its route under /next/,
 // or the classic page.

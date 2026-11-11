@@ -162,7 +162,9 @@ const SHORTCUT_ROWS: readonly { keys: string; label: string }[] = [
   { keys: "t", label: "Switch light / dark theme" },
   { keys: "?", label: "Open Help, Glossary & Shortcuts" },
   { keys: "j / k", label: "Next / previous item in Inbox" },
+  { keys: "Enter", label: "Open full task" },
   { keys: "a / e", label: "Primary action / focus reply in Inbox" },
+  { keys: "Shift + A", label: "Approve selected" },
   { keys: "x / *", label: "Select item / select all visible in Inbox" },
   { keys: "u", label: "Undo last batch or Inbox action" },
   { keys: "f", label: "Toggle full-screen Wall view on Agents" },
@@ -221,89 +223,111 @@ export function guideKeyForUrl(url: string): string {
       <div class="shell-modal-body" tabindex="0">
         <div
           class="segmented help-tabs"
-          role="group"
+          role="tablist"
           aria-label="Help sections"
         >
           <button
             type="button"
-            [attr.aria-pressed]="help.tab() === 'about'"
+            role="tab"
+            id="help-tab-btn-about"
+            aria-controls="help-tabpanel"
+            [attr.aria-selected]="help.tab() === 'about'"
+            [attr.tabindex]="help.tab() === 'about' ? 0 : -1"
             data-testid="help-tab-about"
             (click)="setTab('about')"
+            (keydown)="onTabListKey($event)"
           >
             About this view
           </button>
           <button
             type="button"
-            [attr.aria-pressed]="help.tab() === 'glossary'"
+            role="tab"
+            id="help-tab-btn-glossary"
+            aria-controls="help-tabpanel"
+            [attr.aria-selected]="help.tab() === 'glossary'"
+            [attr.tabindex]="help.tab() === 'glossary' ? 0 : -1"
             data-testid="help-tab-glossary"
             (click)="setTab('glossary')"
+            (keydown)="onTabListKey($event)"
           >
             Glossary
           </button>
           <button
             type="button"
-            [attr.aria-pressed]="help.tab() === 'shortcuts'"
+            role="tab"
+            id="help-tab-btn-shortcuts"
+            aria-controls="help-tabpanel"
+            [attr.aria-selected]="help.tab() === 'shortcuts'"
+            [attr.tabindex]="help.tab() === 'shortcuts' ? 0 : -1"
             data-testid="help-tab-shortcuts"
             (click)="setTab('shortcuts')"
+            (keydown)="onTabListKey($event)"
           >
             Keyboard shortcuts
           </button>
         </div>
 
-        @switch (help.tab()) {
-          @case ("about") {
-            <p class="help-summary" data-testid="help-about-summary">
-              {{ guide().summary }}
-            </p>
-            <ol class="help-steps">
-              @for (step of guide().steps; track step) {
-                <li>{{ step }}</li>
-              }
-            </ol>
-            <p class="muted" style="margin: 0; font-size: 12px">
-              Hover or focus any button or badge for a concise tooltip
-              explanation.
-            </p>
-          }
-          @case ("glossary") {
-            <dl class="help-glossary" data-testid="help-glossary-list">
-              @for (item of glossary; track item.term) {
-                <dt>{{ item.term }}</dt>
-                <dd>{{ item.definition }}</dd>
-              }
-            </dl>
-          }
-          @case ("shortcuts") {
-            <div class="shortcut-switch-bar">
-              <div>
-                <div style="font-weight: 500; font-size: 13px">
-                  Single-key shortcuts
+        <div
+          id="help-tabpanel"
+          role="tabpanel"
+          class="help-tabpanel"
+          [attr.aria-labelledby]="'help-tab-btn-' + help.tab()"
+        >
+          @switch (help.tab()) {
+            @case ("about") {
+              <p class="help-summary" data-testid="help-about-summary">
+                {{ guide().summary }}
+              </p>
+              <ol class="help-steps">
+                @for (step of guide().steps; track step) {
+                  <li>{{ step }}</li>
+                }
+              </ol>
+              <p class="muted" style="margin: 0; font-size: 12px">
+                Hover or focus any button or badge for a concise tooltip
+                explanation.
+              </p>
+            }
+            @case ("glossary") {
+              <dl class="help-glossary" data-testid="help-glossary-list">
+                @for (item of glossary; track item.term) {
+                  <dt>{{ item.term }}</dt>
+                  <dd>{{ item.definition }}</dd>
+                }
+              </dl>
+            }
+            @case ("shortcuts") {
+              <div class="shortcut-switch-bar">
+                <div>
+                  <div style="font-weight: 500; font-size: 13px">
+                    Single-key shortcuts
+                  </div>
+                  <div class="muted" style="font-size: 12px">
+                    Active when focus is not inside a text field. Turn off for
+                    speech input or screen-reader navigation.
+                  </div>
                 </div>
-                <div class="muted" style="font-size: 12px">
-                  Active when focus is not inside a text field. Turn off for
-                  speech input or screen-reader navigation.
-                </div>
+                <button
+                  type="button"
+                  class="g-switch"
+                  role="switch"
+                  data-testid="help-shortcuts-switch"
+                  [attr.aria-checked]="keyboard.enabled()"
+                  aria-label="Enable single-key shortcuts"
+                  (click)="keyboard.setEnabled(!keyboard.enabled())"
+                ></button>
               </div>
-              <button
-                type="button"
-                class="g-switch"
-                role="switch"
-                data-testid="help-shortcuts-switch"
-                [attr.aria-checked]="keyboard.enabled()"
-                aria-label="Enable single-key shortcuts"
-                (click)="keyboard.setEnabled(!keyboard.enabled())"
-              ></button>
-            </div>
-            <div class="shortcut-list" data-testid="help-shortcuts-list">
-              @for (row of shortcuts; track row.keys) {
-                <div class="shortcut-row">
-                  <span>{{ row.label }}</span>
-                  <kbd class="kbd-key">{{ row.keys }}</kbd>
-                </div>
-              }
-            </div>
+              <div class="shortcut-list" data-testid="help-shortcuts-list">
+                @for (row of shortcuts; track row.keys) {
+                  <div class="shortcut-row">
+                    <span>{{ row.label }}</span>
+                    <kbd class="kbd-key">{{ row.keys }}</kbd>
+                  </div>
+                }
+              </div>
+            }
           }
-        }
+        </div>
       </div>
 
       <div class="shell-modal-foot">
@@ -367,6 +391,28 @@ export class HelpDialogComponent implements AfterViewInit, OnDestroy {
 
   protected setTab(tab: HelpTab): void {
     this.help.tab.set(tab);
+  }
+
+  protected onTabListKey(ev: KeyboardEvent): void {
+    const order: HelpTab[] = ["about", "glossary", "shortcuts"];
+    const idx = order.indexOf(this.help.tab());
+    let next = -1;
+    if (ev.key === "ArrowRight") next = (idx + 1) % order.length;
+    else if (ev.key === "ArrowLeft")
+      next = (idx - 1 + order.length) % order.length;
+    else if (ev.key === "Home") next = 0;
+    else if (ev.key === "End") next = order.length - 1;
+    if (next < 0) return;
+    ev.preventDefault();
+    const target = order[next];
+    this.help.tab.set(target);
+    queueMicrotask(() => {
+      this.dialogEl()
+        ?.nativeElement.querySelector<HTMLButtonElement>(
+          `#help-tab-btn-${target}`,
+        )
+        ?.focus();
+    });
   }
 
   protected onEscape(ev: Event): void {

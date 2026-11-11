@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   Injectable,
   NgZone,
+  OnDestroy,
   computed,
   effect,
   inject,
@@ -22,7 +24,6 @@ import {
   untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
 import type { Task, TaskDetail } from "../api/models";
 import { TaskFeedStore } from "../services/task-feed.service";
 import {
@@ -47,10 +48,10 @@ type Host = { cpus?: number; loadAverage1?: number };
 // current attempt, sandbox CPU probes where the backend has them, and a
 // short history of activity updates for the sparklines.
 @Injectable({ providedIn: "root" })
-export class AgentsStore {
+export class AgentsStore implements OnDestroy {
   private readonly api = inject(GrainApi);
-  private readonly events = inject(GrainEvents);
   private readonly feed = inject(TaskFeedStore);
+  private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
 
   readonly tasks = this.feed.tasks;
@@ -74,9 +75,7 @@ export class AgentsStore {
   });
 
   private active = false;
-  private timer: ReturnType<typeof setInterval> | null = null;
   private slowTimer: ReturnType<typeof setInterval> | null = null;
-  private eventSub: { unsubscribe(): void } | null = null;
   private refreshing: Promise<void> | null = null;
   private pending = false;
   private slowRefreshing: Promise<void> | null = null;
@@ -84,7 +83,8 @@ export class AgentsStore {
   private readonly detailFailedAt = new Map<string, number>();
 
   private readonly onVisibility = (): void => {
-    if (document.visibilityState === "visible") {
+    if (!this.active) return;
+    if (this.doc.visibilityState === "visible") {
       this.resume();
     } else {
       this.pause();
@@ -92,13 +92,26 @@ export class AgentsStore {
   };
 
   constructor() {
-    // Keep sparkline history and missing details in sync whenever any
-    // surface refreshes TaskFeedStore.
+    // React to TaskFeedStore's monotonic revision and loadError so sparkline
+    // history and missing details stay in sync without duplicate 3s polls or
+    // duplicate task.* SSE refresh stampedes.
     effect(() => {
-      const list = this.feed.tasks();
+      const rev = this.feed.revision();
+      const err = this.feed.loadError();
       const feedLoaded = this.feed.loaded();
       untracked(() => {
-        if (!feedLoaded && list.length === 0) return;
+        if (err) {
+          if (this.active) {
+            this.loadError.set(
+              `Running tasks could not be read: ${err}. This page tries again on its own.`,
+            );
+          }
+          return;
+        }
+        if (rev === 0 && !feedLoaded) return;
+        const list = this.feed.tasks();
+        this.loadError.set(null);
+        this.ownLoaded.set(true);
         this.record(list);
         this.now.set(Date.now());
         if (this.active) {
@@ -110,40 +123,44 @@ export class AgentsStore {
 
   start(): void {
     this.now.set(Date.now());
+    const wasActive = this.active;
     if (!this.active) {
       this.active = true;
-      this.feed.start(true);
+      this.feed.start(false);
+      this.feed.acquireFast();
     }
-    this.eventSub ??= this.events.events().subscribe(() => void this.refresh());
-    document.addEventListener("visibilitychange", this.onVisibility);
-    if (document.visibilityState === "hidden") {
-      void this.refresh();
+    this.doc.addEventListener("visibilitychange", this.onVisibility);
+    if (this.doc.visibilityState === "hidden") {
+      if (!wasActive && this.feed.loaded()) {
+        this.fetchMissingDetails(this.tasks());
+      }
       void this.refreshSlow();
     } else {
-      this.resume();
+      this.resume(!wasActive);
     }
   }
 
   stop(): void {
     if (this.active) {
       this.active = false;
-      this.feed.stop(true);
+      this.feed.releaseFast();
+      this.feed.stop(false);
     }
     this.pause();
-    this.eventSub?.unsubscribe();
-    this.eventSub = null;
-    document.removeEventListener("visibilitychange", this.onVisibility);
+    this.doc.removeEventListener("visibilitychange", this.onVisibility);
   }
 
-  private resume(): void {
-    if (this.timer) return;
-    void this.refresh();
+  ngOnDestroy(): void {
+    this.stop();
+  }
+
+  private resume(firstActivation = false): void {
+    if (this.slowTimer) return;
+    if (firstActivation && this.feed.loaded()) {
+      void this.refresh();
+    }
     void this.refreshSlow();
     this.zone.runOutsideAngular(() => {
-      this.timer = setInterval(
-        () => this.zone.run(() => void this.refresh()),
-        POLL_MS,
-      );
       this.slowTimer = setInterval(
         () => this.zone.run(() => void this.refreshSlow()),
         SLOW_POLL_MS,
@@ -152,9 +169,7 @@ export class AgentsStore {
   }
 
   private pause(): void {
-    if (this.timer) clearInterval(this.timer);
     if (this.slowTimer) clearInterval(this.slowTimer);
-    this.timer = null;
     this.slowTimer = null;
   }
 
@@ -222,7 +237,7 @@ export class AgentsStore {
             { id: t.id },
             "comments_limit=1&attempts_limit=3",
           );
-          got[t.id] = r.body;
+          if (r?.body) got[t.id] = r.body;
           this.detailFailedAt.delete(t.id);
         } catch {
           this.detailFailedAt.set(t.id, Date.now());

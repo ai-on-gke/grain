@@ -69,6 +69,7 @@ export class KeyboardService implements OnDestroy {
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
     if (isTypingTarget(ev.target)) return;
     if (this.doc.querySelector('[aria-modal="true"]')) return;
+    if (this.doc.getElementById("account-popover") && ev.key !== "0") return;
     const s = this.shortcuts.get(ev.key);
     if (!s) return;
     ev.preventDefault();

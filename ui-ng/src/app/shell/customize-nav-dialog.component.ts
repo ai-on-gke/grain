@@ -247,6 +247,8 @@ export class CustomizeNavDialogComponent
 
   protected move(id: string, delta: -1 | 1): void {
     if (id === "inbox") return;
+    let movedTo = -1;
+    let len = 0;
     this.draftOrder.update((prev) => {
       const next = [...prev];
       const idx = next.indexOf(id);
@@ -255,7 +257,27 @@ export class CustomizeNavDialogComponent
       if (idx < 1 || to < 1 || to >= next.length) return prev;
       next.splice(idx, 1);
       next.splice(to, 0, id);
+      movedTo = to;
+      len = next.length;
       return next;
+    });
+    if (movedTo < 1) return;
+    // When moving onto a boundary disables the clicked button, preserve focus
+    // on the enabled sibling move button rather than dropping focus to <body>.
+    const nextDir =
+      movedTo === 1 && delta === -1
+        ? "down"
+        : movedTo === len - 1 && delta === 1
+          ? "up"
+          : delta === -1
+            ? "up"
+            : "down";
+    queueMicrotask(() => {
+      this.dialogEl()
+        ?.nativeElement.querySelector<HTMLButtonElement>(
+          `[data-testid="nav-move-${nextDir}-${id}"]`,
+        )
+        ?.focus();
     });
   }
 

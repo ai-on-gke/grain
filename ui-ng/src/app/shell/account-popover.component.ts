@@ -148,6 +148,8 @@ export class AccountPopoverComponent
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape") {
       this.zone.run(() => this.onEscape(ev));
+    } else if (ev.key === "Tab") {
+      this.zone.run(() => this.onTab(ev));
     }
   };
 
@@ -211,7 +213,10 @@ export class AccountPopoverComponent
           ? await this.api.logout()
           : await this.api.post<{ redirect?: string }>("POST /api/auth/logout");
       this.api.clearConditionalCache?.();
-      const dest = res?.redirect || "/";
+      const dest =
+        typeof res?.redirect === "string" && /^\/(?!\/)/.test(res.redirect)
+          ? res.redirect
+          : "/next/";
       this.navigate(dest);
     } catch {
       this.signingOut.set(false);
@@ -239,5 +244,26 @@ export class AccountPopoverComponent
     ev.preventDefault();
     ev.stopPropagation();
     this.closed.emit(true);
+  }
+
+  protected onTab(ev: KeyboardEvent): void {
+    const root = this.popEl()?.nativeElement;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = this.doc.activeElement;
+    if (ev.shiftKey && (active === first || !root.contains(active))) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && (active === last || !root.contains(active))) {
+      ev.preventDefault();
+      first.focus();
+    }
   }
 }

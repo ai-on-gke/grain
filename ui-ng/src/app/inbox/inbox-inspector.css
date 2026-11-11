@@ -116,6 +116,12 @@
   gap: 8px;
 }
 
+:root[data-theme="dark"] .resolution-dock,
+:root[data-theme="dark"] .evidence-card {
+  --aurora-surface-bg: var(--md-sys-color-surface-container);
+  background: var(--md-sys-color-surface-container);
+}
+
 .dock-note {
   margin: 0 0 8px;
   font-size: 13px;

@@ -13,7 +13,14 @@
 // limitations under the License.
 
 import { DOCUMENT } from "@angular/common";
-import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
+import {
+  Injectable,
+  NgZone,
+  OnDestroy,
+  computed,
+  inject,
+  signal,
+} from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
@@ -43,7 +50,7 @@ export function isOpenWorkTask(t: Task): boolean {
 // TasksStore, and AgentsStore so no two surfaces ever show contradictory
 // running or queued counts on the same tick.
 @Injectable({ providedIn: "root" })
-export class TaskFeedStore {
+export class TaskFeedStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly doc = inject(DOCUMENT);
@@ -54,6 +61,7 @@ export class TaskFeedStore {
   readonly loadError = signal<string | null>(null);
   readonly lastError = signal<unknown>(null);
   readonly lastChanged = signal(false);
+  readonly revision = signal(0);
   readonly lastUpdatedAt = signal<number | null>(null);
   readonly now = signal<number>(Date.now());
 
@@ -122,6 +130,34 @@ export class TaskFeedStore {
     } else if (!this.doc.hidden) {
       this.schedulePoll();
     }
+  }
+
+  acquireFast(): void {
+    this.fastConsumers++;
+    if (this.consumers > 0 && !this.doc.hidden) {
+      this.schedulePoll();
+    }
+  }
+
+  releaseFast(): void {
+    if (this.fastConsumers > 0) this.fastConsumers--;
+    if (this.consumers > 0 && !this.doc.hidden) {
+      this.schedulePoll();
+    }
+  }
+
+  ngOnDestroy(): void {
+    this.consumers = 0;
+    this.fastConsumers = 0;
+    this.doc.removeEventListener("visibilitychange", this.onVisibility);
+    this.eventSub?.unsubscribe();
+    this.eventSub = null;
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    this.clearTimers();
+    this.beforeChange.clear();
   }
 
   private clearTimers(): void {
@@ -218,6 +254,7 @@ export class TaskFeedStore {
       if (changed || body !== this.tasks() || !this.loaded()) {
         for (const fn of this.beforeChange) fn();
         this.tasks.set(body);
+        this.revision.update((r) => r + 1);
       }
       const ts = Date.now();
       this.lastUpdatedAt.set(ts);

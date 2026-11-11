@@ -16,6 +16,7 @@ import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  Directive,
   ElementRef,
   Injector,
   NgZone,
@@ -24,6 +25,7 @@ import {
   computed,
   effect,
   inject,
+  output,
   runInInjectionContext,
   signal,
   viewChild,
@@ -45,6 +47,7 @@ import { AccessService } from "./services/access.service";
 import { HelpService } from "./services/help.service";
 import { KeyboardService } from "./services/keyboard.service";
 import { NavConfigService } from "./services/nav-config.service";
+import { SnackbarService } from "./services/snackbar.service";
 import { TaskFeedStore } from "./services/task-feed.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
@@ -123,6 +126,15 @@ type CreateItem =
       href: string;
     };
 
+@Directive({ selector: "[gDeferError]" })
+export class DeferErrorDirective implements OnInit {
+  readonly recover = output<void>();
+
+  ngOnInit(): void {
+    queueMicrotask(() => this.recover.emit());
+  }
+}
+
 @Component({
   selector: "g-root",
   imports: [
@@ -131,6 +143,7 @@ type CreateItem =
     RouterLink,
     RouterLinkActive,
     TipDirective,
+    DeferErrorDirective,
     SnackbarComponent,
     NewTaskSheetComponent,
     NextUpComponent,
@@ -817,16 +830,17 @@ type CreateItem =
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
-          <p class="banner banner-error defer-error" role="alert">
-            The New task form could not load.
-            <a [href]="classicNewTask">Use the classic form</a>
-          </p>
+          <span gDeferError (recover)="onDeferError('create')"></span>
         }
       }
 
       @defer (when help.isOpen()) {
         @if (help.isOpen()) {
           <g-help-dialog />
+        }
+      } @error {
+        @if (help.isOpen()) {
+          <span gDeferError (recover)="onDeferError('help')"></span>
         }
       }
 
@@ -837,11 +851,19 @@ type CreateItem =
             (customizeNav)="openCustomizeFromAccount()"
           />
         }
+      } @error {
+        @if (accountOpen()) {
+          <span gDeferError (recover)="onDeferError('account')"></span>
+        }
       }
 
       @defer (when customizeNavOpen()) {
         @if (customizeNavOpen()) {
           <g-customize-nav-dialog (closed)="onCustomizeNavClosed()" />
+        }
+      } @error {
+        @if (customizeNavOpen()) {
+          <span gDeferError (recover)="onDeferError('customize')"></span>
         }
       }
 
@@ -857,6 +879,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly navConfig = inject(NavConfigService);
   protected readonly help = inject(HelpService);
   protected readonly keyboard = inject(KeyboardService);
+  private readonly snackbar = inject(SnackbarService);
   private readonly inboxRef = signal<InboxStore | null>(null);
   private destroyed = false;
   private readonly api = inject(GrainApi);
@@ -1023,16 +1046,26 @@ export class AppComponent implements OnInit, OnDestroy {
 
     const r = (key: string, description: string, run: () => void) =>
       this.unregister.push(this.keyboard.register({ key, description, run }));
-    r("c", "New task", () => this.createTask.open());
+    r("c", "New task", () => {
+      this.closeMenus();
+      this.createTask.open();
+    });
     r("/", "Filter this view", () => {
       const input = this.searchInput()?.nativeElement;
       input?.focus();
       input?.select?.();
     });
-    r("?", "Open Help, Glossary & Shortcuts", () => this.help.open("about"));
-    r("0", "Account and access", () => {
+    r("?", "Open Help, Glossary & Shortcuts", () => {
       this.closeMenus();
-      this.accountOpen.update((v) => !v);
+      this.help.open("about");
+    });
+    r("0", "Account and access", () => {
+      if (this.accountOpen()) {
+        this.onAccountClosed(true);
+      } else {
+        this.closeMenus();
+        this.accountOpen.set(true);
+      }
     });
     r(",", "Open Settings", () => this.open(SETTINGS));
     r("t", "Switch light and dark", () => this.theme.toggle());
@@ -1126,20 +1159,45 @@ export class AppComponent implements OnInit, OnDestroy {
   protected openHelp(ev: Event): void {
     const opener = ev.currentTarget as HTMLElement | null;
     this.closeMenus();
-    this.accountOpen.set(false);
     this.help.open("about", opener);
   }
 
   protected toggleAccount(ev: Event): void {
     ev.stopPropagation();
+    const next = !this.accountOpen();
     this.closeMenus();
-    this.accountOpen.update((v) => !v);
+    this.accountOpen.set(next);
   }
 
   protected onAccountClosed(restoreFocus: boolean): void {
     this.accountOpen.set(false);
     if (restoreFocus) {
       this.avatarBtn()?.nativeElement.focus();
+    }
+  }
+
+  protected onDeferError(
+    which: "create" | "help" | "account" | "customize",
+  ): void {
+    if (which === "create") {
+      this.createTask.close();
+      this.snackbar.show("The New task form could not load.", {
+        label: "Classic form",
+        run: () => this.doc.defaultView?.location.assign(this.classicNewTask),
+      });
+    } else if (which === "help") {
+      this.help.close();
+      this.snackbar.show("Help could not load. Reload the page and try again.");
+    } else if (which === "account") {
+      this.onAccountClosed(true);
+      this.snackbar.show(
+        "Account menu could not load. Reload the page and try again.",
+      );
+    } else {
+      this.onCustomizeNavClosed();
+      this.snackbar.show(
+        "Navigation settings could not load. Reload the page and try again.",
+      );
     }
   }
 
@@ -1172,6 +1230,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.createOpen.set(false);
     this.railMoreOpen.set(false);
     this.moreOpen.set(false);
+    this.accountOpen.set(false);
   }
 
   open(d: Destination): void {
@@ -1181,48 +1240,69 @@ export class AppComponent implements OnInit, OnDestroy {
 
   protected toggleCreate(ev: Event): void {
     ev.stopPropagation();
-    this.railMoreOpen.set(false);
-    this.moreOpen.set(false);
-    this.accountOpen.set(false);
-    if (this.createOpen()) {
-      this.createOpen.set(false);
-      return;
-    }
+    const next = !this.createOpen();
+    this.closeMenus();
+    if (!next) return;
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    const winH = this.doc.defaultView?.innerHeight ?? 900;
+    const estH = Math.min(this.createItems.length * 58 + 16, winH - 24);
     this.createPos.set({
-      top: Math.round(r.top),
+      top: Math.max(12, Math.min(Math.round(r.top), winH - estH - 12)),
       left: Math.round(r.right + 8),
     });
     this.createOpen.set(true);
+    this.clampFloatingMenu("create-menu", (top) =>
+      this.createPos.update((p) => ({ ...p, top })),
+    );
   }
 
   protected toggleRailMore(ev: Event): void {
     ev.stopPropagation();
-    this.createOpen.set(false);
-    this.moreOpen.set(false);
-    this.accountOpen.set(false);
-    if (this.railMoreOpen()) {
-      this.railMoreOpen.set(false);
-      return;
-    }
+    const next = !this.railMoreOpen();
+    this.closeMenus();
+    if (!next) return;
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    const winH = this.doc.defaultView?.innerHeight ?? 900;
+    const count = this.navConfig.hiddenDestinations().length + 1;
+    const estH = Math.min(count * 58 + 16, winH - 24);
     this.railMorePos.set({
-      top: Math.max(12, Math.round(r.top - 40)),
+      top: Math.max(12, Math.min(Math.round(r.top - 40), winH - estH - 12)),
       left: Math.round(r.right + 8),
     });
     this.railMoreOpen.set(true);
+    this.clampFloatingMenu("rail-more-menu", (top) =>
+      this.railMorePos.update((p) => ({ ...p, top })),
+    );
+  }
+
+  private clampFloatingMenu(id: string, applyTop: (top: number) => void): void {
+    queueMicrotask(() => {
+      const menu = this.doc.getElementById(id);
+      const winH = this.doc.defaultView?.innerHeight ?? 0;
+      if (!menu || !winH) return;
+      const rect = menu.getBoundingClientRect();
+      if (rect.height > 0 && rect.bottom > winH - 12) {
+        applyTop(Math.max(12, Math.round(winH - rect.height - 12)));
+      }
+    });
   }
 
   protected toggleMore(ev: Event): void {
     ev.stopPropagation();
-    this.createOpen.set(false);
-    this.railMoreOpen.set(false);
-    this.accountOpen.set(false);
-    this.moreOpen.update((v) => !v);
+    const next = !this.moreOpen();
+    this.closeMenus();
+    this.moreOpen.set(next);
   }
 
   protected onEscape(ev: Event): void {
     if (ev.defaultPrevented) return;
+    if (this.modalOpen() && !this.doc.querySelector('[aria-modal="true"]')) {
+      ev.preventDefault();
+      this.createTask.close();
+      this.help.close();
+      this.onCustomizeNavClosed();
+      return;
+    }
     if (this.createOpen()) this.closeCreate(ev, true);
     else if (this.railMoreOpen()) this.closeRailMore(ev, true);
     else if (this.moreOpen()) this.closeMore(ev, true);

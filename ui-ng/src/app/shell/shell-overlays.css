@@ -70,6 +70,12 @@
   flex: none;
 }
 
+.help-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .help-summary {
   margin: 0;
   font-size: 14px;
@@ -177,8 +183,13 @@
   border-bottom: none;
 }
 
-.nav-custom-row.is-hidden {
-  opacity: 0.65;
+.nav-custom-row.is-hidden,
+:root[data-theme="dark"] .nav-custom-row.is-hidden {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.nav-custom-row.is-hidden .nav-custom-name {
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .nav-custom-text {

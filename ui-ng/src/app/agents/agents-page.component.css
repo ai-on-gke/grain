@@ -30,6 +30,7 @@ g-agents-page {
   padding: 10px 14px;
   border-radius: var(--md-sys-shape-corner-medium);
   border: 1px solid var(--md-sys-color-outline-variant);
+  --aurora-surface-bg: var(--md-sys-color-surface-container-low);
   background: var(--md-sys-color-surface-container-low);
   font-size: 13px;
   color: var(--md-sys-color-on-surface-variant);

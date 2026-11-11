@@ -13,7 +13,16 @@
 // limitations under the License.
 
 import { DOCUMENT } from "@angular/common";
-import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
+import {
+  Injectable,
+  NgZone,
+  OnDestroy,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task, TaskDetail, TaskListPage } from "../api/models";
@@ -78,7 +87,7 @@ export interface BatchResult {
 }
 
 @Injectable({ providedIn: "root" })
-export class WorkstreamsStore {
+export class WorkstreamsStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
@@ -166,6 +175,7 @@ export class WorkstreamsStore {
   private forceClosedPending = false;
   private pollCount = 0;
   private closedFetchedOnce = false;
+  private lastSeenRevision = -1;
   private readonly detailInFlight = new Set<string>();
   private readonly onVisibility = (): void => {
     if (!this.active) return;
@@ -177,12 +187,24 @@ export class WorkstreamsStore {
     }
   };
 
+  constructor() {
+    effect(() => {
+      const rev = this.feed.revision();
+      untracked(() => {
+        if (
+          this.active &&
+          rev > 0 &&
+          rev !== this.lastSeenRevision &&
+          !this.refreshing
+        ) {
+          this.lastSeenRevision = rev;
+          void this.loadClosedPages();
+        }
+      });
+    });
+  }
+
   ensureLoaded(forceClosed = false): void {
-    if (!this.eventSub) {
-      this.eventSub = this.events
-        .events()
-        .subscribe(() => this.scheduleEventRefresh());
-    }
     if (
       !this.refreshing &&
       (!this.loaded() || (forceClosed && !this.closedFetchedOnce))
@@ -194,13 +216,16 @@ export class WorkstreamsStore {
   start(): void {
     if (!this.active) {
       this.active = true;
-      this.feed.start(true);
+      this.feed.start(false);
+      this.feed.acquireFast();
     }
     void this.refresh(!this.closedFetchedOnce);
     if (!this.eventSub) {
-      this.eventSub = this.events
-        .events()
-        .subscribe(() => this.scheduleEventRefresh());
+      this.eventSub = this.events.events().subscribe((ev) => {
+        if (ev.type && !ev.type.startsWith("task.")) {
+          this.scheduleEventRefresh();
+        }
+      });
     }
     this.doc.addEventListener("visibilitychange", this.onVisibility);
     this.scheduleNextPoll();
@@ -209,7 +234,8 @@ export class WorkstreamsStore {
   stop(): void {
     if (this.active) {
       this.active = false;
-      this.feed.stop(true);
+      this.feed.releaseFast();
+      this.feed.stop(false);
     }
     this.eventSub?.unsubscribe();
     this.eventSub = null;
@@ -219,6 +245,10 @@ export class WorkstreamsStore {
     }
     this.clearPoll();
     this.doc.removeEventListener("visibilitychange", this.onVisibility);
+  }
+
+  ngOnDestroy(): void {
+    this.stop();
   }
 
   private clearPoll(): void {
@@ -231,13 +261,12 @@ export class WorkstreamsStore {
   private scheduleNextPoll(): void {
     this.clearPoll();
     if (!this.active || this.doc.hidden) return;
-    const ms = this.hasLiveStreams() ? ACTIVE_POLL_MS : IDLE_POLL_MS;
     this.zone.runOutsideAngular(() => {
       this.pollTimer = setTimeout(() => {
         this.zone.run(() => {
-          void this.refresh().finally(() => this.scheduleNextPoll());
+          void this.loadClosedPages().finally(() => this.scheduleNextPoll());
         });
-      }, ms);
+      }, IDLE_POLL_MS);
     });
   }
 
@@ -284,7 +313,8 @@ export class WorkstreamsStore {
 
   private async load(fetchClosed: boolean, contextOnly = false): Promise<void> {
     const ok = await this.feed.refresh();
-    const openChanged = this.feed.lastChanged();
+    const rev = this.feed.revision();
+    const openChanged = rev !== this.lastSeenRevision;
     const currentOpen = this.openTasks();
     if (ok) {
       this.loadError.set(null);
@@ -301,6 +331,7 @@ export class WorkstreamsStore {
         ? !this.closedFetchedOnce && this.hasMissingAncestor(currentOpen)
         : openChanged || !this.closedFetchedOnce || this.pollCount % 5 === 0);
     if (needClosed) {
+      this.lastSeenRevision = rev;
       await this.loadClosedPages();
     }
     this.loaded.set(true);

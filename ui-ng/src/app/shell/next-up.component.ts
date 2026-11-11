@@ -53,6 +53,7 @@ const SHOWN = 7;
       class="next-up top-next"
       [class.is-empty]="!head()"
       data-testid="next-up"
+      (focusout)="onFocusOut($event)"
     >
       @if (head(); as h) {
         <a
@@ -235,6 +236,13 @@ export class NextUpComponent {
 
   protected onDocClick(ev: Event): void {
     if (!(ev.target as HTMLElement | null)?.closest(".next-up")) {
+      this.open.set(false);
+    }
+  }
+
+  protected onFocusOut(ev: FocusEvent): void {
+    const next = ev.relatedTarget as HTMLElement | null;
+    if (next && !next.closest(".next-up")) {
       this.open.set(false);
     }
   }
