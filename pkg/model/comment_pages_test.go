@@ -107,3 +107,77 @@ func TestLatestHandoverIsTheNewestHandoverComment(t *testing.T) {
 		t.Fatalf("latest handover = %+v, want the second summary", h)
 	}
 }
+
+func TestRunsBeforePagesBackwardsAndCountsOlderAttempts(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	if err := st.PutTask(ctx, model.Task{ID: "runs", Intent: model.IntentImplement, Title: "runs"}); err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n <= 5; n++ {
+		runID := fmt.Sprintf("runs-%d", n)
+		start := now.Add(time.Duration(n) * time.Minute)
+		if err := st.StartRun(ctx, model.Run{ID: runID, TaskID: "runs", Sandbox: "sb", Attempt: n, StartedAt: start}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.FinishRun(ctx, runID, start.Add(10*time.Second), "succeeded", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page, older, err := st.RunsBefore(ctx, "runs", 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if older != 3 || len(page) != 2 || page[0].Attempt != 4 || page[1].Attempt != 5 {
+		t.Fatalf("newest runs = %+v (older %d), want attempts 4 and 5 with 3 older", page, older)
+	}
+	page, older, err = st.RunsBefore(ctx, "runs", page[0].Attempt, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if older != 1 || len(page) != 2 || page[0].Attempt != 2 || page[1].Attempt != 3 {
+		t.Fatalf("second page = %+v (older %d), want attempts 2 and 3 with 1 older", page, older)
+	}
+	page, older, err = st.RunsBefore(ctx, "runs", page[0].Attempt, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if older != 0 || len(page) != 1 || page[0].Attempt != 1 {
+		t.Fatalf("oldest page = %+v (older %d), want attempt 1 with 0 older", page, older)
+	}
+}
+
+func TestFailureStreakWalksPastABatchBoundary(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	if err := st.PutTask(ctx, model.Task{ID: "streak", Intent: model.IntentImplement, Title: "streak"}); err != nil {
+		t.Fatal(err)
+	}
+	// Run 1 succeeded, then 40 consecutive failed runs (past streakBatchSize=32).
+	for n := 1; n <= 41; n++ {
+		runID := fmt.Sprintf("streak-%d", n)
+		start := now.Add(time.Duration(n) * time.Minute)
+		if err := st.StartRun(ctx, model.Run{ID: runID, TaskID: "streak", Sandbox: "sb", Attempt: n, StartedAt: start}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		outcome := "failed"
+		if n == 1 {
+			outcome = "succeeded"
+		}
+		if err := st.FinishRun(ctx, runID, start.Add(5*time.Second), outcome, fmt.Sprintf("detail-%d", n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	streak, err := st.FailureStreak(ctx, "streak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streak == nil || streak.Count != 40 || streak.LastFailureDetail != "detail-41" {
+		t.Fatalf("FailureStreak = %+v, want Count=40 and LastFailureDetail=detail-41", streak)
+	}
+}

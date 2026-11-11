@@ -88,15 +88,11 @@ func (c *Client) TaskContext(ctx context.Context, id string) (TaskContextView, e
 		BriefEdits:          edits,
 	}
 	if tc.CompactedThrough > 0 {
-		comments, err := c.Store.Comments(ctx, id)
+		n, err := c.Store.CountCommentsBefore(ctx, id, tc.CompactedThrough+1)
 		if err != nil {
 			return TaskContextView{}, err
 		}
-		for _, cm := range comments {
-			if cm.ID <= tc.CompactedThrough {
-				view.Summarised++
-			}
-		}
+		view.Summarised = n
 	}
 	return view, nil
 }

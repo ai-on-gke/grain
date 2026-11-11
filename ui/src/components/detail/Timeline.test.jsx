@@ -2014,4 +2014,129 @@ describe("DetailOverlay timeline", () => {
       );
     });
   });
+
+  it("collapses summarised comments under the handover and loads earlier pages on demand", async () => {
+    api.mockImplementation(async (path) => {
+      if (
+        path ===
+        "/api/tasks/12?comments_limit=50&comments_before=102&attempts_limit=20&attempts_before=2"
+      ) {
+        return {
+          id: "12",
+          comments: [
+            {
+              id: 100,
+              author: "alice",
+              authorKind: "human",
+              body: "Earliest paged-in comment.",
+              createdAt: "2026-11-10T09:00:00Z",
+            },
+            {
+              id: 101,
+              author: "run",
+              authorKind: "agent",
+              body: "Second paged-in comment.",
+              createdAt: "2026-11-10T09:01:00Z",
+            },
+          ],
+          olderComments: 0,
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-11-10T08:50:00Z",
+              finishedAt: "2026-11-10T08:55:00Z",
+              outcome: "succeeded",
+            },
+          ],
+          olderAttempts: 0,
+        };
+      }
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          id: "12",
+          compactedThrough: 102,
+          olderComments: 2,
+          olderAttempts: 1,
+          comments: [
+            {
+              id: 102,
+              author: "alice",
+              authorKind: "human",
+              body: "Settled note before compaction.",
+              createdAt: "2026-11-10T09:02:00Z",
+            },
+            {
+              id: 103,
+              author: "grain",
+              authorKind: "automation",
+              onBehalfOfKind: "agent",
+              onBehalfOf: "12",
+              handover: true,
+              body: "Compacted handover summary.",
+              createdAt: "2026-11-10T09:05:00Z",
+            },
+            {
+              id: 104,
+              author: "alice",
+              authorKind: "human",
+              body: "Fresh follow-up after compaction.",
+              createdAt: "2026-11-10T09:10:00Z",
+            },
+          ],
+          attempts: [
+            {
+              number: 2,
+              startedAt: "2026-11-10T09:06:00Z",
+              finishedAt: "2026-11-10T09:09:00Z",
+              outcome: "succeeded",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    // Post-cursor comment and handover are shown; pre-cursor comment is collapsed.
+    expect(
+      screen.getByText("Fresh follow-up after compaction."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Compacted handover summary.")).toBeInTheDocument();
+    const disclosures = document.querySelectorAll(
+      "details.timeline-summarised",
+    );
+    expect(disclosures).toHaveLength(1);
+    expect(disclosures[0]).not.toHaveAttribute("open");
+    expect(disclosures[0]).toHaveTextContent(
+      "Summarised by compaction -- show",
+    );
+
+    const earlierBtn = screen.getByRole("button", {
+      name: "Show earlier (2 comments, 1 run)",
+    });
+    await user.click(earlierBtn);
+
+    expect(api).toHaveBeenCalledWith(
+      "/api/tasks/12?comments_limit=50&comments_before=102&attempts_limit=20&attempts_before=2",
+    );
+    await screen.findByRole("button", { name: /^Succeeded$/ });
+    expect(
+      document.querySelectorAll("details.timeline-summarised"),
+    ).toHaveLength(3);
+    expect(
+      screen.queryByRole("button", { name: /Show earlier/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Attempt #2/ }),
+    ).toBeInTheDocument();
+  });
 });

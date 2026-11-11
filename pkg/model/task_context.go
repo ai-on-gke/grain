@@ -240,14 +240,12 @@ func (s *Store) CompactTask(ctx context.Context, taskID, handover string, throug
 		return TaskContext{}, ErrEmptyHandover
 	}
 	if throughID <= 0 {
-		comments, err := s.Comments(ctx, taskID)
+		last, err := s.LatestComment(ctx, taskID)
 		if err != nil {
 			return TaskContext{}, err
 		}
-		for _, c := range comments {
-			if c.ID > throughID {
-				throughID = c.ID
-			}
+		if last != nil {
+			throughID = last.ID
 		}
 	}
 	if _, err := s.AddComment(ctx, Comment{
@@ -322,40 +320,30 @@ func (s *Store) TaskBriefEdits(ctx context.Context, taskID string) ([]TaskBriefE
 // whichever is later, and the comments posted after it that are not
 // handovers themselves.
 func (s *Store) TaskHandoverAge(ctx context.Context, taskID string) (HandoverAge, error) {
-	comments, err := s.Comments(ctx, taskID)
+	latest, err := s.LatestHandover(ctx, taskID)
 	if err != nil {
 		return HandoverAge{}, err
+	}
+	if latest == nil {
+		return HandoverAge{}, nil
 	}
 	tc, err := s.TaskContext(ctx, taskID)
 	if err != nil {
 		return HandoverAge{}, err
 	}
-	return handoverAge(ctx, s, comments, tc)
-}
-
-func handoverAge(ctx context.Context, s *Store, comments []Comment, tc TaskContext) (HandoverAge, error) {
-	last := -1
-	for i, c := range comments {
-		if c.Handover {
-			last = i
-		}
-	}
-	if last < 0 {
-		return HandoverAge{}, nil
-	}
-	age := HandoverAge{Exists: true, At: comments[last].CreatedAt}
+	age := HandoverAge{Exists: true, At: latest.CreatedAt}
 	if tc.HandoverConfirmedAt != nil && tc.HandoverConfirmedAt.After(age.At) {
 		age.At = *tc.HandoverConfirmedAt
 	}
-	for _, c := range comments[last+1:] {
-		if !c.Handover && c.CreatedAt.After(age.At) {
-			age.Comments++
-		}
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM `task_comment` WHERE `task_id` = ? AND `id` > ? AND `handover` = 0 AND `created_at` > ?",
+		taskID, latest.ID, age.At.UTC()).Scan(&age.Comments); err != nil {
+		return HandoverAge{}, fmt.Errorf("model: counting comments since the handover on %s: %w", taskID, err)
 	}
 	if err := s.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM `task_run` WHERE `task_id` = ? AND `started_at` > ?",
-		tc.TaskID, age.At.UTC()).Scan(&age.Runs); err != nil {
-		return HandoverAge{}, fmt.Errorf("model: counting runs since the handover on %s: %w", tc.TaskID, err)
+		taskID, age.At.UTC()).Scan(&age.Runs); err != nil {
+		return HandoverAge{}, fmt.Errorf("model: counting runs since the handover on %s: %w", taskID, err)
 	}
 	return age, nil
 }
