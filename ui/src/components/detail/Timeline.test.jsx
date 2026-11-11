@@ -27,6 +27,8 @@ import api from "../../api.js";
 import fileToAttachment from "../../attachments.js";
 import { STATE_LABELS } from "../../state.js";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
+import { AccessConfigProvider } from "../../AccessContext.jsx";
+import { viewerConfig } from "../../accessTestConfigs.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 vi.mock("../../attachments.js", () => ({ default: vi.fn() }));
@@ -1256,6 +1258,61 @@ describe("DetailOverlay timeline", () => {
       2,
     );
     expect(screen.getByText("run.go").tagName).toBe("CODE");
+  });
+
+  // Task 3803: a comment on a closed task reaches no agent, so the box
+  // says so, and Reopen and send posts it with the reopen that delivers it.
+  it("warns on a closed task and offers Reopen and send", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, state: "closed" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+    expect(
+      screen.getByText("This task is closed; a comment won't reach an agent."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Comment only" }),
+    ).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("Reply..."), "one more thing");
+    await user.click(screen.getByRole("button", { name: "Reopen and send" }));
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/comments", {
+      method: "POST",
+      body: JSON.stringify({
+        body: "one more thing",
+        attachments: [],
+        reopen: true,
+      }),
+    });
+  });
+
+  it("keeps the closed note but not the reopen for a role that cannot reopen", () => {
+    render(
+      <AccessConfigProvider config={viewerConfig}>
+        <DetailOverlay
+          task={{ ...baseTask, state: "closed" }}
+          tasks={[]}
+          config={config}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={vi.fn()}
+        />
+      </AccessConfigProvider>,
+    );
+    expect(
+      screen.getByText("This task is closed; a comment won't reach an agent."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reopen and send" }),
+    ).not.toBeInTheDocument();
   });
 
   it("posts a comment and clears the textarea", async () => {

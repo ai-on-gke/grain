@@ -546,6 +546,14 @@ type Task struct {
 	// straight to it (model.CommentPath), as GET /api/inbox's path does.
 	// 0 when the task is not parked.
 	QuestionCommentID int64 `json:"questionCommentId,omitempty"`
+	// UnansweredCommentFrom is who wrote the newest person's comment on an
+	// awaiting_reply task that no run has been shown yet
+	// (model.UndeliveredPersonComment), "" when there is none. A person's
+	// comment on such a task queues a run at once (reopenAcknowledgeable),
+	// so this is set only where something left one undelivered, and a row
+	// says "unanswered question from X" rather than offering the owner a
+	// plain Reply for a question that was never theirs to answer.
+	UnansweredCommentFrom string `json:"unansweredCommentFrom,omitempty"`
 	// AwaitingAccess is an awaiting_reply task parked on an access
 	// request (request_access) rather than a question: what it wants is
 	// a grant, which its card offers, not a reply.
@@ -3023,6 +3031,21 @@ type addCommentRequest struct {
 	Attachments []AttachmentUpload `json:"attachments"`
 	Author      string             `json:"author,omitempty"`
 	Reviewers   *[]string          `json:"reviewers,omitempty"`
+	// Reopen asks for a closed task to be reopened along with the
+	// comment -- the UI's "Reopen and send" -- so the reopen queues the
+	// run that answers it (Client.AddCommentReopening). Held to whether
+	// the caller may reopen the task, as POST /api/tasks/{id}/reopen is.
+	// Ignored on a task that is not closed.
+	Reopen bool `json:"reopen,omitempty"`
+}
+
+// commentResponse is POST /api/tasks/{id}/comments' answer: the task as
+// it stands after the comment and, for one left on a task that is still
+// closed, CommentDelivery and Notice saying it reached no agent.
+type commentResponse struct {
+	Task
+	CommentDelivery string `json:"commentDelivery,omitempty"`
+	Notice          string `json:"notice,omitempty"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -3033,20 +3056,65 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
+	if req.Reopen {
+		if err := mayReopen(r); err != nil {
+			writeError(w, agentRefusalStatus(err), err)
+			return
+		}
+	}
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {
 			writeClientError(w, err)
 			return
 		}
 	}
-	if err := s.tasks.AddCommentWithAuthor(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
+	add := s.tasks.AddCommentWithAuthor
+	if req.Reopen {
+		add = s.tasks.AddCommentReopening
+	}
+	if err := add(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
 		writeClientError(w, err)
 		return
 	}
 	// Best effort: the comment is written, and a zone that failed to
 	// stick costs the next run only the time of day it is told.
 	_ = s.tasks.noteRequesterTimeZone(r.Context(), id, requestTimeZone(r))
-	s.respondWithTask(w, r, id)
+	task, err := s.tasks.Task(r.Context(), id)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	resp := commentResponse{Task: task}
+	if task.State == model.StateClosed {
+		resp.CommentDelivery = CommentNotDelivered
+		resp.Notice = CommentNotDeliveredNotice
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// mayReopen refuses an agent's comment a reopen: what an agent says
+// never sends a task to the queue, and a run may not reopen its own task
+// (selfMutableTaskRoutes), so the reopen would be one it could not make.
+// A person's role is asked about the reopen with the comment's own
+// (authorizeRoleCall's commentAsksReopen).
+func mayReopen(r *http.Request) error {
+	if _, ok := agentCallFromContext(r.Context()); ok {
+		return errors.New("an agent's comment cannot reopen a task: call POST /api/tasks/{id}/reopen separately")
+	}
+	return nil
+}
+
+// commentAsksReopen is whether a POST /api/tasks/{id}/comments body
+// carries reopen: true, read without consuming it (peekBody).
+func commentAsksReopen(r *http.Request) bool {
+	body, err := peekBody(r)
+	if err != nil || len(body) == 0 {
+		return false
+	}
+	var req struct {
+		Reopen bool `json:"reopen"`
+	}
+	return json.Unmarshal(body, &req) == nil && req.Reopen
 }
 
 // handleGetAttachment serves one attachment's raw content -- the only

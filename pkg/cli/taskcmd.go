@@ -620,11 +620,12 @@ func cmdComment(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 	fs := flag.NewFlagSet("grain comment", flag.ContinueOnError)
 	var attach stringList
 	fs.Var(&attach, "attach", "path to a local file to attach to the comment (repeatable)")
+	reopen := fs.Bool("reopen", false, "reopen the task if it is closed, so the comment reaches an agent (a comment on a closed task otherwise reaches none)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
-		return errors.New("usage: grain comment [-attach path]... <id> [body...]")
+		return errors.New("usage: grain comment [-attach path]... [-reopen] <id> [body...]")
 	}
 	id, err := taskID(fs.Arg(0))
 	if err != nil {
@@ -647,10 +648,15 @@ func cmdComment(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 		return err
 	}
 	if body == "" && len(attachments) == 0 {
-		return errors.New("usage: grain comment [-attach path]... <id> [body...] -- a body, an attachment, or both is required")
+		return errors.New("usage: grain comment [-attach path]... [-reopen] <id> [body...] -- a body, an attachment, or both is required")
 	}
-	if err := c.AddComment(ctx, id, body, attachments); err != nil {
+	notice, err := c.Comment(ctx, id, body, attachments, *reopen)
+	if err != nil {
 		return err
+	}
+	// On stderr, so the task printed below stays what -json prints.
+	if notice != "" {
+		fmt.Fprintln(os.Stderr, "grain comment: "+notice)
 	}
 	return respond(ctx, c, out, id)
 }
