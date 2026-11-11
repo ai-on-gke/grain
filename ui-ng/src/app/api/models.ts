@@ -1,0 +1,133 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// The slices of the server's JSON the Angular UI reads. Field names are
+// the server's own (pkg/ui's json tags); everything optional the server
+// omits when empty is optional here too.
+
+export interface AccessInfo {
+  role: string;
+  roles: string[];
+  full: boolean;
+  scopes: string[];
+  missing?: string[];
+  repoLimits?: Record<string, string[]>;
+}
+
+export interface GrainConfig {
+  access?: AccessInfo | null;
+  version?: string;
+  stateRepoSyncFailure?: unknown;
+  [key: string]: unknown;
+}
+
+export interface PullRequestRef {
+  number?: number;
+  url?: string;
+  [key: string]: unknown;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  state: string;
+  repo?: string;
+  repos?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  proposedBy?: string;
+  questionSummary?: string;
+  questionCommentId?: number;
+  awaitingAccess?: boolean;
+  turnStopped?: boolean;
+  reviewQuestions?: string;
+  reviewFindings?: unknown[];
+  humanApprovedBy?: string;
+  humanReviewHold?: { category?: string }[];
+  autoMerge?: boolean;
+  pullRequest?: PullRequestRef | string | null;
+  prClosedAt?: string;
+  prMergedAt?: string;
+  merged?: boolean;
+  closedReason?: string;
+  mergeQueueState?: string;
+  mergeQueueStalledAt?: string;
+  mergeQueueBlockedAt?: string;
+  redBaseBranch?: unknown;
+  stall?: string;
+  consoleSession?: unknown;
+  body?: string;
+}
+
+export interface AccessRequestItem {
+  kind: string;
+  repo?: string;
+  base?: string;
+  capability?: string;
+  with?: Record<string, unknown>;
+  access?: string;
+  grant?: string;
+  dangerous?: boolean;
+  requiresPerson?: boolean;
+  held?: boolean;
+  error?: string;
+}
+
+export interface AccessRequestView {
+  summary: string;
+  reason: string;
+  items: AccessRequestItem[];
+  createdAt: string;
+}
+
+export interface Comment {
+  id: number;
+  author?: string;
+  body: string;
+  summary?: string;
+  createdAt?: string;
+}
+
+export interface TaskDetail extends Task {
+  comments?: Comment[];
+  pendingAccess?: AccessRequestView | null;
+  pendingSecret?: { name: string; secret?: string; key?: string } | null;
+}
+
+export interface Notification {
+  id: number;
+  subject: string;
+  family?: string;
+  severity?: string;
+  body?: string;
+  raisedAt?: string;
+  raisedBy?: string;
+  raiseCount?: number;
+  ackedAt?: string | null;
+  actions?: string[];
+  repo?: string;
+  breaking?: unknown;
+  investigationTaskId?: string;
+}
+
+export interface LocalScriptApproval {
+  id: string;
+  taskId: string;
+  tool?: string;
+  script?: string;
+  args?: string[];
+  stdinBytes?: number;
+  stdinPreview?: string;
+  stdinTruncated?: boolean;
+}
