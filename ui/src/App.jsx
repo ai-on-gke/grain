@@ -62,6 +62,7 @@ import { boardMoves } from "./boardOrder.js";
 import { panelMove } from "./panelOrder.js";
 import { sectionMove } from "./sectionOrder.js";
 import { TimeZoneProvider } from "./TimeZoneContext.jsx";
+import { ViewerProvider } from "./ViewerContext.jsx";
 import {
   mergeFreshDetail,
   prependEarlierPage,
@@ -4561,7 +4562,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
       </div>
     </TimeZoneProvider>
   );
-  return <AccessConfigProvider config={config}>{shell}</AccessConfigProvider>;
+  return (
+    <AccessConfigProvider config={config}>
+      <ViewerProvider whoami={whoami}>{shell}</ViewerProvider>
+    </AccessConfigProvider>
+  );
 }
 
 // DEPLOYMENT_SETTINGS_TAB maps a Team settings tab an older link or
