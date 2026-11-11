@@ -502,6 +502,8 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   // /sessions/:id are two routes, so moving between them makes a new
   // page; the store (drafts, cached conversations) is shared and stays.
   readonly id = input<string>();
+  // ?new=1 (the create menu's New session) opens the New session dialog.
+  readonly new = input<string>();
 
   protected readonly director = DIRECTOR_ID;
   protected readonly freshOpen = signal(false);
@@ -589,6 +591,18 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         this.store.select(id);
         this.freshOpen.set(false);
         this.confirmDelete.set(false);
+      });
+    });
+    effect(() => {
+      if (!this.new()) return;
+      untracked(() => {
+        if (this.canCreate()) this.openNew();
+        // Drop the parameter so Back and a reload do not reopen it.
+        void this.router.navigate([], {
+          queryParams: { new: null },
+          queryParamsHandling: "merge",
+          replaceUrl: true,
+        });
       });
     });
     // Keep the newest message in view when one arrives, unless the

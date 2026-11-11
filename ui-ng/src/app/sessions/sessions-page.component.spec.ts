@@ -502,4 +502,21 @@ describe("SessionsPageComponent", () => {
     expect(api.calls.length + api.reads.length).toBe(n);
     vi.useRealTimers();
   });
+
+  it("opens New session when reached with ?new=1 from the create menu", async () => {
+    TestBed.configureTestingModule({
+      imports: [SessionsPageComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: new FakeApi() },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const f = TestBed.createComponent(SessionsPageComponent);
+    f.componentRef.setInput("new", "1");
+    f.autoDetectChanges();
+    await TestBed.inject(SessionsStore).refresh();
+    await f.whenStable();
+    expect(q(f, '[data-testid="new-session-dialog"]')).toBeTruthy();
+  });
 });

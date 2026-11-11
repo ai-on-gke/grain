@@ -39,14 +39,9 @@ import { KeyboardService } from "./services/keyboard.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
 import { TipDirective } from "./shared/tip.directive";
-import {
-  CLASSIC_NEW_SESSION,
-  CLASSIC_NEW_TASK,
-  DESTINATIONS,
-  type Destination,
-  SETTINGS,
-  hrefFor,
-} from "./shell/nav";
+import { DESTINATIONS, type Destination, SETTINGS, hrefFor } from "./shell/nav";
+import { CreateTaskService } from "./create/create-task.service";
+import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
 // Material-style 24px outline paths, drawn for this app.
@@ -75,11 +70,16 @@ const ICONS: Record<string, string> = {
   mark: "M12 2c-3 3-5 6-5 10a5 5 0 0 0 10 0c0-4-2-7-5-10zm0 15a3 3 0 0 1-3-3c0-2 1-4 3-6 2 2 3 4 3 6a3 3 0 0 1-3 3z",
 };
 
-interface CreateItem {
-  label: string;
-  href: string;
-  tip: string;
-}
+type CreateItem =
+  | { kind: "task"; label: string; tip: string }
+  | {
+      kind: "route";
+      label: string;
+      tip: string;
+      route: string;
+      query?: Record<string, unknown>;
+    }
+  | { kind: "href"; label: string; tip: string; href: string };
 
 @Component({
   selector: "g-root",
@@ -90,6 +90,7 @@ interface CreateItem {
     RouterLinkActive,
     TipDirective,
     SnackbarComponent,
+    NewTaskSheetComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
@@ -99,18 +100,20 @@ interface CreateItem {
   template: `
     <div class="app-shell">
       <nav class="nav-rail" aria-label="Primary destinations">
-        <a
+        <button
+          type="button"
           class="rail-fab"
           data-testid="rail-new-task"
-          [href]="newTaskHref"
           aria-label="New task"
+          aria-keyshortcuts="c"
           gTip="New task (c): describe the work and Grain files it."
           gTipPlacement="right"
+          (click)="openNewTask($event)"
         >
           <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
             <path [attr.d]="icons['add']" fill="currentColor" />
           </svg>
-        </a>
+        </button>
         <div class="rail-create" (focusout)="onCreateFocusOut($event)">
           <button
             #createBtn
@@ -135,15 +138,14 @@ interface CreateItem {
               [style.top.px]="createPos().top"
               [style.left.px]="createPos().left"
             >
-              @for (item of createItems; track item.href) {
+              @for (item of createItems; track item.label) {
                 <li>
-                  <a
-                    class="create-menu-item"
-                    [href]="item.href"
-                    [gTip]="item.tip"
-                    gTipPlacement="right"
-                    >{{ item.label }}</a
-                  >
+                  <ng-container
+                    *ngTemplateOutlet="
+                      createEntry;
+                      context: { $implicit: item, cls: 'create-menu-item' }
+                    "
+                  />
                 </li>
               }
             </ul>
@@ -315,16 +317,17 @@ interface CreateItem {
       <!-- Sessions has a composer where the phone FAB would sit, and is
         itself a place to ask for work (the prototype hides it there too). -->
       @if (!onSessions()) {
-        <a
+        <button
+          type="button"
           class="phone-fab"
           data-testid="phone-new-task"
-          [href]="newTaskHref"
           aria-label="New task"
+          (click)="openNewTask($event)"
         >
           <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
             <path [attr.d]="icons['add']" fill="currentColor" />
           </svg>
-        </a>
+        </button>
       }
 
       <nav class="compact-nav" aria-label="Primary destinations (compact)">
@@ -397,17 +400,61 @@ interface CreateItem {
                 <a class="more-sheet-item" [href]="hrefOf(d)">{{ d.label }}</a>
               </li>
             }
-            @for (item of createItems; track item.href) {
+            @for (item of createItems; track item.label) {
               <li>
-                <a class="more-sheet-item" [href]="item.href">{{
-                  item.label
-                }}</a>
+                <ng-container
+                  *ngTemplateOutlet="
+                    createEntry;
+                    context: { $implicit: item, cls: 'more-sheet-item' }
+                  "
+                />
               </li>
             }
           </ul>
         </nav>
       }
 
+      <ng-template #createEntry let-item let-cls="cls">
+        @switch (item.kind) {
+          @case ("task") {
+            <button
+              type="button"
+              [class]="cls"
+              data-testid="create-new-task"
+              [gTip]="item.tip"
+              gTipPlacement="right"
+              (click)="openNewTask($event)"
+            >
+              {{ item.label }}
+            </button>
+          }
+          @case ("route") {
+            <a
+              [class]="cls"
+              [routerLink]="item.route"
+              [queryParams]="item.query"
+              [gTip]="item.tip"
+              gTipPlacement="right"
+              (click)="closeMenus()"
+              >{{ item.label }}</a
+            >
+          }
+          @default {
+            <a
+              [class]="cls"
+              [href]="item.href"
+              [gTip]="item.tip"
+              gTipPlacement="right"
+              >{{ item.label }}</a
+            >
+          }
+        }
+      </ng-template>
+
+      <!-- Loaded the first time it opens, to keep the shell's bundle small. -->
+      @defer (when createTask.isOpen()) {
+        <g-new-task-sheet />
+      }
       <g-snackbar />
     </div>
   `,
@@ -430,19 +477,41 @@ export class AppComponent implements OnInit, OnDestroy {
     ...DESTINATIONS.filter((d) => !d.phone),
     SETTINGS,
   ];
-  protected readonly newTaskHref = CLASSIC_NEW_TASK;
+  // The create menu (spec D-23). Task from template, Run a suite and
+  // New board stay on the classic pages until those milestones land.
   protected readonly createItems: CreateItem[] = [
     {
+      kind: "task",
       label: "New task",
-      href: CLASSIC_NEW_TASK,
       tip: "Describe a piece of work for an agent to do.",
     },
     {
+      kind: "route",
       label: "New session",
-      href: CLASSIC_NEW_SESSION,
+      route: "/sessions",
+      query: { new: 1 },
       tip: "Start a standing conversation with an agent.",
     },
+    {
+      kind: "href",
+      label: "Task from template",
+      href: "/processes",
+      tip: "File a task from a saved template (classic Processes page).",
+    },
+    {
+      kind: "href",
+      label: "Run a suite",
+      href: "/processes",
+      tip: "Run a set of templates together (classic Processes page).",
+    },
+    {
+      kind: "href",
+      label: "New board",
+      href: "/boards",
+      tip: "A saved view of tasks (classic Boards page).",
+    },
   ];
+  protected readonly createTask = inject(CreateTaskService);
   protected readonly onSessions = signal(false);
   protected readonly inboxCount = computed(() => this.store.entries().length);
   protected readonly createOpen = signal(false);
@@ -463,7 +532,7 @@ export class AppComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     const r = (key: string, description: string, run: () => void) =>
       this.unregister.push(this.keyboard.register({ key, description, run }));
-    r("c", "New task", () => this.go(this.newTaskHref));
+    r("c", "New task", () => this.createTask.open());
     DESTINATIONS.slice(0, 9).forEach((d, i) =>
       r(String(i + 1), `Open ${d.label}`, () => this.open(d)),
     );
@@ -500,6 +569,24 @@ export class AppComponent implements OnInit, OnDestroy {
     this.doc
       .querySelector(".nav-rail")
       ?.removeEventListener("scroll", this.onViewportChange);
+  }
+
+  // openNewTask opens the New task sheet from whatever was clicked, so
+  // focus goes back there when it closes.
+  protected openNewTask(ev: Event): void {
+    const opener =
+      this.createOpen() || this.moreOpen()
+        ? this.moreOpen()
+          ? this.moreBtn()?.nativeElement
+          : this.createBtn()?.nativeElement
+        : (ev.currentTarget as HTMLElement | null);
+    this.closeMenus();
+    this.createTask.open({}, opener);
+  }
+
+  protected closeMenus(): void {
+    this.createOpen.set(false);
+    this.moreOpen.set(false);
   }
 
   // open goes to a destination: a route inside this app, or the classic

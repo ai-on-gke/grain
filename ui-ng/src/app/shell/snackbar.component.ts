@@ -32,6 +32,16 @@ import { SnackbarService } from "../services/snackbar.service";
           (focusout)="snacks.resume()"
         >
           <span class="snackbar-text">{{ s.message }}</span>
+          @if (s.secondary) {
+            <button
+              type="button"
+              class="snackbar-action"
+              data-testid="snackbar-secondary"
+              (click)="snacks.runAction(s.id, 'secondary')"
+            >
+              {{ s.secondary.label }}
+            </button>
+          }
           @if (s.action) {
             <button
               type="button"

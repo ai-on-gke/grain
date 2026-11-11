@@ -23,6 +23,8 @@ export interface Snack {
   id: number;
   message: string;
   action?: SnackbarAction;
+  // A second action shown before the first (Open beside Undo).
+  secondary?: SnackbarAction;
   // How long it stays, in milliseconds. 0 keeps it until dismissed.
   durationMs: number;
 }
@@ -55,9 +57,20 @@ export class SnackbarService implements OnDestroy {
   private startedAt = 0;
   readonly current = signal<Snack | null>(null);
 
-  show(message: string, action?: SnackbarAction, durationMs?: number): Snack {
+  show(
+    message: string,
+    action?: SnackbarAction,
+    durationMs?: number,
+    secondary?: SnackbarAction,
+  ): Snack {
     const ms = durationMs ?? (action ? ACTION_SNACK_MS : DEFAULT_SNACK_MS);
-    const snack: Snack = { id: this.nextId++, message, action, durationMs: ms };
+    const snack: Snack = {
+      id: this.nextId++,
+      message,
+      action,
+      secondary,
+      durationMs: ms,
+    };
     this.clearTimer();
     this.current.set(snack);
     this.remaining = ms;
@@ -84,14 +97,15 @@ export class SnackbarService implements OnDestroy {
 
   // runAction performs the showing snack's action once and dismisses it,
   // so a double click cannot undo twice. A failed action says so.
-  async runAction(id: number): Promise<void> {
+  async runAction(id: number, which: "primary" | "secondary" = "primary") {
     const snack = this.current();
-    if (!snack || snack.id !== id || !snack.action) return;
+    const action = which === "primary" ? snack?.action : snack?.secondary;
+    if (!snack || snack.id !== id || !action) return;
     this.dismiss(id);
     try {
-      await snack.action.run();
+      await action.run();
     } catch (err) {
-      this.show(`${snack.action.label} failed: ${errorText(err)}`);
+      this.show(`${action.label} failed: ${errorText(err)}`);
     }
   }
 

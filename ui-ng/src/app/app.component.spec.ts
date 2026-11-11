@@ -19,6 +19,7 @@ import { NEVER } from "rxjs";
 import { GrainApi } from "./api/grain-api.service";
 import { GrainEvents } from "./api/grain-events.service";
 import { AppComponent } from "./app.component";
+import { CreateTaskService } from "./create/create-task.service";
 import { DESTINATIONS, SETTINGS } from "./shell/nav";
 
 const fakeApi = {
@@ -94,13 +95,16 @@ describe("AppComponent shell", () => {
     expect(btn.getAttribute("aria-expanded")).toBe("true");
     expect(btn.hasAttribute("aria-haspopup")).toBe(false);
     const links = [
-      ...el(f).querySelectorAll<HTMLAnchorElement>(
-        '[data-testid="create-menu"] a',
+      ...el(f).querySelectorAll<HTMLElement>(
+        '[data-testid="create-menu"] li > *',
       ),
     ];
     expect(links.map((e) => e.textContent?.trim())).toEqual([
       "New task",
       "New session",
+      "Task from template",
+      "Run a suite",
+      "New board",
     ]);
     links[1].focus();
     links[1].dispatchEvent(
@@ -182,5 +186,22 @@ describe("AppComponent shell", () => {
     await router.navigateByUrl("/sessions");
     await f.whenStable();
     expect(el(f).querySelector('[data-testid="phone-new-task"]')).toBeNull();
+  });
+
+  it("opens the New task sheet from the rail FAB and from c", async () => {
+    const f = await render();
+    const fab = el(f).querySelector(
+      '[data-testid="rail-new-task"]',
+    ) as HTMLButtonElement;
+    fab.click();
+    await f.whenStable();
+    expect(el(f).querySelector('[data-testid="new-task-sheet"]')).toBeTruthy();
+    TestBed.inject(CreateTaskService).close();
+    await f.whenStable();
+    expect(el(f).querySelector('[data-testid="new-task-sheet"]')).toBeNull();
+    press("c");
+    await f.whenStable();
+    expect(el(f).querySelector('[data-testid="new-task-sheet"]')).toBeTruthy();
+    TestBed.inject(CreateTaskService).close();
   });
 });
