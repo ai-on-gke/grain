@@ -323,15 +323,31 @@ func (s *Server) signalChanged() {
 // spool and its exit record on disk, and the next hostd lists it again
 // (loadSpools), so a daemon that was not attached loses nothing.
 func (s *Server) Drain() {
+	if s.refuseStarts() {
+		s.startDrain()
+	}
+}
+
+// refuseStarts is the half of Drain that refuses new starts, without yet
+// letting Serve return, and reports whether this call is the one that
+// began the drain. OpDrain does it before answering, so a daemon whose
+// Drain has returned is never served a start it was told is refused.
+func (s *Server) refuseStarts() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining {
-		return
+		return false
 	}
 	s.draining = true
-	s.startDrainLocked()
 	s.logf("hostd: draining for an upgrade: refusing new starts; %d process(es) still running", s.runningLocked())
+	return true
+}
+
+func (s *Server) startDrain() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startDrainLocked()
 }
 
 // Cutover is the drain an upgrade to a build speaking this one's protocol
@@ -625,12 +641,17 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		// Answered before draining starts: with nothing running, the drain
 		// loop exits the process at once, and an answer written after it
 		// raced that exit -- a daemon then read EOF for a drain that had
-		// in fact happened (tests/agentdcompat).
-		_ = writeFrame(conn, frameOK, nil)
+		// in fact happened (tests/agentdcompat). Starts are refused before
+		// the answer, though, or one sent straight after it could be taken.
 		if req.Idle {
+			_ = writeFrame(conn, frameOK, nil)
 			s.Cutover()
-		} else {
-			s.Drain()
+			return
+		}
+		began := s.refuseStarts()
+		_ = writeFrame(conn, frameOK, nil)
+		if began {
+			s.startDrain()
 		}
 		return
 	case OpSocketOwner:
