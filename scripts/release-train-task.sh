@@ -23,10 +23,15 @@
 #   1. a scratch clone of the task's remote (never the task checkout, which
 #      the tags would be left behind in);
 #   2. the CI verdicts, written unedited from grain's own forge connection
-#      in the GitHub shapes scripts/candidate-gate.sh reads: main's
-#      workflow runs, and for the rc in qualification its nightly.yml jobs
-#      (Stage 1), its grain/release-qualification check runs (Stage 2) and,
-#      for a dropped rc, its grain/rc-hold check runs;
+#      in the GitHub shapes scripts/candidate-gate.sh reads: for the rc in
+#      qualification its nightly.yml jobs (Stage 1), its
+#      grain/release-qualification check runs (Stage 2) and, for a dropped
+#      rc, its grain/rc-hold check runs -- and main's workflow runs only if
+#      the train gets as far as looking for a commit to cut
+#      (RELEASE_RUNS_CMD). Those are up to 500 runs of each required
+#      workflow, most of a tick's reading, and a tick whose rc is still
+#      qualifying or whose rc-hold is still holding never needs them
+#      (grain/task-4393);
 #   3. scripts/release-from-trunk.sh in train mode under the train's own
 #      tag grant (RELEASE_PUSH_GRANT=train), publishers off: images and the
 #      GitHub Release are CI's, on the tags this pushes.
@@ -52,7 +57,9 @@ trap 'rm -rf "$out"' EXIT
 say() { echo "release-train-task: $*"; }
 fail() {
   say "$*"
-  echo "RELEASE_TRAIN_RESULT=failed"
+  # The main-runs mode is a step of release-from-trunk.sh's, which reports
+  # its failure; the tick's result is this script's top level's to print.
+  [ -n "${main_runs_mode:-}" ] || echo "RELEASE_TRAIN_RESULT=failed"
   exit 1
 }
 
@@ -84,6 +91,49 @@ read_ci() {
   fail "$what"
 }
 
+# main_runs <dest> <branch>: <branch>'s GitHub Actions runs, as one listing
+# in the shape scripts/candidate-gate.sh select-lkg reads. Stage 0 reads
+# only the required workflows on main, where every rc is cut (playbook
+# section 5; there is no convergence branch since 2026-11-09), so query
+# each required workflow directly rather than letting unrelated workflows
+# on main crowd them out of one page.
+main_runs() {
+  local dest="$1" cut_branch="$2" wf
+  local required="${CANDIDATE_GATE_REQUIRED-tests release}"
+  if [ -n "$required" ]; then
+    : > "$out/runs.jsonl"
+    for wf in $required; do
+      read_ci "$out/runs-$wf.json" "grain ci list could not read $wf.yml's GitHub Actions runs on $cut_branch" \
+        list --repo "$repo" --ref "$cut_branch" --workflow "$wf.yml" --provider github-actions --format github --limit 500
+      cat "$out/runs-$wf.json" >> "$out/runs.jsonl"
+      rm -f "$out/runs-$wf.json"
+    done
+    jq -s '{
+      total_count: (map(.total_count // (.workflow_runs | length)) | add // 0),
+      workflow_runs: (map(.workflow_runs // []) | add // []),
+      grain_note: ([.[].grain_note // empty | select(length > 0)] | join("; "))
+    } | if .grain_note == "" then del(.grain_note) else . end' "$out/runs.jsonl" > "$dest" ||
+      fail "could not combine $cut_branch's GitHub Actions runs"
+  else
+    read_ci "$dest" "grain ci list could not read $cut_branch's GitHub Actions runs" \
+      list --repo "$repo" --ref "$cut_branch" --provider github-actions --format github --limit 500
+  fi
+  local note
+  note="$(jq -r '.grain_note // empty' "$dest" 2>/dev/null || true)"
+  [ -z "$note" ] || say "grain_note in $cut_branch's runs: $note"
+}
+
+# `release-train-task.sh main-runs <dest> <branch>` is main_runs on its own:
+# what scripts/release-from-trunk.sh runs (RELEASE_RUNS_CMD) when, and
+# only when, it looks for a commit to cut. Its messages go to stderr,
+# where release-from-trunk.sh's own output already is.
+if [ "${1:-}" = main-runs ]; then
+  main_runs_mode=1
+  [ $# = 3 ] || fail "usage: $0 main-runs <dest> <branch>"
+  main_runs "$2" "$3" >&2
+  exit 0
+fi
+
 url="$(git -C "$checkout" remote get-url origin)" || fail "no origin remote in $checkout"
 rm -rf "$dir"
 git clone -q "$url" "$dir" || fail "could not clone $url"
@@ -114,31 +164,6 @@ while read -r t; do
   git rev-parse -q --verify "refs/tags/$v-pending" >/dev/null && continue
   dropped="$t"
 done < <(git tag -l 'v*-rc.*-discarded' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+-discarded$' | sed 's/-discarded$//' | sort -V)
-
-# Stage 0 (candidate-gate.sh select-lkg) reads only the required workflows on
-# main, where every rc is cut (playbook section 5; there is no convergence
-# branch since 2026-11-09), so query each required workflow directly rather
-# than letting unrelated workflows on main crowd them out of one page.
-cut_branch=main
-required="${CANDIDATE_GATE_REQUIRED-tests release}"
-if [ -n "$required" ]; then
-  : > "$out/runs.jsonl"
-  for wf in $required; do
-    read_ci "$out/runs-$wf.json" "grain ci list could not read $wf.yml's GitHub Actions runs on $cut_branch" \
-      list --repo "$repo" --ref "$cut_branch" --workflow "$wf.yml" --provider github-actions --format github --limit 500
-    cat "$out/runs-$wf.json" >> "$out/runs.jsonl"
-    rm -f "$out/runs-$wf.json"
-  done
-  jq -s '{
-    total_count: (map(.total_count // (.workflow_runs | length)) | add // 0),
-    workflow_runs: (map(.workflow_runs // []) | add // []),
-    grain_note: ([.[].grain_note // empty | select(length > 0)] | join("; "))
-  } | if .grain_note == "" then del(.grain_note) else . end' "$out/runs.jsonl" > "$out/runs.json" ||
-    fail "could not combine $cut_branch's GitHub Actions runs"
-else
-  read_ci "$out/runs.json" "grain ci list could not read $cut_branch's GitHub Actions runs" \
-    list --repo "$repo" --ref "$cut_branch" --provider github-actions --format github --limit 500
-fi
 
 app=""
 env_args=()
@@ -174,8 +199,9 @@ for f in "$out"/*.json; do
 done
 
 status=0
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 env RELEASE_PUSH_GRANT=train RELEASE_CI_SOURCE=grain GITHUB_TOKEN= GH_TOKEN= \
-  RELEASE_RUNS_JSON="$out/runs.json" RELEASE_QUALIFICATION_APP="$app" \
+  RELEASE_RUNS_JSON= RELEASE_RUNS_CMD="bash $(printf '%q' "$self") main-runs" RELEASE_QUALIFICATION_APP="$app" \
   RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off \
   RELEASE_TRAIN_OUTPUT="$out/train.out" ${env_args[@]+"${env_args[@]}"} \
   bash scripts/release-from-trunk.sh || status=$?

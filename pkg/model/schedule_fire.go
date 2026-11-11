@@ -675,6 +675,18 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 		}
 		return *held, nil
 	}
+	// A condition the schedule declared (Schedule.SkipWhen), after both:
+	// a previous firing still going is the more useful thing to name.
+	base := comp.Base
+	if base == "" {
+		base = sched.Base
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, base, now, advance); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
 
 	// What a repository's declaration asked for, recorded as of this
 	// firing, is what Settings -> Capabilities offers a person to
@@ -881,6 +893,12 @@ func (s *Store) fireWorkflowSchedule(ctx context.Context, sched Schedule, stem s
 		abandoned = hold.Review
 	}
 	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}
@@ -1251,6 +1269,12 @@ func (s *Store) fireSuiteSchedule(ctx context.Context, sched Schedule, now time.
 		}
 	}
 	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}

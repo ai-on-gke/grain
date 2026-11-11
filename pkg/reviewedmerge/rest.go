@@ -43,19 +43,18 @@ type REST struct {
 	Token string
 	// Client is the HTTP client; one with a 30s timeout when nil.
 	Client *http.Client
-	// Attempts is how many times a read is tried before its failure is
-	// reported; DefaultAttempts when zero.
-	Attempts int
-	// Backoff is the wait before the first retry, doubled before each
-	// one after it; DefaultBackoff when zero.
-	Backoff time.Duration
 }
 
-// DefaultAttempts and DefaultBackoff are how a REST read is retried: four
-// tries, 2s, 4s and 8s apart.
-const (
-	DefaultAttempts = 4
-	DefaultBackoff  = 2 * time.Second
+// restAttempts is how many times get asks before it gives up on a
+// failure it counts as transient (transient); restBackoff is the wait
+// before the second attempt, doubled before each one after it. A single
+// 503 from the API used to refuse a release outright (run 43048355272),
+// so the gate now rides out a brief outage the way a person re-running
+// the job would -- and still fails, with the last error, once the outage
+// outlasts every attempt.
+var (
+	restAttempts = 5
+	restBackoff  = 2 * time.Second
 )
 
 // maxRetryAfter caps how long a 429's Retry-After is waited out.
@@ -98,14 +97,7 @@ func (e *networkError) Unwrap() error { return e.err }
 // transient. Only how the forge is read is retried: what it answers is
 // returned as it is.
 func (r REST) get(ctx context.Context, rp repoAPI, p string, into any) error {
-	attempts := r.Attempts
-	if attempts <= 0 {
-		attempts = DefaultAttempts
-	}
-	wait := r.Backoff
-	if wait <= 0 {
-		wait = DefaultBackoff
-	}
+	attempts, wait := restAttempts, restBackoff
 	for attempt := 1; ; attempt++ {
 		err := r.getOnce(ctx, rp, p, into)
 		if err == nil || !transient(err) || ctx.Err() != nil {

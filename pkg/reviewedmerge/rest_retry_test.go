@@ -54,10 +54,11 @@ func (f *flakyForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func newFlakyForge(t *testing.T, status int, failures map[string]int, answers map[string]string) (*flakyForge, REST) {
 	t.Helper()
+	shortRESTBackoff(t)
 	f := &flakyForge{status: status, failures: failures, answers: answers, asked: map[string]int{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	return f, REST{BaseURL: srv.URL, Backoff: time.Millisecond}
+	return f, REST{BaseURL: srv.URL}
 }
 
 const (
@@ -117,13 +118,13 @@ func TestAForgeThatKeepsFailingIsAForgeErrorNotARefusal(t *testing.T) {
 	if !IsForgeError(err) {
 		t.Fatalf("err = %v, want a ForgeError", err)
 	}
-	for _, want := range []string{"could not read the pull requests for abc", "after 4 attempts", "503 Service Unavailable"} {
+	for _, want := range []string{"could not read the pull requests for abc", "after 5 attempts", "503 Service Unavailable"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %q, want it to say %q", err, want)
 		}
 	}
-	if f.asked[listPath] != DefaultAttempts {
-		t.Fatalf("asked %d times, want %d", f.asked[listPath], DefaultAttempts)
+	if f.asked[listPath] != restAttempts {
+		t.Fatalf("asked %d times, want %d", f.asked[listPath], restAttempts)
 	}
 }
 
@@ -158,7 +159,8 @@ func TestANetworkErrorIsRetried(t *testing.T) {
 		}
 		return rec.Result(), nil
 	})}
-	rest := REST{BaseURL: "https://forge.example", Client: client, Backoff: time.Millisecond}
+	shortRESTBackoff(t)
+	rest := REST{BaseURL: "https://forge.example", Client: client}
 	if _, err := policy.Check(context.Background(), rest, "abc"); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +171,7 @@ func TestANetworkErrorIsRetried(t *testing.T) {
 
 func TestRetryingStopsWhenTheContextIsDone(t *testing.T) {
 	f, rest := newFlakyForge(t, http.StatusServiceUnavailable, map[string]int{listPath: 100}, map[string]string{listPath: mergedList})
-	rest.Backoff = time.Hour
+	restBackoff = time.Hour
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	_, err := policy.Check(ctx, rest, "abc")

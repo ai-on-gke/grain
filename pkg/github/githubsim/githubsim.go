@@ -140,6 +140,8 @@ var (
 	// and cancelRunRe POST .../actions/runs/{id}/cancel (Sim.Dispatches,
 	// Sim.CancelledRuns).
 	workflowDispatchRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/workflows/([^/]+)/dispatches$`)
+	actionsVariableRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/variables/([^/]+)$`)
+	userRe             = regexp.MustCompile(`^/users/([^/]+)$`)
 	cancelRunRe        = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/cancel$`)
 	// And the fourth read hung off that walk, for a run whose jobs served
 	// no log: the check run behind one of them, which is where GitHub
@@ -384,6 +386,15 @@ type Sim struct {
 	// the upstream Sim can resolve cross-repository pull request heads and
 	// route fork repository requests to the fork Sim.
 	Forks map[string]*Sim
+
+	// Variables are this repository's GitHub Actions variables, by name
+	// (GET .../actions/variables/{name}); any other is a 404, on any
+	// repository. Accounts are GitHub's account type by login (GET
+	// /users/{login}): a login not in it is "Bot" when it ends in "[bot]"
+	// and "User" otherwise. What `grain health`'s reviewed-merge login
+	// check reads (pkg/mergelogins).
+	Variables map[string]string
+	Accounts  map[string]string
 
 	// PullRequestBase is the number the first pull request opened on this
 	// sim gets, the next one base+1 and so on. Zero means 9000. A test
@@ -1468,6 +1479,26 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		// again, not that it gave up quietly.
 		return jsonResponse(s.FailReads.Status, map[string]string{"message": s.FailReads.Message}), nil
 	}
+	if method == "GET" {
+		if m := actionsVariableRe.FindStringSubmatch(p); m != nil {
+			name, _ := url.PathUnescape(m[3])
+			if v, ok := s.Variables[name]; ok && m[1] == s.Owner && m[2] == s.Repo {
+				return jsonResponse(200, map[string]string{"name": name, "value": v}), nil
+			}
+			return jsonResponse(404, map[string]string{"message": "Not Found"}), nil
+		}
+		if m := userRe.FindStringSubmatch(p); m != nil {
+			login, _ := url.PathUnescape(m[1])
+			kind, ok := s.Accounts[login]
+			if !ok {
+				kind = "User"
+				if strings.HasSuffix(login, "[bot]") {
+					kind = "Bot"
+				}
+			}
+			return jsonResponse(200, map[string]string{"login": login, "type": kind}), nil
+		}
+	}
 	if method == "GET" && (p == "/installation/repositories" || p == "/user/repos") {
 		return s.reachableRepos(p, qs, headers), nil
 	}
@@ -1693,7 +1724,19 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				}
 			}
 			jobs := s.workflowJobsFor(key)
-			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
+			runID := s.runIDFor(key)
+			payload := workflowRunsJSON(m[1], m[2], runID, jobs)
+			// A run re-run through rerun-failed-jobs reads as its next
+			// attempt, as on GitHub, though its jobs stay what the test
+			// seeded: a re-run of a seeded infrastructure failure fails
+			// the same way again, which is what a test counting re-runs
+			// wants.
+			if runs, ok := payload["workflow_runs"].([]map[string]any); ok {
+				for _, run := range runs {
+					run["run_attempt"] = 1 + s.rerunsOf(int64(runID))
+				}
+			}
+			return jsonResponse(200, payload), nil
 		}
 		if m := actionsRunRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -3110,6 +3153,18 @@ func (s *Sim) jobByID(id int) (WorkflowJob, bool) {
 		return WorkflowJob{}, false
 	}
 	return jobs[index], true
+}
+
+// rerunsOf is how many times rerun-failed-jobs was accepted for runID.
+// Called with s.mu held, like every handler.
+func (s *Sim) rerunsOf(runID int64) int {
+	n := 0
+	for _, id := range s.RerunFailedJobs {
+		if id == runID {
+			n++
+		}
+	}
+	return n
 }
 
 // jobConclusion is GitHub's own field, with Sim's default for a job a

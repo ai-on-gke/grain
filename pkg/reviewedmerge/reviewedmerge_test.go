@@ -21,7 +21,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeForge struct {
@@ -230,6 +232,77 @@ func TestRESTRefusesAReviewListTooLongToRead(t *testing.T) {
 	defer srv.Close()
 	if _, err := (REST{BaseURL: srv.URL}).Reviews(context.Background(), "example/grain", 7); err == nil || !strings.Contains(err.Error(), "more than 1000 reviews") {
 		t.Fatalf("err = %v, want the list refused", err)
+	}
+}
+
+// shortRESTBackoff makes get's retries immediate for a test.
+func shortRESTBackoff(t *testing.T) {
+	t.Helper()
+	old := restBackoff
+	restBackoff = time.Millisecond
+	t.Cleanup(func() { restBackoff = old })
+}
+
+// TestRESTRidesOutATransientOutage: a 503 from the API refused release
+// run 43048355272 outright; a passing outage is now asked through.
+func TestRESTRidesOutATransientOutage(t *testing.T) {
+	shortRESTBackoff(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch calls.Add(1) {
+		case 1:
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		case 2:
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+		default:
+			fmt.Fprint(w, `{"parents":[{"sha":"p1"}]}`)
+		}
+	}))
+	defer srv.Close()
+	got, err := (REST{BaseURL: srv.URL}).FirstParent(context.Background(), "example/grain", "abc")
+	if err != nil || got != "p1" {
+		t.Fatalf("FirstParent = %q, %v; want p1 after the outage", got, err)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Fatalf("calls = %d, want 3", n)
+	}
+}
+
+// TestRESTGivesUpOnALastingOutage: an outage that outlasts every attempt
+// still refuses, with the API's own answer.
+func TestRESTGivesUpOnALastingOutage(t *testing.T) {
+	shortRESTBackoff(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	if _, err := (REST{BaseURL: srv.URL}).FirstParent(context.Background(), "example/grain", "abc"); err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("err = %v, want the 503", err)
+	}
+	if n := calls.Load(); int(n) != restAttempts {
+		t.Fatalf("calls = %d, want %d", n, restAttempts)
+	}
+}
+
+// TestRESTDoesNotRetryAnAnswer: a 404 or 401 says the same thing every
+// time, so it is not asked again.
+func TestRESTDoesNotRetryAnAnswer(t *testing.T) {
+	shortRESTBackoff(t)
+	for _, status := range []int{http.StatusNotFound, http.StatusUnauthorized, http.StatusForbidden} {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			http.Error(w, http.StatusText(status), status)
+		}))
+		if _, err := (REST{BaseURL: srv.URL}).FirstParent(context.Background(), "example/grain", "abc"); err == nil {
+			t.Fatalf("%d: err = nil", status)
+		}
+		srv.Close()
+		if n := calls.Load(); n != 1 {
+			t.Fatalf("%d: calls = %d, want 1", status, n)
+		}
 	}
 }
 
