@@ -809,6 +809,10 @@ func scheduleSchema() Schema {
 			// hold this repository's own schedules, because it is scoped to
 			// the repository the firing goes into.
 			{Model: "OverlapGroup", Keys: carried("overlap-group"), Columns: []string{"overlap_group"}},
+			// A condition outside the schedule that holds its firings
+			// (model.Schedule.SkipWhen, grain/task-4393): today only
+			// `publishing-held`. Carried: it only ever holds work back.
+			{Model: "SkipWhen", Keys: carried("skip-when"), Columns: []string{"skip_when"}},
 			{Model: "TimeZone", Keys: carried("timezone"), Columns: []string{"time_zone"}},
 			{Model: "Enabled", Keys: carried("enabled"), Columns: []string{"enabled"}},
 			{Model: "Base", Keys: carried("base"), Columns: []string{"base"}},

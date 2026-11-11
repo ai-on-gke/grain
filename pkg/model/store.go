@@ -6627,18 +6627,18 @@ func newScheduleID(ctx context.Context, tx *sql.Tx) (string, error) {
 
 const scheduleColumns = "`id`,`title`,`body`,`target_owner`,`target_name`,`base`," +
 	"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`," +
-	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`"
+	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`,`skip_when`"
 
 func scanSchedule(scan func(...any) error) (Schedule, error) {
 	var t Schedule
 	var base, templateID, suiteID sql.NullString
-	var kind, overlap, networkAccess, nothingNeeded, timeZone, workflowReview, admission, hosting, overlapGroup string
+	var kind, overlap, networkAccess, nothingNeeded, timeZone, workflowReview, admission, hosting, overlapGroup, skipWhen string
 	var everyNHours, everyNMinutes, timeOfDay, weekday, dayOfMonth sql.NullInt64
 	var lastRun sql.NullTime
 	if err := scan(&t.ID, &t.Title, &t.Body, &t.Target.Owner, &t.Target.Name, &base,
 		&t.AutoMerge, &t.AutoApproveProposals, &templateID, &suiteID, &kind, &everyNHours, &timeOfDay, &weekday, &dayOfMonth,
 		&overlap, &networkAccess, &nothingNeeded, &t.Model, &t.Enabled, &t.NextRunAt, &lastRun, &t.CreatedAt, &timeZone,
-		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting, &t.GrainCI, &overlapGroup); err != nil {
+		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting, &t.GrainCI, &overlapGroup, &skipWhen); err != nil {
 		return Schedule{}, err
 	}
 	t.Admission = Admission(strings.TrimSpace(admission))
@@ -6646,6 +6646,7 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 	t.Target = RepoFromStored(t.Target.Owner, t.Target.Name)
 	t.Overlap = OverlapPolicy(overlap)
 	t.OverlapGroup = strings.TrimSpace(overlapGroup)
+	t.SkipWhen = ScheduleSkipWhen(strings.TrimSpace(skipWhen))
 	t.NetworkAccess = NetworkAccess(networkAccess)
 	t.NothingNeededAction = NothingNeededAction(nothingNeeded)
 	t.WorkflowReview = WorkflowReviewPolicy(workflowReview)
@@ -6711,12 +6712,12 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`schedule`"+` (
   `+"`id`,`title`,`body`,`target_owner`,`target_name`,`base`,"+
 		"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`,"+
-		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`"+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`,`skip_when`"+`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
 		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
-		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting), t.GrainCI, strings.TrimSpace(t.OverlapGroup))
+		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting), t.GrainCI, strings.TrimSpace(t.OverlapGroup), string(t.SkipWhen))
 	if err != nil {
 		return fmt.Errorf("writing schedule %s: %w", t.ID, err)
 	}

@@ -1006,6 +1006,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `auto_upgrade_release` ADD COLUMN `succeeded_at` DATETIME NULL",
 		},
 	},
+	{
+		Version:     140,
+		Description: "add schedule.skip_when, a condition such as held base-branch publishing that holds a schedule's firings (grain/task-4393)",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `skip_when` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

@@ -532,6 +532,8 @@ overlap: skip                      # optional; "skip" (default) or "allow"; "ski
                                    # `overlap-group: sync-oss-release` beside `overlap: skip` says the same
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
 grain-ci: true                     # optional, workflow: only; run on grain CI even when ci_mode is github
+skip-when: publishing-held         # optional; hold firings while this base branch's publishing is held
+                                   # by a release triage task (see "Holding while publishing is held")
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
 admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
 hosting: console                   # optional; raises the template's own to console; refused with suite:
@@ -629,6 +631,36 @@ overlap group "sync-oss-release" is still open (running)`.
 A settings-owned schedule row carries the same `overlap-group:` key
 (`settings/schedules.yml`, `overlapGroup` on `POST`/`PATCH
 /api/schedules`).
+
+#### Holding while publishing is held: `skip-when:`
+
+grain/task-4393. `skip-when: publishing-held` holds a schedule's firings
+while publishing from the base branch it fires into is held: deployment
+health's `baseBranchPublishing` finding for that repository and branch
+is `gated`, with a release triage task open on it ("Further releases on
+this branch are held pending resolution of triage task N"). It is for
+work that can do nothing useful until publishing works again -- the
+release train cuts only from a commit whose release published, and on
+2026-11-10 it woke 45 times in a day to find that out.
+
+```yaml
+skip-when: publishing-held
+```
+
+A held firing is recorded like an overlap skip, as `skipped at <time>:
+publishing held by task N (...)`, and the schedules page says the same
+while it lasts. It is held, not dropped: the cadence stays where it was,
+and the first cycle after the triage task closes fires it once, standing
+in for the occurrences that came round meanwhile. Run now is never held.
+A `github_workflow_run` trigger's firing has no occurrence to hold, so it
+is dropped and recorded. `publishing-held` is the only condition; any
+other value is refused. Settings rows carry the same key
+(`settings/schedules.yml`).
+
+A daemon older than this key refuses a schedule file that says it, and a
+repository with a refused declaration keeps its last good commit's
+declarations, so declare it only once every daemon that reads the
+repository understands it.
 
 ### `.grain/triggers/<name>.yml`
 
