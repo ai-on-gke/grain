@@ -1279,6 +1279,13 @@ agentd_sign() {
   esac
   validate_agentd "$d"
   if [ -z "$key_file" ]; then
+    # A dry run is never handed the signing key (the workflows keep it
+    # off the runner's disk), so it says what it would sign instead of
+    # failing REQUIRE_AGENTD_SIGNING.
+    if [ "$dry_run" = true ]; then
+      say "[dry-run] would sign grain-agentd manifests in $d with AGENTD_RELEASE_SIGNING_KEY"
+      return 0
+    fi
     if [ "$require_signing" = true ]; then
       die "AGENTD_RELEASE_SIGNING_KEY is not set and REQUIRE_AGENTD_SIGNING=true"
     fi
