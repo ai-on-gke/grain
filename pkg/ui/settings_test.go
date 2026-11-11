@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1195,6 +1196,23 @@ func TestUpdateSettingsRoundTripsTheAutomaticUpgrade(t *testing.T) {
 		AutoUpgradeMinIntervalHours: &neg,
 	}); err == nil {
 		t.Error("a negative autoUpgradeMinIntervalHours was accepted")
+	}
+	// The largest a time.Duration holds is accepted and reads back
+	// exactly; one hour more, or math.MaxInt (which the browser would read
+	// back rounded and could not save again), is refused
+	// (docs/test-runs/2026-11-11-upgrades.md).
+	most := model.MaxAutoUpgradeMinIntervalHours
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeMinIntervalHours: &most,
+	}); err != nil || got.AutoUpgradeMinIntervalHours != most {
+		t.Fatalf("setting min interval to %d: %d, %v", most, got.AutoUpgradeMinIntervalHours, err)
+	}
+	for _, huge := range []int{model.MaxAutoUpgradeMinIntervalHours + 1, math.MaxInt} {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+			AutoUpgradeMinIntervalHours: &huge,
+		}); err == nil || !strings.Contains(err.Error(), "at most") {
+			t.Errorf("autoUpgradeMinIntervalHours %d: err = %v, want a refusal naming the most accepted", huge, err)
+		}
 	}
 	hourly := "hourly"
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &hourly}); err == nil {
