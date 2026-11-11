@@ -62,6 +62,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -85,6 +86,11 @@ var baseTime = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 // It also hands every client here the test access code
 // (useTestAccessCode), as the grain CLI on a daemon's own host has it.
 func TestMain(m *testing.M) {
+	// git_hosts_lifecycle_test.go runs this binary as the command-backed
+	// forge's tool.
+	if filepath.Base(os.Args[0]) == gitproxytest.Command {
+		os.Exit(fakeForgeCLI(os.Args[1:]))
+	}
 	// These tests' scripted agents call the MCP tools the control roster
 	// serves as `grain` commands instead; they drive the full roster
 	// (tests/security's TestControlRoster checks the control one).
@@ -162,6 +168,9 @@ type worldConfig struct {
 	namedSecrets map[string]string
 	// forwardHost, when set, overrides the default forward host passed to BuildProxy.
 	forwardHost string
+	// wrapUpstream, when set, wraps the default host's upstream -- for a
+	// test that records what reached it (git_hosts_lifecycle_test.go).
+	wrapUpstream func(http.Handler) http.Handler
 }
 
 // e2eBotToken is the deployment's own GitHub credential in a world built
@@ -265,6 +274,9 @@ func newWorld(t *testing.T, opts ...worldOption) *world {
 	}
 	for name, token := range cfg.namedSecrets {
 		mustWriteFile(t, filepath.Join(dataDir, "secrets", "github", name+".token"), token)
+	}
+	if cfg.wrapUpstream != nil {
+		upstream = cfg.wrapUpstream(upstream)
 	}
 	backendHost := mustHost(t, newTestServer(t, upstream))
 	if cfg.forwardHost != "" {
