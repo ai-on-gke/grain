@@ -386,6 +386,10 @@ type Config struct {
 	// before the run fails as an infrastructure failure, with no strike
 	// (agent.ErrHostdLost). Zero fails it at once.
 	HostdReattachTimeout time.Duration
+	// CIWakeBackstop is -ci-wake-backstop: how long a task resume_later
+	// deferred on a CI verdict may wait before it is woken regardless
+	// (orchestrator.Config.CIWakeBackstop). Zero is the default.
+	CIWakeBackstop time.Duration
 	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
 	// the session of a grain hostd on another machine that dials in to
 	// /api/hostd/connect with that token (hostd -server), through which

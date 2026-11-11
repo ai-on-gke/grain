@@ -400,6 +400,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		hostd.RemotePath+" with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability "+
 		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, "+
 		"which gives it a token of its own")
+	ciWakeBackstop := fs.Duration("ci-wake-backstop", orchestrator.DefaultCIWakeStallBound,
+		"how long a task that resume_later deferred on a CI verdict may wait before grain wakes it anyway, with a note on the task and a stall notification; a negative duration, such as -1s, disables the backstop")
 	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a host whose "+
 		"connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
 		"re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once")
@@ -1225,6 +1227,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		ClaudeRun: *claudeRun, CodexRun: *codexRun, AgyRun: *agyRun,
 		HostdSocket:          *hostdSocket,
 		HostdReattachTimeout: *hostdReattachTimeout,
+		CIWakeBackstop:       *ciWakeBackstop,
 		GithubHost:           *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
 		CheckpostURL: *checkpostURL, CheckpostExpect: *checkpostExpect,
 		GithubWebhookURL: *githubWebhookURL, GithubWebhookAddr: *githubWebhookAddr,

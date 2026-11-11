@@ -450,6 +450,11 @@ type SandboxHealthResponse struct {
 	// firing that ran anything (model.Store.StaleSchedules): a nightly
 	// that went quiet says so here rather than nowhere.
 	StaleSchedules []model.StaleSchedule `json:"staleSchedules,omitempty"`
+	// CIWaits is every task resume_later has deferred on a CI verdict that
+	// has been waiting longer than CIWaitHealthAge (ciWaits): the waits
+	// whose verdict grain has not yet seen, before the orchestrator's
+	// backstop wakes them anyway.
+	CIWaits []CIWaitHealth `json:"ciWaits,omitempty"`
 	// DispatchBlocked is every condition holding this deployment's
 	// dispatch (Config.DispatchConditions): the failing checks of this
 	// response, first because nothing below them matters while one is
@@ -1068,7 +1073,8 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
 			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
 			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
-			StaleSchedules:         s.tasks.staleSchedules(r.Context())})
+			StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+			CIWaits:                s.tasks.ciWaits(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
@@ -1089,6 +1095,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		CapabilityServers:      s.tasks.capabilityServersDown(),
 		Hub:                    s.tasks.hubHealth(r.Context()),
 		StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+		CIWaits:                s.tasks.ciWaits(r.Context()),
 		TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
@@ -1193,6 +1200,51 @@ func (c *Client) capabilityServersDown() []CapabilityServerDown {
 		}
 		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Waiting: st.Waiting, Reason: reason})
 	}
+	return out
+}
+
+// CIWaitHealthAge is how long a resume_later CI wait runs before `grain
+// health` lists it: well past a CI run's ordinary length, well short of
+// the orchestrator's backstop.
+const CIWaitHealthAge = time.Hour
+
+// CIWaitHealth is one task deferred on a resume_later CI wait.
+type CIWaitHealth struct {
+	TaskID string    `json:"taskId"`
+	Repo   string    `json:"repo,omitempty"`
+	Branch string    `json:"branch,omitempty"`
+	CIMode string    `json:"ciMode,omitempty"`
+	CI     string    `json:"ci"`
+	Since  time.Time `json:"since"`
+	// Recovered is a wait read back from resume_later's own comment
+	// rather than from its run (model.HeldCIResume.Recovered).
+	Recovered bool `json:"recovered,omitempty"`
+}
+
+// ciWaits is every resume_later CI wait older than CIWaitHealthAge,
+// oldest first, nil on a store that cannot answer.
+func (c *Client) ciWaits(ctx context.Context) []CIWaitHealth {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	held, err := c.Store.HeldCIResumes(ctx)
+	if err != nil {
+		return nil
+	}
+	now := c.now()
+	var out []CIWaitHealth
+	for _, h := range held {
+		if now.Sub(h.Since) < CIWaitHealthAge {
+			continue
+		}
+		w := CIWaitHealth{TaskID: h.TaskID, Branch: h.Branch, CIMode: string(h.CIMode), CI: h.TargetCI,
+			Since: h.Since, Recovered: h.Recovered}
+		if h.Repo != (model.RepoRef{}) {
+			w.Repo = h.Repo.String()
+		}
+		out = append(out, w)
+	}
+	slices.SortFunc(out, func(a, b CIWaitHealth) int { return a.Since.Compare(b.Since) })
 	return out
 }
 
