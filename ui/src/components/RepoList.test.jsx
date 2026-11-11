@@ -1172,4 +1172,30 @@ describe("RepoList", () => {
     });
     vi.unstubAllGlobals();
   });
+
+  it("surfaces a warning when a stored hostless entry is reachable only on a non-default git host", async () => {
+    api.mockImplementation((path) => {
+      if (path === "/api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [
+            { repo: "acme/widgets", push: true },
+            { repo: "git.forge.example/experimental/grain", push: true },
+          ],
+          connections: [
+            { credential: "github-token", host: "github.com", ok: true },
+            { credential: "forge-token", host: "git.forge.example", ok: true },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    renderList({
+      config: { targetRepos: ["acme/widgets", "experimental/grain"] },
+    });
+    const alert = await screen.findByTestId("repo-host-mismatch-alert");
+    expect(alert).toHaveTextContent(
+      "experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+    );
+  });
 });

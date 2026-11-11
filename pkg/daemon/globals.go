@@ -185,16 +185,43 @@ var liveRepoNames atomic.Pointer[github.RESTClient]
 // "this deployment cannot ask" and stores the operator's own spelling,
 // so a repo added before the reconcile loop is up is added under the
 // name that was typed rather than not added at all.
-type repoNameGate struct{}
+type repoNameGate struct {
+	store       *model.Store
+	defaultHost string
+}
 
-func (repoNameGate) RepoFullName(owner, name string) (string, error) {
+func (g repoNameGate) RepoFullName(host, owner, name string) (string, error) {
 	client := liveRepoNames.Load()
 	if client == nil {
 		return "", errors.New(
 			"this daemon has no GitHub client yet, so it cannot ask how this repo spells its own name: " +
 				"its reconcile loop has not started (or has failed -- check the daemon log)")
 	}
-	return client.RepoFullName(owner, name)
+	ref := model.RepoRef{Host: host, Owner: owner, Name: name}
+	defHost := restClientHost(g.defaultHost)
+	if _, routed := client.Transport.(*forgeRouter); routed {
+		resolvedHost := defHost
+		if host != "" {
+			if h, err := model.NormalizeGitHost(host); err == nil && h != "" {
+				resolvedHost = h
+			} else {
+				resolvedHost = host
+			}
+		}
+		if !model.SameGitHost(resolvedHost, defHost, model.DefaultGitHost) && g.store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			conn, err := g.store.GitConnectionOn(ctx, resolvedHost, ref.Owner, ref.Name)
+			cancel()
+			if err != nil || conn == "" {
+				return "", fmt.Errorf("no git connection configured for %s", resolvedHost)
+			}
+		}
+		return client.RepoFullName(resolvedHost+"/"+ref.Owner, ref.Name)
+	}
+	if off := ref.OffDefaultHost(); off != "" && !model.SameGitHost(off, defHost, model.DefaultGitHost) {
+		return "", fmt.Errorf("this GitHub client only reaches %s, not %s", defHost, off)
+	}
+	return client.RepoFullName(ref.Owner, ref.Name)
 }
 
 // repoComparisonGate supplies the task UI's internal pull-request view. The
