@@ -111,6 +111,15 @@ type KubeConfig struct {
 	// Nil skips the check with a warning on the signature step, as on
 	// the image path.
 	VerifyCmd []string
+	// ReviewedMerge, when set, refuses an image whose commit did not
+	// reach its branch through reviewed merges, as ImageConfig's does
+	// (reviewed.go). Asked in the signature step, after VerifyCmd and
+	// before any pod runs the image. The commit is the revision label of
+	// the digest VerifyCmd verified, read from the registry
+	// (reviewed_registry.go), since nothing here has pulled the image;
+	// RevisionCmd is unused. Set with no VerifyCmd, every upgrade is
+	// refused.
+	ReviewedMerge *ReviewedMergeConfig
 	// SandboxImageArgs asks the candidate grain image which Kubernetes
 	// sandbox image it names. When set, that image is also pull-checked
 	// in a throwaway pod before the Deployment is changed.
@@ -270,13 +279,31 @@ func (u *Upgrader) stageKube(ctx context.Context, p *progress, branch string) (s
 		if checked, err = verifyTag(ctx, p, stepVerify, u.cfg.Kube.VerifyCmd, ref); err != nil {
 			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 		}
-		p.done(stepVerify, fmt.Sprintf("%s is signed as %s", tag, strings.TrimPrefix(checked, tag+"@")))
+		signed := fmt.Sprintf("%s is signed as %s", tag, strings.TrimPrefix(checked, tag+"@"))
 		if u.sameKubeVersion(current, branch, tag, checked) || u.discardedRCUnchangedDetail(ctx, branch) != "" {
+			p.done(stepVerify, signed)
 			if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" {
 				return p.markUnchanged(msg), nil
 			}
 			return p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, checked)), nil
 		}
+		// And whether a reviewed commit went into it (reviewed.go), read
+		// from the registry by the digest just verified: no pod has run
+		// it yet, and none does unless this passes.
+		reviewed, err := u.checkKubeReviewedMerge(ctx, p, stepVerify, checked)
+		if err != nil {
+			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+		}
+		if reviewed != "" {
+			signed += "; " + reviewed
+		}
+		p.done(stepVerify, signed)
+	} else if u.cfg.Kube.ReviewedMerge != nil {
+		// Asked for the reviewed-merge check with no signature to hold
+		// the revision label to: refused, as on the image path.
+		p.start(stepVerify)
+		_, err := u.checkKubeReviewedMerge(ctx, p, stepVerify, ref)
+		return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 	} else {
 		p.logf("%s: warning: %s", stepVerify, unverifiedNote)
 		p.skip(stepVerify, unverifiedNote)
