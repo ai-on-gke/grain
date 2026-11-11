@@ -45,6 +45,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
@@ -365,6 +366,18 @@ type CiSandboxes struct {
 	ActionsCache func(scope actionscache.Scope) (url string, revoke func(), err error)
 	// Stopping, when non-nil, is closed when the daemon begins shutting down.
 	Stopping <-chan struct{}
+	// GoCacheJobs is the package cache's Go build-cache writer registry
+	// (PackageCache.GoCacheJobs). A job on a trusted ref is registered in
+	// it as Trusted for as long as its sandbox lives, and its GOCACHEPROG
+	// carries the token (ciGoCacheWriteRefusal, grantGoCacheWrites). nil
+	// registers nobody: every job then reads the shared Go build cache and
+	// writes none of it, exactly as a task sandbox does.
+	GoCacheJobs *pkgcache.JobTokenSet
+	// GoCacheRefRefusal says why a job on repo's ref may not write the
+	// shared Go build cache -- "" when it may. The daemon's is
+	// CiReleaseRefRefusal: the default branch, a paired branch or an open
+	// release's branch, never a task's. nil trusts no ref.
+	GoCacheRefRefusal func(ctx context.Context, repo, ref string) (string, error)
 }
 
 // ciActionsCacheScope is the corner of the Actions cache a job may use:
@@ -694,6 +707,10 @@ func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if prep := orchestrator.PrepareSandbox(ctx, cache, backing); prep.Err != nil {
 		s.log("grain ci: %s: configuring package cache at %s: %v", sandbox.SandboxName, prep.Base, prep.Err)
 	}
+	// A job on a trusted ref writes the shared Go build cache every
+	// sandbox reads; every other job keeps the token-less GOCACHEPROG
+	// PrepareSandbox just gave it, and reads only.
+	sandbox.revokeGoCache = s.grantGoCacheWrites(ctx, req, backing)
 	// Where this deployment keeps an Actions cache, this job is told
 	// where to find its own repository's corner of it -- one file, read
 	// by the act invocation grain generates for an Actions job
@@ -778,6 +795,9 @@ func (s CiSandboxes) Readopt(ctx context.Context, req ci.SandboxRequest) (ci.San
 		}
 		s.log("grain ci: %s: refreshing package cache on readopt: %v", sandbox.SandboxName, err)
 	}
+	// The token the job was given before the restart died with the old
+	// daemon's registry, so a trusted job is given a fresh one.
+	sandbox.revokeGoCache = s.grantGoCacheWrites(ctx, req, backing)
 	return sandbox, nil
 }
 
@@ -854,6 +874,10 @@ type CiSandbox struct {
 	// that the URL written into the sandbox is worth nothing the moment
 	// the sandbox is gone. nil where this deployment keeps no cache.
 	revokeActionsCache func()
+	// revokeGoCache gives back this job's Go build-cache writer token
+	// (CiSandboxes.grantGoCacheWrites). nil for a job that was not
+	// trusted to write the shared Go build cache.
+	revokeGoCache func()
 	// run is the sandbox's own run_command tool, the transport an
 	// agent's tool call goes over.
 	Run func(context.Context, map[string]any) mcp.Result
@@ -1772,6 +1796,9 @@ func (s *CiSandbox) Release(ctx context.Context) error {
 	s.Owner.Teams.Drop(s.SandboxName)
 	if s.revokeActionsCache != nil {
 		s.revokeActionsCache()
+	}
+	if s.revokeGoCache != nil {
+		s.revokeGoCache()
 	}
 	capErr := s.revokeCapabilities(ctx)
 	err := errors.Join(capErr, s.Backing.Release(ctx))
