@@ -1447,6 +1447,14 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 				return err
 			}
 		}
+		// And the deployment's own repositories: a pull request open
+		// against one removed since it was opened is left open, its
+		// auto-merge withdrawn, rather than merged into a repository
+		// grain no longer works in (targetrepos.go). No override gets
+		// past this one while the repository stays off the list.
+		if held, err := withdrawForRemovedRepo(ctx, store, task, ref, now); err != nil || held {
+			return err
+		}
 		// And the repository's merge rules, where they say a person has
 		// to press Submit (`auto_merge: never`, mergerules.go).
 		if held, err := withdrawForMergePolicy(ctx, store, client, e.task, ref, e.policy, now); err != nil {
@@ -3574,7 +3582,7 @@ func noJobLogSection(ev buildEvidence) string {
 			"there is no job log to hand you: the failing check named above comes through " +
 			"the Checks API from something else -- Buildkite, CircleCI, a review bot -- " +
 			"which keeps its own output. Your sandbox cannot reach it and neither can " +
-			"`pull_request_status`, so reproduce the failure in your checkout; if its name " +
+			"`grain ci wait`, so reproduce the failure in your checkout; if its name " +
 			"does not say what to reproduce, say so on this task rather than pushing at " +
 			"it blind."
 	}
@@ -3584,8 +3592,8 @@ func noJobLogSection(ev buildEvidence) string {
 			return heading + "When the queue looked, " + stillRunningPhrase(state) +
 				", and no job of " + runsPronoun(state.Runs) + " had failed yet: the check " +
 				"above concluded ahead of the Actions API, which is ordinary. That read is " +
-				"older than your sandbox, so call `pull_request_status` first -- it " +
-				"fetches the failing jobs' logs for this pull request -- and read what it " +
+				"older than your sandbox, so run `grain ci wait` first -- it " +
+				"fetches the failing jobs' logs for this branch -- and read what it " +
 				"says before going through the code."
 		}
 		return heading + allFinishedPhrase(state.Runs) +
@@ -3602,12 +3610,12 @@ func noJobLogSection(ev buildEvidence) string {
 	if state.Unfinished > 0 {
 		b.WriteString("\nAt that moment " + stillRunningPhrase(state) + ", which is why there " +
 			"is no log here: Actions only serves a job's log once its run has finished. " +
-			"That read is older than your sandbox, so call `pull_request_status` -- it " +
+			"That read is older than your sandbox, so run `grain ci wait` -- it " +
 			"will most likely fetch the log now.")
 	} else {
 		b.WriteString("\nThose runs had all finished and their logs were still not served: a " +
 			"log past Actions' 90-day retention, or a credential that may not fetch one. " +
-			"`pull_request_status` reads the same commit and will find no more, so work " +
+			"`grain ci wait` reads the same commit and will find no more, so work " +
 			"from the failed steps above and reproduce that step in your checkout.")
 	}
 	return b.String()

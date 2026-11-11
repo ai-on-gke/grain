@@ -553,6 +553,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/attempts/{number}/transcript", s.handleGetAttemptTranscript)
 	s.route("GET /api/tasks/{id}/attempts/{number}/capability-audit", s.handleGetAttemptCapabilityAudit)
 	s.route("GET /api/tasks/{id}/prompt", s.handleGetTaskPrompt)
+	s.route("GET /api/tasks/{id}/diff-preview", s.handleTaskDiffPreview)
 	s.route("GET /api/tasks/{id}/tree", s.handleGetTaskTree)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)

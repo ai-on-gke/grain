@@ -574,4 +574,46 @@ test.describe("user and system settings walkthrough regressions", () => {
       });
     }
   });
+  // 2026-11-11 walkthrough: the filter answered "No setting matches" for
+  // Models' Token usage and budgets and Where each agent CLI runs cards and
+  // for Agents' Commit identity, which had no entries in its index.
+  test("the filter finds Models' usage and run-location cards and Agents' commit identity", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 600 });
+    for (const [query, label, path, anchor] of [
+      ["budget", "Token usage and budgets", "/settings/models", "usage"],
+      [
+        "run location",
+        "Where each agent CLI runs",
+        "/settings/models",
+        "cli-run",
+      ],
+      [
+        "commit identity",
+        "Commit identity",
+        "/settings/agents",
+        "commit-identity",
+      ],
+    ]) {
+      await page.goto("/settings/general");
+      await page.keyboard.press("/");
+      await page.getByRole("textbox", { name: "Filter settings" }).fill(query);
+      await expect(page.getByTestId("settings-no-match")).toHaveCount(0);
+      await page
+        .getByTestId("settings-result")
+        .filter({ hasText: label })
+        .first()
+        .click();
+      await expect(page).toHaveURL(new RegExp(`${path}#${anchor}$`));
+      const card = page.locator(`#${anchor}`);
+      await expect(card).toHaveClass(/setting-highlight/);
+      await expect
+        .poll(async () => {
+          const box = await card.boundingBox();
+          return Boolean(box && box.y < 600 && box.y + box.height > 0);
+        })
+        .toBe(true);
+    }
+  });
 });

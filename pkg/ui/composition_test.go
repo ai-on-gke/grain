@@ -748,12 +748,15 @@ func TestDraftScheduleCompositionKeepsAScheduleCapabilitiesBesideItsTemplates(t 
 		t.Fatalf("composing a draft: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	want := []string{model.GCPKeySandboxAgentGrant, model.GitHubReadIssuesGrant}
+	// acme/widgets has no CI mode set, so GitHub CI: the repo layer adds
+	// the default api:ci-read@acme/widgets (model.DefaultCIReadGrant).
+	want := []string{model.GCPKeySandboxAgentGrant, model.GitHubReadIssuesGrant,
+		model.DefaultCIReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}).Capability}
 	if !slices.Equal(caps.Values, want) {
 		t.Errorf("draft values = %v, want %v", caps.Values, want)
 	}
-	if !slices.Equal(caps.Sources, []string{"template", "schedule"}) {
-		t.Errorf("draft sources = %v, want [template schedule]", caps.Sources)
+	if !slices.Equal(caps.Sources, []string{"template", "schedule", "repo"}) {
+		t.Errorf("draft sources = %v, want [template schedule repo]", caps.Sources)
 	}
 
 }

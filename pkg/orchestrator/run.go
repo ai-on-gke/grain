@@ -449,7 +449,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
-	prompt += sandboxToolingSectionFor(task.Target != nil, grainci.Granted(task.Grants), isReviewTask(task))
+	prompt += sandboxToolingSectionFor(task.Target != nil, runCIAccessOf(task), isReviewTask(task))
 	prompt += grainCLISection(task)
 	prompt += customFieldsSection(task)
 	prompt += timezoneSection(task)
@@ -583,8 +583,8 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		} else {
 			prompt += fmt.Sprintf(
 				"\n\nPush as often as you like: %q is your branch, and each push reruns CI "+
-					"against the new commit. After a push, call `wait_for_checks` and fix "+
-					"any failure before finishing.", branch)
+					"against the new commit. After a push, run `grain ci wait` (give `run_command` "+
+					"`timeout: 600000`) and fix any failure before finishing.", branch)
 		}
 		// The other half of reading a failure, and the one a run has no
 		// way to work out from inside its sandbox: whether the failure is
@@ -605,11 +605,10 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 			// so base_branch_status is a GitHub-check comparison with no role
 			// in this CI loop.
 		} else if history.Repair || model.FixesBaseBranch(task) {
-			prompt += repairCISection()
+			prompt += repairCISection(runCIAccessOf(task))
 		} else {
 			prompt += "\n\nIf a check fails, find out whether it was already failing before you " +
-				"started: `base_branch_status` reports CI on the branch your work merges " +
-				"into. A failure that is red there too is not yours to fix -- leave it " +
+				"started: " + baseStatusPhrase(runCIAccessOf(task)) + ". A failure that is red there too is not yours to fix -- leave it " +
 				"alone, do not weaken the test to get past it, and say in what you report " +
 				"that it was already failing. A failure with no counterpart there is yours."
 		}
@@ -674,6 +673,19 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	prompt += proposalSection(task)
 	prompt += writeTargetsSection(task)
 	return prompt
+}
+
+// baseStatusPhrase names how this run reads CI on the branch its work
+// merges into: `grain pr base-status` with read access to its repository's
+// CI, and otherwise the pull request page `grain pr open` prints -- the
+// MCP base_branch_status is not on a host sandbox's roster, so it is not
+// named (sandboxToolingSection).
+func baseStatusPhrase(access runCIAccess) string {
+	if access.read || access.grainCI {
+		return "`grain pr base-status` reports CI on the branch your work merges into"
+	}
+	return "this run cannot read the base branch's CI logs itself, so compare against the " +
+		"checks `grain pr open` lists and say which failures you could not attribute"
 }
 
 // suspendedCLINote leads the grain CLI reference in a resumed session's
@@ -771,7 +783,7 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 		prompt += relayedReviewThreadsSection(task)
 	}
 	if task.Target != nil && !grainci.Granted(task.Grants) && (history.Repair || model.FixesBaseBranch(task)) {
-		prompt += repairCISection()
+		prompt += repairCISection(runCIAccessOf(task))
 	}
 	prompt += suspendedCLINote + grainCLISection(task)
 	for _, section := range extraSections {
@@ -881,11 +893,11 @@ func redCIProcedureSection() string {
 // that -- a failure that reproduces on the base is a different kind of
 // diagnosis than one that appeared with this branch, and the person
 // reading the pull request afterward wants to know which they got.
-func repairCISection() string {
+func repairCISection(access runCIAccess) string {
 	return "\n\nThis run is the merge queue's repair of a branch that is already stopping " +
 		"the queue, so fix every failing check on it, whether or not your own commits " +
-		"caused the failure. If a check fails, `base_branch_status` still tells you " +
-		"where it came from -- it reports CI on the branch your work merges into -- " +
+		"caused the failure. If a check fails, " + baseStatusPhrase(access) + ", which still tells you " +
+		"where it came from, " +
 		"but a failure that is red there too is yours to fix here all the same: this " +
 		"pull request cannot merge until it is green, and leaving inherited breakage " +
 		"alone leaves the queue stopped. Fix the code the check is failing on rather " +
@@ -1546,24 +1558,33 @@ func sandboxDirsSection(checkoutDir, sandboxRoot string) string {
 // is no branch, no pull request and no CI for those tools to report on,
 // so it would be three tool names of noise. The other two hold for every
 // run in every sandbox.
-func sandboxToolingSection(hasTarget, grainCI bool) string {
-	return sandboxToolingSectionFor(hasTarget, grainCI, false)
+//
+// The commands it names are the ones this run can use (runCIAccessOf): the
+// MCP wait_for_checks / pull_request_status / base_branch_status are not
+// named at all, because a host's sandbox has no GitHub reader for them
+// (daemon.pullRequestToolsWithUpstream drops them there), while
+// `grain ci wait` and `grain pr open` answer on every sandbox.
+func sandboxToolingSection(hasTarget bool, access runCIAccess) string {
+	return sandboxToolingSectionFor(hasTarget, access, false)
 }
 
-func sandboxToolingSectionFor(hasTarget, grainCI, review bool) string {
+// sandboxToolingSectionFor is sandboxToolingSection for a review too: a
+// review reads the reviewed change's CI rather than waiting on its own, and
+// always holds a read of it (ensureReviewCIReadGrant).
+func sandboxToolingSectionFor(hasTarget bool, access runCIAccess, review bool) string {
 	s := "\n\n"
-	if hasTarget && review {
+	switch {
+	case hasTarget && review:
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
-			"`grain ci checks <sha>`, `grain ci list`, `grain ci log`, `grain pr status` and " +
-			"`pull_request_status` rather than reaching for `gh`, which the stock sandbox image " +
-			"does not carry. "
-	} else if hasTarget && grainCI {
+			"`grain ci checks <sha>`, `grain ci list`, `grain ci log` and `grain pr status` " +
+			"rather than reaching for `gh`, which the stock sandbox image does not carry. "
+	case hasTarget && (access.grainCI || access.read):
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
 			"`grain ci wait`, `grain pr status` and `grain pr base-status` rather than " +
 			"reaching for `gh`, which the stock sandbox image does not carry. "
-	} else if hasTarget {
+	case hasTarget:
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
-			"`wait_for_checks`, `pull_request_status` and `base_branch_status` rather than " +
+			"`grain ci wait` and `grain pr open` rather than " +
 			"reaching for `gh`, which the stock sandbox image does not carry. "
 	}
 	s += "Anything else you find missing is usually a Debian package away -- the image keeps no " +
@@ -1587,6 +1608,13 @@ func grainCLISection(task model.Task) string {
 	if task.Target != nil && task.Target.Owner != "" && task.Target.Name != "" {
 		repo = task.Target.Owner + "/" + task.Target.Name
 	}
+	// The namespace example is one this run can read: ci://<repo> answers
+	// "forbidden" to a run with no CI read, which then asks for the
+	// grant the example implied it held.
+	example := "ci://" + repo
+	if task.Target != nil && !runCIAccessOf(task).read && task.ID != "" {
+		example = "task://" + task.ID
+	}
 	s := "\n\n### Grain CLI (`grain`)\n\n" +
 		"Inside your sandbox, the `grain` CLI (run it with `run_command`) reaches this deployment's " +
 		"namespace, CI, pull request, merge queue and the capabilities granted to this task, with no " +
@@ -1595,16 +1623,9 @@ func grainCLISection(task model.Task) string {
 		"`grep`, `jq` or `head` it rather than printing it all:\n\n" +
 		"- **Namespace** (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`): " +
 		"`grain ls <uri>`, `grain read <uri> [--tail N]`, `grain grep <re> <uri>`. For example " +
-		"`grain ls ci://" + repo + "`.\n"
+		"`grain ls " + example + "`.\n"
 	if task.Target != nil {
-		s += "- **CI & pull request** (this task's branch): `grain ci wait [--jobs j1,j2]` (give " +
-			"`run_command` `timeout: 600000`; time blocked is credited back to your deadline), " +
-			"`grain ci run-job <job>`, `grain ci retrigger`, `grain ci list`, `grain ci log [<run-id>] " +
-			"[--job <j>] [--step <s>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
-			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
-			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
-			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
-			"`grain ci log <run-id>`.\n"
+		s += grainCLICIBullet(repo, runCIAccessOf(task))
 	}
 	s += "- **Task & collaboration:** `grain status \"<note>\"`, `grain handover write --file <path>`, " +
 		"`grain task wait <id>`, `grain task message <id> \"<body>\"`, `grain notify --subject <s> " +
@@ -1615,6 +1636,71 @@ func grainCLISection(task model.Task) string {
 		"`resume_later` and `propose_task` directly, not as shell commands.\n\n" +
 		"Run `grain help` or `grain <command> --help` for every flag."
 	return s
+}
+
+// runCIAccess is what a run can do with its own repository's CI, read from
+// the grants it holds: grain#ci is only ever attached on a repository grain
+// CI gates (model.adjustGrainCIGrant strips it everywhere else), so holding
+// it is the grain-CI case; any other run is on a repository GitHub Actions
+// gates, and reads that repository's runs and logs only with ci:read on it
+// -- the api:ci-read@<target> it is filed with by default
+// (model.DefaultCIReadGrant), unless the capability policy turned that off.
+type runCIAccess struct {
+	grainCI bool
+	read    bool
+}
+
+func runCIAccessOf(task model.Task) runCIAccess {
+	if grainci.Granted(task.Grants) {
+		return runCIAccess{grainCI: true, read: true}
+	}
+	names := make([]string, len(task.Grants))
+	for i, g := range task.Grants {
+		names[i] = g.Capability
+	}
+	repo := ""
+	if task.Target != nil {
+		repo = task.Target.String()
+	}
+	read := grainserver.HasSource(names) || (repo != "" && model.APIGrantsOf(names).Allows("ci:read", repo))
+	return runCIAccess{read: read}
+}
+
+// grainCLICIBullet is the CI & pull request bullet of grainCLISection,
+// naming only the commands this run can use (task 4364). Every command
+// it lists for a GitHub-CI run answers for GitHub Actions runs
+// (gha:<owner>:<name>:<run>); run-job and retrigger drive grain CI alone
+// and are not offered there. A run that cannot
+// read its CI is told the one grant that would let it, once -- never
+// grain#ci, which no repository GitHub Actions gates can grant and which
+// is what agents told only "forbidden" kept asking a person for.
+func grainCLICIBullet(repo string, access runCIAccess) string {
+	wait := "(give `run_command` `timeout: 600000`; time blocked is credited back to your deadline)"
+	if access.grainCI {
+		return "- **CI & pull request** (this task's branch): `grain ci wait [--jobs j1,j2]` " + wait + ", " +
+			"`grain ci run-job <job>`, `grain ci retrigger`, `grain ci list`, `grain ci log [<run-id>] " +
+			"[--job <j>] [--step <s>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
+			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
+			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
+			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
+			"`grain ci log <run-id>`.\n"
+	}
+	gated := "GitHub Actions gates this repository's pull requests"
+	if access.read {
+		return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
+			"`grain ci list`, `grain ci log [<run-id>] [--job <j>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
+			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
+			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
+			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
+			"`grain ci log <run-id>`. `grain ci run-job` and `grain ci retrigger` drive grain CI only " +
+			"and cannot rerun GitHub's checks: push a commit for that.\n"
+	}
+	return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
+		"which reports each failing job's log tail, `grain pr open` (your pull request, its checks and " +
+		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. This run does " +
+		"not hold read access to the CI of " + repo + ": to read CI logs, `request_access` for " +
+		"`https://grain.dev/capabilities/api#ci-read` on " + repo + "; never `grain#ci`, which a " +
+		"repository GitHub Actions gates cannot grant.\n"
 }
 
 // grainCLIGrants is the `grain` commands each of grain's own capability
@@ -4026,8 +4112,14 @@ func capacityDetail(capacity *agent.CapacityError) string {
 // the clone's credential, say -- which is the host's doing and is recorded
 // as model.EnvironmentOutcome, in the words that say how to renew them. A setup
 // step's error may have crossed a process (the git proxy answering a
-// clone), so the refusal is also recognised by its text.
+// clone), so the refusal is also recognised by its text. A clone the git
+// proxy refused because the host's own login for a git host has lapsed
+// (hostLoginLapsedError) is the same finding about a different login.
 func setupEnding(err error, outcome, detail string) (string, string) {
+	var lapsed *hostLoginLapsedError
+	if errors.As(err, &lapsed) {
+		return model.EnvironmentOutcome, lapsed.detail()
+	}
 	if expired, ok := authfix.As(authfix.Wrap(err, "", "")); ok {
 		return model.EnvironmentOutcome, expired.Error()
 	}

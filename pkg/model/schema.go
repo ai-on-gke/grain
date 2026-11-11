@@ -657,10 +657,10 @@ import "strconv"
 // `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
 // the minimum interval between two completed automatic upgrades in release
 // mode, and when the last automatic upgrade succeeded (grain/task-4230).
-// 140 adds `schedule`.`skip_when` (model.Schedule.SkipWhen): a condition
+// 141 adds `schedule`.`skip_when` (model.Schedule.SkipWhen): a condition
 // outside the schedule, such as its base branch's publishing being held,
 // that holds its firings (grain/task-4393).
-const SchemaVersion = 140
+const SchemaVersion = 141
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -761,7 +761,14 @@ const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_even
   ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
-  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`notification_id`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`subject`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`severity`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`summary`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`approval_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`script`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`decision`" + `         TEXT     NOT NULL DEFAULT ''
 )`
 
 // secretEntriesTable is the `secret_entries` catalogue for
@@ -2063,7 +2070,7 @@ var Tables = []string{
 	// what every schedule did before it could say otherwise.
 	//
 	// skip_when is model.Schedule.SkipWhen (grain/task-4393): DEFAULT ''
-	// here and in migration 140, which holds nothing.
+	// here and in migration 141, which holds nothing.
 	//
 	// every_n_minutes is model.Recurrence.EveryNMinutes, every_n_hours'
 	// counterpart for RecurrenceEveryNMinutes: NULL on every other kind,

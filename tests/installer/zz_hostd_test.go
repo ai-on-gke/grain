@@ -599,7 +599,10 @@ while [ $i -lt %[1]d ]; do
   i=$((i+1))
   sleep 0.5
 done
-url=$(sed -n 's/^url = "\(.*\)"/\1/p' "$CODEX_HOME/config.toml")
+# The wrapper appends grain's own server last; a task holding an api grant
+# (every task on a GitHub-CI repository holds api:ci-read by default) also
+# has a grain-controller server in the base config, with a url of its own.
+url=$(sed -n 's/^url = "\(.*\)"/\1/p' "$CODEX_HOME/config.toml" | tail -n1)
 auth=$(sed -n 's/^http_headers = { Authorization = "\(.*\)" }/\1/p' "$CODEX_HOME/config.toml")
 curl -fsS -X POST "$url" \
   -H "Authorization: $auth" \
