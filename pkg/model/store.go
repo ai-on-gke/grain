@@ -1775,6 +1775,47 @@ func (s *Store) PendingQuestions(ctx context.Context) (map[string]PendingQuestio
 	return out, err
 }
 
+// noteSummaryWhere picks, out of `task_comment` `c`, the newest comment on
+// its task that is not a handover -- the note a task that answered in a
+// comment is resting on -- where that comment carries a summary.
+const noteSummaryWhere = "`c`.`handover` = 0 AND `c`.`summary` <> '' AND `c`.`id` = (" +
+	"SELECT MAX(`c2`.`id`) FROM `task_comment` `c2` WHERE `c2`.`task_id` = `c`.`task_id` AND `c2`.`handover` = 0)"
+
+// NoteSummaries is, for every open task, the one-line summary its newest
+// comment was given (comment_on_issue's `summary`), keyed by task: one
+// query for a whole list, as PendingQuestions is. A task whose newest
+// comment has no summary is absent rather than given one derived from the
+// comment's opening, which is what a report starts with, not what anybody
+// has to do.
+func (s *Store) NoteSummaries(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	err := each(ctx, s.db,
+		"SELECT `c`.`task_id`, `c`.`summary` FROM `task_comment` `c` JOIN `task_observation` `o` "+
+			"ON `o`.`task_id` = `c`.`task_id` WHERE `o`.`closed_at` IS NULL AND "+noteSummaryWhere, nil,
+		func(rows *sql.Rows) error {
+			var id, summary string
+			if err := rows.Scan(&id, &summary); err != nil {
+				return err
+			}
+			out[id] = summary
+			return nil
+		})
+	return out, err
+}
+
+// NoteSummary is NoteSummaries for one task: "" when its newest comment
+// has no summary, or it has no comments.
+func (s *Store) NoteSummary(ctx context.Context, taskID string) (string, error) {
+	var summary string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `c`.`summary` FROM `task_comment` `c` WHERE `c`.`task_id` = ? AND "+noteSummaryWhere,
+		taskID).Scan(&summary)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return summary, err
+}
+
 // CommentByPerson reports whether a comment is a person's: a human's
 // own, or one a service relayed on a human's behalf. What agents and
 // grain itself say on a task is never something a run is owed for.
