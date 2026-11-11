@@ -656,8 +656,18 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	if strings.TrimSpace(req.Hosting) == "" && comp.Hosting != "" {
 		req.Hosting = string(comp.Hosting)
 	}
-	if req.Skills == nil && comp.Skills != nil {
-		req.Skills = comp.Skills.Clone()
+	if comp.Skills != nil {
+		// Field by field, the way every other skills layer composes
+		// (model.ResolveSkillFolders, model.ComposeRepoSkills): a task
+		// that says only enabled: true keeps the template's folders
+		// rather than falling back past them to the repository's. A
+		// task setting that does not validate is left as it is, for
+		// CreateTask to refuse.
+		if req.Skills == nil {
+			req.Skills = comp.Skills.Clone()
+		} else if _, err := model.NormalizeSkillsConfig(req.Skills); err == nil {
+			req.Skills = model.ComposeRepoSkills(req.Skills, comp.Skills)
+		}
 	}
 	if req.Priority == nil && comp.Priority != 0 {
 		p := comp.Priority
