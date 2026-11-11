@@ -221,6 +221,11 @@ type GateOverrideRecord struct {
 	By      string    `json:"by"`
 	HeadSHA string    `json:"headSha"`
 	At      time.Time `json:"at"`
+	// WithdrawnAt is set once the branch moved on from HeadSHA before the
+	// forced merge happened (orchestrator.dropMovedForcedMerge). The
+	// record stays on the task as the audit of who asked and why, but a
+	// withdrawn override skips no gate.
+	WithdrawnAt *time.Time `json:"withdrawnAt,omitempty"`
 }
 
 // Link encodes r as a LinkGateOverride link.
@@ -253,13 +258,38 @@ func GateOverrides(t Task) []GateOverrideRecord {
 	return out
 }
 
-// LatestGateOverride returns the most recent GateOverrideRecord on t, if any.
+// LatestGateOverride returns the most recent GateOverrideRecord on t, if any
+// and if it still stands: an override withdrawn because the branch moved on
+// from the commit it was for (WithdrawnAt) skips nothing, and neither does
+// any older one it replaced. GateOverrides still lists every record.
 func LatestGateOverride(t Task) (GateOverrideRecord, bool) {
 	all := GateOverrides(t)
-	if len(all) == 0 {
+	if len(all) == 0 || all[len(all)-1].WithdrawnAt != nil {
 		return GateOverrideRecord{}, false
 	}
 	return all[len(all)-1], true
+}
+
+// WithdrawGateOverride marks t's standing gate override, if any, withdrawn
+// at at, keeping it as an audit record. It reports whether it changed t.
+func WithdrawGateOverride(t *Task, at time.Time) bool {
+	for i := len(t.Links) - 1; i >= 0; i-- {
+		if t.Links[i].Kind != LinkGateOverride {
+			continue
+		}
+		r, ok := ParseGateOverrideRecord(t.Links[i].Target)
+		if !ok {
+			continue
+		}
+		if r.WithdrawnAt != nil {
+			return false
+		}
+		w := at.UTC().Truncate(time.Second)
+		r.WithdrawnAt = &w
+		t.Links[i] = r.Link()
+		return true
+	}
+	return false
 }
 
 // NormalizeOverrideGates parses and validates explicit gate names supplied via

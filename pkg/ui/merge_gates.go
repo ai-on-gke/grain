@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -100,8 +101,21 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 	if err != nil {
 		return err
 	}
+	head, err = c.forceMergeHead(ref, strings.ToLower(strings.TrimSpace(head)), obs)
+	if err != nil {
+		return err
+	}
+	// An earlier override stands only for the commit it was given for: at
+	// any other head it skips nothing, so the gates this request is checked
+	// against are computed without it (the merge queue withdraws it on its
+	// next cycle; this covers the window before that).
+	gateTask := *task
+	if ov, ok := model.LatestGateOverride(gateTask); ok && !strings.EqualFold(ov.HeadSHA, head) {
+		gateTask.Links = slices.Clone(gateTask.Links)
+		model.WithdrawGateOverride(&gateTask, c.now())
+	}
 	targetStates, _ := c.Store.States(ctx)
-	liveGates := model.ComputeMergeGates(*task, obs, targetStates)
+	liveGates := model.ComputeMergeGates(gateTask, obs, targetStates)
 
 	// Enforce explicit --override-gates whenever any required review gate is
 	// unsatisfied: no default or shorthand may skip a security review or code
@@ -154,10 +168,6 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 		skipped = legacySkipped
 	}
 
-	head, err = c.forceMergeHead(ref, strings.ToLower(strings.TrimSpace(head)), obs)
-	if err != nil {
-		return err
-	}
 	now := c.now()
 	who := c.requestActor(ctx)
 	by := who.Actor.ID

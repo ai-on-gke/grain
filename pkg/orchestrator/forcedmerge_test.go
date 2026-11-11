@@ -270,6 +270,20 @@ func TestSyncPullRequestsDoesNotForceACommitPushedAfterTheOverride(t *testing.T)
 		t.Fatalf("the task's thread does not say the override was withdrawn and why: %q",
 			commentBodies(t, ctx, store, task.ID))
 	}
+	// The gate override recorded with the stamp goes with it: kept as the
+	// audit of who asked and why, but no longer standing, so the task's
+	// gates stop reading "overridden" at a head nobody overrode
+	// (docs/test-runs/2026-11-11-merge-gates.md, finding F1).
+	if got, err := store.GetTask(ctx, task.ID); err != nil || got == nil {
+		t.Fatalf("GetTask: %v", err)
+	} else {
+		if ov, ok := model.LatestGateOverride(*got); ok {
+			t.Fatalf("gate override still standing after the branch moved: %+v", ov)
+		}
+		if all := model.GateOverrides(*got); len(all) == 0 || all[len(all)-1].WithdrawnAt == nil {
+			t.Fatalf("gate override records = %+v, want the moved one kept and marked withdrawn", all)
+		}
+	}
 
 	// And it stays withdrawn: the next cycle is an ordinary one, and a red
 	// change does not merge on it.

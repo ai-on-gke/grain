@@ -1,0 +1,113 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ui_test
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/model"
+)
+
+// A gate override is for one commit. Once the branch has moved on (a new
+// head pushed, the outstanding force-merge stamp withdrawn by the merge
+// queue), the earlier override must neither show its gates as
+// "overridden" nor let a later override at the new head skip a review gate
+// it does not name (docs/test-runs/2026-11-11-merge-gates.md, finding F1).
+func TestAGateOverrideForAnEarlierHeadSkipsNothingAtTheNewHead(t *testing.T) {
+	t.Parallel()
+	const headA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const headB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	c, store, ctx := testClient(t)
+	c.Config.GitHubPullRequests = prHead(headA)
+	task := create(t, c, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.AutoMerge = true
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#77"},
+			model.Link{Kind: model.LinkSecurityHold, Target: "trust-boundary/v5"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "901"},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Date(2026, 11, 11, 1, 0, 0, 0, time.UTC)
+	if err := store.Observe(ctx, model.Observation{
+		TaskID: task.ID, CompletedAt: &done,
+		CI: &model.CIStatus{RunID: "run-1", Commit: headA, Conclusion: "success", FinishedAt: &done},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.ForceMergeWithGates(ctx, task.ID, "rollback at A", headA, []string{"security-review"}); err != nil {
+		t.Fatalf("override at head A: %v", err)
+	}
+
+	// The branch moves on: a new head is pushed and the merge queue
+	// withdraws the stamp for A (orchestrator.dropMovedForcedMerge).
+	c.Config.GitHubPullRequests = prHead(headB)
+	if err := store.ObserveField(ctx, task.ID, done.Add(time.Minute), func(o *model.Observation) {
+		o.ForceMergeAt = nil
+		o.ForceMergeReason, o.ForceMergeBy, o.ForceMergeSkipped, o.ForceMergeHeadSHA = "", "", "", ""
+		o.CI = &model.CIStatus{RunID: "run-2", Commit: headB, Conclusion: "success", FinishedAt: &done}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before the merge queue's next cycle has withdrawn the override, an
+	// override at B that names no review gate must already be refused: the
+	// security review has not passed on B and nobody overrode it there.
+	err := c.ForceMergeWithGates(ctx, task.ID, "just CI please", headB, nil)
+	if err == nil || !strings.Contains(err.Error(), "security-review") {
+		t.Fatalf("override at head B naming no review gate = %v, want it refused for the unsatisfied security-review gate", err)
+	}
+
+	// Once the queue has withdrawn it (as orchestrator.dropMovedForcedMerge
+	// does), the task pane no longer shows the gate as overridden, while the
+	// record of who asked and why stays.
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		model.WithdrawGateOverride(tk, done.Add(time.Minute))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range detail.MergeGates {
+		if g.ID == model.GateSecurityReview && g.State == model.GateStateOverridden {
+			t.Fatalf("security-review gate at head B = %s (%s): an override given for head A still shows as standing", g.State, g.Detail)
+		}
+	}
+	got, err := store.GetTask(ctx, task.ID)
+	if err != nil || got == nil {
+		t.Fatal(err)
+	}
+	if all := model.GateOverrides(*got); len(all) != 1 || all[0].WithdrawnAt == nil || all[0].Reason != "rollback at A" {
+		t.Fatalf("override records = %+v, want head A's kept as a withdrawn audit record", all)
+	}
+
+	// And an override at B naming the gate is accepted and stands.
+	if err := c.ForceMergeWithGates(ctx, task.ID, "rollback at B", headB, []string{"security-review"}); err != nil {
+		t.Fatalf("override at head B: %v", err)
+	}
+	got, _ = store.GetTask(ctx, task.ID)
+	if ov, ok := model.LatestGateOverride(*got); !ok || ov.HeadSHA != headB {
+		t.Fatalf("latest override = %+v (%v), want head B's", ov, ok)
+	}
+}

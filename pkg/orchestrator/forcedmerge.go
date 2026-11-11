@@ -109,6 +109,15 @@ func dropMovedForcedMerge(ctx context.Context, store *model.Store, taskID string
 	if err := store.ObserveField(ctx, taskID, now, clearForceMerge); err != nil {
 		return fmt.Errorf("orchestrator: withdrawing the force merge on %s: %w", taskID, err)
 	}
+	// The gate override recorded beside the stamp was for the same commit:
+	// withdraw it too, or the task keeps showing (and a later override at
+	// the new head keeps treating) its gates as overridden.
+	if err := store.UpdateTask(ctx, taskID, func(t *model.Task) error {
+		model.WithdrawGateOverride(t, now)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("orchestrator: withdrawing the gate override on %s: %w", taskID, err)
+	}
 	by := f.by
 	if by == "" {
 		by = forcedMergeBy
