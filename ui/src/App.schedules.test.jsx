@@ -883,6 +883,43 @@ describe("App", () => {
     }
   });
 
+  // 2026-11-11 recurring and composed work walkthrough: the link closed
+  // the pane before the task had loaded, which wrote the bare list into
+  // history between them, so Back from the task skipped the schedule. A
+  // suite run's task rows never did; the link now behaves as they do.
+  it("comes back to the schedule from the suppressed task it links to", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+      suppressed: { reason: "task", taskId: "1" },
+    };
+    window.history.replaceState(null, "", "/processes/schedules/sched-1");
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Edit schedule" });
+    const before = window.history.length;
+    await user.click(screen.getByRole("link", { name: "task 1" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/tasks/1"));
+    expect(window.history.length).toBe(before + 1);
+
+    window.history.back();
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/processes/schedules/sched-1"),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Edit schedule" }),
+    ).toBeInTheDocument();
+  });
+
   it("refreshes schedules, templates and suites immediately when navigating into Processes", async () => {
     setupApi(initialTasks, [], [], []);
     const user = userEvent.setup();

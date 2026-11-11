@@ -257,4 +257,50 @@ describe("HubSection", () => {
       },
     });
   });
+
+  // A saved listed: false is omitted from the settings, and the daemon
+  // registers an unset entry unlisted; the box showed it ticked
+  // (2026-11-11 walkthrough).
+  it("shows an unset or false Listed unticked, and saves a tick as listed", async () => {
+    api.mockResolvedValue({
+      enabled: true,
+      state: "connected",
+      effectiveHostKind: "kubernetes",
+    });
+    const saveChoice = vi.fn();
+    const s = {
+      settings: {
+        hubTokenSet: true,
+        hub: {
+          url: "https://hub.example.com",
+          entry: "acme-widgets",
+          hostKind: "kubernetes",
+        },
+      },
+      saveChoice,
+      onEnterKey: () => {},
+      reloadSettings: vi.fn(),
+      showError: vi.fn(),
+      onSaved: vi.fn(),
+    };
+    render(<HubSection s={s} />);
+    const listed = screen.getByRole("checkbox", {
+      name: /Listed in hub directory/,
+    });
+    expect(listed).not.toBeChecked();
+    fireEvent.click(listed);
+    expect(saveChoice).toHaveBeenLastCalledWith({
+      hub: expect.objectContaining({ listed: true }),
+    });
+
+    // With a kind chosen, the effective kind is that choice, not what
+    // Auto-detect would pick.
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: /Host kind/ }));
+    expect(
+      await screen.findByRole("option", { name: "Auto-detect" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "Auto-detect (kubernetes)" }),
+    ).toBeNull();
+  });
 });
