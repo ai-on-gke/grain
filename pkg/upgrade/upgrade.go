@@ -1223,7 +1223,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 	_, checksEdition := u.deploymentEdition()
 	checksEdition = checksEdition && len(u.cfg.Image.EditionArgs) > 0
 	switch {
-	case len(u.cfg.Image.VerifyCmd) > 0 || checksEdition:
+	case len(u.cfg.Image.VerifyCmd) > 0 || u.cfg.Image.ReviewedMerge != nil || checksEdition:
 		p.start(stepVerify)
 		var verified []string
 		if len(u.cfg.Image.VerifyCmd) > 0 {
@@ -1231,9 +1231,19 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 				return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 			}
 			verified = append(verified, ref+" is signed")
-		} else {
+		} else if u.cfg.Image.ReviewedMerge == nil {
 			p.logf("%s: warning: %s", stepVerify, unverifiedNote)
 			verified = append(verified, unverifiedNote)
+		}
+		// And whether a reviewed commit went into it (reviewed.go): the
+		// signature says only that CI built it. With the check on and no
+		// signature verification, this refuses.
+		reviewed, err := u.checkReviewedMerge(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref)
+		if err != nil {
+			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+		}
+		if reviewed != "" {
+			verified = append(verified, reviewed)
 		}
 		note, err := u.checkImageEdition(ctx, p, ref)
 		if err != nil {
