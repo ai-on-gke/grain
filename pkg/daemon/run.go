@@ -376,6 +376,10 @@ func Run(ctx context.Context, cfg Config) error {
 			"it, the sync loop retries every %s, and the UI's State pane says so until one works. "+
 			"The load reported: %v", stateRepo.Dir(), stateSyncInterval, loadErr)
 	}
+	// The hub's name for this deployment, applied once the state
+	// repository's grain_config is in, so a name set there (or in
+	// Settings) is the one that is kept.
+	adoptDefaultEnvironmentName(ctx, store, cfg.DefaultEnvironmentName)
 	// The encrypted-secrets backup is refused to every sandbox. The set is
 	// live so changing that backup through the UI takes effect immediately.
 	forbidden := gitproxy.NewForbiddenSet()

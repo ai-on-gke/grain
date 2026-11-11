@@ -645,12 +645,16 @@ import "strconv"
 // model.TaskBriefEdit): a durable task's compaction cursor, handover
 // version and current brief, and every edit of that brief
 // (design/design/durable-tasks.design.md#DT-15, grain/task-4107).
-// 137 adds `grain_config`.`auto_upgrade_min_interval_hours`
+// 137 adds `grain_config`.`hub_environment_name`
+// (model.Config.HubEnvironmentName): the environment name a Grain Hub last
+// supplied as this deployment's default, so a rename of its hub entry can
+// replace it without overwriting a name the operator chose (grain/task-4200).
+// 138 adds `grain_config`.`auto_upgrade_min_interval_hours`
 // (model.Config.AutoUpgradeMinIntervalHours, default 6; 0 = off) and
 // `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
 // the minimum interval between two completed automatic upgrades in release
 // mode, and when the last automatic upgrade succeeded (grain/task-4230).
-const SchemaVersion = 137
+const SchemaVersion = 138
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2695,6 +2699,7 @@ var Tables = []string{
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
+  ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_min_interval_hours`" + ` INTEGER NOT NULL DEFAULT 6,
   PRIMARY KEY (` + "`id`" + `)
 )`,

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,6 +107,90 @@ func TestAHostdsLoginsReachTheControllersStatus(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the controller never learned the hostd's logins: %+v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAllowlistLoginsMapAndFeatureLogins(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "ignored-codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "ignored-claude"))
+
+	// Built-in codex file exists, so we prove an explicit logins: map
+	// overrides the built-in table rather than merging with it.
+	if err := os.MkdirAll(filepath.Join(home, "ignored-codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "ignored-codex", "auth.json"), []byte(`{"secret":"built-in"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	customCred := filepath.Join(home, ".acme", "token.json")
+	if err := os.MkdirAll(filepath.Dir(customCred), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const secretValue = "super-secret-credential-payload"
+	if err := os.WriteFile(customCred, []byte(`{"token":"`+secretValue+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctl := startController(t, "s3cret")
+	startRemoteServer(t, ctl, "s3cret", "logins:\n  acme: ~/.acme/token.json\n  missing: ~/.acme/none.json\n")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		st := ctl.remote.Status()
+		if st.LoginsKnown {
+			if !reflect.DeepEqual(st.Logins, []string{"acme"}) {
+				t.Fatalf("status logins = %q, want [\"acme\"]", st.Logins)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("controller never learned mapped logins: %+v", st)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	h, err := ctl.client().Hello(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.Has(FeatureLoginsMap) || !h.Has(FeatureLogins) {
+		t.Fatalf("hello features = %v, want logins and logins_map", h.Features)
+	}
+	if !reflect.DeepEqual(h.Logins, []string{"acme"}) {
+		t.Errorf("Hello.Logins = %q, want [\"acme\"]", h.Logins)
+	}
+	if want := map[string]string{"acme": customCred}; !reflect.DeepEqual(h.LoginTargets, want) {
+		t.Errorf("Hello.LoginTargets = %v, want %v", h.LoginTargets, want)
+	}
+	if h.CodexAuth != "" {
+		t.Errorf("Hello.CodexAuth = %q, want empty when codex is omitted from logins:", h.CodexAuth)
+	}
+	for _, s := range append(append([]string{}, h.Logins...), h.LoginTargets["acme"]) {
+		if strings.Contains(s, secretValue) {
+			t.Fatalf("Hello leaked login file contents: %q", s)
+		}
+	}
+
+	// An explicit empty logins: {} lends no logins, and Has(FeatureLogins)
+	// marks that empty list authoritative (LoginsKnown == true).
+	ctlNone := startController(t, "s3cret")
+	startRemoteServer(t, ctlNone, "s3cret", "logins: {}\n")
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		st := ctlNone.remote.Status()
+		if st.LoginsKnown {
+			if len(st.Logins) != 0 {
+				t.Fatalf("empty logins: status = %q, want none", st.Logins)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("controller did not record authoritative empty logins: %+v", st)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

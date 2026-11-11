@@ -1700,15 +1700,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [urlTask, setUrlTask] = useState(
     () => parsePath(window.location.pathname).taskId || null,
   );
+  // urlTaskSeq numbers those requests, so each releases only its own
+  // claim.
+  const urlTaskSeq = useRef(0);
   const openTaskFromUrl = useCallback(
     async (id) => {
+      const seq = ++urlTaskSeq.current;
       setUrlTask(id);
       try {
         await loadTask(id, true);
       } finally {
         // Only this request's own claim: a quicker Back/Forward may
-        // have asked for another task since.
-        setUrlTask((cur) => (cur === id ? null : cur));
+        // have asked for another task since -- or for this same one
+        // again. A link followed to /tasks/N, Back before it loaded and
+        // Forward onto it again is two loads of N, and the first one's
+        // answer, dropped as stale, used to clear the second's claim
+        // while it was still fetching: the URL effect then wrote the
+        // page behind the pane over /tasks/N#comment=…, and the pane
+        // that arrived after pushed /tasks/N again without the fragment
+        // (ui/e2e/responsive-navigation-walkthrough.spec.js).
+        if (seq === urlTaskSeq.current) setUrlTask(null);
       }
     },
     [loadTask],
