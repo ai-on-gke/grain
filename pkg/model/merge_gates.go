@@ -66,18 +66,18 @@ func (s MergeGateState) Satisfied() bool {
 
 // MergeGate describes one required gate on a change and its current state.
 type MergeGate struct {
-	ID          string         `json:"id"`
-	Label       string         `json:"label"`
-	State       MergeGateState `json:"state"`
-	Detail      string         `json:"detail,omitempty"`
-	ReviewTask  string         `json:"reviewTask,omitempty"`
+	ID         string         `json:"id"`
+	Label      string         `json:"label"`
+	State      MergeGateState `json:"state"`
+	Detail     string         `json:"detail,omitempty"`
+	ReviewTask string         `json:"reviewTask,omitempty"`
 	// Tasks lists every review task the gate stands for, when it stands for
 	// more than one: the code-review gate folds every gating trigger's
 	// review (one per review template) and a configured Review: task into
 	// one gate, and ReviewTask can name only one of them.
-	Tasks []string `json:"tasks,omitempty"`
-	ApprovedBy  string         `json:"approvedBy,omitempty"`
-	Overridable bool           `json:"overridable,omitempty"`
+	Tasks       []string `json:"tasks,omitempty"`
+	ApprovedBy  string   `json:"approvedBy,omitempty"`
+	Overridable bool     `json:"overridable,omitempty"`
 }
 
 // ReviewFindingsRecord records that a required review left findings, open
