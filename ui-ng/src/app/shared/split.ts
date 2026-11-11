@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The Inbox's list/inspector split (spec D-3): 30/70 by default, with a
+// The list/detail split of the Inbox and Tasks (spec D-3): 30/70 by default, with a
 // wide range either way so the list can be a narrow index or most of the
 // screen. The width is kept as a share of the split, so it means the same
 // thing on a laptop and on a wide monitor.
@@ -52,34 +52,34 @@ export function percent(ratio: number): number {
   return Math.round(ratio * 100);
 }
 
-export function loadRatio(): number {
+export function loadRatio(key = RATIO_KEY, fallback = DEFAULT_RATIO): number {
   try {
-    const v = Number(localStorage.getItem(RATIO_KEY));
-    return v > 0 && v < 1 ? v : DEFAULT_RATIO;
+    const v = Number(localStorage.getItem(key));
+    return v > 0 && v < 1 ? v : fallback;
   } catch {
-    return DEFAULT_RATIO;
+    return fallback;
   }
 }
 
-export function saveRatio(ratio: number): void {
+export function saveRatio(ratio: number, key = RATIO_KEY): void {
   try {
-    localStorage.setItem(RATIO_KEY, ratio.toFixed(4));
+    localStorage.setItem(key, ratio.toFixed(4));
   } catch {
     // Storage unavailable: the width lasts for this page only.
   }
 }
 
-export function loadCollapsed(): boolean {
+export function loadCollapsed(key = COLLAPSED_KEY): boolean {
   try {
-    return localStorage.getItem(COLLAPSED_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
   }
 }
 
-export function saveCollapsed(on: boolean): void {
+export function saveCollapsed(on: boolean, key = COLLAPSED_KEY): void {
   try {
-    localStorage.setItem(COLLAPSED_KEY, on ? "1" : "0");
+    localStorage.setItem(key, on ? "1" : "0");
   } catch {
     // As above.
   }

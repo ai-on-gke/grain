@@ -544,7 +544,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly createTask = inject(CreateTaskService);
   protected readonly classicNewTask = CLASSIC_NEW_TASK;
   protected readonly onSessions = signal(false);
-  protected readonly inboxCount = computed(() => this.store.entries().length);
+  protected readonly inboxCount = computed(() => this.store.decisions().length);
   protected readonly createOpen = signal(false);
   protected readonly createPos = signal({ top: 0, left: 0 });
   protected readonly moreOpen = signal(false);

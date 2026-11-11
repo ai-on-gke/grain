@@ -1,0 +1,121 @@
+/* The M7 work surface (Inbox and Tasks list | detail): pinned
+   selection, held order, batch scope and CI chips. Loaded with the lazy
+   pages that use it (ViewEncapsulation.None, deduplicated by Angular), so
+   the shell's initial bundle stays inside its budget. Same GM3 tokens as
+   styles.css. */
+
+.banner-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.left-banner {
+  margin: 12px 20px 0;
+}
+
+.left-banner > span {
+  flex: 1 1 240px;
+}
+
+/* "N updates": the list holds still while the person works in it. */
+.updates-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+  background: var(--md-sys-color-surface);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.updates-chip {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--md-sys-color-primary);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.updates-chip:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.queue-row.is-gone .row-main {
+  opacity: 0.55;
+}
+
+.row-line3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.row-repo {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--md-sys-color-on-surface-variant);
+  font-family: var(--grain-font-mono, monospace);
+}
+
+.row-gone {
+  font-style: italic;
+}
+
+/* CI at a glance: never colour alone, every chip has a glyph and words. */
+.ci-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--md-sys-shape-corner-small);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ci-chip.healthy {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+
+.ci-chip.error {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.ci-chip.setup,
+.ci-chip.neutral {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.inspector-provenance .ci-chip {
+  margin-left: 8px;
+}
+
+.scope-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.scope-check {
+  margin-bottom: 12px;
+  font-weight: 500;
+}

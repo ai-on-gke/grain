@@ -130,7 +130,7 @@ describe("InboxPageComponent", () => {
     );
     expect(
       q(f, '[data-testid="inspector-open-task"]')?.getAttribute("href"),
-    ).toBe("/task/9");
+    ).toBe("/task/9?from=inbox");
     (q(f, '[data-testid="action-approve"]') as HTMLButtonElement).click();
     await f.whenStable();
     await TestBed.inject(InboxStore).refresh();
@@ -609,7 +609,9 @@ describe("InboxPageComponent", () => {
       }),
     );
     await f.whenStable();
-    expect(nav).toHaveBeenCalledWith(expect.stringMatching(/^\/task\/\d+$/));
+    expect(nav).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/task\/\d+\?from=inbox$/),
+    );
   });
 
   it("says the range is 0 while the list is hidden", async () => {
@@ -713,5 +715,422 @@ describe("inbox page helpers", () => {
     expect(
       questionOf(d, { task: { questionCommentId: 5 }, summary: "s" } as never),
     ).toBe("Keep v1?");
+  });
+
+  describe("M7 safety", () => {
+    function rowByRef(f: ComponentFixture<unknown>, ref: string): HTMLElement {
+      return [
+        ...(f.nativeElement as HTMLElement).querySelectorAll<HTMLElement>(
+          ".queue-row",
+        ),
+      ].find((r) => r.querySelector(".row-ref")?.textContent?.trim() === ref)!;
+    }
+
+    async function type(f: ComponentFixture<unknown>, text: string) {
+      const input = q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement;
+      input.value = text;
+      input.dispatchEvent(new Event("input"));
+      await f.whenStable();
+    }
+
+    function comments(api: FakeApi) {
+      return api.posts.filter(
+        (p) => p.route === "POST /api/tasks/{id}/comments",
+      );
+    }
+
+    it("keeps the selected row when it leaves mid-compose, and never sends to another task", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "2",
+          title: "Old stopped work",
+          state: "awaiting_reply",
+          questionSummary: "Anything else?",
+          questionCommentId: 7,
+        },
+        {
+          id: "36",
+          title: "stats: add Mean",
+          state: "awaiting_reply",
+          questionSummary: "Mean of empty?",
+          questionCommentId: 5,
+        },
+      ];
+      const f = await render(api);
+      rowByRef(f, "#36").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      await type(f, "Return ErrEmpty");
+      expect(q(f, '[data-testid="send-reply"]')?.textContent).toContain(
+        "Send to #36",
+      );
+
+      // #36's run picks up again and it leaves the queue.
+      api.taskList = [
+        api.taskList[0],
+        { ...api.taskList[1], state: "running", questionCommentId: undefined },
+      ];
+      await TestBed.inject(InboxStore).refresh();
+      await f.whenStable();
+      expect(q(f, '[data-testid="inspector-title"]')?.textContent).toContain(
+        "#36",
+      );
+      expect(q(f, '[data-testid="left-banner"]')?.textContent).toContain(
+        "#36 left the Inbox: it is running now",
+      );
+      expect(
+        (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(q(f, '[data-testid="reply-blocked"]')?.textContent).toContain(
+        "no longer waiting",
+      );
+      expect(comments(api)).toEqual([]);
+
+      // Next item is the explicit way off it.
+      (q(f, '[data-testid="next-item"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      expect(q(f, '[data-testid="inspector-title"]')?.textContent).toContain(
+        "#2",
+      );
+      expect(
+        (q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement).value,
+      ).toBe("");
+    });
+
+    it("refuses a reply whose task moved on before the list noticed", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "2",
+          title: "Other",
+          state: "awaiting_reply",
+          questionCommentId: 7,
+        },
+        {
+          id: "36",
+          title: "stats",
+          state: "awaiting_reply",
+          questionCommentId: 5,
+        },
+      ];
+      const f = await render(api);
+      rowByRef(f, "#36").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      await type(f, "Go ahead");
+      // The server already moved on; no refresh has run yet.
+      api.taskList = [api.taskList[0]];
+      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      expect(comments(api)).toEqual([]);
+      expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+        "Not sent: #36",
+      );
+    });
+
+    it("sends to the pinned task while it still waits on the same question", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        { id: "2", title: "Other", state: "awaiting_reply" },
+        {
+          id: "36",
+          title: "stats",
+          state: "awaiting_reply",
+          questionCommentId: 5,
+        },
+      ];
+      const f = await render(api);
+      rowByRef(f, "#36").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      await type(f, "Yes");
+      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      await new Promise((r) => setTimeout(r));
+      expect(comments(api)).toEqual([
+        {
+          route: "POST /api/tasks/{id}/comments",
+          params: { id: "36" },
+          body: { body: "Yes" },
+        },
+      ]);
+    });
+
+    it("refuses Send when the task asked a new question since typing started", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "36",
+          title: "stats",
+          state: "awaiting_reply",
+          questionCommentId: 5,
+        },
+      ];
+      const f = await render(api);
+      await type(f, "Yes");
+      api.taskList = [{ ...api.taskList[0], questionCommentId: 9 }];
+      await TestBed.inject(InboxStore).refresh();
+      await f.whenStable();
+      expect(
+        (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(q(f, '[data-testid="reply-blocked"]')?.textContent).toContain(
+        "asked a new question",
+      );
+    });
+
+    it("holds the order while a row is selected and buffers changes behind N updates", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        { id: "1", title: "First", state: "proposed" },
+        { id: "2", title: "Second", state: "proposed" },
+      ];
+      const f = await render(api);
+      // Nothing selected: the list follows the server.
+      api.taskList = [
+        ...api.taskList,
+        { id: "3", title: "Third", state: "proposed" },
+      ];
+      await TestBed.inject(InboxStore).refresh();
+      await f.whenStable();
+      expect(rows(f)).toEqual(["First", "Second", "Third"]);
+      expect(q(f, '[data-testid="updates-chip"]')).toBeNull();
+
+      rowByRef(f, "#2").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      // A new row arrives first, one leaves, and the rest reorder.
+      api.taskList = [
+        { id: "4", title: "Fourth", state: "proposed" },
+        { id: "3", title: "Third", state: "proposed" },
+        { id: "2", title: "Second", state: "proposed" },
+      ];
+      await TestBed.inject(InboxStore).refresh();
+      await f.whenStable();
+      expect(rows(f)).toEqual(["First", "Second", "Third"]);
+      expect(rowByRef(f, "#1").classList).toContain("is-gone");
+      expect(q(f, '[data-testid="updates-chip"]')?.textContent).toContain(
+        "4 updates",
+      );
+      expect(q(f, '[data-testid="inspector-title"]')?.textContent).toContain(
+        "#2",
+      );
+
+      (q(f, '[data-testid="updates-chip"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      expect(rows(f)).toEqual(["Fourth", "Third", "Second"]);
+      expect(q(f, '[data-testid="updates-chip"]')).toBeNull();
+      expect(q(f, '[data-testid="inspector-title"]')?.textContent).toContain(
+        "#2",
+      );
+    });
+
+    it("shows repo and owner on rows, names every repo in Approve all, and acts only on the rows shown", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "9",
+          title: "Bump Go",
+          state: "proposed",
+          repo: "acme/web",
+          owner: "ana",
+        },
+        {
+          id: "10",
+          title: "Bump Node",
+          state: "proposed",
+          repo: "sidthe/grain",
+          owner: "bo",
+        },
+      ];
+      const f = await render(api);
+      expect(
+        [
+          ...(f.nativeElement as HTMLElement).querySelectorAll(
+            '[data-testid="row-repo"]',
+          ),
+        ].map((e) => e.textContent?.trim()),
+      ).toEqual(["web", "grain"]);
+      expect(rowByRef(f, "#9").textContent).toContain("ana");
+
+      (
+        q(f, '[data-testid="group-approve-proposal"]') as HTMLButtonElement
+      ).click();
+      await f.whenStable();
+      const scope = q(f, '[data-testid="confirm-scope"]')?.textContent ?? "";
+      expect(scope).toContain("1 in acme/web");
+      expect(scope).toContain("1 in sidthe/grain");
+      expect(scope).toContain("1 owned by ana");
+      expect(scope).toContain("1 owned by bo");
+      const accept = q(
+        f,
+        '[data-testid="confirm-accept"]',
+      ) as HTMLButtonElement;
+      expect(accept.disabled).toBe(true);
+
+      // The group refills while the dialog is open.
+      api.taskList = [
+        ...api.taskList,
+        { id: "11", title: "Late", state: "proposed", repo: "sidthe/grain" },
+      ];
+      await TestBed.inject(InboxStore).refresh();
+      await f.whenStable();
+
+      (q(f, '[data-testid="confirm-multi-repo"]') as HTMLInputElement).click();
+      await f.whenStable();
+      expect(accept.disabled).toBe(false);
+      accept.click();
+      await f.whenStable();
+      await new Promise((r) => setTimeout(r));
+      expect(
+        api.posts
+          .filter((p) => p.route === "POST /api/tasks/{id}/approve")
+          .map((p) => (p.params as { id: string }).id)
+          .sort(),
+      ).toEqual(["10", "9"]);
+    });
+
+    it("needs no second tick when every row is in one repository", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        { id: "9", title: "A", state: "proposed", repo: "acme/web" },
+        { id: "10", title: "B", state: "proposed", repo: "acme/web" },
+      ];
+      const f = await render(api);
+      (
+        q(f, '[data-testid="group-approve-proposal"]') as HTMLButtonElement
+      ).click();
+      await f.whenStable();
+      expect(q(f, '[data-testid="confirm-scope"]')?.textContent).toContain(
+        "2 in acme/web",
+      );
+      expect(q(f, '[data-testid="confirm-multi-repo"]')).toBeNull();
+      expect(
+        (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).disabled,
+      ).toBe(false);
+    });
+
+    it("turns Submit off on failing or unreported CI, and shows CI on the row", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "33",
+          title: "CI drill",
+          state: "awaiting_submit",
+          pullRequest: "acme/web#3",
+          mergeGates: [
+            { id: "ci", label: "CI", state: "failing" },
+            { id: "approval", label: "Approval", state: "needed" },
+          ],
+        },
+        {
+          id: "35",
+          title: "Makefile",
+          state: "awaiting_submit",
+          pullRequest: "acme/web#5",
+          mergeGates: [
+            { id: "ci", label: "CI", state: "passed" },
+            { id: "approval", label: "Approval", state: "needed" },
+          ],
+        },
+        {
+          id: "37",
+          title: "No gates yet",
+          state: "awaiting_submit",
+          pullRequest: "acme/web#7",
+        },
+      ];
+      const f = await render(api);
+      expect(rowByRef(f, "#33").textContent).toContain("✕ CI");
+      expect(rowByRef(f, "#35").textContent).toContain("✓ 1/1");
+      expect(rowByRef(f, "#37").textContent).toContain("CI unknown");
+
+      const submitOf = async (ref: string) => {
+        rowByRef(f, ref).querySelector<HTMLButtonElement>(".row-main")!.click();
+        await f.whenStable();
+        return q(f, '[data-testid="action-submit"]') as HTMLButtonElement;
+      };
+      const red = await submitOf("#33");
+      expect(red.disabled).toBe(true);
+      expect(red.title).toContain("CI is failing");
+      const unknown = await submitOf("#37");
+      expect(unknown.disabled).toBe(true);
+      expect(unknown.title).toContain("has not reported");
+      const green = await submitOf("#35");
+      expect(green.disabled).toBe(false);
+
+      // Bulk Submit counts and sends only the green one.
+      for (const ref of ["#33", "#35", "#37"]) {
+        rowByRef(f, ref).querySelector<HTMLInputElement>(".row-check")!.click();
+      }
+      await f.whenStable();
+      const bulk = q(f, '[data-testid="bulk-submit"]') as HTMLButtonElement;
+      expect(bulk.textContent).toContain("(1)");
+      bulk.click();
+      await f.whenStable();
+      (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      await new Promise((r) => setTimeout(r));
+      expect(
+        api.posts
+          .filter((p) => p.route === "POST /api/tasks/{id}/submit")
+          .map((p) => (p.params as { id: string }).id),
+      ).toEqual(["35"]);
+    });
+
+    it("puts a stopped turn in Paused, names who stopped it, and offers Resume and Close only", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "2",
+          title: "Stopped work",
+          state: "awaiting_reply",
+          turnStopped: true,
+          questionCommentId: 43,
+          reason: {
+            reason: "awaiting_reply/stopped",
+            class: "awaiting a person",
+          },
+        },
+      ];
+      api.details["2"] = {
+        id: "2",
+        title: "Stopped work",
+        state: "awaiting_reply",
+        comments: [
+          {
+            id: 43,
+            author: "rarcea",
+            authorLabel: "Roman",
+            body: "Turn stopped by user",
+          },
+        ],
+      };
+      const f = await render(api);
+      await TestBed.inject(InboxStore).refresh();
+      await f.whenStable();
+      expect(q(f, '[data-testid="inbox-group-reply"]')).toBeNull();
+      expect(q(f, '[data-testid="inbox-group-paused"]')?.textContent).toContain(
+        "Stopped by Roman.",
+      );
+      expect(
+        q(f, '[data-testid="next-inbox-headline"]')?.textContent,
+      ).toContain("Nothing waiting on you");
+      expect(q(f, '[data-testid="reply-input"]')).toBeNull();
+      expect(q(f, '[data-testid="action-resume"]')).toBeTruthy();
+      expect(q(f, '[data-testid="action-close"]')).toBeTruthy();
+      expect(q(f, '[data-testid="group-approve-paused"]')).toBeNull();
+
+      rowByRef(f, "#2").querySelector<HTMLInputElement>(".row-check")!.click();
+      await f.whenStable();
+      expect(q(f, '[data-testid="bulk-resume"]')).toBeNull();
+      expect(q(f, '[data-testid="bulk-close"]')).toBeNull();
+
+      (q(f, '[data-testid="action-resume"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      expect(api.posts[0]).toMatchObject({
+        route: "POST /api/tasks/{id}/retry",
+        params: { id: "2" },
+      });
+    });
   });
 });

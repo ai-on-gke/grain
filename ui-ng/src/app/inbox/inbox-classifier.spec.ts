@@ -41,11 +41,14 @@ describe("inbox classifier", () => {
     expect(
       waitsOnUser(task({ state: "awaiting_reply", consoleSession: {} })),
     ).toBe(false);
+    // A running task is never offered Submit, even with an open pull
+    // request and no auto-merge (the classic UI lists it): its agent may
+    // still be pushing to the branch.
     expect(
       waitsOnUser(
         task({ state: "running", pullRequest: { url: "https://x/pr/1" } }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       waitsOnUser(
         task({

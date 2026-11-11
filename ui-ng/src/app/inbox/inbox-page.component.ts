@@ -14,23 +14,21 @@
 
 import { Router, RouterLink } from "@angular/router";
 import { SnackbarService } from "../services/snackbar.service";
+import { SplitController } from "../shared/split-controller";
 import {
-  DEFAULT_RATIO,
-  bounds,
-  clampRatio,
-  keyStep,
-  loadCollapsed,
-  loadRatio,
-  percent,
-  saveCollapsed,
-  saveRatio,
-} from "./split";
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import { scopeOf } from "../shared/scope";
+import { ciChip, repoShort } from "../shared/gates";
+import { TipDirective } from "../shared/tip.directive";
 import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
   HostListener,
   afterNextRender,
+  OnDestroy,
   OnInit,
   computed,
   effect,
@@ -38,6 +36,7 @@ import {
   signal,
   untracked,
   viewChild,
+  ViewEncapsulation,
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
@@ -53,14 +52,7 @@ import {
   releaseConfirm,
 } from "./inbox-classifier";
 import { InboxStore } from "./inbox.store";
-
-interface ConfirmRequest {
-  title: string;
-  message: string;
-  accept: string;
-  destructive: boolean;
-  run: () => Promise<unknown>;
-}
+import { replyRefusal, whyGone } from "./departure";
 
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: "all", label: "All" },
@@ -69,6 +61,7 @@ const FILTERS: { id: FilterId; label: string }[] = [
   { id: "merges", label: "Merges" },
   { id: "proposals", label: "Proposals" },
   { id: "alerts", label: "Blocked & alerts" },
+  { id: "paused", label: "Paused" },
   { id: "unread", label: "Unread" },
 ];
 
@@ -104,8 +97,16 @@ const PAST: Record<string, string> = {
   acknowledge: "Acknowledged",
   submit: "Submitted",
   retry: "Retried",
+  resume: "Resumed",
   "retry-merge": "Retried the merge of",
 };
+
+// The reply composer's target: the task and question the person was
+// looking at when they started typing.
+interface ReplyTarget {
+  taskId: string;
+  questionCommentId?: number;
+}
 
 // Answers the `a` key may give in one keystroke; anything else (approving
 // a host script, submitting a merge) asks first.
@@ -114,6 +115,9 @@ const ONE_KEY = new Set(["approve"]);
 @Component({
   selector: "g-inbox-page",
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // The work-surface rules load with this page, not the shell.
+  encapsulation: ViewEncapsulation.None,
+  styleUrl: "../shared/work-surface.css",
   template: `
     <section class="view-panel is-active" aria-labelledby="inbox-headline">
       <div class="stage-header">
@@ -195,16 +199,31 @@ const ONE_KEY = new Set(["approve"]);
       <div
         class="inbox-split"
         #split
-        [class.is-collapsed]="collapsed()"
-        [class.is-dragging]="dragging()"
-        [style.--queue-w.%]="ratioExact()"
+        [class.is-collapsed]="sp.collapsed()"
+        [class.is-dragging]="sp.dragging()"
+        [style.--queue-w.%]="sp.ratioExact()"
       >
         <section
           class="queue-pane"
           id="queue-pane"
           aria-label="Decision queue"
           data-testid="next-inbox-queue"
+          (focusin)="store.hold()"
+          (focusout)="onListBlur($event)"
         >
+          @if (store.pendingUpdates(); as n) {
+            <div class="updates-bar">
+              <button
+                type="button"
+                class="updates-chip"
+                data-testid="updates-chip"
+                gTip="The list holds still while you work in it. Show the changes that came in since."
+                (click)="store.applyUpdates()"
+              >
+                {{ n }} {{ n === 1 ? "update" : "updates" }}
+              </button>
+            </div>
+          }
           <div class="queue-list">
             @if (store.loaded() && store.groups().length === 0) {
               <div class="empty-state" data-testid="next-inbox-empty">
@@ -252,7 +271,7 @@ const ONE_KEY = new Set(["approve"]);
                         'Approve all ' + n + ' in ' + group.title
                       "
                       [disabled]="!!store.busy()"
-                      (click)="approveGroup(group.entries)"
+                      (click)="approveGroup(group)"
                     >
                       Approve all {{ n }}
                     </button>
@@ -269,6 +288,7 @@ const ONE_KEY = new Set(["approve"]);
                       [class.is-selected]="store.selected()?.key === e.key"
                       [class.is-checked]="store.checked().has(e.key)"
                       [class.is-unread]="!store.seen().has(e.key)"
+                      [class.is-gone]="e.gone"
                       [attr.data-key]="e.key"
                       data-testid="queue-row"
                     >
@@ -277,6 +297,7 @@ const ONE_KEY = new Set(["approve"]);
                           type="checkbox"
                           class="row-check"
                           [checked]="store.checked().has(e.key)"
+                          [disabled]="e.gone"
                           [attr.aria-label]="'Select ' + e.ref + ' ' + e.title"
                           (change)="store.toggleChecked(e.key)"
                         />
@@ -306,6 +327,36 @@ const ONE_KEY = new Set(["approve"]);
                               <span class="muted row-acked">acknowledged</span>
                             }
                           </span>
+                          @if (e.repo || e.owner || e.task) {
+                            <span class="row-line3">
+                              @if (e.repo) {
+                                <span
+                                  class="row-repo"
+                                  data-testid="row-repo"
+                                  [attr.title]="e.repo"
+                                  >{{ short(e.repo) }}</span
+                                >
+                              }
+                              @if (e.owner) {
+                                <span class="row-owner muted"
+                                  >· {{ e.owner }}</span
+                                >
+                              }
+                              @if (e.task && chip(e.task); as c) {
+                                <span
+                                  [class]="'ci-chip ' + c.tone"
+                                  data-testid="row-ci"
+                                  [attr.title]="c.tip"
+                                  >{{ c.text }}</span
+                                >
+                              }
+                              @if (e.gone) {
+                                <span class="muted row-gone"
+                                  >left the Inbox</span
+                                >
+                              }
+                            </span>
+                          }
                         </button>
                       </div>
                     </li>
@@ -339,7 +390,7 @@ const ONE_KEY = new Set(["approve"]);
                   "
                   [disabled]="!!store.busy() || b.allowed === 0"
                   [attr.data-testid]="'bulk-' + b.id"
-                  (click)="confirmBulk(b.id, b.label, b.allowed)"
+                  (click)="confirmBulk(b.id, b.label)"
                 >
                   {{ b.label }} ({{ b.allowed }})
                 </button>
@@ -363,27 +414,27 @@ const ONE_KEY = new Set(["approve"]);
           aria-orientation="vertical"
           aria-controls="queue-pane"
           aria-label="Resize the list"
-          [attr.aria-valuemin]="collapsed() ? 0 : minPct()"
-          [attr.aria-valuemax]="maxPct()"
-          [attr.aria-valuenow]="collapsed() ? 0 : ratioPct()"
+          [attr.aria-valuemin]="sp.collapsed() ? 0 : sp.minPct()"
+          [attr.aria-valuemax]="sp.maxPct()"
+          [attr.aria-valuenow]="sp.collapsed() ? 0 : sp.ratioPct()"
           [attr.aria-valuetext]="
-            collapsed()
+            sp.collapsed()
               ? 'List hidden'
-              : 'List ' + ratioPct() + ' percent of the width'
+              : 'List ' + sp.ratioPct() + ' percent of the width'
           "
           data-testid="inbox-resizer"
-          (pointerdown)="onResizeStart($event)"
-          (pointermove)="onResizeMove($event)"
-          (pointerup)="onResizeEnd($event)"
-          (pointercancel)="onResizeEnd($event)"
-          (lostpointercapture)="onResizeEnd($event)"
-          (dblclick)="resetSplit()"
-          (keydown)="onResizerKey($event)"
+          (pointerdown)="sp.onResizeStart($event)"
+          (pointermove)="sp.onResizeMove($event)"
+          (pointerup)="sp.onResizeEnd($event)"
+          (pointercancel)="sp.onResizeEnd($event)"
+          (lostpointercapture)="sp.onResizeEnd($event)"
+          (dblclick)="sp.reset()"
+          (keydown)="sp.onKey($event)"
         >
           <span class="inbox-resizer-pill" aria-hidden="true"></span>
-          @if (dragging()) {
+          @if (sp.dragging()) {
             <span class="inbox-resizer-badge" aria-hidden="true"
-              >{{ ratioPct() }} / {{ 100 - ratioPct() }}</span
+              >{{ sp.ratioPct() }} / {{ 100 - sp.ratioPct() }}</span
             >
           }
         </div>
@@ -405,6 +456,7 @@ const ONE_KEY = new Set(["approve"]);
                     <a
                       class="btn-text"
                       [routerLink]="sel.taskLink"
+                      [queryParams]="{ from: 'inbox' }"
                       data-testid="inspector-open-task"
                       >Open full task</a
                     >
@@ -429,12 +481,12 @@ const ONE_KEY = new Set(["approve"]);
                     type="button"
                     class="btn-text"
                     data-testid="split-toggle"
-                    [attr.aria-expanded]="!collapsed()"
+                    [attr.aria-expanded]="!sp.collapsed()"
                     aria-controls="queue-pane"
-                    (click)="toggleCollapsed()"
+                    (click)="sp.toggleCollapsed()"
                   >
                     {{
-                      collapsed()
+                      sp.collapsed()
                         ? "Show list (" + store.ordered().length + ")"
                         : "Hide list"
                     }}
@@ -443,8 +495,10 @@ const ONE_KEY = new Set(["approve"]);
                     type="button"
                     class="btn-text"
                     data-testid="split-30"
-                    [attr.aria-pressed]="!collapsed() && ratioPct() === 30"
-                    (click)="setPreset(0.3)"
+                    [attr.aria-pressed]="
+                      !sp.collapsed() && sp.ratioPct() === 30
+                    "
+                    (click)="sp.setPreset(0.3)"
                   >
                     30 / 70
                   </button>
@@ -452,8 +506,10 @@ const ONE_KEY = new Set(["approve"]);
                     type="button"
                     class="btn-text"
                     data-testid="split-42"
-                    [attr.aria-pressed]="!collapsed() && ratioPct() === 42"
-                    (click)="setPreset(0.42)"
+                    [attr.aria-pressed]="
+                      !sp.collapsed() && sp.ratioPct() === 42
+                    "
+                    (click)="sp.setPreset(0.42)"
                   >
                     42 / 58
                   </button>
@@ -483,10 +539,40 @@ const ONE_KEY = new Set(["approve"]);
                 </h2>
                 <div class="inspector-provenance tabular muted">
                   {{ sel.repo || "no repository"
+                  }}{{ sel.owner ? " · owned by " + sel.owner : ""
                   }}{{ sel.at ? " · " + ago(sel.at) + " ago" : "" }}
+                  @if (sel.task && chip(sel.task); as c) {
+                    <span
+                      [class]="'ci-chip ' + c.tone"
+                      data-testid="inspector-ci"
+                      [attr.title]="c.tip"
+                      >CI {{ c.text }}</span
+                    >
+                  }
                 </div>
               </div>
             </div>
+
+            @if (departed(); as d) {
+              <div
+                class="banner banner-info left-banner"
+                role="status"
+                data-testid="left-banner"
+              >
+                <span
+                  >{{ d.ref }} left the Inbox: {{ d.reason }}. Nothing here acts
+                  on it any more.</span
+                >
+                <button
+                  type="button"
+                  class="btn-tonal"
+                  data-testid="next-item"
+                  (click)="store.next()"
+                >
+                  Next item
+                </button>
+              </div>
+            }
 
             <div
               class="resolution-dock aurora-surface"
@@ -518,9 +604,14 @@ const ONE_KEY = new Set(["approve"]);
                     placeholder="Your reply goes to the agent and it resumes"
                     data-testid="reply-input"
                     [value]="draft()"
-                    [disabled]="!can(commentsRoute, sel)"
-                    (input)="draft.set($any($event.target).value)"
+                    [disabled]="!can(commentsRoute, sel) || !!sel.gone"
+                    (input)="onDraft(sel, $any($event.target).value)"
                   ></textarea>
+                  @if (replyBlock(sel); as why) {
+                    <p class="rbac-note" data-testid="reply-blocked">
+                      {{ why }}
+                    </p>
+                  }
                   <div class="action-bar">
                     <div class="action-btn-group">
                       <button
@@ -530,11 +621,12 @@ const ONE_KEY = new Set(["approve"]);
                         [disabled]="
                           !draft().trim() ||
                           !!store.busy() ||
-                          !can(commentsRoute, sel)
+                          !can(commentsRoute, sel) ||
+                          !!replyBlock(sel)
                         "
                         (click)="sendReply(sel)"
                       >
-                        Send reply &amp; resume
+                        Send to #{{ target()?.taskId ?? sel.taskId }}
                       </button>
                       <ng-container
                         *ngTemplateOutlet="actions; context: { $implicit: sel }"
@@ -890,8 +982,10 @@ const ONE_KEY = new Set(["approve"]);
                   : 'btn-text'
             "
             [attr.data-testid]="'action-' + a.id"
-            [disabled]="!!store.busy() || !access.can(a.route, a.repo)"
-            [title]="access.deniedReason(a.route, a.repo)"
+            [disabled]="
+              !!store.busy() || !access.can(a.route, a.repo) || !!a.blocked
+            "
+            [title]="a.blocked || access.deniedReason(a.route, a.repo)"
             (click)="run(a)"
           >
             {{ a.label }}
@@ -949,47 +1043,13 @@ const ONE_KEY = new Set(["approve"]);
         </div>
       }
       @if (confirming(); as c) {
-        <div class="modal-backdrop">
-          <div
-            class="modal-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-title"
-            aria-describedby="confirm-body"
-            data-testid="confirm-dialog"
-            (keydown.escape)="confirming.set(null)"
-          >
-            <h2 id="confirm-title" class="modal-title">{{ c.title }}</h2>
-            <p id="confirm-body" class="modal-body">{{ c.message }}</p>
-            <div class="action-btn-group modal-actions">
-              <button
-                type="button"
-                class="btn-text"
-                data-testid="confirm-cancel"
-                (click)="confirming.set(null)"
-              >
-                Cancel
-              </button>
-              <button
-                #acceptBtn
-                type="button"
-                [class]="
-                  c.destructive ? 'btn-primary is-destructive' : 'btn-primary'
-                "
-                data-testid="confirm-accept"
-                (click)="accept(c)"
-              >
-                {{ c.accept }}
-              </button>
-            </div>
-          </div>
-        </div>
+        <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
       }
     </section>
   `,
-  imports: [NgTemplateOutlet, RouterLink],
+  imports: [NgTemplateOutlet, RouterLink, ConfirmDialogComponent, TipDirective],
 })
-export class InboxPageComponent implements OnInit {
+export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
   protected readonly access = inject(AccessService);
   protected readonly theme = inject(ThemeService);
@@ -1002,32 +1062,11 @@ export class InboxPageComponent implements OnInit {
     viewChild<ElementRef<HTMLTextAreaElement>>("replyBox");
 
   // ---------- the split (D-3) ----------
-  protected readonly ratio = signal(loadRatio());
-  protected readonly collapsed = signal(loadCollapsed());
-  protected readonly dragging = signal(false);
-  private readonly stage = signal(0);
-  private dragFrom: number | null = null;
-  // The column gets the exact share; ARIA gets a whole percent.
-  protected readonly ratioExact = computed(
-    () =>
-      (this.stage() ? clampRatio(this.ratio(), this.stage()) : this.ratio()) *
-      100,
-  );
+  protected readonly sp = new SplitController({
+    element: () => this.split()?.nativeElement,
+  });
   private lastUndoSnack: number | null = null;
-  private dragWasCollapsed = false;
   private helpReturn: HTMLElement | null = null;
-  private resizeObs: ResizeObserver | null = null;
-  protected readonly ratioPct = computed(() =>
-    percent(
-      this.stage() ? clampRatio(this.ratio(), this.stage()) : this.ratio(),
-    ),
-  );
-  protected readonly minPct = computed(() =>
-    this.stage() ? percent(bounds(this.stage()).min / this.stage()) : 15,
-  );
-  protected readonly maxPct = computed(() =>
-    this.stage() ? percent(bounds(this.stage()).max / this.stage()) : 80,
-  );
   protected readonly helpOpen = signal(false);
   private readonly keyboard = inject(KeyboardService);
 
@@ -1046,6 +1085,9 @@ export class InboxPageComponent implements OnInit {
     "POST /api/repos/{owner}/{name}/pending-releases/{version}/reject" as const;
 
   protected readonly draft = signal("");
+  protected readonly target = signal<ReplyTarget | null>(null);
+  protected readonly short = repoShort;
+  protected readonly chip = ciChip;
   private readonly selectedKey = computed(
     () => this.store.selected()?.key ?? null,
   );
@@ -1055,14 +1097,26 @@ export class InboxPageComponent implements OnInit {
   protected readonly shortSoakOk = signal(false);
   protected readonly approvalKey = signal<string | null>(null);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
-  private readonly acceptBtn =
-    viewChild<ElementRef<HTMLButtonElement>>("acceptBtn");
 
   protected readonly headline = computed(() => {
-    const n = this.store.entries().length;
+    const n = this.store.decisions().length;
     if (!this.store.loaded()) return "Inbox";
     if (n === 0) return "Nothing waiting on you";
     return `${n} ${n === 1 ? "decision" : "decisions"} waiting on you`;
+  });
+  // departed explains a selected row that has left the queue.
+  protected readonly departed = computed(() => {
+    const sel = this.store.selected();
+    if (!sel?.gone) return null;
+    return {
+      ref: sel.ref,
+      reason: whyGone(
+        sel,
+        this.store.tasks(),
+        this.store.liveEntries(),
+        sel.taskId ? this.store.answeredWith(sel.taskId) : undefined,
+      ),
+    };
   });
   protected readonly question = computed(() =>
     questionOf(this.store.selectedDetail(), this.store.selected()),
@@ -1080,7 +1134,7 @@ export class InboxPageComponent implements OnInit {
           label: `${a.label} all`,
           allowed: 0,
         };
-        if (this.access.can(a.route, a.repo)) b.allowed++;
+        if (this.access.can(a.route, a.repo) && !a.blocked) b.allowed++;
         byId.set(a.id, b);
       }
     }
@@ -1089,16 +1143,7 @@ export class InboxPageComponent implements OnInit {
 
   constructor() {
     // The divider's bounds depend on the split's width, known once drawn.
-    afterNextRender(() => {
-      this.measure();
-      // The rail or a window change can resize the split without a window
-      // resize event.
-      const el = this.split()?.nativeElement;
-      if (el && typeof ResizeObserver === "function") {
-        this.resizeObs = new ResizeObserver(() => this.measure());
-        this.resizeObs.observe(el);
-      }
-    });
+    afterNextRender(() => this.sp.attach());
     // A new selection starts with a clean dock. Only the selected row's key
     // is tracked: every refresh (an SSE event, another row answered) builds
     // fresh entry objects, and resetting on those would wipe a reply the
@@ -1107,15 +1152,11 @@ export class InboxPageComponent implements OnInit {
       this.selectedKey();
       const sel = untracked(() => this.store.selected());
       this.draft.set("");
+      this.target.set(null);
       this.denying.set(false);
       this.unticked.set(new Set());
       this.allowBreaking.set(!!sel?.release?.breaking);
       this.shortSoakOk.set(!!sel?.release?.shortSoak);
-    });
-    effect(() => {
-      if (this.confirming()) {
-        queueMicrotask(() => this.acceptBtn()?.nativeElement.focus());
-      }
     });
   }
 
@@ -1123,6 +1164,53 @@ export class InboxPageComponent implements OnInit {
   // page reads the queue at once rather than waiting for the next poll.
   ngOnInit(): void {
     this.store.start();
+  }
+
+  ngOnDestroy(): void {
+    this.sp.detach();
+  }
+
+  // Focus leaving the list lets it follow the server again, unless a row
+  // is selected.
+  protected onListBlur(ev: FocusEvent): void {
+    const to = ev.relatedTarget as Node | null;
+    const pane = ev.currentTarget as HTMLElement;
+    if (to && pane.contains(to)) return;
+    this.store.release();
+  }
+
+  // The composer's target is fixed when typing starts: the task (and the
+  // question) shown at that moment. A row chosen by default is pinned,
+  // so a refresh cannot swap it.
+  protected onDraft(sel: InboxEntry, value: string): void {
+    if (!this.target() && sel.taskId) {
+      if (this.store.selectedKey() === null) this.store.select(sel.key);
+      this.target.set({
+        taskId: sel.taskId,
+        questionCommentId: sel.task?.questionCommentId,
+      });
+    }
+    this.draft.set(value);
+  }
+
+  // replyBlock is why Send is off for the selected row: it has left the
+  // queue, or now waits on a different question than the one the person
+  // started answering.
+  protected replyBlock(sel: InboxEntry): string {
+    const tgt = this.target();
+    const id = tgt?.taskId ?? sel.taskId;
+    if (sel.gone || (tgt && tgt.taskId !== sel.taskId)) {
+      return `#${id} is no longer waiting on this question, so the reply would not reach it. Your text is kept.`;
+    }
+    const now = sel.task?.questionCommentId;
+    if (
+      tgt?.questionCommentId !== undefined &&
+      now !== undefined &&
+      now !== tgt.questionCommentId
+    ) {
+      return `#${id} asked a new question since you started typing. Read it, then send.`;
+    }
+    return "";
   }
 
   protected can(
@@ -1201,24 +1289,49 @@ export class InboxPageComponent implements OnInit {
     void this.store.act(a);
   }
 
-  protected confirmBulk(id: string, label: string, n: number): void {
+  // confirmBulk asks before answering the checked rows. The rows are
+  // fixed now, when the button is pressed: the batch acts on exactly
+  // these keys, never on whatever is checked when the dialog closes.
+  protected confirmBulk(id: string, label: string): void {
+    const rows = this.store
+      .checkedEntries()
+      .filter((e) =>
+        e.actions.some(
+          (a) => a.id === id && !a.blocked && this.access.can(a.route, a.repo),
+        ),
+      );
+    const n = rows.length;
+    if (!n) return;
+    const keys = rows.map((e) => e.key);
     this.confirming.set({
       title: label,
       message: `${label}: ${n} selected ${n === 1 ? "item" : "items"}? Each is answered as if you had pressed its own button.`,
-      accept: label,
+      accept: `${label} (${n})`,
       destructive: id === "close" || id === "decline",
-      run: () => this.batch(id, PAST[id] ?? "Done:"),
+      scope: scopeOf(rows),
+      run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
   }
 
-  protected async accept(c: ConfirmRequest): Promise<void> {
+  protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
     this.confirming.set(null);
-    await c.run();
+    if (ok) await c.run();
   }
 
+  // sendReply posts to the task the composer was opened for. The store
+  // reads the queue again first and refuses if that task no longer waits
+  // on the same question.
   protected async sendReply(sel: InboxEntry): Promise<void> {
-    if (!sel.taskId || !this.draft().trim()) return;
-    if (await this.store.reply(sel.taskId, this.draft())) this.draft.set("");
+    const tgt = this.target() ?? (sel.taskId ? { taskId: sel.taskId } : null);
+    if (!tgt || !this.draft().trim() || this.replyBlock(sel)) return;
+    const asked = tgt.questionCommentId ?? sel.task?.questionCommentId;
+    const ok = await this.store.reply(tgt.taskId, this.draft(), (t) =>
+      replyRefusal(t, tgt.taskId, asked),
+    );
+    if (ok) {
+      this.draft.set("");
+      this.target.set(null);
+    }
   }
 
   protected grant(sel: InboxEntry, items: { error?: string }[]): void {
@@ -1290,106 +1403,9 @@ export class InboxPageComponent implements OnInit {
     }
   }
 
-  private measure(): number {
-    const w = this.split()?.nativeElement.clientWidth ?? 0;
-    if (w) this.stage.set(w);
-    return w;
-  }
-
   @HostListener("window:resize")
   onResize(): void {
-    this.measure();
-  }
-
-  protected onResizeStart(ev: PointerEvent): void {
-    if (ev.button !== 0) return;
-    this.measure();
-    this.dragFrom = this.ratio();
-    this.dragWasCollapsed = this.collapsed();
-    this.dragging.set(true);
-    // Escape cancels a drag wherever focus is: the separator does not take
-    // focus on pointerdown, so its own keydown would not see the key.
-    window.addEventListener("keydown", this.onDragEscape, true);
-    (ev.currentTarget as HTMLElement).setPointerCapture?.(ev.pointerId);
-    ev.preventDefault();
-  }
-
-  protected onResizeMove(ev: PointerEvent): void {
-    if (!this.dragging()) return;
-    const el = this.split()?.nativeElement;
-    const w = this.stage();
-    if (!el || !w) return;
-    const x = ev.clientX - el.getBoundingClientRect().left;
-    if (this.collapsed()) this.collapsed.set(false);
-    this.ratio.set(clampRatio(x / w, w));
-  }
-
-  private readonly onDragEscape = (ev: KeyboardEvent): void => {
-    if (ev.key !== "Escape" || !this.dragging()) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    this.onResizeCancel();
-  };
-
-  protected onResizeEnd(ev?: Event): void {
-    if (!this.dragging()) return;
-    window.removeEventListener("keydown", this.onDragEscape, true);
-    this.dragging.set(false);
-    this.dragFrom = null;
-    saveRatio(this.ratio());
-    saveCollapsed(false);
-    (ev?.currentTarget as HTMLElement | undefined)?.releasePointerCapture?.(
-      (ev as PointerEvent).pointerId,
-    );
-  }
-
-  // Escape during a drag puts the divider back where it started.
-  protected onResizeCancel(): void {
-    if (!this.dragging()) return;
-    window.removeEventListener("keydown", this.onDragEscape, true);
-    if (this.dragFrom !== null) this.ratio.set(this.dragFrom);
-    if (this.dragWasCollapsed) this.collapsed.set(true);
-    this.dragging.set(false);
-    this.dragFrom = null;
-  }
-
-  protected resetSplit(): void {
-    this.setPreset(DEFAULT_RATIO);
-  }
-
-  protected setPreset(r: number): void {
-    const w = this.measure();
-    this.ratio.set(w ? clampRatio(r, w) : r);
-    this.collapsed.set(false);
-    saveRatio(this.ratio());
-    saveCollapsed(false);
-  }
-
-  protected toggleCollapsed(): void {
-    this.collapsed.update((v) => !v);
-    saveCollapsed(this.collapsed());
-  }
-
-  protected onResizerKey(ev: KeyboardEvent): void {
-    if (ev.key === "Enter") {
-      ev.preventDefault();
-      this.toggleCollapsed();
-      return;
-    }
-    if (ev.key === "Escape" && this.dragging()) {
-      ev.preventDefault();
-      this.onResizeCancel();
-      return;
-    }
-    const w = this.measure();
-    const next = keyStep(ev.key, ev.shiftKey, this.ratio(), w || 1);
-    if (next === null) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    this.collapsed.set(false);
-    this.ratio.set(next);
-    saveRatio(next);
-    saveCollapsed(false);
+    this.sp.measure();
   }
 
   // ---------- groups and batches (D-4) ----------
@@ -1409,22 +1425,38 @@ export class InboxPageComponent implements OnInit {
   }
 
   protected approvable(entries: InboxEntry[]): number {
-    return entries.filter((e) =>
-      e.actions.some(
-        (a) => a.id === "approve" && this.access.can(a.route, a.repo),
-      ),
+    return entries.filter(
+      (e) =>
+        !e.gone &&
+        e.actions.some(
+          (a) => a.id === "approve" && this.access.can(a.route, a.repo),
+        ),
     ).length;
   }
 
-  protected approveGroup(entries: InboxEntry[]): void {
-    const keys = entries
-      .filter((e) => e.actions.some((a) => a.id === "approve"))
-      .map((e) => e.key);
+  // approveGroup asks before approving the group's rows as they are
+  // drawn now. The confirmation counts them per repository and owner,
+  // and the batch acts on these keys only: a group that refills while the
+  // dialog is open does not grow the batch.
+  protected approveGroup(group: {
+    title: string;
+    entries: InboxEntry[];
+  }): void {
+    const rows = group.entries.filter(
+      (e) =>
+        !e.gone &&
+        e.actions.some(
+          (a) => a.id === "approve" && this.access.can(a.route, a.repo),
+        ),
+    );
+    const keys = rows.map((e) => e.key);
+    if (!keys.length) return;
     this.confirming.set({
       title: "Approve all",
-      message: `Approve all ${keys.length}? Each starts in the Backlog at its priority.`,
+      message: `Approve ${keys.length} ${keys.length === 1 ? "proposal" : "proposals"} in \u201c${group.title}\u201d? Each starts in the Backlog at its priority.`,
       accept: `Approve ${keys.length}`,
       destructive: false,
+      scope: scopeOf(rows),
       run: () => this.batch("approve", "Approved", keys),
     });
   }
@@ -1524,13 +1556,17 @@ export class InboxPageComponent implements OnInit {
     } else if (letters && ev.code === "KeyA" && ev.shiftKey) {
       const n =
         this.bulkActions().find((b) => b.id === "approve")?.allowed ?? 0;
-      if (n) this.confirmBulk("approve", "Approve all", n);
+      if (n) this.confirmBulk("approve", "Approve all");
     } else if (letters && ev.code === "KeyA" && !ev.shiftKey) {
       // Resolve: the selected row's primary answer. Only a plain approval
       // goes through in one keystroke; anything else (approving a host
       // script, submitting a merge) asks first.
       const primary = sel?.actions.find((x) => x.variant === "primary");
-      if (primary && this.access.can(primary.route, primary.repo)) {
+      if (
+        primary &&
+        !primary.blocked &&
+        this.access.can(primary.route, primary.repo)
+      ) {
         if (ONE_KEY.has(primary.id) || primary.confirm) this.run(primary);
         else
           this.confirming.set({
@@ -1562,9 +1598,9 @@ export class InboxPageComponent implements OnInit {
       sel?.taskLink &&
       this.isRowOrPage(ev.target)
     ) {
-      void this.router.navigateByUrl(sel.taskLink);
+      void this.router.navigateByUrl(`${sel.taskLink}?from=inbox`);
     } else if (ev.key === "Escape") {
-      if (this.dragging()) this.onResizeCancel();
+      if (this.sp.dragging()) this.sp.onResizeCancel();
       else if (this.store.checked().size && !this.store.sheetOpen())
         this.store.clearChecked();
       else this.store.closeSheet();

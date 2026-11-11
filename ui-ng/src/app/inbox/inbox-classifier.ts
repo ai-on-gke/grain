@@ -15,6 +15,7 @@
 import type { RouteKey } from "../api/generated-routes";
 import type { RouteParams } from "../api/grain-api.service";
 import type { LocalScriptApproval, Notification, Task } from "../api/models";
+import { gateSummary, isMerged, submitBlock } from "../shared/gates";
 
 // The classification here is a port of the React Inbox's (ui/src/state.js
 // waitsOnUser and ui/src/components/InboxPage.jsx GROUPS, plus
@@ -24,7 +25,14 @@ import type { LocalScriptApproval, Notification, Task } from "../api/models";
 export type Tone =
   "reply" | "proposal" | "blast" | "error" | "healthy" | "neutral";
 export type FilterId =
-  "all" | "asked" | "proposals" | "merges" | "approvals" | "alerts" | "unread";
+  | "all"
+  | "asked"
+  | "proposals"
+  | "merges"
+  | "approvals"
+  | "alerts"
+  | "paused"
+  | "unread";
 
 export interface InboxAction {
   id: string;
@@ -40,6 +48,10 @@ export interface InboxAction {
   // bulk is the batch bar's label when several selected rows offer it.
   bulk?: boolean;
   repo?: string;
+  // blocked is why the action must not be taken now (Submit on a red or
+  // unreported CI): the button is off with this as its tooltip, and
+  // batches skip it.
+  blocked?: string;
 }
 
 export interface PendingRelease {
@@ -72,6 +84,7 @@ export type EntryKind =
   | "failed"
   | "stalled"
   | "proposal"
+  | "stopped"
   | "notification";
 
 export interface InboxEntry {
@@ -81,6 +94,8 @@ export interface InboxEntry {
   ref: string;
   title: string;
   repo: string;
+  // The task's owner, when the server names one.
+  owner: string;
   summary: string;
   pillLabel: string;
   pillTone: Tone;
@@ -95,6 +110,10 @@ export interface InboxEntry {
   release?: PendingRelease;
   localScript?: LocalScriptApproval;
   acked?: boolean;
+  // gone marks a row that has left the queue but is still shown, greyed,
+  // until the person applies the buffered updates (or, for the selected
+  // row, moves on). It offers no actions.
+  gone?: boolean;
   actions: InboxAction[];
 }
 
@@ -207,12 +226,32 @@ export const GROUP_ORDER: GroupDef[] = [
     hint: "Open alerts raised for this deployment. Acknowledge one you have seen, or have an agent investigate it.",
     filter: "alerts",
   },
+  {
+    id: "paused",
+    title: "Paused",
+    hint: "Turns a person stopped. Nothing was asked: resume one to let it carry on, or close it.",
+    filter: "paused",
+  },
 ];
+
+// Groups that are not decisions waiting on anyone; the headline and the
+// rail badge leave them out.
+export const QUIET_GROUPS: ReadonlySet<string> = new Set(["paused"]);
 
 // --- task predicates (ui/src/state.js) -------------------------------
 
 export function isTaskMerged(t: Task): boolean {
-  return !!(t.merged || t.prMergedAt || t.closedReason === "merged");
+  return isMerged(t);
+}
+
+// isStoppedTurn is a task a person stopped mid-run: Stop writes a
+// pending comment, so the server reads it as awaiting_reply, but nothing
+// was asked (reason awaiting_reply/stopped, or turnStopped).
+export function isStoppedTurn(t: Task): boolean {
+  return (
+    t.state === "awaiting_reply" &&
+    (t.reason?.reason === "awaiting_reply/stopped" || !!t.turnStopped)
+  );
 }
 
 export function waitingBaseRepair(t: Task): boolean {
@@ -230,14 +269,13 @@ export function awaitsHumanSubmit(t: Task): boolean {
   ) {
     return false;
   }
-  if (t.state === "awaiting_submit") return true;
-  return (
-    t.state === "running" &&
-    !t.autoMerge &&
-    !!t.pullRequest &&
-    !t.prClosedAt &&
-    !isTaskMerged(t)
-  );
+  // The classic UI (ui/src/state.js) also counts a running task with an
+  // open pull request and no auto-merge, so a run parked in
+  // wait_for_checks is visible. Here a running task is never offered
+  // Submit: the agent may still push to the branch, and on 2026-11-11 a
+  // Submit pressed mid-run approved a change that kept changing. Such a
+  // task is on Agents and in the Running tab until its run ends.
+  return t.state === "awaiting_submit";
 }
 
 export function awaitsGitHubApproval(t: Task): boolean {
@@ -463,6 +501,7 @@ function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
     pillTone: "neutral",
     at: t.updatedAt || t.createdAt || null,
     rationale: "",
+    owner: t.owner || "",
     taskId: t.id,
     taskLink: `/task/${encodeURIComponent(t.id)}`,
     externalLink: pullRequestUrl(t),
@@ -483,6 +522,7 @@ export function classifyTask(t: Task): InboxEntry | null {
       "A red base branch's repair pull request waits for your approval.";
     e.rationale = "Nothing else lands on this branch until its repair merges.";
     if (!t.humanApprovedBy) {
+      const blocked = submitBlock(t);
       e.actions.push(
         taskAction(
           t,
@@ -490,6 +530,7 @@ export function classifyTask(t: Task): InboxEntry | null {
           "Submit",
           "POST /api/tasks/{id}/submit",
           "primary",
+          blocked ? { blocked } : {},
         ),
       );
     }
@@ -504,8 +545,30 @@ export function classifyTask(t: Task): InboxEntry | null {
       e.rationale = "Only a person can widen what a run may reach.";
       return e;
     }
+    if (isStoppedTurn(t)) {
+      const e = taskEntry(t, "stopped", "paused");
+      e.pillLabel = "Stopped";
+      e.pillTone = "neutral";
+      e.summary = "Stopped by a person.";
+      e.rationale =
+        "Somebody stopped this run. It waits until a person resumes or closes it; nothing was asked.";
+      e.actions.push(
+        taskAction(
+          t,
+          "resume",
+          "Resume",
+          "POST /api/tasks/{id}/retry",
+          "primary",
+        ),
+        taskAction(t, "close", "Close", "POST /api/tasks/{id}/close", "tonal", {
+          confirm: `Close #${t.id}? The task is closed, and reopening puts it back.`,
+          destructive: true,
+        }),
+      );
+      return e;
+    }
     const e = taskEntry(t, "reply", "reply");
-    e.pillLabel = t.turnStopped ? "Stopped by you" : "Needs reply";
+    e.pillLabel = "Needs reply";
     e.pillTone = "reply";
     e.summary = t.questionSummary || "Answered on the task itself.";
     e.rationale = "The run is parked until somebody answers it.";
@@ -526,16 +589,18 @@ export function classifyTask(t: Task): InboxEntry | null {
   }
   if (awaitsHumanSubmit(t)) {
     const review = !!t.reviewQuestions;
+    const blocked = submitBlock(t);
     const e = taskEntry(
       t,
       review ? "review" : "submit",
       review ? "review" : "submit",
     );
-    e.pillLabel = review ? "Review questions" : "Submit";
-    e.pillTone = review ? "blast" : "healthy";
+    const red = gateSummary(t).state === "failing";
+    e.pillLabel = review ? "Review questions" : red ? "CI failing" : "Submit";
+    e.pillTone = review ? "blast" : red ? "error" : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
-      : "Approve the pull request; it merges once its gates pass.";
+      : blocked || "Approve the pull request; it merges once its gates pass.";
     e.rationale = review
       ? "A fresh review clears the gate once your decision is carried out."
       : "This repository waits for a person's approval before merging.";
@@ -549,6 +614,7 @@ export function classifyTask(t: Task): InboxEntry | null {
           review ? "tonal" : "primary",
           {
             bulk: !review,
+            ...(blocked ? { blocked } : {}),
           },
         ),
       );
@@ -621,7 +687,9 @@ export function classifyTask(t: Task): InboxEntry | null {
     e.pillTone = "proposal";
     e.summary = t.proposedBy
       ? `Proposed by ${t.proposedBy}.`
-      : "Waiting for approval.";
+      : t.generatedFrom
+        ? `Proposed by #${t.generatedFrom}.`
+        : "Waiting for approval.";
     e.rationale = "Nothing runs until somebody approves it.";
     e.actions.push(
       taskAction(
@@ -661,6 +729,7 @@ export function classifyNotification(n: Notification): InboxEntry {
     ref: release ? release.version : n.subject,
     title: release ? `${release.version} is ready to promote` : n.subject,
     repo: n.repo || release?.repo || "",
+    owner: "",
     summary: release ? pendingReleaseSentence(n) : notificationSentence(n),
     pillLabel: release
       ? "Release approval"
@@ -725,6 +794,7 @@ export function classifyLocalScript(a: LocalScriptApproval): InboxEntry {
     ref: `#${a.taskId}`,
     title: `Run ${a.script || a.tool || "a host script"}`,
     repo: "",
+    owner: "",
     summary: call,
     pillLabel: "Host script",
     pillTone: "blast",
@@ -793,7 +863,7 @@ export function matchesFilter(
 export function matchesQuery(e: InboxEntry, q: string): boolean {
   const needle = q.trim().toLowerCase();
   if (!needle) return true;
-  return [e.ref, e.title, e.repo, e.summary]
+  return [e.ref, e.title, e.repo, e.owner, e.summary]
     .join("\n")
     .toLowerCase()
     .includes(needle);

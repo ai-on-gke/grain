@@ -87,7 +87,37 @@ export interface Task {
   dependsOn?: string[];
   description?: string;
   body?: string;
-  branch?: string;
+  // Who the task belongs to and who filed it (pkg/ui tasks.go Task).
+  owner?: string;
+  creator?: string;
+  approvedBy?: string;
+  approvedByLabel?: string;
+  // The task that filed this one, and the work tree it belongs to.
+  generatedFrom?: string;
+  origin?: string;
+  // Open dependencies and the state of each (GET /api/tasks).
+  blockedBy?: string[];
+  dependsOnStates?: Record<string, string>;
+  // The gates a pull request must pass to merge (model.MergeGate).
+  mergeGates?: MergeGate[];
+  // Why the task is where it is (orchestrator liveness reason), e.g.
+  // {reason: "awaiting_reply/stopped", class: "awaiting a person"}.
+  reason?: { reason: string; class?: string; control?: string };
+}
+
+export type MergeGateState =
+  "passed" | "running" | "failing" | "findings" | "needed" | "overridden";
+
+// MergeGate is one required gate on a change (pkg/model merge_gates.go).
+// A gate is satisfied when it has passed or was overridden.
+export interface MergeGate {
+  id: string;
+  label: string;
+  state: MergeGateState | string;
+  detail?: string;
+  reviewTask?: string;
+  approvedBy?: string;
+  overridable?: boolean;
 }
 
 export interface AccessRequestItem {
