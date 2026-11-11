@@ -259,3 +259,163 @@ func TestATriggerReviewOpensNoPullRequestUnlessAskedForFixes(t *testing.T) {
 		t.Errorf("the trigger's security review does not work on the change's own branch: %+v", review)
 	}
 }
+
+// A push addressing findings from an earlier gating review (sensitive or not)
+// files an incremental re-review, keeps the review gate pending until that
+// re-review finishes, and restores auto-merge once it passes clean.
+func TestAPushAfterFindingsFilesAnIncrementalReReviewAndClearsTheGateWhenClean(t *testing.T) {
+	t.Parallel()
+	for _, sensitive := range []bool{false, true} {
+		tr := gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")
+		tr.Sensitive = sensitive
+		ctx, store, sim, client, task := finishGated(t, []model.PathTrigger{tr}, "config/secrets/prod.yml")
+
+		firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+		first := reloaded(t, ctx, store, firstID)
+		res := toolResult(reviewFinding("plaintext token", "config/secrets/prod.yml", 1))
+		if err := orchestrator.ProcessResult(ctx, store, client, first, res, firstID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+			t.Fatalf("ProcessResult(sensitive=%v): %v", sensitive, err)
+		}
+		completeReview(t, ctx, store, firstID)
+		syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+		afterFindings := reloaded(t, ctx, store, task.ID)
+		if afterFindings.AutoMerge || !model.HasPendingReviewHold(afterFindings) {
+			t.Fatalf("sensitive=%v: findings did not hold the review gate: automerge=%v links=%+v",
+				sensitive, afterFindings.AutoMerge, afterFindings.Links)
+		}
+
+		pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/prod.yml", "rotated\n")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+
+		reheld := reloaded(t, ctx, store, task.ID)
+		ids := distinctGatingIDs(reheld)
+		if len(ids) != 1 || ids[0] == firstID {
+			t.Fatalf("sensitive=%v: want a new re-review after findings, got %v (first %s)", sensitive, ids, firstID)
+		}
+		if reheld.AutoMerge || !model.HasPendingReviewHold(reheld) {
+			t.Fatalf("sensitive=%v: review gate cleared before the re-review finished: automerge=%v links=%+v",
+				sensitive, reheld.AutoMerge, reheld.Links)
+		}
+		second := reloaded(t, ctx, store, ids[0])
+		if !strings.Contains(second.Body, "This is an incremental review.") ||
+			!strings.Contains(second.Body, "record it again with add_review_comment") {
+			t.Errorf("sensitive=%v: re-review lacks incremental findings guidance:\n%s", sensitive, second.Body)
+		}
+
+		completeReview(t, ctx, store, second.ID)
+		syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
+		cleared := reloaded(t, ctx, store, task.ID)
+		if !cleared.AutoMerge || model.HasPendingReviewHold(cleared) || model.HasReviewFindings(cleared) {
+			t.Fatalf("sensitive=%v: clean re-review did not clear findings and restore auto-merge: automerge=%v links=%+v",
+				sensitive, cleared.AutoMerge, cleared.Links)
+		}
+	}
+}
+
+// A push after a human: required trigger's first review settled still files a
+// re-review for the new head rather than letting the old review cover unseen
+// commits.
+func TestAHumanRequiredTriggerReReviewsAPushAfterItsFirstReviewSettled(t *testing.T) {
+	t.Parallel()
+	ctx, store, sim, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanRequired, "config/secrets")},
+		"config/secrets/prod.yml")
+
+	firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	completeReview(t, ctx, store, firstID)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+	pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/prod.yml", "updated\n")
+	judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+
+	got := reloaded(t, ctx, store, task.ID)
+	ids := distinctGatingIDs(got)
+	if len(ids) != 1 || ids[0] == firstID || !model.HasPendingReviewHold(got) {
+		t.Fatalf("human: required trigger did not re-review the new head: ids=%v links=%+v", ids, got.Links)
+	}
+}
+
+// Reverting one of the change's own files back to the base branch's state
+// still appears in the incremental review's delta rather than reading as a
+// base-only move.
+func TestIncrementalReviewIncludesAFileRevertedToTheBase(t *testing.T) {
+	t.Parallel()
+	ctx, store, sim, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+		"config/secrets/prod.yml", "pkg/auth/guard.go")
+
+	firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	completeReview(t, ctx, store, firstID)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(20*time.Minute))
+
+	removeFile(t, sim.BareRepo, model.BranchName(task.ID), "pkg/auth/guard.go")
+	judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(30*time.Minute))
+
+	secondID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	second := reloaded(t, ctx, store, secondID)
+	if !strings.Contains(second.Body, "`pkg/auth/guard.go`") ||
+		strings.Contains(second.Body, "none of the change's own files moved") {
+		t.Fatalf("reverted file missing from incremental delta:\n%s", second.Body)
+	}
+}
+
+// When a running review closes without finishing, a queued incremental review
+// waiting on it is converted back to a full review before it runs.
+func TestAnAbandonedRunningReviewForcesTheQueuedDependentToReviewInFull(t *testing.T) {
+	t.Parallel()
+	ctx, store, sim, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+		"config/secrets/prod.yml")
+
+	firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	if err := store.StartRun(ctx, model.Run{
+		ID: firstID + "-1", TaskID: firstID, Sandbox: "sb-1", Attempt: 1, StartedAt: baseTime.Add(time.Minute),
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+
+	pushFile(t, sim.BareRepo, model.BranchName(task.ID), "README.md", "docs\n")
+	judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(2*time.Minute))
+
+	secondID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	if secondID == firstID {
+		t.Fatalf("expected a second review queued behind running %s", firstID)
+	}
+	if !strings.Contains(reloaded(t, ctx, store, secondID).Body, "This is an incremental review.") {
+		t.Fatalf("expected %s to start as incremental while %s is running", secondID, firstID)
+	}
+
+	closedAt := baseTime.Add(5 * time.Minute)
+	if err := store.FinishRun(ctx, firstID+"-1", closedAt, "cancelled", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Observe(ctx, model.Observation{TaskID: firstID, ClosedAt: &closedAt}); err != nil {
+		t.Fatal(err)
+	}
+
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(6*time.Minute))
+	second := reloaded(t, ctx, store, secondID)
+	if strings.Contains(second.Body, "This is an incremental review.") {
+		t.Fatalf("abandoned base review left dependent %s incremental:\n%s", secondID, second.Body)
+	}
+	if reloaded(t, ctx, store, task.ID).AutoMerge {
+		t.Fatal("released before the full replacement review finished")
+	}
+}
+
+func TestUnapprovedTriggerReviewLandsUnapproved(t *testing.T) {
+	t.Parallel()
+	tr := gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")
+	tr.AutoApprove = false
+	ctx, store, _, _, task := finishGated(t, []model.PathTrigger{tr}, "config/secrets/prod.yml")
+	reviewID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+	review := reloaded(t, ctx, store, reviewID)
+	st, err := store.State(ctx, reviewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Approval != nil || st != model.StateProposed {
+		t.Fatalf("auto-approve: false review state = %s, approval = %+v; want proposed and unapproved", st, review.Approval)
+	}
+}

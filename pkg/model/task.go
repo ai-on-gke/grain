@@ -1443,7 +1443,7 @@ const (
 	// fixes nothing (-> the reviewed task's ID): its run never opens a
 	// pull request, whatever it pushed. Grain files every review that
 	// way unless what asked for it asked for fixes
-	// (docs/path-triggers.md#reviews-post-findings).
+	// (docs/declarations.md#gating-reviews).
 	LinkReviewCommentsOnly LinkKind = "review-comments-only"
 	// LinkApprovalRequired records that a rule this task's change matched
 	// lets only named people release it (-> "<rule>=<approver>,..."),

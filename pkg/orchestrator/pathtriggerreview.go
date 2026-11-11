@@ -131,6 +131,15 @@ func reviewKindTag(ref model.PullRequestRef, kind string) string {
 // reviewHeadTag is the head a review was filed to read.
 func reviewHeadTag(sha string) string { return "path-trigger-head:" + strings.ToLower(sha) }
 
+func reviewHead(tags []string) string {
+	for _, tag := range tags {
+		if sha, ok := strings.CutPrefix(tag, "path-trigger-head:"); ok {
+			return sha
+		}
+	}
+	return ""
+}
+
 // reviewSinceTag is the head an incremental review reads from.
 func reviewSinceTag(sha string) string { return "path-trigger-since:" + strings.ToLower(sha) }
 
@@ -143,6 +152,35 @@ func reviewSince(tags []string) string {
 	return ""
 }
 
+// reviewTriggerTag records each gating trigger a review was filed for, so
+// findings from an earlier head's review still identify their trigger gate
+// after a newer head's review has replaced it in LinkPathTriggerTask.
+func reviewTriggerTag(trigger string) string { return "path-trigger-gate:" + trigger }
+
+func reviewTriggers(tags []string) []string {
+	var out []string
+	for _, tag := range tags {
+		if name, ok := strings.CutPrefix(tag, "path-trigger-gate:"); ok && name != "" && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func parseLastReviewedTarget(target string) (kind, id, head string, ok bool) {
+	at := strings.LastIndex(target, "@")
+	if at < 0 {
+		return "", "", "", false
+	}
+	left, head := target[:at], target[at+1:]
+	eq := strings.LastIndex(left, "=")
+	if eq <= 0 {
+		return "", "", "", false
+	}
+	return left[:eq], left[eq+1:], head, true
+}
+
 // lastReviewed is the review of kind last filed for task's pull request,
 // and the head it read (model.LinkPathTriggerReviewed).
 func lastReviewed(task model.Task, kind string) (id, head string) {
@@ -150,11 +188,11 @@ func lastReviewed(task model.Task, kind string) (id, head string) {
 		if l.Kind != model.LinkPathTriggerReviewed {
 			continue
 		}
-		k, rest, ok := strings.Cut(l.Target, "=")
+		k, rID, rHead, ok := parseLastReviewedTarget(l.Target)
 		if !ok || k != kind {
 			continue
 		}
-		id, head, _ = strings.Cut(rest, "@")
+		id, head = rID, rHead
 	}
 	return id, head
 }
@@ -163,7 +201,7 @@ func lastReviewed(task model.Task, kind string) (id, head string) {
 // gating triggers naming it that matched task's pull request at headSHA --
 // demand, or returns the one already filed for that head.
 func filePullRequestReview(ctx context.Context, store *model.Store, client github.Client, task model.Task,
-	ref model.PullRequestRef, headSHA, kind string, matches []reviewMatch, files []string,
+	ref model.PullRequestRef, baseRef, headSHA, kind string, matches []reviewMatch, files []string, known bool,
 	now time.Time) (model.Task, error) {
 
 	tag := reviewKindTag(ref, kind)
@@ -182,12 +220,12 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 
 	filed, err := fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
 		since := ""
-		if rereview {
+		if rereview && known {
 			since = incrementalBase(ctx, store, prev, superseding, lastID, lastHead)
 		}
 		var delta []string
 		if since != "" {
-			delta, since = reviewDelta(client, ref, since, headSHA, files, matches)
+			delta, since = reviewDelta(client, ref, baseRef, since, headSHA, files, matches)
 		}
 		review, err := buildPullRequestReview(ctx, store, task, ref, headSHA, kind, matches, settings, since, delta, now)
 		if err != nil {
@@ -201,6 +239,9 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 			review.Tags = append(review.Tags, reviewSinceTag(since))
 		}
 		for _, m := range matches {
+			if gt := reviewTriggerTag(m.rule.Trigger.Name); !slices.Contains(review.Tags, gt) {
+				review.Tags = append(review.Tags, gt)
+			}
 			if rt := pathTriggerRuleTag(m.rule.Commit); !slices.Contains(review.Tags, rt) {
 				review.Tags = append(review.Tags, rt)
 			}
@@ -218,8 +259,10 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		var kept []model.Link
 		for _, l := range t.Links {
-			if l.Kind == model.LinkPathTriggerReviewed && strings.HasPrefix(l.Target, kind+"=") {
-				continue
+			if l.Kind == model.LinkPathTriggerReviewed {
+				if k, _, _, ok := parseLastReviewedTarget(l.Target); ok && k == kind {
+					continue
+				}
 			}
 			kept = append(kept, l)
 		}
@@ -234,8 +277,9 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 
 // incrementalBase is the head a re-review reads from, or "" for a full
 // review. An undispatched review being superseded hands on its own base
-// (it never read anything); a review still running, or one that finished,
-// read lastHead. One closed without finishing read nothing.
+// (it never read anything); a review still running, or one that finished
+// cleanly, read its recorded head. One that failed, closed without finishing,
+// or had its stacked fixes closed without merging read nothing.
 func incrementalBase(ctx context.Context, store *model.Store, prev *model.Task, superseding bool,
 	lastID, lastHead string) string {
 
@@ -243,13 +287,38 @@ func incrementalBase(ctx context.Context, store *model.Store, prev *model.Task, 
 		return reviewSince(prev.Tags)
 	}
 	if prev != nil {
-		return lastHead
+		head := reviewHead(prev.Tags)
+		if head == "" {
+			head = lastHead
+		}
+		obs, err := store.GetObservation(ctx, prev.ID)
+		if err != nil {
+			return ""
+		}
+		if pushed, landed, ok := reviewOutcome(*prev, obs); ok {
+			if pushed && !landed {
+				return ""
+			}
+			return head
+		}
+		state, err := store.State(ctx, prev.ID)
+		if err != nil || (state != model.StateRunning && state != model.StateCompleted) {
+			return ""
+		}
+		return head
 	}
 	if lastID == "" {
 		return ""
 	}
+	lastTask, err := store.GetTask(ctx, lastID)
+	if err != nil || lastTask == nil {
+		return ""
+	}
 	obs, err := store.GetObservation(ctx, lastID)
 	if err != nil || obs == nil || obs.CompletedAt == nil {
+		return ""
+	}
+	if pushed, landed, ok := reviewOutcome(*lastTask, obs); !ok || (pushed && !landed) {
 		return ""
 	}
 	return lastHead
@@ -258,7 +327,7 @@ func incrementalBase(ctx context.Context, store *model.Store, prev *model.Task, 
 // reviewDelta is the change's files that moved between since and head,
 // and since itself -- or "" with no delta when the review should be a
 // full one after all (the package comment's rules).
-func reviewDelta(client github.Client, ref model.PullRequestRef, since, head string,
+func reviewDelta(client github.Client, ref model.PullRequestRef, baseRef, since, head string,
 	files []string, matches []reviewMatch) ([]string, string) {
 
 	if client == nil {
@@ -273,9 +342,36 @@ func reviewDelta(client github.Client, ref model.PullRequestRef, since, head str
 	if cmp.Status != "ahead" || cmp.FilesTruncated {
 		return nil, ""
 	}
+	hasMerge := false
+	for _, c := range cmp.Commits {
+		if c.Merge || len(c.Parents) > 1 {
+			hasMerge = true
+			break
+		}
+	}
 	ofChange := map[string]bool{}
 	for _, f := range files {
 		ofChange[f] = true
+	}
+	if hasMerge {
+		// Merging the base branch brings in files the change itself never
+		// touched, while reverting one of the change's own files back to the
+		// base drops it from `files` (base...head). Including `base...since`
+		// distinguishes a reverted file of the change from an untouched file
+		// brought in from the base.
+		if baseRef == "" {
+			return nil, ""
+		}
+		prevPR, err := client.CompareRefs(ref.Repo.Owner, ref.Repo.Name, baseRef, since)
+		if err != nil || prevPR.FilesTruncated {
+			return nil, ""
+		}
+		for _, f := range prevPR.Files {
+			ofChange[f.Filename] = true
+			if f.PreviousFilename != "" {
+				ofChange[f.PreviousFilename] = true
+			}
+		}
 	}
 	var delta []string
 	for _, f := range cmp.Files {
@@ -284,7 +380,7 @@ func reviewDelta(client github.Client, ref model.PullRequestRef, since, head str
 			names = append(names, f.PreviousFilename)
 		}
 		for _, name := range names {
-			if ofChange[name] {
+			if !hasMerge || ofChange[name] {
 				if !slices.Contains(delta, name) {
 					delta = append(delta, name)
 				}
@@ -306,8 +402,8 @@ func reviewDelta(client github.Client, ref model.PullRequestRef, since, head str
 	return delta, since
 }
 
-// buildPullRequestReview writes the review of kind, and returns it with
-// the tags and links fileCoalesced adds still to come.
+// buildPullRequestReview builds (without yet storing) the review of kind,
+// ready for fileCoalesced to add coalescing links and store atomically.
 func buildPullRequestReview(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
 	headSHA, kind string, matches []reviewMatch, settings reviewSettings, since string, delta []string,
 	now time.Time) (model.Task, error) {
@@ -339,9 +435,17 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, task model.
 			tmpl = model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
 		}
 	}
+	allVars := tmpl.FieldValues(nil)
+	if allVars == nil {
+		allVars = map[string]string{}
+	}
+	for k, v := range vars {
+		allVars[k] = v
+	}
 	filled := *tmpl
-	filled.Title = model.SubstituteFields(filled.Title, vars)
-	filled.Body = model.SubstituteFields(filled.Body, vars)
+	filled.Fields = nil
+	filled.Title = model.SubstituteFields(filled.Title, allVars)
+	filled.Body = model.SubstituteFields(filled.Body, allVars)
 
 	var review model.Task
 	var err error
@@ -353,19 +457,21 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, task model.
 			"You are reviewing task %s (%q), whose work is on `%s` and proposed in %s. "+
 				"Your checkout is that branch itself: diff it against %s's base to see the change, and push "+
 				"any fix to it.\n", task.ID, task.Title, task.BranchName(), ref, ref) + facts
-		review, err = putSecurityReview(ctx, store, task, ref, filled, securityReviewTitle(task), body, now)
+		review, err = newReview(ctx, store, task, filled, securityReviewTitle(task), body, true, now)
 	case settings.fixes:
-		review, err = putStackedReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
-			reviewTaskBody(filled, task, ref, task.BranchName())+facts, now)
+		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
+			reviewTaskBody(filled, task, ref, task.BranchName())+facts, false, now)
 	default:
-		review, err = putStackedReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
-			reviewFindingsBody(filled, task, ref, task.BranchName())+facts, now)
+		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
+			reviewFindingsBody(filled, task, ref, task.BranchName())+facts, false, now)
 		review.Links = append(review.Links, model.Link{Kind: model.LinkReviewCommentsOnly, Target: task.ID})
 	}
 	if err != nil {
 		return model.Task{}, err
 	}
-	model.InheritRequester(&review, task)
+	if ref != (model.PullRequestRef{}) {
+		review.Links = append(review.Links, model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
+	}
 	if !settings.autoApprove {
 		review.Approval, review.ApprovedAt = nil, nil
 	}
@@ -394,6 +500,11 @@ func reviewFacts(ref model.PullRequestRef, headSHA string, matches []reviewMatch
 	return b.String()
 }
 
+// incrementalNoteHeader marks the start of incrementalNote's appendix on a
+// review's body, so SyncPathTriggerHolds can strip it back to a full review if
+// the running review it was waiting on closed without finishing.
+const incrementalNoteHeader = "\n**This is an incremental review.**"
+
 // incrementalNote tells an incremental review what to read, or nothing
 // for a full one.
 func incrementalNote(since, head string, delta []string) string {
@@ -401,8 +512,8 @@ func incrementalNote(since, head string, delta []string) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n**This is an incremental review.** An earlier review of this kind read the change at %s. "+
-		"Review only what changed since: `git diff %s %s`", shortCommit(since), since, head)
+	fmt.Fprintf(&b, "%s An earlier review of this kind read the change at %s. "+
+		"Review only what changed since: `git diff %s %s`", incrementalNoteHeader, shortCommit(since), since, head)
 	if len(delta) == 0 {
 		b.WriteString(" -- none of the change's own files moved (the new commits only brought in its base). ")
 	} else {
@@ -412,9 +523,21 @@ func incrementalNote(since, head string, delta []string) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Also check that every finding the earlier review left on the pull request has been addressed, " +
-		"and say which still stand. Do not re-review the rest of the change.\n")
+	b.WriteString("Also check that every finding the earlier review left on the pull request has been addressed; " +
+		"for any finding that still stands (and you do not fix yourself), record it again with add_review_comment " +
+		"-- a closing note alone does not hold the change. Do not re-review the rest of the change.\n")
 	return b.String()
+}
+
+// stripIncrementalReview converts an undispatched incremental review into a
+// full review when the earlier review it depended on closed without finishing.
+func stripIncrementalReview(t *model.Task) {
+	if idx := strings.Index(t.Body, incrementalNoteHeader); idx >= 0 {
+		t.Body = t.Body[:idx]
+	}
+	t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool {
+		return strings.HasPrefix(tag, "path-trigger-since:")
+	})
 }
 
 // reviewFindingsBody is reviewTaskBody for a review that fixes nothing:
