@@ -675,6 +675,7 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 		ScopeConflicts:       conflicts,
 		NextIntervalSeconds:  HeartbeatIntervalSeconds(rt.opts.HeartbeatInterval),
 		NextHeartbeatSeconds: HeartbeatIntervalSeconds(rt.opts.HeartbeatInterval),
+		EnvironmentName:      api.EnvironmentNameForEntry(updated.DisplayName, updated.Name),
 	})
 }
 

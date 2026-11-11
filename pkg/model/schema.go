@@ -645,7 +645,11 @@ import "strconv"
 // model.TaskBriefEdit): a durable task's compaction cursor, handover
 // version and current brief, and every edit of that brief
 // (design/design/durable-tasks.design.md#DT-15, grain/task-4107).
-const SchemaVersion = 136
+// 137 adds `grain_config`.`hub_environment_name`
+// (model.Config.HubEnvironmentName): the environment name a Grain Hub last
+// supplied as this deployment's default, so a rename of its hub entry can
+// replace it without overwriting a name the operator chose (grain/task-4200).
+const SchemaVersion = 137
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2694,6 +2698,7 @@ var Tables = []string{
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
+  ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
