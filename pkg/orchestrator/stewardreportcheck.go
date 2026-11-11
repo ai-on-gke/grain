@@ -421,8 +421,8 @@ var stateVocabularyChecks = []stateVocabCheck{
 		},
 	},
 	{
-		name:        "failed",
-		phrases:     []string{"failed"},
+		name:    "failed",
+		phrases: []string{"failed"},
 		ignoreAfter: []string{"failed attempt", "failed attempts", "failed run", "failed runs", "failed job", "failed jobs", "failed check", "failed checks", "failed ci",
 			// A task's CI, a job or a batch failing is not the task failing.
 			"ci failed", "ci has failed", "checks failed", "check failed", "job failed", "jobs failed", "tests failed",
