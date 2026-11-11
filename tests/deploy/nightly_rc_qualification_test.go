@@ -275,14 +275,14 @@ func TestCandidateGateMatchesNightlyStage1Jobs(t *testing.T) {
 	if !ok {
 		t.Fatal("scripts/candidate-gate.sh has no usage() boundary after its default variables")
 	}
-	cmd := exec.Command("bash", "-c", "unset CHECK_QUALIFICATION_JOBS CHECK_QUALIFICATION_IGNORE\n"+
-		header+"\nprintf '%s\\0%s' \"$CHECK_QUALIFICATION_JOBS\" \"$CHECK_QUALIFICATION_IGNORE\"")
+	cmd := exec.Command("bash", "-c", "unset CHECK_QUALIFICATION_JOBS CHECK_QUALIFICATION_IGNORE CANDIDATE_GATE_ADVISORY\n"+
+		header+"\nprintf '%s\\0%s\\0%s' \"$CHECK_QUALIFICATION_JOBS\" \"$CHECK_QUALIFICATION_IGNORE\" \"$CANDIDATE_GATE_ADVISORY\"")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("evaluating candidate-gate.sh defaults: %v\n%s", err, out)
 	}
 	parts := strings.Split(string(out), "\x00")
-	if len(parts) != 2 {
+	if len(parts) != 3 {
 		t.Fatalf("unexpected candidate-gate.sh defaults output: %q", string(out))
 	}
 	parsePairs := func(label, raw string) ([]string, map[string]string) {
@@ -333,6 +333,9 @@ func TestCandidateGateMatchesNightlyStage1Jobs(t *testing.T) {
 	}
 	if want := wf.Jobs["stage-1"].Name; ignoreNames["stage-1"] != want {
 		t.Errorf("CHECK_QUALIFICATION_IGNORE[stage-1] = %q, want nightly.yml jobs.stage-1.name %q", ignoreNames["stage-1"], want)
+	}
+	if !slices.Contains(strings.Fields(parts[2]), "gcp-smoke") {
+		t.Errorf("CANDIDATE_GATE_ADVISORY = %q, want it to retain gcp-smoke while WIF variables can skip gcp-smoke.yml", parts[2])
 	}
 }
 
