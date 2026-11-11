@@ -106,6 +106,8 @@ export const ROUTE_SCOPES = {
   "GET /api/git-ambient-sources": "repos:read",
   "GET /api/github-tokens": "secrets:read",
   "GET /api/host/top": "deployment:read",
+  "GET /api/hostd/agentd/{os}/{arch}": "signed-in",
+  "GET /api/hostd/agentd/{os}/{arch}/manifest.json": "signed-in",
   "GET /api/hostd/connect": "signed-in",
   "GET /api/hostd/install.sh": "signed-in",
   "GET /api/hostds": "capabilities:read",

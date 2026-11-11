@@ -371,6 +371,12 @@ func statusOf(e queueEntry, isMergeHead, blocked bool, review reviewState, lane 
 		if !e.reds.PathToGreen() && !e.reds.BranchOwns() {
 			return queueStatus{state: mergeStateChecksUnfixable, note: unfixableRowNote(e)}
 		}
+		// Waiting out an infrastructure failure between re-runs of its
+		// failed jobs (waitOutInfraFailure): no repair is coming yet, so
+		// the row keeps saying what is.
+		if held, ok := infraWaitHeld(e); ok {
+			return held
+		}
 		return queueStatus{state: mergeStateRepairNeeded, note: repairNeededNote(e)}
 	case model.PrPending:
 		if note, ok := externalPendingRowNote(e); ok {

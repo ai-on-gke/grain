@@ -79,10 +79,13 @@ var forgottenElsewhere = []string{
 }
 
 // Every repo-keyed table is seeded with one row for the repository being
-// removed and one for a neighbour, and ForgetRepo must clear exactly the
-// tables it claims to and touch nothing of the neighbour's
-// (grain/task-4288). This is the "no rows dangle" check for removal,
-// driven by the schema rather than by a hand-kept list of tables.
+// removed, one for a neighbour, and one for the same owner/name on
+// another host, and ForgetRepo must clear exactly the tables it claims
+// to and touch nothing of the others' (grain/task-4288). This is the "no
+// rows dangle" check for removal, driven by the schema rather than by a
+// hand-kept list of tables. The other host's repository is then removed
+// in turn, which only works for tables whose rows carry the host
+// (StoredOwner, grain/task-4335).
 func TestForgetRepoClearsEveryRepoKeyedTableItShould(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
@@ -101,6 +104,7 @@ func TestForgetRepoClearsEveryRepoKeyedTableItShould(t *testing.T) {
 
 	gone := model.RepoRef{Owner: "acme", Name: "widgets"}
 	neighbour := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	offHost := model.RepoRef{Host: "ghe.example.com", Owner: "acme", Name: "widgets"}
 	// repo_declaration's rows name the template, suite or schedule they
 	// declared, which ForgetRepo deletes through them; a placeholder names
 	// nothing it could. TestForgetRepoRemovesAllRepoRecords covers it.
@@ -108,23 +112,45 @@ func TestForgetRepoClearsEveryRepoKeyedTableItShould(t *testing.T) {
 		return t.Name == "repo_declaration"
 	})
 	for i, table := range tables {
-		seedRepoRow(t, ctx, db, table, gone, i*2)
-		seedRepoRow(t, ctx, db, table, neighbour, i*2+1)
+		seedRepoRow(t, ctx, db, table, gone, i*3)
+		seedRepoRow(t, ctx, db, table, neighbour, i*3+1)
+		seedRepoRow(t, ctx, db, table, offHost, i*3+2)
 	}
+	isForgotten := func(table string) bool {
+		return slices.Contains(forgotten, table) || slices.Contains(forgottenElsewhere, table)
+	}
+	check := func(table model.RepoCaseTable, removed, untouched []model.RepoRef) {
+		t.Helper()
+		for _, repo := range removed {
+			wantGone := isForgotten(table.Name)
+			if n := repoRows(t, ctx, db, table, repo); wantGone && n != 0 {
+				t.Errorf("`%s` still holds %d row(s) for the removed %s", table.Name, n, repo)
+			} else if !wantGone && n != 1 {
+				t.Errorf("`%s` holds %d row(s) for the removed %s, want its one row kept (%s)",
+					table.Name, n, repo, keptOnRepoRemoval[table.Name])
+			}
+		}
+		for _, repo := range untouched {
+			if n := repoRows(t, ctx, db, table, repo); n != 1 {
+				t.Errorf("removing %v left `%s` with %d row(s) for %s, want 1", removed, table.Name, n, repo)
+			}
+		}
+	}
+
 	if err := store.ForgetRepo(ctx, gone); err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range tables {
-		wantGone := slices.Contains(forgotten, table.Name) || slices.Contains(forgottenElsewhere, table.Name)
-		if n := repoRows(t, ctx, db, table, gone); wantGone && n != 0 {
-			t.Errorf("`%s` still holds %d row(s) for the removed %s", table.Name, n, gone)
-		} else if !wantGone && n != 1 {
-			t.Errorf("`%s` holds %d row(s) for the removed %s, want its one row kept (%s)",
-				table.Name, n, gone, keptOnRepoRemoval[table.Name])
-		}
-		if n := repoRows(t, ctx, db, table, neighbour); n != 1 {
-			t.Errorf("removing %s left `%s` with %d row(s) for %s, want 1", gone, table.Name, n, neighbour)
-		}
+		check(table, []model.RepoRef{gone}, []model.RepoRef{neighbour, offHost})
+	}
+	if t.Failed() {
+		return
+	}
+	if err := store.ForgetRepo(ctx, offHost); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range tables {
+		check(table, []model.RepoRef{gone, offHost}, []model.RepoRef{neighbour})
 	}
 }
 

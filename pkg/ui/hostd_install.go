@@ -18,10 +18,15 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +34,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	agentdrelease "github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -37,9 +43,24 @@ import (
 // hostdInstallPath is the bootstrap script a machine registering as a
 // remote grain hostd runs; hostdInstallShortPath is the shorter URL shown
 // in Settings -> Hosts -> Invite hosts.
+//
+// hostdAgentdBinaryRoute and hostdAgentdManifestRoute serve the per-platform
+// grain-agentd static binary and its signed manifest directly from the
+// controller, for hosts that cannot reach the internet.
 const (
-	hostdInstallPath      = "/api/hostd/install.sh"
-	hostdInstallShortPath = "/hostd/install"
+	hostdInstallPath        = "/api/hostd/install.sh"
+	hostdInstallShortPath   = "/hostd/install"
+	hostdAgentdBinaryRoute  = "/api/hostd/agentd/{os}/{arch}"
+	hostdAgentdManifestPath = "/api/hostd/agentd/{os}/{arch}/manifest.json"
+
+	defaultAgentdDistDir      = "/usr/local/share/grain/agentd"
+	agentdDistDirEnv          = "GRAIN_AGENTD_DIST_DIR"
+	agentdReleaseURLEnv       = "GRAIN_AGENTD_RELEASE_URL"
+	agentdReleasePublicKeyEnv = "GRAIN_AGENTD_RELEASE_PUBLIC_KEY"
+
+	maxAgentdManifestBytes = 64 << 10 // 64 KiB
+	maxAgentdBinaryBytes   = 64 << 20 // 64 MiB
+	agentdFetchBackoff     = 30 * time.Second
 )
 
 //go:embed hostd_install.sh
@@ -76,7 +97,36 @@ func hostdInstallRoute(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
-	return r.URL.Path == hostdInstallPath || r.URL.Path == hostdInstallShortPath
+	if r.URL.Path == hostdInstallPath || r.URL.Path == hostdInstallShortPath {
+		return true
+	}
+	_, _, ok := hostdAgentdReleasePath(r.URL.Path)
+	return ok
+}
+
+// hostdAgentdReleasePath parses /api/hostd/agentd/{os}/{arch}[/manifest.json].
+func hostdAgentdReleasePath(p string) (platform string, manifest bool, ok bool) {
+	rest, ok := strings.CutPrefix(p, "/api/hostd/agentd/")
+	if !ok || rest == "" {
+		return "", false, false
+	}
+	if trimmed, isManifest := strings.CutSuffix(rest, "/manifest.json"); isManifest {
+		rest = trimmed
+		manifest = true
+	}
+	osName, arch, hasSlash := strings.Cut(rest, "/")
+	if !hasSlash || osName == "" || arch == "" || strings.Contains(arch, "/") {
+		return "", false, false
+	}
+	for _, s := range []string{osName, arch} {
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+				return "", false, false
+			}
+		}
+	}
+	return osName + "/" + arch, manifest, true
 }
 
 // handleHostdInstallScript serves hostd_install.sh with this daemon's
@@ -636,4 +686,356 @@ func (s *Server) hostdInstallImage() string {
 	}
 	c.at = time.Now()
 	return c.image
+}
+
+type cachedAgentdRelease struct {
+	manifestJSON []byte
+	manifest     agentdrelease.Manifest
+	binaryPath   string
+	failedAt     time.Time
+}
+
+type agentdReleaseCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedAgentdRelease
+	// dir holds the verified binaries fetched from the release URL,
+	// created 0700 on first use.
+	dir string
+
+	// local remembers what loadLocalAgentdAsset made of each local
+	// directory's assets, so the open routes re-read and re-hash a binary
+	// only when its files (or the pinned key) change, not on every request.
+	localMu sync.Mutex
+	local   map[string]localAgentdAsset
+}
+
+// localAgentdAsset is one local verification result and the state it was
+// made from.
+type localAgentdAsset struct {
+	stamp string
+	entry cachedAgentdRelease
+	ok    bool
+}
+
+func (s *Server) handleHostdAgentdBinary(w http.ResponseWriter, r *http.Request) {
+	s.serveHostdAgentdRelease(w, r, false)
+}
+
+func (s *Server) handleHostdAgentdManifest(w http.ResponseWriter, r *http.Request) {
+	s.serveHostdAgentdRelease(w, r, true)
+}
+
+func (s *Server) serveHostdAgentdRelease(w http.ResponseWriter, r *http.Request, wantManifest bool) {
+	// Hold bearer access-code guesses to s.access just as handleHostdInstallScript
+	// does on the open install routes.
+	_ = s.hostdInstallCallerHasAccess(r)
+
+	platform := r.PathValue("os") + "/" + r.PathValue("arch")
+	if !slices.Contains(agentdrelease.Platforms, platform) {
+		http.NotFound(w, r)
+		return
+	}
+	entry, ok := s.resolveAgentdRelease(r.Context(), platform)
+	if !ok {
+		http.Error(w, "no grain-agentd release asset available for "+platform, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Grain-Agentd-Version", entry.manifest.Version)
+	w.Header().Set("X-Grain-Agentd-SHA256", entry.manifest.SHA256)
+
+	if wantManifest {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(len(entry.manifestJSON)))
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_, _ = w.Write(entry.manifestJSON)
+		return
+	}
+
+	f, err := os.Open(entry.binaryPath)
+	if err != nil {
+		http.Error(w, "grain-agentd binary unavailable", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() != entry.manifest.Size {
+		http.Error(w, "grain-agentd binary unavailable", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", entry.manifest.Asset))
+	w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	_, _ = io.Copy(w, f)
+}
+
+func (s *Server) resolveAgentdRelease(ctx context.Context, platform string) (cachedAgentdRelease, bool) {
+	dirs := agentdLocalDirs()
+	// 1. Prefer a local directory carrying a signed, verified manifest + binary.
+	for _, dir := range dirs {
+		if entry, ok := s.agentdRelease.loadLocal(dir, platform, true); ok {
+			return entry, true
+		}
+	}
+
+	// 2. When the daemon knows its release and upstream fetching is enabled,
+	// fetch and verify the signed release manifest + binary once from the
+	// release URL so hosts without internet access receive the signed release.
+	// An unsigned upstream release is refused rather than hash-checked.
+	if rel := cliInstallRelease(); rel != "" {
+		if base := agentdReleaseBaseURL(); base != "" && base != "off" {
+			if entry, ok := s.fetchAndCacheAgentdRelease(ctx, base, rel, platform); ok {
+				return entry, true
+			}
+		}
+	}
+
+	// 3. Fall back to a bundled local binary + hash-verified manifest (for
+	// example /usr/local/share/grain/agentd inside an offline controller image).
+	for _, dir := range dirs {
+		if entry, ok := s.agentdRelease.loadLocal(dir, platform, false); ok {
+			return entry, true
+		}
+	}
+	return cachedAgentdRelease{}, false
+}
+
+func agentdLocalDirs() []string {
+	if env := strings.TrimSpace(os.Getenv(agentdDistDirEnv)); env != "" {
+		return []string{env}
+	}
+	dirs := []string{defaultAgentdDistDir}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "agentd"))
+	}
+	return dirs
+}
+
+func agentdReleaseBaseURL() string {
+	if u := strings.TrimSpace(os.Getenv(agentdReleaseURLEnv)); u != "" {
+		if u == "off" {
+			return "off"
+		}
+		u = strings.TrimRight(u, "/")
+		if cliInstallURLRE.MatchString(u) {
+			return u
+		}
+		return ""
+	}
+	if u := strings.TrimSpace(os.Getenv(cliReleaseURLEnv)); u != "" {
+		u = strings.TrimRight(u, "/")
+		if cliInstallURLRE.MatchString(u) {
+			return u
+		}
+		return ""
+	}
+	return defaultCLIReleaseURL
+}
+
+func controllerPinnedAgentdKey() ([]byte, error) {
+	if raw := strings.TrimSpace(os.Getenv(agentdReleasePublicKeyEnv)); raw != "" {
+		return agentdrelease.ParsePublicKey(raw)
+	}
+	return agentdrelease.EmbeddedPublicKey()
+}
+
+// loadLocal is loadLocalAgentdAsset, answered from c.local while the
+// manifest, the binary and the pinned key are as they were when it last ran.
+func (c *agentdReleaseCache) loadLocal(dir, platform string, requireSigned bool) (cachedAgentdRelease, bool) {
+	binName, err := agentdrelease.AssetName(platform)
+	if err != nil {
+		return cachedAgentdRelease{}, false
+	}
+	manifestName, err := agentdrelease.ManifestAssetName(platform)
+	if err != nil {
+		return cachedAgentdRelease{}, false
+	}
+	stamp := os.Getenv(agentdReleasePublicKeyEnv)
+	for _, name := range []string{manifestName, binName} {
+		st, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			return cachedAgentdRelease{}, false
+		}
+		stamp += fmt.Sprintf("|%d|%d", st.Size(), st.ModTime().UnixNano())
+	}
+	key := fmt.Sprintf("%s|%s|%t", dir, platform, requireSigned)
+	c.localMu.Lock()
+	defer c.localMu.Unlock()
+	if cur, ok := c.local[key]; ok && cur.stamp == stamp {
+		return cur.entry, cur.ok
+	}
+	entry, ok := loadLocalAgentdAsset(dir, platform, requireSigned)
+	if c.local == nil {
+		c.local = make(map[string]localAgentdAsset)
+	}
+	c.local[key] = localAgentdAsset{stamp: stamp, entry: entry, ok: ok}
+	return entry, ok
+}
+
+func loadLocalAgentdAsset(dir, platform string, requireSigned bool) (cachedAgentdRelease, bool) {
+	binName, err := agentdrelease.AssetName(platform)
+	if err != nil {
+		return cachedAgentdRelease{}, false
+	}
+	manifestName, err := agentdrelease.ManifestAssetName(platform)
+	if err != nil {
+		return cachedAgentdRelease{}, false
+	}
+	manifestPath := filepath.Join(dir, manifestName)
+	binPath := filepath.Join(dir, binName)
+
+	manifestRaw, err := os.ReadFile(manifestPath)
+	if err != nil || len(manifestRaw) > maxAgentdManifestBytes {
+		return cachedAgentdRelease{}, false
+	}
+	m, err := agentdrelease.ParseManifest(manifestRaw)
+	if err != nil || m.Platform != platform {
+		return cachedAgentdRelease{}, false
+	}
+	if requireSigned && m.Signature == "" {
+		return cachedAgentdRelease{}, false
+	}
+	if st, err := os.Stat(binPath); err != nil || st.Size() != m.Size || st.Size() > maxAgentdBinaryBytes {
+		return cachedAgentdRelease{}, false
+	}
+	binBytes, err := os.ReadFile(binPath)
+	if err != nil {
+		return cachedAgentdRelease{}, false
+	}
+	if m.Signature != "" {
+		pinnedPub, err := controllerPinnedAgentdKey()
+		if err != nil {
+			return cachedAgentdRelease{}, false
+		}
+		if _, err := agentdrelease.VerifyBinary(m, binBytes, pinnedPub); err != nil {
+			return cachedAgentdRelease{}, false
+		}
+	} else {
+		if err := agentdrelease.VerifyBinaryHash(m, binBytes); err != nil {
+			return cachedAgentdRelease{}, false
+		}
+	}
+	return cachedAgentdRelease{
+		manifestJSON: manifestRaw,
+		manifest:     m,
+		binaryPath:   binPath,
+	}, true
+}
+
+func (s *Server) fetchAndCacheAgentdRelease(ctx context.Context, baseURL, rel, platform string) (cachedAgentdRelease, bool) {
+	key := baseURL + "|" + rel + "|" + platform
+	c := &s.agentdRelease
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]cachedAgentdRelease)
+	}
+	if cur, ok := c.entries[key]; ok {
+		if cur.binaryPath != "" {
+			if st, err := os.Stat(cur.binaryPath); err == nil && st.Size() == cur.manifest.Size {
+				return cur, true
+			}
+		}
+		if !cur.failedAt.IsZero() && time.Since(cur.failedAt) < agentdFetchBackoff {
+			return cachedAgentdRelease{}, false
+		}
+	}
+
+	binName, _ := agentdrelease.AssetName(platform)
+	manifestName, _ := agentdrelease.ManifestAssetName(platform)
+	prefix := strings.TrimRight(baseURL, "/") + "/" + rel + "/"
+
+	manifestRaw, err := fetchBoundedURL(ctx, prefix+manifestName, maxAgentdManifestBytes, 15*time.Second)
+	if err != nil {
+		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+		return cachedAgentdRelease{}, false
+	}
+	m, err := agentdrelease.ParseManifest(manifestRaw)
+	if err != nil || m.Platform != platform || m.Version != rel {
+		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+		return cachedAgentdRelease{}, false
+	}
+	binBytes, err := fetchBoundedURL(ctx, prefix+binName, maxAgentdBinaryBytes, 60*time.Second)
+	if err != nil {
+		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+		return cachedAgentdRelease{}, false
+	}
+	// What comes from the network is served only signed by the pinned
+	// key: an unsigned manifest's hash vouches for nothing, since it
+	// arrived beside the binary it describes.
+	pinnedPub, err := controllerPinnedAgentdKey()
+	if err != nil {
+		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+		return cachedAgentdRelease{}, false
+	}
+	if _, err := agentdrelease.VerifyBinary(m, binBytes, pinnedPub); err != nil {
+		c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+		return cachedAgentdRelease{}, false
+	}
+
+	// A directory of this process's own, so nobody else sharing the temp
+	// directory can plant or swap the binary served from it.
+	if c.dir == "" {
+		dir, err := os.MkdirTemp("", "grain-agentd-release-cache-")
+		if err != nil {
+			c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+			return cachedAgentdRelease{}, false
+		}
+		c.dir = dir
+	}
+	cacheDir := c.dir
+	binPath := filepath.Join(cacheDir, m.SHA256+"-"+binName)
+	if st, err := os.Stat(binPath); err != nil || st.Size() != m.Size {
+		tmp := fmt.Sprintf("%s.tmp.%d", binPath, os.Getpid())
+		if err := os.WriteFile(tmp, binBytes, 0o600); err != nil {
+			c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+			return cachedAgentdRelease{}, false
+		}
+		if err := os.Rename(tmp, binPath); err != nil {
+			_ = os.Remove(tmp)
+			c.entries[key] = cachedAgentdRelease{failedAt: time.Now()}
+			return cachedAgentdRelease{}, false
+		}
+	}
+	entry := cachedAgentdRelease{
+		manifestJSON: manifestRaw,
+		manifest:     m,
+		binaryPath:   binPath,
+	}
+	c.entries[key] = entry
+	return entry, true
+}
+
+func fetchBoundedURL(ctx context.Context, rawURL string, maxBytes int64, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: status %d", rawURL, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("GET %s exceeded %d bytes", rawURL, maxBytes)
+	}
+	return body, nil
 }

@@ -42,9 +42,12 @@ Every agent grain dispatches into this repository can edit these files.
 So a workflow must never be able to widen what anything is allowed to
 do: a job's sandbox gets no credential or capability material except the
 capabilities configured for that repository, and *whether* grain CI runs
-for a repository at all is a decision made outside the repository -- the
-`grain-ci` capability, which an operator attaches per task, per repo or
-deployment-wide (`pkg/capability/grainci`). What a workflow can spend is
+for a repository at all is a decision made outside the repository -- its
+CI mode (`ci_mode: grain`), an operator's setting on the repository, from
+which grain grants the repository's tasks
+`https://grain.dev/capabilities/grain#ci` (formerly `grain-ci`); nobody
+attaches that grant by hand (`model.applyGrainCIGrant`,
+`pkg/capability/grainci`). What a workflow can spend is
 sandbox time and outbound network access, in a sandbox where the agent
 that could have edited the file was already running whatever commands it
 liked. Open egress matches a GitHub-hosted runner; the security boundary
@@ -61,7 +64,8 @@ parse error naming the key and the reason (`pkg/declschema`'s
 A job here *may* name a capability, and that is not a hole in the
 paragraph above (grain/task-486). `capabilities:` and `secrets:` on a
 job say what its steps cannot run without -- a requirement, not a grant.
-Writing `package-publish` into a workflow file produces no credential:
+Writing `https://grain.dev/capabilities/release#package-publish` into a
+workflow file produces no credential:
 it makes that job refuse to run, in those words, on any deployment whose
 row for this repository does not already offer it. What it buys is that
 the failure names the missing grant instead of surfacing minutes later
@@ -69,9 +73,10 @@ inside an unrelated step, and that the other six jobs of the suite still
 run.
 
 Two jobs here declare, and no others (grain/task-541):
-`release.yml:images` and `image.yml:guest-cache` name `package-publish`,
+`release.yml:images` and `image.yml:guest-cache` name `release#package-publish`,
 because each is an hour or more of building whose only point is the push
-at the end of it. (`live-agent.yml:live-agy` named `gemini-key` until the
+at the end of it. (`live-agent.yml:live-agy` named `gemini-key`, since retired onto
+`gcp#gemini-key`, until the
 live suites moved to `.github/workflows/`, where their keys are secrets of
 the `live-models` environment; see docs/github-actions-ci.md.)
 Nothing in `workflows/tests.yml` names anything: that file began as
@@ -95,7 +100,7 @@ thing that cannot be allowed to depend on which of them held. The second
 is that it had already gone wrong. At 18:52 UTC on 20 Sep 2026 an
 operator switched declarations on for this repository, the settings file
 was applied against a row nobody had read into it, and a reviewed merge
-took `gemini-key` off the CI set and blanked the job that fills the
+took `gemini-key` (now the retired name of `gcp#gemini-key`) off the CI set and blanked the job that fills the
 sandbox guest cache; `main` moved about fifteen times before anybody
 noticed (grain/task-460, 483, 464).
 
@@ -113,8 +118,9 @@ and the `post-merge-dispatch-jobs` entry all at once. The guest cache
 stopped following `main` from the very next reconcile cycle
 (`orchestrator.startDueBaseBranchDispatch` skips a repository naming no
 jobs, silently), and no release started either, because a repository
-with no `grain-ci` in its defaults is one `grainCIEnabledForRepo`
-answers false for. `main` moved about twenty times over the next twelve
+with no `grain-ci` in its defaults (the retired grant `grain#ci`
+replaced, which then switched grain CI on) is one `grainCIEnabledForRepo`
+answered false for. `main` moved about twenty times over the next twelve
 hours before anybody asked why (grain/task-514).
 
 `deleteDeclared` now takes back the two fields the file may write and
@@ -132,8 +138,10 @@ So the values that file used to carry live in this repository's
 `repo_config` row, and only there. If this repository's CI, publishing
 or guest cache is ever mysteriously reconfigured, that row is what to
 read -- through grain's Repos pane, or `tables/repo_config.json` in
-`grain/config` -- and it should hold `grain-ci` as a task capability,
-`package-publish` and `gemini-key` as CI capabilities, `ignore-github-ci`
+`grain/config` -- and it should hold `ci_mode: grain` (which grants its
+tasks `grain#ci`),
+`https://grain.dev/capabilities/release#package-publish` as a CI
+capability, `ignore-github-ci`
 and `watch-default-branch` set, `work_overrides` holding `release=off`
 (this is what `release-workflows-disabled` became in grain/task-486 --
 the release is one work item this deployment does not run, rather than a
@@ -148,8 +156,8 @@ operator's row.
 Checking that it holds them is not something most work here can do. A
 task sandbox scoped to this repository can read neither the row nor
 `grain/config`; both answer `403 ... is not in scope for this sandbox`,
-which wants either `self-debug` or a grant nothing in this repository
-confers. That is inconvenient exactly when it matters, because the
+which wants either `https://grain.dev/capabilities/api#self-debug` or a
+grant nothing in this repository confers. That is inconvenient exactly when it matters, because the
 window in which somebody wants to know is the window in which the row
 is wrong.
 
@@ -165,11 +173,12 @@ row:
   cost narrowing rather than the default.
 - `work_overrides` holding `release=off`: no `release images` runs for
   `main` while `main` is moving.
-- `gemini-key`: no grain CI workflow here asks for it any more; the
-  live agy suite is `.github/workflows/live-agent.yml`, keyed from the
-  `live-models` environment.
-- `grain-ci` in the task defaults: a task filed with nothing granted to
-  it by hand can start CI at all.
+- `gcp#gemini-key` (formerly `gemini-key`): no grain CI workflow here
+  asks for it any more, so the row need not hold it; the live agy suite
+  is `.github/workflows/live-agent.yml`, keyed from the `live-models`
+  environment.
+- `ci_mode: grain`: a task filed with nothing granted to it by hand holds
+  `grain#ci` and can start CI at all.
 - the post-merge dispatch job: `sandbox guest cache` runs for `main`, a
   few merges apart. One dispatch is in flight at a time and the next
   starts against the tip as it then stands, so it follows `main` rather
@@ -182,12 +191,12 @@ CI job that resolves a sandbox guest goes back to building a ~1GB one
 inline, an hour later, in the middle of somebody else's suite. It also
 has two sources rather than one.
 `pkg/model.EffectivePostMergeDispatchJobs` adds the guest cache job to
-whatever the row names when releases are off, `package-publish` is on
+whatever the row names when releases are off, `release#package-publish` is on
 the CI set and this deployment runs a guest this repository publishes --
 so no `sandbox guest cache` runs at all means both that the row does not
 name the job and that one of those three does not hold.
 
-`package-publish` is the one value with no symptom of its own, which is
+`release#package-publish` is the one value with no symptom of its own, which is
 worth knowing rather than hunting for: grain places its material only
 for a release or a dispatch and never for a push, so no job a branch can
 start will report whether it is granted. It shows up indirectly, as the
@@ -196,15 +205,16 @@ guest cache not following `main` even where the row names the job.
 Read the other way round, this list is what the incident above looked
 like from a branch while it was happening. grain/task-505 read it that
 way at about 16:00 UTC on 21 Sep, while the row was partly restored:
-`grain-ci` in the defaults, `watch-default-branch`, the whole push plan
-over `main`, `gemini-key` and `release=off` all held, and the dispatch
+`grain-ci` (the retired spelling of `grain#ci`) in the defaults,
+`watch-default-branch`, the whole push plan over `main`, `gemini-key`
+and `release=off` all held, and the dispatch
 job did not -- `sandbox guest cache` had run on `main` six times between
 23:53 UTC on 20 Sep and 03:55 UTC on 21 Sep, and not once in the twelve
 hours after 04:42, which is the withdrawal above to the minute. It was
 dispatching again by 22:00 UTC the same day.
 
-The publishing capabilities -- `package-publish`, which places this
-deployment's own GitHub credential for the repository, and `registry-push`,
+The publishing capabilities -- `release#package-publish`, which places this
+deployment's own GitHub credential for the repository, and `release#registry-push`,
 which places a registry secret an operator pasted -- are narrower again. Grain
 materializes either only for the trusted `release` event it creates after
 observing a merge, never for a caller-created run, pull request, or ordinary

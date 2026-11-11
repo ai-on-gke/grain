@@ -340,8 +340,11 @@ fields:                            # optional; the inputs it asks for when filed
     default: staging               #   optional; what an unattended firing uses
     required: false                #   optional; only asked of whoever fills the form
 capabilities:                      # optional; capabilities and repository access
-  - repo-read:acme/upstream        #   the filed task may fetch acme/upstream
-  - repo-write:acme/downstream     #   ...and push its own branch to acme/downstream
+  - {capability: "https://grain.dev/capabilities/repo#read", with: {repo: acme/upstream}}
+                                   #   the filed task may fetch acme/upstream
+  - {capability: "https://grain.dev/capabilities/repo#write", with: {repo: acme/downstream}}
+                                   #   ...and push its own branch to acme/downstream
+                                   #   (formerly repo-read:<repo> / repo-write:<repo>)
   - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
                                    #   capabilities bounded by the filing team
                                    #   (formerly gcp-key, retired in schema migration 97)
@@ -359,13 +362,14 @@ section says about `capabilities:` holds for `grants:` as well.
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
 `.grain/templates/<name>.yml` and `.grain/schedules/<name>.yml` may declare
-any capability the team is allowed to hold, as well as `repo-read:<owner>/<repo>`
-and `repo-write:<owner>/<repo>` on templates.
+any capability the team is allowed to hold, as well as repository access
+(`https://grain.dev/capabilities/repo#read` / `#write` `{repo: <owner>/<repo>}`,
+formerly `repo-read:<owner>/<repo>` / `repo-write:<owner>/<repo>`) on templates.
 
 **Team boundary.** A declared capability cannot grant what the filing team is not
 authorized to have. The team the task runs under is the bound: each capability's
 own `CapabilitySpec.AuthorizedTeams`, plus team-scoped capabilities (such as a
-team-scoped `self-debug` and `api:pipeline-control`). A named GCP key,
+team-scoped `…/api#self-debug` and `…/api#pipeline-control`). A named GCP key,
 `…/gcp#gcp-key` `{permission_set: <name>}` (formerly `gcp-key:<name>`, retired in
 schema migration 97), is the deployment's since single-tenant reset stage 4e, and is dropped only when the
 deployment has no key of that name ([GCP keys](team-gcp-keys.md)).
@@ -377,9 +381,10 @@ requesting unauthorized capabilities:
   naming the stripped capabilities and the filing team.
 
 **Repository access.** For repository access on templates,
-`repo-read:<owner>/<repo>` and `repo-write:<owner>/<repo>` are allowed:
-- Each `repo-read:` becomes one of the template's `reads` and each
-  `repo-write:` one of its `writes` (default branch). Every task filed from
+`repo#read` and `repo#write` `{repo: <owner>/<repo>}` are allowed (and their
+retired spellings `repo-read:<owner>/<repo>` / `repo-write:<owner>/<repo>`):
+- Each `repo#read` becomes one of the template's `reads` and each
+  `repo#write` one of its `writes` (default branch). Every task filed from
   the template carries them, so the git proxy lets that task's sandbox fetch
   the repositories it reads, and push its own task branch to the ones it writes.
 - The proxy clones and pushes a task's work with the filing team's own credential
@@ -556,6 +561,8 @@ overlap: skip                      # optional; "skip" (default) or "allow"; "ski
                                    # `overlap-group: sync-oss-release` beside `overlap: skip` says the same
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
 grain-ci: true                     # optional, workflow: only; run on grain CI even when ci_mode is github
+skip-when: publishing-held         # optional; hold firings while this base branch's publishing is held
+                                   # by a release triage task (see "Holding while publishing is held")
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
 admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
 hosting: console                   # optional; raises the template's own to console; refused with suite:
@@ -653,6 +660,36 @@ overlap group "sync-oss-release" is still open (running)`.
 A settings-owned schedule row carries the same `overlap-group:` key
 (`settings/schedules.yml`, `overlapGroup` on `POST`/`PATCH
 /api/schedules`).
+
+#### Holding while publishing is held: `skip-when:`
+
+grain/task-4393. `skip-when: publishing-held` holds a schedule's firings
+while publishing from the base branch it fires into is held: deployment
+health's `baseBranchPublishing` finding for that repository and branch
+is `gated`, with a release triage task open on it ("Further releases on
+this branch are held pending resolution of triage task N"). It is for
+work that can do nothing useful until publishing works again -- the
+release train cuts only from a commit whose release published, and on
+2026-11-10 it woke 45 times in a day to find that out.
+
+```yaml
+skip-when: publishing-held
+```
+
+A held firing is recorded like an overlap skip, as `skipped at <time>:
+publishing held by task N (...)`, and the schedules page says the same
+while it lasts. It is held, not dropped: the cadence stays where it was,
+and the first cycle after the triage task closes fires it once, standing
+in for the occurrences that came round meanwhile. Run now is never held.
+A `github_workflow_run` trigger's firing has no occurrence to hold, so it
+is dropped and recorded. `publishing-held` is the only condition; any
+other value is refused. Settings rows carry the same key
+(`settings/schedules.yml`).
+
+A daemon older than this key refuses a schedule file that says it, and a
+repository with a refused declaration keeps its last good commit's
+declarations, so declare it only once every daemon that reads the
+repository understands it.
 
 ### `.grain/triggers/<name>.yml`
 

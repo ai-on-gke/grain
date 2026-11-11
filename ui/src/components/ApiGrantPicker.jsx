@@ -236,7 +236,7 @@ export default function ApiGrantPicker({
             onChange={setRepo}
             helperText={
               repo
-                ? `A tick grants it on ${repo} only (api:<scope>@${repo}).`
+                ? `A tick grants it on ${repo} only (with: {repo: ${repo}}).`
                 : "A tick grants it on every repository."
             }
             sx={{ mt: 1.5 }}

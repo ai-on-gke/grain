@@ -170,6 +170,14 @@ func (k ScheduleSkip) Why() string {
 		return "the schedule is paused"
 	case SkippedTeamArchived:
 		return "the schedule's team is archived"
+	case SuppressedByPublishingHeld:
+		if k.Detail != "" {
+			return k.Detail
+		}
+		if k.TaskID != "" {
+			return "publishing held by task " + k.TaskID
+		}
+		return "publishing held"
 	case SkippedFiringFailed:
 		if k.Detail != "" {
 			return "firing failed: " + k.Detail

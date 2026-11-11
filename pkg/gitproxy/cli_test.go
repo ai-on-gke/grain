@@ -95,7 +95,7 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("ci runs without grain-ci: %d %s", rec.Code, rec.Body)
 	}
-	for _, want := range []string{"`grain ci wait`", "`grain pr open`", "api:ci-read@bwsalmon/grain", "api#ci-read"} {
+	for _, want := range []string{"`grain ci wait`", "`grain pr open`", `api#ci-read with {repo: "bwsalmon/grain"}`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("ci runs without grain-ci: %s does not name %q", rec.Body, want)
 		}

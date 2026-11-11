@@ -406,7 +406,7 @@ func newForgeClient(cfg Config, store *model.Store, credentials *gitproxy.Creden
 func newForgeClientOver(def github.Transport, defHost string, store *model.Store, credentials *gitproxy.CredentialSet) (*github.RESTClient, credentialTokenSource) {
 	hostOf := storeRepoHosts(store)
 	tokens := credentialTokenSource{credentials: credentials, teamCredential: repoTeamCredential(store),
-		hostOf: hostOf}
+		hostOf: hostOf, mergeCredential: repoMergeCredential(store)}
 	router := &forgeRouter{def: def, defHost: defHost, transportFor: tokens.forgeTransport, hostOf: hostOf,
 		viaCommand: tokens.forgeViaCommand}
 	return github.NewClient(router, tokens), tokens

@@ -127,7 +127,7 @@ func (s *Server) handleTaskDBQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !taskHasDBRead(task) {
-		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability %s (db-read or db-write)", taskID, model.GrainSQLRef))
+		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability %s (with write false or true)", taskID, model.GrainSQLRef))
 		return
 	}
 	if s.tasks.Config.SourceDB == nil {
@@ -255,7 +255,7 @@ func (s *Server) handleTaskDBExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !taskHasDBWrite(task) {
-		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability %s (db-write)", taskID, model.GrainSQLWriteGrant))
+		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability %s", taskID, model.GrainSQLWriteGrant))
 		return
 	}
 	if s.tasks.Config.SourceDB == nil {

@@ -44,6 +44,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/mergelogins"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -142,6 +143,11 @@ type Config struct {
 	// ladder is configured, even if empty; nil when unconfigured). Used by
 	// Settings -> GitHub tokens and per-client repo#credential validation.
 	OfferedGitCredentials []string
+	// MergeLoginWarnings is the reviewed-merge logins that belong to a
+	// user account (pkg/mergelogins), for GET /api/sandboxes' and `grain
+	// health`'s warning. nil -- a deployment with no forge client -- says
+	// nothing.
+	MergeLoginWarnings func(context.Context) []mergelogins.Warning
 	// LocalScriptApprovals is where a run's local-script calls wait for a
 	// person (LocalScriptApprovals). nil gives the server one of its own,
 	// which is all a single daemon needs: the runs that post to it and
@@ -1295,7 +1301,10 @@ type SettingsHistoryReader interface {
 	// an error -- a repository seeded this minute has no history and that
 	// is not a failure -- and an error here is a report without its
 	// changes section rather than no report at all (Client.Metrics).
-	SettingsChanges(ctx context.Context, since time.Time) ([]metrics.SettingsChange, error)
+	//
+	// reaches is how far back the reader actually got -- the moment before
+	// which a change might be missing -- or zero if it cannot say.
+	SettingsChanges(ctx context.Context, since time.Time) (changes []metrics.SettingsChange, reaches time.Time, err error)
 }
 
 // LiveTranscript is implemented by whatever can read back a still-running

@@ -93,6 +93,15 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
+	// Reviewed-merge logins a person signs in to: the gate passes every
+	// merge they make by hand as grain's (task 4386).
+	if len(h.MergeLoginWarnings) > 0 {
+		fmt.Println("WARNING: reviewed-merge logins that belong to a user account:")
+		for _, w := range h.MergeLoginWarnings {
+			fmt.Printf("  %s %s: %s\n", w.Repo, w.Login, w.Message)
+		}
+		fmt.Println()
+	}
 	// Schedules that stopped running: a cron that comes due and is
 	// dropped every time looks exactly like one that is fine from
 	// everywhere else (the live model suites, two weeks dark).
@@ -179,7 +188,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.StaleSchedules) == 0 && len(h.RefusedDeclarations) == 0 {
+		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.MergeLoginWarnings) == 0 && len(h.StaleSchedules) == 0 && len(h.RefusedDeclarations) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return

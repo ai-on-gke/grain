@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/mergelogins"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -557,6 +558,12 @@ type SandboxHealthResponse struct {
 	// resolve to the default git host while matching repositories reachable
 	// only through a non-default-host git connection.
 	TargetRepoHostWarnings []TargetRepoHostMismatch `json:"targetRepoHostWarnings,omitempty"`
+	// MergeLoginWarnings lists the logins a reviewed-merge gate trusts
+	// as grain's merges (vars.GRAIN_MERGE_LOGINS,
+	// -upgrade-reviewed-merge-logins) that are user accounts somebody
+	// signs in to, whose own hand merges therefore pass the gate
+	// (Config.MergeLoginWarnings, task 4386).
+	MergeLoginWarnings []mergelogins.Warning `json:"mergeLoginWarnings,omitempty"`
 	// Registry reports the deployment's connected-entry grain hub
 	// heartbeat status and any scope conflicts when registry self-registration
 	// is configured; nil when disabled.
@@ -1051,6 +1058,14 @@ func (c *Client) readSandboxHealth(entry *sandboxHealthEntry, stale bool) ([]San
 	return append([]SandboxSnapshot(nil), entry.sandboxes...), &SandboxReading{AgeMS: age.Milliseconds(), Stale: stale}
 }
 
+// mergeLoginWarnings is Config.MergeLoginWarnings, or nothing.
+func (c *Client) mergeLoginWarnings(ctx context.Context) []mergelogins.Warning {
+	if c.Config.MergeLoginWarnings == nil {
+		return nil
+	}
+	return c.Config.MergeLoginWarnings(ctx)
+}
+
 func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) {
 	// ?section=counters is only the layers' counters, which System →
 	// Health re-reads while it is open: an in-memory read that must not
@@ -1090,6 +1105,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
 			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
 			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+			MergeLoginWarnings:     s.tasks.mergeLoginWarnings(r.Context()),
 			StaleSchedules:         s.tasks.staleSchedules(r.Context()),
 			CIWaits:                s.tasks.ciWaits(r.Context()),
 			RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context())})
@@ -1116,6 +1132,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		CIWaits:                s.tasks.ciWaits(r.Context()),
 		RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context()),
 		TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+		MergeLoginWarnings:     s.tasks.mergeLoginWarnings(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
