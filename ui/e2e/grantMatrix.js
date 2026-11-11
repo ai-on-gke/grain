@@ -46,7 +46,7 @@ export const SURFACES = [
 // them as known rather than failing on them, and once the fix lands the
 // entry is deleted and the cell is held to the same bar as the rest.
 // Only the UI's: the API grants every one of them today.
-export const KNOWN_GAPS = {
+const KNOWN_GAPS = {
   // A top-level oneOf draws no fields and says the arguments "match
   // none" (grain/task-4400, in review).
   "https://grain.dev/capabilities/repo#write *": "#4400",
@@ -57,14 +57,27 @@ export const KNOWN_GAPS = {
   // Its one-value credential select did not take the pick within 5s on
   // the task pane (2026-11-11 run; follow-up filed from grain/task-4401).
   "https://grain.dev/capabilities/repo#credential *": "4401 follow-up",
-  // The grain/* api presets are not listed by Add grant… on a task pane
-  // though GET /api/capability-methods offers them (follow-up filed from
-  // grain/task-4401).
-  "https://grain.dev/capabilities/api#grain/viewer *": "4401 follow-up",
+  // Picked but never held, or the menu did not take the pick, on the
+  // task pane (2026-11-11 run; follow-up filed from grain/task-4401).
+  "https://grain.dev/capabilities/api#ci:read *": "4401 follow-up",
+  "https://grain.dev/capabilities/api#memory *": "4401 follow-up",
+  "https://grain.dev/capabilities/repo#read *": "4401 follow-up",
 };
 
+// KNOWN_GAP_PREFIXES are KNOWN_GAPS for every method under a prefix.
+const KNOWN_GAP_PREFIXES = [
+  // The grain/* api presets GET /api/capability-methods lists are not
+  // offered by Add grant… on a task pane (2026-11-11 run; follow-up
+  // filed from grain/task-4401).
+  ["https://grain.dev/capabilities/api#grain/", "4401 follow-up"],
+];
+
 export function knownGap(ref, variant) {
-  return lookup(KNOWN_GAPS, ref, variant) || "";
+  return (
+    lookup(KNOWN_GAPS, ref, variant) ||
+    KNOWN_GAP_PREFIXES.find(([prefix]) => ref.startsWith(prefix))?.[1] ||
+    ""
+  );
 }
 
 // KNOWN_API_GAPS are the API's own: cells where POST
@@ -72,7 +85,7 @@ export function knownGap(ref, variant) {
 // refuse, so a form that trusts the check is told otherwise only on save.
 // The refusals themselves are grant semantics and stay; the gap is the
 // check not saying so, and the wording.
-export const KNOWN_API_GAPS = {
+const KNOWN_API_GAPS = {
   // A task's repository is its target (repo#target, repo#write {repo,
   // base}), given through the task's repository rather than its
   // capabilities, but the capabilities routes refuse it as "unknown
@@ -97,7 +110,7 @@ export function knownAPIGap(ref, variant) {
 // carry, because they are grain's own rule for one spelling of it rather
 // than the policy's: the cell passes when the task surfaces refuse it
 // with this message, and fails if they grant it.
-export const EXPECTED_REFUSALS = {
+const EXPECTED_REFUSALS = {
   // grain#ci follows the repository's CI Mode and is never attached by
   // hand (grainci.Refusal; grain/task-4361, grain/task-4364).
   "https://grain.dev/capabilities/grain#ci *": /CI Mode/,
@@ -153,7 +166,7 @@ export function deref(root, s, depth = 0) {
 const SECRET_NAME =
   /(secret|token|passw(or)?d|passphrase|credential|private[_-]?key|api[_-]?key|access[_-]?key|bearer)/i;
 
-export function isSecret(name, s) {
+function isSecret(name, s) {
   if (s?.writeOnly === true || s?.format === "password") return true;
   if (Array.isArray(s?.enum) && s.enum.length > 0) return false;
   if (Array.isArray(s?.items?.enum) && s.items.enum.length > 0) return false;
@@ -184,7 +197,7 @@ function stringValue(s) {
 
 // valueFor is a valid value for s. full fills optional properties of
 // nested objects too; required-only otherwise.
-export function valueFor(root, schema, full = false) {
+function valueFor(root, schema, full = false) {
   const s = deref(root, schema) || {};
   if ("const" in s) return s.const;
   if (Array.isArray(s.enum)) return s.enum[0];
