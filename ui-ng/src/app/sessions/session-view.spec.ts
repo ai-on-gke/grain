@@ -135,6 +135,11 @@ describe("messages", () => {
     expect(ok).toContain('href="https://grain.dev/x"');
     expect(ok).toContain('target="_blank"');
     expect(ok).toContain('rel="noopener noreferrer"');
+    // The Director links tasks on this server: kept, opened in place.
+    const local = renderMarkdown("[Task #11](/tasks/11)");
+    expect(local).toContain('href="/tasks/11"');
+    expect(local).not.toContain("target=");
+    expect(renderMarkdown("[x](//evil.example/a)")).not.toContain("href");
     const bad = renderMarkdown("[click](javascript:alert(1))");
     expect(bad).not.toContain("href");
     expect(bad).toContain("click");

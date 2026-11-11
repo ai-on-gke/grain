@@ -190,15 +190,21 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// safeHref keeps http(s) and mailto links and drops everything else
-// (javascript:, data:, relative paths that would navigate this app).
+// safeHref keeps http(s) and mailto links, and paths on this server
+// (the Director links tasks as /tasks/11); everything else is dropped
+// (javascript:, data:, protocol-relative //host).
 export function safeHref(href: string): string | null {
+  if (href.startsWith("/") && !href.startsWith("//")) return href;
   try {
     const u = new URL(href);
     return ["http:", "https:", "mailto:"].includes(u.protocol) ? u.href : null;
   } catch {
     return null;
   }
+}
+
+function isLocal(href: string): boolean {
+  return href.startsWith("/");
 }
 
 // Raw HTML in a message is shown as text, so a message can only ever
@@ -218,7 +224,11 @@ const md = new Marked({
       const safe = safeHref(href);
       if (!safe) return label;
       const t = title ? ` title="${escapeHtml(title)}"` : "";
-      return `<a href="${escapeHtml(safe)}"${t} target="_blank" rel="noopener noreferrer">${label}</a>`;
+      // Links on this server open in place; others in a new tab.
+      const tab = isLocal(safe)
+        ? ""
+        : ' target="_blank" rel="noopener noreferrer"';
+      return `<a href="${escapeHtml(safe)}"${t}${tab}>${label}</a>`;
     },
     image({ href, text }) {
       const safe = safeHref(href);
