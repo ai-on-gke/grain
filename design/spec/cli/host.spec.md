@@ -257,7 +257,7 @@ _No flags._
 ### 3.6 `grain defer`, `comment`, `close`/`delete`, `reopen` {#CLI-27}
 
 - `defer <id>` calls `POST /api/tasks/{id}/defer`.
-- `comment <id> <body…>` calls `POST /api/tasks/{id}/comments`. Every word after the id is the body, and a flag written after the id is refused.
+- `comment <id> <body…>` calls `POST /api/tasks/{id}/comments`. Every word after the id is the body, and a flag written after the id is refused. On a closed task the comment reaches no agent, and the command says so on stderr; `-reopen` sends `{"reopen": true}`, which reopens the task with the comment so a run is queued to answer it.
 - `close <id>` (alias `delete`) calls `POST /api/tasks/{id}/close`. `-close-pull-request` also closes the open pull request unmerged, and `-reason` is kept in history.
 - `reopen <id>` calls `POST /api/tasks/{id}/reopen` with `{"reason"}`.
 
@@ -271,6 +271,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-attach` | value |  |  | path to a local file to attach to the comment (repeatable) |
+| `-reopen` | bool |  |  | reopen the task if it is closed, so the comment reaches an agent (a comment on a closed task otherwise reaches none) |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain close -->

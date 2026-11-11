@@ -267,9 +267,9 @@ function clone(v) {
 }
 
 // initialValue is what a fresh field starts at: its default, a const's
-// one value, an object's defaults, a variant's first option's, or
-// undefined (left out of with:).
-export function initialValue(root, schema, nested = false) {
+// one value, an object's defaults, a required array's [], a variant's
+// first option's, or undefined (left out of with:).
+export function initialValue(root, schema, nested = false, required = false) {
   const s = deref(root, schema);
   if (!s) return undefined;
   if ("default" in s) return clone(s.default);
@@ -277,24 +277,32 @@ export function initialValue(root, schema, nested = false) {
   const kind = fieldKind(s);
   if (kind === "object") {
     const out = {};
+    const req = new Set(s.required || []);
     for (const [name, sub] of Object.entries(s.properties || {})) {
       const propSchema = deref(root, sub);
       if (isHiddenProperty(name, propSchema)) continue;
       if (isSecretLooking(name, propSchema)) continue;
-      const v = initialValue(root, sub, true);
+      const v = initialValue(
+        root,
+        sub,
+        true,
+        (!nested || required) && req.has(name),
+      );
       if (v !== undefined) out[name] = v;
     }
-    // A nested object with nothing to start from is left out, so an
-    // optional one is not granted as {}; the arguments themselves are
-    // always an object.
-    if (nested && Object.keys(out).length === 0) return undefined;
+    // A nested object with nothing to start from is left out unless it is
+    // required, so an optional one is not granted as {}; the arguments
+    // themselves are always an object.
+    if (nested && !required && Object.keys(out).length === 0) return undefined;
     return out;
   }
-  if (kind === "array") return s.minItems ? [] : undefined;
+  if (kind === "array") return required ? [] : undefined;
   // An argument that is one of several kinds starts unset, for whoever
   // fills it in to pick; picking one (nested false) starts that kind.
   if (kind === "variant")
-    return nested ? undefined : initialValue(root, (s.oneOf || s.anyOf)[0]);
+    return nested
+      ? undefined
+      : initialValue(root, (s.oneOf || s.anyOf)[0], false, required);
   return undefined;
 }
 

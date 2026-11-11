@@ -116,3 +116,64 @@ func TestRepositoryAddsAndRemovesRoundTripThroughTheStateRepository(t *testing.T
 		t.Fatalf("the re-added repository brought old settings back: %+v, %v", rc, err)
 	}
 }
+
+// grain/task-4288: a removed repository's qualification plan -- settings
+// the state repository carries (SettingsTables) -- is gone on the
+// importing side too, so neither a restart that re-imports nor an
+// upgrade brings the plan back to a repository re-added later.
+func TestARemovedRepositorysQualificationPlanDoesNotComeBackThroughTheStateRepository(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	src, srcDB := openDB(t)
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	if err := src.PutConfig(ctx, model.Config{
+		PollInterval: model.DefaultPollInterval,
+		TargetRepos:  []string{widgets.String(), gadgets.String()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, repo := range []model.RepoRef{widgets, gadgets} {
+		if err := src.PutQualificationPlan(ctx, model.QualificationPlan{Repo: repo, Configured: true,
+			RequireApproval: true, Items: []model.QualificationItem{{TemplateID: "tpl-soak", Repeat: 2}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	if err := staterepo.Export(ctx, srcDB, dir); err != nil {
+		t.Fatal(err)
+	}
+	dst, dstDB := openDB(t)
+	if err := staterepo.ImportTables(ctx, dstDB, dir, staterepo.SettingsTables); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := dst.GetQualificationPlan(ctx, widgets); err != nil || p == nil || len(p.Items) != 1 {
+		t.Fatalf("imported qualification plan = %+v, %v", p, err)
+	}
+
+	if err := src.ForgetRepo(ctx, widgets); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.UpdateConfig(ctx, func(c *model.Config) error {
+		c.TargetRepos = []string{gadgets.String()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Twice: the second import is the restart, which must not find
+	// anything to put back either.
+	for i := 0; i < 2; i++ {
+		if err := staterepo.Export(ctx, srcDB, dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := staterepo.ImportTables(ctx, dstDB, dir, staterepo.SettingsTables); err != nil {
+			t.Fatal(err)
+		}
+		if p, err := dst.GetQualificationPlan(ctx, widgets); err != nil || p != nil {
+			t.Fatalf("import %d: the removed repository's qualification plan survived: %+v, %v", i+1, p, err)
+		}
+		if p, err := dst.GetQualificationPlan(ctx, gadgets); err != nil || p == nil || len(p.Items) != 1 {
+			t.Fatalf("import %d: the kept repository's qualification plan = %+v, %v", i+1, p, err)
+		}
+	}
+}

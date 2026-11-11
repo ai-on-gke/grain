@@ -208,8 +208,8 @@ func (c *Client) githubSpelling(repo model.RepoRef) (model.RepoRef, bool) {
 // (orchestrator.reconcileTargetRepos, model.OffAllowlistAtDispatchComment).
 //
 // This used to refuse outright while repo had a task still in play, and
-// now reports instead -- Settings.TargetReposStranded, the same answer
-// PUT /api/settings gives for the same act (Store.StrandedByTargetRepos).
+// now reports instead -- POST /api/repos/plan (PlanTargetRepos), which
+// the pane asks before it removes (Store.StrandedByTargetRepos).
 // Two reasons, and the first is that the refusal's premise expired:
 // it was written when nothing on the dispatch path read TargetRepos, so
 // removal really did hide live work rather than stop it, and since
@@ -2129,6 +2129,68 @@ func (s *Server) handleAddTargetRepo(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoveTargetRepo answers DELETE /api/repos/{owner}/{name}: take a
 // repo off a team's targets (?team=, or the default team without one).
+// PlanTargetReposRequest is the body of POST /api/repos/plan: the
+// target repo list an add or a remove is about to leave behind.
+type PlanTargetReposRequest struct {
+	TargetRepos []string `json:"targetRepos"`
+}
+
+// StrandedRepo is one repository a proposed target repo list stops
+// naming, with the work stored against it (model.StrandedWork) and the
+// sentence the Remove and first-Add confirmations show for it.
+type StrandedRepo struct {
+	Repo              string   `json:"repo"`
+	Tasks             []string `json:"tasks,omitempty"`
+	Schedules         []string `json:"schedules,omitempty"`
+	QualificationPlan bool     `json:"qualificationPlan,omitempty"`
+	Summary           string   `json:"summary"`
+}
+
+// TargetReposPlan is what POST /api/repos/plan answers.
+type TargetReposPlan struct {
+	TargetReposStranded []StrandedRepo `json:"targetReposStranded"`
+}
+
+// PlanTargetRepos reports what writing proposed as the deployment's
+// target repo list would strand, without writing it.
+//
+// The repos pane's Remove and the first Add (which narrows an
+// unrestricted deployment to one repository) both confirm with this.
+// Until grain/task-4288 they asked POST /api/settings/plan for it. That
+// route lost targetRepos when the list moved under /api/repos, so the
+// question always failed and the confirmation never named the tasks,
+// schedules and qualification plan the click would strand.
+func (c *Client) PlanTargetRepos(ctx context.Context, req PlanTargetReposRequest) (TargetReposPlan, error) {
+	out := TargetReposPlan{TargetReposStranded: []StrandedRepo{}}
+	if c.Store == nil {
+		return out, nil
+	}
+	stranded, err := c.Store.StrandedByTargetRepos(ctx, req.TargetRepos)
+	if err != nil {
+		return out, err
+	}
+	for _, w := range stranded {
+		out.TargetReposStranded = append(out.TargetReposStranded, StrandedRepo{
+			Repo: w.Repo.String(), Tasks: w.Tasks, Schedules: w.Schedules,
+			QualificationPlan: w.QualificationPlan, Summary: w.Summary(),
+		})
+	}
+	return out, nil
+}
+
+func (s *Server) handlePlanTargetRepos(w http.ResponseWriter, r *http.Request) {
+	var req PlanTargetReposRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	plan, err := s.tasks.PlanTargetRepos(r.Context(), req)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
 func (s *Server) handleRemoveTargetRepo(w http.ResponseWriter, r *http.Request) {
 	repo := r.PathValue("owner") + "/" + r.PathValue("name")
 	teamID := r.URL.Query().Get("team")

@@ -649,7 +649,10 @@ import "strconv"
 // (model.Config.HubEnvironmentName): the environment name a Grain Hub last
 // supplied as this deployment's default, so a rename of its hub entry can
 // replace it without overwriting a name the operator chose (grain/task-4200).
-const SchemaVersion = 137
+// 138 adds `grain_config`.`sandbox_shape_limits`
+// (model.Config.SandboxShapeLimits): the deployment-wide and per-role
+// ceilings on the sandbox shape a task may ask for (grain/task-4018).
+const SchemaVersion = 138
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2699,6 +2702,7 @@ var Tables = []string{
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
   ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
+  ` + "`sandbox_shape_limits`" + `         TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

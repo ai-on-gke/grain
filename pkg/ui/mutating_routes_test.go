@@ -818,6 +818,7 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/deployment/git-connections/check":         true,
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
+	"POST /api/repos/plan":                               true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
