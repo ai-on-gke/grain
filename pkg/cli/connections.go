@@ -118,6 +118,11 @@ type gitConnectionSeed struct {
 	// TokenFile, when set, is copied to the credential's own token file,
 	// which is where a connection's credential is read from.
 	TokenFile string `yaml:"token_file"`
+	// MergeCredential, when set, is the credential the connection's pull
+	// requests are merged with (model.TeamGitConnection.MergeCredential):
+	// a GitHub App's, already under secrets/github, so the forge records
+	// grain's merges as the App's and not the pushing person's.
+	MergeCredential string `yaml:"merge_credential"`
 }
 
 type modelConnectionSeed struct {
@@ -209,9 +214,15 @@ func parseConnectionSeed(raw []byte) (connectionSeed, error) {
 		return seed, err
 	}
 	for i, g := range seed.Git {
-		conn, err := model.NormalizeTeamGitConnection(model.TeamGitConnection{Credential: g.Credential, Host: g.Host, Scope: g.Scope})
+		conn, err := model.NormalizeTeamGitConnection(model.TeamGitConnection{Credential: g.Credential, Host: g.Host, Scope: g.Scope,
+			MergeCredential: g.MergeCredential})
 		if err != nil {
 			return seed, fmt.Errorf("git[%d]: %w", i, err)
+		}
+		if conn.MergeCredential != "" {
+			if err := gitproxy.ValidCredentialName(conn.MergeCredential); err != nil {
+				return seed, fmt.Errorf("git[%d]: merge_credential: %w", i, err)
+			}
 		}
 		// "anonymous" is a connection with no credential at all, which a
 		// public repository wants; it has no token to store.
@@ -223,6 +234,7 @@ func parseConnectionSeed(raw []byte) (connectionSeed, error) {
 			return seed, fmt.Errorf("git[%d]: %w", i, err)
 		}
 		seed.Git[i].Credential, seed.Git[i].Host, seed.Git[i].Scope = conn.Credential, conn.Host, conn.Scope
+		seed.Git[i].MergeCredential = conn.MergeCredential
 	}
 	seen := map[string]bool{}
 	for i, m := range seed.Models {
@@ -345,7 +357,7 @@ func importConnections(ctx context.Context, store *model.Store, dataDir string, 
 func mergeGitConnections(have []model.TeamGitConnection, seed []gitConnectionSeed) []model.TeamGitConnection {
 	out := append([]model.TeamGitConnection(nil), have...)
 	for _, g := range seed {
-		conn := model.TeamGitConnection{Credential: g.Credential, Host: g.Host, Scope: g.Scope}
+		conn := model.TeamGitConnection{Credential: g.Credential, Host: g.Host, Scope: g.Scope, MergeCredential: g.MergeCredential}
 		replaced := false
 		for i, c := range out {
 			norm, err := model.NormalizeTeamGitConnection(c)

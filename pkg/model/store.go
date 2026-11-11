@@ -5931,6 +5931,28 @@ func (s *Store) GitConnectionOn(ctx context.Context, host, owner, repo string) (
 	return "", missing
 }
 
+// GitMergeCredentialOn is the credential grain merges owner/repo's pull
+// requests with: the MergeCredential of the deployment's git connection
+// that covers it (MatchTeamGitConnection, the same match GitConnectionOn
+// makes), or "" when that connection names none and merges go out under
+// the push credential as they always have. A repository's own
+// RepoConfig.GitCredential override changes what it is pushed with, not
+// what it is merged with.
+func (s *Store) GitMergeCredentialOn(ctx context.Context, host, owner, repo string) (string, error) {
+	settings, err := s.GetConfig(ctx)
+	if err != nil {
+		return "", fmt.Errorf("reading the deployment's git connections: %w", err)
+	}
+	if settings == nil {
+		return "", nil
+	}
+	conn, ok := MatchTeamGitConnection(settings.EffectiveGitConnections(), host, s.GitDefaultHost, owner, repo)
+	if !ok {
+		return "", nil
+	}
+	return conn.MergeCredential, nil
+}
+
 // pinnedTarget is what a run's own target columns say
 // (task_run.target_owner/target_name): Valid false for a run with
 // nothing pinned onto it, which is every run recorded before those

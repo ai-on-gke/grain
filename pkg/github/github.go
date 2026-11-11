@@ -1001,6 +1001,11 @@ type PullRequestDetail struct {
 	// Merged is true. GitHub also returns it nil for a PR closed without
 	// merging, which is the same nil this stays for that case.
 	MergedAt *time.Time
+	// MergedBy is GitHub's own merged_by login: who the forge records as
+	// having merged the PR, "" until it has. A merge grain made through a
+	// merge credential of its own (MergeTokenSource) reads `<app>[bot]`
+	// here, and that is the login the reviewed-merge gate trusts.
+	MergedBy string
 	// CreatedAt is GitHub's own field: when the PR was opened. Present
 	// for every PR regardless of state, unlike MergedAt.
 	CreatedAt time.Time
@@ -2681,7 +2686,10 @@ func (c *RESTClient) GetPullRequest(owner, repo string, number int) (PullRequest
 		MergeCommitSHA      string     `json:"merge_commit_sha"`
 		Merged              bool       `json:"merged"`
 		MergedAt            *time.Time `json:"merged_at"`
-		CreatedAt           time.Time  `json:"created_at"`
+		MergedBy            *struct {
+			Login string `json:"login"`
+		} `json:"merged_by"`
+		CreatedAt time.Time `json:"created_at"`
 		// The diff's size, which only this endpoint returns -- see
 		// PullRequestDetail.Additions.
 		Additions    int `json:"additions"`
@@ -2695,16 +2703,19 @@ func (c *RESTClient) GetPullRequest(owner, repo string, number int) (PullRequest
 	if state == "" {
 		state = "open"
 	}
-	var headRepo string
+	var headRepo, mergedBy string
 	if data.Head.Repo != nil {
 		headRepo = data.Head.Repo.FullName
+	}
+	if data.MergedBy != nil {
+		mergedBy = data.MergedBy.Login
 	}
 	return PullRequestDetail{
 		Number: data.Number, Title: data.Title, Body: data.Body, HTMLURL: data.HTMLURL,
 		HeadRef: data.Head.Ref, HeadSHA: data.Head.SHA, BaseRef: data.Base.Ref,
 		AuthorLogin: data.User.Login, HeadRepo: headRepo, MaintainerCanModify: data.MaintainerCanModify,
 		State: state, Mergeable: data.Mergeable, MergeableState: data.MergeableState,
-		Merged: data.Merged, MergedAt: data.MergedAt, CreatedAt: data.CreatedAt,
+		Merged: data.Merged, MergedAt: data.MergedAt, MergedBy: mergedBy, CreatedAt: data.CreatedAt,
 		MergeCommitSHA: data.MergeCommitSHA,
 		Additions:      data.Additions, Deletions: data.Deletions, ChangedFiles: data.ChangedFiles,
 	}, nil
@@ -4599,8 +4610,15 @@ func (c *RESTClient) UpdateComment(owner, repo string, commentID int64, body str
 // allowed on this repository"), this falls back to "squash", and if squash
 // is also disallowed ("Squash commits are not allowed on this repository"),
 // once more to "rebase".
+//
+// A repository with a merge credential of its own (MergeTokenSource) is
+// merged under that credential's token and no other.
 func (c *RESTClient) MergePullRequestWithMessage(owner, repo string, number int, headSHA, title, message string) error {
 	if err := c.gitOnly(owner, repo); err != nil {
+		return err
+	}
+	c, err := c.forMerge(owner, repo)
+	if err != nil {
 		return err
 	}
 	payload := map[string]any{}
