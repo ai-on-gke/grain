@@ -80,6 +80,11 @@ const (
 	// accept ~/ relative to hostd's home, and top-level and entry-level x-*
 	// keys are ignored.
 	FeatureEnvOpen Feature = "env_open"
+	// FeatureLoginsMap: Allowlist.Logins configures CLI login paths,
+	// Hello.LoginTargets reports the resolved regular-file targets for
+	// StageSymlink, and StageSymlink accepts any target the map names.
+	// Replaces Hello.CodexAuth.
+	FeatureLoginsMap Feature = "logins_map"
 )
 
 // Features is every feature this build implements, in the order they
@@ -96,6 +101,7 @@ var Features = []Feature{
 	FeatureAgentsOnly,
 	FeatureFeatures,
 	FeatureEnvOpen,
+	FeatureLoginsMap,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited
