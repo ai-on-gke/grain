@@ -581,6 +581,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/release-notes/stats":                                {"period": "The week whose figures to read; the week just ended without one."},
 	"POST /api/repos":                                             {"team": "The team whose targets to add to; the default team without one."},
 	"DELETE /api/repos/{owner}/{name}":                            {"team": "The team whose targets to remove from; the default team without one."},
+	"GET /api/tasks/{id}/diff-preview":                            {"max": "How many hunks to return (default 6, at most 30)."},
 	"GET /api/repos/{owner}/{name}/compare":                       {"base": "The branch or commit to compare from.", "head": "The branch or commit to compare to."},
 	"GET /api/repos/{owner}/{name}/workflows":                     listObjectQueryDocs("workflow path or name", listPageTiny, nil),
 	"GET /api/repos/{owner}/{name}/releases/{release}/candidates": listQueryDocs("branch, status or release", listPageLarge, nil),

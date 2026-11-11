@@ -392,6 +392,20 @@ func grainCIItem() model.AccessRequestItem {
 	return model.AccessRequestItem{Kind: model.AccessGrant, Capability: model.GrainCIRef}
 }
 
+// withoutCIReadDefault strips the default api:ci-read@<repo> a task on a
+// GitHub-CI repository is filed holding (model.DefaultCIReadGrant, task
+// 4364), leaving the task as one filed before that default existed, or
+// under its opt-out: the task a request for grain#ci comes from.
+func withoutCIReadDefault(t *testing.T, store *model.Store, ctx context.Context, id string) {
+	t.Helper()
+	if err := store.UpdateTask(ctx, id, func(tk *model.Task) error {
+		tk.Grants = model.GrantsBeyondCIReadDefault(*tk)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A request for grain#ci is judged by the same check the grants editor
 // makes, which refuses it: on a ci_mode: github repository the refusal
 // names api:ci-read@<repo> and the commands that need no grant, never the
@@ -400,6 +414,7 @@ func TestCheckAccessRequestRefusesGrainCIOnAGitHubModeRepo(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
 	task := create(t, c, ctx)
+	withoutCIReadDefault(t, store, ctx, task.ID)
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, CIMode: model.CIModeGitHub}); err != nil {
 		t.Fatal(err)
 	}
@@ -464,6 +479,7 @@ func TestAParkedGrainCIRequestOffersCIReadAndGrantsIt(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
 	task := create(t, c, ctx)
+	withoutCIReadDefault(t, store, ctx, task.ID)
 	parkOnAccess(t, c, ctx, task.ID, []model.AccessRequestItem{grainCIItem()})
 
 	detail, err := c.GetTask(ctx, task.ID)

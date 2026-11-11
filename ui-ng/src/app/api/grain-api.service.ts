@@ -17,6 +17,7 @@ import { Injectable, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
 import type {
+  DiffPreview,
   GrainConfig,
   LocalScriptApproval,
   Notification,
@@ -98,6 +99,14 @@ export class GrainApi {
       | { notifications?: Notification[]; items?: Notification[] }
     >("GET /api/notifications", undefined, "open=1&fields=list").then((r) =>
       Array.isArray(r) ? r : (r?.notifications ?? r?.items ?? []),
+    );
+  }
+
+  diffPreview(id: string, max = 6): Promise<DiffPreview> {
+    return this.get<DiffPreview>(
+      "GET /api/tasks/{id}/diff-preview",
+      { id },
+      `max=${max}`,
     );
   }
 

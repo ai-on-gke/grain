@@ -605,7 +605,7 @@ func (s *Store) ForgetRepo(ctx context.Context, repo RepoRef) error {
 // Every table is matched on StoredOwner, which every one of them writes.
 // The qualification tables and scheduled_workflow_run wrote a bare Owner
 // even for another host's repository until grain/task-4335; migration
-// 140 (migrateStoredOwners) moved the rows it could place, and a row it
+// 141 (migrateStoredOwners) moved the rows it could place, and a row it
 // could not stays on the default host, where removing that host's
 // repository is what takes it.
 var forgottenRepoTables = []string{

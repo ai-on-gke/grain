@@ -116,15 +116,15 @@ func TestCredentialTokenSourceGitOnlyPlainGitHost(t *testing.T) {
 func TestPullRequestToolsPlainGitHost(t *testing.T) {
 	t.Parallel()
 	dataDir := setupPlainGitHostSecrets(t, "git.example.com")
+	// A plain git host has no GitHub reader, so every pull request tool
+	// could only error: none is registered (task 4364).
 	tools := PullRequestTools(dataDir, "github.com", false, "git.example.com/acme/widgets", "branch", "", "", false, false, "", nil)
-	if len(tools) != 5 {
-		t.Fatalf("len(tools) = %d, want 5", len(tools))
-	}
-	for _, tool := range tools {
-		res := tool.Handler(t.Context(), map[string]any{})
-		if !res.IsError {
-			t.Errorf("tool %s expected error response, got text: %s", tool.Name, res.Text)
+	if len(tools) != 0 {
+		var names []string
+		for _, tool := range tools {
+			names = append(names, tool.Name)
 		}
+		t.Fatalf("tools = %v, want none on a plain git host", names)
 	}
 }
 

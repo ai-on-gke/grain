@@ -32,7 +32,7 @@ var qualificationOwnerTables = []string{
 	"qualification_item_depends_on",
 }
 
-// migrateStoredOwners is migration 140: it host-qualifies the owner
+// migrateStoredOwners is migration 141: it host-qualifies the owner
 // column of the qualification plan tables and scheduled_workflow_run,
 // which before it were written with a bare Owner even for a repository
 // off the default host (grain/task-4335). Every other repo-keyed table
@@ -161,7 +161,7 @@ func migrateQualificationOwners(ctx context.Context, tx *sql.Tx, targets storedO
 		repo, ok, why := targets.resolve(owner, name)
 		if !ok {
 			if why != "" {
-				log.Printf("schema 140: left the qualification plan stored for %s/%s on the default host: %s", owner, name, why)
+				log.Printf("schema 141: left the qualification plan stored for %s/%s on the default host: %s", owner, name, why)
 			}
 			continue
 		}
@@ -170,7 +170,7 @@ func migrateQualificationOwners(ctx context.Context, tx *sql.Tx, targets storedO
 			return err
 		}
 		if taken {
-			log.Printf("schema 140: left the qualification plan stored for %s/%s on the default host: %s already has a plan of its own", owner, name, repo)
+			log.Printf("schema 141: left the qualification plan stored for %s/%s on the default host: %s already has a plan of its own", owner, name, repo)
 			continue
 		}
 		for _, table := range qualificationOwnerTables {
@@ -228,7 +228,7 @@ func migrateScheduledWorkflowRunOwners(ctx context.Context, tx *sql.Tx, targets 
 			repo, ok, why = targets.resolve(f.owner, f.name)
 			if !ok {
 				if why != "" {
-					log.Printf("schema 140: left schedule %s's workflow firing for %s/%s on the default host: %s",
+					log.Printf("schema 141: left schedule %s's workflow firing for %s/%s on the default host: %s",
 						f.scheduleID, f.owner, f.name, why)
 				}
 				continue

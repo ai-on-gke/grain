@@ -352,11 +352,11 @@ func (s *Store) CreateQualificationRun(ctx context.Context, candidate Candidate,
 			}
 			comp.CustomFields = customFields
 			if comp.Target != nil {
-				usesGrainCI, err := querierRepoUsesGrainCI(ctx, tx, *comp.Target)
+				ciDefaults, err := querierRepoCIDefaults(ctx, tx, *comp.Target)
 				if err != nil {
 					return err
 				}
-				applyGrainCIGrant(&comp, usesGrainCI)
+				applyRepoCIGrants(&comp, ciDefaults)
 			}
 
 			var links []Link

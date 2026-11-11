@@ -926,7 +926,7 @@ func AlignDefaultBases(child, parent Task, defaultBranch func(RepoRef) string) T
 func AutoSubmitRefusedOnLanding(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		!LandsWhereGranted(child, parent)
 }
@@ -1062,7 +1062,7 @@ var AutoSubmitPrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-submit"
 func AutoSubmits(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		LandsWhereGranted(child, parent)
 }

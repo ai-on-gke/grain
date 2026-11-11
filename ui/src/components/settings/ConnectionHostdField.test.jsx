@@ -76,6 +76,33 @@ describe("ConnectionHostdField", () => {
     });
   });
 
+  // 2026-11-11 walkthrough: on a connection's page, "A host selected by
+  // label…" then an ambient host picked under Credentials saved that host,
+  // but Run on host went on saying "by label" over an empty label box.
+  it("leaves label mode when a named host is set from outside", async () => {
+    api.mockResolvedValue(registry);
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <ConnectionHostdField backend={{}} onChange={onChange} />,
+    );
+    fireEvent.mouseDown(
+      await screen.findByRole("combobox", { name: "Run on host" }),
+    );
+    fireEvent.click(
+      within(await screen.findByRole("listbox")).getByText(
+        "A host selected by label…",
+      ),
+    );
+    expect(screen.getByTestId("connection-hostd-labels")).toBeInTheDocument();
+    rerender(
+      <ConnectionHostdField backend={{ hostd: "ws-a" }} onChange={onChange} />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Run on host" }).textContent,
+    ).toMatch(/^host ws-a/);
+    expect(screen.queryByTestId("connection-hostd-labels")).toBeNull();
+  });
+
   it("takes a label selector, and has no fallback for a capability server", async () => {
     api.mockResolvedValue(registry);
     const onChange = vi.fn();

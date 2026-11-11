@@ -1008,6 +1008,25 @@ var Migrations = []Migration{
 	},
 	{
 		Version: 140,
+		Description: "add integration_event's notification and host-script approval columns, for GET /api/events's " +
+			"notification.* and local_script.* events (grain/task-4284)",
+		// integration_event came in with no rung of its own, so a store
+		// from before it has none to alter: create it first (as it now
+		// stands), and every ADD COLUMN after passes over a column it
+		// already has.
+		Statements: []string{
+			integrationEventTable,
+			"ALTER TABLE `integration_event` ADD COLUMN `notification_id` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `integration_event` ADD COLUMN `subject` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `severity` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `summary` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `approval_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `script` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `decision` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 141,
 		Description: "host-qualify the owner column of qualification_config, qualification_item, " +
 			"qualification_item_depends_on and scheduled_workflow_run (StoredOwner) for rows a schedule " +
 			"or a target repo places off the default host (grain/task-4335)",
