@@ -1514,12 +1514,12 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 	// itself unavailable, exactly as it does for a deployment that has no
 	// history at all.
 	if c.Config.SettingsHistory != nil && needs&metricsSettingsHistory != 0 {
-		changes, err := c.Config.SettingsHistory.SettingsChanges(ctx, in.Window.Since.Add(-settingsHistorySlack))
+		changes, reaches, err := c.Config.SettingsHistory.SettingsChanges(ctx, in.Window.Since.Add(-settingsHistorySlack))
 		if err != nil {
 			log.Printf("grain ui: reading this deployment's settings history: %v -- "+
 				"the metrics report will not say when a parameter last changed", err)
 		} else {
-			in.SettingsChanges, in.SettingsHistory = changes, true
+			in.SettingsChanges, in.SettingsHistory, in.SettingsReaches = changes, true, reaches
 		}
 	}
 	// And what the machine was doing while all of it happened

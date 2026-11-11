@@ -514,7 +514,7 @@ func TestOnlyThePromotionMovesLatest(t *testing.T) {
 
 	text := read(t, ".grain", "workflows", "promote.yml")
 	contains(t, text, "bash ./scripts/release-images.sh promote")
-	contains(t, text, "capabilities: [package-publish]")
+	contains(t, text, `capabilities: ["https://grain.dev/capabilities/release#package-publish"]`)
 }
 
 // A release whose rebuild reports an edition (which core grain never sets)

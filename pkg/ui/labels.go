@@ -1301,7 +1301,10 @@ type SettingsHistoryReader interface {
 	// an error -- a repository seeded this minute has no history and that
 	// is not a failure -- and an error here is a report without its
 	// changes section rather than no report at all (Client.Metrics).
-	SettingsChanges(ctx context.Context, since time.Time) ([]metrics.SettingsChange, error)
+	//
+	// reaches is how far back the reader actually got -- the moment before
+	// which a change might be missing -- or zero if it cannot say.
+	SettingsChanges(ctx context.Context, since time.Time) (changes []metrics.SettingsChange, reaches time.Time, err error)
 }
 
 // LiveTranscript is implemented by whatever can read back a still-running

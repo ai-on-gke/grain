@@ -419,7 +419,7 @@ func upgradeCheckBody(status upgrade.Status, stateRepo model.RepoRef, gap upgrad
 		"failing that was not failing before?\n" +
 		"- Does the state repository still sync, and does the settings this deployment " +
 		"is running on still say what it said before the upgrade?\n\n")
-	b.WriteString("You have the self-debug capability: inspect grain's own code in the read-only " +
+	b.WriteString("You hold `https://grain.dev/capabilities/grain#source` and `https://grain.dev/capabilities/api#self-debug`: inspect grain's own code in the read-only " +
 		"`grain-src/` checkout using standard sandbox tools, which is the code the " +
 		"upgrade installed, and `grain task list`, `grain task read`, `grain task prompt` and " +
 		"`grain task transcript` read this deployment's own tasks and runs through the " +
@@ -428,7 +428,7 @@ func upgradeCheckBody(status upgrade.Status, stateRepo model.RepoRef, gap upgrad
 		"window that ends now and one that ended before the upgrade, and \"do the runs since " +
 		"the restart look like the runs before it\" is a comparison rather than an " +
 		"impression. If they refuse because this run has no route back to the " +
-		"daemon, say that rather than answering the question from anything else. You also have the grain-log capability: read_grain_log reads this " +
+		"daemon, say that rather than answering the question from anything else. You also hold `https://grain.dev/capabilities/grain#journal` (formerly grain-log): read_grain_log reads this " +
 		"host's own systemd journal -- \"daemon\" for the daemon's log, \"dmesg\" for the kernel's " +
 		"underneath it -- bounded by a time window, a minimum priority and a plain substring, and " +
 		"redacted on the host before you see it. It reads the log itself, so it is the answer to " +
