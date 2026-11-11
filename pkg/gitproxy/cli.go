@@ -959,8 +959,9 @@ func (p *GitProxy) servePRStatus(w http.ResponseWriter, r *http.Request, scope n
 	}
 }
 
-// serveBranchStatus reports the latest grain CI run on branch in repo
-// ("" is the task's own) and each of its jobs' verdicts.
+// serveBranchStatus reports the latest CI on branch in repo ("" is the
+// task's own) and each of its jobs' verdicts: the newest grain CI run, or
+// for GitHub Actions every workflow's newest run at the newest commit.
 func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scope, repo, branch, what string) {
 	repo, store, err := p.ciReadRepo(scope, repo)
 	if err != nil {
