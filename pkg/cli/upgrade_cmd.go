@@ -41,6 +41,14 @@ Subcommands:
                                       cancel an upgrade currently in progress (or a scheduled upgrade waiting to drain)
   rollback [-after-tasks-finish]      roll back to the image or commit the last completed upgrade replaced`
 
+// operatorCommands are the deployment operator's verbs -- notices to
+// every agent, releases, and in-place upgrades -- as dispatchCLI runs
+// them. A map rather than one switch case each keeps main.go to its
+// size limit (size_test.go).
+var operatorCommands = map[string]func(context.Context, *ui.HTTPClient, *printer, []string) error{
+	"broadcast": cmdBroadcast, "notify": cmdBroadcast, "release": cmdRelease, "upgrade": cmdUpgrade,
+}
+
 func cmdUpgrade(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {
 		args = []string{"status"}

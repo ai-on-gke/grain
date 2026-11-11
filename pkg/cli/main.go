@@ -509,9 +509,7 @@ Commands:
                                        release back -- a person's act; an agent is refused
   release approval-key                 the public key GitHub's promote-release.yml verifies an Inbox approval
                                        with (repository variable GRAIN_RELEASE_APPROVAL_KEY)
-  upgrade [status|start|cancel|rollback]
-                                       inspect, start, cancel or roll back an in-place daemon upgrade
-                                       (Settings -> Upgrade; see upgrade_cmd.go)
+  upgrade status|start|cancel|rollback inspect, start, cancel or roll back an in-place upgrade (Settings -> Upgrade)
 `
 
 // defaultServerURL is loopback on the port every installer binds the
@@ -756,12 +754,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":
 		return cmdDefaultModel(ctx, c, out, cmdArgs)
-	case "broadcast", "notify":
-		return cmdBroadcast(ctx, c, out, cmdArgs)
-	case "release":
-		return cmdRelease(ctx, c, out, cmdArgs)
-	case "upgrade":
-		return cmdUpgrade(ctx, c, out, cmdArgs)
+	case "broadcast", "notify", "release", "upgrade":
+		return operatorCommands[cmd](ctx, c, out, cmdArgs)
 	default:
 		return unknownCommandError{cmd}
 	}
