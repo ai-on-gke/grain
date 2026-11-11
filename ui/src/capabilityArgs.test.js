@@ -17,10 +17,42 @@ import {
   GRANT_ARGS_MAX,
   builtinServerName,
   describeGrant,
+  initialValue,
   isSecretLooking,
   methodMenuLabel,
   unsupportedReason,
 } from "./capabilityArgs.js";
+
+describe("initialValue", () => {
+  it("only pre-fills [] for required arrays, leaving optional minItems arrays unset", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["must_urls"],
+      properties: {
+        urls: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string" },
+        },
+        must_urls: {
+          type: "array",
+          minItems: 1,
+          items: { type: "string" },
+        },
+        all: { type: "boolean" },
+        nested_opt: {
+          type: "object",
+          required: ["tags"],
+          properties: {
+            tags: { type: "array", minItems: 1, items: { type: "string" } },
+          },
+        },
+      },
+    };
+    expect(initialValue(schema, schema)).toEqual({ must_urls: [] });
+  });
+});
 
 describe("unsupportedReason", () => {
   it("draws an enum that reserves some values to a person", () => {
