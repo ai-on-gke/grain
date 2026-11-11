@@ -102,9 +102,13 @@ func TestMCPProposeTaskWalkthroughSection4(t *testing.T) {
 			t.Fatalf("creating base task 2: %v", err)
 		}
 
-		// Parent task that will propose subsequent work
+		// Parent task that will propose subsequent work. It runs in a
+		// sandbox as large as the live proposal below asks for: a proposal
+		// asking for more than its proposer's sandbox waits for a person
+		// (model.ProposalSandboxShapeAbove) and would not be queued.
 		parentTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 			Title: "Director Task", Repo: "acme/widgets", Approved: true,
+			SandboxCPUs: 4, SandboxMemoryMB: 8192, SandboxDiskGB: 40,
 		})
 		if err != nil {
 			t.Fatalf("creating parent task: %v", err)

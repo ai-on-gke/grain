@@ -4,10 +4,14 @@ name: Release train
 # .grain/templates/release-train.yml -- judge the rc in qualification,
 # release it (vX.Y.Z and latest) or drop it, or cut the next rc. A tick
 # with nothing to do is one command and a nothing_needed close
-# (scripts/release-train-task.sh, RELEASE_TRAIN_RESULT=noop). overlap: skip,
-# so two ticks never race for the same tags.
+# (scripts/release-train-task.sh, RELEASE_TRAIN_RESULT=noop). This is the
+# backstop: release-train-on-stage1.yml ticks the train as soon as an rc's
+# Stage 1 concludes (playbook section 15). Both are in overlap group
+# release-train, so two ticks never race for the same tags.
 template: release-train
 base: main
 every:
   minutes: 20
-overlap: skip
+overlap:
+  skip: true
+  group: release-train

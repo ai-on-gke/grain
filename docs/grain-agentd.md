@@ -86,18 +86,21 @@ With no `$GRAIN_HOSTD_TOKEN` it asks for the token on the terminal without
 echoing it (and puts the terminal back if you interrupt it). `install`:
 
 1. copies the binary to `~/.local/bin/grain-agentd`;
-2. writes the token to `~/.config/grain/agentd-token` (mode 0600, in a 0700
+2. prepares any registered transport;
+3. fetches the allowlist template from `/hostd/install?template=agentd` on the
+   controller, fills in every template CLI whose binary exists on this machine,
+   shows the allowlist it will write, and writes `~/.config/grain/agentd.yaml`
+   confined to `~/.grain/hostd-stage` (falling back to a minimal built-in
+   template when offline), unless an allowlist is already there, and checks it
+   is agents-only;
+4. writes the token to `~/.config/grain/agentd-token` (mode 0600, in a 0700
    directory), or keeps the one already there;
-3. writes `~/.config/grain/agentd.yaml` with an `agy` entry -- agy found on
-   `$PATH`, else `~/.local/bin/agy` -- confined to the staging root a remote
-   run uses (`~/.grain/hostd-stage`), unless an allowlist is already there, and
-   checks it is agents-only;
-4. writes `~/.config/systemd/user/grain-agentd.service`;
-5. enables and starts it with `systemctl --user`, and enables lingering
+5. writes `~/.config/systemd/user/grain-agentd.service`;
+6. enables and starts it with `systemctl --user`, and enables lingering
    (`loginctl enable-linger`) so it keeps running after you log out, where
    that is allowed.
 
-`-no-start` stops after step 4. Watch it connect with
+`-no-start` stops after step 5. Watch it connect with
 
 ```sh
 journalctl --user -u grain-agentd -f     # look for "connected to the controller"
@@ -151,10 +154,10 @@ The same format as `grain host`'s, with `clis:` only:
 ```yaml
 clis:
   agy:
-    path: /home/you/.local/bin/agy
-    paths_under: [/home/you/.grain/hostd-stage]
-    cwd_under: [/home/you/.grain/hostd-stage]
-    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]
+    path: ~/.local/bin/agy
+    paths_under: [~/.grain/hostd-stage]
+    cwd_under: [~/.grain/hostd-stage]
+    env: [HOME, "*"]
     pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]
 capabilities: {}
 ```
@@ -163,14 +166,35 @@ grain-agentd refuses to start on an allowlist that names a capability, has no
 CLI, is missing, or is writable by anyone but its owner. The host agent re-reads it on
 every request.
 
+### Adding another agent CLI (`grain-agentd allow`)
+
+To allow another CLI later from the controller's template without a new
+`grain-agentd` binary:
+
+```sh
+grain-agentd allow claude
+```
+
+`allow` fetches `/hostd/install?template=agentd` from the `-server` recorded in
+`grain-agentd.service` (or `-server URL`), finds the CLI binary on this host
+(or takes `-path /path/to/cli`), shows the exact `clis:` entry it will write --
+emitting `env: ["*"]` and `~/` paths only when the installed `grain-agentd`
+supports `env_open`, and the controller's closed `env:` list otherwise -- and
+writes `~/.config/grain/agentd.yaml` once you confirm on the host (pass `-yes`
+for non-interactive automation).
+
 ## Hooks
 
 A run's agent CLI forks hooks -- agy's pre-tool hook (`agy-tool-hook`) and
 Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote host
-names that host's own binary for them. grain-agentd answers both, from the
-leaf packages `pkg/agent/antigravity/hook` and `pkg/agent/claude/stophook`
-that `cmd/grain` uses too, so the hook decides the same way wherever the CLI
-runs.
+names that host's own binary for them. For hosts advertising contract feature
+`hook_policy`, the daemon stages a versioned per-run hook policy file
+(`pkg/agent/hookpolicy`) beside the run's configuration and passes `-policy` to
+both subcommands, so `grain-agentd` evaluates the daemon's current tool roster,
+host-tool grants and stop-rule parameters as data -- including while the daemon
+restarts -- without needing a host update when those policies change. When the
+policy file is absent (an older daemon), the hooks fall back to the compiled-in
+defaults in `pkg/agent/antigravity/hook` and `pkg/agent/claude/stophook`.
 
 ## For a build that extends it
 
@@ -202,4 +226,10 @@ to it from `init()` in a main of its own that calls `agentd.Main(os.Args)`
   registry `antigravity.RegisterHostToolGrant` writes to). The binary that
   answers the hook must link the same grants as the daemon that wrote the
   run's hook arguments.
-- **Where agy lives**, when not on `$PATH`: `agentd.RegisterAgyPath`.
+- **CLI template entries and candidate paths** on the controller:
+  `ui.RegisterHostCLICandidates` / `hostd.RegisterCLICandidates` (where an
+  edition's machines install a CLI outside `$PATH` and `~/.local/bin`) and
+  `ui.RegisterHostCLITemplate` / `hostd.RegisterCLITemplate` (additional CLIs),
+  served as data from `/hostd/install?template=agentd` to `grain-agentd install`
+  and `grain-agentd allow`. (`agentd.RegisterAgyPath` is deprecated and kept
+  only for the offline fallback.)

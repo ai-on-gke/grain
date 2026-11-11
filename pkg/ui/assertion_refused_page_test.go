@@ -85,7 +85,7 @@ func (verifierNotReady) Unavailable() bool { return true }
 // as a bad signature does -- the access code does not get it in -- but
 // with 503 and Retry-After, and a page that says to reload rather than
 // advice about audiences and clocks.
-func TestUnavailableVerifierGets503StartingUpPageAndIsNotAdmitted(t *testing.T) {
+func TestUnavailableVerifierGets503UnavailablePageAndIsNotAdmitted(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
 	unreg := ui.RegisterIdentityVerifier(&fakeHeaderVerifier{
@@ -115,14 +115,14 @@ func TestUnavailableVerifierGets503StartingUpPageAndIsNotAdmitted(t *testing.T) 
 		if got := rec.Header().Get("Retry-After"); got != "5" {
 			t.Errorf("browser GET / Retry-After = %q, want 5", got)
 		}
-		for _, want := range []string{"sign-in verification is starting up", "Reload the page in a few seconds", "not reachable yet"} {
+		for _, want := range []string{"Sign-in verification is temporarily unavailable", "Reload the page in a few seconds", "not reachable yet"} {
 			if !strings.Contains(body, want) {
-				t.Errorf("starting-up page lacks %q:\n%s", want, body)
+				t.Errorf("unavailable page lacks %q:\n%s", want, body)
 			}
 		}
-		for _, unwanted := range []string{"-ui-iap-audience", "clock", "Sign-in could not be verified"} {
+		for _, unwanted := range []string{"-ui-iap-audience", "clock", "Sign-in could not be verified", "starting up", "just restarted"} {
 			if strings.Contains(body, unwanted) {
-				t.Errorf("starting-up page has %q, the advice for a bad assertion:\n%s", unwanted, body)
+				t.Errorf("unavailable page has %q, which this refusal is not:\n%s", unwanted, body)
 			}
 		}
 	}
@@ -199,7 +199,7 @@ func TestBuiltInIAPVerifierReturns503WhenJWKSDownAndLogsUnknownKidAfterRecovery(
 		}
 		htmlRec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/", "", h)
 		if htmlRec.Code != http.StatusServiceUnavailable || htmlRec.Header().Get("Retry-After") != "5" ||
-			!strings.Contains(htmlRec.Body.String(), "Sign-in verification is starting up") {
+			!strings.Contains(htmlRec.Body.String(), "Sign-in verification is temporarily unavailable") {
 			t.Fatalf("Browser while JWKS 503: got %d Retry-After %q:\n%s",
 				htmlRec.Code, htmlRec.Header().Get("Retry-After"), htmlRec.Body.String())
 		}
@@ -227,5 +227,108 @@ func TestBuiltInIAPVerifierReturns503WhenJWKSDownAndLogsUnknownKidAfterRecovery(
 	}
 	if afterLogs := logBuf.String()[beforeUnknown:]; !strings.Contains(afterLogs, "not a configuration mismatch") {
 		t.Errorf("unknown-kid refusal was suppressed after prior JWKS outage; logs:\n%s", afterLogs)
+	}
+}
+
+// verifierUnreachable is the error a verifier whose identity backend is
+// transiently unreachable returns, naming that backend.
+type verifierUnreachable struct{ msg, reason string }
+
+func (e verifierUnreachable) Error() string             { return e.msg }
+func (verifierUnreachable) Unavailable() bool           { return true }
+func (e verifierUnreachable) UnavailableReason() string { return e.reason }
+
+func registerUnavailableVerifier(t *testing.T, err error) {
+	t.Helper()
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	unreg := ui.RegisterIdentityVerifier(&fakeHeaderVerifier{
+		name:    "corp-proxy",
+		headers: []string{"X-Corp-Proxy-Assertion"},
+		verifyFn: func(r *http.Request, raw string) (ui.VerifiedIdentity, error) {
+			return ui.VerifiedIdentity{}, fmt.Errorf("checking the assertion: %w", err)
+		},
+	})
+	t.Cleanup(unreg)
+}
+
+// An API caller refused because the verifier could not check its
+// identity gets a 503 the UI can tell apart from a gateway's: the
+// verifier_unavailable code, the backend that was unreachable, and the
+// retry interval -- but not the error itself, which names host paths.
+func TestUnavailableVerifierAPIBodyIsStructuredAndWithholdsInternals(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		err          error
+	}{
+		{"with reason", "tonic_unreachable", verifierUnreachable{msg: "dial unix /var/run/hostd/agent.sock: connection refused", reason: "tonic_unreachable"}},
+		{"without reason", "", verifierNotReady{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registerUnavailableVerifier(t, tc.err)
+			logBuf := ui.LogBufferForTest(t)
+			srv, _ := testServer(t)
+			rec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", map[string]string{"X-Corp-Proxy-Assertion": "x"})
+			if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+				t.Fatalf("got %d Retry-After %q, want 503 with 5: %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+			}
+			raw := rec.Body.String()
+			var body map[string]any
+			if err := json.Unmarshal([]byte(raw), &body); err != nil {
+				t.Fatalf("body is not JSON: %v: %s", err, raw)
+			}
+			if body["code"] != "verifier_unavailable" {
+				t.Errorf("code = %v, want verifier_unavailable", body["code"])
+			}
+			if body["retryAfter"] != float64(5) {
+				t.Errorf("retryAfter = %v, want 5", body["retryAfter"])
+			}
+			ref, _ := body["ref"].(string)
+			if ref == "" {
+				t.Errorf("no ref in %s", raw)
+			}
+			if want := "sign-in verification could not check your identity right now; retrying shortly (ref " + ref + ")"; body["error"] != want {
+				t.Errorf("error = %q, want %q", body["error"], want)
+			}
+			if got, ok := body["reason"]; tc.reason == "" && ok {
+				t.Errorf("reason = %v, want it omitted", got)
+			} else if tc.reason != "" && got != tc.reason {
+				t.Errorf("reason = %v, want %q", got, tc.reason)
+			}
+			if strings.Contains(raw, "/var/run") || strings.Contains(raw, "not reachable yet") {
+				t.Errorf("body leaks the internal error: %s", raw)
+			}
+			if !strings.Contains(logBuf.String(), "ref "+ref) {
+				t.Errorf("log lacks ref %s:\n%s", ref, logBuf.String())
+			}
+		})
+	}
+}
+
+// The browser page says the verifier is starting up only when it said so;
+// otherwise it says verification is temporarily unavailable, without
+// claiming the daemon just restarted.
+func TestUnavailableVerifierPageSaysStartingUpOnlyWhenItIs(t *testing.T) {
+	for _, tc := range []struct {
+		msg, want, unwanted string
+	}{
+		{"identity verifier is starting up", "Sign-in verification is starting up", "temporarily unavailable"},
+		{"tonic did not answer in time", "Sign-in verification is temporarily unavailable", "starting up"},
+	} {
+		t.Run(tc.msg, func(t *testing.T) {
+			registerUnavailableVerifier(t, verifierUnreachable{msg: tc.msg, reason: "tonic_unreachable"})
+			srv, _ := testServer(t)
+			rec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/", "", map[string]string{"X-Corp-Proxy-Assertion": "x"})
+			body := rec.Body.String()
+			if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+				t.Fatalf("got %d Retry-After %q:\n%s", rec.Code, rec.Header().Get("Retry-After"), body)
+			}
+			if !strings.Contains(body, tc.want) || strings.Contains(body, tc.unwanted) {
+				t.Errorf("page should say %q and not %q:\n%s", tc.want, tc.unwanted, body)
+			}
+			if tc.unwanted == "starting up" && strings.Contains(body, "just restarted") {
+				t.Errorf("post-startup page claims a restart:\n%s", body)
+			}
+		})
 	}
 }

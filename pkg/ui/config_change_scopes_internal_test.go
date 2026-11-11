@@ -49,24 +49,29 @@ func TestApprovingAConfigChangeNeedsTheScopesItConfers(t *testing.T) {
 		name   string
 		role   *accessRole
 		files  []string
+		cols   []string
 		refuse string
 	}{
-		{"host script in mcp_servers", settingsOnly, []string{"tables/grain_config.json"}, "capabilities:admin"},
-		{"widened scope set", settingsOnly, []string{"tables/api_scope_set.json"}, "capabilities:admin"},
-		{"template grants", settingsOnly, []string{"settings/templates.yml"}, "capabilities:admin"},
-		{"extracted script", settingsOnly, []string{"scripts/setup.sh"}, "capabilities:admin"},
-		{"git credential", capAdmin, []string{"tables/git_credential.json"}, "secrets:write"},
-		{"standing sandbox secret", capAdmin, []string{"tables/standing_sandbox_secret.json"}, "secrets:write"},
-		{"capability admin adds a host script", capAdmin, []string{"tables/grain_config.json"}, ""},
-		{"plain setting", settingsOnly, []string{"tables/usage_settings.json"}, ""},
-		{"unlimited session", nil, []string{"tables/grain_config.json", "tables/git_credential.json"}, ""},
+		{"host script in mcp_servers", settingsOnly, []string{"tables/grain_config.json"}, nil, "capabilities:admin"},
+		// Task 3973: judged by the columns the change alters, where they
+		// were recorded when it was proposed.
+		{"mcp_servers column", settingsOnly, []string{"tables/grain_config.json"}, []string{"mcp_servers"}, "capabilities:admin"},
+		{"max_workers column", settingsOnly, []string{"tables/grain_config.json"}, []string{"max_workers"}, ""},
+		{"widened scope set", settingsOnly, []string{"tables/api_scope_set.json"}, nil, "capabilities:admin"},
+		{"template grants", settingsOnly, []string{"settings/templates.yml"}, nil, "capabilities:admin"},
+		{"extracted script", settingsOnly, []string{"scripts/setup.sh"}, nil, "capabilities:admin"},
+		{"git credential", capAdmin, []string{"tables/git_credential.json"}, nil, "secrets:write"},
+		{"standing sandbox secret", capAdmin, []string{"tables/standing_sandbox_secret.json"}, nil, "secrets:write"},
+		{"capability admin adds a host script", capAdmin, []string{"tables/grain_config.json"}, nil, ""},
+		{"plain setting", settingsOnly, []string{"tables/usage_settings.json"}, nil, ""},
+		{"unlimited session", nil, []string{"tables/grain_config.json", "tables/git_credential.json"}, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			if tc.role != nil {
 				ctx = withAccessRole(ctx, tc.role)
 			}
-			err := configChangeScopeRefusal(ctx, model.PendingConfigChange{Files: tc.files})
+			err := configChangeScopeRefusal(ctx, model.PendingConfigChange{Files: tc.files, Columns: columnsOf(tc.files, tc.cols)})
 			if tc.refuse == "" {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
@@ -79,6 +84,15 @@ func TestApprovingAConfigChangeNeedsTheScopesItConfers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// columnsOf records cols as the columns a change to the first of files
+// alters, or nothing when cols is nil.
+func columnsOf(files, cols []string) map[string][]string {
+	if cols == nil {
+		return nil
+	}
+	return map[string][]string{files[0]: cols}
 }
 
 // Repointing grain/config at another remote hands every grant the config

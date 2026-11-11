@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -360,7 +361,16 @@ func startPackageCacheFrom(cfg Config, fabric Fabric, upstreams packageCacheUpst
 	}
 
 	caPath := packageCacheCAPath(cfg)
-	ca, err := pkgcache.LoadOrCreateCA(caPath)
+	var ca *pkgcache.CA
+	if cfg.caSecrets != nil && caPath != "" {
+		ca, err = loadPackageCacheCA(cfg.caSecrets, caPath, time.Now())
+		if err != nil {
+			log.Printf("grain daemon: %v -- falling back to %s", err, caPath)
+		}
+	}
+	if ca == nil {
+		ca, err = pkgcache.LoadOrCreateCA(caPath)
+	}
 	if err != nil && caPath != "" {
 		log.Printf("grain daemon: loading package cache internal CA from %s: %v -- generating a new CA", caPath, err)
 		if fresh, ferr := pkgcache.NewCA(); ferr != nil {

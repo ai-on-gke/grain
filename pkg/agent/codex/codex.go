@@ -307,8 +307,9 @@ func WithAuthFile(path string) Option {
 
 // WithHostAuthFile is WithAuthFile for a login on the machine the CLI
 // runs on rather than this one -- a grain hostd's own codex login
-// (hostd.Hello.CodexAuth). path is that machine's, so it is linked as
-// it is, and not checked here, where it is not.
+// (hostd.Hello.LoginTargets, or hostd.Hello.CodexAuth on older hosts).
+// path is that machine's, so it is linked as it is, and not checked here,
+// where it is not.
 func WithHostAuthFile(path string) Option {
 	return func(f *Framework) { f.authFile, f.hostAuthFile = path, true }
 }

@@ -49,7 +49,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -243,8 +242,7 @@ func (c *CredentialSet) IsSSH(name string) bool {
 	if namesOneFile(name) != nil {
 		return false
 	}
-	_, err := os.Stat(c.sshFile(name))
-	return err == nil
+	return c.hasKind(name, ".ssh.json")
 }
 
 // Auth types, as AuthType reports them and the UI's typed editor names
@@ -280,8 +278,8 @@ func (c *CredentialSet) AuthType(name string) string {
 // such file; a file that is there but unusable is an error, which load
 // turns into a refusal rather than an anonymous request.
 func (c *CredentialSet) loadSSHCredential(name string) (*SSHCredential, bool, error) {
-	data, err := os.ReadFile(c.sshFile(name))
-	if os.IsNotExist(err) {
+	data, found, err := c.readKind(name, ".ssh.json")
+	if !found {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -321,7 +319,7 @@ func (c *CredentialSet) SetSSHKey(name string, f SSHKeyFile, kind model.GitHostK
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(c.dir, name+".ssh.json", append(data, '\n')); err != nil {
+	if err := c.writeKind(name, ".ssh.json", append(data, '\n')); err != nil {
 		return fmt.Errorf("writing credential %q: %w", name, err)
 	}
 	if err := c.removeKinds(name, ".token", ".app.json", ".ambient.json"); err != nil {
@@ -409,7 +407,7 @@ func (c *CredentialSet) SetAppWithWebhookSecret(name, appID, installationID, pri
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(c.dir, name+".app.json", append(data, '\n')); err != nil {
+	if err := c.writeKind(name, ".app.json", append(data, '\n')); err != nil {
 		return fmt.Errorf("writing credential %q: %w", name, err)
 	}
 	if err := c.removeKinds(name, ".token", ".ssh.json", ".ambient.json"); err != nil {
@@ -423,7 +421,7 @@ func (c *CredentialSet) SetAppWithWebhookSecret(name, appID, installationID, pri
 // when they exist.
 func (c *CredentialSet) removeKinds(name string, suffixes ...string) error {
 	for _, suffix := range suffixes {
-		if err := os.Remove(filepath.Join(c.dir, name+suffix)); err != nil && !os.IsNotExist(err) {
+		if _, err := c.removeKind(name, suffix); err != nil {
 			return fmt.Errorf("replacing credential %q: %w", name, err)
 		}
 	}

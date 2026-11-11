@@ -13,7 +13,18 @@
 // limitations under the License.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import api, { forgetETags, isUnreachable, unreachableReason } from "./api.js";
+import api, {
+  forgetETag,
+  forgetETags,
+  forgetVerifierTrouble,
+  isUnreachable,
+  isVerifierUnavailable,
+  unreachableReason,
+  VERIFIER_SUSTAINED_MS,
+  verifierSustainedReason,
+  verifierTroubleSince,
+  verifierTroubleSustained,
+} from "./api.js";
 import { UNCHANGED } from "./poll.js";
 import { browserTimeZone } from "./time.js";
 
@@ -431,6 +442,28 @@ describe("api, polling", () => {
     expect(fetchMock.mock.calls[2][1].headers["If-None-Match"]).toBeUndefined();
   });
 
+  it("forgets one path's ETag for a caller that dropped its answer", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, [], { ETag: '"task"' }))
+      .mockResolvedValueOnce(jsonResponse(200, [], { ETag: '"list"' }))
+      .mockResolvedValueOnce(jsonResponse(200, []))
+      .mockResolvedValueOnce(notModified('"list"'));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api("/api/tasks/1", { poll: true });
+    await api("/api/tasks", { poll: true });
+    forgetETag("/api/tasks/1");
+    await api("/api/tasks/1", { poll: true });
+    await api("/api/tasks", { poll: true });
+
+    // The dropped answer's ETag would have the next poll told 304 about
+    // a body its caller never kept (App.jsx's loadSessionTask); other
+    // paths keep theirs.
+    expect(fetchMock.mock.calls[2][1].headers["If-None-Match"]).toBeUndefined();
+    expect(fetchMock.mock.calls[3][1].headers["If-None-Match"]).toBe('"list"');
+  });
+
   it("asks unconditionally for a path nobody polls", async () => {
     const fetchMock = vi
       .fn()
@@ -492,5 +525,79 @@ describe("api, polling", () => {
     await expect(api("/api/tasks/1/approve", { method: "POST" })).resolves.toBe(
       null,
     );
+  });
+
+  // pkg/ui's writeVerifierUnavailable: the daemon answering that the
+  // sign-in verifier could not check this request's identity right now.
+  describe("verifier_unavailable", () => {
+    const body = {
+      error:
+        "sign-in verification could not check your identity right now; retrying shortly (ref 0123456789ab)",
+      code: "verifier_unavailable",
+      reason: "tonic_unreachable",
+      retryAfter: 5,
+      ref: "0123456789ab",
+    };
+
+    afterEach(() => {
+      forgetVerifierTrouble();
+      vi.useRealTimers();
+    });
+
+    it("carries the reason and retry interval, and is not unreachable", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(jsonResponse(503, body)),
+      );
+      const err = await api("/api/tasks", { poll: true }).catch((e) => e);
+      expect(err.status).toBe(503);
+      expect(err.code).toBe("verifier_unavailable");
+      expect(err.reason).toBe("tonic_unreachable");
+      expect(err.retryAfter).toBe(5);
+      expect(err.method).toBe("GET");
+      expect(isVerifierUnavailable(err)).toBe(true);
+      expect(isUnreachable(err)).toBe(false);
+    });
+
+    it("leaves a generic 503 unreachable", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          jsonResponse(503, {
+            error: "the service is temporarily unavailable (ref 1)",
+            code: "unavailable",
+          }),
+        ),
+      );
+      const err = await api("/api/tasks").catch((e) => e);
+      expect(isVerifierUnavailable(err)).toBe(false);
+      expect(isUnreachable(err)).toBe(true);
+      expect(verifierTroubleSince()).toBeNull();
+    });
+
+    it("times a run of refusals from the first, and ends it on the first answer", async () => {
+      vi.useFakeTimers();
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(503, body));
+      vi.stubGlobal("fetch", fetchMock);
+      await api("/api/tasks").catch(() => {});
+      const since = verifierTroubleSince();
+      expect(since).toBeInstanceOf(Date);
+      expect(verifierTroubleSustained()).toBe(false);
+
+      vi.advanceTimersByTime(VERIFIER_SUSTAINED_MS - 1000);
+      await api("/api/config").catch(() => {});
+      expect(verifierTroubleSince()).toBe(since);
+      expect(verifierTroubleSustained()).toBe(false);
+      vi.advanceTimersByTime(1000);
+      expect(verifierTroubleSustained()).toBe(true);
+      expect(verifierSustainedReason(since)).toBe(
+        "Sign-in verification has been temporarily unable to check your identity for 30s — retrying automatically.",
+      );
+
+      fetchMock.mockResolvedValue(jsonResponse(200, []));
+      await api("/api/tasks");
+      expect(verifierTroubleSince()).toBeNull();
+      expect(verifierTroubleSustained()).toBe(false);
+    });
   });
 });

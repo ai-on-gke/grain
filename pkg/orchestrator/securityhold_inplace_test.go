@@ -360,3 +360,59 @@ func TestSecurityHoldReviewsAgainAnInPlaceFixOnTheTrustBoundary(t *testing.T) {
 		t.Fatalf("a clean second review did not release the hold: automerge=%v links=%+v", got.AutoMerge, got.Links)
 	}
 }
+
+// Security reviews hold only repo-scoped api:ci-read@<repo> on both ci_mode:
+// github and ci_mode: grain repositories, carry the cheap-review testing
+// guidance, and get a BuildPrompt that never instructs them to wait on CI.
+func TestSecurityReviewHoldsRepoScopedCIReadAndSkipsCIWaitLoopInPrompt(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []model.CIMode{model.CIModeGitHub, model.CIModeGrain} {
+		store, ctx := openStore(t)
+		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+		if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: mode}); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, reviewID := heldTaskWithSim(t, ctx, store)
+		review := reloaded(t, ctx, store, reviewID)
+
+		wantGrant := model.APIGrantString("ci-read", repo.String())
+		if len(review.Grants) != 1 || review.Grants[0].Capability != wantGrant || review.Grants[0].Via != model.GrantByGrain {
+			t.Fatalf("mode=%s: review grants = %+v, want [{Capability:%s Via:grain}]", mode, review.Grants, wantGrant)
+		}
+		sandbox := "sb-sec-" + string(mode)
+		if err := store.StartRun(ctx, model.Run{
+			ID: reviewID + "-1", TaskID: reviewID, Sandbox: sandbox,
+			Attempt: 1, StartedAt: baseTime.Add(time.Minute),
+		}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		scope, live, err := store.SandboxNamespaceScope(ctx, sandbox)
+		if err != nil || !live || !scope.MayReadCI || scope.MayReadAllCI || !scope.AllowedRepos["acme/widgets"] {
+			t.Fatalf("mode=%s: SandboxNamespaceScope = %+v (live=%v, err=%v), want repo-scoped CI read", mode, scope, live, err)
+		}
+
+		prompt := orchestrator.BuildPrompt(review, "work", "/home/debian", true,
+			orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
+		for _, want := range []string{
+			"Testing and CI",
+			"Do not run `go test ./...`",
+			"Do not call `grain ci wait`",
+			"narrowly targeted test (`go test ./pkg/x -run TestName`)",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("mode=%s: review prompt missing %q:\n%s", mode, want, prompt)
+			}
+		}
+		for _, unwanted := range []string{
+			"After a push, call `wait_for_checks`",
+			"Before finishing, run `grain ci wait`",
+			"carries no verdict, so wait for it",
+			"not a reason to skip the wait",
+			"Once you have pushed, you can run `grain pr open`",
+		} {
+			if strings.Contains(prompt, unwanted) {
+				t.Errorf("mode=%s: review prompt still tells reviewer %q:\n%s", mode, unwanted, prompt)
+			}
+		}
+	}
+}

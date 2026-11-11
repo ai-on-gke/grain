@@ -653,6 +653,18 @@ schedules are gone.
   `live-secrets-repo`, `post-reset-e2e`) on their own crons. The first two
   decide the LKG (section 2), `nightly.yml` also runs on every rc as Stage 1
   of its qualification (section 4), and the rest are advisory.
+- **Live real-model suites** (`.github/workflows/live-agent.yml`,
+  `live-frameworks.yml`): advisory, with a freshness policy. Every LKG
+  selection (`scripts/candidate-gate.sh select-lkg`) records each suite's
+  newest verdict and newest pass on `main`, and prints a `WARNING live`
+  line when the newest verdict is not a pass, or when no pass is newer than
+  `CANDIDATE_GATE_LIVE_MAX_AGE_DAYS` (3 days). The policy is to warn and
+  not refuse. A provider outage or an exhausted key must not stall the
+  train. But a release cut under a warning was cut without a fresh
+  live-model verdict, and the train's report says so. v3.5.0 shipped a
+  tool schema Gemini refuses because these suites had stopped running for
+  two weeks and nothing said so. The warning and `grain health`'s stale
+  schedules (`docs/github-actions-ci.md`) are how that is seen now.
 - **No staging soak.** There is no persistent staging sandbox, no
   `staging-ui-exploration` or `staging-state-cleanup` schedule and no
   24-hour wait: an rc is qualified by Stage 1 and Stage 2 (section 4), and

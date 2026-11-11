@@ -71,7 +71,7 @@ With no state repository (`Config.StateRepo == nil` and no external remote, e.g.
 The bootstrap set is exactly what `clearBootstrap` (`pkg/ui/config_bootstrap.go`) zeroes:
 
 - **Models:** `agentBackends`, `defaultModel`, `agentBackendId`, `modelSettings`, `judgementModel`.
-- **Sandboxes:** `maxWorkers`, `sandboxBackend`, `sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`, `sandbox{Cpu,Memory,Disk}Overcommit`, `sandboxMemoryReserveMb`, `sandboxDiskFloorShare`, `sandboxDiskFloorMinMb`, `sandboxOvercommit` (adaptive overcommit), `networkAccess`, `sandboxImage`, `sandboxImageMirror`, every `k8s*` field (including `k8sPriorityClass{Interactive,Agent,Ci}`).
+- **Sandboxes:** `maxWorkers`, `sandboxBackend`, `sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`, `sandbox{Cpu,Memory,Disk}Overcommit`, `sandboxMemoryReserveMb`, `sandboxDiskFloorShare`, `sandboxDiskFloorMinMb`, `sandboxOvercommit` (adaptive overcommit), `sandboxShapeLimits`, `networkAccess`, `sandboxImage`, `sandboxImageMirror`, every `k8s*` field (including `k8sPriorityClass{Interactive,Agent,Ci}`).
 - **CLI run locations:** `cliRun`.
 - **The lock:** `settingsLocked`.
 
@@ -227,7 +227,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Upgrade now / scheduled | Action — `POST /api/upgrade`, `DELETE /api/upgrade/scheduled` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
-| `upgradeCheckMode`, `upgradeCheckPausesPipeline`, `autoUpgradeChannel`, `autoUpgradeTime` | Yes — General → Updates; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
+| `upgradeCheckMode`, `upgradeCheckPausesPipeline`, `autoUpgradeOn`, `autoUpgradeChannel`, `autoUpgradeTime`, `autoUpgradeMinIntervalHours` | Yes — General → Updates; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
 | Power (restart, reboot, shutdown) | Action — System → Power; `POST /api/host/{restart,reboot,shutdown}` | No — action | Unlocked (Action) | No | |
 
 ### 3.8 Caches (`/settings/caches`)
@@ -252,7 +252,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 | --- | --- | --- | --- | --- | --- |
 | External remote / branch | Action — Config repo; `POST /api/state-repo/remote` | No — host-local `<data-dir>/state-repo.json` (also `-external-config-repo`, `-external-config-branch`) | Unlocked (Action) | No | Switches mode (§2.7.4). |
 | `directConfigWrites` | No | No — host-local `state-repo.json`, read per request | — | Ignored | §2.5. |
-| Secrets key / secrets repo | Write-only — `POST /api/state-repo/secrets-key` (`import-key`), `POST /api/state-repo/secrets-repo` | No — secret material | Unlocked (Secret) | No | |
+| Secrets key / secrets repo | Write-only — `POST /api/state-repo/secrets-key` (`import-key`), `POST /api/state-repo/secrets-key/wrap` / `unwrap`, `POST /api/state-repo/secrets-repo` | No — secret material | Unlocked (Secret) | No | |
 | Sync now, open config PR, dismiss reset notice | Action — `POST /api/state-repo/sync`, `/pull-requests`, `/reset-notice` | No — action | Unlocked (Action) | No | The PR route is how a refusal's `change` becomes a PR. |
 
 ### 3.11 General (`/settings/general`)

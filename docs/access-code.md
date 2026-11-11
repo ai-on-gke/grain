@@ -537,17 +537,73 @@ also records who presented it, as the principal `access-code:<name>`
   (`v2.<issued>.<name>.<mac>`), so it cannot be edited. A session signed
   in before names existed (`v1`) keeps working until it expires, as
   "operator (access code)".
-- **The CLI** sends `X-Grain-Access-Name` beside a bearer code:
-  `$GRAIN_OWNER` when set, else the local account as `<user>@<host>`.
-  The header counts only beside the code. The name is what the CLI
-  says, not something grain verified: anybody who holds the code is the
-  owner already, so the name attributes the request, it does not
-  authorize it. For a verified identity, use `grain login` through IAP
-  or an identity proxy.
+- **The CLI**, when it sends the code, sends `X-Grain-Access-Name`
+  beside it: `$GRAIN_OWNER` when set, else the local account as
+  `<user>@<host>`. The header counts only beside the code. The name is
+  what the CLI says, not something grain verified: anybody who holds the
+  code is the owner already, so the name attributes the request, it does
+  not authorize it. The two ways below give the host CLI a verified
+  identity instead, and day to day it then sends no code at all.
 - **The access history** (Settings -> Access, the config audit) records
   every mutating request the code authenticates under the surface
   `access-code`: who, the source address, the route and the time,
   beside role changes.
+
+### On the daemon's host: the API socket
+
+The daemon also serves its API on a unix socket,
+`<data-dir>/api/grain.sock`, in a directory only its own account may
+enter (mode `0700`). `-api-socket` names another path, and `none` turns
+it off. For each connection the daemon asks the kernel which account
+connected (`SO_PEERCRED`) and maps that uid to a person:
+
+- `-host-accounts 1000=alice@example.com,1001=bob@example.com`
+  (`$GRAIN_HOST_ACCOUNTS`) names them;
+- the daemon's own account maps to `-deployment-owner` unless
+  `-host-accounts` names it.
+
+With neither set, no account maps to anybody and the socket is not
+served. A mapped caller is recorded as that person, with the source
+`host-account`, which is a verified source: it can be named in an
+`Approved-by:` trailer, which `access-code:<name>` never can. The
+allowlist still decides what they may do, as for any verified sign-in;
+`-deployment-owner` is always on it.
+
+Nothing on the socket is trusted for being there:
+
+- a uid the map names nobody for is refused with `403` before the
+  request reaches the API, whatever it presents, the access code
+  included;
+- a mapped caller is only that person: the socket drops the access
+  code, bearer tokens, cookies, `X-Grain-Access-Name`,
+  `X-Grain-Acting-Task` and every proxy identity or forwarding header;
+- a socket request's address is `unix-socket:uid=<n>`, never empty, so
+  it is never taken for the daemon's own in-process calls, which stay
+  trusted as before.
+
+The host `grain` CLI dials the socket in place of a loopback
+`-server` whenever it exists and this account can reach it, unless
+`-token`, `$GRAIN_TOKEN` (or another token variable) or the context's
+own credential says how to sign in. It finds the socket under
+`$GRAIN_DATA_DIR`; `$GRAIN_API_SOCKET` names another, and
+`GRAIN_API_SOCKET=none` sends the CLI back to `-server` and the code.
+The directory's `0700` means that by default only the daemon's account
+(and root) can connect, which is what the CLI wrapper `scripts/setup.sh`
+installs runs as. To let another account in, grant it search on the
+directory (`setfacl -m u:alice:x <data-dir>/api`) and name its uid in
+`-host-accounts`. Being able to connect admits nobody on its own.
+
+### Elsewhere: `grain login` through IAP or an identity proxy
+
+`grain login <url>` that signs a person in through IAP (a Google ID
+token) or a credential source a wrapper registered (`--auth <source>`)
+now keeps a personal token afterwards: a `grain/external-dev` `gma_`
+token owned by them, as `--issue-token` mints. From then on the context
+is that token, recorded as `external:cli-…` on behalf of the person,
+and needs neither the proxy's sign-in nor the code day to day. `grain
+logout` revokes it. `--issue-token=false` keeps a context that signs in
+through the proxy on every call instead. A deployment with
+`externalAgentApi` off cannot issue one, and says so.
 
 ## Bootstrap and recovery only: `grain access-code mode`
 

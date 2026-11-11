@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -124,6 +125,16 @@ func (c *Client) SetPendingSecret(ctx context.Context, id, value string) error {
 		return validationErrorf("task %s is not waiting on a secret", id)
 	}
 	target := c.pendingSecretFor(obs)
+	// request_secret refuses these names; this is the same refusal for a
+	// request recorded before it did, or by any other route.
+	held, err := c.grainHeldSecret(ctx, target.Secret)
+	if err != nil {
+		return err
+	}
+	if held {
+		return validationErrorf("%s is grain's own credential or signing material and is not set "+
+			"from a task's secret request", target.Name)
+	}
 	if err := store.Set(target.Secret, target.Key, []byte(value)); err != nil {
 		return validationErrorf("%s", err)
 	}
@@ -164,4 +175,25 @@ func (s *Server) handleSetTaskSecret(w http.ResponseWriter, r *http.Request) {
 	// is queued again with no secret pending. respondWithTask is what
 	// every other mutation on a task already answers with.
 	s.respondWithTask(w, r, id)
+}
+
+// grainHeldSecret is secrets.GrainHeld plus what only this deployment's
+// configuration knows: a GCP key may mint through a minter secret of any
+// name (model.GCPKey.MinterCredential), which is as much grain's own key
+// as the gcp-key-minter default GrainHeld already names.
+func (c *Client) grainHeldSecret(ctx context.Context, secret string) (bool, error) {
+	if secrets.GrainHeld(secret) {
+		return true, nil
+	}
+	keys, err := c.Store.ListGCPKeys(ctx)
+	if err != nil {
+		return false, err
+	}
+	name, _, _ := strings.Cut(secret, "/")
+	for _, k := range keys {
+		if minter, _, _ := strings.Cut(k.EffectiveMinterCredential(), "/"); minter == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }

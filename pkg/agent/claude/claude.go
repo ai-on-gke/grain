@@ -894,8 +894,12 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	if err != nil {
 		stopRecord = ""
 	}
+	stopPolicy, err := stageStopPolicy(ctx, f.host, cfg.Interactive)
+	if err != nil {
+		stopPolicy = ""
+	}
 	// The hook is forked by claude, on claude's machine.
-	stopSettings, err := writeStopSettings(ctx, f.host, agent.HookBinary(f.host, f.grainBinaryPath), cfg.Interactive, stopRecord)
+	stopSettings, err := writeStopSettingsWithPolicy(ctx, f.host, agent.HookBinary(f.host, f.grainBinaryPath), cfg.Interactive, stopRecord, stopPolicy)
 	if err != nil {
 		stopSettings = ""
 	} else {
@@ -907,7 +911,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 		}
 		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
-		for _, p := range []string{stopRecord, stopSettings} {
+		for _, p := range []string{stopRecord, stopPolicy, stopSettings} {
 			if p != "" {
 				f.host.RemoveAll(removeCtx, p)
 			}

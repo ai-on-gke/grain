@@ -2039,8 +2039,9 @@ func TestReleasingAGranuleSandboxGivesBackItsAddress(t *testing.T) {
 func TestAGranuleAcquireRecreatesARemovedSandboxNetwork(t *testing.T) {
 	stateDir := t.TempDir()
 	granuleLog := filepath.Join(t.TempDir(), "granule-argv.log")
+	dockerLog := filepath.Join(t.TempDir(), "docker-argv.log")
 	writeFakeGranule(t, granuleLog, 30080)
-	writeFakeDockerGuest(t, filepath.Join(t.TempDir(), "docker-argv.log"), filepath.Join(t.TempDir(), "counter"), 0, "")
+	writeFakeDockerGuest(t, dockerLog, filepath.Join(t.TempDir(), "counter"), 0, "")
 	fakeGranule, err := exec.LookPath("granule")
 	if err != nil {
 		t.Fatal(err)
@@ -2094,6 +2095,13 @@ func TestAGranuleAcquireRecreatesARemovedSandboxNetwork(t *testing.T) {
 	}
 	if got := granuleCreateCount(t, granuleLog); got != 3 {
 		t.Errorf("granule vm create ran %d times, want 3: one for t1-1, the refused one for t2-1 and its retry", got)
+	}
+	dockerCalls, err := os.ReadFile(dockerLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dockerCalls), "com.docker.network.bridge.enable_icc=false") {
+		t.Errorf("docker network create omitted enable_icc=false:\n%s", dockerCalls)
 	}
 }
 

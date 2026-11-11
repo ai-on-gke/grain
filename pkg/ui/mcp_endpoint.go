@@ -168,13 +168,11 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 	// X-Grain-Acting-Task on a token's request is ignored rather than let
 	// widen the token's scopes to a task's grants.
 	if tok := externalTokenFromContext(ctx); tok != nil {
-		_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		held, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 		if err != nil {
 			return mcpCallerAccess{role: role, externalToken: tok}, err
 		}
-		if role != nil && !role.Full {
-			set = set.Intersect(role.set).Without(role.deny)
-		}
+		_, set = narrowExternalGrants(held, set, role)
 		return mcpCallerAccess{
 			role:          role,
 			externalToken: tok,
@@ -323,7 +321,7 @@ var domainGuidance = map[string]string{
 	"connections":  "Git connections and model backend definitions.",
 	"sessions":     "Interactive console sessions and standing Director/chat sessions.",
 	"caches":       "CI, package, and GitHub Actions cache inspection and flushing.",
-	"dispatch":     "Queue/pipeline pause controls and immediate task dispatch (run-now).",
+	"dispatch":     "Queue/pipeline pause controls, immediate task dispatch (run-now), and what a durable task's next dispatch carries (context compaction, current brief, and rollover to a successor).",
 	"memory":       "Deployment and per-repository standing agent memory documents.",
 }
 
@@ -1298,6 +1296,7 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				},
 				"grants": map[string]any{
 					"type":        "array",
+					"items":       map[string]any{},
 					"description": "Unified grants, each a grant string or a {capability, with} object, as POST /api/tasks takes them (repo#target, repo#read and repo#write included). A request that also names the same kind the old way -- capabilities, reads, writes, or repo/base/no_repo beside repo#target -- is refused.",
 				},
 				"depends_on": map[string]any{

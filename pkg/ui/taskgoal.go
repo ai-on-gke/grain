@@ -143,6 +143,8 @@ func goalWords(g model.GoalDecl) string {
 		return fmt.Sprintf("tasks %v %s", g.Spec.Tasks, g.Spec.Until)
 	case model.GoalPipelineHealthy:
 		return "the pipeline healthy"
+	case model.GoalNightlyGreen:
+		return fmt.Sprintf("`%s` on %s green", g.Spec.Workflow, g.Spec.Repo)
 	}
 	return "a person closes it"
 }

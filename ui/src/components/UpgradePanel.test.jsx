@@ -76,6 +76,44 @@ describe("UpgradePanel", () => {
     );
   });
 
+  // task 4083: an edition's notice about how this deployment upgrades
+  // (upgrade.RegisterNotice) is a warning with the command that fixes
+  // it, whether or not the deployment can upgrade itself.
+  it("shows each notice GET /api/upgrade reports, with its command", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      notices: [
+        {
+          kind: "stale-flag",
+          message: "The unit's -upgrade-image flag names a retired repository.",
+          command: "sudo systemctl edit grain",
+          docsUrl: "https://example.com/docs/upgrade",
+        },
+      ],
+    });
+    render(<UpgradePanel showError={() => {}} />);
+
+    const notice = await screen.findByTestId("upgrade-notice");
+    expect(notice).toHaveTextContent(
+      "The unit's -upgrade-image flag names a retired repository.",
+    );
+    expect(screen.getByTestId("upgrade-notice-command")).toHaveTextContent(
+      "sudo systemctl edit grain",
+    );
+    expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://example.com/docs/upgrade",
+    );
+  });
+
+  it("shows no notice when GET /api/upgrade reports none", async () => {
+    api.mockResolvedValue({ enabled: false });
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(await screen.findByText(/Not available:/)).toBeInTheDocument();
+    expect(screen.queryByTestId("upgrade-notice")).not.toBeInTheDocument();
+  });
+
   // grain/task-3689: the box starts on the channel the deployment
   // follows, so a deployment installed on latest is offered the next
   // release rather than main's head -- even when its last upgrade
@@ -1971,10 +2009,57 @@ describe("AutoUpgradeSettings", () => {
       screen.getByRole("option", { name: "release-2026" }),
     ).toBeInTheDocument();
   });
+
+  it("saves the minimum interval between release upgrades on blur or Enter, allowing 0", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <AutoUpgradeSettings
+        settings={{
+          ...settings,
+          autoUpgradeOn: "release",
+          autoUpgradeChannel: "latest",
+          autoUpgradeMinIntervalHours: 6,
+          autoUpgradeMinIntervalHoursDefault: 6,
+        }}
+        onSave={onSave}
+      />,
+    );
+
+    const interval = screen.getByLabelText(/minimum interval \(hours\)/i);
+    expect(interval).toHaveValue(6);
+    await user.clear(interval);
+    await user.type(interval, "0");
+    expect(onSave).not.toHaveBeenCalled();
+    await user.tab();
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeMinIntervalHours: 0,
+    });
+
+    rerender(
+      <AutoUpgradeSettings
+        settings={{
+          ...settings,
+          autoUpgradeOn: "release",
+          autoUpgradeChannel: "latest",
+          autoUpgradeMinIntervalHours: 0,
+          autoUpgradeMinIntervalHoursDefault: 6,
+        }}
+        onSave={onSave}
+      />,
+    );
+    const updated = screen.getByLabelText(/minimum interval \(hours\)/i);
+    expect(updated).toHaveValue(0);
+    await user.clear(updated);
+    await user.type(updated, "12{Enter}");
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeMinIntervalHours: 12,
+    });
+  });
 });
 
 describe("Registry image mode on UpgradePanel", () => {
-  it("renders registry pull description without release-asset source selector", async () => {
+  it("renders registry pull description without an image source selector", async () => {
     const baseStatus = {
       enabled: true,
       mode: "image",
@@ -1982,16 +2067,10 @@ describe("Registry image mode on UpgradePanel", () => {
       running: { image: "docker.io/grainai/grain:main" },
       phase: "done",
       branch: "main",
-      source: "registry",
       detail: "pulled docker.io/grainai/grain:main",
       imageRepo: "docker.io/grainai/grain",
       defaultImageRepo: "docker.io/grainai/grain",
       imageRepos: ["docker.io/grainai/grain"],
-      imageSource: {
-        source: "registry",
-        sourceDefault: true,
-        locked: false,
-      },
     };
 
     api.mockImplementation((url) => {
@@ -2015,7 +2094,46 @@ describe("Registry image mode on UpgradePanel", () => {
       screen.queryByTestId("upgrade-image-source"),
     ).not.toBeInTheDocument();
   });
+});
 
+describe("Host-less image repository on UpgradePanel", () => {
+  it("warns before an upgrade when the configured image repository names no registry host", async () => {
+    const warning =
+      "Upgrades will be refused: the image repository edition-local/grain (set by the -upgrade-image flag in this deployment's unit) names no registry host.";
+    api.mockImplementation((url) => {
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        channel: "main",
+        running: { image: "edition-local/grain:main" },
+        phase: "idle",
+        imageRepo: "edition-local/grain",
+        defaultImageRepo: "docker.io/grainai/grain",
+        imageRepos: ["docker.io/grainai/grain"],
+        imageRepoWarning: warning,
+      });
+    });
+
+    const { container } = render(<UpgradePanel showError={() => {}} />);
+
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+    const alert = container.querySelector(".upgrade-image-repo-warning");
+    expect(alert.querySelector(".upgrade-configured-repo")).toHaveTextContent(
+      "edition-local/grain",
+    );
+    expect(alert.querySelector(".upgrade-default-repo")).toHaveTextContent(
+      "docker.io/grainai/grain",
+    );
+  });
+});
+
+describe("External management notice on UpgradePanel", () => {
   it("replaces in-VM upgrade and SQLite migration controls with an external management notice when selfUpgradeDisabled is set", async () => {
     api.mockResolvedValue({
       enabled: false,
@@ -2093,5 +2211,165 @@ describe("Registry image mode on UpgradePanel", () => {
       safeManagementUrl("https://user:secret@grain.example.com/entries/alice"),
     ).toBe("");
     expect(safeManagementUrl("https://:8080/entries/alice")).toBe("");
+  });
+});
+
+// grain/task-4153: another edition's repository is never one of the
+// ordinary image choices; it is offered only behind "Switch edition…",
+// and an upgrade onto it is confirmed with what it loses before the
+// request -- carrying switchEdition -- is sent.
+describe("Switching edition on UpgradePanel", () => {
+  const editionStatus = {
+    enabled: true,
+    mode: "image",
+    channel: "main",
+    phase: "",
+    branch: "",
+    edition: "acme",
+    imageRepo: "registry.example/acme/acme-grain",
+    defaultImageRepo: "registry.example/acme/acme-grain",
+    imageRepos: [
+      "registry.example/acme/acme-grain",
+      "mirror.example/acme/grain",
+    ],
+    otherEditionImageRepos: [
+      { repository: "docker.io/grainai/grain", edition: "oss" },
+    ],
+    editionSwitchLosses: [
+      "the capability servers the acme edition links in",
+      "the acme install track's defaults",
+    ],
+  };
+
+  // GET /api/upgrade answers editionStatus, a POST starts the upgrade,
+  // and anything else (the release notes preview) answers nothing.
+  const mockEditionApi = () =>
+    api.mockImplementation((url, opts) => {
+      if (opts?.method === "POST") {
+        return Promise.resolve({
+          ...editionStatus,
+          phase: "running",
+          branch: "main",
+        });
+      }
+      if (url === "/api/upgrade") return Promise.resolve(editionStatus);
+      return Promise.resolve({});
+    });
+
+  it("keeps another edition's repository out of the ordinary choices", async () => {
+    api.mockResolvedValue(editionStatus);
+    const user = userEvent.setup();
+    const { container } = render(<UpgradePanel showError={() => {}} />);
+
+    await screen.findByText("mirror.example/acme/grain");
+    expect(
+      screen.queryByText(/docker\.io\/grainai\/grain/),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Switch edition…" }));
+    const panel = container.querySelector(".upgrade-switch-edition");
+    expect(panel).toHaveTextContent(/runs the acme edition/);
+    expect(panel).toHaveTextContent(
+      /the capability servers the acme edition links in/,
+    );
+    expect(
+      within(panel).getByText("docker.io/grainai/grain (oss edition)"),
+    ).toBeInTheDocument();
+  });
+
+  it("confirms an edition switch, naming what is lost, and posts switchEdition", async () => {
+    mockEditionApi();
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    await screen.findByText("mirror.example/acme/grain");
+    await user.click(screen.getByRole("button", { name: "Switch edition…" }));
+    await user.click(screen.getByText("docker.io/grainai/grain (oss edition)"));
+    expect(
+      screen.getByText(/switches this deployment from the acme edition to oss/),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Switch edition and upgrade" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/Switch edition from acme to oss\?/);
+    expect(dialog).toHaveTextContent(
+      /the capability servers the acme edition links in/,
+    );
+    expect(dialog).toHaveTextContent(/the acme install track's defaults/);
+    const posts = () =>
+      api.mock.calls.filter(([, opts]) => opts?.method === "POST").length;
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(posts()).toBe(0);
+
+    await user.click(
+      screen.getByRole("button", { name: "Switch edition and upgrade" }),
+    );
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Switch edition",
+      }),
+    );
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/upgrade", {
+        method: "POST",
+        body: JSON.stringify({
+          branch: "main",
+          image: "docker.io/grainai/grain",
+          afterTasksFinish: false,
+          switchEdition: true,
+        }),
+      }),
+    );
+  });
+
+  it("drops the switch when the operator goes back to an ordinary choice", async () => {
+    mockEditionApi();
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    await screen.findByText("mirror.example/acme/grain");
+    await user.click(screen.getByRole("button", { name: "Switch edition…" }));
+    await user.click(screen.getByText("docker.io/grainai/grain (oss edition)"));
+    await user.click(screen.getByText("mirror.example/acme/grain"));
+    await user.click(screen.getByRole("button", { name: "Upgrade" }));
+
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/upgrade", {
+        method: "POST",
+        body: JSON.stringify({
+          branch: "main",
+          image: "mirror.example/acme/grain",
+          afterTasksFinish: false,
+        }),
+      }),
+    );
+  });
+
+  it("says when the last upgrade switched edition, and who asked", async () => {
+    api.mockResolvedValue({
+      ...editionStatus,
+      phase: "ok",
+      branch: "main",
+      editionSwitch: {
+        from: "acme",
+        to: "oss",
+        repository: "docker.io/grainai/grain",
+        requestedBy: "operator alice",
+      },
+    });
+    const { container } = render(<UpgradePanel showError={() => {}} />);
+    await waitFor(() =>
+      expect(
+        container.querySelector(".upgrade-last-edition-switch"),
+      ).toHaveTextContent(
+        /switched this deployment's edition from acme to oss, pulling from docker\.io\/grainai\/grain, as operator alice asked/,
+      ),
+    );
   });
 });

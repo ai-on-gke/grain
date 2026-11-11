@@ -134,4 +134,20 @@ describe("navigateInApp", () => {
       window.removeEventListener("hashchange", hash);
     }
   });
+
+  // The pane's "← Back" returns to the page it was opened over, which
+  // App reads from the entry's state on this push and on any later Back
+  // or Forward onto it (the Inbox's question rows go through here).
+  it("keeps the page a task is opened over in the pushed entry", () => {
+    window.history.replaceState(null, "", "/inbox?state=open");
+    navigateInApp("/tasks/4#comment=37");
+    expect(window.history.state).toEqual({ behind: "/inbox?state=open" });
+    // From that pane to another: the inbox is still what is behind.
+    navigateInApp("/tasks/8");
+    expect(window.history.state).toEqual({ behind: "/inbox?state=open" });
+    // A pane loaded on its own has no page behind it to keep.
+    window.history.replaceState(null, "", "/tasks/9");
+    navigateInApp("/tasks/10");
+    expect(window.history.state).toEqual({});
+  });
 });

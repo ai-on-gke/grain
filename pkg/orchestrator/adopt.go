@@ -517,7 +517,7 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 		tools:              tools,
 		sandboxRoot:        sandboxRoot,
 		placer:             placer,
-		mint:               deps.MintSandboxToken,
+		mint:               mintSandboxTokenFor(deps, task.ID, run.Attempt),
 		credentialIdentity: deps.CredentialGitIdentity,
 		unrestorable:       unrestorable,
 	}

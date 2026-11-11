@@ -307,6 +307,12 @@ var settingsDiffRows = []settingsDiffRow{
 		b, _ := json.Marshal(s.SandboxOvercommit)
 		return string(b)
 	}},
+	// The sandbox shape ceilings, as the one JSON object they are stored
+	// as, so a change to the maximum or any role's ceiling is one row.
+	{"sandboxShapeLimits", "sandbox shape limits", func(s ui.Settings) any {
+		b, _ := json.Marshal(s.SandboxShapeLimits)
+		return string(b)
+	}},
 	{"externalAgentApi", "external agent api", func(s ui.Settings) any { return s.ExternalAgentAPI }},
 	{"sessionSandboxIdleTtl", "session sandbox idle ttl", func(s ui.Settings) any { return s.SessionSandboxIdleTTL }},
 	{"sandboxDiskFloorShare", "sandbox disk floor share", func(s ui.Settings) any { return s.SandboxDiskFloorShare }},
@@ -376,12 +382,13 @@ var settingsDiffRows = []settingsDiffRow{
 	{"autoUpgradeChannel", "automatic upgrade channel", func(s ui.Settings) any { return s.AutoUpgradeChannel }},
 	{"autoUpgradeTime", "automatic upgrade time", func(s ui.Settings) any { return s.AutoUpgradeTime }},
 	{"autoUpgradeOn", "automatic upgrade mode", func(s ui.Settings) any { return s.AutoUpgradeOn }},
+	{"autoUpgradeMinIntervalHours", "automatic upgrade min interval (hours)", func(s ui.Settings) any { return s.AutoUpgradeMinIntervalHours }},
 	{"ownerTrust", "owner-trust proposal policy", func(s ui.Settings) any { return ownerTrustRows(s.OwnerTrust) }},
 	{"autoGrantContextReads", "auto-grant context reads", func(s ui.Settings) any { return strings.Join(s.AutoGrantContextReads, ", ") }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
 	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
-	{"registry", "registry connection", func(s ui.Settings) any {
-		b, _ := json.Marshal(s.Registry)
+	{"hub", "hub connection", func(s ui.Settings) any {
+		b, _ := json.Marshal(settingsHubConfig(s))
 		return string(b)
 	}},
 }

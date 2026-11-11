@@ -504,9 +504,32 @@ The trust rules are those of `repo-write`. A job is given its api grants
 only on a post-merge `release`, an operator's `workflow_dispatch`, or a
 cron grain fired itself, never on a pull request's or an ordinary push's
 run. They are honoured only for the repositories the deployment offers
-grain's API to in CI, which is grain's own (`ai-on-gke/grain`). Like
+grain's API to in CI: grain's own (`ai-on-gke/grain`), always, and the
+repositories the deployment's `ci_api_repos` setting adds to it. Like
 repository access, a job is granted them by declaring them: they are
 not taken from the repository's CI capabilities list.
+
+`ci_api_repos` is the `grain_config.ci_api_repos` column, a
+comma-separated list of `owner/name` (or `host/owner/name`) entries,
+exported to `tables/grain_config.json` in the deployment's state
+repository, so offering the API to one more repository is a reviewed
+pull request there:
+
+```json
+"ci_api_repos": "acme/widgets,git.example.com/acme/gadgets"
+```
+
+Empty, the default, offers it to `ai-on-gke/grain` only, and a listed
+repository is offered it beside `ai-on-gke/grain`, never instead of it.
+An entry that is not a repository is ignored, and the daemon logs it.
+Listing a repository changes nothing else: its jobs still get a token
+only on the trusted events above, still only for the scopes listed
+above, and still narrowed to their own repository. Each job reads the
+setting when its grants are resolved, so a merged change applies from
+the next job on, with no restart. Listing a repository widens a trust
+boundary: anyone who can merge to that repository's default branch, or
+cut a release from it, can then read its tasks and CI and file its
+templates through grain's API.
 
 `release-gate-read`, the release train's capability
 (`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
@@ -533,6 +556,76 @@ and the forge is not asked.
 | `GET /api/ci/runs/{id}` | With an Actions id (`gha:<owner>:<name>:<run id>`, for example `gha:ai-on-gke:grain:123`): the run with its jobs and their steps, each with its conclusion. Logs are not included. |
 | `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
 | `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
+
+### A task's own CI: the default `api:ci-read`
+
+A task filed against a repository grain CI does not gate holds
+`api:ci-read@<owner>/<name>`, which is
+`https://grain.dev/capabilities/api#ci-read={"repo":"<owner>/<name>"}`
+on its own repository, by default. This applies to `ci_mode: github`
+and to any repository without "Use Grain CI". The grant is recorded on
+the task like the default `grain#ci` is on a grain-CI repository, as
+`Via: default` credited to the repository layer
+(`model.DefaultCIReadGrant`). Every filing point attaches it: a person
+or the API (`POST /api/tasks`), `propose_task`, schedules, suites,
+templates, path triggers, reviews and GitHub-event tasks. With it, the
+run's own CI reads answer for its GitHub Actions runs
+(`gha:<owner>:<name>:<run>`):
+
+| Command | Route |
+|---|---|
+| `grain ci list` (and `--task <id>` for a task in the same repository) | `/cli/ci/runs`, `GET /api/ci/runs` |
+| `grain ci show <run-id>`, `grain ci log [<run-id>] [--job <j>] [--tail N]` | `/cli/ci/show`, `GET /api/ci/runs/{id}`, `GET /api/ci/runs/{id}/log` |
+| `grain pr status` (and `--task <id>`, `--ref <branch>`) | `/cli/pr/status`: every workflow's newest run at the branch's newest commit, with each job's verdict |
+| `grain pr base-status` | `/cli/pr/base-status`, the same for the base branch |
+| `grain ls/read ci://<owner>/<name>/...` | the namespace's `ci://` tree |
+
+`grain ci test-history <test>` reads the same runs. `grain ci wait` and
+`grain pr open` work without the grant. `grain ci run-job` and `grain ci
+retrigger` drive grain CI only, and are not offered on a GitHub-CI
+repository.
+
+**The trade-off.** The grant is read-only (`ci:read` alone: runs, jobs,
+logs and artifact lists, with no `ci:write`, tasks, merges or memory). It
+reaches only the task's own repository. It mints no credential, since
+Actions reads go through the daemon's forge connection, and it changes
+no merge gate. `grain#ci`, which would also change gating, is still
+never attached on these repositories. What it adds is that a run can
+read its own repository's CI logs, which may contain anything that
+repository's CI prints. Because it is an `api:*` grant, a run holding
+it also has the `grain-controller` MCP server (`POST /api/mcp`)
+attached, where before a run with no `api:*` grant had none. That
+server answers only the scopes the task holds, so here it adds the same
+`ci:read` tools and nothing more. Without the grant, runs got `forbidden` from
+`grain ci log` and asked a person for `grain#ci`, which no GitHub-CI
+repository can grant.
+
+**Turning it off.** Add a capability policy deny rule on
+`https://grain.dev/capabilities/api#ci-read`. Without `repos` it applies
+to every repository. With `repos` it applies only to the repositories it
+names:
+
+```json
+{"rules": [{"capability": "https://grain.dev/capabilities/api#ci-read", "repos": ["acme/secret-ci"], "deny": true}]}
+```
+
+The default is then not attached at all; it is not attached and then
+dropped. The same rule refuses the grant to anybody who asks for it.
+The rule does not remove the grant from tasks filed before it was saved.
+Dispatch checks every `api:*` grant a task holds against the policy
+(`checkTaskGrantsPolicy`), so such a task is refused and parked, as it
+would be for any grant that a later policy denies. Remove the grant from
+those tasks, or file them again.
+A run without it reads in its prompt that to read CI logs it should
+`request_access` for `https://grain.dev/capabilities/api#ci-read` on its
+repository, never `grain#ci`. A CI read it attempts anyway is refused in
+the same words.
+
+Like a default `grain#ci`, the default `api:ci-read` on the proposal's
+own repository is not an escalation. A run's `propose_task` carrying it
+still queues on the proposer's permission
+(`model.GrantsBeyondCIReadDefault`), and an external credential approving
+such a task need not hold `ci:read` itself.
 
 Notes:
 
@@ -816,6 +909,29 @@ it. `total` is how many items matched across every page;
 `truncated: true` says this page was cut by the limit, and `nextCursor`
 (absent on the last page) reads on from it.
 
+A list can change between two page reads, and a newest-first one
+changes at its head: a new template, notification or inbox item moves
+every row after it down one. So on the routes whose rows have a key of
+their own -- an id, a name, a path -- `nextCursor` names the row the page
+ended on as well as where the next page starts, and the next page
+starts just after that row wherever it now sits: a row added or removed
+ahead of the cursor between the two reads neither repeats the previous
+page's last row nor skips one. Only when that row itself has gone does
+the page start at the offset instead. Those routes are
+`GET /api/templates`, `GET /api/inbox`, `GET /api/notifications`,
+`GET /api/tasks/{id}/messages`, `GET /api/memory/documents`,
+`GET /api/suites`, `GET /api/suite-runs`, `GET /api/boards`,
+`GET /api/release-notes`, a repository's releases and their candidates,
+`GET /api/ci/faults`, `GET /api/merge-batches`, `GET /api/console`,
+`GET /api/console-sessions`, `GET /api/external-agents/tokens`,
+`GET /api/deployment/secret-audit`, `GET /api/deployment/config-audit`,
+`GET /api/access/history`, `GET /api/persistent-sandboxes`,
+`GET /api/hostds`, `GET /api/gcp-keys`, `GET /api/github-tokens` and
+`GET /api/secrets`. The other routes in the table page by offset alone,
+which is exact for a list that only grows at its tail; `GET /api/tasks`
+and `GET /api/events` page by their own keyset cursors. A cursor handed
+out before cursors carried a key still reads on from its offset.
+
 | Route | Page by default | `q` matches | Other filters |
 |---|---|---|---|
 | `GET /api/deployment/reachable-repos` | 100 | the full name (`owner/name`, or `host/owner/name` on another git host) | `push=true` for only repositories the connection can push to -- those a task can be filed against -- or `push=false` for only those it cannot; `owner=`; `host=` (the deployment's default host, `github.com` unless configured, for the names that spell none). `repos` is the page; `connections` and `errors`, one entry per git connection, are whole (and omitted for repository-limited callers). |
@@ -833,24 +949,24 @@ it. `total` is how many items matched across every page;
 | `GET /api/tasks/{id}/messages` | 10 | author, summary or body | `after`, `agents`, `wait_ms` |
 | `GET /api/inbox` | 20 | task, title, repo, summary, subject or pull request | `repo`, `kind`. `items` is the page. |
 | `GET /api/notifications` | 20 | subject or title | `open`, `family`, `after`, `fields=list` |
-| `GET /api/ci/runs` | 10 (`view=full`) / 20 (`view=compact`) | id, repository, ref, commit, event, task id (`requestedBy`), job or workflow | `view=compact` (recommended), `repo`, `ref`, `conclusion`, `job`, `workflow`, `since`, `until`, `sort`, `order`, `provider`. `runs` is the page; `matched` (with `stored`) is the count. |
+| `GET /api/ci/runs` | 10 (`view=full`) / 20 (`view=compact`) | id, repository, ref, commit, event, task id (`requestedBy`), job or workflow | `view=compact` (recommended), `repo`, `ref`, `conclusion`, `job`, `workflow`, `since`, `until`, `sort`, `order`, `provider`, `fields=full`. `runs` is the page; `matched` (with `stored`) is the count. Unless `fields=full` is passed, an agent's row carries at most 5 jobs (`view=full`) or 10 job lines (`view=compact`), the failed, errored and cancelled ones first; `jobCount` and `jobsTruncated` report the full count, and `GET /api/ci/runs/{id}` has every job. An agent's `view=full` row cuts `error` and its jobs' errors to 500 bytes (`errorTruncated` marks the run's), and its `faults` are the shared faults seen on that page's own runs (at most 5), each cut as a paged `GET /api/ci/faults` row is; `GET /api/ci/faults` lists them all. |
 | `GET /api/ci/workflows` | 20 | workflow path or name | `repo`, `ref` (both required: the workflows are read from the repository at that ref). `workflows` is the page. |
 | `GET /api/ci/runs/{id}/artifacts` | 50 | job or artifact name | `artifacts` is the page. |
-| `GET /api/ci/faults` | 20 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. |
+| `GET /api/ci/faults` | 10 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. A paged row names its first 3 `runs`, 5 `refs` and 5 `paths`; `runCount`, `refCount` and `pathCount` report the full counts of what was cut, and `trimmed` says something was. `fields=full` carries them all. |
 | `GET /api/merge-batches` | 20 | repository, branch, ref or run id | `repo=owner/name`. `batches` is the page. |
-| `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. |
+| `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. A paged row leaves out `detail` (the finding in prose, ~650 B) unless `fields=full`. |
 | `GET /api/memory` | 5 | repository, author or text | `repo=owner/name` for one repository's standing memory; `repo=` (empty) for the deployment's own. |
 | `GET /api/memory/documents` | 20 | name, repo or summary | `repo=owner/name` for one repository's documents; `repo=` (empty) for the deployment's own. |
 | `GET /api/templates` | 5 (`fields=summary`: 20) | id, name, title or repository | `repo=owner/name`; `fields=summary` omits each template's prompt description. |
 | `GET /api/schedules` | 10 | name, id, repository, template, suite, source or declared path | `kind` (`schedule`, `workflow`), `sort`, `f`, `fields=full` (inline prompt descriptions are omitted on paged calls unless `fields=full`). |
 | `GET /api/suites` | 20 | id or name | |
-| `GET /api/suite-runs` | 20 | suite name or id | `repo=owner/name` |
+| `GET /api/suite-runs` | 10 | suite name or id | `repo=owner/name`. A paged row carries its first 3 `tasks` (`taskCount` and `tasksTruncated` report the full count); `fields=full`, or `GET /api/suite-runs/{id}`, has every task. |
 | `GET /api/boards` | 20 | id, name or folder | |
 | `GET /api/release-notes` | 20 | week period, title or author | |
 | `GET /api/release-notes/versions` | 50 | version string | `versions` is the page. |
 | `GET /api/state-repo/files` | 100 | file path | `entries` is the page. |
-| `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo` |
-| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls, and a row's `status.methods` is capped at 40 (`methodCount` and `methodsTruncated` report the full count); use `GET /api/capability-methods` for every method. |
+| `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo`. A paged row cuts `description` to 500 bytes and each array in `args` (an enum of configured spaces, say) to 10 items; `descriptionTruncated`, `argsTruncated` and `argItemCounts` (each cut array's full length by its path in the schema) say so. Ask with `fields=full` and `q=<ref>` for a whole row. |
+| `GET /api/capability-servers` | 10 | capability_id, command or URL | Method and configure JSON schemas are omitted on paged calls, and a row's `status.methods` is capped at 40 (`methodCount` and `methodsTruncated` report the full count); use `GET /api/capability-methods` for every method. Each array in a paged row's `config.config` (gchat's `spaces`, one per room) is cut to 10 items; `configTruncated` says so and `configItemCounts` gives each cut array's full length by its path. `fields=full` carries whole rows. |
 | `GET /api/capability-servers/usage` | 20 | capability_id | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
 | `GET /api/capability-servers/gchat-usage` | 50 | space or transport | `id` |
 | `GET /api/capability-servers/host-entries` | 50 | allowlist entry name | `entries` is the page. |
@@ -858,7 +974,7 @@ it. `total` is how many items matched across every page;
 | `GET /api/api-scope-sets/usage` | 20 | scope set name | Per-row `holders` is capped on paged calls (`holderCount` and `holdersTruncated` report the full count). |
 | `GET /api/external-agents/tokens` | 20 | id, name, owner or scope set | Per-row `resolvedScopes` (scopes times repositories) is left out of paged calls: `resolvedScopeCount` says how many there are, `resolvedScopesTruncated` is set, and `scopeSet`, `scopes` and `repos` are complete. |
 | `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
-| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. |
+| `GET /api/access/history` | 20 | actor, actorLabel or summary | Changes to the allowed users and groups list (`config_audit` surface `access`), newest first. The surface is matched in the database query, so newer changes to other surfaces never push access changes out of the answer. |
 | `GET /api/hostds` | 50 | host name or owner | |
 | `GET /api/gcp-keys` | 20 | key name, project id or service account email | |
 | `GET /api/github-tokens` | 20 | credential name, capability or connection scope | `tokens` is the page; per-row `connections` is capped on paged calls (`connectionCount` and `connectionsTruncated`). |
@@ -1005,6 +1121,31 @@ To tell another task's running agent something, use
   target's state is the same afterwards.
 
 It is refused on the caller's own task.
+
+### Steering a task with wider grants
+
+An agent may edit, re-queue or speak in another task only when that
+task is within its own task's envelope. `PATCH /api/tasks/{id}`,
+`retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
+`PUT /api/tasks/{id}/goal`, `agent-messages` and `notes` are refused
+with `403` on a target that carries a grant the calling task does not
+hold (a capability, an `api:*` scope, or the secrets and credentials a
+capability's arguments bind), writes to or reads a repository the
+calling task cannot, has wider network access, or has `autoMerge` the
+calling task lacks. A repository default grant the calling task lacks
+counts only when it is dangerous (only a person may grant it). Holding `api:tasks:write` on the repository is not
+enough: otherwise a less-privileged run could have a more-privileged
+one act on its behalf. Ask a person to act on that task instead.
+`run-now` is not refused this way: on an approved task it only moves
+when the task runs (`api:dispatch-control`'s job), and on an unapproved
+one the approval rail already applies.
+
+Two kinds of target are exempt: the calling task's own proposals
+(directly or down its proposal chain), which were held to its ceilings
+when filed, and -- for `agent-messages` and `notes` only -- its parent
+or child. A message from a narrower parent or child reaches the
+recipient prefixed with an `[Untrusted agent input: ...]` notice, so the
+receiving run weighs it as information rather than instructions.
 
 Two other routes look like they do this, but don't:
 
@@ -1226,7 +1367,7 @@ task" behave as follows:
 | `/api/console/*` and `/api/console-sessions*` | Excluded from `tools/list` and refused by `agentAPIGate` (bound to in-grain sandbox consoles and session tasks). |
 | `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
 | Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. Approval is the exception: see the next row. |
-| Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's origin names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions, a reason included (`X-Grain-Acting-Reason`, `grain_invoke`'s `reason`, `grain approve`/`grain run-now -reason`): approve is destructive under `tasks:admin`, so neither approves without one. That is `tasks:admin` on the task's repository, or, for a task with no repository, `tasks:admin` on every repository: a credential holding `tasks:admin` only for some repositories approves neither way a task that names none. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
+| Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's origin names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. It approves only work it could have filed itself over `POST /api/tasks`, so it is also refused (403) a task holding a grant the credential does not hold, writing to a repository it does not hold `tasks:write` on, reading one it does not hold `tasks:read` on, widening `networkAccess` past the deployment's default, turning on `autoApproveProposals`, or naming a `reviewTemplateId` it could not name at filing. A credential presented inside a limited verified session is held to that session's role for all of these. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions, a reason included (`X-Grain-Acting-Reason`, `grain_invoke`'s `reason`, `grain approve`/`grain run-now -reason`): approve is destructive under `tasks:admin`, so neither approves without one. That is `tasks:admin` on the task's repository, or, for a task with no repository, `tasks:admin` on every repository: a credential holding `tasks:admin` only for some repositories approves neither way a task that names none. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
 | Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents`, `GET /api/memory/documents/{name}`, `GET /api/suite-runs`, `GET /api/ci/faults`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
 | External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
 

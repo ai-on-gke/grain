@@ -1283,6 +1283,20 @@ of the endings task 837's rule gives a request back for
 task was paused simply stays put. Either way it waits, ignored by
 `Store.RunNow`, until the resume.
 
+**Compacting a long-lived task.** A durable task's conversation can be
+folded into a fresh handover on purpose
+([durable-tasks DT-15](../design/design/durable-tasks.design.md#DT-15)):
+by its agent with `compact_context`, by a person with
+`grain compact <id> [-handover-file f]`, or automatically once its prompt
+passes 50 KB. `task_context` records the cursor. Later prompts carry the
+handover and only the comments after it, while every comment stays on the
+task and in the UI. The same row holds the task's **current brief**,
+which replaces the original description in prompts. Its agent edits it
+with `update_brief`, a person with `grain brief <id> -file f -reason r`,
+and every edit is kept in `task_brief_edit`. `grain brief <id>` shows the
+brief, the handover's version and age (stale past 10 runs or 30
+comments), and the cursor.
+
 **Decided: Defer stays its own thing.** Deferral means "put away": it
 hides a task from the default lists and is offered only before a task
 has run, with a wake time of its own. Folding it into pause would change
@@ -3766,9 +3780,9 @@ apart, as [above](#decided-whoever-writes-it-owns-it).
 
 | Group | Tables |
 |---|---|
-| The deployment | `grain_schema` (the stamped version), `grain_instance` (the installation's durable id), `grain_config` (the settings row), `pipeline_pause`, `scheduled_upgrade`, `tuning_recommendation` |
+| The deployment | `grain_schema` (the stamped version), `grain_instance` (the installation's durable id), `grain_config` (the settings row), `pipeline_pause`, `scheduled_upgrade`, `auto_upgrade_run`, `auto_upgrade_release`, `tuning_recommendation` |
 | Tasks: declaration | `task`, `task_sequence`, `task_link`, `task_tag`, `task_read`, `task_write`, `task_grant`, `task_custom_field`, `task_filed_template`, `work_origin_comment` |
-| Tasks: observation | `task_observation`, `task_comment`, `task_attachment`, `task_grant_wait` |
+| Tasks: observation | `task_observation`, `task_comment`, `task_attachment`, `task_grant_wait`, `task_context`, `task_brief_edit` |
 | Runs | `task_run`, `task_run_tool`, `task_run_check_wait`, `task_run_wait_credit`, `task_run_ci_habit`, `task_run_spool_cursor`, `task_run_unmatched_failure`, `task_run_exec_failure`, `task_suspension`, `lease` |
 | Templates | `template`, `template_sequence`, `template_field`, `template_read`, `template_write`, `template_grant`, `template_custom_field` |
 | Schedules | `schedule`, `schedule_sequence`, `schedule_read`, `schedule_write`, `schedule_grant`, `schedule_custom_field`, `scheduled_firing_skip`, `scheduled_workflow_run` |

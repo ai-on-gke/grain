@@ -546,6 +546,11 @@ type Config struct {
 	// deployment that really wants a longer one sets it explicitly
 	// instead of switching this off.
 	MaxRunRuntime time.Duration
+	// AutoCompactBytes is the assembled-prompt size past which a durable
+	// task's run is asked to compact its context before anything else
+	// (context_compaction.go, design/design/durable-tasks.design.md#DT-15).
+	// Zero uses DefaultAutoCompactBytes.
+	AutoCompactBytes int
 	// MaxDurableRuns is how many runs of durable tasks (model.Task.IsDurable,
 	// design/design/durable-tasks.design.md#DT-1) may be live at once. They are
 	// admitted outside every worker and merger count, as every task with

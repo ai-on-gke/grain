@@ -37,6 +37,13 @@ import (
 //go:embed static
 var staticFS embed.FS
 
+// staticNextFS is the Angular UI (ui-ng/, design/design/angular-ui.design.md),
+// built into static-next/ by `make frontend` and served under /next/ beside
+// the React UI in static/. Same embedding, same placeholder arrangement.
+//
+//go:embed static-next
+var staticNextFS embed.FS
+
 // Server is the JSON API plus the static frontend it serves, a thin HTTP
 // shim over a Client. The store behind that Client is the record: every
 // answer here is read from it when it is asked for, so there is nowhere
@@ -465,6 +472,7 @@ func (s *Server) routes() {
 	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
 	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
 	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
+	s.route("POST /api/pull-requests/submit", s.handleSubmitPullRequest)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)
@@ -482,6 +490,10 @@ func (s *Server) routes() {
 	// messages.go, and mcp's chat tool at the other end of it.
 	s.route("POST /api/tasks/{id}/messages", s.handlePostTaskMessage)
 	s.route("POST /api/tasks/{id}/notes", s.handlePostTaskNote)
+	s.route("GET /api/tasks/{id}/context", s.handleGetTaskContext)
+	s.route("POST /api/tasks/{id}/compact", s.handleCompactTask)
+	s.route("POST /api/tasks/{id}/brief", s.handleSetTaskBrief)
+	s.route("POST /api/tasks/{id}/rollover", s.handleRolloverTask)
 	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
 	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
@@ -549,6 +561,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/tree", s.handleGetTaskTree)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
+	s.route("POST /api/repos/plan", s.handlePlanTargetRepos)
 	s.route("DELETE /api/repos/{owner}/{name}", s.handleRemoveTargetRepo)
 
 	s.route("GET /api/repos/{owner}/{name}/ci-capabilities", s.handleGetRepoCapabilities)
@@ -733,6 +746,8 @@ func (s *Server) routes() {
 	s.route("POST /api/state-repo/pull-requests", s.handleOpenConfigPullRequest)
 	s.route("POST /api/state-repo/remote", s.handleSetStateRepoRemote)
 	s.route("POST /api/state-repo/secrets-key", s.handleImportSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/wrap", s.handleWrapSecretsKey)
+	s.route("POST /api/state-repo/secrets-key/unwrap", s.handleUnwrapSecretsKey)
 	s.route("POST /api/state-repo/import-key", s.handleImportSecretsKey)
 	s.route("POST /api/state-repo/secrets-repo", s.handleSetSecretsRepo)
 	s.route("POST /api/state-repo/reset-notice", s.handleDismissResetNotice)
@@ -743,7 +758,6 @@ func (s *Server) routes() {
 	s.route("GET /api/host/top", s.handleGetHostTop)
 	s.route("GET /api/upgrade", s.handleGetUpgradeStatus)
 	s.route("POST /api/upgrade", s.handleStartUpgrade)
-	s.route("PUT /api/upgrade/source", s.handleUpdateUpgradeSource)
 	s.route("DELETE /api/upgrade/scheduled", s.handleCancelScheduledUpgrade)
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)
@@ -878,7 +892,11 @@ func (s *Server) routes() {
 		// condition a caller can do anything about.
 		panic("ui: embedding static/: " + err.Error())
 	}
-	s.mux.Handle("/", s.apiFallback(spaHandler(static)))
+	staticNext, err := fs.Sub(staticNextFS, "static-next")
+	if err != nil {
+		panic("ui: embedding static-next/: " + err.Error())
+	}
+	s.mux.Handle("/", s.apiFallback(frontendHandler(static, staticNext)))
 	s.patterns = append(s.patterns, "/")
 }
 
@@ -1013,6 +1031,33 @@ func hostQualifiedRepoRequest(r *http.Request) *http.Request {
 	out.URL.Path, out.URL.RawPath = path, raw
 	out.RequestURI = out.URL.RequestURI()
 	return out
+}
+
+// frontendHandler serves both embedded frontends from the one "/"
+// catch-all: the Angular UI in staticNext under /next/ (a bare /next
+// redirects to /next/), and the React UI in static everywhere else.
+// Both sit behind the same ServeHTTP -- security headers, CSRF, the
+// access-code gate and verified-identity admission -- so the new UI has
+// no authentication path of its own: it is the same origin, the same
+// session cookie and the same /api/ as the old one.
+func frontendHandler(static, staticNext fs.FS) http.Handler {
+	legacy := spaHandler(static)
+	next := http.StripPrefix("/next", spaHandler(staticNext))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/next" {
+			target := "/next/"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/next/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		legacy.ServeHTTP(w, r)
+	})
 }
 
 // spaHandler serves static assets straight out of fsys, the same as

@@ -198,6 +198,9 @@ Each of these takes `<id>`, calls the route, and prints the task. `approve` and 
 | `retry <id>` | `POST /api/tasks/{id}/retry`: clears the retry cap | |
 | `retry-merge <id>` | `POST /api/tasks/{id}/retry-merge` | |
 | `run-now <id>` | `POST /api/tasks/{id}/run-now` | |
+| `compact [-handover-file f] <id>` | `POST /api/tasks/{id}/compact`. With a handover the task is compacted now, through every comment so far; without one its next run is asked to compact first (`design/design/durable-tasks.design.md#DT-15`) | |
+| `brief [-file f -reason r] <id>` | `GET /api/tasks/{id}/context` to show the current brief, handover age and compaction cursor; with `-file`, `POST /api/tasks/{id}/brief` replaces the brief (an empty file reverts to the original description) | |
+| `rollover <id>` | `POST /api/tasks/{id}/rollover`. Files a successor carrying the task's current brief, handover and settings, moves every reference to the task onto it, and closes the task as `rolled_over`; refused for a closed task, a running one, a console session, and a task that is not durable (`design/design/durable-tasks.design.md#DT-15`) | |
 | `resume <id>` | `POST /api/tasks/{id}/resume` | |
 | `capability <id> <capability-id> attach\|detach` | `POST /api/tasks/{id}/capabilities`. A bad verb gets `third argument must be attach or detach, got "<x>"`; fewer than three arguments get `usage: grain capability <id> <capability-id> attach\|detach` | admin |
 
@@ -229,6 +232,23 @@ _No flags._
 | `-reason` | string |  |  | why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give when run-now approves an unapproved task |
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain compact -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-handover-file` | string |  |  | compact now, to the handover in this file (- for stdin); without it, the task's next run is asked to compact first |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain brief -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-file` | string |  |  | replace the current brief with this file (- for stdin); an empty file reverts to the original description |
+| `-reason` | string |  |  | why the brief changed (required with -file) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain rollover -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain resume -->
 _No flags._
 <!-- END GENERATED FLAGS -->
@@ -242,7 +262,7 @@ _No flags._
 ### 3.6 `grain defer`, `comment`, `close`/`delete`, `reopen` {#CLI-27}
 
 - `defer <id>` calls `POST /api/tasks/{id}/defer`.
-- `comment <id> <body…>` calls `POST /api/tasks/{id}/comments`. Every word after the id is the body, and a flag written after the id is refused.
+- `comment <id> <body…>` calls `POST /api/tasks/{id}/comments`. Every word after the id is the body, and a flag written after the id is refused. On a closed task the comment reaches no agent, and the command says so on stderr; `-reopen` sends `{"reopen": true}`, which reopens the task with the comment so a run is queued to answer it.
 - `close <id>` (alias `delete`) calls `POST /api/tasks/{id}/close`. `-close-pull-request` also closes the open pull request unmerged, and `-reason` is kept in history.
 - `reopen <id>` calls `POST /api/tasks/{id}/reopen` with `{"reason"}`.
 
@@ -256,6 +276,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-attach` | value |  |  | path to a local file to attach to the comment (repeatable) |
+| `-reopen` | bool |  |  | reopen the task if it is closed, so the comment reaches an agent (a comment on a closed task otherwise reaches none) |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain close -->
@@ -288,6 +309,7 @@ Calls `POST /api/tasks/{id}/force-merge` with the reason. It overrides the merge
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-head` | string |  |  | the head commit you reviewed; the override is for it alone |
+| `-override-gates` | string |  |  | comma-separated unsatisfied gates to override (e.g. security-review, review, ci); required when any review gate is pending or has findings |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/force_merge_is_not_a_tool_test.go`: `TestNoAgentFacingToolCanForceAMerge`.
@@ -1147,13 +1169,14 @@ _No flags._
 
 ---
 
-### 4.15 `grain pr adopt|review|status <pr>` {#CLI-65}
+### 4.15 `grain pr adopt|review|status|submit <pr>` {#CLI-65}
 
 The external half of pull-request coordination ([`external-cli.spec.md`](../external-cli/external-cli.spec.md) #XC-28, #XC-29). `<pr>` is `owner/name#n` or the pull request's GitHub URL; anything else **MUST** fail with a usage error before any request is sent. Every verb takes `-json` and the global `-json`. The in-sandbox `grain pr` ([`sandbox.spec.md`](sandbox.spec.md)) is a different command about the task's own branch.
 
 1. `grain pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]` calls `POST /api/pull-requests/adopt` (scope `merge:write`, and `tasks:write` on the pull request's repository) and prints the shepherd task's ID, state and mode. `-mode` defaults to `review-only`; `finish` on a pull request a review-only shepherd already holds upgrades that task in place. A filing that lands `proposed` says it waits for a person.
 2. `grain pr review <pr> [-design] [-spec <path>]` calls `POST /api/pull-requests/review` (scope `tasks:write`, and `repos:read` on the repository) and prints the review task. `-design` asks for a design review: `design/spec/contributions/contributions.spec.md` conventions and overlapping designs under `design/`.
-3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each merge gate and its state, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+4. `grain pr submit <pr> [-override-gates <gates> -reason <why> [-head <sha>]]` calls `POST /api/pull-requests/submit`. Without `-override-gates`, it needs `tasks:write` on the repository, records the caller's Submit approval only, and never skips or cancels any required review gate. With `-override-gates`, it needs `merge:force` on the repository and a non-empty `-reason`, explicitly names every unsatisfied gate being skipped (such as `security-review`, `review`, `ci`), and records the audited override on the task and pull request while keeping any running reviews alive post-merge.
 
 #### `grain pr`
 
@@ -1191,6 +1214,17 @@ _No flags._
 | `-threads` | bool |  |  | list every inline review thread's file, line and body |
 <!-- END GENERATED FLAGS -->
 
+#### `grain pr submit`
+
+<!-- BEGIN GENERATED FLAGS: grain pr submit -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-head` | string |  |  | the head commit SHA reviewed when overriding gates |
+| `-json` | bool |  |  | print the submit result as JSON |
+| `-override-gates` | string |  |  | comma-separated unsatisfied gates to override under merge:force (e.g. security-review, review, ci); never implied |
+| `-reason` | string |  |  | required reason when -override-gates is set, recorded on the task and pull request |
+<!-- END GENERATED FLAGS -->
+
 **Pinned by:** `pkg/cli/prcmd_test.go`, `pkg/ui/pull_requests_api_test.go`: `TestGrainPRReviewDesignAndPRStatusThreadsJSON`; `pkg/orchestrator/takeover_adopt_test.go`: `TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace`, `TestAdoptPullRequestLinksSpecAndDesignIntoConformanceReviewAndProposalGate`, `TestPullRequestReviewDesignAndStatusThreads`.
 
 ---
@@ -1202,6 +1236,7 @@ These sign a workstation in to a deployment as a named context, and say who it i
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
 - `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
 - It refuses `--token-stdin` beside `--refresh` the same way (exit `2`, `token_stdin_refresh`), and `--scope-set`, `--repos` or `--expires` without `--issue-token` (exit `2`, `needs_issue_token`): each would otherwise be ignored. A refused login writes nothing.
+- Signed in as a person through IAP (a Google ID token) or a registered credential source, with none of `--issue-token`, `--token-stdin` or `--refresh` given, `grain login` mints and keeps a personal `--scope-set` token as `--issue-token` would, so the CLI stops needing the proxy's sign-in or the access code day to day. `--issue-token=false` keeps a context that signs in through the proxy every time; a deployment with `externalAgentApi` off gets that context and a note on stderr.
 - `grain logout --local` forgets the credential without revoking its token on the server.
 
 #### `grain context list|use|show|delete`
@@ -1217,7 +1252,7 @@ _No flags._
 |---|---|---|---|---|
 | `-auth` | string |  |  | how to sign in: access-code, or a credential source this build registers |
 | `-expires` | string | `"30d"` |  | how long --issue-token's token lasts (30d, 12h, ...) |
-| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it |
+| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it (the default when IAP or a credential source signs in a person; --issue-token=false declines) |
 | `-name` | string |  |  | the context's name (default: from the server's host name) |
 | `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
 | `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
@@ -1246,7 +1281,7 @@ _No flags._
 Installs and checks the workstation coding-agent skill guide (`SKILL.md`) and serves the optional local stdio 13-tool external coordination MCP server ([external-cli #XC-30](../external-cli/external-cli.spec.md#XC-30) and [#XC-31](../external-cli/external-cli.spec.md#XC-31)).
 - `grain skill install` combines the embedded `pkg/cli/skill/SKILL.md.tmpl` static CLI guide with live deployment metadata from `GET /api/auth/whoami`, `GET /api/config`, and `GET /api/templates`, embeds the CLI version and SHA-256 deployment digest, refuses to write any bearer token or secret, and with `-mcp` registers `grain mcp` in the target agent's MCP configuration file.
 - `grain skill status` checks recorded or standard skill paths for the active context and reports `installed`, `stale` (`version_mismatch` or `deployment_digest_mismatch`), or `missing`. Ordinary CLI calls emit at most a single-line notice on `stderr` when the recorded skill is stale, never touching `stdout`.
-- `grain mcp [-context <name>]` speaks JSON-RPC 2.0 over `stdin`/`stdout` (distinct from in-sandbox `grain mcpserver`) exposing the 13 external coordination tools (`propose_task`, `read_grain_task`, `list_grain_tasks`, `wait_for_task`, `reply_to_task`, `comment_on_task`, `grain_inbox`, `ci_runs`, `ci_log`, `merge_queue`, `fs_read`, `fs_grep`, and `adopt_pull_request`) over the CLI's shared `ui.HTTPClient` and context credentials, slicing `wait_for_task` below MCP client tool timeouts.
+- `grain mcp [-context <name>]` speaks JSON-RPC 2.0 over `stdin`/`stdout` (distinct from in-sandbox `grain mcpserver`) exposing the 13 external coordination tools (`propose_task`, `read_grain_task`, `list_grain_tasks`, `wait_for_task`, `reply_to_task`, `comment_on_task`, `grain_inbox`, `ci_runs`, `ci_log`, `merge_queue`, `fs_read`, `fs_grep`, and `adopt_pull_request`) over the CLI's shared `ui.HTTPClient` and context credentials, slicing `wait_for_task` below MCP client tool timeouts and paging `list_grain_tasks`, `grain_inbox`, and `ci_runs` (`limit`, `cursor`, `q`; answers carry `total`, `truncated`, `nextCursor`) so each default answer fits the ~10 KB tool budget ([external-cli #XC-31](../external-cli/external-cli.spec.md#XC-31)).
 
 #### `grain skill`
 
@@ -1719,7 +1754,7 @@ _No flags._
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
 
-This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md)) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
+This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md); `-host-accounts` and `-api-socket` for the unix socket the host CLI is recorded through by account, `docs/access-code.md`) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
 
 <!-- BEGIN GENERATED FLAGS: grain daemon -->
 | Flag | Type | Default | Env | Description |
@@ -1729,6 +1764,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-agy-path` | string |  |  | path to the Antigravity CLI binary (agy) agent/antigravity runs as a subprocess; empty resolves "agy" against $PATH instead. Only used by a run driven by the "antigravity" framework |
 | `-agy-run` | string |  |  | where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release |
 | `-allow-unisolated-host-sandboxes` | bool |  |  | let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user |
+| `-api-socket` | string |  |  | unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names (default <data-dir>/api/grain.sock, served only when some account is mapped; "none" turns it off) |
 | `-as` | string |  |  | principal the UI/API attributes tasks and comments it creates to (defaults to the OS user) |
 | `-backup-gcs-bucket` | string |  |  | GCS bucket for scheduled backups; when set, upload to GCS instead of Google Drive |
 | `-backup-google-credentials-file` | string |  |  | Google credential JSON for scheduled backups; omitted uses Application Default Credentials |
@@ -1767,6 +1803,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-data-dir` | string |  |  | root directory for the store and secrets -- the state a redeploy must not lose, and the one directory to back up (required; scripts/setup.sh installs it at /var/lib/grain/data) |
 | `-db-driver` | string | `"sqlite"` |  | database backend driver ("sqlite" or "postgres"); defaults to sqlite |
 | `-db-dsn` | string |  |  | database connection string / DSN or path; for sqlite defaults to <data-dir>/store |
+| `-default-environment-name` | string |  | $GRAIN_DEFAULT_ENVIRONMENT_NAME | the environment name (the UI's tab title and sidebar badge) this deployment takes when it has none, or still has the one this flag gave it before: never one its operator set in Settings or its state repo. A Grain Hub sets it to a hosted instance's entry display name ($GRAIN_DEFAULT_ENVIRONMENT_NAME when unset) |
 | `-default-target-repo` | string |  |  | owner/name a task created through the UI/API with no repo of its own targets |
 | `-deployment-owner` | string |  | $GRAIN_DEPLOYMENT_OWNER | human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($GRAIN_DEPLOYMENT_OWNER when unset) |
 | `-disable-native-sandboxes` | bool |  |  | select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs) |
@@ -1798,6 +1835,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-grit-client-token` | value |  |  | client token (<id>.<secret>) sent in Grit-Client when -grit-url is set |
 | `-grit-experimental` | bool |  |  | allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI |
 | `-grit-url` | value |  |  | EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred) |
+| `-host-accounts` | string |  | $GRAIN_HOST_ACCOUNTS | comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as (the daemon's own account maps to -deployment-owner unless named here; $GRAIN_HOST_ACCOUNTS when unset) |
 | `-host-sandbox-env` | value |  |  | NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone |
 | `-host-sandboxes` | bool |  |  | dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed |
 | `-hostd-reattach-timeout` | duration | `15m0s` |  | how long a run's agent CLI, running detached on a host whose connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once |
@@ -1942,11 +1980,12 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
-| `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none" or "registry" (legacy "release-assets" logs a deprecation warning and maps to "none"; or GRAIN_UPGRADE_IMAGE_FALLBACK) |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
-| `-upgrade-image-source` | string |  |  | where -upgrade-image pulls candidate container images from: "registry" (docker pull, the default; legacy "release-assets" logs a deprecation warning and maps to "registry"; or GRAIN_UPGRADE_IMAGE_SOURCE) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
 | `-upgrade-restart-cmd` | value |  |  | one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below. |
+| `-upgrade-reviewed-merge-logins` | string |  |  | comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed |
+| `-upgrade-reviewed-merge-repo` | string |  |  | owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked |
+| `-upgrade-reviewed-merge-token-file` | string |  |  | file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously) |
 | `-upgrade-src-dir` | string |  |  | git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature |
 | `-upgrade-verify-cmd` | value |  |  | one argument of the command that verifies an -upgrade-image image's signature before anything runs it -- repeat for every argument, e.g. -upgrade-verify-cmd=cosign -upgrade-verify-cmd=verify -upgrade-verify-cmd=--key=/etc/grain/cosign.pub -upgrade-verify-cmd=--insecure-ignore-tlog=true (docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead unverified and say so. |
 <!-- END GENERATED FLAGS -->
@@ -2271,11 +2310,13 @@ This covers where the installation's state repository lives and what it holds. T
 | `reformat` | record that the schema changed, so the next start replaces the dump |
 | `restore-snapshot DIR` | restore the settings and memory tables from a snapshot |
 | `prepare-upgrade` | export a store this build cannot open, for the next start to migrate. Prints `prepared FROM TO DIR`, `current N` or `none` |
-| `check [-migrate] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive |
+| `check [-migrate] [-base REV] DIR` | load a state repository into a throwaway database and report what breaks. Needs no `-data-dir` and has no team mode. `-migrate` (bool) rehearses a migration: it accepts a dump written at another schema and reports what would arrive. `-base` (string) names the git revision the change is against: a credential typed into a capability server rather than referenced as `$secret:<name>` fails the check when the change adds it and is a warning when the base already held it (without `-base`, or with `-migrate`, every one is a warning). The check grain posts on its own configuration repositories reads the base from the clone's `origin/HEAD` |
 | `key show` / `key path` | print the secrets public key / where the private key is read from |
 | `key import [-key-file F]` | install a private key from `-key-file` or stdin. The key it replaces is kept beside it as `secrets.key.replaced-<time>` |
 | `key retired [list]` | list those replaced keys by name and public half (`status` lists them too) |
 | `key retired delete (-all \| NAME...)` | delete replaced keys by exact name. Refuses the live key, anything that is not an archive beside it, and the archive the secrets file is still encrypted to when the live key does not open it |
+| `key wrap -kms KEY` | wrap the private key with the Cloud KMS key `KEY` (`projects/P/locations/L/keyRings/R/cryptoKeys/K`), in the daemon when one answers and in this process otherwise. It wraps, unwraps the result and compares before replacing the file by a rename, then lists the plaintext copies of a private key it can still see (`secrets.key.replaced-*`, `/run/grain-secrets`) and notes the escrow ([secrets key protection §6.2](../../design/secrets-key-protection.design.md#SKP-6-2)) |
+| `key unwrap` | put the private key back in plaintext form, verified against KMS and read back before it is done. Run it before downgrading to a build that cannot read the wrapped form |
 
 <!-- BEGIN GENERATED FLAGS: grain state -->
 _No flags._
@@ -2337,7 +2378,17 @@ _No flags._
 | `-key-file` | string |  |  | file holding the private key; defaults to reading stdin |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_retired_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
+<!-- BEGIN GENERATED FLAGS: grain state key wrap -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-kms` | string |  |  | the Cloud KMS key to wrap with: projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k> (required) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain state key unwrap -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/state_test.go`: `TestStateStatusReportsTheSecretsKeyAndSaysToBackItUp`, `TestStateRestoreSnapshotAndStatusReporting`, `TestStateRepoCommandNamesReportsAndClearsExternalConfigRepo`; `pkg/cli/state_check_test.go`; `pkg/cli/state_retired_test.go`; `pkg/cli/state_wrap_test.go`; `pkg/cli/state_reformat_test.go`; `pkg/cli/stateprepare_test.go`.
 
 ### 6.5 `grain backup`, `grain export`, `grain import` {#CLI-54}
 
@@ -2677,4 +2728,3 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
-

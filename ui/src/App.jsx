@@ -22,9 +22,13 @@ import {
 } from "react";
 import { kindNarrowing } from "./processFilters.js";
 import api, {
+  forgetETag,
   isUnreachable,
+  isVerifierUnavailable,
   RESTARTING_REASON,
   unreachableReason,
+  VERIFIER_ACTION_REASON,
+  verifierTroubleSustained,
 } from "./api.js";
 import {
   buildPath,
@@ -59,6 +63,12 @@ import { boardMoves } from "./boardOrder.js";
 import { panelMove } from "./panelOrder.js";
 import { sectionMove } from "./sectionOrder.js";
 import { TimeZoneProvider } from "./TimeZoneContext.jsx";
+import {
+  mergeFreshDetail,
+  prependEarlierPage,
+  taskDetailPath,
+  taskEarlierPath,
+} from "./taskDetailPages.js";
 import { AccessConfigProvider } from "./AccessContext.jsx";
 import { canAccess } from "./access.js";
 import Sidebar from "./components/Sidebar.jsx";
@@ -119,6 +129,9 @@ import ConfigUnavailable from "./components/ConfigUnavailable.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import AccessDenied from "./components/AccessDenied.jsx";
 import DisconnectedBanner from "./components/DisconnectedBanner.jsx";
+import VerifierBanner, {
+  useVerifierTrouble,
+} from "./components/VerifierBanner.jsx";
 import { InstallNoticeBanner } from "./components/InstallNotice.jsx";
 import AlertsButton from "./components/AlertsButton.jsx";
 import {
@@ -153,6 +166,10 @@ import {
 // Exported for App.test.jsx, whose poll test runs a fake clock forward
 // by exactly this rather than by a 3000 written out again beside it.
 export const POLL_INTERVAL_MS = 3000;
+
+// TASKS_STALE_AFTER is how many /api/tasks reads in a row have to fail,
+// with a list already held, before the rail says it is not refreshing.
+export const TASKS_STALE_AFTER = 3;
 
 // CONFIG_POLL_TIMEOUT_MS is how long the main poll waits for its
 // GET /api/config before counting the daemon unreachable
@@ -396,6 +413,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // and a page that would say nothing is waiting must not say it.
   const [tasksListed, setTasksListed] = useState(false);
   const [tasksError, setTasksError] = useState(null);
+  // tasksFailures is how many /api/tasks reads in a row have failed since
+  // the last one that answered. Once a list is held, one failure is not
+  // worth "not refreshing" on the rail: a single 5xx or network blip, or
+  // the sign-in verifier briefly unable to check the caller, is retried
+  // by the next tick, and the subtitle flickered on and off with each.
+  // tasksError waits for TASKS_STALE_AFTER of them -- or, for verifier
+  // refusals, for those to have gone on VERIFIER_SUSTAINED_MS.
+  const tasksFailures = useRef(0);
+  const tasksListedRef = useRef(false);
+  tasksListedRef.current = tasksListed;
   // closedSearch is the search box's text while the task views could
   // show closed work, "" otherwise: what useClosedTasks asks the server
   // to search closed tasks for (set below, once the narrowing is known).
@@ -757,6 +784,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the two would flap it on and off every tick (grain/task-1854's
   // per-poll counting, kept through the merge with task-26).
   const [disconnection, setDisconnection] = useState(null);
+  // verifierSince is when the current run of verifier_unavailable
+  // refusals began (api.js), which VerifierBanner says something about
+  // once it has lasted.
+  const verifierSince = useVerifierTrouble();
   const unreachableFrom = useRef(new Set());
   const unreachableStreak = useRef(new Map());
   // restartingRef is the last GET /api/config's `restarting`: the daemon
@@ -806,6 +837,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
   }, []);
   const [openTaskId, setOpenTaskId] = useState(null);
   const [detail, setDetail] = useState(null);
+  const detailRef = useRef(null);
+  detailRef.current = detail;
   // pendingTaskId is the task a click has asked for whose detail is still
   // on its way. The pane opens on it as a loading pane
   // (TaskLoadingOverlay) if the fetch is slow, so the click visibly
@@ -1060,6 +1093,19 @@ function AppContent({ onReload = () => window.location.reload() }) {
       setConfigRefusal(err.configRefusal);
       return;
     }
+    // The sign-in verifier briefly unable to check the caller: the
+    // daemon is up and a read is retried by whatever polls it, so a toast
+    // per refused poll said "temporarily unavailable" every few seconds
+    // over a working page. VerifierBanner speaks for a run of them that
+    // lasts. An action of the operator's own, which nothing will retry,
+    // is told in words about sign-in rather than about reaching grain.
+    if (isVerifierUnavailable(err)) {
+      const method = err.method || "GET";
+      if (method === "GET" || method === "HEAD") return;
+      errorIsUnreachable.current = false;
+      setError(VERIFIER_ACTION_REASON);
+      return;
+    }
     const message = String(err?.message || err);
     const unexplained = isUnreachable(err) && !err.explained;
     if (unexplained && disconnectedRef.current) return;
@@ -1105,13 +1151,25 @@ function AppContent({ onReload = () => window.location.reload() }) {
         // Given up on by the poll tick that asked (its signal, below):
         // that tick has already said why, and this read failed nothing.
         if (opts?.signal?.aborted) throw err;
-        setTasksError(
-          isUnreachable(err) && !err?.explained
-            ? unreachableReason(err)
-            : String(err?.message || err),
-        );
+        tasksFailures.current += 1;
+        const verifier = isVerifierUnavailable(err);
+        const stale = !tasksListedRef.current
+          ? true
+          : verifier
+            ? verifierTroubleSustained()
+            : tasksFailures.current >= TASKS_STALE_AFTER;
+        if (stale) {
+          setTasksError(
+            verifier
+              ? "sign-in verification could not check your identity"
+              : isUnreachable(err) && !err?.explained
+                ? unreachableReason(err)
+                : String(err?.message || err),
+          );
+        }
         throw err;
       }
+      tasksFailures.current = 0;
       setTasksError(null);
       setTasksListed(true);
       if (next === UNCHANGED) return;
@@ -1400,25 +1458,42 @@ function AppContent({ onReload = () => window.location.reload() }) {
         setSessionTask(null);
         return;
       }
-      let detail = await api(`/api/tasks/${taskId}`, {
+      const path = taskDetailPath(taskId);
+      let detail = await api(path, {
         poll: true,
       });
+      // A read a later one has superseded is dropped -- but a full
+      // answer dropped here has still advanced the ETag api.js keeps for
+      // the path, and the next poll would be told 304 about a body this
+      // pane never took. That is how a message sent as a new session
+      // opened stayed missing from it until a reload: the opening poll,
+      // answered just after the message landed, was superseded by the
+      // send's own re-read, which then asked "still this?" of the
+      // dropped answer and kept the older conversation.
+      const answered = detail !== UNCHANGED;
+      const drop = () => {
+        if (answered) forgetETag(path);
+      };
       if (seq !== sessionTaskSeq.current) {
+        drop();
         return;
       }
       if (detail === UNCHANGED) {
         if (String(sessionTaskRef.current?.id) === String(taskId)) {
           return;
         }
-        detail = await api(`/api/tasks/${taskId}`);
+        detail = await api(path);
         if (seq !== sessionTaskSeq.current) {
           return;
         }
       }
       if (String(openSessionTaskIdRef.current) !== String(taskId)) {
+        drop();
         return;
       }
-      setSessionTask((prev) => keepIfSame(prev, detail));
+      setSessionTask((prev) =>
+        keepIfSame(prev, mergeFreshDetail(prev, detail)),
+      );
       // api.js caches ETags per path, so when the session's task is also
       // open in the task detail overlay, a 200 consumed here advances the
       // ETag the detail poll will send next ( returning 304 UNCHANGED ).
@@ -1426,7 +1501,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // the other.
       setDetail((prev) =>
         prev && String(prev.id) === String(detail?.id)
-          ? keepIfSame(prev, detail)
+          ? keepIfSame(prev, mergeFreshDetail(prev, detail))
           : prev,
       );
     },
@@ -1651,7 +1726,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       const seq = ++openSeq.current;
       setPendingTaskId(id);
       try {
-        const d = await api(`/api/tasks/${id}`);
+        const d = await api(taskDetailPath(id));
         if (seq !== openSeq.current) return;
         setPendingTaskId(null);
         setTaskLoadError(null);
@@ -1662,7 +1737,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           return;
         }
         setOpenTaskId(id);
-        setDetail(d);
+        setDetail((prev) => keepIfSame(prev, mergeFreshDetail(prev, d)));
       } catch (err) {
         if (seq !== openSeq.current) return;
         setPendingTaskId(null);
@@ -1678,6 +1753,47 @@ function AppContent({ onReload = () => window.location.reload() }) {
     [showError],
   );
   const openTask = useCallback((id) => loadTask(id, false), [loadTask]);
+
+  const loadEarlierForTask = useCallback(
+    async (targetId, opts = {}) => {
+      const current =
+        (detailRef.current &&
+          String(detailRef.current.id) === String(targetId) &&
+          detailRef.current) ||
+        (sessionTaskRef.current &&
+          String(sessionTaskRef.current.id) === String(targetId) &&
+          sessionTaskRef.current) ||
+        null;
+      const path = taskEarlierPath(current, opts);
+      if (!path) return null;
+      const wantComments =
+        (current.olderComments || 0) > 0 &&
+        Array.isArray(current.comments) &&
+        current.comments.length > 0;
+      const wantAttempts =
+        !opts.commentsOnly &&
+        (current.olderAttempts || 0) > 0 &&
+        Array.isArray(current.attempts) &&
+        current.attempts.length > 0;
+      try {
+        const earlier = await api(path);
+        const merge = (prev) =>
+          prev && String(prev.id) === String(targetId)
+            ? prependEarlierPage(prev, earlier, {
+                loadedComments: wantComments,
+                loadedAttempts: wantAttempts,
+              })
+            : prev;
+        setDetail(merge);
+        setSessionTask(merge);
+        return earlier;
+      } catch (err) {
+        showError(err);
+        return null;
+      }
+    },
+    [showError],
+  );
 
   const closeDetail = useCallback(() => {
     openSeq.current++;
@@ -1700,15 +1816,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [urlTask, setUrlTask] = useState(
     () => parsePath(window.location.pathname).taskId || null,
   );
+  // urlTaskSeq numbers those requests, so each releases only its own
+  // claim.
+  const urlTaskSeq = useRef(0);
   const openTaskFromUrl = useCallback(
     async (id) => {
+      const seq = ++urlTaskSeq.current;
       setUrlTask(id);
       try {
         await loadTask(id, true);
       } finally {
         // Only this request's own claim: a quicker Back/Forward may
-        // have asked for another task since.
-        setUrlTask((cur) => (cur === id ? null : cur));
+        // have asked for another task since -- or for this same one
+        // again. A link followed to /tasks/N, Back before it loaded and
+        // Forward onto it again is two loads of N, and the first one's
+        // answer, dropped as stale, used to clear the second's claim
+        // while it was still fetching: the URL effect then wrote the
+        // page behind the pane over /tasks/N#comment=…, and the pane
+        // that arrived after pushed /tasks/N again without the fragment
+        // (ui/e2e/responsive-navigation-walkthrough.spec.js).
+        if (seq === urlTaskSeq.current) setUrlTask(null);
       }
     },
     [loadTask],
@@ -1730,7 +1857,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const openTaskFromMetrics = useCallback(
     async (id) => {
       try {
-        const d = await api(`/api/tasks/${id}`);
+        const d = await api(taskDetailPath(id));
         if (d?.consoleSession) {
           setOpenTaskId(null);
           setDetail(null);
@@ -1738,7 +1865,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           return;
         }
         setOpenTaskId(id);
-        setDetail(d);
+        setDetail((prev) => keepIfSame(prev, mergeFreshDetail(prev, d)));
       } catch (err) {
         showError(err);
       }
@@ -2324,7 +2451,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         if (createdRow?.taskId) {
           openSessionTaskIdRef.current = createdRow.taskId;
           try {
-            const detail = await api(`/api/tasks/${createdRow.taskId}`);
+            const detail = await api(taskDetailPath(createdRow.taskId));
             if (detail) {
               sessionTaskSeq.current += 1;
               setSessionTask(detail);
@@ -2460,12 +2587,21 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const actBatch = useCallback(
     async (ids, mutate) => {
       const results = await Promise.allSettled(ids.map((id) => mutate(id)));
-      await refreshList();
+      // The re-read failing is the poll's to report (refreshList's
+      // tasksError), not a reason to leave the batch's own outcome unsaid.
+      await refreshList().catch((err) =>
+        console.warn("grain: list re-read after a batch failed", err),
+      );
       const failed = results.filter((r) => r.status === "rejected");
       if (failed.length > 0) {
+        const first = failed[0].reason;
         showError(
           new Error(
-            `${failed.length} of ${ids.length} task(s) failed: ${failed[0].reason?.message || failed[0].reason}`,
+            `${failed.length} of ${ids.length} task(s) failed: ${
+              isVerifierUnavailable(first)
+                ? VERIFIER_ACTION_REASON
+                : first?.message || first
+            }`,
           ),
         );
       }
@@ -2715,42 +2851,29 @@ function AppContent({ onReload = () => window.location.reload() }) {
           refreshSessions({ signal: tick.signal }),
         ]);
         if (openTaskId !== null && taskLoadError?.id === openTaskId) {
-          // A task the address bar asked for that failed to load: try it
-          // again, in full rather than conditionally (there is no body on
-          // screen for an "unchanged" to mean anything against). Still
-          // failing leaves the error pane up and the rest of the tick
-          // going.
           const seq = openSeq.current;
           try {
-            const detail = await api(`/api/tasks/${openTaskId}`);
+            const detail = await api(taskDetailPath(openTaskId));
             if (seq === openSeq.current) {
               setTaskLoadError(null);
-              setDetail(detail);
+              setDetail((prev) =>
+                keepIfSame(prev, mergeFreshDetail(prev, detail)),
+              );
             }
           } catch (err) {
             console.warn("grain: task still failing to load", err);
           }
         } else if (openTaskId !== null) {
-          // Conditional for the same reason as refreshList: an open task
-          // pane carries its comment and attempt history, and fetching,
-          // parsing and comparing it every three seconds to say the same
-          // thing is waste before re-rendering even enters the picture.
-          const detail = await api(`/api/tasks/${openTaskId}`, { poll: true });
+          const detail = await api(taskDetailPath(openTaskId), { poll: true });
           if (detail !== UNCHANGED) {
-            // Only over the same task's pane. The tick asked for the
-            // task open when it started, and a click onto another one
-            // can land while this read is still out; written then, the
-            // old task's body would sit under the new one's selection,
-            // and stay there while the new task's own conditional poll
-            // answered UNCHANGED for a body it never delivered.
             setDetail((prev) =>
               prev && String(prev.id) === String(detail?.id)
-                ? keepIfSame(prev, detail)
+                ? keepIfSame(prev, mergeFreshDetail(prev, detail))
                 : prev,
             );
             setSessionTask((prev) =>
               prev && String(prev.id) === String(detail?.id)
-                ? keepIfSame(prev, detail)
+                ? keepIfSame(prev, mergeFreshDetail(prev, detail))
                 : prev,
             );
           }
@@ -3901,6 +4024,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
           standing warning is a row in the alerts panel the top bar's
           bell opens (alerts.js, components/AlertsButton.jsx). */}
         <DisconnectedBanner disconnection={disconnection} />
+        {disconnection === null && <VerifierBanner since={verifierSince} />}
         {/* And the one fact about the deployment that stands above the
           top bar too: an install still in host mode, which v2.3.0 no
           longer supports and whose CLIs may have nowhere to run until
@@ -4013,6 +4137,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             key={openRepo}
                             repo={openRepo}
                             comparison={repoComparison}
+                            tasks={tasks}
+                            onOpenTask={openTask}
                             onBack={() => setRepoComparison(null)}
                             showError={showError}
                           />
@@ -4237,6 +4363,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onDraftConsumed={consumeSessionPrompt}
                             onSaved={refreshSessionSaved}
                             onDeleted={deleteStandingSession}
+                            onLoadEarlier={(opts) =>
+                              loadEarlierForTask(openSessionTaskId, opts)
+                            }
                             showError={showError}
                           />
                         ) : view === "settings" ? (
@@ -4381,6 +4510,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
               onOpenCIRun={openCIRun}
               onOpenSuiteRun={openSuiteRun}
               act={act}
+              onLoadEarlier={(opts) => loadEarlierForTask(openTaskId, opts)}
               showError={showError}
             />
           </ErrorBoundary>

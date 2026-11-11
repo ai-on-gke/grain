@@ -385,7 +385,7 @@ func (s *Server) handleListReleaseNotes(w http.ResponseWriter, r *http.Request) 
 	notes = filterList(notes, func(n ReleaseNote) bool {
 		return list.matches(n.Period, n.Title, n.UpdatedBy)
 	})
-	writeList(w, notes, list)
+	writeListBy(w, notes, list, func(n ReleaseNote) string { return n.Period })
 }
 
 // handlePutReleaseNote answers PUT /api/release-notes, with the week in

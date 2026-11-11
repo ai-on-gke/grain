@@ -830,6 +830,21 @@ samp,
   margin-left: auto;
   align-self: center;
 }
+/* "Try the new Inbox": a quiet link under the header, to /next/inbox. */
+.inbox-next-callout {
+  margin: 0;
+  padding: 0.5rem 1.75rem 0;
+  font-size: 0.8125rem;
+  text-align: right;
+}
+:root[data-phone="true"] .inbox-next-callout {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+.inbox-try-next {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
 
 /* ---------- Status dot: a small colored circle stands in for the state
    pill everywhere a state is shown, in place of the filled badge. ---------- */
@@ -4273,6 +4288,23 @@ fieldset legend {
 .timeline-newest-first .timeline-list {
   margin-bottom: 0;
 }
+/* A closed task's note sits over the reply box (Timeline.jsx), taking
+   the box's own top margin so the pair spaces like the box alone. */
+.comment-form-closed {
+  margin: 0.85rem 0 0;
+}
+.comment-form-closed + .comment-form {
+  margin-top: 0.4rem;
+}
+.timeline-newest-first .comment-form-closed {
+  margin-top: 0;
+}
+/* Two buttons beside the textarea ("Reopen and send", "Comment only")
+   keep a label on one line each rather than squeezing it onto two. */
+.comment-form > .MuiButton-root {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 /* An attempt's own row opens AttemptTranscriptOverlay on click or on
    Enter/Space while focused (bwsalmon/agents#446) -- cursor and a subtle
    hover background are this row's only visual difference from a plain
@@ -4376,6 +4408,44 @@ fieldset legend {
   font-size: 0.9rem;
   margin-top: 0.15rem;
   word-break: break-word;
+}
+/* A comment a durable task's compaction folded into its handover
+   (DT-15): kept, collapsed behind one muted line. */
+.timeline-summarised > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+/* The current brief's own controls under it: Edit, the original
+   description and the brief's history (DT-15). */
+.brief-header {
+  margin-top: 1rem;
+}
+.brief-header + .description {
+  margin-top: 0.35rem;
+}
+.brief-extras {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin: -0.5rem 0 1rem;
+}
+.brief-extras > details {
+  align-self: stretch;
+}
+.brief-extras > details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.brief-history {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+.brief-history .description {
+  margin: 0.25rem 0 0.75rem;
 }
 .comment-form,
 .pending-question-form {
@@ -4547,6 +4617,15 @@ fieldset legend {
    title's line, taking width from the title that on a phone they have
    never taken. */
 :root[data-phone="true"] .task-row > .MuiChip-root {
+  order: 4;
+}
+/* So does the control that ends a stalled row's wait, which follows the
+   sub-case chip it answers -- bare, or inside AccessGate's wrapper for a
+   role that may not press it. Without an order it sorted up onto the
+   title's line, a screen's height of row away from the chip naming what
+   it does (2026-11-11 walkthrough). */
+:root[data-phone="true"] .task-row > .task-reason-control,
+:root[data-phone="true"] .task-row > .access-gate {
   order: 4;
 }
 :root[data-phone="true"] .chips {
@@ -5271,6 +5350,59 @@ fieldset legend {
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 4px;
+}
+
+/* Paged timeline "Show earlier" control and chat summarised comments
+   disclosure (durable-tasks.design.md#DT-15). */
+.timeline-earlier {
+  display: flex;
+  justify-content: center;
+}
+.timeline-earlier-bottom {
+  padding: 0.75rem 0 0.25rem;
+}
+.timeline-earlier-top {
+  padding: 0.25rem 0 0.75rem;
+}
+.task-chat-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 0 0 0.5rem;
+}
+.task-chat-summarised {
+  margin-top: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  background: var(--canvas);
+}
+.task-chat-summarised > .timeline-summarised-summary {
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.task-chat-summarised[open] > .timeline-summarised-summary {
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-summarised-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.timeline-summarised-item {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-summarised-item:first-child {
+  padding-top: 0;
+}
+.timeline-summarised-item:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 /* The closed-tasks pager at the end of a task view (ClosedTasksMore.jsx). */

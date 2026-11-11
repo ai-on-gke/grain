@@ -1096,9 +1096,12 @@ func TestEveryBranchTagSubstitutionMatchesTagForBranch(t *testing.T) {
 // `${{ secrets.* }}` to either would hand a model credential to code no human
 // has read.
 //
-// The trigger is asserted for the same reason: no `push` and no
-// `pull_request`, since those events run code from branches that have not
-// been reviewed.
+// The trigger is asserted for the same reason: no `push`, no
+// `pull_request` and no `pull_request_target`, since those events run
+// code from branches (or forks) that have not been reviewed. And every
+// live job takes its credentials from the `live-models` environment,
+// whose deployment branch rule admits main alone, runs only on main, and
+// holds contents: read and nothing more.
 func TestOnlyDefaultBranchLiveJobsHoldAModelCredential(t *testing.T) {
 	for name, text := range map[string]string{
 		"tests.yml":   testsWorkflow(t),
@@ -1113,13 +1116,14 @@ func TestOnlyDefaultBranchLiveJobsHoldAModelCredential(t *testing.T) {
 	triggers := upTo(t, live, "jobs:")
 	contains(t, triggers, "schedule:")
 	contains(t, triggers, "workflow_dispatch:")
-	for _, forbidden := range []string{"push:", "pull_request:"} {
+	for _, forbidden := range []string{"push:", "pull_request:", "pull_request_target:"} {
 		if strings.Contains(triggers, forbidden) {
 			t.Errorf("live-agent.yml triggers on %s: the model credential it holds would then be readable by any branch", forbidden)
 		}
 	}
 
 	nightly := namedJob(t, live, "live-agy")
+	assertLiveModelsJob(t, "live-agent.yml", nightly)
 	contains(t, nightly, "GRAIN_LIVE_AGENT_TEST")
 	// The whole of tests/e2e's live set, by prefix rather than by name:
 	// a job naming one test is a job that silently stops running the next
@@ -1140,7 +1144,7 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	live := stripComments(liveFrameworksWorkflow(t))
 	contains(t, live, "schedule:")
 	contains(t, live, "workflow_dispatch:")
-	for _, forbidden := range []string{"push:", "pull_request:"} {
+	for _, forbidden := range []string{"push:", "pull_request:", "pull_request_target:"} {
 		if strings.Contains(upTo(t, live, "jobs:"), forbidden) {
 			t.Errorf("live-frameworks.yml triggers on %s: the two credentials it holds would then be readable by any branch, which is what the environments exist to prevent", forbidden)
 		}
@@ -1156,7 +1160,8 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 		{"live-codex", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "./pkg/agent/codex/"},
 	} {
 		text := namedJob(t, live, job.name)
-		contains(t, text, job.secret)
+		assertLiveModelsJob(t, "live-frameworks.yml", text)
+		contains(t, text, "secrets."+job.secret)
 		if strings.Contains(text, job.otherSecret) {
 			t.Errorf("the %s job reads %s as well: a job holding both credentials turns revoking one key into two frameworks losing their nightly", job.name, job.otherSecret)
 		}
@@ -1186,8 +1191,8 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 		t.Error("live-frameworks.yml pins a codex version of its own: it should read ARG CODEX_CLI_VERSION out of the Dockerfile, so bumping the image's codex is also what points this job at it")
 	}
 
-	// And both of codex's credential-free probes run *before* the
-	// credential gate. Neither spends a token, and between them they
+	// And both of codex's credential-free probes run whether or not the
+	// optional credential is there. Neither spends a token, and between them they
 	// measure the two facts about a live codex that this repository
 	// cannot check any other way: that grain's config is one codex loads
 	// (TestLiveCodexLoads...), and that `codex exec resume` still does
@@ -1196,7 +1201,7 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	// nothing at all on a night when no secret has been created -- which,
 	// as this file's own OPENAI_API_KEY assertion above is a reminder,
 	// has been every night so far.
-	free := between(t, codex, "Live codex probes (no credential)", "Require a credential")
+	free := between(t, codex, "Live codex probes (no credential)", "Live codex run")
 	for _, probe := range []string{"TestLiveCodexLoads", "TestLiveCodexResumes"} {
 		contains(t, free, probe)
 	}
@@ -1213,17 +1218,36 @@ func TestTheLiveFrameworkJobsKeepTheirTwoCredentialsApart(t *testing.T) {
 	}
 }
 
+// assertLiveModelsJob holds one live job of name to how a model
+// credential may be held on GitHub Actions: from the live-models
+// environment, on main only, with a read-only token, and failing --
+// never skipping -- when a credential it requires is missing.
+func assertLiveModelsJob(t *testing.T, name, job string) {
+	t.Helper()
+	contains(t, job, "environment: live-models")
+	contains(t, job, "if: github.ref == 'refs/heads/main'")
+	contains(t, job, "permissions:\n      contents: read\n")
+	contains(t, job, "GRAIN_LIVE_AGENT_TEST")
+	if strings.Contains(job, "id-token") {
+		t.Errorf("%s: a live job asks for id-token, which no model credential needs", name)
+	}
+	if strings.Contains(job, "printenv") || strings.Contains(job, "env |") {
+		t.Errorf("%s: a live job prints its environment, which holds a model credential", name)
+	}
+}
+
 // Every workflow that installs an agent CLI at runtime must force IPv4 and
 // retry on transient network errors, matching the Dockerfile builds.
 func TestWorkflowCLIDownloadsForceIPv4AndRetry(t *testing.T) {
-	for _, name := range []string{
-		"live-frameworks.yml",
-		"live-agent.yml",
-		"codex-surface.yml",
-		"claude-surface.yml",
-		"agy-surface.yml",
+	for _, path := range [][]string{
+		{".github", "workflows", "live-frameworks.yml"},
+		{".github", "workflows", "live-agent.yml"},
+		{".grain", "workflows", "codex-surface.yml"},
+		{".grain", "workflows", "claude-surface.yml"},
+		{".grain", "workflows", "agy-surface.yml"},
 	} {
-		content := stripComments(read(t, ".grain", "workflows", name))
+		name := path[len(path)-1]
+		content := stripComments(read(t, path...))
 		for _, line := range strings.Split(content, "\n") {
 			if !strings.Contains(line, "curl ") {
 				continue
@@ -1992,14 +2016,7 @@ func TestTheInstallerNeedsNothingOnTheHostButDockerAndSystemd(t *testing.T) {
 	// optional rather than required -- host_git_version answers nothing
 	// on a host with no git, and the conversion then says what to run
 	// instead -- so it adds nothing to what a host must have.
-	//
-	// And installing from release assets (docs/release-assets.md) is a
-	// download from github.com before any image exists to run one in. It
-	// is optional too: with no curl on the host install_release_assets
-	// falls back to pulling the registry image, and manifest_field reads
-	// images.json with awk where there is no jq.
-	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true,
-		"install_release_assets": true, "manifest_field": true}
+	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true}
 	inHostGit := false
 
 	inImage := false
@@ -2951,6 +2968,11 @@ func TestTheSandboxGuestCanActOnThePowerButton(t *testing.T) {
 // of one is a bump of both, so two builds of one grain commit cannot carry
 // different toolchains (TestBothImagesPinTheSameAgentCLIs has the incident
 // that established it). Only the digests differ.
+//
+// kind and actionlint are built from source in Granulefile's
+// guest_tools_builder rather than downloaded, so their pin is the Go
+// checksum database `go install module@version` consults: nothing may
+// turn it off.
 func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 	for _, file := range []string{"Granulefile", "Granulefile.guest-base"} {
 		code := read(t, file)
@@ -2968,24 +2990,41 @@ func TestBothGuestImagesPinTheirToolchainsForBothArchitectures(t *testing.T) {
 			`arm64) sha="${GO_SHA256_ARM64}"`,
 			`amd64) node_arch=x64; sha="${NODE_SHA256_AMD64}"`,
 			`arm64) node_arch=arm64; sha="${NODE_SHA256_ARM64}"`,
-			`amd64) sha="${ACTIONLINT_SHA256_AMD64}"`,
-			`arm64) sha="${ACTIONLINT_SHA256_ARM64}"`,
+			`amd64) act_arch=x86_64; sha="${ACT_SHA256_AMD64}"`,
+			`arm64) act_arch=arm64; sha="${ACT_SHA256_ARM64}"`,
+			// npm's tarball and pip's wheel are one file for every
+			// architecture, so each has one pin, and it is checked.
+			`echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c -`,
+			`echo "${PIP_SHA256}  /tmp/pip-${PIP_VERSION}-py3-none-any.whl" | sha256sum -c -`,
 			// An architecture with no pin stops the build rather than
 			// installing a toolchain nobody checked. This is the branch no
 			// build on either architecture ever takes, so it is the one
 			// worth asserting.
 			`no pinned go checksum for $arch`,
 			`no pinned node checksum for $arch`,
-			`no pinned actionlint checksum for $arch`,
+			`no pinned act checksum for $arch`,
 			`| sha256sum -c -`,
 		} {
 			if !strings.Contains(code, want) {
 				t.Errorf("%s does not contain %s", file, want)
 			}
 		}
+		for _, want := range []string{
+			`go install -trimpath "sigs.k8s.io/kind@${KIND_VERSION}"`,
+			`go install -trimpath "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"`,
+		} {
+			if !strings.Contains(code, want) {
+				t.Errorf("%s does not contain %s", file, want)
+			}
+		}
+		for _, gone := range []string{"GOSUMDB=off", "GONOSUMDB", "GONOSUMCHECK", "GOINSECURE", "GOFLAGS=-insecure"} {
+			if strings.Contains(code, gone) {
+				t.Errorf("%s turns off Go's checksum database with %s", file, gone)
+			}
+		}
 		// And no single-architecture pin survives, which is what a careless
 		// revert would reintroduce.
-		for _, gone := range []string{"ARG GO_SHA256=", "ARG NODE_SHA256=", "ARG ACTIONLINT_SHA256="} {
+		for _, gone := range []string{"ARG GO_SHA256=", "ARG NODE_SHA256=", "ARG ACT_SHA256="} {
 			if strings.Contains(code, gone) {
 				t.Errorf("%s still has the single-architecture pin %s", file, gone)
 			}
@@ -3432,10 +3471,29 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 	}
 }
 
+// TestGitHubWorkflowCosignDownloadsAreChecksummed: the cosign a release
+// workflow downloads is handed the image-signing key, so every install of
+// it -- the release asset and the image fallback alike -- is checked against
+// a pinned sha256 before it runs, not trusted for coming from a tag.
+func TestGitHubWorkflowCosignDownloadsAreChecksummed(t *testing.T) {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml", "promote-release.yml", "publish-release.yml"} {
+		content := stripComments(read(t, ".github", "workflows", name))
+		downloads := strings.Count(content, "/cosign-linux-amd64")
+		if downloads == 0 {
+			t.Errorf(".github/workflows/%s no longer downloads cosign-linux-amd64; update this test", name)
+		}
+		fallbacks := strings.Count(content, "docker cp \"$cid:/ko-app/cosign\"")
+		checks := strings.Count(content, "  /usr/local/bin/cosign\" | sha256sum -c -")
+		if checks != downloads+fallbacks {
+			t.Errorf(".github/workflows/%s installs cosign %d ways (%d release-asset downloads, %d image fallbacks) but checks a sha256 %d times; pin a checksum for each", name, downloads+fallbacks, downloads, fallbacks, checks)
+		}
+	}
+}
+
 func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
 	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
 		content := stripComments(read(t, ".github", "workflows", name))
-		contains(t, content, "gcr.io/projectsigstore/cosign:v2.4.1@sha256:")
+		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:")
 		for _, line := range strings.Split(content, "\n") {
 			if !strings.Contains(line, "curl ") || strings.Contains(line, "curl -fsSIL") {
 				continue

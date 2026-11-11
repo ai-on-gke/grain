@@ -329,6 +329,14 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("commenting: %v", err)
 	}
+	// task_context and task_brief_edit: a compaction and a brief edit.
+	if _, err := store.CompactTask(ctx, "a1b2", awkward, commentID,
+		model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}}, "human bwsalmon", sub); err != nil {
+		t.Fatalf("compacting: %v", err)
+	}
+	if err := store.SetTaskBrief(ctx, "a1b2", awkward, "human bwsalmon", awkward, sub); err != nil {
+		t.Fatalf("editing the brief: %v", err)
+	}
 	if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
 		TaskID: "a1b2", Kind: model.TaskEventClosed, At: sub, Reason: awkward,
 		By:         model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon", Source: model.SourceIAP},
@@ -1026,7 +1034,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// scheduled (model.AutoUpgradeRelease).
 	if err := store.SetAutoUpgradeRelease(ctx, model.AutoUpgradeRelease{
 		Newest: "v3.6.0", SeenAt: sub, Release: "v3.5.0", Target: "latest", ScheduledAt: &sub,
-		Outcome: model.AutoUpgradeFailed,
+		Outcome: model.AutoUpgradeFailed, SucceededAt: &sub,
 	}); err != nil {
 		t.Fatalf("recording a release-triggered upgrade: %v", err)
 	}

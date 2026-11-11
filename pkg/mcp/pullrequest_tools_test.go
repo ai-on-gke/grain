@@ -487,6 +487,12 @@ func TestPullRequestStatusWithoutAScopeSaysSo(t *testing.T) {
 			if !res.IsError {
 				t.Errorf("IsError = false, want an error result: %s", res.Text)
 			}
+			// It names what reaches the same checks from the sandbox (task 4361).
+			for _, want := range []string{"`grain pr open`", "`grain ci wait`"} {
+				if !strings.Contains(res.Text, want) {
+					t.Errorf("answer does not name %s:\n%s", want, res.Text)
+				}
+			}
 			if !strings.Contains(res.Text, "no GitHub repository configured") {
 				t.Errorf("answer does not explain why there is nothing to report:\n%s", res.Text)
 			}

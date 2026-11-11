@@ -75,6 +75,19 @@ func TestAGateDefaultsToOnFindings(t *testing.T) {
 	}
 }
 
+func TestAGatingTriggerMayAskForFixes(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/check.yml": plannerTemplate,
+		".grain/triggers/gate.yml":   "on: pull_request\npaths: [x]\ntemplate: check\ngate: true\nfixes: true\n",
+		".grain/triggers/plain.yml":  "on: pull_request\npaths: [x]\ntemplate: check\ngate: true\n",
+	})
+	for _, tr := range declared.Triggers {
+		if tr.Fixes != (tr.Name == "gate") {
+			t.Errorf("trigger %s: fixes = %v", tr.Name, tr.Fixes)
+		}
+	}
+}
+
 func TestTriggerRefusals(t *testing.T) {
 	cases := map[string]struct{ file, want string }{
 		"no event":           {"paths: [x]\ntemplate: check\n", "needs `on: merge` or `on: pull_request`"},
@@ -88,6 +101,7 @@ func TestTriggerRefusals(t *testing.T) {
 		"gate on merge":      {"on: merge\npaths: [a]\ntemplate: check\ngate: true\n", "`on: pull_request` only"},
 		"human, no gate":     {"on: pull_request\npaths: [a]\ntemplate: check\nhuman: no\n", "`gate: true` only"},
 		"unknown human":      {"on: pull_request\npaths: [a]\ntemplate: check\ngate: true\nhuman: maybe\n", `human is "required"`},
+		"fixes, no gate":     {"on: pull_request\npaths: [a]\ntemplate: check\nfixes: true\n", "`gate: true` only"},
 		"unknown per":        {"on: merge\npaths: [a]\ntemplate: check\nper: file\n", `per is "change" or "folder"`},
 		"unknown key":        {"on: merge\npaths: [a]\ntemplate: check\nreads: [x/y]\n", "reads"},
 		"gate false, mrg":    {"on: merge\npaths: [a]\ntemplate: check\ngate: false\n", "`on: pull_request` only"},

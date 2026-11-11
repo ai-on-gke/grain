@@ -211,11 +211,11 @@ func unauthorizedReason(owner, repo string, credential Credential, upstream Upst
 				owner, repo, host, credential.Name, tool, host, tool, who, hint, upstreamNote(upstream))
 		}
 		if login, ok := AsLoginRedirect(check.Err); ok {
-			return fmt.Sprintf("%s/%s: %s refused the %q credential's token (401), and asking %s who its login "+
+			return LoginLapsedMarker + fmt.Sprintf("%s/%s: %s refused the %q credential's token (401), and asking %s who its login "+
 				"is was answered with a login page: %s",
 				owner, repo, host, credential.Name, tool, login.Error())
 		}
-		return fmt.Sprintf(
+		return LoginLapsedMarker + fmt.Sprintf(
 			"%s/%s: %s refused the %q credential's token (401), and `GH_HOST=%s %s api user` failed too, so "+
 				"the %s login on the grain host is no longer valid: %s. Run `%s` as %s, then retry%s",
 			owner, repo, host, credential.Name, host, tool, tool, shortMessage(check.Err.Error()),
@@ -225,7 +225,7 @@ func unauthorizedReason(owner, repo string, credential Credential, upstream Upst
 		// Its token came from the host's own login moments ago; the
 		// next request asks again (CredentialSet.Refused), so what is
 		// left to fix is the login itself.
-		return fmt.Sprintf(
+		return LoginLapsedMarker + fmt.Sprintf(
 			"%s/%s: GitHub refused the %q credential's token (401). It is an ambient credential: its token "+
 				"came from %s on the grain host, and that login is no longer valid -- run `gh auth login "+
 				"--hostname %s` (or `gh auth refresh`) as %s, then retry%s",
@@ -399,6 +399,7 @@ var accessRefusalPhrases = []string{
 	"and refused it read access (403)",           // forbiddenReason, fetch
 	"and refused it write access (403)",          // forbiddenReason, push
 	"has no GitHub credential",                   // model.NoTeamGitCredentialError
+	"has no git credential for host",             // model.NoTeamGitCredentialError, another host
 	"has no git connection covering",             // NoTeamCredentialMessage
 	"is not configured on this deployment, so",   // selectTeamCredential
 }
@@ -417,4 +418,31 @@ func IsAccessRefusal(output string) bool {
 		}
 	}
 	return false
+}
+
+// LoginLapsedMarker begins every refusal this proxy gives because a login
+// the grain host itself holds has lapsed -- a forge front end answering
+// with its login page (LoginRedirectError), or an ambient credential's
+// token refused while the tool it came from cannot vouch for its login
+// either (unauthorizedReason). What fixes those is a person renewing that
+// login on the host, so the dispatcher parks the task on it rather than
+// retrying it (orchestrator's hostLoginLapsedError); the marker is what
+// lets it tell, without reading any source's own wording (authfix.Fix),
+// once the refusal has crossed into a sandbox's git as "remote: " lines.
+const LoginLapsedMarker = "grain: host login lapsed: "
+
+// LoginLapsed reports whether output -- what a sandbox's git printed --
+// carries one of this proxy's lapsed-login refusals, and if so the first
+// one's sentence, with git's "remote: " and the marker cut off.
+func LoginLapsed(output string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		_, said, ok := strings.Cut(line, LoginLapsedMarker)
+		if !ok {
+			continue
+		}
+		if said = strings.TrimSpace(said); said != "" {
+			return said, true
+		}
+	}
+	return "", false
 }

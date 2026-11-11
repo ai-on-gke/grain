@@ -376,6 +376,10 @@ func Run(ctx context.Context, cfg Config) error {
 			"it, the sync loop retries every %s, and the UI's State pane says so until one works. "+
 			"The load reported: %v", stateRepo.Dir(), stateSyncInterval, loadErr)
 	}
+	// The hub's name for this deployment, applied once the state
+	// repository's grain_config is in, so a name set there (or in
+	// Settings) is the one that is kept.
+	adoptDefaultEnvironmentName(ctx, store, cfg.DefaultEnvironmentName)
 	// The encrypted-secrets backup is refused to every sandbox. The set is
 	// live so changing that backup through the UI takes effect immediately.
 	forbidden := gitproxy.NewForbiddenSet()
@@ -388,12 +392,17 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	MoveLooseCredentialsIntoStore(cfg, secretStore)
+	if os.Getenv(gitproxy.CredentialsInFilesEnv) != "files" {
+		cfg.caSecrets = secretStore
+	}
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
 	// the UI's own open of the secrets (ui_server.go), never to this one,
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
+	retrySecretsKey(ctx, secretStore)
 	// A dispatch condition's text (DispatchConditions) is served to
 	// every queued task's reason, which an agent reads from its sandbox,
 	// so it is redacted with the same list the journal is read through
@@ -829,6 +838,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
 	}
+	// Also before the capability servers start, so each starts with the
+	// $secret: references its typed-in credentials became.
+	if err := migrateLiteralCredentials(ctx, store, secretStore); err != nil {
+		log.Printf("daemon: moving typed-in capability server credentials into the secrets store: %v", err)
+	}
 	// transcriptDir is where a run's own agent.Framework may mirror its
 	// transcript-in-progress live, and where the UI server below reads one
 	// back from for a still-running attempt -- the two sides of
@@ -1053,7 +1067,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// nil on a deployment configured for neither pipeline, which both
 	// halves already have to handle: the UI hides the pane and the
 	// reconciler applies nothing.
-	upgrader := newUpgrader(cfg, db, store, githubCredentials)
+	upgrader := newUpgrader(cfg, db, store)
 
 	// Which filesystems this deployment's own state sits on, resolved once
 	// for the two halves that read them: the host status pane's disk rows

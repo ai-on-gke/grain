@@ -218,7 +218,7 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	if _, auditErr := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
 		At:      c.now(),
 		By:      model.Principal{Kind: model.PrincipalAutomation, ID: "flag-migration"},
-		Surface: "access",
+		Surface: accessAuditSurface,
 		Summary: summary,
 	}); auditErr != nil {
 		log.Printf("grain access: recording flag migration in config audit: %v", auditErr)
@@ -698,7 +698,7 @@ func (c *Client) auditAccessChange(ctx context.Context, summary string) {
 		At:         c.now(),
 		By:         by.Actor,
 		OnBehalfOf: by.OnBehalfOf,
-		Surface:    "access",
+		Surface:    accessAuditSurface,
 		Summary:    summary,
 	}); err != nil {
 		log.Printf("grain access: recording %q in config audit: %v", summary, err)
@@ -734,6 +734,10 @@ func (s *Server) handleListAccessPrincipals(w http.ResponseWriter, r *http.Reque
 // /api/access/history (the Access page's own read) returns, newest first.
 const accessHistoryLimit = 100
 
+// accessAuditSurface is the config_audit surface access changes are
+// recorded under.
+const accessAuditSurface = "access"
+
 // handleAccessHistory is GET /api/access/history: the config_audit rows of
 // surface "access", so Settings -> Access shows who changed which role,
 // when and why to a caller holding access:read without settings:read.
@@ -755,7 +759,11 @@ func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	entries, err := s.tasks.Store.ConfigAudit(r.Context(), maxConfigAudit)
+	// The surface is narrowed in the query, not here: reading the newest
+	// maxConfigAudit changes of every surface and keeping the access
+	// ones answered nothing once that many settings or capability-server
+	// edits were newer than the last access change.
+	entries, err := s.tasks.Store.ConfigAuditOfSurface(r.Context(), accessAuditSurface, maxConfigAudit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -763,9 +771,6 @@ func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 	title := s.tasks.sessionTitles(r.Context())
 	out := []ConfigAuditView{}
 	for _, e := range entries {
-		if e.Surface != "access" {
-			continue
-		}
 		view := ConfigAuditView{
 			ID:          e.ID,
 			At:          e.At,
@@ -784,7 +789,7 @@ func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	writeList(w, out, list)
+	writeListBy(w, out, list, configAuditKey)
 }
 
 func (s *Server) handleAllowPrincipal(w http.ResponseWriter, r *http.Request) {
