@@ -1441,3 +1441,34 @@ func TestWorkflowGrainCIOffSuppressionReportsCIModeRatherThanStandingWork(t *tes
 		t.Fatalf("SuppressedFiring(opted-in workflow) = %+v, %v, want nil", got, err)
 	}
 }
+
+// A grain-ci: true schedule renamed or withdrawn while its run is in
+// flight on a ci_mode: github repository has its run cancelled -- and the
+// reason says the schedule went, not that the repository switched (the
+// §10 schedule-group walkthrough, docs/test-runs/2026-11-11-schedule-groups.md).
+func TestAWithdrawnGrainCIScheduleSaysWhyItsRunWasCancelled(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sched := workflowSchedule(t, store, baseTime.Add(-time.Minute))
+	runner := newFakeCI()
+	deps := workflowDeps(store, runner)
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if len(runner.requests) != 1 {
+		t.Fatalf("started %d runs, want 1", len(runner.requests))
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: declaringRepo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteSchedule(ctx, sched.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("RunCycle after withdrawing the schedule: %v", err)
+	}
+	got := runner.reasons["run1"]
+	if strings.Contains(got, "switched") || !strings.Contains(got, sched.ID) || !strings.Contains(got, "renamed or withdrawn") {
+		t.Fatalf("run1 cancel reason = %q, want it to say schedule %s was renamed or withdrawn", got, sched.ID)
+	}
+}

@@ -322,6 +322,14 @@ func startScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Schedul
 // exception is the schedule's alone -- the run is a schedule event, so it
 // is no pull request's check and posts no commit status -- which is why it
 // is read off the schedule here rather than off the repository.
+// scheduleGoneCancelReason is why a scheduled grain CI run is cancelled
+// when the schedule that fired it no longer exists on a repository whose
+// CI mode runs grain CI only for a schedule that says grain-ci: true.
+func scheduleGoneCancelReason(scheduleID string, mode model.CIMode) string {
+	return fmt.Sprintf("schedule %s was renamed or withdrawn while its run was in flight, "+
+		"and the repository's CI mode is %s", scheduleID, mode)
+}
+
 func scheduledWorkflowGrainCIOff(ctx context.Context, store *model.Store, row model.ScheduledWorkflowRun) (bool, model.CIMode, error) {
 	disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, store, row.Repo)
 	if err != nil || !disabled {
@@ -499,6 +507,12 @@ func collectScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Sched
 		return err
 	} else if disabled {
 		reason := cancelReasonForCIMode(mode)
+		// The repository did not switch: a grain-ci: true schedule was
+		// renamed or withdrawn while its run was in flight, and nothing
+		// left declares that this run may use grain CI.
+		if sched, err := deps.Store.GetSchedule(ctx, row.ScheduleID); err == nil && sched == nil {
+			reason = scheduleGoneCancelReason(row.ScheduleID, mode)
+		}
 		deps.CI.Cancel(row.RunID, reason, ci.CancelBySystem)
 		log.Printf("orchestrator: schedule %s's grain CI run %s on %s cancelled: %s",
 			row.ScheduleID, row.RunID, row.Repo, reason)

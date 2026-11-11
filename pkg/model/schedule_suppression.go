@@ -379,6 +379,13 @@ func (s *Store) OverlapGroupInFlight(ctx context.Context, sched Schedule, repo R
 		if task != nil {
 			holder = scheduleIDFromTags(task.Tags)
 		}
+		if holder == "" {
+			// A task a scheduled suite run filed names its schedule on
+			// the run rather than in a tag.
+			if holder, err = s.ScheduleOfSuiteRunTask(ctx, id); err != nil {
+				return nil, err
+			}
+		}
 		if holder == sched.ID {
 			// Its own task: the schedule's own check has already
 			// answered for it.
