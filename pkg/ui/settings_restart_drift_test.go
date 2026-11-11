@@ -127,6 +127,8 @@ var settingsAppliedLive = map[string]string{
 		"(reconcileAutoUpgrade)",
 	"autoUpgradeOn": "orchestrator's auto-upgrade and release-upgrade reconcilers, which read grain_config every cycle " +
 		"(reconcileAutoUpgrade, reconcileReleaseUpgrade)",
+	"autoUpgradeMinIntervalHours": "orchestrator's release-upgrade reconciler, which reads grain_config every cycle " +
+		"(reconcileReleaseUpgrade)",
 	"taskBranchTemplate":    "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"deploymentId":          "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"externalAgentApi":      "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",
