@@ -776,6 +776,13 @@ func (c *Client) CheckTeamGitConnection(ctx context.Context, id string, req Chec
 			return TeamGitHubCredentialCheck{Host: normHost, CheckedAt: c.now(),
 				Report: githubtoken.Report{Error: err.Error()}}, nil
 		}
+		if transport, ok := gitproxy.AmbientForgeTransport(unsavedHost, req.Source); ok {
+			// A command-backed forge is reached only through its tool,
+			// so it is checked through it, as a saved one is: probing
+			// the host directly would meet its front end instead.
+			return TeamGitHubCredentialCheck{Host: normHost, CheckedAt: c.now(),
+				Report: githubtoken.Probe(transport, token, false, reposToCheck)}, nil
+		}
 		return c.checkGitHubCredentialForHost(ctx, "", token, normHost, reposToCheck)
 	}
 

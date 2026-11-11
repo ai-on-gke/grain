@@ -89,24 +89,28 @@ const FILTER_TITLES = {
 // current filter. One that doesn't (its parent fell out of the filtered
 // view, or the parent it names is gone) falls back to a plain row of
 // its own, so it is never silently dropped from the list.
+//
+// That fallback row stays where the backlog has it rather than going to
+// the bottom: a move is told the neighbours it lands between on screen
+// (moveTo below), so a row drawn out of its backlog place sent "to the
+// end of the list" a task that landed beside the stacked one's real
+// place instead (2026-11-11 saved-boards walkthrough).
 function groupByStack(tasks, matches) {
+  const shown = tasks.filter(matches);
+  const isStacked = (t) => t.stacked && t.generatedFrom;
+  const parentIds = new Set(
+    shown.filter((t) => !isStacked(t)).map((t) => t.id),
+  );
   const topLevel = [];
-  const orphans = [];
-  for (const t of tasks) {
-    if (!matches(t)) continue;
-    if (t.stacked && t.generatedFrom) orphans.push(t);
-    else topLevel.push(t);
-  }
-  const topLevelIds = new Set(topLevel.map((t) => t.id));
   const children = new Map();
-  for (const c of orphans) {
-    if (!topLevelIds.has(c.generatedFrom)) {
-      topLevel.push(c);
+  for (const t of shown) {
+    if (!isStacked(t) || !parentIds.has(t.generatedFrom)) {
+      topLevel.push(t);
       continue;
     }
-    const list = children.get(c.generatedFrom) || [];
-    list.push(c);
-    children.set(c.generatedFrom, list);
+    const list = children.get(t.generatedFrom) || [];
+    list.push(t);
+    children.set(t.generatedFrom, list);
   }
   return { topLevel, children };
 }
