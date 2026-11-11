@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultStateDir matches bwsalmon/granule's own default: pkg/cli's
@@ -400,8 +401,54 @@ func (c Command) Create(ctx context.Context, stateDir, name string, extraArgs ..
 }
 
 // Delete runs "granule vm delete" through c.
+//
+// A delete that finds docker already removing the VM's container is not
+// a failure: something else in this process -- a run's Release racing an
+// orphan sweep, say -- asked first, and what this caller wanted is
+// already under way. granule's own `docker rm -f` treats only "No such
+// container" as gone, so its delete fails on docker's "removal of
+// container ... is already in progress" before it reaches the saved
+// state. The delete is retried until that removal settles, when granule
+// finds no container and clears the state the way a plain delete does;
+// one that has still not settled when the retries or ctx run out is
+// success anyway, since the container is going regardless and a state
+// file left behind is the next sweep's to clear.
 func (c Command) Delete(ctx context.Context, stateDir, name string) error {
-	return c.vm(ctx, "delete", stateDir, name)
+	for attempt := 1; ; attempt++ {
+		err := c.vm(ctx, "delete", stateDir, name)
+		if err == nil || !RemovalInProgress(err) {
+			return err
+		}
+		if attempt >= deleteInProgressAttempts {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(deleteInProgressInterval):
+		}
+	}
+}
+
+// deleteInProgressAttempts and deleteInProgressInterval bound how long
+// Delete waits out a removal someone else started: long enough for docker
+// to drop a VM's tens of GB of overlay, short enough that a release does
+// not sit on a removal that has wedged. Variables so tests need not wait.
+var (
+	deleteInProgressAttempts = 30
+	deleteInProgressInterval = 2 * time.Second
+)
+
+// RemovalInProgress reports whether err is docker refusing a `docker rm`
+// because the same container is already being removed -- which, for a
+// caller that wanted the container gone, is as good as having removed it.
+// Like "No such container", docker says this only in its stderr.
+func RemovalInProgress(err error) bool {
+	return err != nil && removalInProgressText(err.Error())
+}
+
+func removalInProgressText(msg string) bool {
+	return strings.Contains(msg, "removal of container") && strings.Contains(msg, "is already in progress")
 }
 
 // VMLabel is the label granule's docker backend puts on every VM container
@@ -448,7 +495,8 @@ func dockerCommand(ctx context.Context, args ...string) *exec.Cmd {
 // A container that is already gone is success, the way granule's own
 // remove treats it: docker reports "No such container" for each missing
 // name and exits non-zero even when it removed the rest, so the error is
-// only returned when its stderr said something else as well.
+// only returned when its stderr said something else as well. One docker
+// is already removing is success for the same reason (RemovalInProgress).
 func RemoveContainers(ctx context.Context, vmName string) error {
 	pod := PodName(vmName)
 	cmd := dockerCommand(ctx, "rm", "-f", pod, pod+"-netns")
@@ -464,7 +512,7 @@ func RemoveContainers(ctx context.Context, vmName string) error {
 		return fmt.Errorf("granule: docker rm -f %s: %w", pod, err)
 	}
 	for _, line := range strings.Split(said, "\n") {
-		if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, "No such container") {
+		if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, "No such container") && !removalInProgressText(line) {
 			return fmt.Errorf("granule: docker rm -f %s: %w: %s", pod, err, said)
 		}
 	}

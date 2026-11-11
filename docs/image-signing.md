@@ -252,9 +252,13 @@ It is asked in two places:
   that rewrote the release workflow gets past it, and so does any
   attestation that workflow writes. The check that holds against such a
   commit is the deployment's own. `grain daemon
-  -upgrade-reviewed-merge-repo=owner/name` (with
+  -upgrade-reviewed-merge-repo=owner/name` (or `host/owner/name` for a
+  GitHub Enterprise Server, asked at `https://<host>/api/v3`; with
   `-upgrade-reviewed-merge-logins` and, for a private repository or the
-  API's rate limit, `-upgrade-reviewed-merge-token-file`) reads the
+  API's rate limit, `-upgrade-reviewed-merge-token-file` -- without one,
+  a host that a command-backed ambient source claims is read through
+  that source's own tool, on the host through grain's host bridge when
+  the daemon runs in a container) reads the
   pulled image's revision label, which the signature covers. It then
   asks the forge how that commit was merged, and how every first-parent
   commit since the running build's was merged. For an image of another
