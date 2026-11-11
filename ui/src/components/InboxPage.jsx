@@ -23,6 +23,7 @@ import {
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
+import { taskDetailPath } from "../taskDetailPages.js";
 import AccessGate from "./AccessGate.jsx";
 import LinkedNote from "../linkedNote.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../taskRefs.js";
@@ -1678,7 +1679,7 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
       if (!open) prefetchedIdRef.current = t.id;
       setFailed(false);
       Promise.resolve()
-        .then(() => api(`/api/tasks/${t.id}`))
+        .then(() => api(taskDetailPath(t.id)))
         .then((d) => {
           if (live && d) setDetail(d);
         })

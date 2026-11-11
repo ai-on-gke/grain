@@ -74,6 +74,10 @@ type HostdHost struct {
 	//
 	// Deprecated: use HostLogin / LoginTargets.
 	CodexAuth string
+	// HookPolicy reports whether that hostd's hook subcommands accept
+	// -policy and evaluate a staged per-run hook policy file
+	// (hostd.Hello.Has(hostd.FeatureHookPolicy)).
+	HookPolicy bool
 }
 
 // HostLogin returns the symlink target path for the named CLI login on a

@@ -14,19 +14,19 @@
 
 package cli
 
-import "testing"
+import (
+	"os"
+	"strings"
+)
 
-func TestApplyEnvFallbacksLetsAPassedFlagWin(t *testing.T) {
-	t.Setenv("GRAIN_TEST_FALLBACK_A", "  from-env  ")
-	t.Setenv("GRAIN_TEST_FALLBACK_B", "from-env")
-	t.Setenv("GRAIN_TEST_FALLBACK_C", "   ")
-	a, b, c := "default", "from-flag", "default"
-	applyEnvFallbacks(map[string]bool{"b": true}, []envFallback{
-		{"a", "GRAIN_TEST_FALLBACK_A", &a},
-		{"b", "GRAIN_TEST_FALLBACK_B", &b},
-		{"c", "GRAIN_TEST_FALLBACK_C", &c},
-	})
-	if a != "from-env" || b != "from-flag" || c != "default" {
-		t.Fatalf("got a=%q b=%q c=%q, want from-env, from-flag, default", a, b, c)
+// envDefault sets *dst from the environment variable env when the flag
+// named flag was not passed on the command line and env is set (trimmed,
+// non-empty): the "$ENV when unset" rule many daemon flags share.
+func envDefault(passed map[string]bool, flag, env string, dst *string) {
+	if passed[flag] {
+		return
+	}
+	if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+		*dst = v
 	}
 }
