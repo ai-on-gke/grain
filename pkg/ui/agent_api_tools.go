@@ -145,7 +145,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/compact":                                         "Compact a task to a handover, or ask its next run to.",
 	"POST /api/tasks/{id}/brief":                                           "Rewrite a task's current brief.",
 	"POST /api/tasks/{id}/rollover":                                        "Roll a task over to a successor with a fresh record.",
-	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs api:task-admin.",
+	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs https://grain.dev/capabilities/api#task-admin.",
 	"POST /api/notifications":                                              "Raise an operator notification, or bump the open one with the same subject; it never parks anybody.",
 	"POST /api/notifications/{id}/clear":                                   "Clear an operator notification.",
 	"POST /api/tasks/{id}/wait-on":                                         "Make a task wait for the tasks in ids to close; park true ends its run and resumes it when they have.",

@@ -467,22 +467,22 @@ func tasksAdminAllowsTaskPatch(set APIGrantSet, pattern string) bool {
 func tasksAdminTaskPatchBodyAllowed(body []byte) error {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
-		return errors.New("api:tasks:admin without api:tasks:write requires a JSON object editing priority on PATCH /api/tasks/{id}")
+		return errors.New("https://grain.dev/capabilities/api#tasks:admin without https://grain.dev/capabilities/api#tasks:write requires a JSON object editing priority on PATCH /api/tasks/{id}")
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &fields); err != nil || len(fields) == 0 {
-		return errors.New("api:tasks:admin without api:tasks:write requires a single JSON object editing priority on PATCH /api/tasks/{id}")
+		return errors.New("https://grain.dev/capabilities/api#tasks:admin without https://grain.dev/capabilities/api#tasks:write requires a single JSON object editing priority on PATCH /api/tasks/{id}")
 	}
 	for k, raw := range fields {
 		if gateKey(k) != "priority" {
-			return fmt.Errorf("api:tasks:admin without api:tasks:write may only edit priority on PATCH /api/tasks/{id} (got %q)", k)
+			return fmt.Errorf("https://grain.dev/capabilities/api#tasks:admin without https://grain.dev/capabilities/api#tasks:write may only edit priority on PATCH /api/tasks/{id} (got %q)", k)
 		}
 		var on bool
 		if json.Unmarshal(raw, &on) == nil {
-			return errors.New("api:tasks:admin without api:tasks:write may only edit numeric priority on PATCH /api/tasks/{id}")
+			return errors.New("https://grain.dev/capabilities/api#tasks:admin without https://grain.dev/capabilities/api#tasks:write may only edit numeric priority on PATCH /api/tasks/{id}")
 		}
 		if _, err := decodeTaskPriority(raw); err != nil || strings.TrimSpace(string(raw)) == "null" {
-			return errors.New("api:tasks:admin without api:tasks:write requires a numeric priority on PATCH /api/tasks/{id}")
+			return errors.New("https://grain.dev/capabilities/api#tasks:admin without https://grain.dev/capabilities/api#tasks:write requires a numeric priority on PATCH /api/tasks/{id}")
 		}
 	}
 	return nil
@@ -683,7 +683,7 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 	if pattern == ownMessagesReadRoute && target != "" && model.NormalizeTaskID(target) != acting.ID && !isTaskAdmin(acting) {
 		return fmt.Errorf("task %s cannot read task %s's messages: %s is a run's own conversation and the notes "+
 			"other tasks' agents left for it (message_task), so it takes only your own task's id (%s). "+
-			"Reading another task's needs api:task-admin", acting.ID, target, pattern, acting.ID)
+			"Reading another task's needs https://grain.dev/capabilities/api#task-admin", acting.ID, target, pattern, acting.ID)
 	}
 	if method == http.MethodGet {
 		return nil
@@ -822,14 +822,14 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 			how = "it is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
 		}
 		return fmt.Errorf("task %s cannot approve task %s: %s, and an agent never approves its own proposals, "+
-			"directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them "+
+			"directly or through the tasks they filed, even under https://grain.dev/capabilities/api#tasks:admin or dispatch:write -- a person approves them "+
 			"(docs/agent-api.md)", me, task.ID, how)
 	}
 	if holds, err := s.tasks.proposalPersonHolds(ctx, *task, proposer, acting); err != nil {
 		return err
 	} else if len(holds) > 0 {
 		return fmt.Errorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
-			"approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)",
+			"approves a task held for a person, even under https://grain.dev/capabilities/api#tasks:admin or dispatch:write (docs/agent-api.md)",
 			me, task.ID, strings.Join(holds, "; "))
 	}
 	return nil
@@ -903,7 +903,7 @@ func (c *Client) externalApprovalRefusal(ctx context.Context, principal string, 
 			how = "it filed task " + chain[0] + ", which is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
 		}
 		return forbiddenErrorf("%s cannot approve task %s: %s, and an external agent credential never approves its own "+
-			"filings, directly or through the tasks they proposed, even under api:tasks:admin or dispatch:write -- a "+
+			"filings, directly or through the tasks they proposed, even under https://grain.dev/capabilities/api#tasks:admin or dispatch:write -- a "+
 			"person approves them (docs/agent-api.md)", principal, task.ID, how)
 	}
 	holds, err := c.proposalPersonHolds(ctx, task, proposer, nil)
@@ -912,7 +912,7 @@ func (c *Client) externalApprovalRefusal(ctx context.Context, principal string, 
 	}
 	if len(holds) > 0 {
 		return forbiddenErrorf("%s cannot approve task %s: it is held for a person (%s), and an external agent "+
-			"credential, even one a person owns, never approves a task held for a person, even under api:tasks:admin "+
+			"credential, even one a person owns, never approves a task held for a person, even under https://grain.dev/capabilities/api#tasks:admin "+
 			"or dispatch:write (docs/agent-api.md)", principal, task.ID, strings.Join(holds, "; "))
 	}
 	return c.externalApprovalWithin(ctx, principal, task)
@@ -2157,7 +2157,7 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
 				if opts.acting != nil && gateKey(key) == "approved" {
-					return errors.New("an agent files work unapproved and never approves its own proposals, even under api:tasks:admin (docs/agent-api.md)")
+					return errors.New("an agent files work unapproved and never approves its own proposals, even under https://grain.dev/capabilities/api#tasks:admin (docs/agent-api.md)")
 				}
 				if !set.Allows("tasks:admin", repo) {
 					if opts.role != nil {

@@ -83,9 +83,9 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain api <METHOD> <path> [--body '<json>' | --field k=v] [--reason <why>]
                                          Call a granted non-dangerous agent API route
   grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
-                                         Deployment memory and standing docs (api:memory / api:memory:write)
+                                         Deployment memory and standing docs (api#memory / api#memory:write)
   grain release-notes (stats | publish --version <v> <body|--file f>)
-                                         Release notes stats and publishing (api:release-notes)
+                                         Release notes stats and publishing (api#release-notes)
   grain cap list                         Capability tools this run's grants let the sandbox call
   grain cap <server> <tool> [flags | --json '<args>']
                                          Call one (--help lists its flags, generated from its input schema)
@@ -93,16 +93,16 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
                                          Screenshot the app you are working on (light and dark, desktop and phone)
                                          plus a contact sheet to attach to the closing note, where grain shows it
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
-                                         Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api:test-quarantine)
+                                         Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api#test-quarantine)
   grain metrics [<section>] [--window 7d | --since <d> --until <d>]
-                                         grain's own measurements (api:self-debug)
-  grain health                           This deployment's health (deployment-health)
+                                         grain's own measurements (api#self-debug)
+  grain health                           This deployment's health (grain#health)
   grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
-                                         grain's own log, redacted (grain-log)
+                                         grain's own log, redacted (grain#journal)
   grain playbooks [<name>]               Bootstrap playbooks (config-map bootstrap)
   grain issue list | grain issue read <n>
-                                         GitHub issues (read-issues)
-  grain db query <sql>                   Read-only query on grain's database (db-read)
+                                         GitHub issues (github#read-issues)
+  grain db query <sql>                   Read-only query on grain's database (grain#sql)
 
 Run 'grain <command> --help' for flags and examples.
 `
@@ -307,7 +307,7 @@ var sandboxCommandHelp = map[string]string{
 		"Block until every named task has closed (or merged), up to a 9m slice with wait credit.\n" +
 		"To park and free the sandbox VM across a long wait, call the wait_for_task (park: true)\n" +
 		"or resume_later MCP control tool instead.\n",
-	"task message":          "grain task message <id> (<body> | --body <b> | --file <f>)\n\nLeave a note on a parent or child task's conversation (or any task with api:tasks:admin).\n",
+	"task message":          "grain task message <id> (<body> | --body <b> | --file <f>)\n\nLeave a note on a parent or child task's conversation (or any task with https://grain.dev/capabilities/api#tasks:admin).\n",
 	"task propose":          sandboxProposeHelp,
 	"propose":               sandboxProposeHelp,
 	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",
@@ -315,21 +315,21 @@ var sandboxCommandHelp = map[string]string{
 	"memory":                "grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
 	"memory read":           "grain memory read <path>\n\nRead a file from deployment memory (memory://<path>; grain memory list names them).\n",
-	"memory write":          "grain memory write [--repo owner/name] (<text> | --file <f>) [--reason <why>]\n\nReplace the deployment's memory text (or a repository's, with --repo) with <text>. It is one text, not keyed entries: a named entry is grain memory doc-write. Needs api:memory or api:memory:write.\n",
-	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>) [--summary <s>] [--repo <owner/name>] [--reason <why>]\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
-	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
+	"memory write":          "grain memory write [--repo owner/name] (<text> | --file <f>) [--reason <why>]\n\nReplace the deployment's memory text (or a repository's, with --repo) with <text>. It is one text, not keyed entries: a named entry is grain memory doc-write. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
+	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>) [--summary <s>] [--repo <owner/name>] [--reason <why>]\n\nWrite a standing document in the memory repository. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
+	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
 	"release-notes":         "grain release-notes (stats | publish --version <v> <body|--file f>)\n",
-	"release-notes stats":   "grain release-notes stats [<period> | --period <p>]\n\nCompute task and PR statistics for a release window. Needs api:release-notes or api:release-notes:read.\n",
-	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs api:release-notes or api:release-notes:write.\n",
-	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds api:test-quarantine or api:tests:write.\n",
+	"release-notes stats":   "grain release-notes stats [<period> | --period <p>]\n\nCompute task and PR statistics for a release window. Needs https://grain.dev/capabilities/api#release-notes or https://grain.dev/capabilities/api#release-notes:read.\n",
+	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs https://grain.dev/capabilities/api#release-notes or https://grain.dev/capabilities/api#release-notes:write.\n",
+	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds https://grain.dev/capabilities/api#test-quarantine or https://grain.dev/capabilities/api#tests:write.\n",
 	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
-		"grain's own measurements (deploy://metrics). Needs api:self-debug or api:deployment:read.\n\n" +
+		"grain's own measurements (deploy://metrics). Needs https://grain.dev/capabilities/api#self-debug or https://grain.dev/capabilities/api#deployment:read.\n\n" +
 		"  --window   how far back to measure: 36h, 7d, 2w (default: the daemon's own)\n" +
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
-	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
+	"health": "grain health\n\nThis deployment's health (deploy://health). Needs https://grain.dev/capabilities/grain#health.\n",
 	"log": "grain log [<source> | --source daemon|dmesg] [--unit <unit>] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]\n\n" +
-		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
+		"grain's own log, redacted (deploy://grain.log). Needs https://grain.dev/capabilities/grain#journal.\n\n" +
 		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
 		"  --source          which journal: daemon (the default) or dmesg (the kernel's)\n" +
 		"  --unit            for daemon when both grain-daemon.service and grain.service exist: which unit to read\n" +
@@ -340,7 +340,7 @@ var sandboxCommandHelp = map[string]string{
 	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}.\n",
 	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
 	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
-	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
+	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs https://grain.dev/capabilities/grain#sql.\n",
 	"ci":         "grain ci (list | show | checks | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
 	"pr":         "grain pr (status | base-status | open | reply | resolve | threads | review-comment)\n",
 	"task":       "grain task (list | read | prompt | transcript | wait | message | propose) ...\n",
@@ -351,7 +351,7 @@ var sandboxCommandHelp = map[string]string{
 // sandboxTaskListHelp is grain task list --help.
 const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
-	"The tasks this run may read (its own, or every task with api:self-debug or api:tasks:read), one line each:\n" +
+	"The tasks this run may read (its own, or every task with https://grain.dev/capabilities/api#self-debug or https://grain.dev/capabilities/api#tasks:read), one line each:\n" +
 	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +

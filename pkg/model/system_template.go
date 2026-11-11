@@ -371,7 +371,7 @@ func memoryAgentBody(stateRepo RepoRef) string {
 		"they start.\n\n")
 
 	b.WriteString("Your evidence is the record of the runs themselves, and you read it with the " +
-		"self-debug capability's `grain` commands in your sandbox: `grain task list` for what " +
+		"`grain` commands your `https://grain.dev/capabilities/api#self-debug` grant opens in your sandbox: `grain task list` for what " +
 		"this deployment has been doing (pipe it through `grep` for failed tasks), " +
 		"`grain task read <id>` for one task's whole record, every attempt and how each " +
 		"one ended and everything said on the way through, `grain task prompt <id>` for what " +
@@ -598,7 +598,7 @@ func releaseNotesBody(stateRepo RepoRef) string {
 		"merge -- so if the answer says it covers only some of the week's merges, say that " +
 		"too, and never quote a partial figure as the week's total.\n\n")
 
-	b.WriteString("Then find out what the week was actually about, with the self-debug task " +
+	b.WriteString("Then find out what the week was actually about, with the `api#self-debug` task " +
 		"commands: `grain task list` for what has been going on, `grain task read <id>` for one " +
 		"task's whole record, `grain task prompt <id>` for what an agent was told and " +
 		"`grain task transcript <id>` for one attempt's story. " +
@@ -874,7 +874,7 @@ func infraReviewBody(stateRepo RepoRef) string {
 
 	b.WriteString("## Start with what you said last night\n\n")
 	b.WriteString("Before you look at a single number, find out what this job already " +
-		"recommended and what came of it. The self-debug `grain` commands are how: `grain task list` " +
+		"recommended and what came of it. The `grain` commands of your `api#self-debug` grant are how: `grain task list` " +
 		"for what this deployment has been doing, " +
 		"`grain task read <id>` for one task's whole record including every comment on it, " +
 		"`grain task prompt <id>` for what an agent was told and `grain task transcript <id>` " +
@@ -977,7 +977,7 @@ func infraReviewBody(stateRepo RepoRef) string {
 		"`grain task list` between them will show you the oldest of these.\n" +
 		"- **Flaky jobs**, identified as the same job failing the same way across unrelated " +
 		"branches. `grain ci list` annotates a red job with the other branches failing " +
-		"identically, and your self-debug grant lets you read every repository's runs rather " +
+		"identically, and your `api#self-debug` grant lets you read every repository's runs rather " +
 		"than one's. \"This flaked on six branches tonight\" is worth more than any number you " +
 		"will tune.\n" +
 		"- **Repairs the merge queue had to file**, and anything it gave up on and handed back " +
@@ -1030,7 +1030,7 @@ func infraReviewBody(stateRepo RepoRef) string {
 			"which is worth reading before you describe one as idle.\n\n")
 		b.WriteString("Note what is **not** there: this deployment's tasks, runs, comments and " +
 			"observations are not exported, so there is no tables/task.json and no " +
-			"tables/task_run.json to read. The record lives behind the self-debug task tools " +
+			"tables/task_run.json to read. The record lives behind the `api#self-debug` task tools " +
 			"above.\n\n")
 		b.WriteString("You cannot push to that repository and you should not try. The way a " +
 			"change reaches it is a proposal.\n\n")

@@ -388,7 +388,7 @@ func (s *Server) handleRequestLocalScriptApproval(w http.ResponseWriter, r *http
 		return
 	}
 	if !localScriptsGranted(*task) {
-		writeClientError(w, validationErrorf("task %s holds no local-scripts capability", id))
+		writeClientError(w, validationErrorf("task %s holds no host-script grant (https://grain.dev/capabilities/host-script#host-script)", id))
 		return
 	}
 	if strings.TrimSpace(req.Tool) == "" || strings.TrimSpace(req.Script) == "" {

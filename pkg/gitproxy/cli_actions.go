@@ -1525,7 +1525,7 @@ func (p *GitProxy) serveProposals(w http.ResponseWriter, r *http.Request, scope 
 // serveQuarantine answers POST /cli/quarantine (and POST /cap/quarantine).
 func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
 	if !model.SandboxAPIGrantsOf(scope.Grants).Allows("tests:write", scope.TaskRepo) {
-		cliError(w, namespace.RefuseCapability("grain quarantine", "api:test-quarantine"))
+		cliError(w, namespace.RefuseCapability("grain quarantine", model.APIRef("test-quarantine")))
 		return
 	}
 	var req CLIQuarantineRequest

@@ -772,7 +772,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	k8sRunHostSA := fs.String("k8s-run-host-service-account", "grain", "the service account run pods run as")
 	var localScripts stringList
 	fs.Var(&localScripts, "local-scripts", "NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed "+
-		"local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). "+
+		"local-scripts declaration, each of whose scripts a task holding its host-script grant is served "+
+		"(https://grain.dev/capabilities/host-script#host-script {script}; docs/local-scripts.md). "+
 		"Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml")
 	granuleStateDir := fs.String("granule-state-dir", granule.DefaultStateDir,
 		"granule's VM state directory (only used with -granule-sandboxes)")

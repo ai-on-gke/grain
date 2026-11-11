@@ -374,7 +374,7 @@ func NewTaskTools(reader TaskReader) []Tool {
 // no route to the store -- a sentence about this run rather than "unknown
 // tool", which would read like a bug in grain rather than a fact about
 // how this one was dispatched.
-const noTaskReader = "This run cannot read grain's other tasks: it holds the self-debug grant but was " +
+const noTaskReader = "This run cannot read grain's other tasks: it holds the https://grain.dev/capabilities/api#self-debug grant but was " +
 	"dispatched with no route back to the grain daemon that owns the task store. Say so if it " +
 	"matters to what you were asked to do; nothing you can do from here will change it."
 

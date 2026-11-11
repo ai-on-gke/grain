@@ -263,8 +263,9 @@ func (w Why) Reason() string {
 		return "a repository's own declarations say what work to do in it and when, " +
 			"never what that work may touch -- a task filed from this file targets this repository, " +
 			"holds the capabilities this deployment already gives tasks here, and reaches another " +
-			"repository only where a template says `capabilities: [\"repo-read:<owner>/<repo>\", " +
-			"\"repo-write:<owner>/<repo>\"]`, which its team's own GitHub credential then has to allow. " +
+			"repository only where a template says `capabilities: [{capability: " +
+			"\"https://grain.dev/capabilities/repo#read\", with: {repo: <owner>/<repo>}}]` (or #write), " +
+			"which its team's own GitHub credential then has to allow. " +
 			"A template that needs more than that belongs in grain's own settings"
 	case Authority:
 		return "a repository says what its own work does, never what that work is allowed to do: " +

@@ -501,7 +501,7 @@ func renderScopeOverview(access mcpCallerAccess, authorized []APIRoute) mcp.Resu
 	if len(authorized) == 0 {
 		msg := "No Grain controller API scopes are currently authorized for this caller."
 		if access.actingTaskID != "" {
-			msg += fmt.Sprintf(" Ask a human to grant task %s an api:<scope> or api:<preset> capability (e.g. api:tasks-read, api:task-admin, api:ci-read, api:deployment:read).", access.actingTaskID)
+			msg += fmt.Sprintf(" Ask a human to grant task %s an agent API scope or preset, https://grain.dev/capabilities/api#<scope-or-preset> (e.g. #tasks:read, #task-admin, #ci-read, #deployment:read).", access.actingTaskID)
 		} else if access.role != nil && !access.role.Full {
 			msg += fmt.Sprintf(" %s holds no controller API scopes; ask an access-code admin to assign a role that includes them (docs/access-code.md).", access.role.label())
 		}

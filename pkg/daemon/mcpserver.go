@@ -2083,21 +2083,21 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	var grants GrantNames
 	fs.Var(&grants, "grant",
 		"name of a capability grant this run's task holds, whose tools this server should serve; "+
-			"repeat the flag for each. \"api:self-debug\" (api:tasks:read and api:deployment:read; the retired "+
-			"\"self-debug\" reads as it) serves the four task readers, read_pipeline_changes and read_grain_metrics "+
-			"over -server; "+
-			"\"grain-log\" serves read_grain_log over this host's journal, "+
+			"repeat the flag for each. \"https://grain.dev/capabilities/api#self-debug\" (the tasks:read and "+
+			"deployment:read scopes; the retired \"self-debug\" and \"api:self-debug\" read as it) serves the four "+
+			"task readers, read_pipeline_changes and read_grain_metrics over -server; "+
+			"\"https://grain.dev/capabilities/grain#journal\" (formerly \"grain-log\") serves read_grain_log over this host's journal, "+
 			"redacted with -grain-secrets-dir. Passed "+
 			"by a Framework from the grants on the run's own task (agent.RunConfig.Grants, "+
 			"agent.GrantArgs).")
 	grainSrcDir := fs.String("grain-src-dir", "",
 		"directory holding grain's own source, read-only (pkg/cli/daemon.go's sourceDir: the copy "+
 			"baked into the deployment image, or -upgrade-src-dir's checkout).")
-	grainStateDir := fs.String("grain-state-dir", "", "controller-local synchronized deployment state repository; only used with -grant deployment-health")
+	grainStateDir := fs.String("grain-state-dir", "", "controller-local synchronized deployment state repository; only used with -grant https://grain.dev/capabilities/grain#health")
 	grainSecretsDir := fs.String("grain-secrets-dir", "",
 		"directory holding this deployment's own secrets (cmd/grain's secretsDir: -data-dir/secrets), "+
 			"read on this host so that read_grain_log can redact those values out of the journal "+
-			"before returning any of it. Only used with -grant grain-log, and never served to a run "+
+			"before returning any of it. Only used with -grant https://grain.dev/capabilities/grain#journal, and never served to a run "+
 			"-- what it buys is the ability to recognize a credential in a log line and remove it. "+
 			"Unset, or unreadable, read_grain_log refuses every call rather than answering with an "+
 			"unredacted journal.")

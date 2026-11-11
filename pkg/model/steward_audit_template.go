@@ -57,7 +57,7 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		stateNote = fmt.Sprintf(
 			"You have read access to `%s`, this deployment's state repository (settings, templates, and schedules exported as text). "+
 				"Note that tasks, runs, and comments live in the daemon's database rather than the state export: "+
-				"use the `self-debug` task commands (`grain task list`, `grain task read <id>`, `grain task prompt <id>`, `grain task transcript <id>`) and CI tools (`list_ci_runs`, `get_ci_log`) to read the steward task and the tasks or CI runs its wakes cited.\n\n",
+				"use the `https://grain.dev/capabilities/api#self-debug` task commands (`grain task list`, `grain task read <id>`, `grain task prompt <id>`, `grain task transcript <id>`) and CI tools (`list_ci_runs`, `get_ci_log`) to read the steward task and the tasks or CI runs its wakes cited.\n\n",
 			stateRepo)
 	}
 	return strings.TrimSpace("You are the weekly sampled audit for the pipeline steward (`" + PipelineStewardTemplateID + "`).\n\n" +
