@@ -449,7 +449,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
-	prompt += sandboxToolingSection(task.Target != nil, runCIAccessOf(task))
+	prompt += sandboxToolingSectionFor(task.Target != nil, runCIAccessOf(task), isReviewTask(task))
 	prompt += grainCLISection(task)
 	prompt += customFieldsSection(task)
 	prompt += timezoneSection(task)
@@ -507,7 +507,26 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	// (mcp/wait_for_checks_tool.go). The status read is still worth
 	// naming, since it is the one that answers questions about the pull
 	// request itself rather than about the build.
-	if task.Target != nil {
+	if task.Target != nil && isReviewTask(task) {
+		if !reviewCommentsOnly(task) && task.Intent != model.IntentReview {
+			prompt += "\n\nCommit any fix with a message written for a human reviewer: a short summary " +
+				"line, a blank line, then a paragraph on what changed and why."
+			if trailers := CommitTrailers(task); len(trailers) > 0 {
+				prompt += "\n\nEnd every commit message with these trailers, in its last " +
+					"paragraph, so the work can be followed from git alone:\n\n    " +
+					strings.Join(trailers, "\n    ")
+			}
+			if _, inPlace := reviewsInPlace(task); !inPlace && canOpenPullRequest {
+				prompt += "\n\nOnce you have pushed fixes, you can run `grain pr open` to open " +
+					"the pull request for your branch without waiting for your run to end."
+			}
+			prompt += fmt.Sprintf(
+				"\n\nEach push to %q reruns CI on the new commit automatically, and the merge "+
+					"queue will not merge a head whose CI has not passed: do not call "+
+					"`grain ci wait` or `wait_for_checks` to wait for CI to finish, and do not "+
+					"re-run whole suites in your sandbox.", branch)
+		}
+	} else if task.Target != nil {
 		// What the commit messages are for, which is discoverable from
 		// nowhere else at all: grain builds the pull request's title and
 		// description out of them (description.go), so they are the only
@@ -1037,14 +1056,20 @@ func runtimeSection(task model.Task, maxRuntime time.Duration) string {
 	s := fmt.Sprintf(
 		"\n\ngrain cancels this run after %s of wall-clock time and destroys the "+
 			"sandbox with it, so treat that as your budget rather than as a limit you "+
-			"will never reach. Time you spend blocked inside `grain ci wait` is not "+
-			"charged against that budget -- up to %s over the whole run, which is "+
-			"credited back to your deadline as you spend it, so %s is the longest this "+
-			"run can live. Waiting for the verdict on a push you have already made is "+
-			"therefore not a reason to skip the wait.",
-		humanDuration(maxRuntime), humanDuration(RunWaitCreditCap),
-		humanDuration(maxRuntime+RunWaitCreditCap),
+			"will never reach.",
+		humanDuration(maxRuntime),
 	)
+	if !isReviewTask(task) {
+		s += fmt.Sprintf(
+			" Time you spend blocked inside `grain ci wait` is not "+
+				"charged against that budget -- up to %s over the whole run, which is "+
+				"credited back to your deadline as you spend it, so %s is the longest this "+
+				"run can live. Waiting for the verdict on a push you have already made is "+
+				"therefore not a reason to skip the wait.",
+			humanDuration(RunWaitCreditCap),
+			humanDuration(maxRuntime+RunWaitCreditCap),
+		)
+	}
 	if task.Target != nil {
 		s += " Only what you have pushed survives that: a commit you never pushed, and " +
 			"an edit you never committed, go with the sandbox. Commit and push each " +
@@ -1540,8 +1565,19 @@ func sandboxDirsSection(checkoutDir, sandboxRoot string) string {
 // (daemon.pullRequestToolsWithUpstream drops them there), while
 // `grain ci wait` and `grain pr open` answer on every sandbox.
 func sandboxToolingSection(hasTarget bool, access runCIAccess) string {
+	return sandboxToolingSectionFor(hasTarget, access, false)
+}
+
+// sandboxToolingSectionFor is sandboxToolingSection for a review too: a
+// review reads the reviewed change's CI rather than waiting on its own, and
+// always holds a read of it (ensureReviewCIReadGrant).
+func sandboxToolingSectionFor(hasTarget bool, access runCIAccess, review bool) string {
 	s := "\n\n"
 	switch {
+	case hasTarget && review:
+		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
+			"`grain ci checks <sha>`, `grain ci list`, `grain ci log` and `grain pr status` " +
+			"rather than reaching for `gh`, which the stock sandbox image does not carry. "
 	case hasTarget && (access.grainCI || access.read):
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
 			"`grain ci wait`, `grain pr status` and `grain pr base-status` rather than " +

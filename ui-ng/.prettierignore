@@ -1,0 +1,5 @@
+node_modules
+.angular
+out-tsc
+package-lock.json
+src/app/api/generated-routes.ts
