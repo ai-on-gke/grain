@@ -622,9 +622,10 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpDrain:
-		// Answered first: with nothing running, a drain exits hostd at
-		// once, and an OK written after it raced that exit and was often
-		// lost (Client.Drain tolerates that from older builds).
+		// Answered before draining starts: with nothing running, the drain
+		// loop exits the process at once, and an answer written after it
+		// raced that exit -- a daemon then read EOF for a drain that had
+		// in fact happened (tests/agentdcompat).
 		_ = writeFrame(conn, frameOK, nil)
 		if req.Idle {
 			s.Cutover()

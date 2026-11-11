@@ -455,16 +455,63 @@ func (c *Client) DeleteTeamGitConnection(ctx context.Context, id, credName, user
 		return Team{}, validationErrorf("this deployment has no git connection %q", credName)
 	}
 
-	// Remove credential files grain minted for the connection
-	if model.DeploymentOwnsGitCredential(credName) {
-		_ = c.Config.Credentials.Remove(credName)
+	owned := model.DeploymentOwnsGitCredential(credName)
+	if owned {
+		// The credential is deleted along with the connection, so anything
+		// else that names it would be left pointing at nothing: refused,
+		// naming them, rather than half-removed (grain/task-4249).
+		users, err := c.gitCredentialUsers(ctx, credName)
+		if err != nil {
+			return Team{}, err
+		}
+		if len(users) > 0 {
+			return Team{}, validationErrorf("git connection %q is still named by %s: repoint or remove them first",
+				credName, strings.Join(users, ", "))
+		}
 	}
 
-	return c.UpdateTeam(ctx, id, UpdateTeamRequest{
+	team, err := c.UpdateTeam(ctx, id, UpdateTeamRequest{
 		GitConnections: &updatedConns,
 		GitCredential:  &emptyLegacy,
 		User:           user,
 	})
+	if err != nil {
+		// Nothing has been removed: the credential stays with the
+		// connection that still names it.
+		return Team{}, err
+	}
+	// Remove credential files grain minted for the connection, only once
+	// the connection itself is gone -- removing them first left a
+	// connection naming a credential that no longer existed whenever the
+	// update was refused.
+	if owned {
+		_ = c.Config.Credentials.Remove(credName)
+	}
+	return team, nil
+}
+
+// gitCredentialUsers names what besides the deployment's connection list
+// still names credential name: capability grants
+// (gitCredentialGrantHolders) and repositories whose repo_config pins it
+// as their per-repository override.
+func (c *Client) gitCredentialUsers(ctx context.Context, name string) ([]string, error) {
+	users, err := c.gitCredentialGrantHolders(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if c.Store == nil {
+		return users, nil
+	}
+	configs, err := c.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, rc := range configs {
+		if strings.TrimSpace(rc.GitCredential) == name {
+			users = append(users, "repository "+rc.Repo.String())
+		}
+	}
+	return users, nil
 }
 
 // SetTeamRepoGitConnectionRequest is the body of PUT

@@ -26,8 +26,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
 )
 
 // Client is the daemon's side of the socket.
@@ -95,19 +93,18 @@ func (c Client) Cutover(ctx context.Context) error {
 	return drainAnswered(c.oneShot(ctx, Request{Op: OpDrain, Idle: true}, frameOK, nil))
 }
 
-// drainAnswered reads a drain's or cutover's failure. A hostd with
-// nothing running exits the moment it starts draining, and every
-// release up to now answered OpDrain only after starting it, so the
-// connection can end -- EOF, the session closing, the stream reset --
-// before the OK is written. That is the drain taking effect, not
-// failing: the request reached hostd, and hostd going away is what it
-// asked for. A refusal, a deadline or a failure to connect is still an
-// error.
+// drainAnswered reads a drain request's error. A hostd with nothing
+// running exits as soon as it drains, and released builds (v3.3.0 and
+// earlier) answered only after starting the drain, so their exit can
+// close the connection before the answer is written: the request was
+// sent and taken, and the connection ending without a frame is that
+// hostd having drained, not a failure.
 func drainAnswered(err error) error {
-	if err == nil || !errors.Is(err, errHostdGoneAfterRequest) {
-		return err
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return nil
 	}
-	return nil
+	return err
 }
 
 // SocketOwner asks hostd which process in a process tree it started holds
@@ -158,9 +155,6 @@ func (c Client) oneShot(ctx context.Context, req Request, want byte, out any) er
 		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
 			return ctx.Err()
 		}
-		if connEnded(err) {
-			return fmt.Errorf("%w: %w", errHostdGoneAfterRequest, err)
-		}
 		return err
 	}
 	switch typ {
@@ -173,20 +167,6 @@ func (c Client) oneShot(ctx context.Context, req Request, want byte, out any) er
 		return refusal(payload)
 	}
 	return fmt.Errorf("hostd: unexpected frame %q", typ)
-}
-
-// errHostdGoneAfterRequest marks a oneShot whose request was written but
-// whose connection ended before any reply (connEnded).
-var errHostdGoneAfterRequest = errors.New("hostd: the connection ended before hostd answered")
-
-// connEnded reports whether err is a connection ending under a reader --
-// hostd exiting or the session to it closing -- rather than a deadline or
-// a malformed reply.
-func connEnded(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, mux.ErrSessionClosed) || errors.Is(err, mux.ErrStreamClosed) ||
-		errors.Is(err, mux.ErrStreamReset) || errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
 }
 
 // dialRetry is how long dial keeps trying a socket that is not there or
