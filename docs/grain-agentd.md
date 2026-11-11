@@ -160,10 +160,10 @@ The same format as `grain host`'s, with `clis:` only:
 ```yaml
 clis:
   agy:
-    path: /home/you/.local/bin/agy
-    paths_under: [/home/you/.grain/hostd-stage]
-    cwd_under: [/home/you/.grain/hostd-stage]
-    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]
+    path: ~/.local/bin/agy
+    paths_under: [~/.grain/hostd-stage]
+    cwd_under: [~/.grain/hostd-stage]
+    env: [HOME, "*"]
     pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]
 capabilities: {}
 ```

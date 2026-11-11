@@ -103,9 +103,12 @@ func TestInstall(t *testing.T) {
 	if st, _ := os.Stat(filepath.Dir(p.Token)); st == nil || st.Mode().Perm() != 0o700 {
 		t.Errorf("token directory mode = %v, want 0700", st.Mode().Perm())
 	}
-	// The allowlist: agy, as found on $PATH, and nothing else.
+	// The allowlist: agy, as found on $PATH, with env: [HOME, "*"] and ~/.grain/hostd-stage.
 	allow, _ := os.ReadFile(p.Allowlist)
-	if !strings.Contains(string(allow), "path: "+h.agy) || !strings.Contains(string(allow), "capabilities: {}") {
+	if !strings.Contains(string(allow), "path: "+h.agy) ||
+		!strings.Contains(string(allow), "paths_under: [~/.grain/hostd-stage]") ||
+		!strings.Contains(string(allow), `env: [HOME, "*"]`) ||
+		!strings.Contains(string(allow), "capabilities: {}") {
 		t.Errorf("allowlist:\n%s", allow)
 	}
 	if err := checkAgentsOnly(p.Allowlist, owners()); err != nil {
@@ -255,5 +258,24 @@ func TestInstallJoinHandshake(t *testing.T) {
 	}
 	if !strings.Contains(string(unit), "-key-file "+p.Key) {
 		t.Fatalf("unit missing -key-file %s:\n%s", p.Key, unit)
+	}
+}
+
+func TestAllowlistForGatesEnvOpenOnHostFeature(t *testing.T) {
+	home := "/home/dev"
+	stage := "/home/dev/.grain/hostd-stage"
+	agy := "/home/dev/.local/bin/agy"
+
+	modern := AllowlistFor(hostd.ThisHello("v3.5.0"), home, stage, "https://grain.example.com", agy)
+	if !strings.Contains(modern, "path: ~/.local/bin/agy\n") ||
+		!strings.Contains(modern, "paths_under: [~/.grain/hostd-stage]\n") ||
+		!strings.Contains(modern, `env: [HOME, "*"]`+"\n") {
+		t.Errorf("AllowlistFor modern host:\n%s", modern)
+	}
+
+	legacy := AllowlistFor(hostd.Hello{Protocol: 4}, home, stage, "https://grain.example.com", agy)
+	if strings.Contains(legacy, `"*"`) || strings.Contains(legacy, "~/") ||
+		!strings.Contains(legacy, "env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]\n") {
+		t.Errorf("AllowlistFor legacy host:\n%s", legacy)
 	}
 }

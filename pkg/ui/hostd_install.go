@@ -31,6 +31,7 @@ import (
 	"time"
 
 	agentdrelease "github.com/ai-on-gke/grain/pkg/agentd/release"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -215,6 +216,14 @@ type HostdInstallContext struct {
 	// snippet (--join <code>) for the deployment owner; "" for per-host
 	// install instructions.
 	JoinCode string
+	// Features are the contract features the host advertised when already
+	// connected; empty when the host has not connected yet.
+	Features []hostd.Feature
+}
+
+// HasFeature reports whether c's connected host advertised f.
+func (c HostdInstallContext) HasFeature(f hostd.Feature) bool {
+	return slices.Contains(c.Features, f)
 }
 
 // HostdInstallInstructions is what Settings -> Hostds and `grain hostds`
@@ -349,12 +358,21 @@ func hostdInstallOrigin(r *http.Request) string {
 // it anyway are dropped for the default's.
 func (s *Server) hostdInstallFor(r *http.Request, h model.Hostd, token string) *HostdInstall {
 	out := s.hostdInstallInfo()
+	var features []hostd.Feature
+	if s.tasks != nil {
+		if st, ok := s.tasks.Config.HostdRemote.(hostdStatuses); ok {
+			if cur, ok := st.Statuses()[h.Name]; ok && cur.Connected {
+				features = slices.Clone(cur.Features)
+			}
+		}
+	}
 	c := HostdInstallContext{
-		Origin:  hostdInstallOrigin(r),
-		Name:    h.Name,
-		Owner:   h.Owner,
-		Release: out.Release,
-		Image:   out.Image,
+		Origin:   hostdInstallOrigin(r),
+		Name:     h.Name,
+		Owner:    h.Owner,
+		Release:  out.Release,
+		Image:    out.Image,
+		Features: features,
 	}
 	inst := defaultHostdInstall(c)
 	if f := registeredHostdInstall(); f != nil {

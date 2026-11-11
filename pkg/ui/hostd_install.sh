@@ -483,6 +483,18 @@ enroll_host() {
   fi
 }
 
+supports_env_open() {
+  [ -n "${GRAIN:-}" ] && [ -x "$GRAIN" ] && [ -n "${WORK:-}" ] || return 1
+  probe="$WORK/env-open-probe.yaml"
+  printf 'clis:\n  probe:\n    path: /bin/sh\n    env: ["*"]\n' > "$probe"
+  as_root chown root:root "$probe"
+  as_root chmod 0644 "$probe"
+  ok=0
+  as_root "$GRAIN" hostd -check -allowlist "$probe" >/dev/null 2>&1 || ok=1
+  rm -f "$probe"
+  return "$ok"
+}
+
 allowlist_content() {
   cat <<YAML
 # grain hostd's allowlist: every program the grain daemon at
@@ -502,16 +514,20 @@ YAML
       printf '  "%s": "%s"\n' "${label%%=*}" "${label#*=}"
     done
   fi
-  cat <<'YAML'
+  env_example='[HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]'
+  if supports_env_open; then
+    env_example='[HOME, "*"]'
+  fi
+  cat <<YAML
 # An agent CLI this machine runs for the daemon, for example:
 #  agy:
 #    path: /usr/local/bin/agy
 #    paths_under: [/var/lib/grain]
 #    cwd_under: [/var/lib/grain]
-#    env: [HOME]
+#    env: $env_example
 clis: {}
 # A stdio capability server a capability config starts with run: host;
-# grain's own are added below by `grain hostd -ensure-builtins`.
+# grain's own are added below by \`grain hostd -ensure-builtins\`.
 capabilities:
 YAML
 }
