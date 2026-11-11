@@ -403,13 +403,31 @@ changes to `.grain` files are protected by repository-owned path triggers
 `.grain/**` (with `gate: true`, `human: required`, `sensitive: true`) so that
 pull requests modifying `.grain` declarations require human review and approval.
 
-**Team approval.** Declared access needs no approval beyond what the work
-already gets. The task files as its template would file it: approved when
-a schedule or suite files it, and decided by whoever files it by hand.
-The access only takes effect from the default branch, so the authority
-behind it is the authority to merge `.grain/templates`. It is guarded the
-way `.grain/workflows` is (see "Sensitive paths" below for the
+**Team approval.** Ordinary declared access needs no approval beyond what
+the work already gets. The task files as its template would file it:
+approved when a schedule or suite files it, and decided by whoever files
+it by hand. The access only takes effect from the default branch, so the
+authority behind it is the authority to merge `.grain/templates`. It is
+guarded the way `.grain/workflows` is (see "Sensitive paths" below for the
 recommended trigger).
+
+What only a person may grant is different. That is a GCP key, a host
+script, a GitHub credential, a dangerous or person-only `api:<scope>`
+(`model.DeclaredGrantNeedsPerson`), an `admission:` above `standard`, or
+`network_access: open`. A repository's declaration only asks for these.
+A firing of a declared schedule, or of a declared template, whose
+composition carries one is filed unapproved, with a note naming what
+waits for a person (`model.DeclaredFiringHold`). The same applies to a
+declared suite with `require_approval: false`. This lasts until a person
+accepts that declaration's set on **Settings → Capabilities → Repository
+declarations**. Accepting takes `capabilities:admin` for a capability
+server's grant, and the scope itself for an `api:` grant. From then on
+its firings land approved again, while it asks for nothing beyond the
+accepted set. A declaration that widens past that set is held again, and
+shows as awaiting acceptance, until a person accepts the new set. Schedules
+and templates an operator wrote are a person's standing approval already
+and are never held this way. CI jobs are accepted the same way; see
+[`docs/ci-capabilities.md`](ci-capabilities.md).
 
 **Proposals.** A proposal from such a task is held to the existing
 inheritance rules (`model.UngrantedReads`, `model.UngrantedWrites`). It
