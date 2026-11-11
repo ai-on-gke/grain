@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -462,30 +461,11 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 	}
 	grants := tmpl.Grants
 	if task.Target != nil {
-		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *task.Target)
+		ciDefaults, err := store.RepoCIDefaults(ctx, *task.Target)
 		if err != nil {
 			return model.Task{}, fmt.Errorf("orchestrator: checking CI mode for %s review of %s: %w", *task.Target, task.ID, err)
 		}
-		if usesGrainCI {
-			found := false
-			for _, g := range grants {
-				if grainci.IsGrant(g.Capability) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
-			}
-		} else {
-			filtered := make([]model.Grant, 0, len(grants))
-			for _, g := range grants {
-				if !grainci.IsGrant(g.Capability) {
-					filtered = append(filtered, g)
-				}
-			}
-			grants = filtered
-		}
+		grants = model.AdjustRepoCIGrants(grants, *task.Target, ciDefaults)
 	}
 	// Never a dangerous api grant the reviewed task did not hold itself
 	// (model.ReviewGrants): whoever chose the template was checked when

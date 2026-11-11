@@ -24,7 +24,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -832,14 +831,11 @@ func attributionForSender(sender string, trusted bool, trustedReason model.Origi
 }
 
 func defaultRepoGrants(ctx context.Context, store *model.Store, repo model.RepoRef) ([]model.Grant, error) {
-	usesGrainCI, err := store.RepoUsesGrainCI(ctx, repo)
+	ciDefaults, err := store.RepoCIDefaults(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("checking CI mode for %s: %w", repo, err)
 	}
-	if usesGrainCI {
-		return []model.Grant{{Capability: grainci.Grant, Via: model.GrantByDefault}}, nil
-	}
-	return nil, nil
+	return model.AdjustRepoCIGrants(nil, repo, ciDefaults), nil
 }
 
 func usableRepoBranch(client github.Client, repo model.RepoRef, preferred, fallback string) string {

@@ -2473,7 +2473,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.Body += otherBranchQueueNote(task, proposal)
 		}
 		asked := proposedAutoMerge(p, task) &&
-			model.GrantsSubsetOf(proposal.Grants, task.Grants)
+			model.GrantsSubsetOf(model.GrantsBeyondCIReadDefault(proposal), task.Grants)
 		proposal.AutoMerge = asked && model.LandsWhereGranted(aligned, task)
 		if scratch {
 			// Merging into the scratch branch is what the fixture is for,
@@ -2635,12 +2635,14 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 		}
 	}
 	if target != nil {
-		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *target)
-		if err == nil && usesGrainCI {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
-		} else if err != nil && grainci.RepoUsesGrainCI(repoCfg, *target) {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
+		ciDefaults, err := store.RepoCIDefaults(ctx, *target)
+		if err != nil {
+			ciDefaults = model.RepoCIDefaults{GrainCI: grainci.RepoUsesGrainCI(repoCfg, *target)}
+			if !ciDefaults.GrainCI && cfg != nil {
+				ciDefaults = model.RepoCIDefaultsFor(false, cfg.CapabilityPolicy, *target)
+			}
 		}
+		grants = model.AdjustRepoCIGrants(grants, *target, ciDefaults)
 	}
 	return grants, nil
 }

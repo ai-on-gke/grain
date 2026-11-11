@@ -4456,33 +4456,14 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		grants = defaults
 	}
 	if target != nil {
-		usesGrainCI, err := c.teamRepoUsesGrainCI(ctx, teamID, *target)
+		// grain#ci on a repository grain CI gates; otherwise grain#ci is
+		// stripped and the task reads its own repository's CI through the
+		// default api:ci-read@<target> instead (model.RepoCIDefaults).
+		ciDefaults, err := c.teamRepoCIDefaults(ctx, teamID, *target)
 		if err != nil {
 			return nil, nil, err
 		}
-		if usesGrainCI {
-			found := false
-			for _, grant := range grants {
-				if grainci.IsGrant(grant.Capability) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{
-					Capability: grainci.Grant,
-					Via:        model.GrantByDefault,
-				})
-			}
-		} else {
-			filtered := make([]model.Grant, 0, len(grants))
-			for _, grant := range grants {
-				if !grainci.IsGrant(grant.Capability) {
-					filtered = append(filtered, grant)
-				}
-			}
-			grants = filtered
-		}
+		grants = model.AdjustRepoCIGrants(grants, *target, ciDefaults)
 	}
 	// A GCP key the deployment has not configured is refused when somebody
 	// asked for it, and dropped when it was only inherited: a deployment or
@@ -4522,6 +4503,21 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		allowed = append(allowed, g)
 	}
 	return allowed, droppedRefusals, nil
+}
+
+// teamRepoCIDefaults is the CI grant a task filed against repo is given by
+// default: grain#ci where grain CI gates it, else api:ci-read@<repo> unless
+// the capability policy denies that (model.RepoCIDefaultsFor).
+func (c *Client) teamRepoCIDefaults(ctx context.Context, teamID string, repo model.RepoRef) (model.RepoCIDefaults, error) {
+	usesGrainCI, err := c.teamRepoUsesGrainCI(ctx, teamID, repo)
+	if err != nil || usesGrainCI || c.Store == nil {
+		return model.RepoCIDefaults{GrainCI: usesGrainCI}, err
+	}
+	policy, _, err := c.capabilityPolicyFor(ctx)
+	if err != nil {
+		return model.RepoCIDefaults{}, err
+	}
+	return model.RepoCIDefaultsFor(false, policy, repo), nil
 }
 
 func (c *Client) teamRepoUsesGrainCI(ctx context.Context, teamID string, repo model.RepoRef) (bool, error) {
