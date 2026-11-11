@@ -361,8 +361,11 @@ func TestDrainRefusesNewStartsKeepsChildrenAndExitsWhenTheyEnd(t *testing.T) {
 	started := make(chan Started, 1)
 	c := detachedClient(ts, started)
 	ctx, cancel := context.WithCancel(context.Background())
+	// Long enough to outlast the checks below on a slow -race runner: at
+	// 1.5s the child could end first, hostd would already have drained and
+	// exited, and the start while draining was not refused but answered.
 	go func() {
-		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 1.5"}, Detach: true}, nil, nil, nil)
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 5"}, Detach: true}, nil, nil, nil)
 	}()
 	st := <-started
 	cancel()
