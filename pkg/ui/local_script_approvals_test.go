@@ -386,7 +386,7 @@ func TestHostScriptGrantAndScopedCallbackToken(t *testing.T) {
 		})
 		done2 <- err
 	}()
-	for time.Now().Before(time.Now().Add(5 * time.Second)) {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
 		detail, _ := client.GetTask(ctx, task.ID)
 		if len(detail.LocalScriptApprovals) == 2 && detail.LocalScriptApprovals[1].Status == ui.LocalScriptPending {
 			break
@@ -395,9 +395,20 @@ func TestHostScriptGrantAndScopedCallbackToken(t *testing.T) {
 	}
 	cancel()
 	<-done2
-	detail, err := client.GetTask(ctx, task.ID)
-	if err != nil {
-		t.Fatal(err)
+	// The client returns as soon as its context is cancelled; the server
+	// notices the dropped request and expires the call on its own
+	// goroutine, so wait for that rather than racing it.
+	var detail ui.TaskDetail
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		detail, err = client.GetTask(ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(detail.LocalScriptApprovals) == 2 && detail.LocalScriptApprovals[1].Status == ui.LocalScriptExpired ||
+			!time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if len(detail.LocalScriptApprovals) != 2 || detail.LocalScriptApprovals[1].Status != ui.LocalScriptExpired {
 		t.Errorf("cancelled HTTPApprover left approval %+v, want expired", detail.LocalScriptApprovals)
