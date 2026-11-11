@@ -311,6 +311,10 @@ func Run(ctx context.Context, cfg Config) error {
 	// timer below pulls too, and imports the settings tables of whatever
 	// it finds, but nothing else replaces task and run rows once there
 	// are runs live to hold them.
+	// require_verified reads pull requests from the forge -github-host
+	// names (forgeReviewTransport); the flag's value until the stored
+	// configuration is loaded below.
+	setStateRepoForge(cfg.GithubHost, cfg.GithubInsecureHTTP)
 	stateRepo, err := OpenStateRepo(ctx, cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("opening the state repository: %w", err)
@@ -456,6 +460,10 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("loading deployment configuration: %w", err)
 	}
+	// The stored forge host may differ from the flag's (loadConfig): the
+	// require_verified Verifier is rebuilt against the one in effect.
+	setStateRepoForge(cfg.GithubHost, cfg.GithubInsecureHTTP)
+	stateManager.refreshVerifier()
 	// Bind the UI/API listener before starting capability servers, caches, or
 	// model proxies on ephemeral ports: callers that pass a concrete port or
 	// an ephemeral ":0" address cannot lose that port to an internal listener

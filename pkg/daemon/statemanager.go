@@ -231,6 +231,20 @@ func (m *StateManager) reconcileRepo(ctx context.Context) (staterepo.Settings, b
 	return settings, true, nil
 }
 
+// refreshVerifier rebuilds the external repository's require_verified
+// Verifier from <data-dir>/state-repo.json, for a change in what it is
+// built from that is not in that file (setStateRepoForge).
+func (m *StateManager) refreshVerifier() {
+	if m == nil || m.repo == nil || m.dataDir == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if settings, err := staterepo.LoadSettings(m.dataDir); err == nil {
+		m.repo.SetVerifier(stateRepoVerifier(m.dataDir, settings))
+	}
+}
+
 // refreshForbidden updates the live proxy refusal after the encrypted-secrets
 // backup repository changes. The controller-local config repository never
 // contributes an external refusal.

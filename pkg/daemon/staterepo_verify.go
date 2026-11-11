@@ -17,10 +17,12 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
@@ -43,18 +45,76 @@ func stateRepoVerifier(dataDir string, settings staterepo.Settings) *staterepo.V
 		Mergers:            splitList(settings.VerifiedMergers),
 		Accepted:           splitList(settings.AcceptedCommits),
 	}
-	// Forge reviews are read from GitHub, and only with a credential this
-	// deployment would send there: the same rule RepoToken applies.
-	if owner, repo, ok := repoFromRemote(settings.Remote); ok && ladderMaySendTo(settings.Remote) {
+	// Forge reviews are read from GitHub -- github.com, or the forge this
+	// deployment names with -github-host -- and only with a credential
+	// this deployment would send there: the same rule RepoToken applies.
+	if owner, repo, ok := repoFromRemote(settings.Remote); ok {
+		transport := forgeReviewTransport(settings.Remote)
+		if transport == nil {
+			return v
+		}
 		branch := settings.Branch
 		if branch == "" {
 			branch = staterepo.DefaultBranch
 		}
-		client := github.NewClient(github.NewRealTransport("github.com"),
+		client := github.NewClient(transport,
 			stateRepoTokens{RepoToken(dataDir, settings.Remote, settings.TokenFile)})
 		v.Reviews = forgeReviews{client: client, owner: owner, repo: repo, branch: branch}
 	}
 	return v
+}
+
+// stateRepoForge is this deployment's own forge host, the daemon's
+// -github-host and -github-insecure-http, which Run sets before the state
+// repository opens and again once the stored configuration is loaded.
+var stateRepoForge atomic.Pointer[forgeHost]
+
+type forgeHost struct {
+	host         string
+	insecureHTTP bool
+}
+
+// setStateRepoForge records the deployment's forge host for
+// forgeReviewTransport.
+func setStateRepoForge(host string, insecureHTTP bool) {
+	stateRepoForge.Store(&forgeHost{host: strings.TrimSpace(host), insecureHTTP: insecureHTTP})
+}
+
+// forgeReviewTransport is what require_verified reads a remote's pull
+// requests over, or nil when grain cannot ask anybody about them: GitHub's
+// API for an https://github.com remote, and the deployment's own
+// -github-host (a GitHub Enterprise host, or a local forge double) for a
+// remote on exactly that host -- spoken over plain HTTP only when
+// -github-insecure-http says so. Before this, every remote off github.com
+// was nil, so a deployment pointed at its own forge could never verify an
+// approved or grain-merged pull request, only signatures and acceptances
+// (docs/test-runs/2026-11-11-external-config-verify.md, F1). A remote on
+// any other host is still nil: nothing is asked of a host the operator
+// did not name.
+func forgeReviewTransport(remote string) *github.RealTransport {
+	if ladderMaySendTo(remote) {
+		return github.NewRealTransport("github.com")
+	}
+	f := stateRepoForge.Load()
+	if f == nil || f.host == "" || strings.EqualFold(f.host, "github.com") {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(remote))
+	if err != nil || u.User != nil || !strings.EqualFold(u.Host, f.host) {
+		return nil
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+	case "http":
+		if !f.insecureHTTP {
+			return nil
+		}
+	default:
+		return nil
+	}
+	t := github.NewRealTransport(f.host)
+	t.UseTLS = !f.insecureHTTP
+	return t
 }
 
 // stateRepoTokens is RepoToken as a github.TokenSource.
@@ -158,7 +218,7 @@ func verificationStatus(settings staterepo.Settings, repo *staterepo.Repo) *ui.S
 		RequireVerified:   settings.RequireVerified,
 		RequiredApprovals: max(settings.RequiredApprovals, 1),
 		VerifiedMergers:   splitList(settings.VerifiedMergers),
-		ForgeReviews:      ladderMaySendTo(settings.Remote),
+		ForgeReviews:      forgeReviewTransport(settings.Remote) != nil,
 	}
 	if settings.AllowedSignersFile != "" {
 		if data, err := os.ReadFile(settings.AllowedSignersFile); err == nil {
