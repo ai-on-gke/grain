@@ -13,14 +13,14 @@
 // limitations under the License.
 
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { provideRouter } from "@angular/router";
+import { Router, provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { TaskDetail } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { TaskPageComponent, duration } from "./task-page.component";
+import { TaskPageComponent, backFrom, duration } from "./task-page.component";
 import { TaskStore } from "./task.store";
 
 type Call = { method: string; route: string; params?: unknown; body?: unknown };
@@ -357,5 +357,76 @@ describe("duration", () => {
     expect(duration("2026-11-11T10:00:00Z", "2026-11-11T12:05:00Z")).toBe(
       "2h 5m",
     );
+  });
+
+  describe("full screen (M7)", () => {
+    it("names where the person came from and goes back there with Escape", async () => {
+      TestBed.configureTestingModule({
+        imports: [TaskPageComponent],
+        providers: [
+          provideRouter([{ path: "**", children: [] }]),
+          { provide: GrainApi, useValue: new FakeApi() },
+          { provide: GrainEvents, useValue: { events: () => NEVER } },
+        ],
+      });
+      const f = TestBed.createComponent(TaskPageComponent);
+      f.componentRef.setInput("id", "7");
+      f.componentRef.setInput("from", "tasks:merging");
+      f.autoDetectChanges();
+      await TestBed.inject(TaskStore).refresh();
+      await settle(f);
+      const back = q<HTMLAnchorElement>(f, '[data-testid="task-back"]')!;
+      expect(back.textContent).toContain("← Tasks · Submit & land");
+      expect(back.getAttribute("href")).toBe("/tasks?tab=merging&task=7");
+
+      const nav = vi
+        .spyOn(TestBed.inject(Router), "navigate")
+        .mockResolvedValue(true);
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(nav).toHaveBeenCalledWith(["/tasks"], {
+        queryParams: { tab: "merging", task: "7" },
+      });
+      // The full page has no pane controls.
+      expect(q(f, '[data-testid="pane-expand"]')).toBeNull();
+    });
+
+    it("reads ?from= into the back link", () => {
+      expect(backFrom("inbox", "7")).toEqual({
+        label: "Inbox",
+        commands: ["/inbox"],
+      });
+      expect(backFrom("tasks:asked", "7")).toEqual({
+        label: "Tasks · Asked",
+        commands: ["/tasks"],
+        query: { tab: "asked", task: "7" },
+      });
+      expect(backFrom(undefined, "7")).toEqual({
+        label: "Tasks",
+        commands: ["/tasks"],
+        query: { task: "7" },
+      });
+      expect(backFrom("tasks:nonsense", "7").label).toBe("Tasks");
+    });
+
+    it("turns Submit off while CI is failing and shows CI in the header", async () => {
+      const api = new FakeApi();
+      api.detail = {
+        ...api.detail,
+        state: "awaiting_submit",
+        mergeGates: [
+          { id: "ci", label: "CI", state: "failing" },
+          { id: "approval", label: "Approval", state: "needed" },
+        ],
+      };
+      const f = await render(api);
+      const submit = q<HTMLButtonElement>(f, '[data-testid="act-submit"]')!;
+      expect(submit.disabled).toBe(true);
+      expect(q(f, '[data-testid="task-ci"]')!.textContent).toContain("✕ CI");
+      submit.click();
+      await settle(f);
+      expect(api.calls).toEqual([]);
+    });
   });
 });

@@ -12,26 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { NgTemplateOutlet } from "@angular/common";
+import { LocationStrategy, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   type OnDestroy,
   type OnInit,
+  ViewEncapsulation,
+  afterNextRender,
   computed,
   effect,
   inject,
   input,
   signal,
   untracked,
+  viewChild,
 } from "@angular/core";
-import { RouterLink } from "@angular/router";
+import { Router, RouterLink } from "@angular/router";
 import type { Task } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
-import { TipDirective } from "../shared/tip.directive";
 import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import { ciChip, isMerged, repoShort } from "../shared/gates";
+import { scopeOf } from "../shared/scope";
+import { WIDE_RATIO } from "../shared/split";
+import { SplitController } from "../shared/split-controller";
+import { TipDirective } from "../shared/tip.directive";
+import { TaskDetailComponent } from "../task/task-detail.component";
+import {
+  isBlocked,
   jumpsQueue,
   LEVELS,
   type SortId,
@@ -50,6 +65,17 @@ import {
 } from "./task-view";
 import { type Undo, TasksStore } from "./tasks.store";
 
+export type ClosedFilter = "all" | "merged" | "unmerged";
+
+const CLOSED_FILTERS: { id: ClosedFilter; label: string }[] = [
+  { id: "merged", label: "Merged" },
+  { id: "unmerged", label: "Not merged" },
+  { id: "all", label: "All" },
+];
+
+// Below this width a selected task opens full screen instead of a pane.
+const PHONE_QUERY = "(max-width: 599.95px)";
+
 const SORTS: { id: SortId; label: string }[] = [
   { id: "run", label: "Run order" },
   { id: "priority", label: "Priority" },
@@ -60,14 +86,26 @@ const SORTS: { id: SortId; label: string }[] = [
 // TasksPageComponent is Tasks (spec D-6) with the Backlog (D-28): tabs
 // that follow Grain's lifecycle, Backlog first in the order Grain will
 // run it, Needs approval beside it, and every move, priority change,
-// defer and close undoable from the snackbar.
+// defer and close undoable from the snackbar. Choosing a task opens it
+// in a pane beside the list (/next/tasks?tab=…&task=36), the same body
+// as the full page, which Enter or ⤢ opens.
 @Component({
   selector: "g-tasks-page",
-  imports: [RouterLink, TipDirective, NgTemplateOutlet],
+  imports: [
+    RouterLink,
+    TipDirective,
+    NgTemplateOutlet,
+    ConfirmDialogComponent,
+    TaskDetailComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  encapsulation: ViewEncapsulation.None,
+  styleUrl: "../shared/work-surface.css",
   host: {
     "(document:click)": "onDocClick($event)",
     "(document:keydown.escape)": "onEscape($event)",
+    "(document:keydown.enter)": "onEnter($event)",
+    "(window:resize)": "sp.measure()",
   },
   template: `
     <section
@@ -128,271 +166,415 @@ const SORTS: { id: SortId; label: string }[] = [
         </p>
       }
 
-      <div class="tasks-body">
-        @switch (current()) {
-          @case ("backlog") {
-            <div class="list-toolbar" data-testid="backlog-toolbar">
-              <span class="toolbar-title"
-                >Ready to run
-                <span class="tabular">{{ store.backlog().length }}</span></span
-              >
-              <div class="segmented" role="group" aria-label="Order">
-                @for (s of sorts; track s.id) {
-                  <button
-                    type="button"
-                    [attr.aria-pressed]="sort() === s.id"
-                    [attr.data-testid]="'sort-' + s.id"
-                    (click)="setSort(s.id)"
+      <div
+        class="inbox-split tasks-split"
+        #split
+        [class.has-pane]="!!selectedId()"
+        [class.is-collapsed]="sp.collapsed() && !!selectedId()"
+        [class.is-dragging]="sp.dragging()"
+        [style.--queue-w.%]="sp.ratioExact()"
+      >
+        <div class="queue-pane tasks-list-pane" id="tasks-list">
+          <div class="tasks-body">
+            @switch (current()) {
+              @case ("backlog") {
+                <div class="list-toolbar" data-testid="backlog-toolbar">
+                  <span class="toolbar-title" data-testid="ready-count"
+                    >Ready to run
+                    <span class="tabular">{{
+                      store.ready().length
+                    }}</span></span
                   >
-                    {{ s.label }}
-                  </button>
+                  @if (store.backlog().length - store.ready().length; as n) {
+                    <span
+                      class="muted"
+                      data-testid="blocked-count"
+                      gTip="Approved, but waiting for a task they depend on to finish. Not counted as ready."
+                      >· {{ n }} waiting on a dependency</span
+                    >
+                  }
+                  <div class="segmented" role="group" aria-label="Order">
+                    @for (s of sorts; track s.id) {
+                      <button
+                        type="button"
+                        [attr.aria-pressed]="sort() === s.id"
+                        [attr.data-testid]="'sort-' + s.id"
+                        (click)="setSort(s.id)"
+                      >
+                        {{ s.label }}
+                      </button>
+                    }
+                  </div>
+                  <span class="toolbar-spacer"></span>
+                  @if (store.counts().deferred) {
+                    <a
+                      class="btn-text"
+                      [routerLink]="[]"
+                      [queryParams]="{ tab: 'deferred' }"
+                      >{{ store.counts().deferred }} deferred</a
+                    >
+                  }
+                  @if (store.counts().proposed) {
+                    <a
+                      class="gate-card"
+                      id="backlog-intake-card"
+                      data-testid="gate-card"
+                      [routerLink]="[]"
+                      [queryParams]="{ tab: 'proposed' }"
+                      >Needs approval {{ store.counts().proposed }} · outside
+                      run order · Review →</a
+                    >
+                  }
+                </div>
+                @if (sort() !== "run") {
+                  <p class="muted list-hint">
+                    Moving is off in this order.
+                    <button
+                      type="button"
+                      class="btn-text"
+                      (click)="setSort('run')"
+                    >
+                      Back to run order
+                    </button>
+                  </p>
                 }
-              </div>
-              <span class="toolbar-spacer"></span>
-              @if (store.counts().deferred) {
-                <a
-                  class="btn-text"
-                  [routerLink]="[]"
-                  [queryParams]="{ tab: 'deferred' }"
-                  >{{ store.counts().deferred }} deferred</a
-                >
-              }
-              @if (store.counts().proposed) {
-                <a
-                  class="gate-card"
-                  id="backlog-intake-card"
-                  data-testid="gate-card"
-                  [routerLink]="[]"
-                  [queryParams]="{ tab: 'proposed' }"
-                  >Needs approval {{ store.counts().proposed }} · outside run
-                  order · Review →</a
-                >
-              }
-            </div>
-            @if (sort() !== "run") {
-              <p class="muted list-hint">
-                Moving is off in this order.
-                <button type="button" class="btn-text" (click)="setSort('run')">
-                  Back to run order
-                </button>
-              </p>
-            }
-            @if (store.loaded() && rows().length === 0) {
-              <p class="empty-state" data-testid="backlog-empty">
-                Nothing is waiting for a worker.
-                @if (store.counts().proposed) {
-                  Approve a proposal to put it here.
+                @if (store.loaded() && rows().length === 0) {
+                  <p class="empty-state" data-testid="backlog-empty">
+                    Nothing is waiting for a worker.
+                    @if (store.counts().proposed) {
+                      Approve a proposal to put it here.
+                    }
+                  </p>
                 }
-              </p>
-            }
-            @if (sort() === "run") {
-              @if (backlogChecks()) {
-                <ng-container [ngTemplateOutlet]="selectAll" />
-              }
-              @for (band of runBands(); track band.key) {
-                <section
-                  class="band"
-                  [attr.aria-labelledby]="'band-' + band.key"
-                >
-                  <h2 class="band-header" [id]="'band-' + band.key">
-                    {{ band.label }}
-                    <span class="tabular muted">{{ band.tasks.length }}</span>
-                  </h2>
+                @if (sort() === "run") {
+                  @if (backlogChecks()) {
+                    <ng-container [ngTemplateOutlet]="selectAll" />
+                  }
+                  @for (band of runBands(); track band.key) {
+                    <section
+                      class="band"
+                      [attr.aria-labelledby]="'band-' + band.key"
+                    >
+                      <h2 class="band-header" [id]="'band-' + band.key">
+                        {{ band.label }}
+                        <span class="tabular muted">{{
+                          band.tasks.length
+                        }}</span>
+                      </h2>
+                      <ul class="task-rows">
+                        @for (t of band.tasks; track t.id) {
+                          <ng-container
+                            [ngTemplateOutlet]="backlogRow"
+                            [ngTemplateOutletContext]="{ $implicit: t }"
+                          />
+                        }
+                      </ul>
+                    </section>
+                  }
+                  @if (rows().length) {
+                    <div
+                      class="drop-end"
+                      aria-hidden="true"
+                      [class.drop-before]="dropAt() === store.backlog().length"
+                      (dragover)="onDragOver($event, store.backlog().length)"
+                      (drop)="onDrop($event, store.backlog().length)"
+                    ></div>
+                  }
+                } @else {
                   <ul class="task-rows">
-                    @for (t of band.tasks; track t.id) {
+                    @for (t of rows(); track t.id) {
                       <ng-container
                         [ngTemplateOutlet]="backlogRow"
                         [ngTemplateOutletContext]="{ $implicit: t }"
                       />
                     }
                   </ul>
-                </section>
-              }
-              @if (rows().length) {
-                <div
-                  class="drop-end"
-                  aria-hidden="true"
-                  [class.drop-before]="dropAt() === store.backlog().length"
-                  (dragover)="onDragOver($event, store.backlog().length)"
-                  (drop)="onDrop($event, store.backlog().length)"
-                ></div>
-              }
-            } @else {
-              <ul class="task-rows">
-                @for (t of rows(); track t.id) {
-                  <ng-container
-                    [ngTemplateOutlet]="backlogRow"
-                    [ngTemplateOutletContext]="{ $implicit: t }"
-                  />
                 }
-              </ul>
-            }
-          }
-
-          @case ("proposed") {
-            <div
-              class="list-toolbar gate-toolbar"
-              data-testid="approval-toolbar"
-            >
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  data-testid="select-all"
-                  [checked]="allChecked()"
-                  [indeterminate]="someChecked()"
-                  (change)="toggleAll()"
-                />
-                <span>Select all</span>
-              </label>
-              <span class="muted toolbar-rule"
-                >Approving puts each task into the Backlog at its
-                priority.</span
-              >
-              <span class="toolbar-spacer"></span>
-              <a
-                class="btn-text"
-                [routerLink]="[]"
-                [queryParams]="{ tab: 'backlog' }"
-                >Back to Backlog ({{ store.backlog().length }})</a
-              >
-              @if (canApprove() && rows().length) {
-                <button
-                  type="button"
-                  class="btn-primary"
-                  data-testid="approve-all"
-                  [disabled]="store.isBusy('approve')"
-                  (click)="approve(rowIds())"
-                >
-                  Approve all {{ rows().length }}
-                </button>
               }
-            </div>
-            @if (store.loaded() && rows().length === 0) {
-              <p class="empty-state">No proposals are waiting for approval.</p>
-            }
-            <ul class="task-rows">
-              @for (t of rows(); track t.id) {
-                @let place = placementOf(t);
-                <li
-                  class="task-row approval-row"
-                  [attr.data-testid]="'row-' + t.id"
+
+              @case ("proposed") {
+                <div
+                  class="list-toolbar gate-toolbar"
+                  data-testid="approval-toolbar"
                 >
-                  <input
-                    type="checkbox"
-                    [attr.aria-label]="'Select #' + t.id"
-                    [checked]="checked().has(t.id)"
-                    (change)="toggle(t.id)"
-                  />
-                  <div class="row-main">
-                    <a class="row-title" [routerLink]="['/task', t.id]"
-                      ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
-                    >
-                    <span class="row-sub muted">
-                      {{ t.repo || "No repository" }}
-                      @if (filer(t); as who) {
-                        · {{ who }}
-                      }
-                      · If approved: position {{ place.position }} of
-                      {{ place.of }}, {{ place.band }}
-                    </span>
-                  </div>
-                  <ng-container
-                    [ngTemplateOutlet]="priorityChip"
-                    [ngTemplateOutletContext]="{ $implicit: t, editable: true }"
-                  />
-                  <span class="row-actions">
-                    @if (canApprove()) {
-                      <button
-                        type="button"
-                        class="btn-tonal"
-                        [attr.data-testid]="'approve-' + t.id"
-                        [disabled]="store.isBusy('approve')"
-                        (click)="approve([t.id])"
-                      >
-                        Approve
-                      </button>
-                    }
+                  <label class="check-row">
+                    <input
+                      type="checkbox"
+                      data-testid="select-all"
+                      [checked]="allChecked()"
+                      [indeterminate]="someChecked()"
+                      (change)="toggleAll()"
+                    />
+                    <span>Select all</span>
+                  </label>
+                  <span class="muted toolbar-rule"
+                    >Approving puts each task into the Backlog at its
+                    priority.</span
+                  >
+                  <span class="toolbar-spacer"></span>
+                  <a
+                    class="btn-text"
+                    [routerLink]="[]"
+                    [queryParams]="{ tab: 'backlog' }"
+                    >Back to Backlog ({{ store.backlog().length }})</a
+                  >
+                  @if (canApprove() && rows().length) {
                     <button
                       type="button"
-                      class="btn-text"
-                      [disabled]="!canDefer()"
-                      [attr.data-testid]="'defer-' + t.id"
-                      (click)="defer([t.id])"
+                      class="btn-primary"
+                      data-testid="approve-all"
+                      [disabled]="store.isBusy('approve')"
+                      (click)="confirmApprove(rows())"
                     >
-                      Defer
-                    </button>
-                  </span>
-                </li>
-              }
-            </ul>
-          }
-
-          @default {
-            @if (rows().length) {
-              <ng-container [ngTemplateOutlet]="selectAll" />
-            }
-            @if (current() === "closed" && !store.closedLoaded()) {
-              <p class="empty-state">Loading closed tasks…</p>
-            } @else if (store.loaded() && rows().length === 0) {
-              <p class="empty-state">Nothing here.</p>
-            }
-            <ul class="task-rows">
-              @for (t of rows(); track t.id) {
-                <li class="task-row" [attr.data-testid]="'row-' + t.id">
-                  <input
-                    type="checkbox"
-                    [attr.aria-label]="'Select #' + t.id"
-                    [checked]="checked().has(t.id)"
-                    (change)="toggle(t.id)"
-                  />
-                  <span [class]="'status-pill ' + toneOf(t)">{{
-                    label(t.state)
-                  }}</span>
-                  <div class="row-main">
-                    <a class="row-title" [routerLink]="['/task', t.id]"
-                      ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
-                    >
-                    @if (t.state === "running" && t.activity) {
-                      <span class="row-sub activity">{{ t.activity }}</span>
-                    } @else {
-                      <span class="row-sub muted">{{
-                        t.repo || "No repository"
-                      }}</span>
-                    }
-                  </div>
-                  <ng-container
-                    [ngTemplateOutlet]="priorityChip"
-                    [ngTemplateOutletContext]="{
-                      $implicit: t,
-                      editable: t.state === 'deferred',
-                    }"
-                  />
-                  <span class="row-age muted tabular">{{
-                    ago(t.updatedAt || t.createdAt)
-                  }}</span>
-                  @if (t.state === "deferred" && canDefer()) {
-                    <button
-                      type="button"
-                      class="btn-text"
-                      [attr.data-testid]="'undefer-' + t.id"
-                      (click)="undefer([t.id])"
-                    >
-                      Bring back
+                      Approve all {{ rows().length }}
                     </button>
                   }
-                </li>
+                </div>
+                @if (store.loaded() && rows().length === 0) {
+                  <p class="empty-state">
+                    No proposals are waiting for approval.
+                  </p>
+                }
+                <ul class="task-rows">
+                  @for (t of rows(); track t.id) {
+                    @let place = placementOf(t);
+                    <li
+                      class="task-row approval-row"
+                      [class.is-selected]="selectedId() === t.id"
+                      [attr.data-testid]="'row-' + t.id"
+                    >
+                      <input
+                        type="checkbox"
+                        [attr.aria-label]="'Select #' + t.id"
+                        [checked]="checked().has(t.id)"
+                        (change)="toggle(t.id)"
+                      />
+                      <div class="row-main">
+                        <ng-container
+                          [ngTemplateOutlet]="titleLink"
+                          [ngTemplateOutletContext]="{ $implicit: t }"
+                        />
+                        <span class="row-sub muted">
+                          <ng-container
+                            [ngTemplateOutlet]="scopeLine"
+                            [ngTemplateOutletContext]="{ $implicit: t }"
+                          />
+                          @if (filer(t); as who) {
+                            · filed by {{ who }}
+                          }
+                          · If approved: position {{ place.position }} of
+                          {{ place.of }}, {{ place.band }}
+                        </span>
+                      </div>
+                      <ng-container
+                        [ngTemplateOutlet]="priorityChip"
+                        [ngTemplateOutletContext]="{
+                          $implicit: t,
+                          editable: true,
+                        }"
+                      />
+                      <span class="row-actions">
+                        @if (canApprove()) {
+                          <button
+                            type="button"
+                            class="btn-tonal"
+                            [attr.data-testid]="'approve-' + t.id"
+                            [disabled]="store.isBusy('approve')"
+                            (click)="approve([t.id])"
+                          >
+                            Approve
+                          </button>
+                        }
+                        <button
+                          type="button"
+                          class="btn-text"
+                          [disabled]="!canDefer()"
+                          [attr.data-testid]="'defer-' + t.id"
+                          (click)="defer([t.id])"
+                        >
+                          Defer
+                        </button>
+                      </span>
+                    </li>
+                  }
+                </ul>
               }
-            </ul>
-            @if (current() === "closed" && store.closedCursor()) {
-              <button
-                type="button"
-                class="btn-outlined load-more"
-                (click)="store.loadClosed(true)"
-              >
-                Load more
-              </button>
+
+              @default {
+                @if (rows().length) {
+                  <ng-container [ngTemplateOutlet]="selectAll" />
+                }
+                @if (current() === "closed") {
+                  <div class="list-toolbar" data-testid="closed-toolbar">
+                    <div
+                      class="segmented"
+                      role="group"
+                      aria-label="Closed tasks"
+                    >
+                      @for (c of closedFilters; track c.id) {
+                        <button
+                          type="button"
+                          [attr.aria-pressed]="closedFilter() === c.id"
+                          [attr.data-testid]="'closed-' + c.id"
+                          (click)="closedFilter.set(c.id)"
+                        >
+                          {{ c.label }}
+                        </button>
+                      }
+                    </div>
+                  </div>
+                }
+                @if (current() === "merging") {
+                  <p class="muted list-hint" data-testid="merging-hint">
+                    Two kinds of work: changes waiting for a person to submit,
+                    and submitted changes the merge queue is landing.
+                  </p>
+                }
+                @if (current() === "closed" && !store.closedLoaded()) {
+                  <p class="empty-state">Loading closed tasks…</p>
+                } @else if (store.loaded() && rows().length === 0) {
+                  <p class="empty-state">Nothing here.</p>
+                }
+                <ul class="task-rows">
+                  @for (t of rows(); track t.id) {
+                    <li
+                      class="task-row"
+                      [class.is-selected]="selectedId() === t.id"
+                      [attr.data-testid]="'row-' + t.id"
+                    >
+                      <input
+                        type="checkbox"
+                        [attr.aria-label]="'Select #' + t.id"
+                        [checked]="checked().has(t.id)"
+                        (change)="toggle(t.id)"
+                      />
+                      <span [class]="'status-pill ' + toneOf(t)">{{
+                        label(t.state)
+                      }}</span>
+                      <div class="row-main">
+                        <ng-container
+                          [ngTemplateOutlet]="titleLink"
+                          [ngTemplateOutletContext]="{ $implicit: t }"
+                        />
+                        <span class="row-sub muted">
+                          <ng-container
+                            [ngTemplateOutlet]="scopeLine"
+                            [ngTemplateOutletContext]="{ $implicit: t }"
+                          />
+                          @if (chip(t); as c) {
+                            <span
+                              [class]="'ci-chip ' + c.tone"
+                              [attr.data-testid]="'ci-' + t.id"
+                              [gTip]="c.tip"
+                              >{{ c.text }}</span
+                            >
+                          }
+                        </span>
+                        @if (t.state === "running" && t.activity) {
+                          <span class="row-sub activity">{{ t.activity }}</span>
+                        }
+                      </div>
+                      <ng-container
+                        [ngTemplateOutlet]="priorityChip"
+                        [ngTemplateOutletContext]="{
+                          $implicit: t,
+                          editable: t.state === 'deferred',
+                        }"
+                      />
+                      <span class="row-age muted tabular">{{
+                        ago(t.updatedAt || t.createdAt)
+                      }}</span>
+                      @if (t.state === "deferred" && canDefer()) {
+                        <button
+                          type="button"
+                          class="btn-text"
+                          [attr.data-testid]="'undefer-' + t.id"
+                          (click)="undefer([t.id])"
+                        >
+                          Bring back
+                        </button>
+                      }
+                    </li>
+                  }
+                </ul>
+                @if (current() === "closed" && store.closedCursor()) {
+                  <button
+                    type="button"
+                    class="btn-outlined load-more"
+                    (click)="store.loadClosed(true)"
+                  >
+                    Load more
+                  </button>
+                }
+              }
             }
-          }
+          </div>
+        </div>
+        @if (selectedId(); as id) {
+          <div
+            class="inbox-resizer"
+            role="separator"
+            tabindex="0"
+            aria-orientation="vertical"
+            aria-controls="tasks-list"
+            aria-label="Resize the list"
+            [attr.aria-valuemin]="sp.collapsed() ? 0 : sp.minPct()"
+            [attr.aria-valuemax]="sp.maxPct()"
+            [attr.aria-valuenow]="sp.collapsed() ? 0 : sp.ratioPct()"
+            [attr.aria-valuetext]="
+              sp.collapsed()
+                ? 'List hidden'
+                : 'List ' + sp.ratioPct() + ' percent of the width'
+            "
+            data-testid="tasks-resizer"
+            (pointerdown)="sp.onResizeStart($event)"
+            (pointermove)="sp.onResizeMove($event)"
+            (pointerup)="sp.onResizeEnd($event)"
+            (pointercancel)="sp.onResizeEnd($event)"
+            (lostpointercapture)="sp.onResizeEnd($event)"
+            (dblclick)="sp.reset()"
+            (keydown)="sp.onKey($event)"
+          >
+            <span class="inbox-resizer-pill" aria-hidden="true"></span>
+            @if (sp.dragging()) {
+              <span class="inbox-resizer-badge" aria-hidden="true"
+                >{{ sp.ratioPct() }} / {{ 100 - sp.ratioPct() }}</span
+              >
+            }
+          </div>
+          <section
+            class="inspector-pane tasks-detail-pane is-sheet-open"
+            aria-label="Selected task"
+            data-testid="tasks-pane"
+          >
+            @if (pinnedAway(); as away) {
+              <div
+                class="banner banner-info left-banner"
+                role="status"
+                data-testid="pane-moved"
+              >
+                <span>{{ away }}</span>
+                @if (rows().length) {
+                  <button
+                    type="button"
+                    class="btn-tonal"
+                    data-testid="pane-next"
+                    (click)="step(1)"
+                  >
+                    Next item
+                  </button>
+                }
+              </div>
+            }
+            <g-task-detail
+              [id]="id"
+              [tab]="pane()"
+              [pane]="true"
+              (acted)="onActed()"
+              (closed)="closePane()"
+              (expand)="openFull(id)"
+            />
+          </section>
         }
       </div>
 
@@ -454,7 +636,8 @@ const SORTS: { id: SortId; label: string }[] = [
             <button
               type="button"
               class="btn-text"
-              (click)="approve(selected())"
+              data-testid="batch-approve"
+              (click)="confirmApprove(selectedRows())"
             >
               Approve
             </button>
@@ -521,7 +704,30 @@ const SORTS: { id: SortId; label: string }[] = [
           </button>
         </div>
       }
+      @if (confirming(); as c) {
+        <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
+      }
     </section>
+
+    <ng-template #titleLink let-t>
+      <a
+        class="row-title"
+        [href]="fullHref(t.id)"
+        [attr.aria-current]="selectedId() === t.id ? 'true' : null"
+        [attr.data-testid]="'open-' + t.id"
+        (click)="onOpen($event, t.id)"
+        ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
+      >
+    </ng-template>
+
+    <ng-template #scopeLine let-t>
+      <span class="row-repo" [attr.title]="t.repo || null">{{
+        short(t.repo) || "No repository"
+      }}</span>
+      @if (t.owner) {
+        <span class="row-owner"> · {{ t.owner }}</span>
+      }
+    </ng-template>
 
     <ng-template #selectAll>
       <div class="list-toolbar select-toolbar">
@@ -542,6 +748,7 @@ const SORTS: { id: SortId; label: string }[] = [
       @let pos = positionOf(t);
       <li
         class="task-row backlog-row"
+        [class.is-selected]="selectedId() === t.id"
         [class.is-picked]="picked() === t.id"
         [class.drop-before]="dropAt() === pos"
         [attr.data-testid]="'row-' + t.id"
@@ -577,15 +784,19 @@ const SORTS: { id: SortId; label: string }[] = [
           (change)="toggle(t.id)"
         />
         <div class="row-main">
-          <a class="row-title" [routerLink]="['/task', t.id]"
-            ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
-          >
+          <ng-container
+            [ngTemplateOutlet]="titleLink"
+            [ngTemplateOutletContext]="{ $implicit: t }"
+          />
           <span class="row-sub muted">
-            {{ t.repo || "No repository" }}
+            <ng-container
+              [ngTemplateOutlet]="scopeLine"
+              [ngTemplateOutletContext]="{ $implicit: t }"
+            />
             @if (filer(t); as who) {
-              · {{ who }}
+              · filed by {{ who }}
             }
-            @if (t.blocked) {
+            @if (blocked(t)) {
               <span class="status-pill neutral waits"
                 >Waits on a dependency</span
               >
@@ -711,9 +922,32 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly filter = inject(ViewFilter);
+  private readonly router = inject(Router);
+  private readonly location = inject(LocationStrategy);
+  private readonly keyboard = inject(KeyboardService);
+  private readonly splitEl = viewChild<ElementRef<HTMLElement>>("split");
 
   // ?tab= (withComponentInputBinding); Backlog by default.
   readonly tab = input<string>();
+  // ?task= is the task open in the pane, ?pane= that pane's own tab.
+  readonly task = input<string>();
+  readonly pane = input<string>();
+
+  protected readonly sp = new SplitController({
+    ratioKey: "grain.tasks.splitRatio",
+    collapsedKey: "grain.tasks.collapsed",
+    defaultRatio: WIDE_RATIO,
+    element: () => this.splitEl()?.nativeElement,
+  });
+  protected readonly closedFilters = CLOSED_FILTERS;
+  protected readonly closedFilter = signal<ClosedFilter>("all");
+  protected readonly confirming = signal<ConfirmRequest | null>(null);
+  protected readonly short = repoShort;
+  protected readonly chip = ciChip;
+  protected readonly blocked = isBlocked;
+  // The selection is the task id in the URL, never a position.
+  protected readonly selectedId = computed(() => this.task() || null);
+  private lastIndex = 0;
 
   protected readonly tabs = TABS;
   protected readonly sorts = SORTS;
@@ -753,7 +987,16 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     let list: Task[];
     if (tab === "backlog")
       list = this.previewOrder(sorted(this.store.backlog(), this.sort()));
-    else if (tab === "closed") list = this.store.closed();
+    else if (tab === "closed")
+      list = this.store
+        .closed()
+        .filter((t) =>
+          this.closedFilter() === "all"
+            ? true
+            : this.closedFilter() === "merged"
+              ? isMerged(t)
+              : !isMerged(t),
+        );
     else list = this.store.work().filter((t) => inTab(t, tab));
     return list.filter((t) => this.matches(t));
   });
@@ -762,6 +1005,22 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly selected = computed(() =>
     this.rowIds().filter((id) => this.checked().has(id)),
   );
+  protected readonly selectedRows = computed(() =>
+    this.rows().filter((t) => this.checked().has(t.id)),
+  );
+  // pinnedAway says where the selected task went when it is no longer in
+  // this tab; the pane keeps showing it.
+  protected readonly pinnedAway = computed(() => {
+    const id = this.selectedId();
+    if (!id || this.rowIds().includes(id)) return "";
+    const t = this.store.find(id);
+    const here = TABS.find((x) => x.id === this.current())?.label ?? "";
+    if (!t) return `#${id} is not in ${here}.`;
+    const tab = TABS.find((x) => x.id !== "all" && inTab(t, x.id));
+    return tab && tab.id !== this.current()
+      ? `#${id} moved to ${tab.label}.`
+      : `#${id} is not in this list any more.`;
+  });
   protected readonly allChecked = computed(
     () =>
       this.rows().length > 0 && this.selected().length === this.rows().length,
@@ -794,6 +1053,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   );
 
   constructor() {
+    afterNextRender(() => this.sp.attach());
+    // Where the selected task sits in this tab, so j/k and Next item
+    // carry on from there after it leaves.
+    effect(() => {
+      const i = this.rowIds().indexOf(this.selectedId() ?? "");
+      if (i >= 0) this.lastIndex = i;
+    });
     // A new tab starts with nothing selected and closed tasks read once.
     effect(() => {
       const tab = this.current();
@@ -824,12 +1090,133 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     });
   });
 
+  private unregister: (() => void)[] = [];
+
   ngOnInit(): void {
     this.store.start();
+    this.unregister = [
+      this.keyboard.register({
+        key: "j",
+        description: "Next task",
+        run: () => this.step(1),
+      }),
+      this.keyboard.register({
+        key: "k",
+        description: "Previous task",
+        run: () => this.step(-1),
+      }),
+    ];
   }
 
   ngOnDestroy(): void {
     this.store.stop();
+    this.sp.detach();
+    for (const off of this.unregister) off();
+  }
+
+  // ---------- list | detail ----------
+
+  private isPhone(): boolean {
+    return typeof matchMedia === "function" && matchMedia(PHONE_QUERY).matches;
+  }
+
+  private fromParam(): string {
+    return `tasks:${this.current()}`;
+  }
+
+  // fullHref is the task's full page, so a middle-click or a copied link
+  // opens it in a tab of its own.
+  protected fullHref(id: string): string {
+    const tree = this.router.createUrlTree(["/task", id], {
+      queryParams: { from: this.fromParam() },
+    });
+    return this.location.prepareExternalUrl(this.router.serializeUrl(tree));
+  }
+
+  // onOpen selects the task in the pane (on a phone, opens it full
+  // screen). A modified click keeps the browser's own meaning; Enter on a
+  // row that is already selected opens it full screen.
+  protected onOpen(ev: MouseEvent, id: string): void {
+    if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey)
+      return;
+    ev.preventDefault();
+    if (this.isPhone() || (ev.detail === 0 && this.selectedId() === id)) {
+      this.openFull(id);
+      return;
+    }
+    this.select(id);
+  }
+
+  select(id: string, replace = false): void {
+    if (this.isPhone()) {
+      this.openFull(id);
+      return;
+    }
+    void this.router.navigate([], {
+      queryParams: { task: id },
+      queryParamsHandling: "merge",
+      replaceUrl: replace,
+    });
+  }
+
+  protected closePane(): void {
+    void this.router.navigate([], {
+      queryParams: { task: null, pane: null },
+      queryParamsHandling: "merge",
+    });
+  }
+
+  protected openFull(id: string): void {
+    void this.router.navigate(["/task", id], {
+      queryParams: {
+        from: this.fromParam(),
+        ...(this.pane() ? { tab: this.pane() } : {}),
+      },
+    });
+  }
+
+  // step moves the selection through this tab in the order shown. Off a
+  // task that has left the tab, forward lands on the row that took its
+  // place, back on the one before it.
+  step(delta: number): void {
+    const ids = this.rowIds();
+    if (ids.length === 0) return;
+    const cur = ids.indexOf(this.selectedId() ?? "");
+    let i: number;
+    if (cur >= 0) i = cur + delta;
+    else if (this.selectedId())
+      i = delta > 0 ? this.lastIndex : this.lastIndex - 1;
+    else i = 0;
+    const id = ids[Math.max(0, Math.min(ids.length - 1, i))];
+    this.select(id, true);
+    setTimeout(() =>
+      (
+        document.querySelector(
+          `[data-testid="open-${id}"]`,
+        ) as HTMLElement | null
+      )?.focus(),
+    );
+  }
+
+  protected onActed(): void {
+    void this.store.refresh();
+  }
+
+  // Enter opens the selected task full screen from the page itself (not
+  // from a control, which keeps its own Enter).
+  protected onEnter(ev: KeyboardEvent): void {
+    const id = this.selectedId();
+    if (!id || ev.defaultPrevented || isTypingTarget(ev.target)) return;
+    if (document.querySelector('[aria-modal="true"]')) return;
+    const el = ev.target as HTMLElement | null;
+    if (
+      el &&
+      el !== document.body &&
+      el.closest("a,button,input,select,textarea,[role=separator]")
+    )
+      return;
+    ev.preventDefault();
+    this.openFull(id);
   }
 
   protected filer(t: Task): string {
@@ -967,7 +1354,40 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     } else if (this.picked()) {
       ev.preventDefault();
       this.cancelPick();
+    } else if (this.sp.dragging()) {
+      ev.preventDefault();
+      this.sp.onResizeCancel();
+    } else if (this.selectedId() && !isTypingTarget(ev.target)) {
+      ev.preventDefault();
+      this.closePane();
     }
+  }
+
+  // ---------- confirmations ----------
+
+  // confirmApprove asks before approving several tasks. The rows are
+  // fixed when the button is pressed; the dialog counts them per
+  // repository and owner and the batch approves exactly these.
+  protected confirmApprove(rows: readonly Task[]): void {
+    const ids = rows.map((t) => t.id);
+    if (!ids.length) return;
+    if (ids.length === 1) {
+      void this.approve(ids);
+      return;
+    }
+    this.confirming.set({
+      title: "Approve all",
+      message: `Approve ${ids.length} tasks? Each goes into the Backlog at its priority and can start right away.`,
+      accept: `Approve ${ids.length}`,
+      destructive: false,
+      scope: scopeOf(rows),
+      run: () => this.approve(ids),
+    });
+  }
+
+  protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
+    this.confirming.set(null);
+    if (ok) await c.run();
   }
 
   // ---------- actions ----------

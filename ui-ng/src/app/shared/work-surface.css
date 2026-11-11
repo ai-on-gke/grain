@@ -119,3 +119,92 @@
   margin-bottom: 12px;
   font-weight: 500;
 }
+
+/* ---------- Tasks list | detail (F7) ---------- */
+
+/* With no task chosen the list has the whole width. */
+.tasks-split:not(.has-pane) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tasks-split:not(.has-pane) .tasks-list-pane {
+  border-right: none;
+}
+
+.tasks-split .tasks-list-pane {
+  container-type: inline-size;
+  background: transparent;
+}
+
+.tasks-split .tasks-body {
+  min-width: 0;
+}
+
+.task-row.is-selected {
+  background: var(--md-sys-color-secondary-container);
+}
+
+.task-row.is-selected .row-title {
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+/* A narrow list keeps id, title and priority; age and position go. */
+@container (max-width: 560px) {
+  .tasks-list-pane .row-age,
+  .tasks-list-pane .row-pos {
+    display: none;
+  }
+  .tasks-list-pane .task-row {
+    gap: 8px;
+  }
+}
+
+.tasks-detail-pane {
+  overflow: hidden;
+}
+
+.tasks-detail-pane g-task-detail {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.tasks-detail-pane .task-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The pane is the task page narrowed: Details is a tab, not a column. */
+.task-page.is-pane .task-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.task-page.is-pane .task-tabs [data-testid="task-tab-details"] {
+  display: inline-flex;
+}
+
+.task-page.is-pane .task-title {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.pane-tools {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.pane-tools .icon-btn {
+  font-size: 18px;
+}
+
+.pane-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-header-top .ci-chip {
+  margin-left: 4px;
+}

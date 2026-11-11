@@ -23,6 +23,7 @@ import {
   type TabId,
   TABS,
   inTab,
+  isBlocked,
   isWork,
   neighbours,
   priorityOf,
@@ -64,6 +65,9 @@ export class TasksStore {
   readonly backlog = computed(() =>
     this.work().filter((t) => t.state === "queued"),
   );
+  // ready is the backlog a free worker could take now: blocked tasks
+  // wait on a dependency and are not counted.
+  readonly ready = computed(() => this.backlog().filter((t) => !isBlocked(t)));
   readonly counts = computed(() => {
     const c = {} as Record<TabId, number | null>;
     for (const tab of TABS) {

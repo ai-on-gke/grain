@@ -64,9 +64,9 @@ export const TABS: readonly TabDef[] = [
   },
   {
     id: "merging",
-    label: "Merging",
+    label: "Submit & land",
     states: ["awaiting_submit", "completed"],
-    tip: "The run is done; the change is waiting to merge or to be submitted.",
+    tip: "The run is done. Changes waiting for a person to submit, and submitted changes the merge queue is landing.",
   },
   {
     id: "deferred",
@@ -93,6 +93,14 @@ export const TABS: readonly TabDef[] = [
 
 export function isTabId(v: unknown): v is TabId {
   return TABS.some((t) => t.id === v);
+}
+
+// isBlocked is a queued task that cannot start yet: it waits on a
+// dependency that has not closed (the server's blocked flag, or an open
+// state in dependsOnStates). Such a task is not "ready to run".
+export function isBlocked(t: Task): boolean {
+  if (t.blocked) return true;
+  return Object.values(t.dependsOnStates ?? {}).some((s) => s !== "closed");
 }
 
 // Standing session tasks are conversations, not work in a list.
@@ -297,7 +305,7 @@ export function placement(
 // worker limits are dispatched in an earlier pass, then the rest in
 // queue order; a task waiting on a dependency is skipped.
 export function nextUp(backlog: readonly Task[]): Task | null {
-  const ready = backlog.filter((t) => !t.blocked);
+  const ready = backlog.filter((t) => !isBlocked(t));
   return ready.find(jumpsQueue) ?? ready[0] ?? null;
 }
 

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { provideRouter } from "@angular/router";
+import { Router, provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
@@ -54,8 +54,25 @@ class FakeApi {
   closed: Task[] = [task("50", "closed")];
   calls: Call[] = [];
 
-  getIfChanged = () =>
-    Promise.resolve({ body: structuredClone(this.live), changed: true });
+  // The pane's task detail (GET /api/tasks/{id}) and the list.
+  getIfChanged = (route: string, params?: { id?: string }) =>
+    Promise.resolve(
+      route === "GET /api/tasks/{id}"
+        ? {
+            body: {
+              ...(this.live.find((t) => t.id === params?.id) ??
+                this.closed.find((t) => t.id === params?.id) ?? {
+                  id: params?.id,
+                  title: "Gone",
+                  state: "closed",
+                }),
+              comments: [],
+              attempts: [],
+            },
+            changed: true,
+          }
+        : { body: structuredClone(this.live), changed: true },
+    );
   queries: string[] = [];
   get = (_route: string, _p?: unknown, query?: string) => {
     this.queries.push(query ?? "");
@@ -406,5 +423,261 @@ describe("TasksPageComponent", () => {
       .filter((c) => c.method === "PATCH")
       .map((c) => c.body);
     expect(patches).toEqual([{ priority: 8 }, { priority: 3 }]);
+  });
+
+  describe("list | detail (M7)", () => {
+    function navs(): {
+      commands: unknown[];
+      extras: Record<string, unknown> | undefined;
+    }[] {
+      const spy = TestBed.inject(Router).navigate as unknown as {
+        mock: { calls: [unknown[], Record<string, unknown>?][] };
+      };
+      return spy.mock.calls.map(([commands, extras]) => ({ commands, extras }));
+    }
+
+    async function withPane(api: FakeApi, tab: string | undefined, id: string) {
+      const f = await render(api, tab);
+      vi.spyOn(TestBed.inject(Router), "navigate").mockResolvedValue(true);
+      f.componentRef.setInput("task", id);
+      await settle(f);
+      return f;
+    }
+
+    it("selects a row into the pane instead of leaving the page, and keeps the tab in the URL", async () => {
+      const f = await render(new FakeApi());
+      const nav = vi
+        .spyOn(TestBed.inject(Router), "navigate")
+        .mockResolvedValue(true);
+      expect(q(f, '[data-testid="tasks-pane"]')).toBeNull();
+      const link = q<HTMLAnchorElement>(f, '[data-testid="open-2"]')!;
+      expect(link.getAttribute("href")).toBe("/task/2?from=tasks:backlog");
+      link.click();
+      expect(nav).toHaveBeenCalledWith([], {
+        queryParams: { task: "2" },
+        queryParamsHandling: "merge",
+        replaceUrl: false,
+      });
+
+      f.componentRef.setInput("task", "2");
+      await settle(f);
+      expect(q(f, '[data-testid="tasks-pane"]')).toBeTruthy();
+      expect(q(f, '[data-testid="row-2"]')!.classList).toContain("is-selected");
+      expect(q(f, "g-task-detail #task-title")!.textContent).toContain("#2");
+      // The pane's tabs use ?pane=, leaving the list's ?tab= alone.
+      expect(
+        q(f, '[data-testid="task-tab-runs"]')!.getAttribute("href"),
+      ).toContain("pane=runs");
+    });
+
+    it("steps with j and k in the order shown, and opens full screen with Enter or ⤢", async () => {
+      const f = await withPane(new FakeApi(), undefined, "2");
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "j", bubbles: true }),
+      );
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "k", bubbles: true }),
+      );
+      expect(navs().slice(0, 2)).toEqual([
+        {
+          commands: [],
+          extras: {
+            queryParams: { task: "3" },
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          },
+        },
+        {
+          commands: [],
+          extras: {
+            queryParams: { task: "1" },
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          },
+        },
+      ]);
+
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      expect(navs()[2]).toEqual({
+        commands: ["/task", "2"],
+        extras: { queryParams: { from: "tasks:backlog" } },
+      });
+      q<HTMLButtonElement>(f, '[data-testid="pane-expand"]')!.click();
+      expect(navs()[3].commands).toEqual(["/task", "2"]);
+
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      expect(navs()[4]).toEqual({
+        commands: [],
+        extras: {
+          queryParams: { task: null, pane: null },
+          queryParamsHandling: "merge",
+        },
+      });
+    });
+
+    it("keeps a selected task that left the tab, says where it went, and offers Next item", async () => {
+      const f = await withPane(new FakeApi(), "running", "2");
+      expect(q(f, '[data-testid="pane-moved"]')!.textContent).toContain(
+        "#2 moved to Backlog",
+      );
+      expect(q(f, "g-task-detail #task-title")!.textContent).toContain("#2");
+      q<HTMLButtonElement>(f, '[data-testid="pane-next"]')!.click();
+      expect(navs()[0].extras?.["queryParams"]).toEqual({ task: "20" });
+    });
+
+    it("opens the task full screen on a phone", async () => {
+      const w = window as { matchMedia?: unknown };
+      const had = w.matchMedia;
+      w.matchMedia = () => ({ matches: true }) as MediaQueryList;
+      try {
+        const f = await render(new FakeApi());
+        const nav = vi
+          .spyOn(TestBed.inject(Router), "navigate")
+          .mockResolvedValue(true);
+        q<HTMLAnchorElement>(f, '[data-testid="open-2"]')!.click();
+        expect(nav).toHaveBeenCalledWith(["/task", "2"], {
+          queryParams: { from: "tasks:backlog" },
+        });
+      } finally {
+        w.matchMedia = had;
+      }
+    });
+
+    it("changes priority from the pane", async () => {
+      const api = new FakeApi();
+      const f = await withPane(api, undefined, "2");
+      const sel = q<HTMLSelectElement>(f, '[data-testid="pane-priority"]')!;
+      sel.value = "8";
+      sel.dispatchEvent(new Event("change"));
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="pane-priority-apply"]')!.click();
+      await settle(f);
+      expect(api.calls).toContainEqual({
+        method: "PATCH",
+        route: "PATCH /api/tasks/{id}",
+        params: { id: "2" },
+        body: { priority: 8 },
+      });
+    });
+
+    it("shows repository and owner on rows", async () => {
+      const api = new FakeApi();
+      api.live[1] = task("2", "queued", 5, {
+        repo: "sidthe/grain-scratch-repo",
+        owner: "rarcea",
+      });
+      const f = await render(api);
+      const row = q(f, '[data-testid="row-2"]')!;
+      expect(row.querySelector(".row-repo")!.textContent).toContain(
+        "grain-scratch-repo",
+      );
+      expect(row.querySelector(".row-repo")!.getAttribute("title")).toBe(
+        "sidthe/grain-scratch-repo",
+      );
+      expect(row.textContent).toContain("rarcea");
+    });
+  });
+
+  describe("counts, tabs and Approve all (M7)", () => {
+    it("counts only unblocked tasks as ready to run", async () => {
+      const api = new FakeApi();
+      api.live[1] = task("2", "queued", 5, { blocked: true });
+      api.live[2] = task("3", "queued", 5, {
+        dependsOnStates: { "9": "awaiting_reply" },
+      });
+      const f = await render(api);
+      expect(q(f, '[data-testid="ready-count"]')!.textContent).toContain("2");
+      expect(q(f, '[data-testid="blocked-count"]')!.textContent).toContain(
+        "2 waiting on a dependency",
+      );
+      expect(q(f, '[data-testid="tab-backlog"]')!.textContent).toContain("4");
+    });
+
+    it("filters Closed into merged and not merged", async () => {
+      const api = new FakeApi();
+      api.closed = [
+        task("50", "closed", 5, { prMergedAt: "2026-11-11T10:00:00Z" }),
+        task("51", "closed", 5, { closedReason: "nothing_needed" }),
+        task("52", "closed", 5, { merged: true }),
+      ];
+      const f = await render(api, "closed");
+      await settle(f);
+      const ids = () =>
+        all(f, ".task-row").map((r) => r.getAttribute("data-testid"));
+      expect(ids()).toEqual(["row-50", "row-51", "row-52"]);
+      q<HTMLButtonElement>(f, '[data-testid="closed-merged"]')!.click();
+      await settle(f);
+      expect(ids()).toEqual(["row-50", "row-52"]);
+      q<HTMLButtonElement>(f, '[data-testid="closed-unmerged"]')!.click();
+      await settle(f);
+      expect(ids()).toEqual(["row-51"]);
+    });
+
+    it("labels Merging as submit and land, and explains the two kinds", async () => {
+      const api = new FakeApi();
+      api.live.push(
+        task("40", "awaiting_submit", 5, {
+          mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
+        }),
+      );
+      const f = await render(api, "merging");
+      expect(q(f, '[data-testid="tab-merging"]')!.textContent).toContain(
+        "Submit & land",
+      );
+      expect(q(f, '[data-testid="merging-hint"]')).toBeTruthy();
+      expect(q(f, '[data-testid="ci-40"]')!.textContent).toContain("✕ CI");
+    });
+
+    it("asks before Approve all, names every repository, and approves only the rows shown", async () => {
+      const api = new FakeApi();
+      api.live[4] = task("10", "proposed", 8, {
+        repo: "acme/web",
+        owner: "ana",
+      });
+      api.live[5] = task("11", "proposed", 3, {
+        repo: "sidthe/grain",
+        owner: "bo",
+      });
+      const f = await render(api, "proposed");
+      q<HTMLButtonElement>(f, '[data-testid="approve-all"]')!.click();
+      await settle(f);
+      expect(api.calls).toEqual([]);
+      const scope = q(f, '[data-testid="confirm-scope"]')!.textContent!;
+      expect(scope).toContain("1 in acme/web");
+      expect(scope).toContain("1 in sidthe/grain");
+      const accept = q<HTMLButtonElement>(f, '[data-testid="confirm-accept"]')!;
+      expect(accept.disabled).toBe(true);
+
+      // A proposal arrives while the dialog is open.
+      api.live.push(task("12", "proposed", 5, { repo: "sidthe/grain" }));
+      await TestBed.inject(TasksStore).refresh();
+      await settle(f);
+
+      q<HTMLInputElement>(f, '[data-testid="confirm-multi-repo"]')!.click();
+      await settle(f);
+      accept.click();
+      await settle(f);
+      expect(
+        api.calls
+          .filter((c) => c.route === "POST /api/tasks/{id}/approve")
+          .map((c) => (c.params as { id: string }).id)
+          .sort(),
+      ).toEqual(["10", "11"]);
+    });
+
+    it("cancelling Approve all approves nothing", async () => {
+      const api = new FakeApi();
+      const f = await render(api, "proposed");
+      q<HTMLButtonElement>(f, '[data-testid="approve-all"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="confirm-cancel"]')!.click();
+      await settle(f);
+      expect(q(f, '[data-testid="confirm-dialog"]')).toBeNull();
+      expect(api.calls).toEqual([]);
+    });
   });
 });
