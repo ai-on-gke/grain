@@ -57,6 +57,7 @@ git:
     host: github.com            # optional; the deployment's default host
     scope: ""                   # "" (host default), "owner" or "owner/repo"
     token_file: /run/bot.token  # optional; stored as secrets/github/bot.token
+    merge_credential: ""        # optional; a credential (a GitHub App's) to merge with instead
 ```
 
 (the same file can carry model connections, see
@@ -185,6 +186,7 @@ schema 22), and the state repo exports it as one more column of
 | `credential` | a credential name in the credential store                                |
 | `host`       | the host it is used for; empty means the deployment's default host       |
 | `scope`      | empty means the host default; `owner` (or `owner/*`); `owner/repo`       |
+| `merge_credential` | optional: the credential pull requests are merged with instead of `credential` -- a GitHub App's, so merges are `<app>[bot]`'s and not the pushing person's ([github-actions-ci.md](github-actions-ci.md#a-merge-identity-of-grains-own)) |
 
 A credential for several specific repos is several connections.
 
