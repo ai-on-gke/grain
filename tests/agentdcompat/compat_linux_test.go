@@ -469,6 +469,12 @@ func exercise(t *testing.T, label, bin string) {
 			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"compat_lookup","args":{"query":"q"}}}`); got != "" {
 				t.Errorf("staged agy-tool-hook denied granted compat_lookup: %s", got)
 			}
+			// A host tool is admitted only once its call is on the record
+			// the policy names; the host agent runs on this machine, so the
+			// record is read here directly.
+			if rec, err := os.ReadFile(recordPath); err != nil || !strings.Contains(string(rec), `"compat_lookup"`) {
+				t.Errorf("staged agy-tool-hook admitted compat_lookup without recording it at %s: %q, %v", recordPath, rec, err)
+			}
 			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"mcp_grain-sandbox_run_command"}}`); !strings.Contains(got, "denied by staged compat policy.") {
 				t.Errorf("staged agy-tool-hook consulted compiled-in roster: %s", got)
 			}
