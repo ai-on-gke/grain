@@ -333,12 +333,18 @@ func EvaluatePolicy(policy hookpolicy.ToolPolicy, opts Options, payload []byte) 
 	return denyWithSuffix(name, policy.DefaultDenySuffix)
 }
 
+// matchesPolicyHostGrant returns the staged host-tool grant that admits
+// name. Host tools run on the machine hosting the session rather than in
+// the sandbox, so a grant admits only the exact tool names it lists, as
+// AllowsHostTool always has: never a '*' pattern that could reach a tool
+// nobody granted.
 func matchesPolicyHostGrant(grants []hookpolicy.HostToolGrant, name string) (hookpolicy.HostToolGrant, bool) {
+	if name == "" {
+		return hookpolicy.HostToolGrant{}, false
+	}
 	for _, g := range grants {
-		for _, t := range g.Tools {
-			if hookpolicy.MatchWildcard(t, name) {
-				return g, true
-			}
+		if slices.Contains(g.Tools, name) {
+			return g, true
 		}
 	}
 	return hookpolicy.HostToolGrant{}, false

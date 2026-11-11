@@ -242,3 +242,40 @@ func TestPolicyFileReplacesCompiledInRosterAndGrants(t *testing.T) {
 		t.Errorf("absent policy fallback = %s, want no opinion", got)
 	}
 }
+
+// A staged host-tool grant admits only the exact tool names it lists, as a
+// compiled-in HostToolGrant always has: a '*' in one is a literal byte, not a
+// pattern that opens every host tool behind it.
+func TestStagedHostToolGrantsMatchExactly(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, HostToolCallsFilename)
+	policyPath := filepath.Join(dir, hookpolicy.Filename)
+	raw, err := hookpolicy.Marshal(hookpolicy.File{Tool: &hookpolicy.ToolPolicy{
+		HostToolGrants: []hookpolicy.HostToolGrant{
+			{Capability: "https://grain.example/capabilities/wide#search={}", Tools: []string{"host_*", "exact_lookup"}},
+		},
+		RecordPath: record,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{PolicyPath: policyPath}
+	for _, name := range []string{"host_exec", "host_", "exact_lookup2", ""} {
+		if got := verdict(t, DecisionFor(opts, payload(t, name, nil))); got != "deny" {
+			t.Errorf("DecisionFor(%q) = %s, want deny", name, got)
+		}
+	}
+	if got := verdict(t, DecisionFor(opts, payload(t, "exact_lookup", nil))); got != "no opinion" {
+		t.Errorf("DecisionFor(exact_lookup) = %s, want no opinion", got)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(strings.TrimSpace(string(data)), "\n") + 1; n != 1 || !strings.Contains(string(data), `"exact_lookup"`) {
+		t.Errorf("recorded calls = %q, want exactly the one exact_lookup", data)
+	}
+}

@@ -82,9 +82,10 @@ type ToolPolicy struct {
 	// CapabilityServerPrefixes are tool-name prefixes (such as "mcp_acme_")
 	// admitted with no opinion for capability MCP servers.
 	CapabilityServerPrefixes []string `json:"capability_server_prefixes,omitempty"`
-	// HostToolGrants are the host-tool grants this run holds. Each admitted
-	// call must be recorded to RecordPath before proceeding; failure to
-	// record denies the call.
+	// HostToolGrants are the host-tool grants this run holds. A grant
+	// admits only the exact tool names in its Tools ('*' is not a
+	// wildcard here). Each admitted call must be recorded to RecordPath
+	// before proceeding; failure to record denies the call.
 	HostToolGrants []HostToolGrant `json:"host_tool_grants,omitempty"`
 	// RecordPath, TaskID and RunID configure host-tool call recording when
 	// not overridden by -record, -task or -run on the hook's command line.
