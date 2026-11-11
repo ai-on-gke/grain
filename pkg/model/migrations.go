@@ -1006,6 +1006,25 @@ var Migrations = []Migration{
 			"ALTER TABLE `auto_upgrade_release` ADD COLUMN `succeeded_at` DATETIME NULL",
 		},
 	},
+	{
+		Version: 140,
+		Description: "add integration_event's notification and host-script approval columns, for GET /api/events's " +
+			"notification.* and local_script.* events (grain/task-4284)",
+		// integration_event came in with no rung of its own, so a store
+		// from before it has none to alter: create it first (as it now
+		// stands), and every ADD COLUMN after passes over a column it
+		// already has.
+		Statements: []string{
+			integrationEventTable,
+			"ALTER TABLE `integration_event` ADD COLUMN `notification_id` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `integration_event` ADD COLUMN `subject` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `severity` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `summary` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `approval_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `script` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `decision` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

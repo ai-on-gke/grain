@@ -4,6 +4,20 @@ Container images for Grain deployments and sandboxes are published to the
 container registry (`docker.io/grainai/*`), which `scripts/setup.sh`,
 `scripts/install-grain.sh`, and `pkg/upgrade` pull from directly.
 
+Upgrading from container images on GitHub releases was removed (#1061,
+#1064). The daemon flags `-upgrade-image-source`, `-upgrade-image-fallback`,
+`-upgrade-release-repo`, `-upgrade-release-asset`,
+`-upgrade-release-checksum` and `-upgrade-sandbox-release-asset` no longer
+exist. A daemon unit that still passes one of them starts anyway: the
+daemon ignores each flag it does not define and logs `WARNING: starting
+anyway, ignoring <n> flag(s) this build does not define: ...` once per
+start (`pkg/cli/daemon_unknown_flags.go`). Drop them from the unit, or
+re-run `scripts/setup.sh` to rewrite it. `PUT /api/upgrade/source`, and the image-source picker on
+Settings → Upgrade, are gone too. A stored `release-assets` choice
+(`<data-dir>/upgrade-image-source.json`, or `GRAIN_UPGRADE_IMAGE_SOURCE`)
+is read as the registry, with a one-time warning in the log, and the
+stored file is rewritten.
+
 ## The grain CLI
 
 `vX.Y.Z` and `vX.Y.Z-rc.N` GitHub releases carry the standalone `grain` CLI

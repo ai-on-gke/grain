@@ -311,12 +311,12 @@ func stopOnAccessRefused(ctx context.Context, store *model.Store, task model.Tas
 		TaskID: task.ID,
 		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 		Body: fmt.Sprintf(
-			"This task could not be dispatched: the deployment's GitHub credential cannot reach %s, so cloning "+
-				"it was refused. The git proxy said:\n\n```\n%s\n```\n\n"+
+			"This task could not be dispatched: the git credential this deployment clones %s with cannot reach "+
+				"it, so cloning it was refused. The git proxy said:\n\n```\n%s\n```\n\n"+
 				"Every attempt would fail the same way, before an agent exists, so grain has stopped rather "+
-				"than retrying. Give the credential access to %s on GitHub, or choose another in "+
+				"than retrying. Give that credential access to %s on %s, or choose another in "+
 				"Settings → Git (/settings/git), and reply here to have it dispatched again -- or close it if the "+
-				"work is no longer needed.", refused.Repo, refused.Output, refused.Repo),
+				"work is no longer needed.", refused.Repo, refused.Output, refused.Repo, refused.Repo.GitHost()),
 		CreatedAt: now,
 	})
 	if err != nil {
@@ -347,7 +347,7 @@ func stopOnExpiredHostCredentials(ctx context.Context, store *model.Store, task 
 		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
 		Body: fmt.Sprintf(
 			"This task's run could not start: %s.\n\n"+
-				"Every run on this host fails the same way until then, whatever the task, so grain has "+
+				"Every run on this host fails the same way until that is done, whatever the task, so grain has "+
 				"parked this one rather than retrying it, and has not counted the attempt against it. "+
 				"Reply here once that has been done to have it dispatched again.", strings.TrimRight(why, ".")),
 		CreatedAt: now,

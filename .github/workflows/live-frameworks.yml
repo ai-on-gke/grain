@@ -101,6 +101,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Install the claude CLI
+        id: install
         run: |
           set -euo pipefail
           curl -4 -fsSL --max-time 120 --retry 3 --retry-delay 2 --retry-all-errors https://claude.ai/install.sh -o /tmp/claude-install.sh
@@ -126,7 +127,7 @@ jobs:
           exit 1
 
       - name: Live claude api-grant run
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           set -uo pipefail
           for attempt in 1 2; do
@@ -196,6 +197,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Install the codex CLI
+        id: install
         run: |
           set -euo pipefail
           version="$(sed -n 's/^ARG CODEX_CLI_VERSION=//p' Dockerfile | head -n1)"
@@ -237,7 +239,7 @@ jobs:
             -run '^(TestLiveCodexMCPOnlyAcrossModelProfiles|TestLiveCodexLoadsTheConfigGrainWrites|TestLiveCodexResumesAThreadAcrossExecs|TestLiveCodexRefusesAThreadItDoesNotHave|TestLiveCodexRetriesARefusedTurnItself|TestLiveCodexReportsA429GrainCanClassify|TestLiveCodexRetryResumesTheRunAfterARefusal|TestLiveCodexFallsBackWhenAResumeIsRefused|TestLiveCodexSharedLoginSurvivesConcurrentRefresh)$'
 
       - name: Live codex run
-        if: ${{ !cancelled() && steps.key.outputs.present == 'true' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.key.outputs.present == 'true' }}
         run: |
           set -uo pipefail
           for attempt in 1 2; do

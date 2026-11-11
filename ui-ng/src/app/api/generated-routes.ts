@@ -186,6 +186,7 @@ export const ROUTE_SCOPES = {
   "GET /api/tasks/{id}/attempts/{number}/capability-audit": "tasks:read",
   "GET /api/tasks/{id}/attempts/{number}/transcript": "tasks:read",
   "GET /api/tasks/{id}/context": "dispatch:read",
+  "GET /api/tasks/{id}/diff-preview": "tasks:read",
   "GET /api/tasks/{id}/messages": "tasks:read",
   "GET /api/tasks/{id}/prompt": "tasks:read",
   "GET /api/tasks/{id}/tree": "tasks:read",

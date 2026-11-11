@@ -549,7 +549,12 @@ export default function ConsoleSessionPage({
               (r) => !(session.autoReads || []).includes(r),
             ),
             writes,
-            readOptions: knownRepos(config, tasks),
+            readOptions: knownRepos(config, tasks).filter(
+              (r) =>
+                !(session.autoReads || []).some(
+                  (a) => a.toLowerCase() === r.toLowerCase(),
+                ),
+            ),
             writeOptions: targetableRepos(config, tasks),
             onReadsChange: (next) => save({ reads: next }, "reads"),
             onWritesChange: setWrites,

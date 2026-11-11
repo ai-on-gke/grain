@@ -32,7 +32,11 @@ package model
 //   - usage_setting: one row, the operator's budgets and the concurrency
 //     mode (UsageSettings), as JSON.
 //
-// All three are runtime state, off SettingsTables like usage_limit_pause.
+// The first two are runtime state, off SettingsTables like
+// usage_limit_pause. usage_setting is the operator's own choice and is a
+// settings table (staterepo.SettingsTables): it is in the state
+// repository as tables/usage_setting.json, so a deployment rebuilt from
+// that repository keeps its budgets and mode.
 
 import (
 	"context"

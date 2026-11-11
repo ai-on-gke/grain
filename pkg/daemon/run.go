@@ -40,6 +40,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -218,6 +219,15 @@ func Run(ctx context.Context, cfg Config) error {
 	if lost := writerLockLost.Load(); lost != nil {
 		_ = db.Close()
 		return *lost
+	}
+	// Every read-write transaction from here on first confirms the lease
+	// is still this process's, so the writes made between losing it and
+	// the keep-alive noticing are refused rather than committed beside
+	// the new writer's (postgres/write_fence.go).
+	if writerLock != nil {
+		if err := postgres.FenceWrites(db, writerLock); err != nil {
+			return err
+		}
 	}
 	// And the same on a PostgreSQL store itself, which a tool on another
 	// host can see where it cannot see the lock file (postgres.HoldDaemonLease).
@@ -837,6 +847,11 @@ func Run(ctx context.Context, cfg Config) error {
 	// moved onto it.
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
+	}
+	// Also before the capability servers start, so each starts with the
+	// $secret: references its typed-in credentials became.
+	if err := migrateLiteralCredentials(ctx, store, secretStore); err != nil {
+		log.Printf("daemon: moving typed-in capability server credentials into the secrets store: %v", err)
 	}
 	// transcriptDir is where a run's own agent.Framework may mirror its
 	// transcript-in-progress live, and where the UI server below reads one

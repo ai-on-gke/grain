@@ -507,6 +507,8 @@ var NeverAutoMergePaths = []string{
     "tables/standing_sandbox.json", "tables/standing_sandbox_secret.json",
     "tables/standing_sandbox_env.json", "tables/persistent_sandbox.json",
     "tables/gcp_key.json",
+    // Token budgets and the usage mode: how many runs dispatch at once.
+    "tables/usage_setting.json",
     "scripts/**",
     "workflows/**",
     ".github/**",
