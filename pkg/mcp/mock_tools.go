@@ -472,6 +472,8 @@ func NewMockTools(sink *MockSink, proposeRepos []string) []Tool {
 		commentOnIssueTool(sink),
 		nothingNeededTool(sink),
 		writeHandoverTool(),
+		compactContextTool(),
+		updateBriefTool(),
 		proposeTaskTool(sink, proposeRepos, "", nil),
 		addReviewCommentTool(sink),
 	}

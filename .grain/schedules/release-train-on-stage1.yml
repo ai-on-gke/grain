@@ -1,0 +1,23 @@
+name: Release train (Stage 1 verdict)
+# The continuous release loop (design/playbook/releases.playbook.md,
+# section 15): as soon as Stage 1 (nightly.yml) concludes on a release
+# candidate, one tick of .grain/templates/release-train.yml releases or
+# drops that rc and cuts the next, without waiting for the 20-minute
+# backstop in release-train.yml. Concluded runs reach grain by webhook or
+# its polling fallback (docs/github-ci.md). Overlap group release-train
+# holds this behind a tick already open, and that one -- or the backstop
+# after it -- reads the same verdict.
+#
+# Declaring this trigger is also what opts the repository in to grain's
+# Stage 1 repairs (pkg/orchestrator/stage1repair.go): a red Stage 1, on an
+# rc or on main, files one priority-9 repair with a nightly-green goal,
+# and further red runs update it rather than file another.
+template: release-train
+base: main
+trigger:
+  github_workflow_run:
+    workflow: nightly.yml
+    branches: ["v*-rc.*"]
+overlap:
+  skip: true
+  group: release-train

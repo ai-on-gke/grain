@@ -350,7 +350,7 @@ func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, er
 		return nil, fmt.Errorf("running `%s`: %w", line, authfix.Wrap(err, "", path))
 	}
 	run := &commandForgeRun{cmd: cmd, cancel: cancel, line: line, host: req.URL.Host, start: start, ctx: ctx,
-		timeout: timeout, stderr: stderr, forge: t.Forge}
+		timeout: timeout, stderr: stderr, forge: t.Forge, loginFix: t.LoginFix}
 	br := bufio.NewReaderSize(stdout, 32<<10)
 	resp, headErr := readCommandForgeHead(br)
 	if headErr != nil {
@@ -438,9 +438,16 @@ type commandForgeRun struct {
 	timeout time.Duration
 	stderr  *cappedBuffer
 	forge   CommandForge
+	// loginFix is the source's LoginFix, for a tool that says it is not
+	// logged in.
+	loginFix string
 
 	once sync.Once
 	err  error
+	// ended is why ctx had ended by the time the tool exited, if it had:
+	// wait cancels ctx itself afterwards, so ctx.Err() cannot tell a
+	// run that was stopped from one that exited on its own.
+	ended error
 }
 
 // wait reaps the tool and logs how the run ended -- never what it
@@ -452,9 +459,12 @@ func (r *commandForgeRun) wait() error {
 			err = nil
 		}
 		took := time.Since(r.start).Round(time.Millisecond)
+		if err != nil {
+			r.ended = r.ctx.Err()
+		}
 		switch {
-		case r.ctx.Err() != nil && err != nil:
-			log.Printf("gitproxy: `%s` stopped after %s: %v", r.line, took, r.ctx.Err())
+		case r.ended != nil:
+			log.Printf("gitproxy: `%s` stopped after %s: %v", r.line, took, r.ended)
 		case err != nil:
 			// The tool exits non-zero for any status past 299, having
 			// printed the response all the same: not a failure here.
@@ -477,14 +487,17 @@ func (r *commandForgeRun) failure(werr, headErr error) error {
 	if expired := authfix.Wrap(werr, said, r.cmd.Path); expired != werr {
 		return fmt.Errorf("running `%s`: %w", r.line, expired)
 	}
-	if errors.Is(r.ctx.Err(), context.DeadlineExceeded) {
+	if errors.Is(r.ended, context.DeadlineExceeded) {
 		return fmt.Errorf("%w: `%s` did not answer within %s, so it was killed: run it by hand as %s "+
 			"to see what it waits on", errHostToolTimeout, r.line, r.timeout, ambientAccount())
 	}
-	if r.ctx.Err() != nil {
-		return fmt.Errorf("`%s` was cancelled: %v", r.line, r.ctx.Err())
+	if r.ended != nil {
+		return fmt.Errorf("`%s` was cancelled: %v", r.line, r.ended)
 	}
 	msg := shortMessage(said)
+	if r.loginFix != "" && saysNotLoggedIn(said) {
+		return fmt.Errorf("`%s` failed: %s: run `%s` as %s", r.line, msg, r.loginFix, ambientAccount())
+	}
 	if msg == "" && werr != nil {
 		msg = werr.Error()
 	}
@@ -492,6 +505,14 @@ func (r *commandForgeRun) failure(werr, headErr error) error {
 		msg = headErr.Error()
 	}
 	return fmt.Errorf("`%s` failed: %s", r.line, msg)
+}
+
+// saysNotLoggedIn reports whether a tool's stderr says it has no login
+// for the host, the way gh-style tools do ("not logged in", "please run:
+// ... auth login").
+func saysNotLoggedIn(said string) bool {
+	said = strings.ToLower(said)
+	return strings.Contains(said, "not logged in") || strings.Contains(said, "auth login")
 }
 
 // commandForgeBody is the response body still being printed; reading it to the

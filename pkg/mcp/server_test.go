@@ -45,7 +45,7 @@ func TestListToolsAdvertisesAllTenInOrder(t *testing.T) {
 	want := []string{
 		"run_command", "read_file", "edit_file", "write_file",
 		"ask_question", "request_secret", "request_access", "comment_on_issue", "nothing_needed", "write_handover",
-		"propose_task", "add_review_comment",
+		"compact_context", "update_brief", "propose_task", "add_review_comment",
 	}
 	if len(tools) != len(want) {
 		t.Fatalf("got %d tools, want %d: %+v", len(tools), len(want), tools)

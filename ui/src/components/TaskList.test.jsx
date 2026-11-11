@@ -17,6 +17,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import TaskList from "./TaskList.jsx";
+import { viewerConfig } from "../accessTestConfigs.js";
 import {
   NO_NARROWING,
   defaultNarrowing,
@@ -507,6 +508,41 @@ describe("TaskList", () => {
     });
     expect(screen.getByText("Stalled")).toBeInTheDocument();
     expect(screen.getByTitle(/reconcileDispatch/)).toBeInTheDocument();
+  });
+
+  // The control that ends a stalled row's wait is a write, gated on the
+  // scope its request needs as the inbox's stalled group gates it: a
+  // grain/viewer sees Cancel disabled with the reason rather than a
+  // click that ends in a 403 (2026-11-11 walkthrough, Bug 2).
+  it("disables a stalled row's control for a role without its scope", async () => {
+    const user = userEvent.setup();
+    renderList({
+      config: viewerConfig,
+      tasks: [
+        {
+          id: 23,
+          title: "No process is finishing this",
+          state: "running",
+          stall:
+            "this has stood here for more than 24h, which is longer than `ProcessResult` should take",
+          reason: { case: "live_run", control: "Cancel" },
+          capabilities: [],
+          blocked: false,
+        },
+      ],
+    });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toBeDisabled();
+    expect(cancel.closest("[data-access-denied]")).toHaveAttribute(
+      "data-access-denied",
+      "tasks:write",
+    );
+    await user.hover(cancel.closest("[data-access-denied]"));
+    expect(
+      await screen.findByText(
+        "Needs tasks:write, which your role grain/viewer does not grant.",
+      ),
+    ).toBeInTheDocument();
   });
 
   // And says nothing about the healthy ones, which is nearly all of
@@ -1025,6 +1061,41 @@ describe("TaskList", () => {
         const onReorder = vi.fn();
         const user = userEvent.setup();
         renderList({ tasks: threeTasks, onReorder });
+
+        await user.click(screen.getByRole("button", { name: "Move task 1" }));
+        await user.click(
+          screen.getByRole("button", {
+            name: "Move here, to the end of the list",
+          }),
+        );
+
+        expect(onReorder).toHaveBeenCalledWith([1], 3, null);
+      });
+
+      // A review whose own task the list leaves out is a row of its own,
+      // in its backlog place -- and the end of the list is after the last
+      // task in the backlog, not after wherever that row was drawn
+      // (2026-11-11 saved-boards walkthrough: it was drawn last, so this
+      // move sent afterId 4 and the task stayed at the top).
+      it("keeps a stacked review whose task is filtered out in its backlog place", async () => {
+        const review = {
+          id: 4,
+          title: "Review: the hidden task",
+          state: "queued",
+          capabilities: [],
+          blocked: false,
+          stacked: true,
+          generatedFrom: 9,
+        };
+        const onReorder = vi.fn();
+        const user = userEvent.setup();
+        renderList({ tasks: [review, ...threeTasks], onReorder });
+
+        expect(
+          [...document.querySelectorAll(".task-row")].map(
+            (r) => r.querySelector(".row-link")?.textContent,
+          ),
+        ).toEqual(["Review: the hidden task", "First", "Second", "Third"]);
 
         await user.click(screen.getByRole("button", { name: "Move task 1" }));
         await user.click(

@@ -731,10 +731,10 @@ func TestAgentCLIHostContainment(t *testing.T) {
 
 	// Verify PreToolUse hook denies host built-in tools and enforces HostToolGrant.
 	const testCap = "https://grain.dev/capabilities/security-test#readonly"
-	hook.RegisterHostToolGrant(hook.HostToolGrant{
+	t.Cleanup(hook.RegisterHostToolGrant(hook.HostToolGrant{
 		Capability: testCap,
 		Tools:      []string{"readonly_doc_lookup", "readonly_symbol_lookup"},
-	})
+	}))
 
 	isDenied := func(dec []byte) bool {
 		return strings.Contains(string(dec), `"decision":"deny"`)

@@ -686,6 +686,24 @@ if status != 0:
     emit("=== last 200 lines of the raw run ===")
     for line in tail_ring:
         emit(line)
+    # The raw tail above is whatever was printed last, which for a package
+    # whose parallel tests log heavily (pkg/ui's UI-log replay) is noise
+    # from tests that passed. A log tail is often all anybody reads of a
+    # failed job, so end on the names of what actually failed.
+    emit("=== failed (recap; details under === failing tests === above) ===")
+    recap = [block[0] for kind, block in fail_blocks if kind == "test" and block]
+    for line in recap[:50]:
+        emit(line)
+    if len(recap) > 50:
+        emit(f"... and {len(recap) - 50} more")
+    for block in panic_blocks[:5]:
+        if block:
+            emit(block[0])
+    if race_blocks:
+        emit(f"{len(race_blocks)} data race report(s); see the data races section above")
+    for line in pkg_results:
+        if line.startswith("FAIL"):
+            emit(line)
 
 if status < 0:
     sys.exit(128 + (-status))

@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/reviewedmerge"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -196,13 +197,17 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 		// cluster can pull both artifacts before Recreate stops this pod.
 		return upgrade.New(upgrade.Config{
 			Kube: &upgrade.KubeConfig{
-				Repository:       cfg.UpgradeImage,
-				Track:            track,
-				Deployment:       cfg.K8sDeployment,
-				Container:        cfg.K8sContainer,
-				Namespace:        cfg.K8sNamespace,
-				Kubectl:          cfg.K8sKubectl,
-				VerifyCmd:        cfg.UpgradeVerifyCmd,
+				Repository: cfg.UpgradeImage,
+				Track:      track,
+				Deployment: cfg.K8sDeployment,
+				Container:  cfg.K8sContainer,
+				Namespace:  cfg.K8sNamespace,
+				Kubectl:    cfg.K8sKubectl,
+				VerifyCmd:  cfg.UpgradeVerifyCmd,
+				// And whether a reviewed commit went into the image,
+				// read from the registry by the signed digest and asked
+				// of the forge (pkg/upgrade/reviewed.go).
+				ReviewedMerge:    upgradeReviewedMerge(cfg),
 				SandboxImageArgs: []string{"k8s-sandbox-image"},
 				// And whether the candidate build would accept the args
 				// this Deployment hands it. Those args were applied once
@@ -248,6 +253,9 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 				Repository: cfg.UpgradeImage,
 				RefFile:    cfg.UpgradeImageRefFile,
 				VerifyCmd:  cfg.UpgradeVerifyCmd,
+				// And whether a reviewed commit went into the image, asked
+				// of the forge (pkg/upgrade/reviewed.go).
+				ReviewedMerge: upgradeReviewedMerge(cfg),
 				// Only for a deployment that actually runs sandbox
 				// containers: it asks the newly pulled image which one
 				// it expects (sandboximage.go) and pulls that too, so
@@ -268,8 +276,13 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 				// image moves under it on every upgrade, so this is the
 				// one check that is about the *deployment* rather than
 				// about the build (grain/task-233).
-				UnitFlags:          cfg.UnitFlags,
-				FlagNamesArgs:      []string{"daemon", "-flag-names"},
+				UnitFlags:     cfg.UnitFlags,
+				FlagNamesArgs: []string{"daemon", "-flag-names"},
+				// And which edition's build it is, checked against this
+				// host's install track before anything cuts over: an
+				// upgrade never crosses editions unless the operator
+				// switched edition on purpose (pkg/upgrade/edition.go).
+				EditionArgs:        []string{"version", "--json"},
 				Track:              track,
 				Source:             upgrade.ImageSource(strings.TrimSpace(os.Getenv("GRAIN_UPGRADE_IMAGE_SOURCE"))),
 				SourceOverrideFile: filepath.Join(cfg.DataDir, "upgrade-image-source.json"),
@@ -418,4 +431,38 @@ func upgradeRestartRequest(cfg Config) func(branch string) {
 	return func(branch string) {
 		requests.recordOrLog("upgrade to "+branch, log.Printf)
 	}
+}
+
+// upgradeReviewedMerge is the image and Kubernetes paths' reviewed-merge
+// check, from -upgrade-reviewed-merge-repo and the flags beside it, or
+// nil when that is not set.
+func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
+	repo := strings.TrimSpace(cfg.UpgradeReviewedMergeRepo)
+	if repo == "" {
+		return nil
+	}
+	forge := reviewedmerge.REST{}
+	if path := strings.TrimSpace(cfg.UpgradeReviewedMergeTokenFile); path != "" {
+		// A file that cannot be read leaves the token empty, and the
+		// forge's refusal of the anonymous read says why.
+		forge.Token = readTrimmed(path)
+	}
+	return &upgrade.ReviewedMergeConfig{
+		Policy: reviewedmerge.Policy{
+			Repo:     repo,
+			Branches: []string{"main", "release/v*"},
+			Mergers:  cfg.UpgradeReviewedMergeLogins,
+		},
+		Forge:   forge,
+		Compare: forge.Compare,
+	}
+}
+
+func readTrimmed(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("grain daemon: reading -upgrade-reviewed-merge-token-file: %v", err)
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }

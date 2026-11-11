@@ -219,6 +219,36 @@ func TestTheGitHubWorkflowReviewPromptIsAboutGitHubsRun(t *testing.T) {
 	}
 }
 
+// Both workflow-review families exist to read a scheduled run's logs, not to
+// re-run suites or block in grain ci wait inside their own sandboxes.
+func TestWorkflowReviewPromptsForbidRerunningWholeSuitesAndWaitingOnCI(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{
+		model.WorkflowReviewTemplateID("nightly"),
+		model.GitHubWorkflowReviewTemplateID("nightly"),
+	} {
+		tmpl := model.SystemTemplate(id, model.RepoRef{Owner: "acme", Name: "widgets"})
+		if tmpl == nil {
+			t.Fatalf("SystemTemplate(%q) = nil", id)
+		}
+		for _, want := range []string{
+			"Testing and CI",
+			"grain ci log",
+			"Do not run `go test ./...`",
+			"-race",
+			"`grain ci wait`",
+			"narrowly targeted test (`go test ./pkg/x -run TestName`)",
+		} {
+			if !strings.Contains(tmpl.Body, want) {
+				t.Errorf("%s body missing %q:\n%s", id, want, tmpl.Body)
+			}
+		}
+		if strings.Contains(tmpl.Body, "running the failing step yourself") {
+			t.Errorf("%s still invites re-running whole workflow steps in the sandbox:\n%s", id, tmpl.Body)
+		}
+	}
+}
+
 func capabilityNames(grants []model.Grant) []string {
 	out := make([]string, len(grants))
 	for i, g := range grants {

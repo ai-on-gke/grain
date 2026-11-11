@@ -47,6 +47,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -73,7 +74,13 @@ type upgradeResponse struct {
 	DefaultImageRepo string               `json:"defaultImageRepo"`
 	DefaultImageRef  string               `json:"defaultImageRef"`
 	ImageRepos       []string             `json:"imageRepos"`
+	ImageRepoWarning string               `json:"imageRepoWarning"`
 	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc"`
+
+	Edition                string                      `json:"edition"`
+	OtherEditionImageRepos []upgrade.EditionRepository `json:"otherEditionImageRepos"`
+	EditionSwitchLosses    []string                    `json:"editionSwitchLosses"`
+	EditionSwitch          *upgrade.EditionSwitch      `json:"editionSwitch"`
 }
 
 // upgradeRunning is that body's "running": where the deployment already
@@ -701,6 +708,54 @@ func TestClickingUpgradeDoesNotUpgradeWhenVersionHasNotChanged(t *testing.T) {
 	}
 }
 
+// A unit still naming a host-less -upgrade-image (a release-asset-era
+// <edition>/grain) is warned of on the pane before anybody presses
+// Upgrade, beside the build's registry-qualified default, and pressing it
+// anyway is refused with the same fix rather than pulled from Docker Hub
+// (grain/task-4084).
+func TestUpgradeWarnsOfAHostlessImageRepoBeforeItIsPulled(t *testing.T) {
+	const hostless = "edition-local/grain"
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	pulled := filepath.Join(dir, "pulled")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+hostless+":main@"+testImageDigest+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
+		Repository: hostless,
+		Track:      installtracktest.Track,
+		RefFile:    refFile,
+		PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulled, "sh"},
+		RunCmd:     []string{"sh", "-c", "echo 7"},
+	}, dir)
+
+	got := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
+	if got.ImageRepo != hostless || got.DefaultImageRepo != installtracktest.Repository {
+		t.Errorf("GET /api/upgrade image = %q, default %q; want %q, %q", got.ImageRepo, got.DefaultImageRepo, hostless, installtracktest.Repository)
+	}
+	for _, want := range []string{hostless, "no registry host", "-upgrade-image", installtracktest.Repository, "re-run the installer"} {
+		if !strings.Contains(got.ImageRepoWarning, want) {
+			t.Errorf("imageRepoWarning = %q, want it to say %q", got.ImageRepoWarning, want)
+		}
+	}
+
+	if code, _ := clickUpgrade(t, srv, "main"); code != http.StatusAccepted {
+		t.Fatalf("POST /api/upgrade = %d, want 202", code)
+	}
+	done := pollUpgrade(t, srv)
+	if done.Phase != string(upgrade.PhaseFailed) {
+		t.Fatalf("done = %+v, want a failed upgrade", done)
+	}
+	for _, want := range []string{"refusing to pull " + hostless + ":main", "-upgrade-image", installtracktest.Repository} {
+		if !strings.Contains(done.Detail, want) {
+			t.Errorf("detail = %q, want it to say %q", done.Detail, want)
+		}
+	}
+	if _, err := os.Stat(pulled); !os.IsNotExist(err) {
+		t.Errorf("PullCmd ran for a host-less repository (err=%v)", err)
+	}
+}
+
 // The pane can say exactly what the button will pull before it is
 // pressed, and an operator can point it at another known repository --
 // or a tag in one -- without touching the host's environment.
@@ -755,6 +810,71 @@ func TestUpgradeChoosesTheImageItPulls(t *testing.T) {
 	got = decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
 	if got.ImageRepo != ghcr {
 		t.Errorf("after the switch imageRepo = %q, want %q remembered", got.ImageRepo, ghcr)
+	}
+}
+
+// grain/task-4153: a deployment on a registered track is not offered the
+// open-source repository among its image choices, and POST /api/upgrade
+// refuses it -- unless the request is the explicit "switch edition"
+// override, which then pulls it and records who switched what to what.
+func TestUpgradeRefusesAnotherEditionsImageWithoutTheSwitch(t *testing.T) {
+	const oss = installtrack.DefaultOSSGrainRepository
+	dir := t.TempDir()
+	pulled := filepath.Join(dir, "pulled")
+	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
+		Repository: installtracktest.Repository,
+		Track:      installtracktest.Track,
+		RefFile:    filepath.Join(dir, "image.env"),
+		PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulled, "sh"},
+		RunCmd:     []string{"sh", "-c", "echo 7"},
+	}, dir)
+
+	got := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
+	if slices.Contains(got.ImageRepos, oss) {
+		t.Errorf("imageRepos = %v offers %s to an acme deployment", got.ImageRepos, oss)
+	}
+	if got.Edition != "acme" || !slices.Contains(got.OtherEditionImageRepos, upgrade.EditionRepository{Repository: oss, Edition: "oss"}) {
+		t.Errorf("edition = %q, otherEditionImageRepos = %v; want acme, with %s as oss", got.Edition, got.OtherEditionImageRepos, oss)
+	}
+	if len(got.EditionSwitchLosses) == 0 {
+		t.Error("editionSwitchLosses is empty: the switch's confirmation would name nothing lost")
+	}
+
+	for _, body := range []string{
+		`{"branch":"main","image":"` + oss + `"}`,
+		`{"branch":"main","image":"` + oss + `:main"}`,
+	} {
+		rec := do(t, srv, http.MethodPost, "/api/upgrade", body)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "switch edition") {
+			t.Errorf("POST %s = %d %s, want 400 naming the switch-edition override", body, rec.Code, rec.Body)
+		}
+	}
+	for _, body := range []string{
+		`{"branch":"main","switchEdition":true}`,
+		`{"branch":"main","image":"` + oss + `","switchEdition":true,"afterTasksFinish":true}`,
+	} {
+		if rec := do(t, srv, http.MethodPost, "/api/upgrade", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s = %d %s, want 400", body, rec.Code, rec.Body)
+		}
+	}
+	if _, err := os.Stat(pulled); err == nil {
+		t.Fatalf("a refused upgrade pulled %q", readTestFile(t, pulled))
+	}
+
+	rec := do(t, srv, http.MethodPost, "/api/upgrade", `{"branch":"main","image":"`+oss+`","switchEdition":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST the switch = %d: %s", rec.Code, rec.Body)
+	}
+	final := pollUpgrade(t, srv)
+	if final.Phase != string(upgrade.PhaseOK) {
+		t.Fatalf("upgrade ended %q: %s", final.Phase, final.Detail)
+	}
+	if got := readTestFile(t, pulled); got != oss+":main\n" {
+		t.Errorf("pulled %q, want %s:main", got, oss)
+	}
+	sw := final.EditionSwitch
+	if sw == nil || sw.From != "acme" || sw.To != "oss" || sw.Repository != oss || sw.RequestedBy == "" {
+		t.Errorf("editionSwitch = %+v, want acme -> oss from %s, naming who asked", sw, oss)
 	}
 }
 

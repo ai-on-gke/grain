@@ -445,6 +445,11 @@ type DaemonHealth struct {
 // (bwsalmon/agents#536) puts this one alongside.
 type SandboxHealthResponse struct {
 	Enabled bool `json:"enabled"`
+	// StaleSchedules is every enabled schedule -- a workflow's cron
+	// included -- that has gone more than twice its cadence without a
+	// firing that ran anything (model.Store.StaleSchedules): a nightly
+	// that went quiet says so here rather than nowhere.
+	StaleSchedules []model.StaleSchedule `json:"staleSchedules,omitempty"`
 	// DispatchBlocked is every condition holding this deployment's
 	// dispatch (Config.DispatchConditions): the failing checks of this
 	// response, first because nothing below them matters while one is
@@ -535,6 +540,10 @@ type SandboxHealthResponse struct {
 	// (capabilityServersDown). Absent while every server is attached or
 	// only waiting to be configured for the first time.
 	CapabilityServers []CapabilityServerDown `json:"capabilityServers,omitempty"`
+	// TargetRepoHostWarnings lists stored hostless TargetRepos entries that
+	// resolve to the default git host while matching repositories reachable
+	// only through a non-default-host git connection.
+	TargetRepoHostWarnings []TargetRepoHostMismatch `json:"targetRepoHostWarnings,omitempty"`
 	// Registry reports the deployment's connected-entry grain hub
 	// heartbeat status and any scope conflicts when registry self-registration
 	// is configured; nil when disabled.
@@ -1039,6 +1048,15 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		}{Counters: healthCounterSections()})
 		return
 	}
+	// ?section=staleSchedules is only the schedules that stopped running,
+	// which the CI pane reads to say so beside the repository's runs --
+	// a store read, not worth a sandbox sweep on every poll of that pane.
+	if r.URL.Query().Get("section") == "staleSchedules" {
+		writeJSON(w, http.StatusOK, struct {
+			StaleSchedules []model.StaleSchedule `json:"staleSchedules"`
+		}{StaleSchedules: s.tasks.staleSchedules(r.Context())})
+		return
+	}
 	// Config.Daemon counts here too: a deployment whose sandbox pool and
 	// host readings are both unavailable can still be one that has
 	// restarted forty times this hour, and that is the pane's most
@@ -1057,26 +1075,30 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, DispatchBlocked: s.tasks.dispatchBlocked(),
 			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
-			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context())})
+			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
+			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+			StaleSchedules:         s.tasks.staleSchedules(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
-		Enabled:              true,
-		DispatchBlocked:      s.tasks.dispatchBlocked(),
-		StateRepoSync:        syncFailure,
-		HostCredentials:      hostCredentials,
-		SandboxImage:         s.tasks.sandboxImage(),
-		SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()),
-		SandboxGuest:         s.tasks.sandboxGuestPublishing(r.Context()),
-		BaseBranchGates:      s.tasks.baseBranchGates(r.Context()),
-		BaseBranchPublishing: s.tasks.baseBranchPublishing(r.Context()),
-		PackageCache:         s.tasks.packageCacheStats(),
-		CIHistory:            s.tasks.ciHistoryStorage(r.Context()),
-		Lifetime:             s.tasks.sandboxLifetime(r.Context()),
-		StandingSandboxes:    s.tasks.standingSandboxes(),
-		Counters:             healthCounterSections(),
-		CapabilityServers:    s.tasks.capabilityServersDown(),
-		Hub:                  s.tasks.hubHealth(r.Context()),
+		Enabled:                true,
+		DispatchBlocked:        s.tasks.dispatchBlocked(),
+		StateRepoSync:          syncFailure,
+		HostCredentials:        hostCredentials,
+		SandboxImage:           s.tasks.sandboxImage(),
+		SandboxImageWarnings:   s.tasks.staleSandboxImagePins(r.Context()),
+		SandboxGuest:           s.tasks.sandboxGuestPublishing(r.Context()),
+		BaseBranchGates:        s.tasks.baseBranchGates(r.Context()),
+		BaseBranchPublishing:   s.tasks.baseBranchPublishing(r.Context()),
+		PackageCache:           s.tasks.packageCacheStats(),
+		CIHistory:              s.tasks.ciHistoryStorage(r.Context()),
+		Lifetime:               s.tasks.sandboxLifetime(r.Context()),
+		StandingSandboxes:      s.tasks.standingSandboxes(),
+		Counters:               healthCounterSections(),
+		CapabilityServers:      s.tasks.capabilityServersDown(),
+		Hub:                    s.tasks.hubHealth(r.Context()),
+		StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+		TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
@@ -1154,28 +1176,45 @@ type CapabilityServerDown struct {
 	State servers.State `json:"state"`
 	// ConfigRefused is the server refusing its saved config
 	// (servers.Status.ConfigRefused).
-	ConfigRefused bool   `json:"configRefused,omitempty"`
-	Reason        string `json:"reason"`
+	ConfigRefused bool `json:"configRefused,omitempty"`
+	// Waiting is what the server is waiting on outside grain
+	// (servers.Status.Waiting); it attaches by itself once that is done.
+	Waiting string `json:"waiting,omitempty"`
+	Reason  string `json:"reason"`
 }
 
 // capabilityServersDown is every capability server that failed, or
-// whose configure refused its saved config: what `grain health` lists
-// beside the alert the daemon raises for it. A built-in nobody has
-// configured yet is not among them.
+// whose configure refused its saved config or is waiting on something
+// outside grain: what `grain health` lists beside the alert the daemon
+// raises for it. A built-in nobody has configured yet is not among them.
 func (c *Client) capabilityServersDown() []CapabilityServerDown {
 	if c.Config.CapabilityServers == nil {
 		return nil
 	}
 	var out []CapabilityServerDown
 	for _, st := range c.Config.CapabilityServers.Statuses() {
-		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && st.ConfigRefused) {
+		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && (st.ConfigRefused || st.Waiting != "")) {
 			continue
 		}
 		reason := st.Error
 		if reason == "" {
 			reason = st.Reason
 		}
-		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Reason: reason})
+		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Waiting: st.Waiting, Reason: reason})
 	}
 	return out
+}
+
+// staleSchedules is model.Store.StaleSchedules as of now, nil on a store
+// that cannot answer: health is read when something is already wrong, and
+// one unreadable section must not cost the rest of the pane.
+func (c *Client) staleSchedules(ctx context.Context) []model.StaleSchedule {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	stale, err := c.Store.StaleSchedules(ctx, time.Now())
+	if err != nil {
+		return nil
+	}
+	return stale
 }

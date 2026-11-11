@@ -393,6 +393,7 @@ func frameworkOpensPullRequests(framework agent.Framework) bool {
 func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRequest bool,
 	maxRuntime time.Duration, history History, setup *SetupResult) string {
 	branch := task.BranchName()
+	task, history = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if task.ChangeTarget != nil {
 		// A change that is not a git branch (a changelist): its kind's
@@ -448,7 +449,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
-	prompt += sandboxToolingSection(task.Target != nil, grainci.Granted(task.Grants))
+	prompt += sandboxToolingSectionFor(task.Target != nil, grainci.Granted(task.Grants), isReviewTask(task))
 	prompt += grainCLISection(task)
 	prompt += customFieldsSection(task)
 	prompt += timezoneSection(task)
@@ -473,8 +474,14 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
+	if summarised := summarisedSection(history); summarised != "" {
+		prompt += "\n\n" + strings.TrimRight(summarised, "\n")
+	}
 	if thread := commentThreadSection(history.Comments); thread != "" {
 		prompt += "\n\n" + strings.TrimRight(thread, "\n")
+	}
+	if upkeep := contextUpkeepSection(task, history, len(prompt)); upkeep != "" {
+		prompt += "\n\n" + strings.TrimRight(upkeep, "\n")
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
@@ -500,7 +507,26 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	// (mcp/wait_for_checks_tool.go). The status read is still worth
 	// naming, since it is the one that answers questions about the pull
 	// request itself rather than about the build.
-	if task.Target != nil {
+	if task.Target != nil && isReviewTask(task) {
+		if !reviewCommentsOnly(task) && task.Intent != model.IntentReview {
+			prompt += "\n\nCommit any fix with a message written for a human reviewer: a short summary " +
+				"line, a blank line, then a paragraph on what changed and why."
+			if trailers := CommitTrailers(task); len(trailers) > 0 {
+				prompt += "\n\nEnd every commit message with these trailers, in its last " +
+					"paragraph, so the work can be followed from git alone:\n\n    " +
+					strings.Join(trailers, "\n    ")
+			}
+			if _, inPlace := reviewsInPlace(task); !inPlace && canOpenPullRequest {
+				prompt += "\n\nOnce you have pushed fixes, you can run `grain pr open` to open " +
+					"the pull request for your branch without waiting for your run to end."
+			}
+			prompt += fmt.Sprintf(
+				"\n\nEach push to %q reruns CI on the new commit automatically, and the merge "+
+					"queue will not merge a head whose CI has not passed: do not call "+
+					"`grain ci wait` or `wait_for_checks` to wait for CI to finish, and do not "+
+					"re-run whole suites in your sandbox.", branch)
+		}
+	} else if task.Target != nil {
 		// What the commit messages are for, which is discoverable from
 		// nowhere else at all: grain builds the pull request's title and
 		// description out of them (description.go), so they are the only
@@ -1018,14 +1044,20 @@ func runtimeSection(task model.Task, maxRuntime time.Duration) string {
 	s := fmt.Sprintf(
 		"\n\ngrain cancels this run after %s of wall-clock time and destroys the "+
 			"sandbox with it, so treat that as your budget rather than as a limit you "+
-			"will never reach. Time you spend blocked inside `grain ci wait` is not "+
-			"charged against that budget -- up to %s over the whole run, which is "+
-			"credited back to your deadline as you spend it, so %s is the longest this "+
-			"run can live. Waiting for the verdict on a push you have already made is "+
-			"therefore not a reason to skip the wait.",
-		humanDuration(maxRuntime), humanDuration(RunWaitCreditCap),
-		humanDuration(maxRuntime+RunWaitCreditCap),
+			"will never reach.",
+		humanDuration(maxRuntime),
 	)
+	if !isReviewTask(task) {
+		s += fmt.Sprintf(
+			" Time you spend blocked inside `grain ci wait` is not "+
+				"charged against that budget -- up to %s over the whole run, which is "+
+				"credited back to your deadline as you spend it, so %s is the longest this "+
+				"run can live. Waiting for the verdict on a push you have already made is "+
+				"therefore not a reason to skip the wait.",
+			humanDuration(RunWaitCreditCap),
+			humanDuration(maxRuntime+RunWaitCreditCap),
+		)
+	}
 	if task.Target != nil {
 		s += " Only what you have pushed survives that: a commit you never pushed, and " +
 			"an edit you never committed, go with the sandbox. Commit and push each " +
@@ -1515,8 +1547,17 @@ func sandboxDirsSection(checkoutDir, sandboxRoot string) string {
 // so it would be three tool names of noise. The other two hold for every
 // run in every sandbox.
 func sandboxToolingSection(hasTarget, grainCI bool) string {
+	return sandboxToolingSectionFor(hasTarget, grainCI, false)
+}
+
+func sandboxToolingSectionFor(hasTarget, grainCI, review bool) string {
 	s := "\n\n"
-	if hasTarget && grainCI {
+	if hasTarget && review {
+		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
+			"`grain ci checks <sha>`, `grain ci list`, `grain ci log`, `grain pr status` and " +
+			"`pull_request_status` rather than reaching for `gh`, which the stock sandbox image " +
+			"does not carry. "
+	} else if hasTarget && grainCI {
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
 			"`grain ci wait`, `grain pr status` and `grain pr base-status` rather than " +
 			"reaching for `gh`, which the stock sandbox image does not carry. "
@@ -2426,6 +2467,16 @@ type History struct {
 	// CommittedContext is the committed-context references verified in ./work
 	// or cloned into ./repos/<owner>/<repo> detached at their pinned SHA.
 	CommittedContext []ResolvedContextCheckout
+	// Context is the task's compaction cursor, handover version and
+	// current brief (model.TaskContext), and HandoverAge how stale its
+	// handover is; both zero for a task that has neither. See
+	// context_compaction.go.
+	Context     model.TaskContext
+	HandoverAge model.HandoverAge
+	// AutoCompactBytes is the prompt size past which a durable task's run
+	// is asked to compact first (Config.AutoCompactBytes); zero is
+	// DefaultAutoCompactBytes.
+	AutoCompactBytes int
 }
 
 func sessionSandboxSection(task model.Task, h History) string {
@@ -3048,7 +3099,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		return unprepared(err)
 	}
 
-	comments, err := store.Comments(ctx, task.ID)
+	comments, err := dispatchComments(ctx, store, task.ID)
 	if err != nil {
 		return unprepared(fmt.Errorf("orchestrator: reading %s's conversation: %w", task.ID, err))
 	}
@@ -3215,6 +3266,8 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
 	history.Resumed = ResumedFrom(ctx, store, previous)
+	loadTaskContext(ctx, store, task, &history)
+	history.AutoCompactBytes = cfg.autoCompactBytes()
 	history.ResumedUntil = ResumedUntil(previous)
 	if task.Target != nil {
 		// Advisory, like BaseIncident above: a row grain cannot read
@@ -3246,6 +3299,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		prompt += "\n\n" + section
 		dynamicSections = append(dynamicSections, section)
 	}
+	// A durable task whose whole prompt has crossed the auto-compaction
+	// threshold is asked to compact on its next run even if this one's
+	// sections stayed under it (context_compaction.go).
+	recordAutoCompaction(ctx, store, cfg, task, len(prompt))
 
 	var result *agent.Result
 	var runErr error
@@ -3763,7 +3820,16 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			if session == "" {
 				session = runCfg.ResumeSession
 			}
-			lastTurnForHandover(ctx, store, cfg, framework, runCfg, task, session)
+			lastTurnForHandover(ctx, store, cfg, framework, runCfg, task, session, contextHandoverPrompt)
+		} else if owesHandover(task, result, end.suspend) && !handoverWrittenSince(ctx, store, task.ID, agentStartedAt) {
+			session := resumableSession
+			if session == "" {
+				session = recordedEarly
+			}
+			if session == "" {
+				session = runCfg.ResumeSession
+			}
+			lastTurnForHandover(ctx, store, cfg, framework, runCfg, task, session, requiredHandoverPrompt)
 		}
 		outcome, detail, runErr = end.outcome, end.detail, end.runErr
 		unmatched, burstRuns, burstDetail = end.unmatched, end.burstRuns, end.burstDetail
@@ -3960,8 +4026,14 @@ func capacityDetail(capacity *agent.CapacityError) string {
 // the clone's credential, say -- which is the host's doing and is recorded
 // as model.EnvironmentOutcome, in the words that say how to renew them. A setup
 // step's error may have crossed a process (the git proxy answering a
-// clone), so the refusal is also recognised by its text.
+// clone), so the refusal is also recognised by its text. A clone the git
+// proxy refused because the host's own login for a git host has lapsed
+// (hostLoginLapsedError) is the same finding about a different login.
 func setupEnding(err error, outcome, detail string) (string, string) {
+	var lapsed *hostLoginLapsedError
+	if errors.As(err, &lapsed) {
+		return model.EnvironmentOutcome, lapsed.detail()
+	}
 	if expired, ok := authfix.As(authfix.Wrap(err, "", "")); ok {
 		return model.EnvironmentOutcome, expired.Error()
 	}

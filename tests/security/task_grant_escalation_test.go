@@ -729,10 +729,11 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 	}
 }
 
-// knownGapSandboxShapeCeiling tracks the missing per-role / agent upper bound on
-// per-task sandboxCpus, sandboxMemoryMb, and sandboxDiskGb (validateSandboxShape
-// enforces only >= 1 CPU, >= 128 MB RAM, >= 0 GB disk).
-const knownGapSandboxShapeCeiling = true
+// knownGapSandboxShapeCeiling tracked the missing per-role / agent upper
+// bound on per-task sandboxCpus, sandboxMemoryMb, and sandboxDiskGb. It is
+// closed: model.SandboxShapeLimits holds every caller to a deployment-wide
+// maximum and a limited role to its own ceiling (pkg/ui/sandbox_shape_limits.go).
+const knownGapSandboxShapeCeiling = false
 
 func TestPath1KnownGapPerTaskSandboxShapeUncapped(t *testing.T) {
 	rig := newEscalationRig(t)
@@ -746,6 +747,153 @@ func TestPath1KnownGapPerTaskSandboxShapeUncapped(t *testing.T) {
 		t.Skipf("known gap: grain/contributor filed 128-CPU / 512-GiB / 4-TiB task (%d); see follow-up task for sandbox shape ceilings", code)
 	case accepted:
 		t.Fatalf("grain/contributor filed uncapped 128-CPU / 512-GiB / 4-TiB sandbox shape: %s", body)
+	case code != http.StatusForbidden && code != http.StatusBadRequest:
+		t.Fatalf("grain/contributor 128-CPU / 512-GiB / 4-TiB filing = %d %s, want a 403 or 400 refusal", code, body)
+	}
+}
+
+// TestPath1SandboxShapeCeilings holds the sandbox shape ceilings on every
+// route that can set or start a shape: the deployment maximum binds the
+// operator too (400), a limited role is held to its own ceiling on create,
+// PATCH, approve and run-now (403), an agent cannot use the API to hand
+// a task a larger sandbox than its own, and an agent's proposal above its
+// proposer's sandbox is approved only by an unlimited role.
+func TestPath1SandboxShapeCeilings(t *testing.T) {
+	rig := newEscalationRig(t,
+		model.APIScopeSet{
+			Name:   "widgets-admin",
+			Scopes: []string{"tasks:read", "tasks:write", "tasks:admin", "dispatch:write", "ci:read"},
+			Repos:  []string{"acme/widgets"},
+		},
+	)
+	rig.allow("user:wadmin@example.com", "widgets-admin")
+	ctx := context.Background()
+	cfg, err := rig.store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SandboxShapeLimits = model.SandboxShapeLimits{
+		Max: model.SandboxShape{CPUs: 16, MemoryMB: 65536, DiskGB: 200},
+		Roles: map[string]model.SandboxShape{
+			"grain/contributor": {CPUs: 4, MemoryMB: 16384},
+			"widgets-admin":     {CPUs: 8},
+		},
+	}
+	if err := rig.store.PutConfig(ctx, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	file := func(who, body string) (int, ui.Task) {
+		t.Helper()
+		code, raw := rig.callAs(who, http.MethodPost, "/api/tasks", body)
+		var tk ui.Task
+		if code == http.StatusCreated {
+			if err := json.Unmarshal([]byte(raw), &tk); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return code, tk
+	}
+
+	// The deployment maximum binds an unlimited role too, and says so.
+	code, raw := rig.callAs("ops@example.com", http.MethodPost, "/api/tasks",
+		`{"title":"over max","repo":"acme/widgets","sandboxCpus":32}`)
+	if code != http.StatusBadRequest || !strings.Contains(raw, "maximum") {
+		t.Fatalf("operator filing 32 CPUs over a 16-CPU maximum = %d %s, want 400 naming the maximum", code, raw)
+	}
+	if code, _ := file("ops@example.com", `{"title":"at max","repo":"acme/widgets","sandboxCpus":16,"sandboxDiskGb":200}`); code != http.StatusCreated {
+		t.Fatalf("operator filing at the maximum = %d, want 201", code)
+	}
+
+	// A limited role is held to its own ceiling, not clamped.
+	code, raw = rig.callAs("contrib@example.com", http.MethodPost, "/api/tasks",
+		`{"title":"over role","repo":"acme/widgets","sandboxCpus":8}`)
+	if code != http.StatusForbidden || !strings.Contains(raw, "ceiling") {
+		t.Fatalf("contributor filing 8 CPUs over a 4-CPU role ceiling = %d %s, want 403 naming the ceiling", code, raw)
+	}
+	if code, _ := rig.callAs("contrib@example.com", http.MethodPost, "/api/tasks",
+		`{"title":"over role mem","repo":"acme/widgets","sandbox_memory_mb":32768}`); code != http.StatusForbidden {
+		t.Fatalf("contributor filing 32 GiB over a 16-GiB role ceiling (snake_case key) = %d, want 403", code)
+	}
+	// A dimension the role entry leaves at zero falls back to the maximum.
+	code, small := file("contrib@example.com", `{"title":"within role","repo":"acme/widgets","sandboxCpus":4,"sandboxDiskGb":100}`)
+	if code != http.StatusCreated {
+		t.Fatalf("contributor filing within its ceiling = %d, want 201", code)
+	}
+	if code, raw := rig.callAs("contrib@example.com", http.MethodPatch, "/api/tasks/"+small.ID, `{"sandboxCpus":12}`); code != http.StatusForbidden {
+		t.Fatalf("contributor PATCH to 12 CPUs over its ceiling = %d %s, want 403", code, raw)
+	}
+	if code, raw := rig.callAs("ops@example.com", http.MethodPatch, "/api/tasks/"+small.ID, `{"sandboxCpus":64}`); code != http.StatusBadRequest {
+		t.Fatalf("operator PATCH to 64 CPUs over the maximum = %d %s, want 400", code, raw)
+	}
+
+	// Approve and run-now of a stored task above the role's ceiling.
+	code, big := file("ops@example.com", `{"title":"operator big","repo":"acme/widgets","sandboxCpus":12}`)
+	if code != http.StatusCreated {
+		t.Fatalf("operator filing 12 CPUs = %d, want 201", code)
+	}
+	for _, route := range []string{"/approve", "/run-now"} {
+		if c, b := rig.callAs("wadmin@example.com", http.MethodPost, "/api/tasks/"+big.ID+route, "{}"); c != http.StatusForbidden {
+			t.Errorf("widgets-admin %s of a 12-CPU task over its 8-CPU ceiling = %d %s, want 403", route, c, b)
+		}
+	}
+
+	// A stored task above the deployment maximum (filed before it was
+	// lowered) is not approved by anybody until it is brought down.
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := rig.store.PutTask(ctx, model.Task{
+		ID: "930", Intent: model.IntentImplement, Title: "stale huge", Target: &widgets,
+		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 64,
+		Origin: model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{"/approve", "/run-now"} {
+		if c, b := rig.callAs("ops@example.com", http.MethodPost, "/api/tasks/930"+route, "{}"); c != http.StatusBadRequest {
+			t.Errorf("operator %s of a 64-CPU task over the 16-CPU maximum = %d %s, want 400", route, c, b)
+		}
+	}
+
+	// An agent's proposal above its proposer's sandbox waits for an
+	// unlimited role: a limited one with tasks:admin cannot approve it.
+	agentOrigin := model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP}}, Reason: model.ReasonDirect}
+	if err := rig.store.PutTask(ctx, model.Task{
+		ID: "920", Intent: model.IntentImplement, Title: "parent", Target: &widgets,
+		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 2,
+		Origin: agentOrigin, Approval: &agentOrigin.Attribution,
+		Grants: []model.Grant{
+			{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
+			{Capability: "api:tasks:write@acme/widgets", Via: model.GrantByLabel},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.store.PutTask(ctx, model.Task{
+		ID: "921", Intent: model.IntentImplement, Title: "bigger child", Target: &widgets,
+		Writes: []model.WriteTarget{{Repo: widgets}}, Binding: model.BindingDirective, SandboxCPUs: 6,
+		Links: []model.Link{{Kind: model.LinkProposedBy, Target: "920"}},
+		Origin: model.Origin{Attribution: model.Attribution{
+			Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: "920"},
+		}, Reason: model.ReasonProposal},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if c, b := rig.callAs("wadmin@example.com", http.MethodPost, "/api/tasks/921/approve", "{}"); c != http.StatusForbidden || !strings.Contains(b, "larger sandbox") {
+		t.Fatalf("widgets-admin approving a 6-CPU proposal from a 2-CPU proposer = %d %s, want 403 naming the larger sandbox", c, b)
+	}
+	if c, b := rig.callAs("ops@example.com", http.MethodPost, "/api/tasks/921/approve", "{}"); c != http.StatusOK {
+		t.Fatalf("operator approving the 6-CPU proposal = %d %s, want 200", c, b)
+	}
+
+	// An agent cannot use the API to file a task larger than its own.
+	if err := rig.store.StartRun(ctx, model.Run{ID: "run-920-1", TaskID: "920", Sandbox: "sb-920", Attempt: 1, StartedAt: time.Now()}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if c, b := rig.callAgent("920", http.MethodPost, "/api/tasks", `{"title":"bigger","repo":"acme/widgets","sandboxCpus":8}`); c != http.StatusForbidden || !strings.Contains(b, "larger sandbox") {
+		t.Fatalf("agent filing 8 CPUs from a 2-CPU task = %d %s, want 403", c, b)
+	}
+	if c, b := rig.callAgent("920", http.MethodPost, "/api/tasks", `{"title":"same","repo":"acme/widgets","sandboxCpus":2}`); c == http.StatusForbidden {
+		t.Fatalf("agent filing its own 2-CPU size = %d %s, want it not refused for its shape", c, b)
 	}
 }
 
@@ -1352,7 +1500,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 // knownGapAgentCrossTaskPromptSteering tracks cross-task prompt-injection /
 // execution-steering by an agent holding non-dangerous api:tasks:write on a
 // repository against another task in that same repository carrying wider grants.
-const knownGapAgentCrossTaskPromptSteering = true
+const knownGapAgentCrossTaskPromptSteering = false
 
 func TestPath4KnownGapAgentCrossTaskPromptSteering(t *testing.T) {
 	rig := newEscalationRig(t)
@@ -1772,7 +1920,7 @@ func TestPath6NonAdminScheduleConsoleSessionAndLivePTYCeilings(t *testing.T) {
 		})
 	}
 
-	inputBody := fmt.Sprintf(`{"data":%q}`, base64.StdEncoding.EncodeToString([]byte("echo hi\n")))
+	inputBody := fmt.Sprintf(`{"input":%q}`, base64.StdEncoding.EncodeToString([]byte("echo hi\n")))
 	if c, b := rig.callAs("wsess@example.com", http.MethodGet, "/api/console/"+privPTYTask.ID+"/output", ""); c != http.StatusForbidden {
 		t.Errorf("wsess GET /api/console/%s/output on gcp-key task = %d (%s), want 403", privPTYTask.ID, c, b)
 	}

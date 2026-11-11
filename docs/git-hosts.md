@@ -294,6 +294,32 @@ One team, two fake GitHub instances and a plain git server:
 - legacy single-credential teams and host-less repos behave exactly as
   before.
 
+This is `tests/e2e/git_hosts_lifecycle_test.go` (grain/task-4345). One
+deployment holds acme/widgets on four hosts side by side: the default
+host, a second GitHub-kind host on its own token and base URL, a plain
+git server (kind `git`, no forge API, added once more with a clone URL),
+and a command-backed forge (`gitproxytest`'s `forgecli` source on
+`depot.code.forge.test`, reached only through `forgecli api`, whose REST
+answers carry a host-less `full_name`). For each host it adds and re-adds
+the repository and changes its settings; files a task through
+`POST /api/tasks` that reads and writes the same owner/name on other hosts;
+dispatches it through a real `dispatch.Cycle`; and clones and pushes
+through the real git proxy, checking that the host was sent only its own
+credential and that no other host was sent anything. A state-repo export
+and import then keeps every repository, target, `reads:` and `writes:`
+entry on its host. Its failure cases are the forge's lapsed login (the
+login page, which must give the source's login fix rather than a 404) and
+401 (which must say to renew the login), and a host's connection removed
+while a task on it is running (a refusal naming the host, with nothing
+sent anywhere). It runs in the per-PR `Tests` workflow's `go e2e` job: it
+takes about two seconds.
+
+Opening the pull request, its status and checks, the merge queue and grain
+CI on a command-backed host go through the daemon's forge router, and are
+`pkg/daemon/forgeroute_test.go`'s. Adding and removing connections and
+repositories is `pkg/ui/repo_connection_lifecycle_test.go`'s
+(grain/task-4249).
+
 ### 9. SSH keys (task 2366)
 
 An SSH key is the third auth type, `<name>.ssh.json` (`pkg/gitproxy/sshkey.go`):

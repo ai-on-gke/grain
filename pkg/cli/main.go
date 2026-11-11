@@ -426,6 +426,9 @@ Commands:
   run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
+  compact [-handover-file f] <id>      fold a task's conversation into a handover for later prompts
+  brief [-file f -reason r] <id>       show or replace a task's current brief and handover age
+  rollover <id>                        close a durable task as rolled over to a fresh successor
   config                               show the capabilities this deployment offers
   settings [flags]                     show, or change, the daemon's stored configuration (bwsalmon/agents#320)
   sandbox-budget                       whether one sandbox of this deployment's shape fits in its sandbox budget,
@@ -649,8 +652,7 @@ func runCLI(args []string) error {
 		c.HTTP, c.Socket = cliSocketHTTPClient(sock, *connectTimeout, *callTimeout), sock
 		target.tokenSource = "the API socket " + sock
 	}
-	err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
-	if err == nil {
+	if err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target); err == nil {
 		warnIfCommandSkillStale(rest[0], sel)
 	}
 	return err
@@ -687,7 +689,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapability(ctx, c, out, cmdArgs)
 	case "comment":
 		return cmdComment(ctx, c, out, cmdArgs)
-	case "reply", "inbox", "wait", "logs":
+	case "reply", "inbox", "wait", "logs", "compact", "brief", "rollover":
 		return externalCommands[cmd](ctx, c, out, cmdArgs)
 	case "close", "delete":
 		return cmdClose(ctx, c, out, cmdArgs)

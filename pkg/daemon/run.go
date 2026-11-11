@@ -376,6 +376,10 @@ func Run(ctx context.Context, cfg Config) error {
 			"it, the sync loop retries every %s, and the UI's State pane says so until one works. "+
 			"The load reported: %v", stateRepo.Dir(), stateSyncInterval, loadErr)
 	}
+	// The hub's name for this deployment, applied once the state
+	// repository's grain_config is in, so a name set there (or in
+	// Settings) is the one that is kept.
+	adoptDefaultEnvironmentName(ctx, store, cfg.DefaultEnvironmentName)
 	// The encrypted-secrets backup is refused to every sandbox. The set is
 	// live so changing that backup through the UI takes effect immediately.
 	forbidden := gitproxy.NewForbiddenSet()
@@ -844,6 +848,11 @@ func Run(ctx context.Context, cfg Config) error {
 	// moved onto it.
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
+	}
+	// Also before the capability servers start, so each starts with the
+	// $secret: references its typed-in credentials became.
+	if err := migrateLiteralCredentials(ctx, store, secretStore); err != nil {
+		log.Printf("daemon: moving typed-in capability server credentials into the secrets store: %v", err)
 	}
 	// transcriptDir is where a run's own agent.Framework may mirror its
 	// transcript-in-progress live, and where the UI server below reads one
