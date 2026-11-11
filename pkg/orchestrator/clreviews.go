@@ -196,7 +196,11 @@ func clReviewTaskBody(tmpl model.Template, task model.Task, target string, snaps
 			"one -- written as a question with the answer you recommend. grain saves them on "+
 			"%s as unpublished drafts and puts them to task %s's owner, whose reply sends "+
 			"another run to carry out their decision. A review that records nothing passes, "+
-			"and its pass is what lets snapshot %d be submitted.",
+			"and its pass is what lets snapshot %d be submitted.\n\n"+
+			"**Testing and CI.** Read the change's existing presubmit status (`pull_request_status`) "+
+			"rather than re-running broad test suites or calling `wait_for_checks`. Run a narrowly "+
+			"targeted test only when needed to confirm or refute a specific finding, and say which "+
+			"tests you ran in your closing note (`comment_on_issue`).",
 		task.ID, task.Title, target, snapshot, target, task.ID, snapshot)
 	return b.String()
 }

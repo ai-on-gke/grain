@@ -368,10 +368,11 @@ func withNamedSecrets(secrets map[string]string) worldOption {
 }
 
 // hostlessRepoNames answers every repository the way a forge's REST API
-// does: its full_name, owner/name, with no host in it.
+// does: its full_name, owner/name, with no host in it, whichever host it
+// was asked about.
 type hostlessRepoNames struct{}
 
-func (hostlessRepoNames) RepoFullName(owner, name string) (string, error) {
+func (hostlessRepoNames) RepoFullName(_, owner, name string) (string, error) {
 	return owner + "/" + name, nil
 }
 

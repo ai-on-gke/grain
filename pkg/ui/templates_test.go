@@ -433,6 +433,29 @@ func TestCreateTemplateLeavesTheBindingEmptyByDefault(t *testing.T) {
 	}
 }
 
+// A base typed into a new template with no repo was dropped without a
+// word, though editing the same template refuses the pair (2026-11-11
+// recurring and composed work walkthrough): creating it is refused the
+// same way, and nothing is saved.
+func TestCreateTemplateRefusesABaseWithNoRepo(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	_, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{Name: "x", Title: "x", Base: "main"})
+	var ve *ui.ValidationError
+	if !errors.As(err, &ve) || !strings.Contains(err.Error(), "base needs a repo") {
+		t.Fatalf("err = %v, want the validation error UpdateTemplate gives", err)
+	}
+	list, err := c.ListTemplates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tmpl := range list {
+		if tmpl.Name == "x" {
+			t.Errorf("template %q was saved anyway", tmpl.ID)
+		}
+	}
+}
+
 func TestCreateTemplateRejectsAMalformedRepo(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)

@@ -15,6 +15,7 @@
 import { useState } from "react";
 import { Alert, Button, Stack, TextField } from "@mui/material";
 import api from "../../api.js";
+import AccessGate from "../AccessGate.jsx";
 import {
   connectionLabel,
   defaultModels,
@@ -344,17 +345,20 @@ export default function Declared({ t, config, act }) {
         >
           <span data-testid="task-owner">{t.owner}</span>
           {act && (
-            <Button
-              size="small"
-              aria-label="Change owner"
-              onClick={() => {
-                setOwnerDraft(t.owner || "");
-                setEditingOwner(true);
-              }}
-              sx={{ minWidth: 0, px: 0.75, py: 0, fontSize: "0.75rem" }}
-            >
-              Change
-            </Button>
+            // The owner is PATCHed (tasks:write), which a viewer is refused.
+            <AccessGate scope="tasks:write" repo={t.repo}>
+              <Button
+                size="small"
+                aria-label="Change owner"
+                onClick={() => {
+                  setOwnerDraft(t.owner || "");
+                  setEditingOwner(true);
+                }}
+                sx={{ minWidth: 0, px: 0.75, py: 0, fontSize: "0.75rem" }}
+              >
+                Change
+              </Button>
+            </AccessGate>
           )}
         </Stack>
       ),

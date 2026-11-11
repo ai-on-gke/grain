@@ -348,6 +348,7 @@ export const ROUTE_SCOPES = {
   "POST /api/tasks/{id}/resume-later": "tasks:write",
   "POST /api/tasks/{id}/retry": "tasks:write",
   "POST /api/tasks/{id}/retry-merge": "merge:write",
+  "POST /api/tasks/{id}/rollover": "dispatch:write",
   "POST /api/tasks/{id}/run-now": "dispatch:write",
   "POST /api/tasks/{id}/sandbox/recreate": "tasks:admin",
   "POST /api/tasks/{id}/staged-attachments": null,

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -61,6 +62,15 @@ type AccessRequestItemView struct {
 	Held bool `json:"held,omitempty"`
 	// Error is why the item could not be granted as it stands.
 	Error string `json:"error,omitempty"`
+	// Substitute is what granting this item grants instead, for an item
+	// that cannot be granted as it stands but stands for one that can:
+	// grain#ci on a repository grain CI does not gate, whose substitute
+	// is api:ci-read@<repo> (grainci.SubstituteRequest). Error still says
+	// why the item itself cannot be granted; the card offers the
+	// substitute or Deny, and GrantAccessRequest grants it in the item's
+	// place. SubstituteGrant is it normalized, for the chip.
+	Substitute      *model.AccessRequestItem `json:"substitute,omitempty"`
+	SubstituteGrant string                   `json:"substituteGrant,omitempty"`
 }
 
 // AccessHolds is what a task already holds, for the card's context.
@@ -144,6 +154,9 @@ func (c *Client) checkAccessItem(ctx context.Context, task model.Task, it model.
 		view.Held = string(task.NetworkAccess) == it.Access
 		return view
 	case model.AccessGrant:
+		if grainci.IsGrant(it.Capability) {
+			return c.checkGrainCIAccessItem(ctx, task, view)
+		}
 		checks, err := c.CheckCapabilityGrants(ctx, []GrantRequest{{Capability: it.Capability, With: it.With}})
 		if err != nil {
 			return fail(err)
@@ -169,6 +182,55 @@ func (c *Client) checkAccessItem(ctx context.Context, task model.Task, it model.
 		return view
 	}
 	return fail(fmt.Errorf("kind %q is not read, write, grant or network", it.Kind))
+}
+
+// checkGrainCIAccessItem judges a request for grain#ci (or the retired
+// grain-ci), which nobody grants by hand: the target repository's CI Mode
+// does (grainci.Refusal). CheckCapabilityGrants refuses it as every
+// grants editor does; this says what is true for this task's repository.
+//
+// On a repository grain CI gates the task holds it already (or will on
+// its next filing, model.adjustGrainCIGrant), so the item is Held and a
+// request_access naming it is refused as asking for what the task has.
+//
+// On any other repository it is refused, not rewritten: the run is told
+// to ask for api:ci-read@<repo> itself, or that `grain ci wait` and
+// `grain pr open` need nothing, so what the person is shown is what the
+// run chose to ask for. A request parked before this check existed (or
+// relayed by a run with no checker) still holds grain#ci, so the card
+// offers the substitute in its place (Substitute) rather than a Grant
+// that could only fail.
+func (c *Client) checkGrainCIAccessItem(ctx context.Context, task model.Task, view AccessRequestItemView) AccessRequestItemView {
+	if task.Target == nil || task.Target.IsZero() {
+		view.Error = grainci.Refusal("", "")
+		return view
+	}
+	var repoCfg *model.RepoConfig
+	if c.Store != nil {
+		cfg, err := c.Store.GetRepoConfig(ctx, *task.Target)
+		if err != nil {
+			view.Error = err.Error()
+			return view
+		}
+		repoCfg = cfg
+	}
+	mode := grainci.ModeOf(repoCfg, *task.Target)
+	repo := task.Target.String()
+	if mode == model.CIModeGrain {
+		view.Grant = grainci.Grant
+		view.Held = true
+		return view
+	}
+	view.Error = grainci.Refusal(mode, repo)
+	capability, with := grainci.SubstituteRequest(repo)
+	sub := model.AccessRequestItem{Kind: model.AccessGrant, Capability: capability, With: with}
+	if subView := c.checkAccessItem(ctx, task, sub); subView.Error == "" && !subView.Held {
+		view.Substitute = &sub
+		view.SubstituteGrant = subView.Grant
+	} else if subView.Held {
+		view.Error += fmt.Sprintf(". This task holds %s already", subView.Grant)
+	}
+	return view
 }
 
 // CheckAccessRequest judges the items task id's run is asking for, as a
@@ -304,6 +366,11 @@ func (c *Client) GrantAccessRequest(ctx context.Context, id string, decision Acc
 	var granted, declined []model.AccessRequestItem
 	for i, it := range req.Items {
 		if chosen[i] {
+			// An item with a substitute (grain#ci on a repository grain CI
+			// does not gate) is granted, and recorded, as the substitute.
+			if view := c.checkAccessItem(ctx, *task, it); view.Substitute != nil {
+				it = *view.Substitute
+			}
 			granted = append(granted, it)
 		} else {
 			declined = append(declined, it)

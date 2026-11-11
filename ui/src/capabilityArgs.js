@@ -65,10 +65,14 @@ const SECRET_NAME =
 // a secret: by its name, or by the schema saying so. A string confined to
 // an enum is not one whatever it is called -- its values are the
 // schema's own, fixed list (gcp's credential_source: configured or
-// ambient) -- unless the schema marks it secret.
+// ambient) -- unless the schema marks it secret. Nor is a boolean or a
+// number: it cannot hold one, and hiding it hid switches such as figma's
+// allow_sandbox_token from Settings, with no way to set them
+// (2026-11-11 walkthrough).
 export function isSecretLooking(name, schema) {
   if (schema && (schema.writeOnly === true || schema.format === "password"))
     return true;
+  if (["boolean", "integer", "number"].includes(schema?.type)) return false;
   if (Array.isArray(schema?.enum) && schema.enum.length > 0) return false;
   if (Array.isArray(schema?.items?.enum) && schema.items.enum.length > 0)
     return false;
@@ -176,6 +180,21 @@ export function isStringMap(root, schema) {
   if (!ap || typeof ap !== "object" || ap.type !== "string") return false;
   return Object.keys(ap).every(
     (k) => ANNOTATIONS.has(k) || KIND_KEYWORDS.string.includes(k),
+  );
+}
+
+// isFixedList is an array that can hold only one set of items: unique
+// items from an enum, as many of them as the enum has (repo#write's refs,
+// every branch and every tag together). The form draws it as fixed chips.
+export function isFixedList(root, schema) {
+  const s = deref(root, schema);
+  if (!s || fieldKind(s) !== "array" || !s.uniqueItems) return false;
+  const items = deref(root, s.items);
+  const options = Array.isArray(items?.enum) ? items.enum : null;
+  if (!options || options.length === 0) return false;
+  return (
+    s.minItems === options.length &&
+    (s.maxItems === undefined || s.maxItems === options.length)
   );
 }
 
@@ -296,7 +315,10 @@ export function initialValue(root, schema, nested = false, required = false) {
     if (nested && !required && Object.keys(out).length === 0) return undefined;
     return out;
   }
-  if (kind === "array") return required ? [] : undefined;
+  if (kind === "array") {
+    if (!required) return undefined;
+    return isFixedList(root, s) ? clone(deref(root, s.items).enum) : [];
+  }
   // An argument that is one of several kinds starts unset, for whoever
   // fills it in to pick; picking one (nested false) starts that kind.
   if (kind === "variant")
@@ -343,18 +365,27 @@ export function validateValue(
   };
   if (s.oneOf || s.anyOf) {
     const subs = s.oneOf || s.anyOf;
-    const matched = subs.filter(
-      (sub) =>
-        Object.keys(validateValue(root, sub, value, "", {}, depth + 1))
-          .length === 0,
-    ).length;
-    if (s.oneOf && matched !== 1)
+    const results = subs.map((sub, i) => ({
+      name: variantTitle(deref(root, sub), i),
+      errors: validateValue(root, sub, value, "", {}, depth + 1),
+    }));
+    const matched = results.filter((r) => Object.keys(r.errors).length === 0);
+    if (matched.length === 0) {
+      // Name every option and what keeps the value out of it, so the
+      // message says what to fill in rather than only that it is wrong.
+      const why = results
+        .map(
+          (r) =>
+            `${r.name}: ${Object.entries(r.errors)
+              .map(([k, msg]) => (k ? `${k} ${msg}` : msg))
+              .join(", ")}`,
+        )
+        .join("; ");
+      fail(`matches none of the options -- ${why}`);
+    } else if (s.oneOf && matched.length > 1)
       fail(
-        matched === 0
-          ? "matches none of the options"
-          : "matches more than one option",
+        `matches more than one option: ${matched.map((r) => r.name).join(", ")}`,
       );
-    if (s.anyOf && matched === 0) fail("matches none of the options");
     return errors;
   }
   if (s.type && !typeMatches(s.type, value)) {
@@ -436,6 +467,56 @@ export function validateValue(
     }
   }
   return errors;
+}
+
+// variantTitle is how option i of a oneOf/anyOf is named: its title,
+// its description, or its kind and number.
+export function variantTitle(schema, i) {
+  return (
+    schema?.title ||
+    schema?.description ||
+    `${schema?.type || "option"} ${i + 1}`
+  );
+}
+
+// pickVariant is which option of a oneOf/anyOf a value is shown under:
+// the first it is valid against, else the first object option declaring
+// every argument it has, else the first of its kind, else the first.
+export function pickVariant(root, options, value) {
+  if (value === undefined) return 0;
+  const valid = options.findIndex(
+    (o) => Object.keys(validateValue(root, o, value)).length === 0,
+  );
+  if (valid >= 0) return valid;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const keys = Object.keys(value);
+    const covers = options.findIndex(
+      (o) =>
+        fieldKind(o) === "object" &&
+        keys.length > 0 &&
+        keys.every((k) => k in (o.properties || {})),
+    );
+    if (covers >= 0) return covers;
+  }
+  const kind = options.findIndex((o) => fieldKind(o) && sameKind(o, value));
+  return kind < 0 ? 0 : kind;
+}
+
+function sameKind(schema, value) {
+  if ("const" in schema) return equal(schema.const, value);
+  if (schema.enum) return schema.enum.some((e) => equal(e, value));
+  switch (fieldKind(schema)) {
+    case "array":
+      return Array.isArray(value);
+    case "object":
+      return (
+        Boolean(value) && typeof value === "object" && !Array.isArray(value)
+      );
+    case "number":
+      return typeof value === "number";
+    default:
+      return typeof value === schema.type;
+  }
 }
 
 // formatValue is one argument's value as a chip shows it.
