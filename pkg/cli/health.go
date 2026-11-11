@@ -85,6 +85,13 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
+	if len(h.TargetRepoHostWarnings) > 0 {
+		fmt.Println("WARNING: target repositories missing their git host:")
+		for _, w := range h.TargetRepoHostWarnings {
+			fmt.Printf("  %s: %s\n", w.Repo, w.Message)
+		}
+		fmt.Println()
+	}
 	// Schedules that stopped running: a cron that comes due and is
 	// dropped every time looks exactly like one that is fine from
 	// everywhere else (the live model suites, two weeks dark).
@@ -132,7 +139,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.StaleSchedules) == 0 {
+		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.StaleSchedules) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return

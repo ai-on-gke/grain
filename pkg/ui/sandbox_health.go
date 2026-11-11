@@ -540,6 +540,10 @@ type SandboxHealthResponse struct {
 	// (capabilityServersDown). Absent while every server is attached or
 	// only waiting to be configured for the first time.
 	CapabilityServers []CapabilityServerDown `json:"capabilityServers,omitempty"`
+	// TargetRepoHostWarnings lists stored hostless TargetRepos entries that
+	// resolve to the default git host while matching repositories reachable
+	// only through a non-default-host git connection.
+	TargetRepoHostWarnings []TargetRepoHostMismatch `json:"targetRepoHostWarnings,omitempty"`
 	// Registry reports the deployment's connected-entry grain hub
 	// heartbeat status and any scope conflicts when registry self-registration
 	// is configured; nil when disabled.
@@ -1063,27 +1067,29 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
 			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
-			StaleSchedules: s.tasks.staleSchedules(r.Context())})
+			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+			StaleSchedules:         s.tasks.staleSchedules(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
-		Enabled:              true,
-		DispatchBlocked:      s.tasks.dispatchBlocked(),
-		StateRepoSync:        syncFailure,
-		HostCredentials:      hostCredentials,
-		SandboxImage:         s.tasks.sandboxImage(),
-		SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()),
-		SandboxGuest:         s.tasks.sandboxGuestPublishing(r.Context()),
-		BaseBranchGates:      s.tasks.baseBranchGates(r.Context()),
-		BaseBranchPublishing: s.tasks.baseBranchPublishing(r.Context()),
-		PackageCache:         s.tasks.packageCacheStats(),
-		CIHistory:            s.tasks.ciHistoryStorage(r.Context()),
-		Lifetime:             s.tasks.sandboxLifetime(r.Context()),
-		StandingSandboxes:    s.tasks.standingSandboxes(),
-		Counters:             healthCounterSections(),
-		CapabilityServers:    s.tasks.capabilityServersDown(),
-		Hub:                  s.tasks.hubHealth(r.Context()),
-		StaleSchedules:       s.tasks.staleSchedules(r.Context()),
+		Enabled:                true,
+		DispatchBlocked:        s.tasks.dispatchBlocked(),
+		StateRepoSync:          syncFailure,
+		HostCredentials:        hostCredentials,
+		SandboxImage:           s.tasks.sandboxImage(),
+		SandboxImageWarnings:   s.tasks.staleSandboxImagePins(r.Context()),
+		SandboxGuest:           s.tasks.sandboxGuestPublishing(r.Context()),
+		BaseBranchGates:        s.tasks.baseBranchGates(r.Context()),
+		BaseBranchPublishing:   s.tasks.baseBranchPublishing(r.Context()),
+		PackageCache:           s.tasks.packageCacheStats(),
+		CIHistory:              s.tasks.ciHistoryStorage(r.Context()),
+		Lifetime:               s.tasks.sandboxLifetime(r.Context()),
+		StandingSandboxes:      s.tasks.standingSandboxes(),
+		Counters:               healthCounterSections(),
+		CapabilityServers:      s.tasks.capabilityServersDown(),
+		Hub:                    s.tasks.hubHealth(r.Context()),
+		StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+		TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
