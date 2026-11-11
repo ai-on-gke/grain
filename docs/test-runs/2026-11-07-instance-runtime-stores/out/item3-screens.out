@@ -1,0 +1,45 @@
+PASS desktop-light general: Updates card links to https://registry.example.test/instances/acme
+PASS desktop-light general: no automatic-upgrade fields
+PASS desktop-light general: no horizontal overflow (0px)
+PASS desktop-light upgrade: notice links to https://registry.example.test/instances/acme
+PASS desktop-light upgrade: no Upgrade button in the upgrade section (the settings nav entry is a link-button named Upgrade)
+PASS desktop-light upgrade: Database Backend says PostgreSQL
+PASS desktop-light upgrade: Database Backend DSN carries no password
+PASS desktop-light upgrade: Database Backend is read-only (no buttons or fields)
+PASS desktop-light upgrade: link stays inside the notice
+PASS desktop-light upgrade: no horizontal overflow (0px)
+  desktop-light database card: database backend This deployment runs on PostgreSQL (postgres://grain:%2A%2A%2A%2A%2A%2A@127.0.0.1:4290/walk_i3?sslmode=disable).
+PASS desktop-dark general: Updates card links to https://registry.example.test/instances/acme
+PASS desktop-dark general: no automatic-upgrade fields
+PASS desktop-dark general: no horizontal overflow (0px)
+PASS desktop-dark upgrade: notice links to https://registry.example.test/instances/acme
+PASS desktop-dark upgrade: no Upgrade button in the upgrade section (the settings nav entry is a link-button named Upgrade)
+PASS desktop-dark upgrade: Database Backend says PostgreSQL
+PASS desktop-dark upgrade: Database Backend DSN carries no password
+PASS desktop-dark upgrade: Database Backend is read-only (no buttons or fields)
+PASS desktop-dark upgrade: link stays inside the notice
+PASS desktop-dark upgrade: no horizontal overflow (0px)
+  desktop-dark database card: database backend This deployment runs on PostgreSQL (postgres://grain:%2A%2A%2A%2A%2A%2A@127.0.0.1:4290/walk_i3?sslmode=disable).
+PASS phone-light general: Updates card links to https://registry.example.test/instances/acme
+PASS phone-light general: no automatic-upgrade fields
+PASS phone-light general: no horizontal overflow (0px)
+PASS phone-light upgrade: notice links to https://registry.example.test/instances/acme
+PASS phone-light upgrade: no Upgrade button in the upgrade section (the settings nav entry is a link-button named Upgrade)
+PASS phone-light upgrade: Database Backend says PostgreSQL
+PASS phone-light upgrade: Database Backend DSN carries no password
+PASS phone-light upgrade: Database Backend is read-only (no buttons or fields)
+PASS phone-light upgrade: link stays inside the notice
+PASS phone-light upgrade: no horizontal overflow (0px)
+  phone-light database card: database backend This deployment runs on PostgreSQL (postgres://grain:%2A%2A%2A%2A%2A%2A@127.0.0.1:4290/walk_i3?sslmode=disable).
+PASS phone-dark general: Updates card links to https://registry.example.test/instances/acme
+PASS phone-dark general: no automatic-upgrade fields
+PASS phone-dark general: no horizontal overflow (0px)
+PASS phone-dark upgrade: notice links to https://registry.example.test/instances/acme
+PASS phone-dark upgrade: no Upgrade button in the upgrade section (the settings nav entry is a link-button named Upgrade)
+PASS phone-dark upgrade: Database Backend says PostgreSQL
+PASS phone-dark upgrade: Database Backend DSN carries no password
+PASS phone-dark upgrade: Database Backend is read-only (no buttons or fields)
+PASS phone-dark upgrade: link stays inside the notice
+PASS phone-dark upgrade: no horizontal overflow (0px)
+  phone-dark database card: database backend This deployment runs on PostgreSQL (postgres://grain:%2A%2A%2A%2A%2A%2A@127.0.0.1:4290/walk_i3?sslmode=disable).
+all checks passed

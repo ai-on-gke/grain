@@ -149,15 +149,15 @@ ARG DOCKER_CLI_IMAGE=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e5624
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a
 # distroless base with nothing else in it), and this pin is the whole of
-# what decides which bytes it is. This cosign only ever verifies, so it
-# is a v3 release while scripts/release-images.sh still signs with v2
-# (its COSIGN_VERSION default): v3 verifies the legacy `.sig`
-# signatures v2 writes, with the same flags and the same JSON on stdout
-# the Kubernetes upgrade path reads its digest from. The signer has to
-# keep writing that legacy format for as long as images carrying the
-# old v2.4.1 verifier are in the field -- v2.4.1 cannot find a v3
-# new-format bundle -- so a bump of one is the moment to look at the
-# other, but they need not move together.
+# what decides which bytes it is. This cosign only ever verifies. It is
+# the same v3 release scripts/release-images.sh signs with (its
+# COSIGN_VERSION default), which writes the legacy `.sig` signature
+# (--new-bundle-format=false) rather than v3's new-format bundle: images
+# carrying the old v2.4.1 verifier are still in the field and cannot find
+# the new format. v3 verifies the legacy format with the same flags and
+# the same JSON on stdout the Kubernetes upgrade path reads its digest
+# from. A bump of one is the moment to look at the other, but they need
+# not move together.
 ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli

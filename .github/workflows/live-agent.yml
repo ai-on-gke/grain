@@ -105,6 +105,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Install the agy CLI
+        id: install
         run: |
           set -euo pipefail
           cli_version="$(sed -n 's/^ARG AGY_CLI_VERSION=//p' Dockerfile | head -n1)"
@@ -130,14 +131,14 @@ jobs:
             -count=1 -v -timeout 12m
 
       - name: Measure agy's cross-dispatch resume
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           go test ./pkg/agent/antigravity/ \
             -run 'TestLiveAgy(Resumes|OpensANewConversation)' \
             -count=1 -v -timeout 10m
 
       - name: Check agy still honours the auto-update switch
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           go test ./pkg/agent/antigravity/ \
             -run TestLiveAgyDoesNotReplaceItsOwnBinary \
@@ -148,7 +149,7 @@ jobs:
       # including TestLiveAgyAcceptsTheControllerToolsOfAnAPIGrant, the
       # api:* grant case that hands Gemini the grain-controller tools.
       - name: Live agy run
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           set -uo pipefail
           for attempt in 1 2; do
