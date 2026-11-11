@@ -39,11 +39,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
@@ -72,7 +74,7 @@ func binaries(t *testing.T) map[string]string {
 
 func TestReleasedAgentdsWorkWithThisDaemon(t *testing.T) {
 	for label, bin := range binaries(t) {
-		t.Run(label, func(t *testing.T) { exercise(t, bin) })
+		t.Run(label, func(t *testing.T) { exercise(t, label, bin) })
 	}
 }
 
@@ -186,7 +188,7 @@ type agent struct {
 	log    *bytes.Buffer
 }
 
-func exercise(t *testing.T, bin string) {
+func exercise(t *testing.T, label, bin string) {
 	// A short root: the agent's unix socket must fit in sun_path.
 	root, err := os.MkdirTemp("", "agc")
 	if err != nil {
@@ -265,6 +267,27 @@ func exercise(t *testing.T, bin string) {
 	}
 	stageRoot := peer.StageRoot
 
+	t.Run("logins status", func(t *testing.T) {
+		if peer.Has(hostd.FeatureLogins) {
+			deadline := time.Now().Add(10 * time.Second)
+			for !ctl.current().Status().LoginsKnown {
+				if time.Now().After(deadline) {
+					t.Fatalf("daemon never marked empty logins known for host with FeatureLogins: %+v", ctl.current().Status())
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if got := ctl.current().Status().Logins; len(got) != 0 {
+				t.Fatalf("status logins = %q, want none", got)
+			}
+		} else {
+			// Give learnLogins time to complete its Hello stream against an older host.
+			time.Sleep(100 * time.Millisecond)
+			if st := ctl.current().Status(); st.LoginsKnown {
+				t.Fatalf("daemon marked logins known for an older host without FeatureLogins: %+v", st)
+			}
+		}
+	})
+
 	t.Run("list", func(t *testing.T) {
 		offers, err := c.Offers(ctx)
 		if err != nil {
@@ -303,6 +326,73 @@ func exercise(t *testing.T, bin string) {
 		}
 	})
 
+	t.Run("env_open", func(t *testing.T) {
+		baseAllowlist, err := os.ReadFile(allowlist)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.WriteFile(allowlist, baseAllowlist, 0o644) })
+
+		if label == "head" && !peer.Has(hostd.FeatureEnvOpen) {
+			t.Fatalf("head build hello %+v does not advertise %q", peer, hostd.FeatureEnvOpen)
+		}
+		if !peer.Has(hostd.FeatureEnvOpen) {
+			// An older host does not advertise env_open: snippets rendered for it
+			// must omit "*", "~/" and x- keys so it still accepts the file.
+			snippet := "clis:\n" + hostd.CLIEntryYAML("fake", cli, home, []string{stage}, []string{"COMPAT_MARK"}, nil, peer)
+			if strings.Contains(snippet, `"*"`) || strings.Contains(snippet, "~/") {
+				t.Fatalf("snippet for host without env_open used env_open syntax:\n%s", snippet)
+			}
+			if err := os.WriteFile(allowlist, []byte(snippet), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if _, err := c.Run(ctx, hostd.Request{Kind: hostd.KindCLI, Name: "fake", Env: []string{"COMPAT_MARK=legacy-ok"}, Dir: stageRoot}, nil, &out, io.Discard); err != nil {
+				t.Fatalf("older agent refused the closed-env snippet rendered for it: %v\n%s", err, snippet)
+			}
+			if !strings.Contains(out.String(), "env:legacy-ok") {
+				t.Errorf("stdout %q lacks env:legacy-ok", out.String())
+			}
+			return
+		}
+
+		homeBin := filepath.Join(home, ".local", "bin", "fake-cli")
+		if err := os.MkdirAll(filepath.Dir(homeBin), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(homeBin, []byte(fakeCLI), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		openAllowlist := "x-compat-note: ignored\nclis:\n" +
+			hostd.CLIEntryYAML("fake", homeBin, home, []string{stage}, []string{"COMPAT_MARK"}, nil, peer) +
+			"    x-entry-note: ignored\n"
+		if !strings.Contains(openAllowlist, `env: ["*"]`) || !strings.Contains(openAllowlist, "path: ~/.local/bin/fake-cli") {
+			t.Fatalf("snippet for env_open host did not use env: [\"*\"] and ~/:\n%s", openAllowlist)
+		}
+		if err := os.WriteFile(allowlist, []byte(openAllowlist), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if _, err := c.Run(ctx, hostd.Request{
+			Kind: hostd.KindCLI,
+			Name: "fake",
+			Env:  []string{"COMPAT_MARK=open-ok", "UNLISTED_FUTURE_VAR=1"},
+			Dir:  stageRoot,
+		}, nil, &out, io.Discard); err != nil {
+			t.Fatalf("env_open run failed: %v", err)
+		}
+		if !strings.Contains(out.String(), "env:open-ok") {
+			t.Errorf("stdout %q lacks env:open-ok", out.String())
+		}
+		for _, denied := range []string{"HOME=" + stageRoot, "LD_PRELOAD=" + homeBin, "PYTHONPATH=" + stageRoot, "NODE_OPTIONS=--eval=1"} {
+			_, err := c.Run(ctx, hostd.Request{Kind: hostd.KindCLI, Name: "fake", Env: []string{denied}}, nil, io.Discard, io.Discard)
+			var r *hostd.RefusedError
+			if !errors.As(err, &r) {
+				t.Errorf("denied variable %q under env: [\"*\"]: err = %v, want a refusal", denied, err)
+			}
+		}
+	})
+
 	t.Run("stage", func(t *testing.T) {
 		dir := filepath.Join(stageRoot, "compat")
 		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageMkdirAll, Path: dir, Perm: 0o700}); err != nil {
@@ -319,8 +409,197 @@ func exercise(t *testing.T, bin string) {
 		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: filepath.Join(root, "escape"), Data: []byte("x")}); err == nil {
 			t.Error("write_file outside the stage root was not refused")
 		}
+
+		// Symlink staging: refused when the login file does not exist or is
+		// not a login; allowed via LoginTargets on hosts with logins_map and
+		// via CodexAuth on older hosts.
+		codexLogin := filepath.Join(home, ".codex", "auth.json")
+		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: filepath.Join(dir, "missing-auth.json"), Target: codexLogin}); err == nil {
+			t.Error("symlink to a missing login file was not refused")
+		}
+		if err := os.MkdirAll(filepath.Dir(codexLogin), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(codexLogin, []byte(`{"compat":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(filepath.Dir(codexLogin))
+
+		h, err := c.Hello(ctx)
+		if err != nil {
+			t.Fatalf("hello with codex login: %v", err)
+		}
+		var target string
+		if h.Has(hostd.FeatureLoginsMap) {
+			target = h.LoginTargets[hostd.LoginCodex]
+		} else {
+			target = h.CodexAuth
+		}
+		if target == "" {
+			t.Fatalf("hello %+v reported no codex login target", h)
+		}
+		stagedAuth := filepath.Join(dir, "auth.json")
+		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: stagedAuth, Target: target}); err != nil {
+			t.Fatalf("symlink to codex login (%s): %v", target, err)
+		}
+		if info, err := os.Lstat(stagedAuth); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("staged auth link Lstat = %v, %v; want symlink", info, err)
+		}
+		if data, err := os.ReadFile(stagedAuth); err != nil || string(data) != `{"compat":true}` {
+			t.Fatalf("reading staged auth link = %q, %v", data, err)
+		}
+		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: filepath.Join(dir, "bad-link"), Target: tokenFile}); err == nil {
+			t.Error("symlink to a non-login file was not refused")
+		}
+
+		// Hosts advertising logins_map accept top-level logins: in the
+		// allowlist and allow StageSymlink to target only what it names.
+		if h.Has(hostd.FeatureLoginsMap) {
+			origAllow, err := os.ReadFile(allowlist)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.WriteFile(allowlist, origAllow, 0o644) }()
+
+			customLogin := filepath.Join(home, ".custom-cli", "creds.json")
+			if err := os.MkdirAll(filepath.Dir(customLogin), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(customLogin, []byte(`{"custom":true}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(filepath.Dir(customLogin))
+
+			mappedAllow := string(origAllow) + "logins:\n  custom: ~/.custom-cli/creds.json\n"
+			if err := os.WriteFile(allowlist, []byte(mappedAllow), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			hm, err := c.Hello(ctx)
+			if err != nil {
+				t.Fatalf("hello with logins: map: %v", err)
+			}
+			if !reflect.DeepEqual(hm.Logins, []string{"custom"}) {
+				t.Fatalf("mapped Hello.Logins = %q, want [\"custom\"]", hm.Logins)
+			}
+			customTarget := hm.LoginTargets["custom"]
+			if customTarget == "" {
+				t.Fatalf("mapped Hello.LoginTargets = %v, want custom target", hm.LoginTargets)
+			}
+			stagedCustom := filepath.Join(dir, "custom.json")
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: stagedCustom, Target: customTarget}); err != nil {
+				t.Fatalf("symlink to mapped custom login: %v", err)
+			}
+			if data, err := os.ReadFile(stagedCustom); err != nil || string(data) != `{"custom":true}` {
+				t.Fatalf("reading staged custom link = %q, %v", data, err)
+			}
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: filepath.Join(dir, "unmapped-codex.json"), Target: target}); err == nil {
+				t.Error("symlink to unmapped codex login was not refused when logins: map omitted it")
+			}
+		}
+
 		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageRemoveAll, Path: dir}); err != nil {
 			t.Fatalf("remove_all: %v", err)
+		}
+	})
+
+	t.Run("hooks", func(t *testing.T) {
+		if peer.Grain == "" {
+			t.Fatalf("hello %+v has empty Grain binary path", peer)
+		}
+		runHook := func(args []string, stdin string) string {
+			t.Helper()
+			cmd := exec.CommandContext(ctx, peer.Grain, args...)
+			cmd.Stdin = strings.NewReader(stdin)
+			var out, errOut bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &errOut
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("%s %v failed: %v (stderr: %s)", peer.Grain, args, err, errOut.String())
+			}
+			if strings.Contains(errOut.String(), "ignoring unrecognized arguments") || strings.Contains(errOut.String(), "flag provided but not defined") {
+				t.Fatalf("%s %v rejected its arguments: %s", peer.Grain, args, errOut.String())
+			}
+			return strings.TrimSpace(out.String())
+		}
+
+		// Legacy / fallback contract (used for hosts without FeatureHookPolicy).
+		if got := runHook([]string{"agy-tool-hook"}, `{"toolCall":{"name":"mcp_grain-sandbox_run_command"}}`); got != "" {
+			t.Errorf("fallback agy-tool-hook denied run_command: %s", got)
+		}
+		if got := runHook([]string{"agy-tool-hook"}, `{"toolCall":{"name":"run_command"}}`); !strings.Contains(got, `"decision":"deny"`) {
+			t.Errorf("fallback agy-tool-hook allowed native run_command: %s", got)
+		}
+		if got := runHook([]string{"claude-stop-hook"}, `{"hook_event_name":"Stop","last_assistant_message":"Done."}`); !strings.Contains(got, `"decision":"block"`) {
+			t.Errorf("fallback claude-stop-hook allowed unfinished background stop: %s", got)
+		}
+
+		if peer.Has(hostd.FeatureHookPolicy) {
+			hookDir := filepath.Join(stageRoot, "hook-policy-compat")
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageMkdirAll, Path: hookDir, Perm: 0o700}); err != nil {
+				t.Fatal(err)
+			}
+			policyPath := filepath.Join(hookDir, hookpolicy.Filename)
+			recordPath := filepath.Join(hookDir, "host-calls.jsonl")
+			transcriptPath := filepath.Join(hookDir, "session.jsonl")
+			raw, err := hookpolicy.Marshal(hookpolicy.File{
+				Version: hookpolicy.Version,
+				Tool: &hookpolicy.ToolPolicy{
+					AllowedTools: []string{"mcp_grain-sandbox_future_compat"},
+					HostToolGrants: []hookpolicy.HostToolGrant{
+						{Capability: "compat#lookup", Tools: []string{"compat_lookup"}},
+					},
+					RecordPath:        recordPath,
+					TaskID:            "1",
+					RunID:             "r1",
+					DefaultDenySuffix: "denied by staged compat policy.",
+				},
+				Stop: &hookpolicy.StopPolicy{
+					ToolPrefixes:             []string{"mcp__grain-sandbox__"},
+					BackgroundContinueReason: "compat background nudge",
+					ClosingTools:             []string{"compat_finish"},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: policyPath, Data: raw, Perm: 0o600}); err != nil {
+				t.Fatal(err)
+			}
+			transcript := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"1","name":"mcp__grain-sandbox__compat_finish","input":{}}]}}` + "\n" +
+				`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"1","content":"ok","is_error":false}]}}` + "\n"
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: transcriptPath, Data: []byte(transcript), Perm: 0o600}); err != nil {
+				t.Fatal(err)
+			}
+
+			// Fire both hooks while the daemon is cut, proving policy evaluation
+			// is purely local on the host and never calls back to the controller.
+			ctl.restart(t)
+			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"mcp_grain-sandbox_future_compat"}}`); got != "" {
+				t.Errorf("staged agy-tool-hook denied future_compat: %s", got)
+			}
+			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"compat_lookup","args":{"query":"q"}}}`); got != "" {
+				t.Errorf("staged agy-tool-hook denied granted compat_lookup: %s", got)
+			}
+			// A host tool is admitted only once its call is on the record
+			// the policy names; the host agent runs on this machine, so the
+			// record is read here directly.
+			if rec, err := os.ReadFile(recordPath); err != nil || !strings.Contains(string(rec), `"compat_lookup"`) {
+				t.Errorf("staged agy-tool-hook admitted compat_lookup without recording it at %s: %q, %v", recordPath, rec, err)
+			}
+			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"mcp_grain-sandbox_run_command"}}`); !strings.Contains(got, "denied by staged compat policy.") {
+				t.Errorf("staged agy-tool-hook consulted compiled-in roster: %s", got)
+			}
+			if got := runHook([]string{"claude-stop-hook", "-policy", policyPath}, `{"hook_event_name":"Stop","last_assistant_message":"Done."}`); !strings.Contains(got, "compat background nudge") {
+				t.Errorf("staged claude-stop-hook did not block with staged nudge: %s", got)
+			}
+			if got := runHook([]string{"claude-stop-hook", "-policy", policyPath}, fmt.Sprintf(`{"hook_event_name":"Stop","transcript_path":%q}`, transcriptPath)); got != "" {
+				t.Errorf("staged claude-stop-hook blocked compat_finish: %s", got)
+			}
+
+			ctl.waitConnected(t)
+			c = ctl.client()
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageRemoveAll, Path: hookDir}); err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 
@@ -441,8 +720,10 @@ func exercise(t *testing.T, bin string) {
 	})
 
 	t.Run("drain", func(t *testing.T) {
-		if err := c.Drain(ctx); err != nil {
-			t.Fatalf("drain: %v", err)
+		// An idle agent may exit on s.Drain() before its mux flushes frameOK.
+		drainErr := c.Drain(ctx)
+		if drainErr != nil && !errors.Is(drainErr, io.EOF) {
+			t.Fatalf("drain: %v", drainErr)
 		}
 		select {
 		case err := <-a.exited:
@@ -451,6 +732,9 @@ func exercise(t *testing.T, bin string) {
 				t.Fatalf("a drained agent with nothing running exits cleanly: %v", err)
 			}
 		case <-time.After(30 * time.Second):
+			if drainErr != nil {
+				t.Fatalf("drain: %v", drainErr)
+			}
 			// Still up: it must at least say it is draining and refuse starts.
 			h, err := c.Hello(ctx)
 			if err != nil || !h.Draining {

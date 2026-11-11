@@ -87,6 +87,8 @@ Usage of grain daemon:
     	database backend driver ("sqlite" or "postgres"); defaults to sqlite (default "sqlite")
   -db-dsn string
     	database connection string / DSN or path; for sqlite defaults to <data-dir>/store
+  -default-environment-name string
+    	the environment name (the UI's tab title and sidebar badge) this deployment takes when it has none, or still has the one this flag gave it before: never one its operator set in Settings or its state repo. A Grain Hub sets it to a hosted instance's entry display name ($GRAIN_DEFAULT_ENVIRONMENT_NAME when unset)
   -default-target-repo string
     	owner/name a task created through the UI/API with no repo of its own targets
   -deployment-owner string

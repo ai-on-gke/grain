@@ -16,6 +16,7 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -118,6 +119,7 @@ func TestGCEComputeNestedVirtualizationN2C4AndCustomDisk(t *testing.T) {
 				Generation:     1,
 				StartupEnv: map[string]string{
 					"GRAIN_ENTRY_NAME": tc.entryName,
+					"environment_name": "Fleet " + tc.entryName,
 				},
 			})
 			if err != nil {
@@ -172,14 +174,26 @@ func TestGCEComputeNestedVirtualizationN2C4AndCustomDisk(t *testing.T) {
 			meta, _ := raw["metadata"].(map[string]any)
 			items, _ := meta["items"].([]any)
 			foundStartup := false
+			var grainConfig map[string]string
 			for _, it := range items {
 				m, _ := it.(map[string]any)
 				if m["key"] == "startup-script" && m["value"] == startupBody {
 					foundStartup = true
 				}
+				if m["key"] == "grain-config" {
+					raw, _ := m["value"].(string)
+					if err := json.Unmarshal([]byte(raw), &grainConfig); err != nil {
+						t.Fatalf("grain-config metadata is not JSON: %v\n%s", err, raw)
+					}
+				}
 			}
 			if !foundStartup {
 				t.Fatalf("expected startup-script metadata item on instance %s, got %+v", tc.entryName, items)
+			}
+			// The instance's default environment name rides in grain-config
+			// beside everything else the VM boots from.
+			if got, want := grainConfig["environment_name"], "Fleet "+tc.entryName; got != want {
+				t.Fatalf("grain-config environment_name = %q, want %q", got, want)
 			}
 		})
 	}

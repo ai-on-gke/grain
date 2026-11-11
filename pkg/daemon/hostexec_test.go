@@ -16,8 +16,14 @@ package daemon
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
+	"io"
 	"log"
+	"net"
+	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -280,5 +286,132 @@ func TestTheBareMachineKeepsHostAndItsOwnRules(t *testing.T) {
 	if got := cfg.ResolveCLIRun(context.Background(), model.AgentFrameworkAntigravity); got.Via != ViaDaemon || got.Location != model.CLIRunHost ||
 		!slices.Equal(got.Locations, []string{model.CLIRunHost}) {
 		t.Errorf("agy on the bare machine: %+v, want host as the daemon's child and nothing else offered", got)
+	}
+}
+
+func replyHelloConn(conn net.Conn, h hostd.Hello) {
+	defer conn.Close()
+	var hdr [5]byte
+	if _, err := io.ReadFull(conn, hdr[:]); err != nil {
+		return
+	}
+	n := binary.BigEndian.Uint32(hdr[1:])
+	if _, err := io.CopyN(io.Discard, conn, int64(n)); err != nil {
+		return
+	}
+	payload, err := json.Marshal(h)
+	if err != nil {
+		return
+	}
+	var out [5]byte
+	out[0] = 'H'
+	binary.BigEndian.PutUint32(out[1:], uint32(len(payload)))
+	_, _ = conn.Write(out[:])
+	_, _ = conn.Write(payload)
+}
+
+func fakeHelloClient(h hostd.Hello) hostd.Client {
+	return hostd.Client{Dial: func(context.Context) (net.Conn, error) {
+		c1, c2 := net.Pipe()
+		go replyHelloConn(c2, h)
+		return c1, nil
+	}}
+}
+
+func TestRemoteHostdHostUsesLoginsMapOnlyForHostsWithFeature(t *testing.T) {
+	carrier := (&hostd.Remote{Token: "tok"}).Carrier("")
+
+	// Older host without FeatureLoginsMap: daemon keeps using CodexAuth.
+	oldPeer := hostd.Hello{
+		Protocol:      4,
+		MinCompatible: 1,
+		Remote:        true,
+		StageRoot:     "/home/op/.grain/hostd-stage",
+		Grain:         "/home/op/.local/bin/grain-agentd",
+		CodexAuth:     "/home/op/.codex/auth.json",
+	}
+	oldHost := agent.HostdHost{Client: fakeHelloClient(oldPeer), Entry: "codex"}
+	if err := remoteHostdHost(&oldHost, carrier); err != nil {
+		t.Fatal(err)
+	}
+	if oldHost.HasLoginsMap {
+		t.Fatal("old host without logins_map marked HasLoginsMap")
+	}
+	if got := oldHost.HostLogin(hostd.LoginCodex); got != "/home/op/.codex/auth.json" {
+		t.Errorf("old host codex login = %q, want /home/op/.codex/auth.json", got)
+	}
+
+	// Host with FeatureLoginsMap: daemon uses LoginTargets and ignores CodexAuth,
+	// including when LoginTargets omits codex.
+	newPeer := hostd.ThisHello("head")
+	newPeer.Remote = true
+	newPeer.StageRoot = "/home/op/.grain/hostd-stage"
+	newPeer.Grain = "/home/op/.local/bin/grain-agentd"
+	newPeer.CodexAuth = "/stale/codex/auth.json"
+	newPeer.LoginTargets = map[string]string{"acme": "/home/op/.acme/creds.json"}
+
+	newHost := agent.HostdHost{Client: fakeHelloClient(newPeer), Entry: "codex"}
+	if err := remoteHostdHost(&newHost, carrier); err != nil {
+		t.Fatal(err)
+	}
+	if !newHost.HasLoginsMap {
+		t.Fatal("new host with logins_map not marked HasLoginsMap")
+	}
+	if got := newHost.HostLogin(hostd.LoginCodex); got != "" {
+		t.Errorf("new host codex login = %q, want empty (CodexAuth ignored)", got)
+	}
+	if got := newHost.HostLogin("acme"); got != "/home/op/.acme/creds.json" {
+		t.Errorf("new host acme login = %q, want /home/op/.acme/creds.json", got)
+	}
+}
+
+func TestLocalHostdLoginsUsesFeatureLogins(t *testing.T) {
+	serveHelloSocket := func(t *testing.T, h hostd.Hello) string {
+		t.Helper()
+		dir, err := os.MkdirTemp("", "lh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		sock := filepath.Join(dir, "s.sock")
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go replyHelloConn(conn, h)
+			}
+		}()
+		return sock
+	}
+
+	// Older protocol-4 host without FeatureLogins: empty list means "not known".
+	oldSock := serveHelloSocket(t, hostd.Hello{Protocol: 4, MinCompatible: 1})
+	oldCfg := withExecutor(Config{HostdSocket: oldSock}, inContainer, nil)
+	if logins, known := oldCfg.localHostdLogins(context.Background()); known || len(logins) != 0 {
+		t.Errorf("without FeatureLogins: got (%v, %v), want (nil, false)", logins, known)
+	}
+
+	// Host with FeatureLogins and empty Logins: empty list means "no logins".
+	emptyHello := hostd.ThisHello("head")
+	emptySock := serveHelloSocket(t, emptyHello)
+	emptyCfg := withExecutor(Config{HostdSocket: emptySock}, inContainer, nil)
+	if logins, known := emptyCfg.localHostdLogins(context.Background()); !known || len(logins) != 0 {
+		t.Errorf("with FeatureLogins and empty list: got (%v, %v), want ([], true)", logins, known)
+	}
+
+	// Host with FeatureLogins and logins: returns them as known.
+	withHello := hostd.ThisHello("head")
+	withHello.Logins = []string{"acme", "codex"}
+	withSock := serveHelloSocket(t, withHello)
+	withCfg := withExecutor(Config{HostdSocket: withSock}, inContainer, nil)
+	if logins, known := withCfg.localHostdLogins(context.Background()); !known || !reflect.DeepEqual(logins, []string{"acme", "codex"}) {
+		t.Errorf("with FeatureLogins and logins: got (%v, %v), want ([acme codex], true)", logins, known)
 	}
 }

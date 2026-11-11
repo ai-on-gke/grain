@@ -611,7 +611,9 @@ configured repositories or `WorkOwnership` settings change):
 
 The hub updates the entry's health, task counts, build stamps, and
 `reported` scopes, and responds with
-`{status, next_heartbeat_seconds, scope_conflicts}`. Check a grain's
+`{status, next_heartbeat_seconds, scope_conflicts, environment_name}`
+-- the last being the name the grain shows itself under by default
+([What an instance is called](#what-an-instance-is-called)). Check a grain's
 live registration state, last heartbeat timestamp, and any scope
 conflicts from the grain itself with:
 
@@ -656,6 +658,47 @@ repository scopes used by the directory and work router.
   grains stay visible **only** to their `owner`, verified `owner_group`
   members, and hub `admins`. Setting `listed = true` publishes the
   entry into `GET /api/directory` and `GET /api/route`.
+
+### What an instance is called
+
+A grain the hub knows about names itself after its entry: its
+**environment name** -- the browser tab title and the sidebar badge in
+its own UI, and the name in Settings -- defaults to the entry's
+`display_name`, or to its `name` when the entry has no display name.
+That makes it obvious, with several hub grains open in tabs, which one
+you are looking at.
+
+- **Hosted instances.** The reconciler puts the name in the VM's
+  `grain-config` metadata as `environment_name`;
+  `scripts/grain-instance-init.sh` writes it to `daemon.env` as
+  `GRAIN_DEFAULT_ENVIRONMENT_NAME`, which the daemon reads as
+  `-default-environment-name`.
+- **Connected grains.** The heartbeat reply carries it as
+  `environment_name`, and the daemon applies it on every heartbeat.
+
+It is a default only. The daemon records the name the hub gave it
+(`grain_config.hub_environment_name`), and adopts a new one from the hub
+only while its environment name is empty or still that hub-given name. A
+name the operator sets in **Settings** (or in the state repository's
+`tables/grain_config.json`) is anything else, and the hub never
+overrides it. Clearing the name in Settings hands it back to the hub,
+which fills it in again.
+
+Changing the entry's `display_name` therefore
+renames the grain unless its operator has named it themselves:
+
+- a **connected** grain picks the new name up on its next heartbeat;
+- a **hosted** instance picks it up the next time the hub builds its VM
+  (an upgrade, resize or replace). `grain-config` is written only when a
+  VM is created, so a running VM keeps the name it booted with until
+  then.
+
+The name is cut down to what the daemon's Settings accept rather than
+failing provisioning. Line breaks, tabs and other control characters
+become spaces, runs of spaces collapse, and the result is cut to 32
+characters. For hosted instances, the characters a `daemon.env` line
+cannot carry unchanged to both systemd and docker (`"`, `'`, `\`, `$`
+and `` ` ``) are dropped.
 
 ### Repository scopes (`repo`, `path_prefix`, `role`)
 

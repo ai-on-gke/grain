@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -132,6 +133,17 @@ type RemotePeer struct {
 	// too old to say".
 	Logins      []string `json:"logins,omitempty"`
 	LoginsKnown bool     `json:"loginsKnown,omitempty"`
+	// Features are the contract features the hostd advertised in its hello
+	// (or those inferred from its protocol version when it predates
+	// Hello.Features).
+	Features []Feature `json:"features,omitempty"`
+}
+
+// Hello returns the protocol version and contract features p reported, so
+// callers can check p.Hello().Has(f).
+func (p RemotePeer) Hello() Hello {
+	proto, _ := strconv.Atoi(p.Protocol)
+	return Hello{Build: p.Build, Protocol: proto, Features: p.Features}
 }
 
 // RemoteStatus is Settings' view of a hostd that dials in.
@@ -620,15 +632,15 @@ const learnLoginsTimeout = 10 * time.Second
 
 // learnLogins asks the hostd that just connected over sess for its hello
 // and keeps the agent CLI logins it reports (Hello.Logins) in its
-// status, for Settings' host pickers. It changes nothing a run reads,
-// and a hostd that does not answer -- or one too old to say -- simply
-// shows none known.
+// status, for Settings' host pickers. Has(FeatureLogins) distinguishes
+// an authoritative empty list ("no logins") from an older host that does
+// not report them ("not known").
 func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
 	ctx, cancel := context.WithTimeout(ctx, learnLoginsTimeout)
 	defer cancel()
 	c := Client{Dial: func(ctx context.Context) (net.Conn, error) { return sess.m.OpenStream(ctx) }}
 	h, err := c.Hello(ForDisplay(ctx))
-	if err != nil || h.Protocol < 2 {
+	if err != nil || (!h.Has(FeatureLogins) && len(h.Logins) == 0) {
 		return
 	}
 	r.mu.Lock()
@@ -641,5 +653,10 @@ func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
 	}
 	st := r.last[name]
 	st.Logins, st.LoginsKnown = append([]string(nil), h.Logins...), true
+	if len(h.Features) > 0 {
+		st.Features = append([]Feature(nil), h.Features...)
+	} else {
+		st.Features = legacyFeatures(h.Protocol)
+	}
 	r.last[name] = st
 }
