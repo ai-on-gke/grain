@@ -212,3 +212,21 @@ func seedTestDaemonConnections(t *testing.T, cfg daemon.Config, seed string) {
 	db.Close()
 	seedTestConnections(t, cfg.DataDir, seed)
 }
+
+// A seeded connection carries its merge credential into the deployment's
+// connections, and a merge credential with no valid name is refused.
+func TestParseConnectionSeedMergeCredential(t *testing.T) {
+	seed, err := parseConnectionSeed([]byte("git:\n  - credential: person\n    scope: acme/widgets\n    merge_credential: grain-merge\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns := mergeGitConnections(nil, seed.Git)
+	if len(conns) != 1 || conns[0].MergeCredential != "grain-merge" || conns[0].Credential != "person" {
+		t.Fatalf("connections = %+v", conns)
+	}
+	for _, bad := range []string{"anonymous", "../escape"} {
+		if _, err := parseConnectionSeed([]byte("git:\n  - credential: person\n    merge_credential: " + bad + "\n")); err == nil {
+			t.Errorf("merge_credential %q was accepted", bad)
+		}
+	}
+}

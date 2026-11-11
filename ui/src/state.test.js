@@ -14,6 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  questionActivity,
   ASKED_STATES,
   DISPLAY_STATE_ORDER,
   askedCase,
@@ -3056,5 +3057,39 @@ describe("the asked display state", () => {
       { state: "running", count: 1 },
       { state: "asked", count: 1 },
     ]);
+  });
+});
+
+describe("questionActivity", () => {
+  it("puts a question's summary on the row", () => {
+    expect(
+      questionActivity({
+        state: "awaiting_reply",
+        questionSummary: "Which base?",
+      }),
+    ).toEqual({ note: "Which base?", byQuestion: true });
+  });
+
+  it("puts a closing note's own summary on the row", () => {
+    expect(
+      questionActivity({
+        state: "awaiting_reply",
+        noteSummary: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+      }),
+    ).toEqual({
+      note: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+      byQuestion: true,
+    });
+  });
+
+  it("says nothing for a note without a summary or a stopped turn", () => {
+    expect(questionActivity({ state: "awaiting_reply" })).toBeNull();
+    expect(
+      questionActivity({
+        state: "awaiting_reply",
+        turnStopped: true,
+        noteSummary: "x",
+      }),
+    ).toBeNull();
   });
 });

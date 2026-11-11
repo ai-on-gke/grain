@@ -544,8 +544,10 @@ func TestResumeLaterRefusesUnsatisfiableCIWaits(t *testing.T) {
 }
 
 // A task deferred on a CI wake for longer than DefaultCIWakeStallBound (6h)
-// with no CI activity on its branch raises a stall notification, wakes the
-// pipeline steward, and is undeferred rather than sitting parked forever.
+// is woken by the backstop with a note, a stall notification and a wake of
+// the pipeline steward -- whether or not CI has shown activity on its
+// branch meanwhile, since activity that never turns into a verdict grain
+// can see is exactly how tasks sat deferred for days.
 func TestResumeLaterCIWakeStallBoundFires(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
@@ -604,8 +606,8 @@ func TestResumeLaterCIWakeStallBoundFires(t *testing.T) {
 	parkTaskWithResumeLater(t, ctx, store, ghClient, uiClient, stalledTask, "stall-me-1",
 		map[string]any{"ci": "my-branch"}, baseTime)
 
-	// Second task that DOES get CI activity at T+4h (in-progress run started at T+4h),
-	// so at T+6h05m it has only been quiet for ~2h05m and should NOT stall yet.
+	// Second task that DOES get CI activity at T+4h (an in-progress run that
+	// never concludes): the backstop wakes it at T+6h05m all the same.
 	activeTask := filedTask(t, ctx, store, "active-ci", repo)
 	pushBranch(t, sim.BareRepo, activeTask.BranchName())
 	parkTaskWithResumeLater(t, ctx, store, ghClient, uiClient, activeTask, "active-ci-1",
@@ -637,7 +639,7 @@ func TestResumeLaterCIWakeStallBoundFires(t *testing.T) {
 	}
 
 	// Past the 6h bound: stalledTask is undeferred, stall notification is raised,
-	// steward is woken, and activeTask (with activity 2h ago) stays deferred.
+	// and the steward is woken.
 	pastBound := now.Add(orchestrator.DefaultCIWakeStallBound + 5*time.Minute)
 	if err := orchestrator.ReconcileWake(ctx, deps, pastBound); err != nil {
 		t.Fatal(err)
@@ -657,7 +659,7 @@ func TestResumeLaterCIWakeStallBoundFires(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(comments, func(c model.Comment) bool {
-		return strings.Contains(c.Body, "no CI activity") && strings.Contains(c.Body, "undeferred")
+		return strings.Contains(c.Body, "backstop") && strings.Contains(c.Body, "undeferred")
 	}) {
 		t.Fatalf("expected stall undefer comment on %s, got %+v", stalledTask.ID, comments)
 	}
@@ -666,15 +668,7 @@ func TestResumeLaterCIWakeStallBoundFires(t *testing.T) {
 		t.Fatalf("expected pipeline-steward schedule wake, got %v (%v)", stewardTasks, err)
 	}
 
-	// activeTask had CI activity at T+4h, so at T+6h05m it is still deferred;
-	// once 6h have elapsed since that activity too (T+10h10m), it stalls as well.
-	if st := taskState(t, ctx, store, activeTask.ID); st != model.StateDeferred {
-		t.Fatalf("activeTask state at T+6h05m = %q, want deferred", st)
-	}
-	if err := orchestrator.ReconcileWake(ctx, deps, activityAt.Add(orchestrator.DefaultCIWakeStallBound+5*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
 	if st := taskState(t, ctx, store, activeTask.ID); st != model.StateQueued {
-		t.Fatalf("activeTask state 6h after last CI activity = %q, want queued", st)
+		t.Fatalf("activeTask (CI busy but never concluding) state at T+6h05m = %q, want queued", st)
 	}
 }

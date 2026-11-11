@@ -16,6 +16,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BatchActionsBar from "./BatchActionsBar.jsx";
+import { AccessConfigProvider } from "../AccessContext.jsx";
 import api from "../api.js";
 import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
@@ -356,5 +357,48 @@ describe("BatchActionsBar", () => {
     await user.click(screen.getByRole("button", { name: "Clear selection" }));
 
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates Run selected now on tasks:admin for unapproved selections while keeping dispatch:write for approved ones", () => {
+    const limitedConfig = {
+      access: {
+        role: "carol-limited",
+        roles: ["carol-limited"],
+        full: false,
+        scopes: ["tasks:read", "tasks:admin", "dispatch:write"],
+        repoLimits: { "tasks:admin": ["acme/widgets"] },
+      },
+    };
+    const { rerender } = render(
+      <AccessConfigProvider config={limitedConfig}>
+        <BatchActionsBar
+          selection={[
+            { id: "1", repo: "acme/other", state: "proposed", approved: false },
+          ]}
+          config={limitedConfig}
+          onRun={() => {}}
+          onClear={() => {}}
+        />
+      </AccessConfigProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Run selected now" }),
+    ).toBeDisabled();
+
+    rerender(
+      <AccessConfigProvider config={limitedConfig}>
+        <BatchActionsBar
+          selection={[
+            { id: "1", repo: "acme/other", state: "queued", approved: true },
+          ]}
+          config={limitedConfig}
+          onRun={() => {}}
+          onClear={() => {}}
+        />
+      </AccessConfigProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Run selected now" }),
+    ).toBeEnabled();
   });
 });

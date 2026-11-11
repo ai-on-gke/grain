@@ -1676,6 +1676,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Every agent sandbox found OOM-killed is a decrease signal
 			// for auto overcommit (orchestrator.applySandboxOOM).
 			NoteOOM: overcommitNoteOOM(cfg.Overcommit),
+			// resume_later's CI waits are woken regardless past this
+			// (-ci-wake-backstop, orchestrator.reconcileWake).
+			CIWakeBackstop: cfg.CIWakeBackstop,
 			// The mechanical first attempt at a port, through the git
 			// proxy started above (porter.go); nil files every port as
 			// an agent task.

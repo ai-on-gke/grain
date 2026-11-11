@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/mergelogins"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -451,6 +452,11 @@ type SandboxHealthResponse struct {
 	// firing that ran anything (model.Store.StaleSchedules): a nightly
 	// that went quiet says so here rather than nowhere.
 	StaleSchedules []model.StaleSchedule `json:"staleSchedules,omitempty"`
+	// CIWaits is every task resume_later has deferred on a CI verdict that
+	// has been waiting longer than CIWaitHealthAge (ciWaits): the waits
+	// whose verdict grain has not yet seen, before the orchestrator's
+	// backstop wakes them anyway.
+	CIWaits []CIWaitHealth `json:"ciWaits,omitempty"`
 	// RefusedDeclarations is every repository whose `.grain`
 	// declarations this daemon last could not read in full: the files,
 	// lines and messages (Error, the sync row's LastError), and the
@@ -552,6 +558,12 @@ type SandboxHealthResponse struct {
 	// resolve to the default git host while matching repositories reachable
 	// only through a non-default-host git connection.
 	TargetRepoHostWarnings []TargetRepoHostMismatch `json:"targetRepoHostWarnings,omitempty"`
+	// MergeLoginWarnings lists the logins a reviewed-merge gate trusts
+	// as grain's merges (vars.GRAIN_MERGE_LOGINS,
+	// -upgrade-reviewed-merge-logins) that are user accounts somebody
+	// signs in to, whose own hand merges therefore pass the gate
+	// (Config.MergeLoginWarnings, task 4386).
+	MergeLoginWarnings []mergelogins.Warning `json:"mergeLoginWarnings,omitempty"`
 	// Registry reports the deployment's connected-entry grain hub
 	// heartbeat status and any scope conflicts when registry self-registration
 	// is configured; nil when disabled.
@@ -1046,6 +1058,14 @@ func (c *Client) readSandboxHealth(entry *sandboxHealthEntry, stale bool) ([]San
 	return append([]SandboxSnapshot(nil), entry.sandboxes...), &SandboxReading{AgeMS: age.Milliseconds(), Stale: stale}
 }
 
+// mergeLoginWarnings is Config.MergeLoginWarnings, or nothing.
+func (c *Client) mergeLoginWarnings(ctx context.Context) []mergelogins.Warning {
+	if c.Config.MergeLoginWarnings == nil {
+		return nil
+	}
+	return c.Config.MergeLoginWarnings(ctx)
+}
+
 func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) {
 	// ?section=counters is only the layers' counters, which System →
 	// Health re-reads while it is open: an in-memory read that must not
@@ -1085,7 +1105,9 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
 			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
 			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+			MergeLoginWarnings:     s.tasks.mergeLoginWarnings(r.Context()),
 			StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+			CIWaits:                s.tasks.ciWaits(r.Context()),
 			RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context())})
 		return
 	}
@@ -1107,8 +1129,10 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		CapabilityServers:      s.tasks.capabilityServersDown(),
 		Hub:                    s.tasks.hubHealth(r.Context()),
 		StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+		CIWaits:                s.tasks.ciWaits(r.Context()),
 		RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context()),
 		TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+		MergeLoginWarnings:     s.tasks.mergeLoginWarnings(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
@@ -1212,6 +1236,51 @@ func (c *Client) capabilityServersDown() []CapabilityServerDown {
 		}
 		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Waiting: st.Waiting, Reason: reason})
 	}
+	return out
+}
+
+// CIWaitHealthAge is how long a resume_later CI wait runs before `grain
+// health` lists it: well past a CI run's ordinary length, well short of
+// the orchestrator's backstop.
+const CIWaitHealthAge = time.Hour
+
+// CIWaitHealth is one task deferred on a resume_later CI wait.
+type CIWaitHealth struct {
+	TaskID string    `json:"taskId"`
+	Repo   string    `json:"repo,omitempty"`
+	Branch string    `json:"branch,omitempty"`
+	CIMode string    `json:"ciMode,omitempty"`
+	CI     string    `json:"ci"`
+	Since  time.Time `json:"since"`
+	// Recovered is a wait read back from resume_later's own comment
+	// rather than from its run (model.HeldCIResume.Recovered).
+	Recovered bool `json:"recovered,omitempty"`
+}
+
+// ciWaits is every resume_later CI wait older than CIWaitHealthAge,
+// oldest first, nil on a store that cannot answer.
+func (c *Client) ciWaits(ctx context.Context) []CIWaitHealth {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	held, err := c.Store.HeldCIResumes(ctx)
+	if err != nil {
+		return nil
+	}
+	now := c.now()
+	var out []CIWaitHealth
+	for _, h := range held {
+		if now.Sub(h.Since) < CIWaitHealthAge {
+			continue
+		}
+		w := CIWaitHealth{TaskID: h.TaskID, Branch: h.Branch, CIMode: string(h.CIMode), CI: h.TargetCI,
+			Since: h.Since, Recovered: h.Recovered}
+		if h.Repo != (model.RepoRef{}) {
+			w.Repo = h.Repo.String()
+		}
+		out = append(out, w)
+	}
+	slices.SortFunc(out, func(a, b CIWaitHealth) int { return a.Since.Compare(b.Since) })
 	return out
 }
 

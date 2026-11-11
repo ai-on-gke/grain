@@ -657,7 +657,10 @@ import "strconv"
 // `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
 // the minimum interval between two completed automatic upgrades in release
 // mode, and when the last automatic upgrade succeeded (grain/task-4230).
-const SchemaVersion = 140
+// 141 adds `schedule`.`skip_when` (model.Schedule.SkipWhen): a condition
+// outside the schedule, such as its base branch's publishing being held,
+// that holds its firings (grain/task-4393).
+const SchemaVersion = 141
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2066,6 +2069,9 @@ var Tables = []string{
 	// (grain/task-3878). DEFAULT 0 here and in migration 131, which is
 	// what every schedule did before it could say otherwise.
 	//
+	// skip_when is model.Schedule.SkipWhen (grain/task-4393): DEFAULT ''
+	// here and in migration 141, which holds nothing.
+	//
 	// every_n_minutes is model.Recurrence.EveryNMinutes, every_n_hours'
 	// counterpart for RecurrenceEveryNMinutes: NULL on every other kind,
 	// and last in the table because schema version 33 added it with
@@ -2102,6 +2108,7 @@ var Tables = []string{
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   ` + "`grain_ci`" + `              INTEGER  NOT NULL DEFAULT 0,
   ` + "`overlap_group`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`skip_when`" + `             TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

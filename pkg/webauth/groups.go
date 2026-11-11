@@ -286,13 +286,6 @@ func WithCloudIdentityClock(now func() time.Time) CloudIdentityOption {
 	}
 }
 
-// WithCloudIdentityTimeout overrides the per-call timeout on a single CloudIdentityGroupChecker.
-func WithCloudIdentityTimeout(timeout time.Duration) CloudIdentityOption {
-	return func(c *CloudIdentityGroupChecker) {
-		c.timeout = timeout
-	}
-}
-
 type groupCacheEntry struct {
 	member  bool
 	expires time.Time

@@ -438,15 +438,11 @@ func mergedPullRequestOf(client github.Client, task model.Task, skip *model.Pull
 	return nil, github.PullRequestDetail{}, false
 }
 
-// landedForTask is workOnBase for task's own branch, with the task's own
-// merged pull request (if it has one) folded in -- both to name where the
+// landedForTaskWithStore is workOnBase for task's own branch, with the task's
+// own merged pull request (if it has one) folded in -- both to name where the
 // work landed, and as the first of the two checks: a merged pull request
 // whose head is still the branch's tip is the same work, whatever the
 // content check could or could not read.
-func landedForTask(client github.Client, task model.Task, base string, skip *model.PullRequestRef) landedWork {
-	return landedForTaskWithStore(context.Background(), nil, client, task, base, skip)
-}
-
 func landedForTaskWithStore(ctx context.Context, store *model.Store, client github.Client, task model.Task, base string, skip *model.PullRequestRef) landedWork {
 	branch := task.BranchName()
 	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)

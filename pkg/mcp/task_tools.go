@@ -310,8 +310,8 @@ type TaskRecord struct {
 	// is a question asked of a task that looks stuck, and until now the
 	// only way to answer it was to ask the operator to read their own
 	// screen. Unlike MergeQueue it is not on the list shape -- see
-	// renderTaskList on why one task's sentence does not belong on fifty
-	// rows.
+	// renderFilteredTaskList on why one task's sentence does not belong on
+	// fifty rows.
 	Activity TaskActivity
 }
 
@@ -559,7 +559,7 @@ func listTasksTool(reader TaskReader) Tool {
 	}
 }
 
-// renderTaskList is one line per task, oldest first and newest last by
+// renderFilteredTaskList is one line per task, oldest first and newest last by
 // filing time, with a count and any elision stated outright: a list that
 // silently stopped at 50 would have the reader concluding there are 50
 // tasks. A limit keeps the newest rows, because a debugging question is
@@ -583,10 +583,6 @@ func listTasksTool(reader TaskReader) Tool {
 // asking about. So does the age: "since when" is what a person asks
 // after they have found the row that is stuck, and fifty timestamps to
 // find one is the wrong trade for a list.
-func renderTaskList(tasks []TaskSummary, state string, limit int) string {
-	return renderFilteredTaskList(tasks, taskListFilter{State: state}, limit)
-}
-
 func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit int) string {
 	shown, matched := selectTasks(tasks, filter, limit)
 	if matched == 0 {

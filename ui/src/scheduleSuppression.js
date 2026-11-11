@@ -55,6 +55,10 @@ export function describeSuppression(suppressed) {
       return suppressed.detail
         ? suppressed.detail
         : "skipped: this deployment doesn't run this repository's standing work";
+    case "publishingHeld":
+      return suppressed.detail
+        ? suppressed.detail
+        : "skipped: publishing from its base branch is held by a release triage task";
     case "watchedRepoOffTarget":
       return suppressed.detail
         ? suppressed.detail

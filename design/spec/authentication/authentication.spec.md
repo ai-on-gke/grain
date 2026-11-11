@@ -193,7 +193,7 @@ Every normative requirement below is derived from the implementation on `main` a
 ### 5.1 Startup check requiring an active verifier {#AU-12}
 
 1. `-ui-require-verifier=<name>` (or `$GRAIN_REQUIRE_VERIFIER`) MUST set `ui.Config.RequireVerifier = <name>`, and `-ui-require-iap` (or `$GRAIN_REQUIRE_IAP` set to `1`, `true`, `yes`, or `on`) MUST remain supported as an alias for requiring `"iap"` (`ui.Config.RequireIAP = true`, `pkg/cli/daemon.go`). Setting both `-ui-require-iap` and a non-`"iap"` `-ui-require-verifier` MUST be refused at startup.
-2. `daemon.CheckUIRequireVerifier` (aliased as `daemon.CheckUIRequireIAP`) MUST refuse to start the daemon when a verifier is required (`RequireVerifier != ""` or `RequireIAP == true`) and `ui.HasActiveVerifier(ctx, required)` is `false` (for `"iap"`, when neither an IAP audience nor a registered `"iap"` verifier is configured).
+2. `daemon.CheckUIRequireVerifier` MUST refuse to start the daemon when a verifier is required (`RequireVerifier != ""` or `RequireIAP == true`) and `ui.HasActiveVerifier(ctx, required)` is `false` (for `"iap"`, when neither an IAP audience nor a registered `"iap"` verifier is configured).
 
 **Pinned by:**
 - `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRefusesRequireIAPWithoutAnAudience`, `TestRequireIAPFromTheEnvironment`, `TestCheckConfigRequireVerifier`, `TestRequireVerifierFromTheEnvironment`
