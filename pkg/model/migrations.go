@@ -971,6 +971,16 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `ci_api_repos` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 136,
+		Description: "add task_context and task_brief_edit, a durable task's compaction cursor, handover version " +
+			"and current brief (grain/task-4107)",
+		Statements: []string{
+			taskContextTable,
+			taskBriefEditTable,
+			taskBriefEditTaskIndex,
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

@@ -393,6 +393,7 @@ func frameworkOpensPullRequests(framework agent.Framework) bool {
 func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRequest bool,
 	maxRuntime time.Duration, history History, setup *SetupResult) string {
 	branch := task.BranchName()
+	task, history = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if task.ChangeTarget != nil {
 		// A change that is not a git branch (a changelist): its kind's
@@ -473,8 +474,14 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
+	if summarised := summarisedSection(history); summarised != "" {
+		prompt += "\n\n" + strings.TrimRight(summarised, "\n")
+	}
 	if thread := commentThreadSection(history.Comments); thread != "" {
 		prompt += "\n\n" + strings.TrimRight(thread, "\n")
+	}
+	if upkeep := contextUpkeepSection(task, history, len(prompt)); upkeep != "" {
+		prompt += "\n\n" + strings.TrimRight(upkeep, "\n")
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
@@ -2426,6 +2433,16 @@ type History struct {
 	// CommittedContext is the committed-context references verified in ./work
 	// or cloned into ./repos/<owner>/<repo> detached at their pinned SHA.
 	CommittedContext []ResolvedContextCheckout
+	// Context is the task's compaction cursor, handover version and
+	// current brief (model.TaskContext), and HandoverAge how stale its
+	// handover is; both zero for a task that has neither. See
+	// context_compaction.go.
+	Context     model.TaskContext
+	HandoverAge model.HandoverAge
+	// AutoCompactBytes is the prompt size past which a durable task's run
+	// is asked to compact first (Config.AutoCompactBytes); zero is
+	// DefaultAutoCompactBytes.
+	AutoCompactBytes int
 }
 
 func sessionSandboxSection(task model.Task, h History) string {
@@ -3048,7 +3065,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		return unprepared(err)
 	}
 
-	comments, err := store.Comments(ctx, task.ID)
+	comments, err := dispatchComments(ctx, store, task.ID)
 	if err != nil {
 		return unprepared(fmt.Errorf("orchestrator: reading %s's conversation: %w", task.ID, err))
 	}
@@ -3215,6 +3232,8 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
 	history.Resumed = ResumedFrom(ctx, store, previous)
+	loadTaskContext(ctx, store, task, &history)
+	history.AutoCompactBytes = cfg.autoCompactBytes()
 	history.ResumedUntil = ResumedUntil(previous)
 	if task.Target != nil {
 		// Advisory, like BaseIncident above: a row grain cannot read
@@ -3246,6 +3265,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		prompt += "\n\n" + section
 		dynamicSections = append(dynamicSections, section)
 	}
+	// A durable task whose whole prompt has crossed the auto-compaction
+	// threshold is asked to compact on its next run even if this one's
+	// sections stayed under it (context_compaction.go).
+	recordAutoCompaction(ctx, store, cfg, task, len(prompt))
 
 	var result *agent.Result
 	var runErr error
@@ -3763,7 +3786,16 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			if session == "" {
 				session = runCfg.ResumeSession
 			}
-			lastTurnForHandover(ctx, store, cfg, framework, runCfg, task, session)
+			lastTurnForHandover(ctx, store, cfg, framework, runCfg, task, session, contextHandoverPrompt)
+		} else if owesHandover(task, result, end.suspend) && !handoverWrittenSince(ctx, store, task.ID, agentStartedAt) {
+			session := resumableSession
+			if session == "" {
+				session = recordedEarly
+			}
+			if session == "" {
+				session = runCfg.ResumeSession
+			}
+			lastTurnForHandover(ctx, store, cfg, framework, runCfg, task, session, requiredHandoverPrompt)
 		}
 		outcome, detail, runErr = end.outcome, end.detail, end.runErr
 		unmatched, burstRuns, burstDetail = end.unmatched, end.burstRuns, end.burstDetail

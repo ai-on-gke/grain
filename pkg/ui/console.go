@@ -160,7 +160,7 @@ func (s *Server) handleListConsoles(w http.ResponseWriter, r *http.Request) {
 		matched := filterList(sessions, func(cs ConsoleSession) bool {
 			return list.matches(cs.TaskID, cs.Title, cs.Repo)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(cs ConsoleSession) string { return cs.TaskID })
 		resp.Sessions = page.Items
 		resp.Total = page.Total
 		resp.Truncated = page.Truncated
@@ -215,13 +215,62 @@ func (s *Server) handleConsoleOutput(w http.ResponseWriter, r *http.Request) {
 		start = next - int64(len(window))
 		offset = start
 	}
+	// Redaction recognises a credential only whole, and a PTY hands a
+	// write over in as many reads as it likes: a poll landing between two
+	// of them would serve the first half of a credential that the next
+	// poll, reading from the start of its line, cuts too late. So while
+	// the run is still printing, the token it has not finished is left
+	// for the next poll (consoleHeldTail). LastOutput is read after
+	// Output, so output arriving between the two only holds back more.
+	live := session.Info().Live
+	fresh := live && time.Since(session.LastOutput()) < consoleHoldQuiet
+	if held := consoleHeldTail(window, int(offset-start), fresh); held > 0 {
+		window = window[:len(window)-held]
+		next -= int64(held)
+	}
 	data := s.redactConsoleOutput(window, int(offset-start))
 	writeJSON(w, http.StatusOK, ConsoleOutputResponse{
 		Output:  base64.StdEncoding.EncodeToString(data),
 		Offset:  next,
 		Dropped: dropped,
-		Live:    session.Info().Live,
+		Live:    live,
 	})
+}
+
+// consoleHoldQuiet is how long a live console must have printed nothing
+// before handleConsoleOutput serves a trailing token it has not seen the
+// end of. A run cat-ing a credential writes it in one go, so its pieces
+// arrive microseconds apart; somebody typing sees an unfinished long
+// word echoed once they pause or press space.
+var consoleHoldQuiet = 500 * time.Millisecond
+
+const (
+	// consoleHoldMin is the shortest trailing token held back: shorter
+	// than any credential shape or stored secret worth cutting, and long
+	// enough that a prompt such as "$ " or "[y/N]" is never held.
+	consoleHoldMin = 8
+	// consoleHoldMax is the longest: a run streaming one unbroken token
+	// past this is not printing a credential, and holding it would stall
+	// the terminal for as long as the stream lasts.
+	consoleHoldMax = 8 << 10
+)
+
+// consoleHeldTail is how many bytes at the end of window[at:]
+// handleConsoleOutput leaves for the next poll: the trailing run with no
+// whitespace after it, when the console printed within consoleHoldQuiet
+// (fresh) and the run is between consoleHoldMin and consoleHoldMax long.
+// It may be the first part of a credential still arriving, which the log
+// redactor can only recognise once it is whole. Never more than
+// window[at:], so a poll is answered with nothing rather than going back.
+func consoleHeldTail(window []byte, at int, fresh bool) int {
+	if !fresh {
+		return 0
+	}
+	tail := len(window) - (bytes.LastIndexAny(window, " \t\r\n") + 1)
+	if tail < consoleHoldMin || tail > consoleHoldMax {
+		return 0
+	}
+	return min(tail, len(window)-at)
 }
 
 // consoleRedactContext is how far before a requested offset

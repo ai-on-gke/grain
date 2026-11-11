@@ -78,6 +78,8 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 			state := string(s.State)
 			if s.ConfigRefused {
 				state = "refused its saved config"
+			} else if s.Waiting != "" {
+				state = "waiting for " + s.Waiting + ", retried every minute"
 			}
 			fmt.Printf("  %s (%s): %s\n", s.ID, state, s.Reason)
 		}

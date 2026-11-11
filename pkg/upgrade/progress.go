@@ -356,6 +356,17 @@ func (p *progress) isUnchanged() bool {
 	return p.unchangedFlag
 }
 
+// recordEditionSwitch replaces the edition switch the status records
+// (Status.EditionSwitch) -- once the pulled image has said which
+// edition it is -- and writes it out at once: it is the record that a
+// cross-edition move was asked for, and must not wait on the next line.
+func (p *progress) recordEditionSwitch(sw *EditionSwitch) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.status.EditionSwitch = sw
+	p.flushLocked()
+}
+
 // unchanged closes the upgrade out as PhaseOK with Status.Unchanged set,
 // marking every step that had not run yet as StepSkipped so the pane
 // shows why the rest of the plan was not needed.
