@@ -1609,7 +1609,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		}
 		if m := gitCommitRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
-			out, err := s.gitOutput(nil, nil, "rev-list", "--parents", "-n", "1", m[3]+"^{commit}", "--")
+			out, err := s.gitOutput(nil, nil, "rev-list", "--parents", "-n", "1", "--end-of-options", m[3]+"^{commit}", "--")
 			if err != nil || out == "" {
 				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 			}
