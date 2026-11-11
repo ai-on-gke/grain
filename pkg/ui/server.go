@@ -481,6 +481,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/context", s.handleGetTaskContext)
 	s.route("POST /api/tasks/{id}/compact", s.handleCompactTask)
 	s.route("POST /api/tasks/{id}/brief", s.handleSetTaskBrief)
+	s.route("POST /api/tasks/{id}/rollover", s.handleRolloverTask)
 	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
 	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
