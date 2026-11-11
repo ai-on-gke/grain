@@ -45,6 +45,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
@@ -498,6 +499,107 @@ func exercise(t *testing.T, label, bin string) {
 
 		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageRemoveAll, Path: dir}); err != nil {
 			t.Fatalf("remove_all: %v", err)
+		}
+	})
+
+	t.Run("hooks", func(t *testing.T) {
+		if peer.Grain == "" {
+			t.Fatalf("hello %+v has empty Grain binary path", peer)
+		}
+		runHook := func(args []string, stdin string) string {
+			t.Helper()
+			cmd := exec.CommandContext(ctx, peer.Grain, args...)
+			cmd.Stdin = strings.NewReader(stdin)
+			var out, errOut bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &errOut
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("%s %v failed: %v (stderr: %s)", peer.Grain, args, err, errOut.String())
+			}
+			if strings.Contains(errOut.String(), "ignoring unrecognized arguments") || strings.Contains(errOut.String(), "flag provided but not defined") {
+				t.Fatalf("%s %v rejected its arguments: %s", peer.Grain, args, errOut.String())
+			}
+			return strings.TrimSpace(out.String())
+		}
+
+		// Legacy / fallback contract (used for hosts without FeatureHookPolicy).
+		if got := runHook([]string{"agy-tool-hook"}, `{"toolCall":{"name":"mcp_grain-sandbox_run_command"}}`); got != "" {
+			t.Errorf("fallback agy-tool-hook denied run_command: %s", got)
+		}
+		if got := runHook([]string{"agy-tool-hook"}, `{"toolCall":{"name":"run_command"}}`); !strings.Contains(got, `"decision":"deny"`) {
+			t.Errorf("fallback agy-tool-hook allowed native run_command: %s", got)
+		}
+		if got := runHook([]string{"claude-stop-hook"}, `{"hook_event_name":"Stop","last_assistant_message":"Done."}`); !strings.Contains(got, `"decision":"block"`) {
+			t.Errorf("fallback claude-stop-hook allowed unfinished background stop: %s", got)
+		}
+
+		if peer.Has(hostd.FeatureHookPolicy) {
+			hookDir := filepath.Join(stageRoot, "hook-policy-compat")
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageMkdirAll, Path: hookDir, Perm: 0o700}); err != nil {
+				t.Fatal(err)
+			}
+			policyPath := filepath.Join(hookDir, hookpolicy.Filename)
+			recordPath := filepath.Join(hookDir, "host-calls.jsonl")
+			transcriptPath := filepath.Join(hookDir, "session.jsonl")
+			raw, err := hookpolicy.Marshal(hookpolicy.File{
+				Version: hookpolicy.Version,
+				Tool: &hookpolicy.ToolPolicy{
+					AllowedTools: []string{"mcp_grain-sandbox_future_compat"},
+					HostToolGrants: []hookpolicy.HostToolGrant{
+						{Capability: "compat#lookup", Tools: []string{"compat_lookup"}},
+					},
+					RecordPath:        recordPath,
+					TaskID:            "1",
+					RunID:             "r1",
+					DefaultDenySuffix: "denied by staged compat policy.",
+				},
+				Stop: &hookpolicy.StopPolicy{
+					ToolPrefixes:             []string{"mcp__grain-sandbox__"},
+					BackgroundContinueReason: "compat background nudge",
+					ClosingTools:             []string{"compat_finish"},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: policyPath, Data: raw, Perm: 0o600}); err != nil {
+				t.Fatal(err)
+			}
+			transcript := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"1","name":"mcp__grain-sandbox__compat_finish","input":{}}]}}` + "\n" +
+				`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"1","content":"ok","is_error":false}]}}` + "\n"
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: transcriptPath, Data: []byte(transcript), Perm: 0o600}); err != nil {
+				t.Fatal(err)
+			}
+
+			// Fire both hooks while the daemon is cut, proving policy evaluation
+			// is purely local on the host and never calls back to the controller.
+			ctl.restart(t)
+			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"mcp_grain-sandbox_future_compat"}}`); got != "" {
+				t.Errorf("staged agy-tool-hook denied future_compat: %s", got)
+			}
+			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"compat_lookup","args":{"query":"q"}}}`); got != "" {
+				t.Errorf("staged agy-tool-hook denied granted compat_lookup: %s", got)
+			}
+			// A host tool is admitted only once its call is on the record
+			// the policy names; the host agent runs on this machine, so the
+			// record is read here directly.
+			if rec, err := os.ReadFile(recordPath); err != nil || !strings.Contains(string(rec), `"compat_lookup"`) {
+				t.Errorf("staged agy-tool-hook admitted compat_lookup without recording it at %s: %q, %v", recordPath, rec, err)
+			}
+			if got := runHook([]string{"agy-tool-hook", "-policy", policyPath}, `{"toolCall":{"name":"mcp_grain-sandbox_run_command"}}`); !strings.Contains(got, "denied by staged compat policy.") {
+				t.Errorf("staged agy-tool-hook consulted compiled-in roster: %s", got)
+			}
+			if got := runHook([]string{"claude-stop-hook", "-policy", policyPath}, `{"hook_event_name":"Stop","last_assistant_message":"Done."}`); !strings.Contains(got, "compat background nudge") {
+				t.Errorf("staged claude-stop-hook did not block with staged nudge: %s", got)
+			}
+			if got := runHook([]string{"claude-stop-hook", "-policy", policyPath}, fmt.Sprintf(`{"hook_event_name":"Stop","transcript_path":%q}`, transcriptPath)); got != "" {
+				t.Errorf("staged claude-stop-hook blocked compat_finish: %s", got)
+			}
+
+			ctl.waitConnected(t)
+			c = ctl.client()
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageRemoveAll, Path: hookDir}); err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 

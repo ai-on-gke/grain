@@ -242,6 +242,7 @@ that predates the list is credited from its protocol version
 | `features` | contract v1 | `Hello.features` itself, so silence about a feature is a statement | infers features from the protocol version |
 | `env_open` | contract v1 | `env: ["*"]` (any variable outside the frozen deny set), `~/`-relative `path`/`paths_under`/`cwd_under`, and ignored `x-*` annotation keys | installer and Settings snippets write closed `env:` lists and absolute paths |
 | `logins_map` | contract v1+ | top-level `logins:` map in the allowlist; `Hello.login_targets` and `stage symlink` accept any regular file it names (`Hello.codex_auth` deprecated) | falls back to `Hello.codex_auth` for codex's login |
+| `hook_policy` | contract v1+ | `agy-tool-hook` and `claude-stop-hook` accept `-policy` and evaluate a staged per-run hook policy file (`pkg/agent/hookpolicy`) | stages no policy file and omits `-policy`; hooks fall back to the roster and stop rule compiled into the host binary |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -477,8 +478,9 @@ list should make that rare.
 
 Filed as separate tasks, each after this one lands:
 
-1. **V1 + V2: hook policy as staged data** -- the daemon stages a per-run
-   policy file (published tools, host-tool grants, stop-rule parameters);
+1. **V1 + V2: hook policy as staged data (done)** -- the daemon stages a
+   per-run policy file (`pkg/agent/hookpolicy`: published tools/patterns,
+   capability-server prefixes, host-tool grants, stop-rule parameters);
    agentd's `agy-tool-hook` and `claude-stop-hook` evaluate it; feature
    `hook_policy`; the daemon keeps today's behaviour for hosts without it.
 2. **V3 + V4: host-owned `logins:`** *(done)* -- generic login discovery and
@@ -516,6 +518,7 @@ feature agents_only
 feature features
 feature env_open
 feature logins_map
+feature hook_policy
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]
