@@ -1325,6 +1325,12 @@ agentd_publish() {
   [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || die "$release is not a vX.Y.Z or vX.Y.Z-rc.N release: only those carry grain-agentd"
   [ -n "$token" ] || [ "$dry_run" = true ] || die "publishing needs GITHUB_TOKEN (permissions: contents: write)"
   validate_agentd "$d"
+  # A signed manifest names the version it was built for; one uploaded to
+  # another release would vouch for a binary under the wrong version.
+  for name in "${agentd_manifests[@]}"; do
+    [ "$(jq -r '.version' "$d/$name")" = "$release" ] ||
+      die "$d/$name is for version $(jq -r '.version' "$d/$name"), not $release"
+  done
   upload_base=""
   if release_json "$release"; then
     id="$(jq -r .id "$scratch/release")"

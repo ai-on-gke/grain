@@ -455,6 +455,9 @@ check "agentd-validate refuses a features entry pkg/agentd/release would reject"
   '[ "$status" != 0 ] && grep -q "invalid features" <<< "$out"'
 
 printf '70 images.json\n' > "$FAKE_V7_ASSETS"
+fake AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-publish v3.4.1 "$agentd_dir"
+check "agentd-publish refuses manifests signed for another version" \
+  '[ "$status" != 0 ] && grep -q "is for version v3.4.0, not v3.4.1" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
 fake AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-publish v3.4.0 "$agentd_dir"
 check "agentd-publish uploads both binaries and then both signed manifests to a promoted release" \
   '[ "$status" = 0 ] && [ "$(grep -c "^POST .*/releases/7/assets?name=" "$FAKE_LOG")" = 4 ] &&
