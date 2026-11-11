@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -248,6 +249,15 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 
 func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.Lookup) GrantCheck {
 	check := GrantCheck{Grant: s}
+	// grain#ci is a well-formed reference to a registered method, so the
+	// checks below would pass it -- and SetCapability would then refuse
+	// it (capabilityByID). A check that says yes to what the edit says no
+	// to is how request_access relayed a grain#ci nobody could grant
+	// (task 4361): refuse it here, in the same words.
+	if grainci.IsGrant(s) {
+		check.Error = capabilityRefusal(s)
+		return check
+	}
 	if !model.IsCapabilityRef(s) {
 		if _, ok := c.capabilityByID(s); !ok {
 			check.Error = capabilityRefusal(s)

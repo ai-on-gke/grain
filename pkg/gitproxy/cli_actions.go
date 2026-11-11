@@ -586,7 +586,7 @@ func writeActionResult(w http.ResponseWriter, res CLIActionResult, err error) {
 // that decides whether its branch goes through grain CI at all.
 func requireOwnCI(scope namespace.Scope) error {
 	if !scope.MayReadCI && !scope.MayReadAllCI {
-		return namespace.RefuseCapability("grain ci", model.GrainCIRef)
+		return namespace.RefuseGrainCIAction("grain ci")
 	}
 	if scope.TaskRepo == "" || scope.TaskBranch == "" {
 		return errNoTaskRepo

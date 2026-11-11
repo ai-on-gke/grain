@@ -218,6 +218,14 @@ func TestGrantScoping(t *testing.T) {
 	noCIScope := Scope{TaskRepo: "bwsalmon/grain", MayReadCI: false, MayReadSrc: false}
 	if rec := serveRequest(srv, noCIScope, http.MethodGet, "/fs/ci/bwsalmon/grain/run-1/go/Test.log", nil); rec.Code != http.StatusForbidden {
 		t.Errorf("no ci-read got status %d, want 403", rec.Code)
+	} else {
+		// The refusal names the commands that need no grant and the
+		// grant that opens ci://, not "a human attaches grain#ci".
+		for _, want := range []string{"`grain ci wait`", "`grain pr open`", "api:ci-read@bwsalmon/grain"} {
+			if !strings.Contains(rec.Body.String(), want) {
+				t.Errorf("no ci-read refusal %q does not name %q", rec.Body.String(), want)
+			}
+		}
 	}
 	if rec := serveRequest(srv, noCIScope, http.MethodGet, "/fs/ci/?list", nil); rec.Code != http.StatusForbidden {
 		t.Errorf("no ci-read root list got status %d, want 403", rec.Code)
