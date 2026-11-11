@@ -100,7 +100,7 @@ describe("CapabilityPolicyEditor", () => {
     render(<CapabilityPolicyEditor showError={() => {}} />);
     const cat = await screen.findByTestId("policy-catalogue-entries");
     expect(cat).toHaveTextContent(
-      "api:grain/memory — disabled (retired in_process.memory → move to api_scopes.presets.memory)",
+      "https://grain.dev/capabilities/api#grain/memory — disabled (retired in_process.memory → move to api_scopes.presets.memory)",
     );
     expect(cat).toHaveTextContent(
       'https://grain.dev/capabilities/grain#sql={"write":true} — disabled (retired in_process.db-write → move to servers (https://grain.dev/capabilities/grain#sql))',
@@ -109,13 +109,13 @@ describe("CapabilityPolicyEditor", () => {
       "https://grain.dev/capabilities/grain#journal — repos ai-on-gke/grain (retired in_process.grain-log → move to servers (https://grain.dev/capabilities/grain#journal))",
     );
     expect(cat).toHaveTextContent(
-      'api:deployment:read + https://grain.dev/capabilities/grain#health — kinds director (retired in_process.deployment-health → move to api_scopes.raw_scopes["deployment:read"] and servers (https://grain.dev/capabilities/grain#health))',
+      'https://grain.dev/capabilities/api#deployment:read + https://grain.dev/capabilities/grain#health — kinds director (retired in_process.deployment-health → move to api_scopes.raw_scopes["deployment:read"] and servers (https://grain.dev/capabilities/grain#health))',
     );
     expect(cat).toHaveTextContent(
-      "api:grain/release-notes — repos acme/* · requires a person (api_scopes.presets.release-notes)",
+      "https://grain.dev/capabilities/api#grain/release-notes — repos acme/* · requires a person (api_scopes.presets.release-notes)",
     );
     expect(cat).toHaveTextContent(
-      "api:grain/release-manager — disabled (api_scopes.presets.release-manager)",
+      "https://grain.dev/capabilities/api#grain/release-manager — disabled (api_scopes.presets.release-manager)",
     );
     expect(
       within(cat).getByRole("link", { name: "API scope sets" }),

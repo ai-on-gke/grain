@@ -122,7 +122,7 @@ describe("RepoRuns", () => {
     expect(
       await screen.findByText(/No CI runs for acme\/widgets yet/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/grain-ci capability/)).toBeInTheDocument();
+    expect(screen.getByText(/grain#ci capability/)).toBeInTheDocument();
   });
 
   it("starts a run against this repo without asking which repo", async () => {

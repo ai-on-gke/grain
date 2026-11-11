@@ -1724,7 +1724,19 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				}
 			}
 			jobs := s.workflowJobsFor(key)
-			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
+			runID := s.runIDFor(key)
+			payload := workflowRunsJSON(m[1], m[2], runID, jobs)
+			// A run re-run through rerun-failed-jobs reads as its next
+			// attempt, as on GitHub, though its jobs stay what the test
+			// seeded: a re-run of a seeded infrastructure failure fails
+			// the same way again, which is what a test counting re-runs
+			// wants.
+			if runs, ok := payload["workflow_runs"].([]map[string]any); ok {
+				for _, run := range runs {
+					run["run_attempt"] = 1 + s.rerunsOf(int64(runID))
+				}
+			}
+			return jsonResponse(200, payload), nil
 		}
 		if m := actionsRunRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -3141,6 +3153,18 @@ func (s *Sim) jobByID(id int) (WorkflowJob, bool) {
 		return WorkflowJob{}, false
 	}
 	return jobs[index], true
+}
+
+// rerunsOf is how many times rerun-failed-jobs was accepted for runID.
+// Called with s.mu held, like every handler.
+func (s *Sim) rerunsOf(runID int64) int {
+	n := 0
+	for _, id := range s.RerunFailedJobs {
+		if id == runID {
+			n++
+		}
+	}
+	return n
 }
 
 // jobConclusion is GitHub's own field, with Sim's default for a job a
