@@ -1026,7 +1026,7 @@ describe("InboxPage", () => {
   describe("replying to a parked question", () => {
     it("shows only the question's summary on the row, and the whole question on expanding it", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1081,7 +1081,7 @@ describe("InboxPage", () => {
 
     it("expands and collapses the question from the keyboard", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1114,7 +1114,7 @@ describe("InboxPage", () => {
 
     it("falls back to the task's derived questionSummary for a question asked without a comment summary", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1143,7 +1143,7 @@ describe("InboxPage", () => {
 
     it("renders a closing report whole without QuestionDisclosure when no question summary is present", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",
@@ -1192,7 +1192,7 @@ describe("InboxPage", () => {
 
     it("shows the question and posts the answer as a comment", async () => {
       api.mockImplementation(async (path) =>
-        path === "/api/tasks/4"
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
           ? {
               id: "4",
               state: "awaiting_reply",

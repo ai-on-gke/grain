@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Link, TextField } from "@mui/material";
 import LinkIcon from "@mui/icons-material/Link";
 import api from "../../api.js";
+import AccessGate from "../AccessGate.jsx";
+import {
+  earlierButtonLabel,
+  mergeFreshDetail,
+  prependEarlierPage,
+  taskEarlierPath,
+} from "../../taskDetailPages.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { useTimelineOrder } from "../../TimelineOrderContext.jsx";
 import { formatDateTime } from "../../time.js";
@@ -340,7 +347,13 @@ const CLOSE_SYNC_WINDOW_MS = 60 * 60 * 1000;
 // unrecoverable) -- so this can skip a state without that being a bug to
 // chase. One it could only place approximately comes flagged inferred,
 // and its time is shown as approximate.
-function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
+function timelineEvents(
+  t,
+  zone,
+  now = Date.now(),
+  onOpenTask = null,
+  context = null,
+) {
   const events = [];
   const push = (e) => events.push({ ...e, seq: events.length });
   const transitions = t.transitions || [];
@@ -685,7 +698,18 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
   });
   prEvents.forEach(push);
 
+  // A durable task's compaction cursor (DT-15): comments at or before it
+  // are folded into a handover and left out of prompts, so they are
+  // drawn collapsed -- still here, and still opened by a deep link
+  // (CommentDeepLink's revealComment opens the <details>). The newest
+  // handover says when it is stale.
+  const compactedThrough =
+    context?.compacted_through || t.compactedThrough || 0;
+  const lastHandover = (t.comments || []).findLastIndex((c) => c.handover);
   const commentEvents = (t.comments || []).map((c, i) => {
+    const summarised =
+      compactedThrough > 0 && c.id != null && c.id <= compactedThrough;
+    const stale = context?.handover_stale && i === lastHandover;
     // onBehalfOf is set when grain relayed somebody else's words -- a
     // question from a dispatched run reads as grain speaking for an
     // agent, not as grain's own.
@@ -694,7 +718,7 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
     const who = commentAuthor(c);
     const at = timelineTime(c.createdAt);
     return {
-      key: `comment-${i}`,
+      key: `comment-${c.id ?? i}`,
       // The comment's own id, which a /tasks/<id>#comment=<id> link
       // names (commentLinks.js) and the entry is marked with.
       commentId: c.id,
@@ -709,6 +733,8 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               {who} · {c.authorKind}
               {c.filedVia ? ` · from ${c.filedVia}` : ""}
               {c.handover ? " · handover" : ""}
+              {stale ? " · stale" : ""}
+              {summarised ? " · summarised" : ""}
             </span>
             <span className="timeline-comment-actions">
               {c.id != null && (
@@ -752,10 +778,19 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               <strong>{c.summary}</strong>
             </p>
           )}
-          {c.body && (
-            <ExpandableMarkdown className="timeline-comment-body">
-              {c.authorKind === "automation" ? linkTaskRefs(c.body) : c.body}
-            </ExpandableMarkdown>
+          {c.body && summarised ? (
+            <details className="timeline-summarised">
+              <summary>Summarised by compaction -- show</summary>
+              <ExpandableMarkdown className="timeline-comment-body">
+                {c.authorKind === "automation" ? linkTaskRefs(c.body) : c.body}
+              </ExpandableMarkdown>
+            </details>
+          ) : (
+            c.body && (
+              <ExpandableMarkdown className="timeline-comment-body">
+                {c.authorKind === "automation" ? linkTaskRefs(c.body) : c.body}
+              </ExpandableMarkdown>
+            )
           )}
           <AttachmentLinks taskId={t.id} attachments={c.attachments} />
         </>
@@ -793,13 +828,82 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
 // put: under a newest-first feed it sits above the list, so replying to
 // what a run just said is never a scroll past the whole history to reach
 // the box.
-export default function Timeline({ t, act, showError, onOpenTask }) {
+export default function Timeline({
+  t: propTask,
+  context = null,
+  act,
+  showError,
+  onOpenTask,
+  onLoadEarlier = null,
+}) {
+  const [localTask, setLocalTask] = useState(null);
+  useEffect(() => {
+    setLocalTask((prev) => {
+      if (!prev || String(prev.id) !== String(propTask?.id)) return null;
+      return mergeFreshDetail(prev, propTask);
+    });
+  }, [propTask]);
+  const t = !onLoadEarlier && localTask ? localTask : propTask;
+
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const textareaRef = useRef(null);
   const zone = useTimeZone();
   const { order } = useTimelineOrder();
   const newestFirst = order === "newest";
-  const events = timelineEvents(t, zone, Date.now(), onOpenTask);
+  const events = timelineEvents(t, zone, Date.now(), onOpenTask, context);
   const ordered = newestFirst ? [...events].reverse() : events;
+
+  const handleLoadEarlier = async () => {
+    if (loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      if (onLoadEarlier) {
+        await onLoadEarlier();
+      } else {
+        const path = taskEarlierPath(t);
+        if (!path) return;
+        const wantComments =
+          (t.olderComments || 0) > 0 && (t.comments || []).length > 0;
+        const wantAttempts =
+          (t.olderAttempts || 0) > 0 && (t.attempts || []).length > 0;
+        const earlier = await api(path);
+        setLocalTask((prev) =>
+          prependEarlierPage(prev || propTask, earlier, {
+            loadedComments: wantComments,
+            loadedAttempts: wantAttempts,
+          }),
+        );
+      }
+    } catch (err) {
+      if (showError) showError(err);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
+  const earlierLabel = earlierButtonLabel(
+    t?.olderComments || 0,
+    t?.olderAttempts || 0,
+  );
+  const earlierControl = earlierLabel ? (
+    <div
+      id="timeline-show-earlier"
+      className={
+        newestFirst
+          ? "timeline-earlier timeline-earlier-bottom"
+          : "timeline-earlier timeline-earlier-top"
+      }
+      data-testid="timeline-show-earlier"
+    >
+      <Button
+        size="small"
+        variant="outlined"
+        disabled={loadingEarlier}
+        onClick={handleLoadEarlier}
+      >
+        {loadingEarlier ? "Loading earlier…" : earlierLabel}
+      </Button>
+    </div>
+  ) : null;
   // openAttempt is the attempt (bwsalmon/agents#446's own Attempt shape,
   // off t.attempts) whose transcript is open, or null -- local to
   // Timeline, since nothing outside it needs to know.
@@ -809,7 +913,11 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
   const [attachments, setAttachments] = useState([]);
   const sending = useRef(false);
 
-  const send = async () => {
+  // reopen asks for a closed task to be reopened with the comment
+  // ("Reopen and send"), so the reopen queues the run that answers it
+  // (ui.Client.AddCommentReopening); a closed task's comment otherwise
+  // reaches no agent.
+  const send = async (reopen = false) => {
     if (sending.current) return;
     const body = textareaRef.current?.value || "";
     if (!body.trim() && attachments.length === 0) return;
@@ -835,6 +943,7 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
             body: JSON.stringify({
               body,
               attachments: uploaded,
+              ...(reopen && { reopen: true }),
             }),
           }),
         t.id,
@@ -866,42 +975,62 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
         Sending a comment reopens this task for another run.
       </p>
     ) : null;
+  // A closed task stays closed when commented on, so the box says before
+  // it is used that the comment reaches no agent, and offers the reopen
+  // that would deliver it. The note stays for a role that may not reopen
+  // (AccessGate leaves the button out); Comment only is the plain post.
+  const closed = t.state === "closed";
+  const closedNote = closed ? (
+    <p className="hint comment-form-closed">
+      This task is closed; a comment won&apos;t reach an agent.
+    </p>
+  ) : null;
   const composer = (
-    <div
-      className="comment-form"
-      onPaste={(evt) => {
-        const files = getPastedImages(evt);
-        if (files.length > 0) {
+    <>
+      {closedNote}
+      <div
+        className="comment-form"
+        onPaste={(evt) => {
+          const files = getPastedImages(evt);
+          if (files.length > 0) {
+            evt.preventDefault();
+            setAttachments((current) => [...current, ...files]);
+          }
+        }}
+        onDrop={(evt) => {
+          const dropped = getDroppedFiles(evt);
+          if (dropped.length > 0) {
+            evt.preventDefault();
+            setAttachments((current) => [...current, ...dropped]);
+          }
+        }}
+        onDragOver={(evt) => {
           evt.preventDefault();
-          setAttachments((current) => [...current, ...files]);
-        }
-      }}
-      onDrop={(evt) => {
-        const dropped = getDroppedFiles(evt);
-        if (dropped.length > 0) {
-          evt.preventDefault();
-          setAttachments((current) => [...current, ...dropped]);
-        }
-      }}
-      onDragOver={(evt) => {
-        evt.preventDefault();
-      }}
-    >
-      <TextField
-        multiline
-        rows={2}
-        placeholder={t.interactive ? "Message..." : "Reply..."}
-        inputRef={textareaRef}
-        autoFocus={t.interactive}
-        fullWidth
-        size="small"
-      />
-      <AttachmentPicker files={attachments} onChange={setAttachments} />
-      <Button variant="outlined" onClick={send}>
-        Comment
-      </Button>
-      {reopens}
-    </div>
+        }}
+      >
+        <TextField
+          multiline
+          rows={2}
+          placeholder={t.interactive ? "Message..." : "Reply..."}
+          inputRef={textareaRef}
+          autoFocus={t.interactive}
+          fullWidth
+          size="small"
+        />
+        <AttachmentPicker files={attachments} onChange={setAttachments} />
+        {closed && (
+          <AccessGate scope="tasks:write" repo={t.repo} hide>
+            <Button variant="contained" onClick={() => send(true)}>
+              Reopen and send
+            </Button>
+          </AccessGate>
+        )}
+        <Button variant="outlined" onClick={() => send()}>
+          {closed ? "Comment only" : "Comment"}
+        </Button>
+        {reopens}
+      </div>
+    </>
   );
 
   return (
@@ -949,6 +1078,7 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
         </div>
       )}
       {newestFirst && composer}
+      {!newestFirst && earlierControl}
       {ordered.length > 0 && (
         <ul className="timeline-list">
           {ordered.map((e) => (
@@ -1045,6 +1175,7 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
           ))}
         </ul>
       )}
+      {newestFirst && earlierControl}
       {openAttempt && (
         <AttemptTranscriptOverlay
           taskId={t.id}

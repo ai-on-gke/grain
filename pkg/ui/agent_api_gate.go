@@ -738,6 +738,9 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 				return fmt.Errorf("task %s is the standing session %q, which task %s does not own", target, session, acting.ID)
 			}
 		}
+		if err := s.agentCrossTaskRail(ctx, acting, pattern, target); err != nil {
+			return err
+		}
 		if pattern == "POST /api/tasks/{id}/run-now" || pattern == "POST /api/tasks/{id}/pause" || pattern == "POST /api/tasks/{id}/resume" {
 			me := model.Principal{Kind: model.PrincipalAgent, ID: acting.ID}
 			if p, err := s.tasks.Store.GetPause(ctx, target); err == nil && p != nil && !p.PausedBy.Same(me) {
@@ -1430,10 +1433,23 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 	if name == model.DurableCapability {
 		return fmt.Errorf("%s lets a task jump the queue and run with no deadline: only a person may grant it", name)
 	}
-	notHeld := fmt.Errorf("an agent cannot grant %s, which its own task does not hold", name)
+	if !agentHoldsGrant(held, name, normalize) {
+		return fmt.Errorf("an agent cannot grant %s, which its own task does not hold", name)
+	}
+	return nil
+}
+
+// agentHoldsGrant reports whether a task holding held already holds name
+// (canonical: legacy aliases already resolved by the caller): an api:*
+// grant every scope of which held allows on every repository name gives
+// it, a capability reference held's own references cover, or a plain
+// grant held names exactly. It is the subset half of agentGrantRefusal,
+// without that function's dangerous-grant refusals, so agentCoversGrant
+// can ask it of grants a task already carries.
+func agentHoldsGrant(held []string, name string, normalize func(string) (string, error)) bool {
 	if g, ok, err := ParseAPIGrant(name); ok {
 		if err != nil {
-			return notHeld
+			return false
 		}
 		// A scope set limited to some repositories grants each scope on
 		// those alone, so that is what the agent must hold: read through
@@ -1443,11 +1459,11 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 		for _, scope := range g.Scopes {
 			for _, repo := range g.ReposOf(scope) {
 				if !set.Allows(scope, repo) {
-					return notHeld
+					return false
 				}
 			}
 		}
-		return nil
+		return true
 	}
 	if model.IsCapabilityRef(name) {
 		if normalize != nil {
@@ -1459,15 +1475,9 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 		for i, h := range held {
 			parent[i] = model.Grant{Capability: h}
 		}
-		if len(model.UncoveredCapabilityRefs([]model.Grant{{Capability: name}}, parent)) > 0 {
-			return notHeld
-		}
-		return nil
+		return len(model.UncoveredCapabilityRefs([]model.Grant{{Capability: name}}, parent)) == 0
 	}
-	if !slices.Contains(held, name) {
-		return notHeld
-	}
-	return nil
+	return slices.Contains(held, name)
 }
 
 // grantBodies are the routes whose bodies name a grant under keys of
@@ -3609,6 +3619,8 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/pull-requests/review":               taskRespNone,
 	"POST /api/pull-requests/submit":               taskRespNone,
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
+	"POST /api/tasks/{id}/compact":                 taskRespNone,
+	"POST /api/tasks/{id}/brief":                   taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
 	"POST /api/tasks/{id}/submit":                  taskRespSingle,

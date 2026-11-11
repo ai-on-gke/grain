@@ -944,6 +944,8 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/wait":          true,
 	"POST /api/tasks/{id}/messages":                                        true,
 	"POST /api/tasks/{id}/notes":                                           true,
+	"POST /api/tasks/{id}/compact":                                         true,
+	"POST /api/tasks/{id}/brief":                                           true,
 	"POST /api/tasks/{id}/notify":                                          true,
 	"POST /api/tasks/{id}/pull-request":                                    true,
 	"POST /api/tasks/{id}/resume":                                          true,

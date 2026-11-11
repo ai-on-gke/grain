@@ -1352,7 +1352,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 // knownGapAgentCrossTaskPromptSteering tracks cross-task prompt-injection /
 // execution-steering by an agent holding non-dangerous api:tasks:write on a
 // repository against another task in that same repository carrying wider grants.
-const knownGapAgentCrossTaskPromptSteering = true
+const knownGapAgentCrossTaskPromptSteering = false
 
 func TestPath4KnownGapAgentCrossTaskPromptSteering(t *testing.T) {
 	rig := newEscalationRig(t)
@@ -1772,7 +1772,7 @@ func TestPath6NonAdminScheduleConsoleSessionAndLivePTYCeilings(t *testing.T) {
 		})
 	}
 
-	inputBody := fmt.Sprintf(`{"data":%q}`, base64.StdEncoding.EncodeToString([]byte("echo hi\n")))
+	inputBody := fmt.Sprintf(`{"input":%q}`, base64.StdEncoding.EncodeToString([]byte("echo hi\n")))
 	if c, b := rig.callAs("wsess@example.com", http.MethodGet, "/api/console/"+privPTYTask.ID+"/output", ""); c != http.StatusForbidden {
 		t.Errorf("wsess GET /api/console/%s/output on gcp-key task = %d (%s), want 403", privPTYTask.ID, c, b)
 	}

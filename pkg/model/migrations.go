@@ -971,6 +971,23 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `ci_api_repos` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 136,
+		Description: "add task_context and task_brief_edit, a durable task's compaction cursor, handover version " +
+			"and current brief (grain/task-4107)",
+		Statements: []string{
+			taskContextTable,
+			taskBriefEditTable,
+			taskBriefEditTaskIndex,
+		},
+	},
+	{
+		Version:     137,
+		Description: "add grain_config.hub_environment_name, the environment name a Grain Hub last supplied as this deployment's default (grain/task-4200)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `hub_environment_name` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

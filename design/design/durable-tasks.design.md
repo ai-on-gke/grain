@@ -84,6 +84,10 @@ the gaps between them, and making the rule hold for every way a run stops.
    duties move into daemon reconcilers. It is pinned to a strong model.
 8. **A console session is a durable task whose goal is "a person closes
    it".** The session-only exemptions collapse into that setting.
+9. **A durable task compacts on purpose and keeps a current brief**
+   (DT-15). A compaction moves a cursor past which prompts carry only a
+   fresh handover. The current brief replaces the description in prompts.
+   Rollover to a successor task is the storage backstop.
 
 ## Long-lived runs {#DT-1}
 
@@ -880,6 +884,216 @@ record by a separate pinned-model task) catches what the vocabulary
 cannot. It is a schedule under the same `judgement` model, and its
 findings are rows in the same table.
 
+## Deliberate compaction, the current brief and rollover {#DT-15}
+
+Asked by the operator on 2026-11-10 (grain/task-4107): "Do we have a good
+way for a durable task to compact its context?", and "won't the task
+eventually become too large to load?"
+
+### What there was
+
+- **The handover** (`write_handover`, `grain handover write`): a standing
+  summary carried into every prompt outside the thread's budget
+  (`conversationHandoverBudget`).
+- **The positional cut** (`conversation.go`): the oldest and newest
+  messages are kept and the middle is elided.
+- **Session resume** (`ResumeSession`) and the **`context` suspension**:
+  on exhaustion the run gets one last turn to write its handover.
+
+Durable task #3557 (Grain Hub maintainer) shows where that ends: its
+prompt grew from 46 KB to 84 KB over runs 35–41 and is now held at about
+62 KB by the cut. The gaps were:
+
+- the handover is voluntary and goes stale unnoticed;
+- the cut chooses the middle by size, not importance;
+- nothing folds history into the summary on purpose;
+- the description is immutable and stays in every prompt after it is
+  obsolete (#3557's still describes its finished Stage 1).
+
+### Compaction
+
+A compaction writes a fresh handover from the whole thread (the current
+handover, every comment and the recent run outcomes) and moves a
+**cursor**. Every comment at or before the cursor is **summarised**: later
+prompts carry the handover and only the comments after the cursor. The
+summarised comments stay in the record, in the UI (collapsed under the
+handover) and behind every deep link. Nothing is deleted.
+
+- **Store:** `task_context` (schema 136), one row per task:
+  `compacted_through` (a comment ID), `compacted_at`/`_by`,
+  `handover_version`, `handover_confirmed_at`, `compact_requested_at`/`_by`
+  and the current brief. The cursor never moves backwards.
+- **Agent:** `compact_context(handover)`, relayed when the run ends (last
+  call wins, like `write_handover`). The cursor moves to the last comment
+  posted **before the run started**, so nothing a person said while the
+  run was working is folded away unread.
+- **People:** `grain compact <id> [-handover-file f]` and
+  `POST /api/tasks/{id}/compact`. With a handover, the task is compacted
+  at once through every comment so far, under the person's name. Without
+  one, a compaction **request** is recorded and the task's next run is
+  told, before anything else, to call `compact_context`. That run is the
+  "short compaction run": it costs one tool call at the head of the next
+  dispatch rather than a dispatch of its own, and a resting task compacts
+  when it next wakes. A dedicated compaction-only dispatch is follow-up
+  work (below).
+- **The prompt** says the conversation was compacted, by whom, through
+  which comment and at which handover version, and that the summarised
+  messages are still on the task.
+
+Positional cutting stays as the backstop beneath it. It still applies to
+whatever is after the cursor, so a task nobody compacts is bounded
+exactly as before.
+
+### A required, versioned handover
+
+- Every new handover body bumps `handover_version`. Writing the
+  **same** handover again is a **confirmation**: it resets the age without
+  a new version.
+- **Age** is measured, not stored: the runs started and the comments
+  posted since the handover was written or confirmed
+  (`model.HandoverAge`). Past `HandoverStaleRuns` (10) runs or
+  `HandoverStaleComments` (30) comments it is **stale**. The durable
+  task's prompt then asks for a replacement or confirmation, and
+  `GET /api/tasks/{id}/context` returns `handover_stale`.
+- **Required at rest:** a durable run that ends parked (`ask_question`,
+  `request_secret`, `request_access`, `resume_later`, `wait_for_task`) or
+  suspended, without having written or confirmed its handover in that
+  run, gets the same one-last-turn the `context` suspension already gave
+  (`lastTurnForHandover`, now with `requiredHandoverPrompt`).
+- **Console sessions are exempt from the required turn:** every turn of
+  a session parks on the person's next message, so a handover turn after
+  each would double what a conversation costs. Their handover is still
+  asked for where the thread is cut and at a `context` suspension.
+
+### The current brief
+
+A durable task's description describes what it was filed for. Months in,
+that is often finished work. The **current brief** is a separate field
+(`task_context.current_brief`) that replaces the description in prompts.
+The prompt says that it does, and that the original is still on the task.
+
+- The agent edits it with `update_brief(brief, reason)`. People edit it
+  with `grain brief <id> -file f -reason r` or `POST /api/tasks/{id}/brief`.
+  A reason is required.
+- Every edit is a row in `task_brief_edit` (who, when, why, the text). The
+  original `task.body` is never rewritten, so template- and
+  schedule-filed durable tasks keep their source brief as the original.
+- An empty brief reverts prompts to the original description.
+
+### Auto-compaction
+
+When the assembled prompt of a durable task crosses
+`Config.AutoCompactBytes` (default `DefaultAutoCompactBytes`, 50 KB, just
+under the 64 KB thread bound plus its handover allowance), the run is
+told to compact first and a compaction request is recorded as
+`grain (auto-compaction)`. If the run does not answer it, the next
+dispatch asks again. The check is in the prompt builder because the
+prompt's size is only known there. A dispatch is never held back for it,
+so auto-compaction cannot be a new way for a dispatch to fail.
+
+The threshold is a daemon setting rather than a stored one. Expressing it
+as a fraction of the model's context window is open question 4.
+
+### Routes and scopes
+
+`GET /api/tasks/{id}/context`, `POST /api/tasks/{id}/compact` and
+`POST /api/tasks/{id}/brief` are under `dispatch:read` / `dispatch:write`,
+not `tasks:*`. They change what a task's **next dispatch carries**,
+which is what the dispatch scopes already govern (`run-now`), and the
+`tasks` explore group is at its 10 KB compact-listing budget.
+
+### Will the record become too large to load?
+
+Compaction bounds the **prompt**. The **record** (comments, runs,
+transcripts, observations) keeps growing, and the director asked that
+nothing load the whole of it at once. Where that stands:
+
+| Path | Today | Plan |
+|---|---|---|
+| Dispatch prompt | Bounded: the cursor, then the positional cut | Done here |
+| `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
+| `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
+| `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
+| `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
+| SSE updates | Per-event deltas | No change needed |
+| State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
+| Reconcilers and tail readers (`WriteTaskHandover`, `relayHandover`, `CarryConsoleSessionHandover`, `TaskHandoverAge`, wait targets, console sessions, `cycle.go`, `Client.Task`, session titles, task owner) | Read `LatestHandover`, `LatestComment`, `Comment(id)`, `FirstHumanComment` or backwards pages (`CommentsBefore`) by index | Done (grain/task-4194, grain/task-4219) |
+
+Measured by grain/task-4194 on 2026-11-10, through `GET /api/tasks/{id}`:
+
+| Task | Detail | Comments (body bytes) | Runs | Transitions |
+|---|---|---|---|---|
+| #3557 (Grain Hub maintainer) | 151 KB | 103 (81 KB) | 43 | 93 |
+| #2923 (the director session) | 368 KB | 409 (248 KB) | 34 | 69 |
+
+Neither is too large to load yet; the director's grows about a comment
+an exchange. The limits to set: a task page loads at most 50 comments
+and 20 runs before asking for more (`?comments_limit=50&attempts_limit=20`);
+a dispatch reads at most the comments after the cursor.
+
+### Rollover to a successor task
+
+Compaction keeps one task ID: links, history and the PR stay in one
+place, but storage grows forever. **Rollover** files a successor and
+closes the predecessor. That gives a clean record and bounded storage,
+at the price of a split history and deep links that now point at a
+closed task.
+
+**Design:**
+
+- **Trigger:** `grain task rollover <id>` / `POST /api/tasks/{id}/rollover`,
+  or automatically when a durable task passes a record limit: runs
+  (default 500), comments (default 2,000), or age (default one year since
+  filing).
+- **The successor** has the same repo, grants, hosting, admission,
+  goal, branch/PR attachment and schedule bindings. Its description is
+  the predecessor's current brief, then its handover, then "Rolled over
+  from [task N](/tasks/N)". It starts with a fresh `task_context`.
+- **The predecessor** closes with outcome `rolled_over` and the note
+  "rolled over to #M". It keeps everything; nothing is copied or moved
+  except references.
+- **References move** in one transaction: `depends_on` entries naming
+  it, `wait_for_task` parks and `task_suspension.resume_on` targets,
+  schedules whose standing task it is, notification subjects and
+  subscriptions, the console session's binding, and the PR/branch
+  attachment. A reader resolving a closed task with a `rolled_over_to`
+  forwards to the successor, so `/tasks/N` shows a banner and a link,
+  and the API answers with the successor's ID beside its own.
+- **Deep links** to the predecessor's comments still resolve, because
+  the predecessor is never deleted (`/tasks/N#comment-ID`, #3862).
+
+**When each applies:** compact by default, whenever the prompt or the
+thread asks for it. Roll over only past the record limit, and not on a
+schedule shorter than a year. A durable task should compact many times
+for every rollover.
+
+**Grain's own standing sessions** (the director chat, task 2923) roll
+over too, by the mechanism they already have: a closed console session is
+refiled the next cycle (`reconcileConsoleSession`), and
+`CarryConsoleSessionHandover` already carries its last handover. Rollover
+for a session is that refiling, plus the reference moves above, plus the
+current brief carried with the handover. It is never automatic in the
+middle of a conversation: past the limit, the director is told and
+rolls over when the conversation next rests.
+
+**Status:** designed here, not implemented in grain/task-4107. It is the
+storage backstop, not something prompts or page loads depend on.
+
+### Follow-up work
+
+- A compaction-only dispatch for a person's request on a resting task,
+  so the request does not wait for the next wake.
+- `grain task read` / `read_grain_task` summary default and `conversation, after:` paging (the remaining open row in the table above).
+- UI: the Compact button, the brief editor with its edit history, and the
+  stale-handover badge, all under the deployment's screenshot rule.
+  Done in grain/task-4193: a durable task's page shows the current brief
+  in place of the description (the original and the edit history folded
+  under it), a Context panel with the handover's version, age, stale
+  badge, Compact and Write handover…, and summarised comments collapsed
+  in place in the timeline (`ui/src/components/detail/TaskContext.jsx`).
+- Rollover as designed above.
+
 ## Store and schema changes (summary)
 
 | Change | Stage |
@@ -892,6 +1106,7 @@ findings are rows in the same table.
 | `notification`, `task_notification_subscription` tables; `NotificationSink` interface; `notifications:write` permission; `POST /api/tasks/{id}/notes` | DT-S6 |
 | `task_run_api_call`, `task_run_report_check`; `GET /api/pipeline/changes` | DT-S8, DT-S11 |
 | `Config.JudgementModel`; symbolic model `judgement` | DT-S9 |
+| `task_context`, `task_brief_edit` (schema 136); `Config.AutoCompactBytes`; `GET /api/tasks/{id}/context`, `POST /api/tasks/{id}/compact`, `POST /api/tasks/{id}/brief` | DT-15 |
 
 Each table is new, so older stores gain empty tables. The one column added
 to an existing table, `task_run.suspend_kind`, is nullable and backfilled
@@ -911,7 +1126,9 @@ local, and pruned after 30 days.
 | `notify_operator(...)` | all (critical needs task-admin) | Raises or bumps a notification and does not park. |
 | `message_task(task, body)` | task-admin, or parent/child | A note to another task's agent. Never parks it. |
 | `read_pipeline_changes(after)` | self-debug | The delta feed. |
-| `write_handover` | all | Unchanged. It is also requested at a `context` suspension. |
+| `write_handover` | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
+| `compact_context(handover)` | all | Writes a fresh handover and moves the compaction cursor to the last comment before the run started (DT-15). |
+| `update_brief(brief, reason)` | all | Replaces the current brief that stands in for the description in prompts (DT-15). |
 
 ## UI surfaces
 
@@ -983,3 +1200,7 @@ Each stage is one follow-up task, filed by task 840. Arrows are
 3. **Can agents raise `critical`?** Here, only holders of
    `api:task-admin`. Revisit once there is a week of notifications to
    look at.
+4. **Should `AutoCompactBytes` follow the model's context window?** It is
+   a fixed 50 KB here. A fraction of `model.PromptContextTokens` would
+   track bigger windows, but would also let prompts grow, which the cut
+   was built to prevent.

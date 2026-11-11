@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -618,7 +619,7 @@ func (s *Server) handleHostdJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if status == http.StatusServiceUnavailable {
-			w.Header().Set("Retry-After", verifierRetryAfter)
+			w.Header().Set("Retry-After", strconv.Itoa(verifierRetryAfter))
 		}
 		writeError(w, status, apierror.Public(err.Error()))
 		return
