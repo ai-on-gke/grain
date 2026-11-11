@@ -574,6 +574,8 @@ body {
   }
 }
 
+/* One sticky bar per group: the title, Select all and Approve all share
+   its background and its bottom border. */
 .queue-group-head {
   position: sticky;
   top: 0;
@@ -583,12 +585,16 @@ body {
   gap: 4px;
   min-width: 0;
   padding-right: 8px;
-  background: var(--md-sys-color-surface);
+  background: var(--md-sys-color-surface-container-low);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
 .queue-group-head .queue-group-header {
+  position: static;
   flex: 1;
   min-width: 0;
+  background: transparent;
+  border-bottom: none;
 }
 
 .group-title {
