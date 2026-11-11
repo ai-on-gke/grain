@@ -27,6 +27,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // AddRepoRequest is POST /api/repos' body.
@@ -277,7 +278,7 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 		return c.GetSettings(ctx)
 	}
 	if removingErr == nil {
-		if err := c.forgetRepoReleaseSecrets(ctx, removing); err != nil {
+		if err := c.forgetRepoReleaseSecrets(removing); err != nil {
 			return Settings{}, err
 		}
 		if err := c.Store.ForgetRepo(ctx, removing); err != nil {
@@ -294,31 +295,21 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 	return c.GetSettings(ctx)
 }
 
-// forgetRepoReleaseSecrets deletes the values of the release secrets
-// repo's repo_config row declares, before ForgetRepo drops the row that
-// names them. Without this the values stayed in the encrypted store under
-// the repository's address with nothing left listing them, and a later
-// re-add of the same repository inherited them (grain/task-4249).
-func (c *Client) forgetRepoReleaseSecrets(ctx context.Context, repo model.RepoRef) error {
+// forgetRepoReleaseSecrets deletes the values of repo's release secrets
+// before ForgetRepo drops the repo_config row that lists them. Without
+// this the values stayed in the encrypted store under the repository's
+// address with nothing left listing them, and a later re-add of the same
+// repository inherited them (grain/task-4249). The repository's whole
+// release namespace goes, not only the names its row lists: a value set
+// whose repo_config write then failed is stored but never listed, and
+// would otherwise survive the removal the same way.
+func (c *Client) forgetRepoReleaseSecrets(repo model.RepoRef) error {
 	if c.Config.Secrets == nil {
 		return nil
 	}
-	rc, err := c.Store.GetRepoConfig(ctx, repo)
-	if err != nil || rc == nil {
-		return err
-	}
-	for _, name := range rc.ReleaseSecrets {
-		secret, key := ci.ReleaseSecretAddress(rc.Repo.String(), name)
-		stored, err := c.Config.Secrets.Has(secret, key)
-		if err != nil {
-			return err
-		}
-		if !stored {
-			continue
-		}
-		if err := c.Config.Secrets.DeleteKey(secret, key); err != nil {
-			return fmt.Errorf("forgetting release secret %s of %s: %w", name, repo, err)
-		}
+	namespace, _ := ci.ReleaseSecretAddress(repo.String(), "_")
+	if err := c.Config.Secrets.DeleteSecret(namespace); err != nil && !errors.Is(err, secrets.ErrNoSecret) {
+		return fmt.Errorf("forgetting the release secrets of %s: %w", repo, err)
 	}
 	return nil
 }

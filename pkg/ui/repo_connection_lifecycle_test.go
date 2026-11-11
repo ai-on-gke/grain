@@ -402,6 +402,13 @@ func TestRemovingARepositoryForgetsItsStateAndReAddingStartsClean(t *testing.T) 
 	if v, err := r.client.Config.Secrets.Resolve(r.ctx, secret+"/"+key); err != nil || v != "npm-secret" {
 		t.Fatalf("release secret before removal = %q, %v", v, err)
 	}
+	// A value stored under the repository's release namespace that its
+	// row never came to list -- a set whose repo_config write failed --
+	// is the repository's too, and goes with it.
+	orphan, orphanKey := ci.ReleaseSecretAddress("acme/widgets", "UNLISTED")
+	if err := r.client.Config.Secrets.Set(orphan, orphanKey, []byte("orphaned")); err != nil {
+		t.Fatal(err)
+	}
 	if rc, err := r.store.GetRepoConfig(r.ctx, ref); err != nil || rc == nil || rc.SetupCommand != "make deps" {
 		t.Fatalf("repo_config before removal = %+v, %v", rc, err)
 	}
@@ -412,6 +419,9 @@ func TestRemovingARepositoryForgetsItsStateAndReAddingStartsClean(t *testing.T) 
 	}
 	if v, err := r.client.Config.Secrets.Resolve(r.ctx, secret+"/"+key); err == nil {
 		t.Fatalf("release secret survived its repository's removal: %q", v)
+	}
+	if v, err := r.client.Config.Secrets.Resolve(r.ctx, orphan+"/"+orphanKey); err == nil {
+		t.Fatalf("an unlisted release secret survived its repository's removal: %q", v)
 	}
 
 	r.must(http.MethodPost, "/api/repos", `{"repo":"acme/widgets"}`)
