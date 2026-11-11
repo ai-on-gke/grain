@@ -16,6 +16,7 @@ import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type {
+  DiffPreview,
   LocalScriptApproval,
   Notification,
   Task,
@@ -34,10 +35,31 @@ import {
 } from "./inbox-classifier";
 
 export const SEEN_STORAGE_KEY = "grain.next.inbox.seen";
-// POLL_MS backs the event stream up: notifications and host-script
-// approvals have no events of their own yet (design doc, "Prototype
-// gaps"), so the queue is also read again on a timer.
-export const POLL_MS = 15000;
+// POLL_MS backs the event stream up. Tasks, notifications and
+// host-script approvals all have events (GRAIN_EVENT_TYPES), so the
+// timer only catches what the stream cannot say: a dropped connection,
+// or a host-script call that ran past its deadline unanswered.
+export const POLL_MS = 60000;
+
+// DIFF_KINDS are the entries whose decision is about a change, so the
+// inspector shows its diff beside them; any other task entry shows one
+// only when its task already has a pull request.
+const DIFF_KINDS = new Set<string>([
+  "submit",
+  "review",
+  "merge-blocked",
+  "github-approval",
+  "merge-stalled",
+]);
+export const DIFF_PREVIEW_HUNKS = 6;
+// DIFF_TTL_MS is how long a preview is shown before selecting its row
+// reads it again.
+const DIFF_TTL_MS = 60000;
+
+export function wantsDiff(e: InboxEntry | null): boolean {
+  if (!e?.taskId) return false;
+  return DIFF_KINDS.has(e.kind) || !!e.task?.pullRequest;
+}
 
 function loadSeen(): Set<string> {
   try {
@@ -86,6 +108,11 @@ export class InboxStore {
   readonly sheetOpen = signal(false);
   readonly details = signal<Record<string, TaskDetail>>({});
   readonly version = signal("");
+  // diffs holds each task's diff preview: null when there is none to
+  // show (nothing pushed yet, no comparison on this server, or the
+  // reader may not read it).
+  readonly diffs = signal<Record<string, DiffPreview | null>>({});
+  private readonly diffAt = new Map<string, number>();
 
   readonly entries = computed(() =>
     buildEntries(this.tasks(), this.notifications(), this.localScripts()),
@@ -123,6 +150,13 @@ export class InboxStore {
   readonly selectedDetail = computed<TaskDetail | null>(() => {
     const id = this.selected()?.taskId;
     return id ? (this.details()[id] ?? null) : null;
+  });
+  // selectedDiff is the selected entry's preview: undefined while it is
+  // being read or when the entry is not about a change.
+  readonly selectedDiff = computed<DiffPreview | null | undefined>(() => {
+    const e = this.selected();
+    if (!wantsDiff(e)) return undefined;
+    return this.diffs()[e!.taskId as string];
   });
   readonly checkedEntries = computed(() => {
     const c = this.checked();
@@ -212,7 +246,28 @@ export class InboxStore {
     }
     if (scripts.status === "fulfilled") this.localScripts.set(scripts.value);
     this.loaded.set(true);
-    await this.ensureDetail();
+    await Promise.all([this.ensureDetail(), this.ensureDiff()]);
+  }
+
+  // ensureDiff reads the selected change's diff preview, unless one read
+  // in the last DIFF_TTL_MS is already held.
+  async ensureDiff(): Promise<void> {
+    const e = this.selected();
+    if (!wantsDiff(e)) return;
+    const id = e!.taskId as string;
+    const at = this.diffAt.get(id);
+    if (at !== undefined && Date.now() - at < DIFF_TTL_MS) return;
+    this.diffAt.set(id, Date.now());
+    let preview: DiffPreview | null = null;
+    if (this.access.can("GET /api/tasks/{id}/diff-preview", e!.repo)) {
+      try {
+        preview = await this.api.diffPreview(id, DIFF_PREVIEW_HUNKS);
+      } catch {
+        // No branch pushed yet, or no comparison here: the inspector
+        // links to the pull request instead.
+      }
+    }
+    this.diffs.update((m) => ({ ...m, [id]: preview }));
   }
 
   // ensureDetail reads the selected task's detail: the question it is
@@ -234,6 +289,7 @@ export class InboxStore {
     this.sheetOpen.set(true);
     this.markSeen(key);
     void this.ensureDetail(true);
+    void this.ensureDiff();
   }
 
   closeSheet(): void {

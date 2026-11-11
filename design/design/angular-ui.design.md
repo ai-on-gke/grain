@@ -159,10 +159,11 @@ bookmarks keep working), and `baseHref` becomes `/`.
 - **Live updates:** `GrainEvents` holds one `EventSource` on
   `GET /api/events?since=now&stream=1`, shared by every subscriber, with
   reconnect and backoff. The server sends *named* frames
-  (`task.state`, `task.question`, `task.comment`, `task.ci`), which
-  never reach `onmessage`, so each name is listened for explicitly. A
-  page treats an event as "read again" rather than as state; a slow poll
-  backs the stream up for the things it does not cover yet.
+  (`task.*`, `notification.*` and `local_script.*`), which never reach
+  `onmessage`, so each name is listened for explicitly. A page treats an
+  event as "read again" rather than as state; a slow poll (60 s on the
+  Inbox) backs the stream up for a dropped connection and for a
+  host-script call that runs past its deadline unanswered.
 - **Design tokens:** `ui-shared/tokens.css` is loaded first, so both UIs
   share base tokens and the `data-theme` switch; the new UI's sheet adds
   Material 3 colour roles (light and dark), shape, type and spacing
@@ -289,16 +290,12 @@ listing them, never on a guess.
 ## Gaps
 
 What the reference design shows that the API does not support yet, and
-which is left out of slice 1:
+which is left out of slice 1. Two earlier gaps are closed (task 4284):
+`notification.*` and `local_script.*` events now reach the Inbox at
+once, and the inspector shows the first hunks of a change's diff
+(`GET /api/tasks/{id}/diff-preview`) beside a submit, review or merge
+decision, or any task entry whose task has a pull request.
 
-- **Events for alerts and host-script approvals.** `/api/events`
-  carries task events only, so a new alert or host-script call appears
-  on the next poll (15 s) rather than at once. Follow-up: emit
-  `notification.*` and `local_script.*` events.
-- **An inline diff in the inspector.** The design shows the change's
-  diff next to the decision. The API has no compact changed-hunks read
-  for a task's pull request; the inspector links to the pull request
-  instead. Follow-up: a small diff-preview endpoint.
 - **Agent state on the resolution dock** ("anticipating", "processing")
   and **undo** after a batch close need run-state and undo support the
   API does not have; the dock is static and closes are confirmed up

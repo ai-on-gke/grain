@@ -24,6 +24,11 @@ export const GRAIN_EVENT_TYPES = [
   "task.question",
   "task.comment",
   "task.ci",
+  "notification.raised",
+  "notification.acked",
+  "notification.cleared",
+  "local_script.pending",
+  "local_script.answered",
 ] as const;
 
 export interface GrainEvent {
