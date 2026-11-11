@@ -204,10 +204,19 @@ build: frontend $(CMDS)
 # what deleting it was guarding against: server.go serves this directory
 # with http.FileServerFS, so "/" resolves to index.html once a build
 # exists and placeholder.html is reachable only at its own path.
+#
+# ui-ng/ is the Angular rewrite (design/design/angular-ui.design.md),
+# built into pkg/ui/static-next and served under /next/ beside ui/. It
+# gets the same clear-then-build treatment and the same three tracked
+# files, and like ui/ keeps its build toolchain in `dependencies` so
+# `npm ci --omit=dev` is enough to build it.
 frontend:
 	find pkg/ui/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui && npm ci --omit=dev && npm run build
+	find pkg/ui/static-next -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
+		-not -name 'placeholder.html' -delete
+	cd ui-ng && npm ci --omit=dev && npm run build
 	find pkg/hub/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui-hub && npm ci --omit=dev && npm run build
@@ -326,6 +335,7 @@ container-build: builder
 test: frontend
 	go test -race -timeout 30m ./...
 	cd ui && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
+	cd ui-ng && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm run lint && npm test
 	cd ui-hub && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
 
 # The same suite, turned up: what .github/workflows/nightly.yml runs
@@ -681,6 +691,7 @@ fmt:
 # be pure waste.
 fmt-frontend:
 	cd ui && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
+	cd ui-ng && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
 	cd ui-hub && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check && npx prettier --check ../ui-shared
 
 clean:
