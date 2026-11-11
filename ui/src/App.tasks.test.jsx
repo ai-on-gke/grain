@@ -19,6 +19,7 @@
 // Part of the App suite -- see App.test.jsx for why it is six files.
 
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -29,6 +30,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { LOADING_PANE_DELAY_MS, POLL_INTERVAL_MS } from "./App.jsx";
 import api from "./api.js";
+import { navigateInApp } from "./commentLinks.js";
 import {
   config,
   initialTasks,
@@ -538,6 +540,47 @@ describe("App", () => {
     expect(push).not.toHaveBeenCalled();
     expect(window.history.length).toBe(length);
     push.mockRestore();
+  });
+
+  // ...including when Back and Forward come before the task has loaded:
+  // that is two loads of one task, and the first one answering used to
+  // release the second's hold on the URL effect while it still fetched,
+  // so the page behind the pane was pushed over /tasks/1#comment=…, and
+  // the pane arriving after it pushed /tasks/1 without the fragment
+  // (ui/e2e/responsive-navigation-walkthrough.spec.js, under load).
+  it("keeps the address when Back and Forward beat a task's load", async () => {
+    setupApi();
+    const base = api.getMockImplementation();
+    const loads = [];
+    api.mockImplementation((p, opts) =>
+      p === "/api/tasks/1"
+        ? new Promise((resolve) =>
+            loads.push(() => base(p, opts).then(resolve)),
+          )
+        : base(p, opts),
+    );
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    act(() => navigateInApp("/tasks/1#comment=1"));
+    await waitFor(() => expect(loads).toHaveLength(1));
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    const push = vi.spyOn(window.history, "pushState");
+    const replace = vi.spyOn(window.history, "replaceState");
+    window.history.forward();
+    await waitFor(() => expect(loads).toHaveLength(2));
+
+    await act(async () => loads[0]());
+    await act(async () => loads[1]());
+    await screen.findByRole("heading", { name: /Fix bug/ });
+    expect(window.location.pathname + window.location.hash).toBe(
+      "/tasks/1#comment=1",
+    );
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    push.mockRestore();
+    replace.mockRestore();
   });
 
   it("discards a field edit when a dependency opens another task", async () => {
