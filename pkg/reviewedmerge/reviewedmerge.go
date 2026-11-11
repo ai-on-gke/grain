@@ -68,7 +68,8 @@ const RecordType = "https://github.com/ai-on-gke/grain/reviewed-merge/v1"
 
 // Policy is what counts as a reviewed merge for one repository.
 type Policy struct {
-	// Repo is owner/name.
+	// Repo is owner/name on github.com, or host/owner/name on a GitHub
+	// Enterprise Server (SplitRepo).
 	Repo string
 	// Branches are the branches a release is built from, as path.Match
 	// patterns: "main", "release/v*". A pull request merged anywhere else

@@ -451,12 +451,15 @@ type Config struct {
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
 	UpgradeVerifyCmd []string
-	// UpgradeReviewedMergeRepo, when set (owner/name), also refuses an
+	// UpgradeReviewedMergeRepo, when set (owner/name, or host/owner/name
+	// on a GitHub Enterprise Server), also refuses an
 	// image upgrade whose commit did not reach that repository's release
 	// branches through a reviewed merge (upgrade.ImageConfig.ReviewedMerge,
 	// pkg/reviewedmerge). UpgradeReviewedMergeLogins are the forge logins
 	// its grain merges as, and UpgradeReviewedMergeTokenFile a file holding
-	// a read token for its API (none reads anonymously).
+	// a read token for its API (none reads through the host's forge tool
+	// when a command-backed ambient source claims its host, and
+	// anonymously otherwise).
 	UpgradeReviewedMergeRepo      string
 	UpgradeReviewedMergeLogins    []string
 	UpgradeReviewedMergeTokenFile string
