@@ -111,7 +111,7 @@
 # `docker build` with no --build-arg gets, so it is written down twice on
 # purpose and GOTOOLCHAIN=local below turns a stale copy into an error
 # naming both versions rather than a silently different compiler.
-ARG GO_VERSION=1.26.10
+ARG GO_VERSION=1.26.11
 # Separate from the tag so a mirror can be substituted whole
 # (GO_IMAGE=mirror.gcr.io/library/golang) on a network that does not
 # reach Docker Hub -- the same escape hatch Dockerfile.build and the
@@ -135,7 +135,7 @@ ARG GO_IMAGE=golang
 # and GOTOOLCHAIN=local below turns the mismatch into an error naming
 # both versions. Dockerfile.build pins the same value, and
 # TestEveryBaseImageIsPinnedByDigest keeps the two equal.
-ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
+ARG GO_IMAGE_DIGEST=sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
 ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # The docker CLI is copied out of this image rather than apt-installed:
 # Debian's own `docker.io` package pulls in the whole daemon --
