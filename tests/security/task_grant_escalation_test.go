@@ -1500,7 +1500,7 @@ func TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries(t *testing.T) {
 // knownGapAgentCrossTaskPromptSteering tracks cross-task prompt-injection /
 // execution-steering by an agent holding non-dangerous api:tasks:write on a
 // repository against another task in that same repository carrying wider grants.
-const knownGapAgentCrossTaskPromptSteering = true
+const knownGapAgentCrossTaskPromptSteering = false
 
 func TestPath4KnownGapAgentCrossTaskPromptSteering(t *testing.T) {
 	rig := newEscalationRig(t)

@@ -690,6 +690,16 @@ type Config struct {
 	// trims it so a stray space is not the difference between named and
 	// unnamed.
 	EnvironmentName string
+	// HubEnvironmentName is the environment name a Grain Hub last gave
+	// this deployment as its default -- a hosted instance's hub entry's
+	// display name or entry name, through -default-environment-name, or a
+	// connected entry's, through its heartbeat -- recorded so the hub's
+	// name can be told apart from one the operator chose. While
+	// EnvironmentName still equals it (or is empty) the name is the hub's,
+	// and a new one from the hub (the entry renamed) replaces it; once the
+	// operator sets anything else, the hub leaves EnvironmentName alone
+	// (AdoptHubEnvironmentName). Empty on every deployment no hub named.
+	HubEnvironmentName string
 	// DefaultCapabilities is the set of capability ids a new task is
 	// filed holding, by id -- the deployment-wide answer to "what should
 	// every task here start out able to do", and the reason gcp-key need

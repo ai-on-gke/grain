@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -198,9 +199,140 @@ func TestGetTaskPagesItsCommentsAndRuns(t *testing.T) {
 	if whole := page(""); bodies(whole) != "a,b,c,d,e" || whole.OlderComments != 0 {
 		t.Errorf("unpaged read = %q, want the whole conversation", bodies(whole))
 	}
-	for _, bad := range []string{"comments_limit=0", "comments_limit=501", "attempts_limit=x", "comments_before=-1"} {
+	olderRuns := page("comments_limit=1&attempts_limit=2&attempts_before=3")
+	if len(olderRuns.Attempts) != 2 || olderRuns.Attempts[0].Number != 1 || olderRuns.Attempts[1].Number != 2 || olderRuns.OlderAttempts != 0 {
+		t.Errorf("attempts_before=3 = %+v (older %d), want runs 1 and 2 with 0 older", olderRuns.Attempts, olderRuns.OlderAttempts)
+	}
+	for _, bad := range []string{"comments_limit=0", "comments_limit=501", "attempts_limit=x", "comments_before=-1", "attempts_before=0"} {
 		if code, _ := serve(t, srv, http.MethodGet, "/api/tasks/"+tk.ID+"?"+bad, ""); code != http.StatusBadRequest {
 			t.Errorf("?%s answered %d, want 400", bad, code)
 		}
+	}
+}
+
+// TestGetTaskPagePreservesDerivedFieldsAndCachesHead verifies that a paged
+// detail built from the store answers the same derived fields (pending
+// question summary even when parked on an older comment, failure streak,
+// bounded transitions, total token usage, compactedThrough) and answers 304
+// on quiet head polls without building the unpaged whole detail.
+func TestGetTaskPagePreservesDerivedFieldsAndCachesHead(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	tk, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "derived", Approved: true, NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	agentAttr := model.Attribution{
+		Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: tk.ID},
+	}
+	qID, err := client.Store.AddComment(ctx, model.Comment{
+		TaskID:    tk.ID,
+		Author:    agentAttr,
+		Summary:   "Keep the v1 flag?",
+		Body:      "Full question body.",
+		CreatedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := client.Store.AddComment(ctx, model.Comment{
+			TaskID:    tk.ID,
+			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+			Body:      fmt.Sprintf("note-%d", i),
+			CreatedAt: at.Add(time.Duration(i+1) * time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Store.CompactTask(ctx, tk.ID, "Compacted handover summary.", 0, agentAttr, "alice", at.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.ObserveField(ctx, tk.ID, at.Add(11*time.Minute), func(o *model.Observation) {
+		o.PendingQuestionCommentID = &qID
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n <= 4; n++ {
+		runID := fmt.Sprintf("%s-r%d", tk.ID, n)
+		start := at.Add(time.Duration(n) * time.Hour)
+		finish := start.Add(2 * time.Minute)
+		if err := client.Store.StartRun(ctx, model.Run{ID: runID, TaskID: tk.ID, Sandbox: "sb", Attempt: n, StartedAt: start}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		outcome := "failed"
+		if n <= 2 {
+			outcome = "succeeded"
+		}
+		if err := client.Store.FinishRun(ctx, runID, finish, outcome, fmt.Sprintf("fail-%d", n)); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.Store.RecordRunUsage(ctx, model.RunUsage{
+			RunID: runID, TaskID: tk.ID, InputTokens: 100, OutputTokens: 50, StartedAt: start, FinishedAt: finish,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+tk.ID+"?comments_limit=2&attempts_limit=2", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET paged: %d %s", rec.Code, rec.Body.String())
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("paged head response returned no ETag")
+	}
+	var paged ui.TaskDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &paged); err != nil {
+		t.Fatal(err)
+	}
+	if paged.QuestionSummary != "Keep the v1 flag?" || paged.QuestionCommentID != qID {
+		t.Errorf("QuestionSummary = %q (id %d), want Keep the v1 flag? (%d)", paged.QuestionSummary, paged.QuestionCommentID, qID)
+	}
+	if paged.FailedAttempts != 2 || paged.LastFailureReason != "fail-4" {
+		t.Errorf("FailedAttempts = %d (%q), want 2 (fail-4)", paged.FailedAttempts, paged.LastFailureReason)
+	}
+	if paged.CompactedThrough <= 0 {
+		t.Errorf("CompactedThrough = %d, want > 0", paged.CompactedThrough)
+	}
+	if paged.Usage == nil || paged.Usage.Runs != 4 || paged.Usage.InputTokens != 400 {
+		t.Errorf("Usage = %+v, want total across all 4 runs", paged.Usage)
+	}
+	// Transitions are bounded to the 2 runs on the page rather than carrying
+	// running/requeue entries for runs 1 and 2.
+	runningTransitions := 0
+	for _, tr := range paged.Transitions {
+		if tr.State == model.StateRunning {
+			runningTransitions++
+		}
+	}
+	if runningTransitions != 2 {
+		t.Errorf("running transitions on 2-run page = %d, want 2", runningTransitions)
+	}
+
+	// Second poll with If-None-Match answers 304 without rebuilding.
+	builds := ui.TaskDetailBuilds(srv)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/tasks/"+tk.ID+"?comments_limit=2&attempts_limit=2", nil)
+	req2.Header.Set("If-None-Match", etag)
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("conditional paged poll = %d, want 304", rec2.Code)
+	}
+	if got := ui.TaskDetailBuilds(srv); got != builds {
+		t.Errorf("quiet paged poll rebuilt detail %d times, want 0", got-builds)
+	}
+
+	// Client.Task for an awaiting_reply task also resolves QuestionSummary by comment id.
+	one, err := client.Task(ctx, tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.QuestionSummary != "Keep the v1 flag?" {
+		t.Errorf("Client.Task QuestionSummary = %q, want Keep the v1 flag?", one.QuestionSummary)
 	}
 }

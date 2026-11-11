@@ -59,39 +59,42 @@ async function fakeLiveRun(page, taskID) {
 const goneAway = (err) => /disposed|closed|cancel|handled/i.test(String(err));
 
 async function fakeRunningTask(page, taskID) {
-  await page.route(new RegExp(`/api/tasks/${taskID}$`), async (route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    const headers = { ...route.request().headers() };
-    delete headers["if-none-match"];
-    let response, body;
-    try {
-      response = await route.fetch({ headers });
-      body = await response.json();
-    } catch (err) {
-      if (goneAway(err)) return;
-      throw err;
-    }
-    await route
-      .fulfill({
-        response,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...body,
-          state: "running",
-          activityBySetup: false,
-          attempts: [
-            ...(body.attempts || []).map((a) => ({
-              ...a,
-              finishedAt: a.finishedAt || "2026-09-08T10:05:00Z",
-            })),
-            { number: 99, startedAt: "2026-09-08T11:00:00Z" },
-          ],
-        }),
-      })
-      .catch((err) => {
-        if (!goneAway(err)) throw err;
-      });
-  });
+  await page.route(
+    new RegExp(`/api/tasks/${taskID}(\\?.*)?$`),
+    async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      let response, body;
+      try {
+        response = await route.fetch({ headers });
+        body = await response.json();
+      } catch (err) {
+        if (goneAway(err)) return;
+        throw err;
+      }
+      await route
+        .fulfill({
+          response,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...body,
+            state: "running",
+            activityBySetup: false,
+            attempts: [
+              ...(body.attempts || []).map((a) => ({
+                ...a,
+                finishedAt: a.finishedAt || "2026-09-08T10:05:00Z",
+              })),
+              { number: 99, startedAt: "2026-09-08T11:00:00Z" },
+            ],
+          }),
+        })
+        .catch((err) => {
+          if (!goneAway(err)) throw err;
+        });
+    },
+  );
 }
 
 // A poll still in fakeRunningTask's handler when the page goes would

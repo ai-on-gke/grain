@@ -475,6 +475,13 @@ type Config struct {
 	// deployment's lifecycle and upgrades are managed externally
 	// (-management-url / $GRAIN_MANAGEMENT_URL).
 	ManagementURL string
+	// DefaultEnvironmentName is the environment name a Grain Hub gives
+	// this deployment by default (-default-environment-name /
+	// $GRAIN_DEFAULT_ENVIRONMENT_NAME, set from a hosted instance's
+	// grain-config): applied at start to a deployment with no name, or
+	// still the hub's previous one, and never over one its operator set
+	// (model.Config.AdoptHubEnvironmentName).
+	DefaultEnvironmentName string
 
 	// rebootCmd is what the UI's reboot-host button runs; empty means
 	// rebootHost's own `sudo systemctl reboot` default.

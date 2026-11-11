@@ -81,7 +81,7 @@ async function awaitingTask(request) {
 // and records each decision posted rather than letting it reach the
 // store.
 async function fakeAccessRequest(page, id) {
-  await page.route(new RegExp(`/api/tasks/${id}$`), async (route) => {
+  await page.route(new RegExp(`/api/tasks/${id}(\\?.*)?$`), async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];

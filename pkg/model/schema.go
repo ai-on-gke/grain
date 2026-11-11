@@ -645,10 +645,14 @@ import "strconv"
 // model.TaskBriefEdit): a durable task's compaction cursor, handover
 // version and current brief, and every edit of that brief
 // (design/design/durable-tasks.design.md#DT-15, grain/task-4107).
-// 137 adds `grain_config`.`sandbox_shape_limits`
+// 137 adds `grain_config`.`hub_environment_name`
+// (model.Config.HubEnvironmentName): the environment name a Grain Hub last
+// supplied as this deployment's default, so a rename of its hub entry can
+// replace it without overwriting a name the operator chose (grain/task-4200).
+// 138 adds `grain_config`.`sandbox_shape_limits`
 // (model.Config.SandboxShapeLimits): the deployment-wide and per-role
 // ceilings on the sandbox shape a task may ask for (grain/task-4018).
-const SchemaVersion = 137
+const SchemaVersion = 138
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -1557,6 +1561,8 @@ var Tables = []string{
 	// many finished rows over a store's lifetime (one per attempt) and
 	// only the currently-open one must be unique.
 	`CREATE UNIQUE INDEX IF NOT EXISTS ` + "`task_run_open_task`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `) WHERE ` + "`finished_at`" + ` IS NULL`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_attempt`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`attempt`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_task_outcome_started`" + ` ON ` + "`task_run`" + ` (` + "`task_id`" + `, ` + "`outcome`" + `, ` + "`started_at`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_run_started`" + ` ON ` + "`task_run`" + ` (` + "`started_at`" + `)`,
 
@@ -1946,6 +1952,8 @@ var Tables = []string{
 )`,
 
 	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task_id`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task_handover`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `, ` + "`handover`" + `, ` + "`id`" + `)`,
 
 	// One row per file (bwsalmon/agents#522), content included -- the same
 	// "the store is durable; nothing needs to stay reachable to read it
@@ -2693,6 +2701,7 @@ var Tables = []string{
   ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   ` + "`skills`" + `                       TEXT    NOT NULL DEFAULT '',
   ` + "`ci_api_repos`" + `                 TEXT    NOT NULL DEFAULT '',
+  ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`sandbox_shape_limits`" + `         TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,

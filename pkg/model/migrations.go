@@ -983,6 +983,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     137,
+		Description: "add grain_config.hub_environment_name, the environment name a Grain Hub last supplied as this deployment's default (grain/task-4200)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `hub_environment_name` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     138,
 		Description: "add grain_config.sandbox_shape_limits, the deployment and per-role ceilings on a task's sandbox shape (grain/task-4018)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_shape_limits` TEXT NOT NULL DEFAULT ''",

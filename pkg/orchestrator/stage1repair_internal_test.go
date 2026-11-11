@@ -274,3 +274,61 @@ func TestAnUnattendedStage1RepairRaisesANotification(t *testing.T) {
 		t.Fatalf("%s still open once the repair closed", subject)
 	}
 }
+
+// A scheduled run on main that nightly.yml's idle-gate turned off
+// (idle-gate passed, every Stage 1 job and stage-1 skipped, the run
+// success) neither files a repair nor closes an open one.
+func TestASkippedScheduledStage1NeitherFilesARepairNorClosesOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	optInStage1(t, ctx, store, repo)
+	deps := Deps{Store: store}
+	now := time.Date(2026, 11, 10, 18, 0, 0, 0, time.UTC)
+
+	noop, noopJobs := stage1Run(t, ctx, store, repo, 71, "main", "schedule", "success", now,
+		map[string]string{
+			"idle-gate":                      "success",
+			"go, shuffled and repeated (1)":  "skipped",
+			"upgrade from previous versions": "skipped",
+			"stage 1 qualification verdict":  "skipped",
+		})
+	if err := handleStage1Verdict(ctx, deps, noop, noopJobs, now); err != nil {
+		t.Fatal(err)
+	}
+	if ids := stage1Repairs(t, ctx, store, repo); len(ids) != 0 {
+		t.Fatalf("an idle-gated scheduled run filed repairs %v", ids)
+	}
+
+	redAt := now.Add(time.Hour)
+	red, redJobs := stage1Run(t, ctx, store, repo, 72, "v3.5.0-rc.1", "push", "failure", redAt,
+		map[string]string{"idle-gate": "success", "go-long": "failure", "stage 1 qualification verdict": "failure"})
+	if err := handleStage1Verdict(ctx, deps, red, redJobs, redAt); err != nil {
+		t.Fatal(err)
+	}
+	ids := stage1Repairs(t, ctx, store, repo)
+	if len(ids) != 1 {
+		t.Fatalf("want 1 repair, got %v", ids)
+	}
+	if err := reconcileStage1Repairs(ctx, deps, redAt.Add(61*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	subject := stage1Subject(repo)
+	if n, _ := store.OpenNotification(ctx, subject); n == nil {
+		t.Fatalf("expected %s before the idle-gated run", subject)
+	}
+
+	skipAt := redAt.Add(2 * time.Hour)
+	noop2, noopJobs2 := stage1Run(t, ctx, store, repo, 73, "main", "schedule", "success", skipAt,
+		map[string]string{"idle-gate": "success", "go-long": "skipped", "stage 1 qualification verdict": "skipped"})
+	if err := handleStage1Verdict(ctx, deps, noop2, noopJobs2, skipAt); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, ids[0]); st == model.StateClosed {
+		t.Fatalf("an idle-gated scheduled run closed Stage 1 repair %s", ids[0])
+	}
+	if n, _ := store.OpenNotification(ctx, subject); n == nil {
+		t.Fatalf("an idle-gated scheduled run cleared %s while repair %s is open", subject, ids[0])
+	}
+}

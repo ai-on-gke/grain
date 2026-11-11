@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 	"github.com/ai-on-gke/grain/pkg/agent/stoprule"
 )
 
@@ -140,5 +141,90 @@ func TestRun(t *testing.T) {
 	Run(nil, strings.NewReader("not json"), &out, &errOut)
 	if out.Len() != 0 {
 		t.Errorf("bad payload wrote %q", out.String())
+	}
+}
+
+func TestRunEvaluatesStagedStopPolicyAndFallsBackWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, hookpolicy.Filename)
+	raw, err := hookpolicy.Marshal(hookpolicy.File{
+		Version: hookpolicy.Version,
+		Stop: &hookpolicy.StopPolicy{
+			ToolPrefixes:             []string{"mcp__custom-ns__"},
+			SessionContinueReason:    "custom session nudge",
+			BackgroundContinueReason: "custom background nudge",
+			ClosingTools:             []string{"future_finish"},
+			ClosingCalls: []hookpolicy.ClosingCallRule{
+				{Tool: "future_suspend", RequireSuccess: true},
+				{Tool: "future_park", ArgBoolTrue: "hold"},
+			},
+			PromisePhrases:  []string{"brb checking"},
+			PromisePrefixes: []string{"hold on "},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runWithTranscript := func(args []string, lines string) string {
+		t.Helper()
+		tp := filepath.Join(dir, "session.jsonl")
+		if err := os.WriteFile(tp, []byte(lines), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p, _ := json.Marshal(map[string]any{"hook_event_name": "Stop", "transcript_path": tp})
+		var out, errOut bytes.Buffer
+		Run(args, bytes.NewReader(p), &out, &errOut)
+		return strings.TrimSpace(out.String())
+	}
+
+	// Compiled-in comment_on_issue is NOT in the staged ClosingTools, so background stops block
+	// with the staged nudge -- proving compiled-in closingTools were not consulted.
+	got := runWithTranscript([]string{FlagPolicy, policyPath}, sessionLines(t,
+		hookAssistantTool("t1", "mcp__custom-ns__comment_on_issue", map[string]any{"comment": "hi"}),
+		hookToolResult("t1", "ok", false),
+		hookAssistantText("Done."),
+	))
+	if !strings.Contains(got, `"reason":"custom background nudge"`) {
+		t.Errorf("omitted closing tool = %q, want custom background nudge", got)
+	}
+
+	// Staged future_finish and non-errored future_suspend close the background run.
+	if got := runWithTranscript([]string{FlagPolicy, policyPath}, sessionLines(t,
+		hookAssistantTool("t1", "mcp__custom-ns__future_finish", nil),
+		hookToolResult("t1", "ok", false),
+	)); got != "" {
+		t.Errorf("future_finish blocked: %q", got)
+	}
+	if got := runWithTranscript([]string{FlagPolicy, policyPath}, sessionLines(t,
+		hookAssistantTool("t1", "mcp__custom-ns__future_suspend", nil),
+		hookToolResult("t1", "dirty", true),
+	)); !strings.Contains(got, "custom background nudge") {
+		t.Errorf("errored future_suspend = %q, want block", got)
+	}
+	if got := runWithTranscript([]string{FlagPolicy, policyPath}, sessionLines(t,
+		hookAssistantTool("t1", "mcp__custom-ns__future_suspend", nil),
+		hookToolResult("t1", "ok", false),
+	)); got != "" {
+		t.Errorf("succeeded future_suspend blocked: %q", got)
+	}
+
+	// Interactive promise uses the staged phrases and nudge.
+	if got := runWithTranscript([]string{"-interactive", FlagPolicy, policyPath}, sessionLines(t,
+		hookAssistantText("Hold on while I check."),
+	)); !strings.Contains(got, `"reason":"custom session nudge"`) {
+		t.Errorf("interactive custom prefix = %q, want custom session nudge", got)
+	}
+
+	// Absent policy file falls back to compiled-in DefaultPolicy.
+	missing := filepath.Join(dir, "absent.json")
+	if got := runWithTranscript([]string{FlagPolicy, missing}, sessionLines(t,
+		hookAssistantTool("t1", "mcp__grain-sandbox__comment_on_issue", map[string]any{"comment": "done"}),
+		hookToolResult("t1", "ok", false),
+	)); got != "" {
+		t.Errorf("absent policy fallback blocked comment_on_issue: %q", got)
 	}
 }

@@ -442,14 +442,14 @@ func (s *Server) handleDeleteGitHubToken(w http.ResponseWriter, r *http.Request)
 				"or every repo they cover fails its next push", scopes, name))
 		return
 	}
-	holders, err := s.tasks.gitCredentialGrantHolders(r.Context(), name)
+	holders, err := s.tasks.gitCredentialUsers(r.Context(), name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if len(holders) > 0 {
 		writeError(w, http.StatusBadRequest, fmt.Errorf(
-			"credential %q is still in use by capability grants (%s): detach or update them first",
+			"credential %q is still in use by capability grants or repositories (%s): detach or update them first",
 			name, strings.Join(holders, ", ")))
 		return
 	}
