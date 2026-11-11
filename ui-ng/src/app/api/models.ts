@@ -134,6 +134,8 @@ export interface Comment {
 export interface Attempt {
   number: number;
   startedAt?: string;
+  agentStartedAt?: string;
+  promptTokens?: number;
   finishedAt?: string;
   outcome?: string;
   detail?: string;

@@ -33,6 +33,14 @@ export const routes: Routes = [
       import("./tasks/tasks-page.component").then((m) => m.TasksPageComponent),
   },
   {
+    path: "agents",
+    title: "Agents · grain",
+    loadComponent: () =>
+      import("./agents/agents-page.component").then(
+        (m) => m.AgentsPageComponent,
+      ),
+  },
+  {
     path: "task/:id",
     title: "Task · grain",
     loadComponent: () =>

@@ -52,6 +52,14 @@ export const DESTINATIONS: readonly Destination[] = [
     phone: true,
   },
   {
+    id: "agents",
+    label: "Agents",
+    icon: "agents",
+    route: "/agents",
+    classic: "/tasks?filter=running",
+    tip: "Every running agent with what it is doing now; quiet runs first.",
+  },
+  {
     id: "sessions",
     label: "Sessions",
     icon: "sessions",
