@@ -129,6 +129,13 @@ func TestARunMayNotReachARepositoryRemovedFromTheDeploymentWhileItWasLive(t *tes
 			t.Errorf("RemovedReason(acme/%s) = %q, %v; want it to name the repo, the removal and the list", repo, reason, removed)
 		}
 	}
+	// Any spelling Authorize refuses is explained as the removal too.
+	if ok, err := a.Authorize(ctx, "sb", "Acme", "Widgets.git", "git-receive-pack"); err != nil || ok {
+		t.Errorf("Acme/Widgets.git push allowed after removal: %v, %v", ok, err)
+	}
+	if _, removed := a.RemovedReason(ctx, "sb", "Acme", "Widgets.git"); !removed {
+		t.Error("a refusal of Acme/Widgets.git was not explained as the removal")
+	}
 	if !may("docs", "git-upload-pack") {
 		t.Error("a read the task was granted was refused because the repository is not on the list")
 	}

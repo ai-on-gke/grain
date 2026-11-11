@@ -264,6 +264,9 @@ func (a *ModelAuthorizer) RemovedReason(ctx context.Context, sandbox, owner, rep
 	if err != nil {
 		return "", false
 	}
+	// Canonicalized as Authorize does, so a request it refused for any
+	// spelling of the repo is explained the same way.
+	owner, repo = canonicalizeRepo(owner, repo)
 	allowed, off, err := a.removedFromDeployment(ctx, owner, repo, target, writes)
 	if err != nil || !off {
 		return "", false
