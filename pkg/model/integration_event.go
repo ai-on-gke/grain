@@ -325,6 +325,17 @@ func awaitingReplySummaryTx(ctx context.Context, q querier, taskID string) (stri
 	if sec := strings.TrimSpace(pendingSecret.String); sec != "" {
 		return clampSingleLine("set "+sec+" in the encrypted secret input", MaxQuestionSummaryLen), commentID
 	}
+	// Parked on nothing: a task resting on a closing note is announced by
+	// the summary its run gave that note (Store.NoteSummary), and never by
+	// a line derived from the note's body.
+	if commentID == 0 {
+		var summary string
+		if err := q.QueryRowContext(ctx,
+			"SELECT `c`.`summary` FROM `task_comment` `c` WHERE `c`.`task_id` = ? AND "+noteSummaryWhere, taskID,
+		).Scan(&summary); err == nil {
+			return clampSingleLine(summary, MaxQuestionSummaryLen), 0
+		}
+	}
 	return "", commentID
 }
 

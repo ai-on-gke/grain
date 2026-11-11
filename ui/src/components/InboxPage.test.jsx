@@ -1148,6 +1148,48 @@ describe("InboxPage", () => {
       ).not.toBeInTheDocument();
     });
 
+    it("shows a closing note by its own summary, never by its opening sentence", async () => {
+      api.mockImplementation(async (path) =>
+        path === "/api/tasks/4?comments_limit=50&attempts_limit=20"
+          ? {
+              id: "4",
+              state: "awaiting_reply",
+              noteSummary: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+              comments: [
+                {
+                  id: 2,
+                  body: "I didn't change any code. These release failures aren't caused by a bug.",
+                  summary: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+                },
+              ],
+            }
+          : null,
+      );
+      renderInbox({
+        tasks: [
+          task({
+            id: "4",
+            title: "Investigate the stall",
+            state: "awaiting_reply",
+            noteSummary: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+          }),
+        ],
+      });
+
+      const item = row("Investigate the stall");
+      expect(item.querySelector(".inbox-note")).toHaveTextContent(
+        "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+      );
+      expect(
+        await within(item).findByRole("button", {
+          name: /Set GRAIN_MERGE_LOGINS to unblock image publishing/,
+        }),
+      ).toHaveAttribute("aria-expanded", "false");
+      expect(
+        within(item).queryByText(/I didn't change any code/),
+      ).not.toBeInTheDocument();
+    });
+
     it("renders a closing report whole without QuestionDisclosure when no question summary is present", async () => {
       api.mockImplementation(async (path) =>
         path === "/api/tasks/4?comments_limit=50&attempts_limit=20"

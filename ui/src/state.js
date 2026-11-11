@@ -659,12 +659,15 @@ export function runActivity(t, now = Date.now()) {
 
 // questionActivity is the status line of a task parked on a question:
 // the question's one-line summary (ui.Task.QuestionSummary), so a row in
-// the task list says what it was asked as well as that it was asked. Null
-// for any other task, and for a stopped turn, which asked nothing.
+// the task list says what it was asked as well as that it was asked. A
+// task resting on a closing note is shown by the summary its run gave the
+// note (ui.Task.NoteSummary) the same way. Null for any other task, and
+// for a stopped turn, which asked nothing.
 export function questionActivity(t) {
-  if (t.state !== "awaiting_reply" || t.turnStopped || !t.questionSummary)
-    return null;
-  return { note: t.questionSummary, byQuestion: true };
+  if (t.state !== "awaiting_reply" || t.turnStopped) return null;
+  const note = t.questionSummary || t.noteSummary;
+  if (!note) return null;
+  return { note, byQuestion: true };
 }
 
 // How old one of these phrases has to be before the row says how old it

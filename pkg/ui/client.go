@@ -892,6 +892,10 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	noteSummaries, err := c.Store.NoteSummaries(ctx)
+	if err != nil {
+		return nil, err
+	}
 	accessRequests, err := c.Store.PendingAccessRequests(ctx)
 	if err != nil {
 		return nil, err
@@ -935,6 +939,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 			if p, ok := undelivered[t.ID]; ok {
 				task.UnansweredCommentFrom = p.ID
 			}
+			task.NoteSummary = noteSummaryOf(task, noteSummaries[t.ID])
 		}
 		var wait *model.GrantWait
 		if w, ok := grantWaits[t.ID]; ok {
@@ -1271,6 +1276,9 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		if task.UnansweredCommentFrom, err = c.unansweredCommentFrom(ctx, id, state, obs); err != nil {
 			return Task{}, err
 		}
+		if task.NoteSummary, err = c.noteSummary(ctx, task); err != nil {
+			return Task{}, err
+		}
 	}
 	task = c.withReasons(task, *t, obs, wait)
 	if err := c.attachPause(ctx, &task); err != nil {
@@ -1501,6 +1509,9 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	task.QuestionCommentID = questionCommentID(state, obs)
 	task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	if task.UnansweredCommentFrom, err = c.unansweredCommentFrom(ctx, id, state, obs); err != nil {
+		return TaskDetail{}, err
+	}
+	if task.NoteSummary, err = c.noteSummary(ctx, task); err != nil {
 		return TaskDetail{}, err
 	}
 	detail := TaskDetail{
@@ -2044,6 +2055,32 @@ func questionSummaryComment(state model.State, obs *model.Observation, c *model.
 		return c.Summary
 	}
 	return model.DeriveQuestionSummary(c.Body)
+}
+
+// noteSummaryOf is the NoteSummary an awaiting_reply task t is shown by,
+// given summary, the one its newest comment carries: "" unless t is
+// resting on a note rather than waiting on anything that already has its
+// own line -- a question, a stopped turn, an access request, a person's
+// unanswered comment.
+func noteSummaryOf(t Task, summary string) string {
+	if t.State != model.StateAwaitingReply || t.QuestionSummary != "" || t.TurnStopped ||
+		t.AwaitingAccess || t.UnansweredCommentFrom != "" {
+		return ""
+	}
+	return summary
+}
+
+// noteSummary is noteSummaryOf for one task, reading its newest comment's
+// summary only when the task could be shown by one.
+func (c *Client) noteSummary(ctx context.Context, t Task) (string, error) {
+	if noteSummaryOf(t, "-") == "" {
+		return "", nil
+	}
+	summary, err := c.Store.NoteSummary(ctx, t.ID)
+	if err != nil {
+		return "", err
+	}
+	return noteSummaryOf(t, summary), nil
 }
 
 // CreateTaskRequest is a new task's fields. Repo, Base and AutoMerge were
