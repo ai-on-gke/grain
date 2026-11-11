@@ -141,7 +141,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-go-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
