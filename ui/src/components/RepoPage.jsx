@@ -475,6 +475,12 @@ export default function RepoPage({
   // name was already on the list -- so the form says so rather than
   // leaving the list unchanged without a word.
   const [branchNote, setBranchNote] = useState("");
+  // branchRefusal is why the server refused the last name typed, shown on
+  // the Branch name box and cleared by the next edit or an add that
+  // succeeds, as the release name box does (RepoReleases.jsx). As the
+  // app's five-second toast it went while the refused name stayed in the
+  // box with nothing on it to say why (2026-11-11 repository walkthrough).
+  const [branchRefusal, setBranchRefusal] = useState("");
   const [compareBase, setCompareBase] = useState("main");
   const [compareHead, setCompareHead] = useState("");
   // caps is what GET /api/repos/{owner}/{name}/capabilities last said --
@@ -894,6 +900,7 @@ export default function RepoPage({
         body: JSON.stringify({ name: branchName }),
       });
       settleSave("branch");
+      setBranchRefusal("");
       setBranchNote(
         added && added.alreadyRequested
           ? `${branchName} is already on this repo's list (${added.status}); nothing new was added.`
@@ -902,7 +909,12 @@ export default function RepoPage({
       form.reset();
       await loadBranches();
     } catch (err) {
-      refuseSave("branch", err);
+      // A refusal (400) is about the name, and belongs beside it; any
+      // other failure is the app's to report.
+      if (err?.status === 400) {
+        setBranchNote("");
+        setBranchRefusal(String(err.message || err));
+      } else refuseSave("branch", err);
     }
   };
 
@@ -2920,7 +2932,12 @@ export default function RepoPage({
                 name="branchName"
                 label="Branch name"
                 placeholder="feature/foo"
-                helperText="Created from the repo's current default branch, or adopted as it stands if it already exists"
+                helperText={
+                  branchRefusal ||
+                  "Created from the repo's current default branch, or adopted as it stands if it already exists"
+                }
+                error={Boolean(branchRefusal)}
+                onChange={() => setBranchRefusal("")}
                 autoComplete="off"
                 inputProps={{
                   ...identifierField,
