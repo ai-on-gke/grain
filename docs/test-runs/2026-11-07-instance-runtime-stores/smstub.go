@@ -157,9 +157,12 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:4303", "listen address")
+	addr := flag.String("addr", "", "listen address (required; the walkthrough uses loopback port 4303)")
 	flag.StringVar(&token, "token", "fake-sm-token", "bearer token to require")
 	flag.Parse()
+	if *addr == "" {
+		log.Fatal("smstub: -addr is required")
+	}
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	log.Printf("smstub listening on %s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, http.HandlerFunc(handler)))
