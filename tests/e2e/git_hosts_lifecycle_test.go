@@ -647,6 +647,7 @@ func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	if strings.Contains(out, "not found") || strings.Contains(out, "404") {
 		t.Errorf("a lapsed login on %s read as a missing repository: %q", depotHost, out)
 	}
+	assertParksOnRenewingTheLogin(t, "a lapsed login", out, gitproxytest.Action)
 
 	depot.fail(hostUnauthorized)
 	task = r.fileTask(t, depot, "push with a refused credential", nil, nil)
@@ -661,6 +662,25 @@ func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	}
 	if strings.Contains(out, "not found") || strings.Contains(out, "404") {
 		t.Errorf("a refused credential on %s read as a missing repository: %q", depotHost, out)
+	}
+	assertParksOnRenewingTheLogin(t, "a refused credential", out, "GH_HOST="+depotHost+" forgecli auth login")
+}
+
+// assertParksOnRenewingTheLogin checks that a refused clone's output is
+// one the dispatcher parks the task on, saying to renew the host's login
+// (gitproxy.LoginLapsed, orchestrator's hostLoginLapsedError) -- not one
+// it retries towards the failure limit, nor one it reads as the
+// credential lacking access to the repository (gitproxy.IsAccessRefusal).
+func assertParksOnRenewingTheLogin(t *testing.T, what, out, fix string) {
+	t.Helper()
+	said, ok := gitproxy.LoginLapsed(out)
+	if !ok {
+		t.Errorf("%s on %s is not one the dispatcher parks on renewing the login: %q", what, depotHost, out)
+	} else if !strings.Contains(said, fix) {
+		t.Errorf("%s on %s parks on %q; want it to say %q", what, depotHost, said, fix)
+	}
+	if gitproxy.IsAccessRefusal(out) {
+		t.Errorf("%s on %s reads as the credential lacking access: %q", what, depotHost, out)
 	}
 }
 
