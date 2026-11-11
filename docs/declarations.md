@@ -334,8 +334,11 @@ fields:                            # optional; the inputs it asks for when filed
     default: staging               #   optional; what an unattended firing uses
     required: false                #   optional; only asked of whoever fills the form
 capabilities:                      # optional; capabilities and repository access
-  - repo-read:acme/upstream        #   the filed task may fetch acme/upstream
-  - repo-write:acme/downstream     #   ...and push its own branch to acme/downstream
+  - {capability: "https://grain.dev/capabilities/repo#read", with: {repo: acme/upstream}}
+                                   #   the filed task may fetch acme/upstream
+  - {capability: "https://grain.dev/capabilities/repo#write", with: {repo: acme/downstream}}
+                                   #   ...and push its own branch to acme/downstream
+                                   #   (formerly repo-read:<repo> / repo-write:<repo>)
   - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
                                    #   capabilities bounded by the filing team
                                    #   (formerly gcp-key, retired in schema migration 97)
@@ -353,13 +356,14 @@ section says about `capabilities:` holds for `grants:` as well.
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
 `.grain/templates/<name>.yml` and `.grain/schedules/<name>.yml` may declare
-any capability the team is allowed to hold, as well as `repo-read:<owner>/<repo>`
-and `repo-write:<owner>/<repo>` on templates.
+any capability the team is allowed to hold, as well as repository access
+(`https://grain.dev/capabilities/repo#read` / `#write` `{repo: <owner>/<repo>}`,
+formerly `repo-read:<owner>/<repo>` / `repo-write:<owner>/<repo>`) on templates.
 
 **Team boundary.** A declared capability cannot grant what the filing team is not
 authorized to have. The team the task runs under is the bound: each capability's
 own `CapabilitySpec.AuthorizedTeams`, plus team-scoped capabilities (such as a
-team-scoped `self-debug` and `api:pipeline-control`). A named GCP key,
+team-scoped `…/api#self-debug` and `…/api#pipeline-control`). A named GCP key,
 `…/gcp#gcp-key` `{permission_set: <name>}` (formerly `gcp-key:<name>`, retired in
 schema migration 97), is the deployment's since single-tenant reset stage 4e, and is dropped only when the
 deployment has no key of that name ([GCP keys](team-gcp-keys.md)).
@@ -371,9 +375,10 @@ requesting unauthorized capabilities:
   naming the stripped capabilities and the filing team.
 
 **Repository access.** For repository access on templates,
-`repo-read:<owner>/<repo>` and `repo-write:<owner>/<repo>` are allowed:
-- Each `repo-read:` becomes one of the template's `reads` and each
-  `repo-write:` one of its `writes` (default branch). Every task filed from
+`repo#read` and `repo#write` `{repo: <owner>/<repo>}` are allowed (and their
+retired spellings `repo-read:<owner>/<repo>` / `repo-write:<owner>/<repo>`):
+- Each `repo#read` becomes one of the template's `reads` and each
+  `repo#write` one of its `writes` (default branch). Every task filed from
   the template carries them, so the git proxy lets that task's sandbox fetch
   the repositories it reads, and push its own task branch to the ones it writes.
 - The proxy clones and pushes a task's work with the filing team's own credential

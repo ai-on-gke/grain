@@ -39,7 +39,7 @@ import (
 //
 //   - everything under .grain/ (YAML comments excepted: they may explain
 //     history), the declarations and prompts grain reads from this
-//     repository;
+//     repository, and the bootstrap playbooks (pkg/playbooks) agents read;
 //   - every string literal of grain's non-test Go code under pkg/ and cmd/:
 //     agent prompts (pkg/orchestrator's sections, pkg/model's templates),
 //     tool and CLI help, and the errors and labels people see.
@@ -87,6 +87,11 @@ var (
 
 	// historyMarker marks text that names a retired spelling as history.
 	historyMarker = regexp.MustCompile(`(?i)formerly|retired|legacy|alias|renamed|migrat|deprecated|historical|older spelling|old name|until it became|became`)
+
+	// legacyOtherMeaning is text where a retired name means something
+	// else: grain-ci is also the name of a Kubernetes PriorityClass for CI
+	// sandboxes and of the git identity CI commits as.
+	legacyOtherMeaning = regexp.MustCompile(`PriorityClass|(?i)priority class|user\.name|\[bot\]`)
 
 	// declarationKey is a .grain/ YAML line whose value is a capability.
 	declarationKey = regexp.MustCompile(`^\s*(?:-\s*)?(?:capabilities|optional-capabilities|capability|grants)\s*:`)
@@ -272,7 +277,9 @@ func TestNoLegacyCapabilityNames(t *testing.T) {
 		if legacyExempt(rel) {
 			continue
 		}
-		grain := strings.HasPrefix(rel, ".grain/")
+		// pkg/playbooks is the bootstrap config map an agent reads
+		// (config-map#config-map {config_maps: [bootstrap]}).
+		grain := strings.HasPrefix(rel, ".grain/") || strings.HasPrefix(rel, "pkg/playbooks/") && strings.HasSuffix(rel, ".md")
 		goSrc := strings.HasSuffix(rel, ".go") && !strings.HasSuffix(rel, "_test.go") &&
 			(strings.HasPrefix(rel, "pkg/") || strings.HasPrefix(rel, "cmd/"))
 		if !grain && !goSrc {
@@ -289,7 +296,7 @@ func TestNoLegacyCapabilityNames(t *testing.T) {
 			hits = append(grainFileHits(rel, data), grainDeclarationListHits(rel, data)...)
 		}
 		for _, h := range hits {
-			if historyMarker.MatchString(h.text) {
+			if historyMarker.MatchString(h.text) || legacyOtherMeaning.MatchString(h.text) {
 				continue
 			}
 			bad = append(bad, h)
@@ -397,5 +404,46 @@ func TestLegacyCapabilityNameInventory(t *testing.T) {
 	sort.Strings(classes)
 	for _, c := range classes {
 		fmt.Printf("# %5d  %s\n", counts[c], c)
+	}
+}
+
+// TestLegacyNameMatcherCatchesWhatItShould pins what the matcher behind
+// TestNoLegacyCapabilityNames reports, so a loosened pattern cannot let
+// the retired spellings back in silently.
+func TestLegacyNameMatcherCatchesWhatItShould(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		bare bool
+		want string
+	}{
+		{text: "capabilities: [grain-ci]", bare: true, want: "grain-ci"},
+		{text: "capabilities: [package-publish]", bare: true, want: "package-publish"},
+		{text: `capabilities: ["repo-write:acme/widgets"]`, bare: true, want: "repo-write:acme/widgets"},
+		{text: "grant api:ci-read@acme/widgets to read CI", want: "api:ci-read@acme/widgets"},
+		{text: "you hold the self-debug capability", want: "self-debug"},
+		{text: "stop granting gcp-key here", want: "gcp-key"},
+		{text: "holds no local-scripts capability", want: "local-scripts"},
+		{text: "a gcp-key:prod key", want: "gcp-key:prod"},
+		{text: "needs grain-log", want: "grain-log"},
+		{text: `capabilities: ["https://grain.dev/capabilities/release#package-publish"]`, bare: true},
+		{text: "https://grain.dev/capabilities/gcp#gcp-key", bare: true},
+		{text: "the gcp server's gcp-key method"},
+		{text: "grain-ci: true"},
+		{text: "/home/debian/.package-publish-token", bare: true},
+		{text: "docs/image-signing.md"},
+		{text: "a local-scripts declaration"},
+		{text: "release#package-publish publishes the images"},
+		{text: "-disable-self-upgrade"},
+	} {
+		got := legacyNamesIn(tc.text, tc.bare)
+		switch {
+		case tc.want == "" && len(got) > 0:
+			t.Errorf("legacyNamesIn(%q) = %q, want nothing", tc.text, got)
+		case tc.want != "" && (len(got) == 0 || got[0] != tc.want):
+			t.Errorf("legacyNamesIn(%q) = %q, want %q", tc.text, got, tc.want)
+		}
+	}
+	if !historyMarker.MatchString("grain#ci (formerly grain-ci)") {
+		t.Error(`historyMarker does not let "formerly grain-ci" through`)
 	}
 }

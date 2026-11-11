@@ -367,7 +367,7 @@ describe("ConsoleSessionPage", () => {
     );
 
     await user.click(
-      within(grants).getByRole("button", { name: /^Remove api:tasks:read/ }),
+      within(grants).getByRole("button", { name: /^Remove api#tasks:read/ }),
     );
     await waitFor(() => expect(puts()).toContainEqual(["self-debug", held]));
   });
