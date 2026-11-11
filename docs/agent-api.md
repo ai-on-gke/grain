@@ -589,7 +589,11 @@ Actions reads go through the daemon's forge connection, and it changes
 no merge gate. `grain#ci`, which would also change gating, is still
 never attached on these repositories. What it adds is that a run can
 read its own repository's CI logs, which may contain anything that
-repository's CI prints. Without the grant, runs got `forbidden` from
+repository's CI prints. Because it is an `api:*` grant, a run holding
+it also has the `grain-controller` MCP server (`POST /api/mcp`)
+attached, where before a run with no `api:*` grant had none. That
+server answers only the scopes the task holds, so here it adds the same
+`ci:read` tools and nothing more. Without the grant, runs got `forbidden` from
 `grain ci log` and asked a person for `grain#ci`, which no GitHub-CI
 repository can grant.
 
@@ -604,6 +608,11 @@ names:
 
 The default is then not attached at all; it is not attached and then
 dropped. The same rule refuses the grant to anybody who asks for it.
+The rule does not remove the grant from tasks filed before it was saved.
+Dispatch checks every `api:*` grant a task holds against the policy
+(`checkTaskGrantsPolicy`), so such a task is refused and parked, as it
+would be for any grant that a later policy denies. Remove the grant from
+those tasks, or file them again.
 A run without it reads in its prompt that to read CI logs it should
 `request_access` for `https://grain.dev/capabilities/api#ci-read` on its
 repository, never `grain#ci`. A CI read it attempts anyway is refused in
