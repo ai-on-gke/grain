@@ -167,4 +167,41 @@ describe("comment deep links (/tasks/<id>#comment=<id>)", () => {
       ),
     );
   });
+
+  it("fetches earlier pages and opens summarised disclosure for a deep link before the loaded page", async () => {
+    const api = (await import("../api.js")).default;
+    const all = longConversation(80);
+    // Initial loaded page has only the newest 50 comments (1030..1079),
+    // compacted through 1020 with a handover at 1050.
+    all[50].handover = true;
+    api.mockImplementation(async (path) => {
+      if (
+        path ===
+        "/api/tasks/12?comments_limit=200&comments_before=1030&attempts_limit=1"
+      ) {
+        return {
+          id: "12",
+          comments: all.slice(0, 30),
+          olderComments: 0,
+        };
+      }
+      return null;
+    });
+
+    window.history.replaceState(null, "", "/tasks/12#comment=1005");
+    renderTask({
+      ...baseTask,
+      id: "12",
+      compactedThrough: 1020,
+      olderComments: 30,
+      comments: all.slice(30),
+    });
+
+    await waitFor(() => expect(scrolled).toHaveLength(1));
+    expect(scrolled[0].getAttribute("data-comment-id")).toBe("1005");
+    expect(
+      scrolled[0].querySelector("details.timeline-summarised"),
+    ).toHaveAttribute("open");
+    expect(screen.queryByTestId("comment-link-notice")).toBeNull();
+  });
 });

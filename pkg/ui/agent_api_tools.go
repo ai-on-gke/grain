@@ -544,6 +544,7 @@ var routeQueries = map[string]map[string]string{
 		"comments_limit":  "Answer only the newest this many comments (1 to 500); olderComments says how many were left out.",
 		"comments_before": "A comment id: answer only the comments before it, the cursor for the page before comments_limit's.",
 		"attempts_limit":  "Answer only the newest this many runs (1 to 500); olderAttempts says how many were left out.",
+		"attempts_before": "An attempt number: answer only the runs before it, the cursor for the page before attempts_limit's.",
 	},
 	"GET /api/tasks/states": {"limit": "At most this many states (an agent's call: default 250, at most 1000; a person's: default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
 	"GET /api/states":       {"limit": "At most this many states (an agent's call: default 250, at most 1000; a person's: default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},

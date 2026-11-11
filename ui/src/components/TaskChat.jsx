@@ -39,6 +39,7 @@ import "@chatscope/chat-ui-kit-styles/dist/default/styles.css";
 import api from "../api.js";
 import fileToAttachment from "../attachments.js";
 import { awaitsReply, chatEntries, typingNote, working } from "../chat.js";
+import { earlierButtonLabel } from "../taskDetailPages.js";
 import { nameScrollbars } from "../chatScrollbars.js";
 import { commentUrl } from "../commentLinks.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
@@ -120,9 +121,11 @@ export default function TaskChat({
   placeholder = "Message…",
   draftRequest = null,
   onDraftConsumed,
+  onLoadEarlier = null,
   actions = null,
   children = null,
 }) {
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const zone = useTimeZone();
   // Keyed on `t` itself, which is exactly as stable as the conversation
   // is: App polls this task every three seconds and writes the result
@@ -382,7 +385,9 @@ export default function TaskChat({
               />
               <Message.CustomContent>
                 <div className="task-chat-message-content">
-                  <Markdown className="task-chat-body">{e.body}</Markdown>
+                  {e.body && (
+                    <Markdown className="task-chat-body">{e.body}</Markdown>
+                  )}
                   {((e.direction === "incoming" && e.body) ||
                     (e.commentId != null && !e.pending)) && (
                     <div className="task-chat-actions">
@@ -401,6 +406,43 @@ export default function TaskChat({
                   )}
                 </div>
                 <AttachmentLinks taskId={t.id} attachments={e.attachments} />
+                {e.summarised?.length > 0 && (
+                  <details
+                    className="timeline-summarised task-chat-summarised"
+                    data-testid="summarised-comments"
+                  >
+                    <summary className="timeline-summarised-summary">
+                      {e.summarised.length} summarised comment
+                      {e.summarised.length === 1 ? "" : "s"}
+                    </summary>
+                    <ul className="timeline-summarised-list">
+                      {e.summarised.map((sc) => (
+                        <li
+                          key={sc.key}
+                          className="timeline-summarised-item"
+                          {...(sc.commentId != null && {
+                            id: `comment-${sc.commentId}`,
+                            "data-comment-id": sc.commentId,
+                          })}
+                        >
+                          <div className="timeline-meta">
+                            {sc.sender}
+                            {sc.at ? ` · ${formatDateTime(sc.at, zone)}` : ""}
+                          </div>
+                          {sc.body && (
+                            <Markdown className="task-chat-body">
+                              {sc.body}
+                            </Markdown>
+                          )}
+                          <AttachmentLinks
+                            taskId={t.id}
+                            attachments={sc.attachments}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
                 {e.pending === "failed" && (
                   <div className="task-chat-retry">
                     <Button
@@ -746,6 +788,28 @@ export default function TaskChat({
       <LocalScriptApprovals t={t} act={act} />
       <PendingConfigChange t={t} act={act} />
       <PendingAccess t={t} act={act} />
+      {(t.olderComments || 0) > 0 && typeof onLoadEarlier === "function" && (
+        <div className="task-chat-earlier" data-testid="task-chat-show-earlier">
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={loadingEarlier}
+            onClick={async () => {
+              if (loadingEarlier) return;
+              setLoadingEarlier(true);
+              try {
+                await onLoadEarlier({ commentsOnly: true });
+              } finally {
+                setLoadingEarlier(false);
+              }
+            }}
+          >
+            {loadingEarlier
+              ? "Loading earlier…"
+              : earlierButtonLabel(t.olderComments || 0, 0)}
+          </Button>
+        </div>
+      )}
       <div className="task-chat-window" ref={windowRef} id={windowId}>
         <MainContainer>
           <ChatContainer>
