@@ -1,0 +1,68 @@
+# item 2: one repair per red Stage 1
+
+=== 2a. rc.1's Stage 1 is red
+    nightly.yml run 9003 on v1.1.0-rc.1 (push) concluded failure
+    repair 3 [queued] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=0
+      evidence: `nightly` run 9003 on `v1.1.0-rc.1` (c6256c8b6bac) has 2 job(s) not green: go, shuffled and repeated, stage 1 qualification verdict
+    release-train ticks: 1 (2:queued)
+
+=== 2b. the scheduled nightly on main is red too
+    nightly.yml run 9004 on main (schedule) concluded failure
+    repair 3 [queued] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=1
+      evidence: `nightly` run 9004 on `main` (c6256c8b6bac) has 2 job(s) not green: stage 1 qualification verdict, sustained load
+
+=== 2c. an idle-gated scheduled nightly on main (every job but idle-gate skipped) concludes green
+    nightly.yml run 9005 on main (schedule) concluded success
+    repair 3 [queued] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=1
+      evidence: `nightly` run 9004 on `main` (c6256c8b6bac) has 2 job(s) not green: stage 1 qualification verdict, sustained load
+
+=== 2d. rc.2's Stage 1 is green
+    nightly.yml run 9006 on v1.1.0-rc.2 (push) concluded success
+    repair 3 [closed] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=2
+      evidence: `nightly` run 9006 on `v1.1.0-rc.2` (c6256c8b6bac) is green
+    release-train ticks: 1 (2:queued)
+
+=== 2e. a later red after the repair closed files a new one
+    nightly.yml run 9007 on v1.1.0-rc.2 (workflow_dispatch) concluded failure
+    repair 3 [closed] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=2
+      evidence: `nightly` run 9006 on `v1.1.0-rc.2` (c6256c8b6bac) is green
+    repair 4 [queued] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=0
+      evidence: `nightly` run 9007 on `v1.1.0-rc.2` (c6256c8b6bac) has 2 job(s) not green: go, shuffled and repeated, stage 1 qualification verdict
+
+=== 2f. a flake retry (workflow_dispatch jobs=go-long) re-runs only the failed job, green; the rest skipped
+    nightly.yml run 9008 on v1.1.0-rc.2 (workflow_dispatch) concluded success
+    repair 3 [closed] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=2
+      evidence: `nightly` run 9006 on `v1.1.0-rc.2` (c6256c8b6bac) is green
+    repair 4 [closed] p9 "Fix the red Stage 1 (nightly) at c6256c8b6bac" goal=nightly-green/close met=false comments=1
+      evidence: `nightly` run 9008 on `v1.1.0-rc.2` (c6256c8b6bac) is green
+    release-train ticks: 1 (2:queued)
+    log: 2026/11/11 21:20:24 orchestrator: Stage 1 run 9003 on acme/widgets is red; filed repair 3 at priority 9
+    log: 2026/11/11 21:20:34 orchestrator: Stage 1 run 9004 on acme/widgets is red; appended it to the open repair 3
+    log: 2026/11/11 21:21:17 orchestrator: Stage 1 run 9007 on acme/widgets is red; filed repair 4 at priority 9
+
+# item 3: pipeline.release-loop-idle (GRAIN_RELEASE_LOOP_IDLE_AFTER=1m)
+
+=== 3a. main gains a chore-only green commit: nothing is owed
+    (open loop-idle notifications: 0)
+
+=== 3b. a green fix lands: raised after the 1m threshold
+    [warning] pipeline.release-loop-idle:acme/widgets: Release train on acme/widgets has had no rc in qualification for 1m
+      No release candidate of acme/widgets has been in qualification for 1m, while `main` has known-good (`tests.yml` + `release.yml` green) commit 8e87fce19b59 carrying a fix or feature newer than `v1.1.0` (f588928e0678), and neither `grain/rc-hold` nor a `-pending` release explains the wait. Release-train schedules: newest tick [task 2](/tasks/2) ("Release train (Stage 1 verdict)") is queued (waiting 5m, priority 9). This clears automatically once the next `vX.Y.Z-rc.N` is cut (design/playbook/releases.playbook.md, section 15).
+
+=== 3c. a staged v1.2.0-pending explains the wait: cleared
+    (open loop-idle notifications: 0)
+
+=== 3d. the -pending is withdrawn: raised again
+    [warning] pipeline.release-loop-idle:acme/widgets: Release train on acme/widgets has had no rc in qualification for 1m
+      No release candidate of acme/widgets has been in qualification for 1m, while `main` has known-good (`tests.yml` + `release.yml` green) commit 8e87fce19b59 carrying a fix or feature newer than `v1.1.0` (f588928e0678), and neither `grain/rc-hold` nor a `-pending` release explains the wait. Release-train schedules: newest tick [task 2](/tasks/2) ("Release train (Stage 1 verdict)") failed. This clears automatically once the next `vX.Y.Z-rc.N` is cut (design/playbook/releases.playbook.md, section 15).
+
+=== 3e. the train cuts v1.2.0-rc.1: cleared
+    (open loop-idle notifications: 0)
+    log: 2026/11/11 21:25:25 orchestrator: raised notification pipeline.release-loop-idle:acme/widgets (warning): Release train on acme/widgets has had no rc in qualification for 1m
+    log: 2026/11/11 21:27:28 orchestrator: cleared notification pipeline.release-loop-idle:acme/widgets
+    log: 2026/11/11 21:29:29 orchestrator: raised notification pipeline.release-loop-idle:acme/widgets (warning): Release train on acme/widgets has had no rc in qualification for 1m
+    log: 2026/11/11 21:31:29 orchestrator: cleared notification pipeline.release-loop-idle:acme/widgets
+
+=== every notification the daemon holds
+    [warning] pipeline.release-loop-idle:acme/widgets raised 2026-11-11T21:29:29.502067878Z cleared 2026-11-11T21:31:29.555457088Z
+    [warning] pipeline.release-loop-idle:acme/widgets raised 2026-11-11T21:25:24.955116839Z cleared 2026-11-11T21:27:28.989514445Z
