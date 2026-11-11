@@ -1,0 +1,2177 @@
+[
+  {
+    "scenario": "other:narrow",
+    "description": "Narrow another entry (user:dave@example.com grain/operator -> grain/viewer)",
+    "caller": "alice",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/viewer\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/operator -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:narrow",
+    "description": "Narrow another entry (user:dave@example.com grain/operator -> grain/viewer)",
+    "caller": "bob",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/viewer\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/operator -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:narrow",
+    "description": "Narrow another entry (user:dave@example.com grain/operator -> grain/viewer)",
+    "caller": "carol",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:narrow",
+    "description": "Narrow another entry (user:dave@example.com grain/operator -> grain/viewer)",
+    "caller": "agent",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:narrow",
+    "description": "Narrow another entry (user:dave@example.com grain/operator -> grain/viewer)",
+    "caller": "access-code",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/viewer\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/operator -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:widen",
+    "description": "Widen another entry (user:dave@example.com grain/viewer -> grain/operator)",
+    "caller": "alice",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/operator\",\"previous\":\"grain/viewer\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/viewer -> grain/operator",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:widen",
+    "description": "Widen another entry (user:dave@example.com grain/viewer -> grain/operator)",
+    "caller": "bob",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/operator\",\"previous\":\"grain/viewer\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/viewer -> grain/operator",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:widen",
+    "description": "Widen another entry (user:dave@example.com grain/viewer -> grain/operator)",
+    "caller": "carol",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:widen",
+    "description": "Widen another entry (user:dave@example.com grain/viewer -> grain/operator)",
+    "caller": "agent",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:widen",
+    "description": "Widen another entry (user:dave@example.com grain/viewer -> grain/operator)",
+    "caller": "access-code",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/operator\",\"previous\":\"grain/viewer\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/viewer -> grain/operator",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:add-deny",
+    "description": "Add a deny to another entry (user:dave@example.com grain/viewer -> viewer-no-secrets)",
+    "caller": "alice",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"viewer-no-secrets\",\"previous\":\"grain/viewer\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/viewer -> viewer-no-secrets",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:add-deny",
+    "description": "Add a deny to another entry (user:dave@example.com grain/viewer -> viewer-no-secrets)",
+    "caller": "bob",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"viewer-no-secrets\",\"previous\":\"grain/viewer\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/viewer -> viewer-no-secrets",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:add-deny",
+    "description": "Add a deny to another entry (user:dave@example.com grain/viewer -> viewer-no-secrets)",
+    "caller": "carol",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:add-deny",
+    "description": "Add a deny to another entry (user:dave@example.com grain/viewer -> viewer-no-secrets)",
+    "caller": "agent",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:add-deny",
+    "description": "Add a deny to another entry (user:dave@example.com grain/viewer -> viewer-no-secrets)",
+    "caller": "access-code",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"viewer-no-secrets\",\"previous\":\"grain/viewer\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/viewer -> viewer-no-secrets",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:lift-deny",
+    "description": "Lift a deny from another entry (user:dave@example.com viewer-no-secrets -> grain/viewer)",
+    "caller": "alice",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/viewer\",\"previous\":\"viewer-no-secrets\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role viewer-no-secrets -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:lift-deny",
+    "description": "Lift a deny from another entry (user:dave@example.com viewer-no-secrets -> grain/viewer)",
+    "caller": "bob",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/viewer\",\"previous\":\"viewer-no-secrets\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role viewer-no-secrets -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:lift-deny",
+    "description": "Lift a deny from another entry (user:dave@example.com viewer-no-secrets -> grain/viewer)",
+    "caller": "carol",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:lift-deny",
+    "description": "Lift a deny from another entry (user:dave@example.com viewer-no-secrets -> grain/viewer)",
+    "caller": "agent",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "other:lift-deny",
+    "description": "Lift a deny from another entry (user:dave@example.com viewer-no-secrets -> grain/viewer)",
+    "caller": "access-code",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/viewer\",\"previous\":\"viewer-no-secrets\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role viewer-no-secrets -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-unconfirmed",
+    "description": "Narrow own user: entry without confirmSelf (-> grain/viewer)",
+    "caller": "alice",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "confirm_self",
+      "message": "user:alice@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:alice@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "confirm_self",
+      "message": "user:alice@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "panelText": "user:alice@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-unconfirmed",
+    "description": "Narrow own user: entry without confirmSelf (-> grain/viewer)",
+    "caller": "bob",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "confirm_self",
+      "message": "user:bob@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:bob@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "confirm_self",
+      "message": "user:bob@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "panelText": "user:bob@example.com matches you: confirm that you want to change its role grain/operator -> grain/viewer, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-unconfirmed",
+    "description": "Narrow own user: entry without confirmSelf (-> grain/viewer)",
+    "caller": "carol",
+    "entry": "user:carol@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-unconfirmed",
+    "description": "Narrow own user: entry without confirmSelf (-> grain/viewer)",
+    "caller": "agent",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-unconfirmed",
+    "description": "Narrow own user: entry without confirmSelf (-> grain/viewer)",
+    "caller": "access-code",
+    "entry": "user:dave@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:dave@example.com\",\"role\":\"grain/viewer\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:dave@example.com: role grain/operator -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-confirmed",
+    "description": "Narrow own user: entry WITH confirmSelf (-> grain/viewer)",
+    "caller": "alice",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:alice@example.com\",\"role\":\"grain/viewer\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:alice@example.com: role grain/operator -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-confirmed",
+    "description": "Narrow own user: entry WITH confirmSelf (-> grain/viewer)",
+    "caller": "bob",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:bob@example.com\",\"role\":\"grain/viewer\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:bob@example.com: role grain/operator -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-confirmed",
+    "description": "Narrow own user: entry WITH confirmSelf (-> grain/viewer)",
+    "caller": "carol",
+    "entry": "user:carol@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-confirmed",
+    "description": "Narrow own user: entry WITH confirmSelf (-> grain/viewer)",
+    "caller": "agent",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:narrow-confirmed",
+    "description": "Narrow own user: entry WITH confirmSelf (-> grain/viewer)",
+    "caller": "access-code",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:bob@example.com\",\"role\":\"grain/viewer\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:bob@example.com: role grain/operator -> grain/viewer",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:widen",
+    "description": "Widen own user: entry (grain/contributor -> grain/operator, even if caller holds full admin via group)",
+    "caller": "alice",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "alice@example.com (role grain/contributor) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: alice@example.com (role grain/contributor) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:write, so you can see this list but not change it.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:widen",
+    "description": "Widen own user: entry (grain/contributor -> grain/operator, even if caller holds full admin via group)",
+    "caller": "bob",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_escalation",
+      "message": "user:bob@example.com matches you: you may not widen it from grain/contributor to grain/operator (it grants tasks:admin, which user:bob@example.com (role grain/contributor) does not hold); another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:bob@example.com matches you: you may not widen it from grain/contributor to grain/operator (it grants tasks:admin, which user:bob@example.com (role grain/contributor) does not hold); another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_escalation",
+      "message": "user:bob@example.com matches you: you may not widen it from grain/contributor to grain/operator (it grants tasks:admin, which user:bob@example.com (role grain/contributor) does not hold); another admin, or the access code, can",
+      "panelText": "user:bob@example.com matches you: you may not widen it from grain/contributor to grain/operator (it grants tasks:admin, which user:bob@example.com (role grain/contributor) does not hold); another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:widen",
+    "description": "Widen own user: entry (grain/contributor -> grain/operator, even if caller holds full admin via group)",
+    "caller": "carol",
+    "entry": "user:carol@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:widen",
+    "description": "Widen own user: entry (grain/contributor -> grain/operator, even if caller holds full admin via group)",
+    "caller": "agent",
+    "entry": "user:carol@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:widen",
+    "description": "Widen own user: entry (grain/contributor -> grain/operator, even if caller holds full admin via group)",
+    "caller": "access-code",
+    "entry": "user:carol@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:carol@example.com\",\"role\":\"grain/operator\",\"previous\":\"carol-limited\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:carol@example.com: role carol-limited -> grain/operator",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:add-deny",
+    "description": "Add a deny to own user: entry (-> operator-no-secrets)",
+    "caller": "alice",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "panelText": "user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:add-deny",
+    "description": "Add a deny to own user: entry (-> operator-no-secrets)",
+    "caller": "bob",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "panelText": "user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:add-deny",
+    "description": "Add a deny to own user: entry (-> operator-no-secrets)",
+    "caller": "carol",
+    "entry": "user:carol@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:add-deny",
+    "description": "Add a deny to own user: entry (-> operator-no-secrets)",
+    "caller": "agent",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:add-deny",
+    "description": "Add a deny to own user: entry (-> operator-no-secrets)",
+    "caller": "access-code",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:bob@example.com\",\"role\":\"operator-no-secrets\",\"previous\":\"grain/operator\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:bob@example.com: role grain/operator -> operator-no-secrets",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:lift-deny",
+    "description": "Lift a deny from own user: entry (operator-no-secrets -> grain/operator)",
+    "caller": "alice",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "panelText": "user:alice@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:lift-deny",
+    "description": "Lift a deny from own user: entry (operator-no-secrets -> grain/operator)",
+    "caller": "bob",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "panelText": "user:bob@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:lift-deny",
+    "description": "Lift a deny from own user: entry (operator-no-secrets -> grain/operator)",
+    "caller": "carol",
+    "entry": "user:carol@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role viewer-no-secrets) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role viewer-no-secrets) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:write, so you can see this list but not change it.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:lift-deny",
+    "description": "Lift a deny from own user: entry (operator-no-secrets -> grain/operator)",
+    "caller": "agent",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "self-direct:lift-deny",
+    "description": "Lift a deny from own user: entry (operator-no-secrets -> grain/operator)",
+    "caller": "access-code",
+    "entry": "user:bob@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:bob@example.com\",\"role\":\"grain/operator\",\"previous\":\"operator-no-secrets\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "user:bob@example.com: role operator-no-secrets -> grain/operator",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-unconfirmed",
+    "description": "Narrow group:ops@example.com without confirmSelf (grain/dispatch-control -> grain/pipeline-control; matches bob via group, other for alice)",
+    "caller": "alice",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/pipeline-control\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> grain/pipeline-control",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-unconfirmed",
+    "description": "Narrow group:ops@example.com without confirmSelf (grain/dispatch-control -> grain/pipeline-control; matches bob via group, other for alice)",
+    "caller": "bob",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "confirm_self",
+      "message": "group:ops@example.com matches you: confirm that you want to change its role grain/dispatch-control -> grain/pipeline-control, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: group:ops@example.com matches you: confirm that you want to change its role grain/dispatch-control -> grain/pipeline-control, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "confirm_self",
+      "message": "group:ops@example.com matches you: confirm that you want to change its role grain/dispatch-control -> grain/pipeline-control, which narrows your own access (confirmSelf, or --confirm-self)",
+      "panelText": "group:ops@example.com matches you: confirm that you want to change its role grain/dispatch-control -> grain/pipeline-control, which narrows your own access (confirmSelf, or --confirm-self)",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-unconfirmed",
+    "description": "Narrow group:ops@example.com without confirmSelf (grain/dispatch-control -> grain/pipeline-control; matches bob via group, other for alice)",
+    "caller": "carol",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-unconfirmed",
+    "description": "Narrow group:ops@example.com without confirmSelf (grain/dispatch-control -> grain/pipeline-control; matches bob via group, other for alice)",
+    "caller": "agent",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-unconfirmed",
+    "description": "Narrow group:ops@example.com without confirmSelf (grain/dispatch-control -> grain/pipeline-control; matches bob via group, other for alice)",
+    "caller": "access-code",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/pipeline-control\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> grain/pipeline-control",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-confirmed",
+    "description": "Narrow group:ops@example.com WITH confirmSelf (grain/dispatch-control -> grain/pipeline-control)",
+    "caller": "alice",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/pipeline-control\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> grain/pipeline-control",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-confirmed",
+    "description": "Narrow group:ops@example.com WITH confirmSelf (grain/dispatch-control -> grain/pipeline-control)",
+    "caller": "bob",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/pipeline-control\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> grain/pipeline-control",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-confirmed",
+    "description": "Narrow group:ops@example.com WITH confirmSelf (grain/dispatch-control -> grain/pipeline-control)",
+    "caller": "carol",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-confirmed",
+    "description": "Narrow group:ops@example.com WITH confirmSelf (grain/dispatch-control -> grain/pipeline-control)",
+    "caller": "agent",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:narrow-confirmed",
+    "description": "Narrow group:ops@example.com WITH confirmSelf (grain/dispatch-control -> grain/pipeline-control)",
+    "caller": "access-code",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/pipeline-control\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> grain/pipeline-control",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:widen",
+    "description": "Widen group:ops@example.com (grain/dispatch-control -> grain/operator; matches bob via group, other for alice)",
+    "caller": "alice",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/operator\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> grain/operator",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:widen",
+    "description": "Widen group:ops@example.com (grain/dispatch-control -> grain/operator; matches bob via group, other for alice)",
+    "caller": "bob",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_escalation",
+      "message": "group:ops@example.com matches you: you may not widen it from grain/dispatch-control to grain/operator (it grants tasks:admin, which group:ops@example.com (role grain/dispatch-control) does not hold); another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: group:ops@example.com matches you: you may not widen it from grain/dispatch-control to grain/operator (it grants tasks:admin, which group:ops@example.com (role grain/dispatch-control) does not hold); another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_escalation",
+      "message": "group:ops@example.com matches you: you may not widen it from grain/dispatch-control to grain/operator (it grants tasks:admin, which group:ops@example.com (role grain/dispatch-control) does not hold); another admin, or the access code, can",
+      "panelText": "group:ops@example.com matches you: you may not widen it from grain/dispatch-control to grain/operator (it grants tasks:admin, which group:ops@example.com (role grain/dispatch-control) does not hold); another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:widen",
+    "description": "Widen group:ops@example.com (grain/dispatch-control -> grain/operator; matches bob via group, other for alice)",
+    "caller": "carol",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:widen",
+    "description": "Widen group:ops@example.com (grain/dispatch-control -> grain/operator; matches bob via group, other for alice)",
+    "caller": "agent",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:widen",
+    "description": "Widen group:ops@example.com (grain/dispatch-control -> grain/operator; matches bob via group, other for alice)",
+    "caller": "access-code",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/operator\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> grain/operator",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:add-deny",
+    "description": "Add deny to group:ops@example.com (grain/dispatch-control -> viewer-no-secrets; matches bob via group, other for alice)",
+    "caller": "alice",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"viewer-no-secrets\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> viewer-no-secrets",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:add-deny",
+    "description": "Add deny to group:ops@example.com (grain/dispatch-control -> viewer-no-secrets; matches bob via group, other for alice)",
+    "caller": "bob",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "panelText": "group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:add-deny",
+    "description": "Add deny to group:ops@example.com (grain/dispatch-control -> viewer-no-secrets; matches bob via group, other for alice)",
+    "caller": "carol",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:add-deny",
+    "description": "Add deny to group:ops@example.com (grain/dispatch-control -> viewer-no-secrets; matches bob via group, other for alice)",
+    "caller": "agent",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:add-deny",
+    "description": "Add deny to group:ops@example.com (grain/dispatch-control -> viewer-no-secrets; matches bob via group, other for alice)",
+    "caller": "access-code",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"viewer-no-secrets\",\"previous\":\"grain/dispatch-control\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role grain/dispatch-control -> viewer-no-secrets",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:lift-deny",
+    "description": "Lift deny from group:ops@example.com (viewer-no-secrets -> grain/dispatch-control; matches bob via group, other for alice)",
+    "caller": "alice",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/dispatch-control\",\"previous\":\"viewer-no-secrets\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role viewer-no-secrets -> grain/dispatch-control",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:lift-deny",
+    "description": "Lift deny from group:ops@example.com (viewer-no-secrets -> grain/dispatch-control; matches bob via group, other for alice)",
+    "caller": "bob",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "self_access_change",
+      "message": "group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "panelText": "group:ops@example.com matches you: you may not add or lift a deny on an entry that matches yourself; another admin, or the access code, can",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:lift-deny",
+    "description": "Lift deny from group:ops@example.com (viewer-no-secrets -> grain/dispatch-control; matches bob via group, other for alice)",
+    "caller": "carol",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which PATCH /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:lift-deny",
+    "description": "Lift deny from group:ops@example.com (viewer-no-secrets -> grain/dispatch-control; matches bob via group, other for alice)",
+    "caller": "agent",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which PATCH /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: PATCH /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "group:lift-deny",
+    "description": "Lift deny from group:ops@example.com (viewer-no-secrets -> grain/dispatch-control; matches bob via group, other for alice)",
+    "caller": "access-code",
+    "entry": "group:ops@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"group:ops@example.com\",\"role\":\"grain/dispatch-control\",\"previous\":\"viewer-no-secrets\"}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "group:ops@example.com: role viewer-no-secrets -> grain/dispatch-control",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "last-admin:remove",
+    "description": "Remove the last full admin (user:alice@example.com when bob is grain/viewer)",
+    "caller": "alice",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "last_admin",
+      "message": "user:alice@example.com is the last entry holding a full admin role (grain/operator): refusing to remove it (role grain/operator), which would leave nobody to sign in as a full admin; give another entry grain/operator first (the access code can still recover the deployment)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: user:alice@example.com is the last entry holding a full admin role (grain/operator): refusing to remove it (role grain/operator), which would leave nobody to sign in as a full admin; give another entry grain/operator first (the access code can still recover the deployment)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "last_admin",
+      "message": "user:alice@example.com is the last entry holding a full admin role (grain/operator): refusing to remove it (role grain/operator), which would leave nobody to sign in as a full admin; give another entry grain/operator first (the access code can still recover the deployment)",
+      "panelText": "user:alice@example.com is the last entry holding a full admin role (grain/operator): refusing to remove it (role grain/operator), which would leave nobody to sign in as a full admin; give another entry grain/operator first (the access code can still recover the deployment)",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "last-admin:remove",
+    "description": "Remove the last full admin (user:alice@example.com when bob is grain/viewer)",
+    "caller": "bob",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "bob@example.com (roles grain/dispatch-control, grain/viewer) holds no scope access:write, which DELETE /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: bob@example.com (roles grain/dispatch-control, grain/viewer) holds no scope access:write, which DELETE /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:write, so you can see this list but not change it.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "last-admin:remove",
+    "description": "Remove the last full admin (user:alice@example.com when bob is grain/viewer)",
+    "caller": "carol",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "carol@example.com (role carol-limited) holds no scope access:write, which DELETE /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds no scope access:write, which DELETE /api/access/principals/{entry} needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "gated-ui",
+      "status": 403,
+      "code": "ui_gated",
+      "message": "Your role does not include access:read, so this list is hidden.",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "last-admin:remove",
+    "description": "Remove the last full admin (user:alice@example.com when bob is grain/viewer)",
+    "caller": "agent",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "refused",
+      "status": 403,
+      "code": "",
+      "message": "task 1 holds no api grant for scope access:write, which DELETE /api/access/principals/{entry} needs: ask a person to grant api:access:write or a preset that includes it (docs/agent-api.md)",
+      "auditDelta": 0
+    },
+    "cli": {
+      "outcome": "refused",
+      "exit": 3,
+      "output": "grain: DELETE /api/access/principals/{entry} is destructive (scope access:write): give a reason",
+      "auditDelta": 0
+    },
+    "ui": {
+      "outcome": "n/a-no-browser-session",
+      "status": 403,
+      "code": "",
+      "message": "agents do not sign in to the browser UI; verified over REST and CLI",
+      "panelText": "",
+      "auditDelta": 0
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  },
+  {
+    "scenario": "last-admin:remove",
+    "description": "Remove the last full admin (user:alice@example.com when bob is grain/viewer)",
+    "caller": "access-code",
+    "entry": "user:alice@example.com",
+    "rest": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "{\"entry\":\"user:alice@example.com\",\"removed\":true}",
+      "auditDelta": 1
+    },
+    "cli": {
+      "outcome": "accepted",
+      "exit": 0,
+      "output": "removed user:alice@example.com",
+      "auditDelta": 1
+    },
+    "ui": {
+      "outcome": "accepted",
+      "status": 200,
+      "code": "",
+      "message": "",
+      "panelText": "",
+      "auditDelta": 1
+    },
+    "surfacesAgree": true,
+    "auditConsistent": true
+  }
+]

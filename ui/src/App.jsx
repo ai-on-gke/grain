@@ -1639,6 +1639,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         // on both).
         setConfig((prev) => keepIfSame(prev, next));
         setConfigError(null);
+        return next;
       } catch (err) {
         setConfigError(err);
         if (
