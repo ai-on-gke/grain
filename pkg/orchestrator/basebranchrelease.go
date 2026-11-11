@@ -1013,6 +1013,7 @@ func baseBranchReleaseTriageBody(row model.BaseBranchRelease) string {
 	b.WriteString("- Identify the cause of the failure in the release workflow or codebase.\n")
 	b.WriteString("- Repair the release pipeline or repository files so releases succeed.\n")
 	b.WriteString("\n" + model.RedCIProcedureReminder + "\n")
+	b.WriteString("\n" + model.RepairNeedsAPersonReminder + "\n")
 	return b.String()
 }
 

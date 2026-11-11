@@ -660,6 +660,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	prompt += nothingNeededSection(task)
 	prompt += questionSummarySection
+	prompt += personActionSection
 	prompt += statusSection(canOpenPullRequest)
 	prompt += chatSection(task, canOpenPullRequest)
 	prompt += runtimeSection(task, maxRuntime)
@@ -1132,6 +1133,16 @@ const questionSummarySection = "\n\nWhenever you ask a person something -- ask_q
 	"it?\"). The inbox, the task list and notifications show only that line, with your " +
 	"full question behind an expander, so never write \"I have a question\" or " +
 	"\"Need input\"."
+
+// personActionSection is what every run is told about an outcome that
+// needs a person to act (model.PersonActionInstruction): that it is a
+// question, not a closing note. Task #4256 ended a repair that only a
+// repository admin could finish with a note whose inbox line was its
+// opening sentence, and the action halfway down it, hedged as a choice.
+// A task body that says how it must finish (a qualification run's
+// verdict footer, say) still decides, which the last sentence leaves to it.
+const personActionSection = "\n\n" + model.PersonActionInstruction + " Where the task " +
+	"itself names the tool to finish with, do as it says, and still give that tool's `summary`."
 
 // statusSection is the paragraph about update_status: that a run can put
 // one line on its own task's row saying what it is doing, and when doing
