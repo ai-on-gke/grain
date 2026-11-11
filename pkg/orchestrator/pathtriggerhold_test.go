@@ -154,8 +154,10 @@ func TestGatedPathRequiringAHumanIsNeverReleased(t *testing.T) {
 
 func TestGatedPathsUnderSeveralTriggersWaitForAllUnderTheStrictest(t *testing.T) {
 	t.Parallel()
+	docs := gateTrigger("docs", model.TriggerHumanNo, "docs")
+	docs.Template = templateID("planner")
 	ctx, store, _, client, task := finishGated(t, []model.PathTrigger{
-		gateTrigger("docs", model.TriggerHumanNo, "docs"),
+		docs,
 		gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets"),
 	}, "docs/a.md", "config/secrets/prod.yml")
 
@@ -165,7 +167,7 @@ func TestGatedPathsUnderSeveralTriggersWaitForAllUnderTheStrictest(t *testing.T)
 	}
 	ids := gatingIDs(got)
 	if len(ids) != 2 {
-		t.Fatalf("want a gating task per trigger, got %v", ids)
+		t.Fatalf("want a gating task per review template, got %v", ids)
 	}
 	completeReview(t, ctx, store, ids[0])
 	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))

@@ -180,6 +180,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		SandboxMemoryOvercommit: ptr(1.5),
 		SandboxDiskOvercommit:   ptr(4.0),
 		SandboxOvercommit:       &model.OvercommitSettings{Mode: model.OvercommitAuto, CPUMax: 4},
+		SandboxShapeLimits:      &model.SandboxShapeLimits{Max: model.SandboxShape{CPUs: 12}},
 		ExternalAgentAPI:        ptr(true),
 		SessionSandboxIdleTTL:   ptr("45m"),
 		SandboxMemoryReserveMB:  ptr(4096),

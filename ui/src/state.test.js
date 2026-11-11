@@ -2944,6 +2944,24 @@ describe("askedCase", () => {
     });
   });
 
+  // Task 3803: a person's question no run has been shown is waiting on an
+  // agent, not on the owner's Reply.
+  it("names a person's undelivered comment ahead of a plain answer", () => {
+    const t = {
+      state: "awaiting_reply",
+      unansweredCommentFrom: "atyburcy@example.com",
+    };
+    expect(askedCase(t)).toEqual({
+      kind: "unanswered",
+      title: "Unanswered question from atyburcy@example.com",
+      action: "reply",
+    });
+    expect(stateTitle(t)).toBe("Unanswered question from atyburcy@example.com");
+    expect(baseRepairWaitReason(t)).toBe(
+      "unanswered question from atyburcy@example.com",
+    );
+  });
+
   it("distinguishes a parked question from an answered report in baseRepairWaitReason", () => {
     expect(
       baseRepairWaitReason({

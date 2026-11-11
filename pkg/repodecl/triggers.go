@@ -41,6 +41,7 @@ type rawTrigger struct {
 	AutoApprove bool     `yaml:"auto-approve"`
 	Sensitive   bool     `yaml:"sensitive"`
 	Approvers   []string `yaml:"approvers"`
+	Fixes       bool     `yaml:"fixes"`
 }
 
 // loadTriggers reads and checks every file in `.grain/triggers`.
@@ -89,6 +90,7 @@ func parseTrigger(f file, repo model.RepoRef, templates map[string]bool) (model.
 		Path:        f.path,
 		On:          model.TriggerEvent(strings.TrimSpace(raw.On)),
 		AutoApprove: raw.AutoApprove,
+		Fixes:       raw.Fixes,
 	}
 	var errs []error
 	switch t.On {
@@ -176,6 +178,10 @@ func parseTrigger(f file, repo model.RepoRef, templates map[string]bool) (model.
 		if t.Human == "" {
 			t.Human = model.TriggerHumanOnFindings
 		}
+	}
+	if raw.Fixes && !gate {
+		errs = append(errs, fmt.Errorf("%s: fixes says a gating review may push fixes, so it goes with "+
+			"`gate: true` only", f.path))
 	}
 	errs = append(errs, parseSensitive(f, raw, &t)...)
 	if len(errs) > 0 {

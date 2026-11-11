@@ -854,6 +854,14 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if !pushed {
 		return false, nil
 	}
+	if reviewCommentsOnly(task) {
+		// A review posts its findings; it was not asked to fix them
+		// (pathtriggerreview.go). What it pushed is left where it is, and
+		// the run ends like any other review's.
+		return false, noteOnTask(ctx, store, task.ID, fmt.Sprintf("Branch %s was pushed, but this review "+
+			"was filed to post findings, not to fix them, so no pull request was opened for it.",
+			task.BranchName()), now)
+	}
 	closed, err := taskClosed(ctx, store, task.ID)
 	if err != nil {
 		return true, err
