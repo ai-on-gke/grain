@@ -32,9 +32,10 @@ package e2e
 // to by a scripted agent through the real git proxy, and carried through
 // a state-repo export and import; at every step its host must survive,
 // and every upstream must only ever be sent its own host's credential.
-// Opening the pull request and the merge queue on a command-backed host
-// are pkg/daemon/forgeroute_test.go's, one layer down: the forge router
-// they go through is the daemon's own.
+// What happens to a pushed branch afterwards -- the pull request, its
+// checks, the plain git server's no-PR ending -- goes through the
+// daemon's own forge router, and is git_hosts_daemon_test.go's, through a
+// real daemon.Run.
 
 import (
 	"bytes"
@@ -175,7 +176,10 @@ type hostUpstream struct {
 	// kind names the host in failures.
 	kind string
 	// secret is the one credential this host may ever be sent.
-	secret  string
+	secret string
+	// repo is the repository's name on this host: gitHostsRepo unless a
+	// test gives each host its own (git_hosts_daemon_test.go).
+	repo    string
 	dir     string
 	backend http.Handler
 
@@ -186,7 +190,7 @@ type hostUpstream struct {
 
 func newHostUpstream(t *testing.T, kind, host, secret string) *hostUpstream {
 	dir := t.TempDir()
-	return &hostUpstream{t: t, kind: kind, host: host, secret: secret, dir: dir, backend: gitHTTPBackend(dir)}
+	return &hostUpstream{t: t, kind: kind, host: host, secret: secret, repo: gitHostsRepo, dir: dir, backend: gitHTTPBackend(dir)}
 }
 
 func (u *hostUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +256,12 @@ func (u *hostUpstream) label() string {
 
 // ref is acme/widgets on this host.
 func (u *hostUpstream) ref() model.RepoRef {
-	return model.RepoRef{Host: u.host, Owner: gitHostsOwner, Name: gitHostsRepo}
+	return model.RepoRef{Host: u.host, Owner: gitHostsOwner, Name: u.repo}
+}
+
+// bare is this host's bare repository.
+func (u *hostUpstream) bare() string {
+	return filepath.Join(u.dir, gitHostsOwner, u.repo+".git")
 }
 
 // newRepo seeds acme/widgets on this host with one commit on main, and a
@@ -260,11 +269,11 @@ func (u *hostUpstream) ref() model.RepoRef {
 func (u *hostUpstream) newRepo() {
 	t := u.t
 	t.Helper()
-	bare := initBareRepo(t, filepath.Join(u.dir, gitHostsOwner, gitHostsRepo+".git"), "main")
+	bare := initBareRepo(t, u.bare(), "main")
 	run(t, u.dir, "git", "-C", bare, "config", "http.receivepack", "true")
 	seed := filepath.Join(t.TempDir(), "seed")
 	run(t, u.dir, "git", "clone", "-q", bare, seed)
-	mustWriteFile(t, filepath.Join(seed, "README.md"), "acme/widgets on "+u.label()+"\n")
+	mustWriteFile(t, filepath.Join(seed, "README.md"), gitHostsOwner+"/"+u.repo+" on "+u.label()+"\n")
 	run(t, seed, "git", "add", "README.md")
 	run(t, seed, "git", "-c", "user.email=s@e", "-c", "user.name=s", "commit", "-q", "-m", "initial commit")
 	run(t, seed, "git", "push", "-q", "origin", "HEAD:main")
@@ -273,7 +282,7 @@ func (u *hostUpstream) newRepo() {
 // branchTip is the subject of branch's tip on this host, "" when the
 // branch is not there.
 func (u *hostUpstream) branchTip(branch string) string {
-	bare := filepath.Join(u.dir, gitHostsOwner, gitHostsRepo+".git")
+	bare := u.bare()
 	out, err := exec.Command("git", "--git-dir", bare, "log", "-1", "--format=%s", "refs/heads/"+branch).Output()
 	if err != nil {
 		return ""
