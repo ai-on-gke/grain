@@ -260,6 +260,10 @@ func DefaultKMSClient() *KMSClient {
 	return defaultKMSClient
 }
 
+// ResolvedEndpoint is the REST root c calls, after $GRAIN_KMS_ENDPOINT
+// and DefaultKMSEndpoint have been applied.
+func (c *KMSClient) ResolvedEndpoint() string { return c.endpoint() }
+
 func (c *KMSClient) endpoint() string {
 	ep := c.Endpoint
 	if ep == "" {
@@ -298,22 +302,25 @@ func (c *KMSClient) token(ctx context.Context) (string, error) {
 	return tok, nil
 }
 
-// call POSTs one KMS method on name and decodes its answer into out,
-// classifying a failure as a KMSError. A nil in is a GET.
+// call calls one KMS method on name and decodes its answer into out,
+// classifying a failure as a KMSError. A nil in is a GET, of the
+// sub-resource method names (cryptoKeyVersions.getPublicKey is
+// GET v1/<version>/publicKey, not a :custom verb).
 func (c *KMSClient) call(ctx context.Context, name, method string, in, out any) error {
 	tok, err := c.token(ctx)
 	if err != nil {
 		return &KMSError{Key: name, Reason: "unreachable", Err: err}
 	}
-	verb, body := http.MethodGet, io.Reader(nil)
+	verb, body, url := http.MethodGet, io.Reader(nil), c.endpoint()+name+"/"+method
 	if in != nil {
+		url = c.endpoint() + name + ":" + method
 		data, err := json.Marshal(in)
 		if err != nil {
 			return err
 		}
 		verb, body = http.MethodPost, bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, verb, c.endpoint()+name+":"+method, body)
+	req, err := http.NewRequestWithContext(ctx, verb, url, body)
 	if err != nil {
 		return &KMSError{Key: name, Reason: "unreachable", Err: err}
 	}
@@ -436,7 +443,7 @@ func (c *KMSClient) GetPublicKey(ctx context.Context, name string) (*ecdsa.Publi
 		PEM       string `json:"pem"`
 		Algorithm string `json:"algorithm"`
 	}
-	if err := c.call(ctx, name, "getPublicKey", nil, &out); err != nil {
+	if err := c.call(ctx, name, "publicKey", nil, &out); err != nil {
 		return nil, err
 	}
 	if out.Algorithm != "EC_SIGN_P256_SHA256" {

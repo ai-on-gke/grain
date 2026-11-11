@@ -26,13 +26,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/secrets/kmsfake"
 )
 
-// kmsVersion is a made-up key version; each test takes its own so the
-// public-key cache never carries one fake's key into another test.
+// kmsVersion is a made-up key version. The public-key cache is keyed by
+// endpoint too, so each test's fake (its own URL) reads its own key.
 func kmsVersion(t *testing.T, n int) string {
 	t.Helper()
-	name := "projects/example-project/locations/global/keyRings/grain/cryptoKeys/release-approval/cryptoKeyVersions/" + strconv.Itoa(n)
-	t.Cleanup(func() { kmsPublic.Delete(name) })
-	return name
+	return "projects/example-project/locations/global/keyRings/grain/cryptoKeys/release-approval/cryptoKeyVersions/" + strconv.Itoa(n)
 }
 
 func TestAKMSKeySignsWhatTheWorkflowsVerifierAccepts(t *testing.T) {

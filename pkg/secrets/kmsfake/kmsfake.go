@@ -110,10 +110,12 @@ func (f *Server) signingKey(name string) *ecdsa.PrivateKey {
 }
 
 func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
-	name, method, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v1/"), ":")
+	path := strings.TrimPrefix(r.URL.Path, "/v1/")
+	name, method, ok := strings.Cut(path, ":")
 	wantVerb := http.MethodPost
-	if method == "getPublicKey" {
-		wantVerb = http.MethodGet
+	// getPublicKey is GET v1/<version>/publicKey, as Cloud KMS has it.
+	if v, found := strings.CutSuffix(path, "/publicKey"); found && !strings.Contains(path, ":") {
+		name, method, ok, wantVerb = v, "getPublicKey", true, http.MethodGet
 	}
 	if !ok || r.Method != wantVerb {
 		apiError(w, http.StatusNotFound, "not found")

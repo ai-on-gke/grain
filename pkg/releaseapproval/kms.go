@@ -41,7 +41,9 @@ type KMSSigner struct {
 
 // kmsPublic caches each key version's public key: a version's key pair
 // never changes, and Approve should not cost a getPublicKey every time.
-var kmsPublic sync.Map // version name -> *ecdsa.PublicKey
+// It is keyed by the endpoint as well as the name, so a key read from
+// one KMS (a test's fake, say) is never taken for another's.
+var kmsPublic sync.Map // endpoint + version name -> *ecdsa.PublicKey
 
 // NewKMSSigner is the signer for the key version name, reading its
 // public key through client (secrets.DefaultKMSClient when nil: the
@@ -55,14 +57,15 @@ func NewKMSSigner(ctx context.Context, client *secrets.KMSClient, name string) (
 		client = secrets.DefaultKMSClient()
 	}
 	var pub *ecdsa.PublicKey
-	if v, ok := kmsPublic.Load(name); ok {
+	cacheKey := client.ResolvedEndpoint() + name
+	if v, ok := kmsPublic.Load(cacheKey); ok {
 		pub = v.(*ecdsa.PublicKey)
 	} else {
 		var err error
 		if pub, err = client.GetPublicKey(ctx, name); err != nil {
 			return nil, err
 		}
-		kmsPublic.Store(name, pub)
+		kmsPublic.Store(cacheKey, pub)
 	}
 	kid, err := attest.KeyID(pub)
 	if err != nil {
