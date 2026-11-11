@@ -65,10 +65,14 @@ const SECRET_NAME =
 // a secret: by its name, or by the schema saying so. A string confined to
 // an enum is not one whatever it is called -- its values are the
 // schema's own, fixed list (gcp's credential_source: configured or
-// ambient) -- unless the schema marks it secret.
+// ambient) -- unless the schema marks it secret. Nor is a boolean or a
+// number: it cannot hold one, and hiding it hid switches such as figma's
+// allow_sandbox_token from Settings, with no way to set them
+// (2026-11-11 walkthrough).
 export function isSecretLooking(name, schema) {
   if (schema && (schema.writeOnly === true || schema.format === "password"))
     return true;
+  if (["boolean", "integer", "number"].includes(schema?.type)) return false;
   if (Array.isArray(schema?.enum) && schema.enum.length > 0) return false;
   if (Array.isArray(schema?.items?.enum) && schema.items.enum.length > 0)
     return false;
