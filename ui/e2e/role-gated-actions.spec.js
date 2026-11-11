@@ -312,7 +312,7 @@ test("a viewer's access request Grant and Deny are disabled, and say why", async
   page,
 }) => {
   await asViewer(page);
-  await page.route(/\/api\/tasks\/1$/, async (route) => {
+  await page.route(/\/api\/tasks\/1(\?.*)?$/, async (route) => {
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];
     await rewriteJSON(
