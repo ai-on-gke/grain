@@ -474,6 +474,7 @@ func settingsWithEveryFieldChanged() ui.Settings {
 	}
 	// Struct-valued settings: the overcommit mode, hub connection and skill folders.
 	s.SandboxOvercommit = model.OvercommitSettings{Mode: model.OvercommitAuto}
+	s.SandboxShapeLimits = model.SandboxShapeLimits{Max: model.SandboxShape{CPUs: 12}}
 	s.Hub = model.HubConfig{URL: "https://registry.example.com", Entry: "grain-dev"}
 	s.Registry = s.Hub
 	folders := []string{".claude/skills"}
