@@ -104,7 +104,11 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 	// this terminal, so only a turn that ends on a promise is sent back.
 	// No record file -- a console session hands grain no Result to put
 	// one on.
-	settingsPath, err := writeStopSettings(ctx, f.host, f.grainBinaryPath, true, "")
+	policyPath, err := stageStopPolicy(ctx, f.host, true)
+	if err != nil {
+		policyPath = ""
+	}
+	settingsPath, err := writeStopSettingsWithPolicy(ctx, f.host, agent.HookBinary(f.host, f.grainBinaryPath), true, "", policyPath)
 	if err != nil {
 		settingsPath = ""
 	} else {
@@ -119,6 +123,7 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 			cred, err := f.oauthToken(ctx)
 			if err != nil {
 				os.Remove(configPath)
+				removeStopSettings(policyPath)
 				removeStopSettings(settingsPath)
 				releaseServers()
 				return nil, fmt.Errorf("claude: reading the Claude Code credential: %w", err)
@@ -127,6 +132,7 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 				vc, err := setupVertexCredentials(ctx, f.host, cred)
 				if err != nil {
 					os.Remove(configPath)
+					removeStopSettings(policyPath)
 					removeStopSettings(settingsPath)
 					releaseServers()
 					return nil, err
@@ -139,6 +145,7 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 		token, err := f.oauthToken(ctx)
 		if err != nil {
 			os.Remove(configPath)
+			removeStopSettings(policyPath)
 			removeStopSettings(settingsPath)
 			releaseServers()
 			return nil, fmt.Errorf("claude: reading the Claude Code OAuth token: %w", err)
@@ -157,6 +164,7 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 		// process that reads it has not been started yet.
 		Cleanup: func() {
 			os.Remove(configPath)
+			removeStopSettings(policyPath)
 			removeStopSettings(settingsPath)
 			releaseServers()
 			if credsCleanup != nil {
