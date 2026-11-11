@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -132,6 +133,17 @@ type RemotePeer struct {
 	// too old to say".
 	Logins      []string `json:"logins,omitempty"`
 	LoginsKnown bool     `json:"loginsKnown,omitempty"`
+	// Features are the contract features the hostd advertised in its hello
+	// (or those inferred from its protocol version when it predates
+	// Hello.Features).
+	Features []Feature `json:"features,omitempty"`
+}
+
+// Hello returns the protocol version and contract features p reported, so
+// callers can check p.Hello().Has(f).
+func (p RemotePeer) Hello() Hello {
+	proto, _ := strconv.Atoi(p.Protocol)
+	return Hello{Build: p.Build, Protocol: proto, Features: p.Features}
 }
 
 // RemoteStatus is Settings' view of a hostd that dials in.
@@ -641,5 +653,10 @@ func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
 	}
 	st := r.last[name]
 	st.Logins, st.LoginsKnown = append([]string(nil), h.Logins...), true
+	if len(h.Features) > 0 {
+		st.Features = append([]Feature(nil), h.Features...)
+	} else {
+		st.Features = legacyFeatures(h.Protocol)
+	}
 	r.last[name] = st
 }

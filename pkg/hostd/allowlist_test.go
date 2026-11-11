@@ -547,6 +547,258 @@ func TestParseAllowlistReadsCapacityAndLabels(t *testing.T) {
 	}
 }
 
+func TestEnvOpenAdmitsArbitraryNamesAndEnforcesFrozenDenySet(t *testing.T) {
+	a, root := mustParse(t, `
+clis:
+  open:
+    path: /opt/cli
+    paths_under: [ROOT]
+    env: ["*"]
+    pass_env: [HTTPS_PROXY]
+    set_env: {FIXED_FLAG: "1"}
+  open_with_home:
+    path: /opt/agy
+    paths_under: [ROOT]
+    env: [HOME, PYTHONPATH, "*"]
+`)
+	mkfiles(t, root, "home/run-1/", "pylib/", "cfg.json")
+	host := []string{"PATH=/usr/bin", "HOME=/home/me", "USER=me", "HTTPS_PROXY=http://proxy:3128"}
+
+	// Arbitrary new CLI variables and valid paths under paths_under pass.
+	spec, err := a.Check(&Request{
+		Kind: KindCLI,
+		Name: "open",
+		Env: []string{
+			"NEW_CLI_VAR_2027=enabled",
+			"GEMINI_API_KEY=secret-key",
+			"STAGE_CONFIG=" + root + "/cfg.json",
+		},
+	}, host)
+	if err != nil {
+		t.Fatalf("open env check failed: %v", err)
+	}
+	for _, want := range []string{
+		"PATH=/usr/bin",
+		"HOME=/home/me",
+		"HTTPS_PROXY=http://proxy:3128",
+		"FIXED_FLAG=1",
+		"NEW_CLI_VAR_2027=enabled",
+		"GEMINI_API_KEY=secret-key",
+		"STAGE_CONFIG=" + root + "/cfg.json",
+	} {
+		if !slices.Contains(spec.Env, want) {
+			t.Errorf("spec.Env %q lacks %q", spec.Env, want)
+		}
+	}
+
+	// Every member of the frozen deny set is refused under env: ["*"].
+	denied := []string{
+		// Identity variables:
+		"PATH=" + root,
+		"HOME=" + root + "/home/run-1",
+		"USER=other",
+		"LOGNAME=other",
+		"LANG=C",
+		"TZ=UTC",
+		// Dynamic loader variables:
+		"LD_PRELOAD=" + root + "/cfg.json",
+		"LD_LIBRARY_PATH=" + root,
+		"LD_AUDIT=" + root + "/cfg.json",
+		// Shell and interpreter injection variables:
+		"BASH_ENV=" + root + "/cfg.json",
+		"ENV=" + root + "/cfg.json",
+		"NODE_OPTIONS=--require=foo",
+		"PYTHONSTARTUP=" + root + "/cfg.json",
+		"PYTHONPATH=" + root + "/pylib",
+		"PERL5OPT=-Mstrict",
+		"RUBYOPT=-w",
+	}
+	for _, kv := range denied {
+		_, err := a.Check(&Request{Kind: KindCLI, Name: "open", Env: []string{kv}}, host)
+		wantRefused(t, err, "not one this entry accepts")
+	}
+
+	// set_env and pass_env still cannot be overridden under env: ["*"].
+	for _, kv := range []string{"HTTPS_PROXY=http://evil:3128", "FIXED_FLAG=0"} {
+		_, err := a.Check(&Request{Kind: KindCLI, Name: "open", Env: []string{kv}}, host)
+		wantRefused(t, err, "set_env or pass_env")
+	}
+
+	// Path-like values still must sit under paths_under under env: ["*"].
+	for _, kv := range []string{
+		"ANY_PATH=/etc/passwd",
+		"ANY_PATH=./cfg.json",
+		"ANY_PATH=../cfg.json",
+		"ANY_PATH=~/cfg.json",
+		"ANY_PATH=" + root + "/escape",
+	} {
+		_, err := a.Check(&Request{Kind: KindCLI, Name: "open", Env: []string{kv}}, host)
+		wantRefused(t, err, "paths_under")
+	}
+
+	// Exact names keep working alongside "*", while other denied names stay refused.
+	spec, err = a.Check(&Request{
+		Kind: KindCLI,
+		Name: "open_with_home",
+		Env: []string{
+			"HOME=" + root + "/home/run-1",
+			"PYTHONPATH=" + root + "/pylib",
+			"AGY_EXTRA_VAR=ok",
+		},
+	}, host)
+	if err != nil {
+		t.Fatalf("open_with_home check failed: %v", err)
+	}
+	if !slices.Contains(spec.Env, "HOME="+root+"/home/run-1") || !slices.Contains(spec.Env, "PYTHONPATH="+root+"/pylib") {
+		t.Errorf("spec.Env = %q, want overridden HOME and PYTHONPATH", spec.Env)
+	}
+	for _, kv := range []string{"PATH=" + root, "LD_PRELOAD=" + root + "/cfg.json", "NODE_OPTIONS=--inspect"} {
+		_, err := a.Check(&Request{Kind: KindCLI, Name: "open_with_home", Env: []string{kv}}, host)
+		wantRefused(t, err, "not one this entry accepts")
+	}
+
+	// Malformed wildcard patterns are still rejected at parse time.
+	for _, bad := range []string{
+		`clis: {x: {path: /bin/x, env: ["**"]}}`,
+		`clis: {x: {path: /bin/x, env: ["*FOO"]}}`,
+	} {
+		if _, err := ParseAllowlist([]byte(bad)); err == nil {
+			t.Errorf("ParseAllowlist(%q) succeeded, want refused", bad)
+		}
+	}
+}
+
+func TestParseAllowlistIgnoresXAnnotationKeysAndKeepsStrictnessElsewhere(t *testing.T) {
+	root := testRoot(t)
+	yamlWithAnnotations := strings.ReplaceAll(`
+x-notes:
+  owner: workstation-team
+  items: [1, 2, 3]
+x-shared-roots: &roots [ROOT]
+clis:
+  agy:
+    path: /opt/agy/bin/agy
+    paths_under: *roots
+    cwd_under: *roots
+    env: ["*"]
+    x-installed-by: grain-agentd
+  x-custom-cli:
+    path: /opt/custom/cli
+    x-meta: {experimental: true}
+capabilities:
+  corp-search:
+    command: /usr/local/bin/corp-search
+    x-ticket: issue-12345
+`, "ROOT", root)
+	a, err := ParseAllowlist([]byte(yamlWithAnnotations))
+	if err != nil {
+		t.Fatalf("ParseAllowlist with x- keys failed: %v", err)
+	}
+	if a.Lookup(KindCLI, "agy") == nil || a.Lookup(KindCLI, "x-custom-cli") == nil || a.Lookup(KindCapability, "corp-search") == nil {
+		t.Fatalf("offers = %+v, want agy, x-custom-cli and corp-search", a.Offers())
+	}
+	if !slices.Equal(a.CLIs["agy"].PathsUnder, []string{root}) {
+		t.Errorf("x-shared-roots anchor resolved to %v, want [%s]", a.CLIs["agy"].PathsUnder, root)
+	}
+	if onlyX, err := ParseAllowlist([]byte("x-only: true\n")); err != nil || len(onlyX.Offers()) != 0 {
+		t.Errorf("an allowlist with only x- keys = %+v, %v", onlyX, err)
+	}
+
+	// Non-x- unknown keys are still strictly refused, even beside x- keys.
+	for _, bad := range []string{
+		"x-note: ok\ntypo_top: 1\n",
+		"x-note: ok\nclis:\n  agy:\n    path: /bin/agy\n    x-ok: 1\n    extra_arg: true\n",
+		"capabilities:\n  c:\n    command: /bin/c\n    x-ok: 1\n    max_dur: 5m\n",
+		"clis:\n  agy:\n    path: /bin/agy\n    set_env:\n      x-not-env: 1\n",
+	} {
+		if _, err := ParseAllowlist([]byte(bad)); err == nil {
+			t.Errorf("ParseAllowlist(%q) succeeded, want strict refusal", bad)
+		}
+	}
+}
+
+func TestParseAllowlistExpandsHomeRelativePaths(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	mkfiles(t, home, ".local/bin/agy", ".grain/hostd-stage/work/")
+
+	a, err := ParseAllowlist([]byte(`
+clis:
+  agy:
+    path: ~/.local/bin/agy
+    paths_under: [~/.grain/hostd-stage]
+    cwd_under: [~/.grain/hostd-stage]
+    env: [HOME, "*"]
+`))
+	if err != nil {
+		t.Fatalf("ParseAllowlist with ~/ paths failed: %v", err)
+	}
+	wantBin := filepath.Join(home, ".local/bin/agy")
+	wantStage := filepath.Join(home, ".grain/hostd-stage")
+	e := a.Lookup(KindCLI, "agy")
+	if e.Path != wantBin || !slices.Equal(e.PathsUnder, []string{wantStage}) || !slices.Equal(e.CwdUnder, []string{wantStage}) {
+		t.Fatalf("expanded entry = %+v, want path %s and stage %s", e, wantBin, wantStage)
+	}
+	workDir := filepath.Join(wantStage, "work")
+	spec, err := a.Check(&Request{
+		Kind: KindCLI,
+		Name: "agy",
+		Args: []string{"--add-dir", workDir},
+		Env:  []string{"HOME=" + workDir, "EXTRA_FLAG=1"},
+		Dir:  workDir,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Check against ~/ entry failed: %v", err)
+	}
+	if spec.Path != wantBin || spec.Dir != workDir {
+		t.Errorf("spec = %+v, want path %s and dir %s", spec, wantBin, workDir)
+	}
+
+	// Unsafe ~ forms and capability command: with ~/ stay refused.
+	for _, bad := range []string{
+		"clis: {agy: {path: ~}}",
+		"clis: {agy: {path: ~/}}",
+		"clis: {agy: {path: ~other/bin/agy}}",
+		"clis: {agy: {path: ~/.local/../bin/agy}}",
+		"clis: {agy: {path: /bin/agy, paths_under: [~/../etc]}}",
+		"clis: {agy: {path: /bin/agy, cwd_under: [~other/work]}}",
+		"capabilities: {c: {command: ~/.local/bin/cap}}",
+	} {
+		if _, err := ParseAllowlist([]byte(bad)); err == nil {
+			t.Errorf("ParseAllowlist(%q) succeeded, want refused", bad)
+		}
+	}
+}
+
+func TestCLIEntryYAMLWritesEnvOpenOnlyWhenPeerAdvertisesIt(t *testing.T) {
+	home := "/home/alice"
+	stage := "/home/alice/.grain/hostd-stage"
+	closed := []string{"CODEX_HOME", "OPENAI_API_KEY"}
+	agyClosed := []string{"HOME", "AGY_CLI_DISABLE_AUTO_UPDATE", "GEMINI_API_KEY"}
+
+	modern := ThisHello("v3.5.0")
+	gotCodex := CLIEntryYAML("codex", "/home/alice/.local/bin/codex", home, []string{stage}, closed, nil, modern)
+	if !strings.Contains(gotCodex, "path: ~/.local/bin/codex\n") ||
+		!strings.Contains(gotCodex, "paths_under: [~/.grain/hostd-stage]\n") ||
+		!strings.Contains(gotCodex, `env: ["*"]`+"\n") {
+		t.Errorf("modern codex snippet:\n%s", gotCodex)
+	}
+	gotAgy := CLIEntryYAML("agy", "/home/alice/.local/bin/agy", home, []string{stage}, agyClosed, nil, modern)
+	if !strings.Contains(gotAgy, `env: [HOME, "*"]`+"\n") {
+		t.Errorf("modern agy snippet must retain exact HOME beside *:\n%s", gotAgy)
+	}
+
+	old := Hello{Protocol: 4}
+	gotOld := CLIEntryYAML("codex", "/home/alice/.local/bin/codex", home, []string{stage}, closed, nil, old)
+	if strings.Contains(gotOld, `"*"`) || strings.Contains(gotOld, "~/") ||
+		!strings.Contains(gotOld, "env: [CODEX_HOME, OPENAI_API_KEY]\n") {
+		t.Errorf("legacy host snippet used env_open syntax:\n%s", gotOld)
+	}
+}
+
 func TestParseAllowlistLoginsMap(t *testing.T) {
 	absent, err := ParseAllowlist([]byte("clis: {}\n"))
 	if err != nil {
