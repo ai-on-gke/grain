@@ -17,6 +17,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import TaskList from "./TaskList.jsx";
+import { viewerConfig } from "../accessTestConfigs.js";
 import {
   NO_NARROWING,
   defaultNarrowing,
@@ -507,6 +508,41 @@ describe("TaskList", () => {
     });
     expect(screen.getByText("Stalled")).toBeInTheDocument();
     expect(screen.getByTitle(/reconcileDispatch/)).toBeInTheDocument();
+  });
+
+  // The control that ends a stalled row's wait is a write, gated on the
+  // scope its request needs as the inbox's stalled group gates it: a
+  // grain/viewer sees Cancel disabled with the reason rather than a
+  // click that ends in a 403 (2026-11-11 walkthrough, Bug 2).
+  it("disables a stalled row's control for a role without its scope", async () => {
+    const user = userEvent.setup();
+    renderList({
+      config: viewerConfig,
+      tasks: [
+        {
+          id: 23,
+          title: "No process is finishing this",
+          state: "running",
+          stall:
+            "this has stood here for more than 24h, which is longer than `ProcessResult` should take",
+          reason: { case: "live_run", control: "Cancel" },
+          capabilities: [],
+          blocked: false,
+        },
+      ],
+    });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toBeDisabled();
+    expect(cancel.closest("[data-access-denied]")).toHaveAttribute(
+      "data-access-denied",
+      "tasks:write",
+    );
+    await user.hover(cancel.closest("[data-access-denied]"));
+    expect(
+      await screen.findByText(
+        "Needs tasks:write, which your role grain/viewer does not grant.",
+      ),
+    ).toBeInTheDocument();
   });
 
   // And says nothing about the healthy ones, which is nearly all of

@@ -35,6 +35,7 @@ import {
   mergeQueueStalled,
   pullRequestUrl,
   reasonControl,
+  actionScope,
   redBaseRepairSentence,
   waitingBaseRepair,
   askedCase,
@@ -1184,25 +1185,9 @@ function groupTasks(tasks) {
 // under the reader's cursor, and a header full of "Approve all (1)"
 // teaches everybody to click past the confirm that matters.
 // inboxActionScope is the role scope the request behind one of a row's
-// answers needs (pkg/ui's roleScopeOf for POST /api/tasks/{id}<post>), or
-// null for an answer that only reads -- opening the task, or a link out.
-// AccessGate disables the button for a role without it and says why,
-// rather than leaving a grain/viewer an Approve whose click ends in a 403
-// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
-export function inboxActionScope(action) {
-  if (action.open || action.href) return null;
-  if (action.forceMerge || action.overrideReviewGates) return "merge:force";
-  switch (action.post) {
-    case "/approve":
-      return "tasks:admin";
-    case "/run-now":
-      return "dispatch:write";
-    case "/retry-merge":
-      return "merge:write";
-    default:
-      return "tasks:write";
-  }
-}
+// answers needs (state.js's actionScope, which the task list's own
+// stalled-row control is gated on too).
+export const inboxActionScope = actionScope;
 
 // gated wraps a row's button in AccessGate when its answer writes.
 function gated(scope, repo, config, button) {

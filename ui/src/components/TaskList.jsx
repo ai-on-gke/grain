@@ -17,10 +17,12 @@ import { Button, Checkbox, Chip, FormControlLabel } from "@mui/material";
 import { heldForRunNow } from "../alerts.js";
 import CampaignIcon from "@mui/icons-material/Campaign";
 import api from "../api.js";
+import AccessGate from "./AccessGate.jsx";
 import GrantChip from "./GrantChip.jsx";
 import KeepRunningChip from "./KeepRunningChip.jsx";
 import {
   STATE_LABELS,
+  actionScope,
   statesOf,
   activityTitle,
   questionActivity,
@@ -1007,21 +1009,29 @@ export function TaskRow({
           as stuck: the escalation to a person is this button beside the
           sentence that says so (the inbox's stalled group offers the
           same one, and passes no onControl here so it is not offered
-          twice). */}
+          twice). Gated like the inbox's: a role without the scope its
+          request needs sees it disabled with the reason, not a click
+          that ends in a 403. */}
       {stalledControl && (
-        <Button
-          size="small"
-          variant="outlined"
-          className="task-reason-control"
-          color={stalledControl.color}
-          title={stalledControl.title}
-          onClick={(e) => {
-            e.stopPropagation();
-            onControl(t, stalledControl);
-          }}
+        <AccessGate
+          scope={actionScope(stalledControl)}
+          repo={t.repo}
+          config={config}
         >
-          {stalledControl.label}
-        </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            className="task-reason-control"
+            color={stalledControl.color}
+            title={stalledControl.title}
+            onClick={(e) => {
+              e.stopPropagation();
+              onControl(t, stalledControl);
+            }}
+          >
+            {stalledControl.label}
+          </Button>
+        </AccessGate>
       )}
     </div>
   );
