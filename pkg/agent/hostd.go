@@ -61,9 +61,36 @@ type HostdHost struct {
 	// directory, as its hello said them.
 	Grain     string
 	StageRoot string
-	// CodexAuth is the codex login on that hostd's machine, if it has
-	// one (hostd.Hello.CodexAuth).
+	// LoginTargets maps each named CLI login on that hostd's machine to
+	// its resolved regular-file target for Symlink
+	// (hostd.Hello.LoginTargets, FeatureLoginsMap).
+	LoginTargets map[string]string
+	// HasLoginsMap reports whether that hostd advertised
+	// hostd.FeatureLoginsMap, so LoginTargets is authoritative and
+	// CodexAuth is not consulted.
+	HasLoginsMap bool
+	// CodexAuth is the codex login on that hostd's machine, for a hostd
+	// that predates FeatureLoginsMap (hostd.Hello.CodexAuth).
+	//
+	// Deprecated: use HostLogin / LoginTargets.
 	CodexAuth string
+	// HookPolicy reports whether that hostd's hook subcommands accept
+	// -policy and evaluate a staged per-run hook policy file
+	// (hostd.Hello.Has(hostd.FeatureHookPolicy)).
+	HookPolicy bool
+}
+
+// HostLogin returns the symlink target path for the named CLI login on a
+// remote hostd's machine: from LoginTargets when the host advertises
+// FeatureLoginsMap, or from CodexAuth for older hosts.
+func (h HostdHost) HostLogin(name string) string {
+	if h.HasLoginsMap {
+		return h.LoginTargets[name]
+	}
+	if name == hostd.LoginCodex {
+		return h.CodexAuth
+	}
+	return ""
 }
 
 func (h HostdHost) binary() string {

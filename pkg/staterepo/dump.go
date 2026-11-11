@@ -688,6 +688,13 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		if err := model.MigrateHostingFromGrants(ctx, tx, true); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
+		// Both spellings of a grant are one key (unified-grants §3): an
+		// api:/repo-read:/repo-write: entry a mixed-version or hand-edited
+		// grain/config carries is stored as its canonical reference, and
+		// dropped where its owner already holds that reference.
+		if err := model.MigrateCanonicalGrants(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
 	}
 	// Host work nothing places, written down as placed on the only host
 	// there is, when the daemon importing says which that is

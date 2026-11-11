@@ -475,6 +475,128 @@ working across a rotation. A bearer code is accepted from any address,
 because the code is the credential, unless the daemon requires IAP
 (`-ui-require-iap`), which takes it over unforwarded loopback only.
 
+## Who the code is recorded as
+
+The code carries the owner's powers, but every request it authenticates
+also records who presented it, as the principal `access-code:<name>`
+(a human, source `access-code`, shown as "`<name>` (access code)"):
+
+- **The browser sign-in** asks for your email beside the code. When the
+  allowlist (Settings -> Access) names anybody, the email must be one it
+  admits; a verified identity that arrives with the code (a verifier
+  declaring `AccessCodeWins`) is used instead of what was typed. The
+  session cookie carries the name under its MAC
+  (`v2.<issued>.<name>.<mac>`), so it cannot be edited. A session signed
+  in before names existed (`v1`) keeps working until it expires, as
+  "operator (access code)".
+- **The CLI**, when it sends the code, sends `X-Grain-Access-Name`
+  beside it: `$GRAIN_OWNER` when set, else the local account as
+  `<user>@<host>`. The header counts only beside the code. The name is
+  what the CLI says, not something grain verified: anybody who holds the
+  code is the owner already, so the name attributes the request, it does
+  not authorize it. The two ways below give the host CLI a verified
+  identity instead, and day to day it then sends no code at all.
+- **The access history** (Settings -> Access, the config audit) records
+  every mutating request the code authenticates under the surface
+  `access-code`: who, the source address, the route and the time,
+  beside role changes.
+
+### On the daemon's host: the API socket
+
+The daemon also serves its API on a unix socket,
+`<data-dir>/api/grain.sock`, in a directory only its own account may
+enter (mode `0700`). `-api-socket` names another path, and `none` turns
+it off. For each connection the daemon asks the kernel which account
+connected (`SO_PEERCRED`) and maps that uid to a person:
+
+- `-host-accounts 1000=alice@example.com,1001=bob@example.com`
+  (`$GRAIN_HOST_ACCOUNTS`) names them;
+- the daemon's own account maps to `-deployment-owner` unless
+  `-host-accounts` names it.
+
+With neither set, no account maps to anybody and the socket is not
+served. A mapped caller is recorded as that person, with the source
+`host-account`, which is a verified source: it can be named in an
+`Approved-by:` trailer, which `access-code:<name>` never can. The
+allowlist still decides what they may do, as for any verified sign-in;
+`-deployment-owner` is always on it.
+
+Nothing on the socket is trusted for being there:
+
+- a uid the map names nobody for is refused with `403` before the
+  request reaches the API, whatever it presents, the access code
+  included;
+- a mapped caller is only that person: the socket drops the access
+  code, bearer tokens, cookies, `X-Grain-Access-Name`,
+  `X-Grain-Acting-Task` and every proxy identity or forwarding header;
+- a socket request's address is `unix-socket:uid=<n>`, never empty, so
+  it is never taken for the daemon's own in-process calls, which stay
+  trusted as before.
+
+The host `grain` CLI dials the socket in place of a loopback
+`-server` whenever it exists and this account can reach it, unless
+`-token`, `$GRAIN_TOKEN` (or another token variable) or the context's
+own credential says how to sign in. It finds the socket under
+`$GRAIN_DATA_DIR`; `$GRAIN_API_SOCKET` names another, and
+`GRAIN_API_SOCKET=none` sends the CLI back to `-server` and the code.
+The directory's `0700` means that by default only the daemon's account
+(and root) can connect, which is what the CLI wrapper `scripts/setup.sh`
+installs runs as. To let another account in, grant it search on the
+directory (`setfacl -m u:alice:x <data-dir>/api`) and name its uid in
+`-host-accounts`. Being able to connect admits nobody on its own.
+
+### Elsewhere: `grain login` through IAP or an identity proxy
+
+`grain login <url>` that signs a person in through IAP (a Google ID
+token) or a credential source a wrapper registered (`--auth <source>`)
+now keeps a personal token afterwards: a `grain/external-dev` `gma_`
+token owned by them, as `--issue-token` mints. From then on the context
+is that token, recorded as `external:cli-…` on behalf of the person,
+and needs neither the proxy's sign-in nor the code day to day. `grain
+logout` revokes it. `--issue-token=false` keeps a context that signs in
+through the proxy on every call instead. A deployment with
+`externalAgentApi` off cannot issue one, and says so.
+
+## Bootstrap and recovery only: `grain access-code mode`
+
+```bash
+grain access-code mode            # prints on, recovery or off
+grain access-code mode recovery   # recommended once a verified sign-in works
+grain access-code mode off
+grain access-code mode on         # the default
+```
+
+The mode is kept in `<data-dir>/access-code-mode`, beside the code, and
+the daemon re-reads it within a second. Only this command, on the host,
+changes it, never Settings. That way someone holding the code on the
+network cannot switch it back on, and an owner who has lost every
+verified sign-in still has the host.
+
+- **on** (the default, and how every existing install behaves): the code
+  works everywhere, as described above.
+- **recovery**: once a person on the allowlist with a full role (a
+  `user:` entry, `grain/operator` or wider) can sign in through a
+  verifier (an IAP audience, `-ui-require-verifier`, or a registered
+  identity proxy), the code only manages access and settings:
+  `/api/access/*`, `/api/api-scope-sets*`, `/api/settings*`,
+  `/api/config`, `/api/deployment` and its config audit,
+  `/api/whoami`, signing in and out, and the frontend. Every other
+  route answers `403` naming recovery mode. Each use raises an Inbox
+  notification (`access-code:recovery:<source>`, at most one a minute
+  per name and source, with every raise counted) that names who used it
+  and from where. Until such a person exists, recovery works like
+  **on**, so it cannot lock out the bootstrap it is meant to protect.
+- **off**: the code is refused as a bearer token, in
+  `X-Grain-Access-Code`, as a session, and at sign-in. One exception
+  remains: a run's own plumbing (`grain mcpserver` requests carrying
+  `X-Grain-Acting-Task`, held to that task's grants and recorded as the
+  task) still reaches the daemon with the code, until runs carry a
+  credential of their own. Undo it with `grain access-code mode on` on
+  the host.
+
+A mode file holding anything else is read as **off**, so a typo never
+opens the code wider than intended.
+
 ## Rotating
 
 `grain access-code rotate` writes a new code into the file and prints it.

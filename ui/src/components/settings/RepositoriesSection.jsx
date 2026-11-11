@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  Alert,
   Box,
   Checkbox,
   FormControlLabel,
@@ -36,7 +37,7 @@ import {
   confirmBaseRepairBypass,
   repoCIMode,
 } from "../RepoPage.jsx";
-import { repoHostOf } from "../RepoList.jsx";
+import { repoHostOf, targetRepoHostMismatches } from "../RepoList.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 
 // RepositoriesSection is Settings → Repositories: an index only
@@ -132,6 +133,11 @@ export default function RepositoriesSection({
   // when settings live in the config repo, both of which the API refuses.
   const bypassReadOnly = (repo) =>
     Boolean(config?.configRepoOnly) || !repoAdministered(config, repo);
+  const hostMismatches = targetRepoHostMismatches(
+    reach,
+    config?.targetRepos,
+    config?.githubHost,
+  );
 
   return (
     <SettingsCard title="Repositories" anchor="repositories">
@@ -141,55 +147,75 @@ export default function RepositoriesSection({
         </Typography>
       ) : (
         <>
-          <Table size="small" aria-label="Repositories">
-            <TableHead>
-              <TableRow>
-                <TableCell>Repository</TableCell>
-                <TableCell>Base branch</TableCell>
-                <TableCell>Declarations</TableCell>
-                <TableCell>CI mode</TableCell>
-                <TableCell>Git connection</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {repos.map((repo) => {
-                const { defaults, release } = facts[repo] || {};
-                return (
-                  <TableRow
-                    key={repo}
-                    data-testid="settings-repo-row"
-                    data-repo={repo}
-                  >
-                    <TableCell>{tabLink(repo, "overview", repo)}</TableCell>
-                    <TableCell data-testid="settings-repo-base">
-                      {tabLink(repo, "releases", baseBranchText(release))}
-                    </TableCell>
-                    <TableCell data-testid="settings-repo-declarations">
-                      {tabLink(repo, "advanced", declarationsText(defaults))}
-                    </TableCell>
-                    <TableCell data-testid="settings-repo-ci">
-                      {tabLink(repo, "ci", ciModeText(defaults))}
-                    </TableCell>
-                    <TableCell data-testid="settings-repo-git">
-                      <Link
-                        href={buildPath({
-                          view: "settings",
-                          settingsSection: "git",
-                        })}
-                        onClick={(evt) => {
-                          if (!onSection || !plainLeftClick(evt)) return;
-                          evt.preventDefault();
-                          onSection("git");
-                        }}
-                      >
-                        {connectionText(reach, repo)}
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+          {hostMismatches.length > 0 && (
+            <Stack spacing={1} sx={{ mb: 2 }}>
+              {hostMismatches.map((m) => (
+                <Alert
+                  key={m.repo}
+                  severity="warning"
+                  data-testid="repo-host-mismatch-alert"
+                  sx={{ overflowWrap: "anywhere" }}
+                >
+                  <strong>{m.repo}</strong>: {m.message}
+                </Alert>
+              ))}
+            </Stack>
+          )}
+          <Box sx={{ overflowX: "auto" }}>
+            <Table size="small" aria-label="Repositories">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Repository</TableCell>
+                  <TableCell>Base branch</TableCell>
+                  <TableCell>Declarations</TableCell>
+                  <TableCell>Skills</TableCell>
+                  <TableCell>CI mode</TableCell>
+                  <TableCell>Git connection</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {repos.map((repo) => {
+                  const { defaults, release } = facts[repo] || {};
+                  return (
+                    <TableRow
+                      key={repo}
+                      data-testid="settings-repo-row"
+                      data-repo={repo}
+                    >
+                      <TableCell>{tabLink(repo, "overview", repo)}</TableCell>
+                      <TableCell data-testid="settings-repo-base">
+                        {tabLink(repo, "releases", baseBranchText(release))}
+                      </TableCell>
+                      <TableCell data-testid="settings-repo-declarations">
+                        {tabLink(repo, "advanced", declarationsText(defaults))}
+                      </TableCell>
+                      <TableCell data-testid="settings-repo-skills">
+                        {tabLink(repo, "agents", skillsText(defaults))}
+                      </TableCell>
+                      <TableCell data-testid="settings-repo-ci">
+                        {tabLink(repo, "ci", ciModeText(defaults))}
+                      </TableCell>
+                      <TableCell data-testid="settings-repo-git">
+                        <Link
+                          href={buildPath({
+                            view: "settings",
+                            settingsSection: "git",
+                          })}
+                          onClick={(evt) => {
+                            if (!onSection || !plainLeftClick(evt)) return;
+                            evt.preventDefault();
+                            onSection("git");
+                          }}
+                        >
+                          {connectionText(reach, repo)}
+                        </Link>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </Box>
           <Box sx={{ mt: 2, pt: 1.5, borderTop: 1, borderColor: "divider" }}>
             <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
               Base-branch repair human-gate bypass
@@ -268,6 +294,34 @@ function declarationsText(defaults) {
   if (defaults === undefined) return "…";
   if (!defaults) return "Unknown";
   return defaults.declarations ? "Read" : "Not read";
+}
+
+const DEFAULT_SKILL_FOLDERS_KEY =
+  ".claude/skills,.agents/skills,.codex/skills,.gemini/skills,skills";
+
+export function skillsText(defaults) {
+  if (defaults === undefined) return "…";
+  if (!defaults) return "Unknown";
+  if (Array.isArray(defaults.effectiveSkillFolders)) {
+    if (defaults.effectiveSkillFolders.length === 0) return "Off";
+    if (
+      !defaults.skills &&
+      !defaults.declaredSkills &&
+      !defaults.deploymentSkills &&
+      defaults.effectiveSkillFolders.join(",") === DEFAULT_SKILL_FOLDERS_KEY
+    ) {
+      return "Default folders";
+    }
+    return defaults.effectiveSkillFolders.join(", ");
+  }
+  const s = defaults.skills;
+  if (s) {
+    if (s.enabled === false) return "Off";
+    if (Array.isArray(s.folders)) {
+      return s.folders.length === 0 ? "Off" : s.folders.join(", ");
+    }
+  }
+  return "Default folders";
 }
 
 function ciModeText(defaults) {

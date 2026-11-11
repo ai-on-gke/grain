@@ -261,3 +261,43 @@ func TestGrainLoginDoesNotEchoURLUserinfo(t *testing.T) {
 		t.Fatalf("login output = %q, want the scrubbed server URL", out)
 	}
 }
+
+// Signing in through a trusted identity proxy (or IAP) as a person keeps
+// a personal token afterwards, with no --issue-token asked for, so the
+// CLI needs neither the proxy's sign-in nor the access code day to day;
+// --issue-token=false keeps signing in through the proxy instead.
+func TestGrainLoginThroughAnIdentityProxyHoldsAPersonalToken(t *testing.T) {
+	ts, store := loginServer(t)
+	ctx := context.Background()
+
+	out := captureStdout(t, func() {
+		if err := runCLI([]string{"login", ts.URL, "--name", "team", "--auth", "test-sso"}); err != nil {
+			t.Error(err)
+		}
+	})
+	cfg, _ := loadContexts()
+	team := cfg.Contexts["team"]
+	if team == nil || team.Auth != "external-token" || team.TokenID == "" {
+		t.Fatalf("after a proxy sign-in, context = %+v; want a personal external-token", team)
+	}
+	if !strings.Contains(out, "holding a personal token for jane@example.com") || !strings.Contains(out, "--issue-token=false") {
+		t.Errorf("login said %q; want it to name the personal token and how to decline one", out)
+	}
+	tok, err := store.GetExternalAgentToken(ctx, team.TokenID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.Owner != "jane@example.com" || tok.ScopeSet != defaultLoginScopeSet {
+		t.Errorf("personal token = %+v; want jane's own %s token", tok, defaultLoginScopeSet)
+	}
+
+	_ = captureStdout(t, func() {
+		if err := runCLI([]string{"login", ts.URL, "--name", "proxied", "--auth", "test-sso", "--issue-token=false"}); err != nil {
+			t.Error(err)
+		}
+	})
+	cfg, _ = loadContexts()
+	if p := cfg.Contexts["proxied"]; p == nil || p.Auth != "test-sso" || p.TokenID != "" {
+		t.Fatalf("login --issue-token=false: context = %+v; want one that signs in through test-sso", p)
+	}
+}

@@ -15,6 +15,7 @@
 import { useState } from "react";
 import { Alert, Button } from "@mui/material";
 import api from "../../api.js";
+import { useAccess } from "../../AccessContext.jsx";
 import { isLegacyApiGrant } from "../../apiGrants.js";
 import { knownRepos } from "../../state.js";
 import { declaredPushRef } from "../Declared.jsx";
@@ -43,6 +44,17 @@ export default function CapabilityToggles({
   // (apiGrants.js), and any bare capability id an older store still holds
   // are GrantsPicker's below, one list.
   const apiSelected = held.filter(isLegacyApiGrant);
+  // Every edit here is a write: a grant is POST .../capabilities
+  // (capabilities:admin, or capabilities:detach to remove one) and a repo
+  // line PATCHes the task (tasks:write). A principal holding none of them
+  // -- a viewer -- is shown the grants read only, not offered Remove and
+  // "Add grant…" that end in a 403.
+  const { can } = useAccess(config);
+  const readOnly = ![
+    "tasks:write",
+    "capabilities:admin",
+    "capabilities:detach",
+  ].some((scope) => can(scope, t.repo));
   const [capabilitiesChanged, setCapabilitiesChanged] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
@@ -112,6 +124,7 @@ export default function CapabilityToggles({
         onApiChange={(next) => applyChange(apiSelected, next)}
         onSubmit={submitGrant}
         onRemove={removeGrant}
+        disabled={readOnly}
         idPrefix={`task-${t.id}`}
         repos={{
           target: t.repo || "",

@@ -14,11 +14,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Alert, Snackbar } from "@mui/material";
-import { commentIdFromHash } from "../commentLinks.js";
+import { commentIdFromHash, malformedCommentHash } from "../commentLinks.js";
+import { TASK_DEEP_LINK_COMMENTS_LIMIT } from "../taskDetailPages.js";
 
 // HIGHLIGHT_MS is how long a linked comment stays marked once it has
 // been scrolled to (.comment-highlight in style.css fades over the same).
-export const HIGHLIGHT_MS = 2500;
+const HIGHLIGHT_MS = 2500;
 
 // How long to keep looking for a comment the detail says exists but the
 // page has not drawn yet: the chat window and the timeline mount after
@@ -38,14 +39,15 @@ function shown(el) {
 // interactive task draws each comment twice: in its chat and in the
 // history folded up beneath it.
 // id is digits only (commentIdFromHash), so it needs no escaping.
-export function findCommentElement(root, id) {
+function findCommentElement(root, id) {
   const all = Array.from(root.querySelectorAll(`[data-comment-id="${id}"]`));
   return all.find(shown) || all[0] || null;
 }
 
-// revealComment opens every closed <details> el is folded inside, so a
-// comment in a collapsed group can be scrolled to.
-export function revealComment(el) {
+// revealComment opens every closed <details> el is folded inside or contains
+// (such as Timeline's .timeline-summarised), so a comment in a collapsed
+// group or collapsed in place can be scrolled to.
+function revealComment(el) {
   for (
     let d = el.closest("details:not([open])");
     d;
@@ -53,20 +55,26 @@ export function revealComment(el) {
   ) {
     d.open = true;
   }
+  for (const d of el.querySelectorAll("details:not([open])")) {
+    d.open = true;
+  }
 }
 
 // linkedComment is the comment the address links to on task taskId, as
 // a fresh target, or null. A /tasks/<id> address naming some other task
 // is that task's link, not this one's: following it from here is a
-// navigation to that task, whose own pane looks for the comment.
-export function linkedComment(taskId) {
-  const id = commentIdFromHash(window.location.hash);
-  if (!id) return null;
+// navigation to that task, whose own pane looks for the comment. A
+// #comment= naming no comment is a target with an empty id, which is
+// said rather than ignored.
+function linkedComment(taskId) {
+  const hash = window.location.hash;
+  const id = commentIdFromHash(hash);
+  if (!id && !malformedCommentHash(hash)) return null;
   const m = /^\/tasks\/([^/]+)/.exec(window.location.pathname);
   if (m && taskId != null && decodeURIComponent(m[1]) !== String(taskId)) {
     return null;
   }
-  return { id };
+  return { id, hash: hash.slice(0, 40) };
 }
 
 // useCommentDeepLink follows the #comment=<id> on the address
@@ -81,18 +89,22 @@ export function linkedComment(taskId) {
 // comments), so whether a comment belongs to the task is answered off it
 // rather than off the DOM: a comment far back in a long conversation is
 // in the detail however the page draws it.
-export function useCommentDeepLink(t) {
+function useCommentDeepLink(t, onLoadEarlier) {
   const taskId = useRef(t?.id);
   taskId.current = t?.id;
   // An object rather than the bare id, so the same link followed twice
   // scrolls twice.
   const [target, setTarget] = useState(() => linkedComment(t?.id));
   const [notice, setNotice] = useState("");
+  const fetchingBeforeRef = useRef("");
 
   useEffect(() => {
     const read = () => {
       const next = linkedComment(taskId.current);
-      if (next) setTarget(next);
+      if (next) {
+        fetchingBeforeRef.current = "";
+        setTarget(next);
+      }
     };
     window.addEventListener("hashchange", read);
     window.addEventListener("popstate", read);
@@ -103,9 +115,45 @@ export function useCommentDeepLink(t) {
   }, []);
 
   const comments = t?.comments;
+  const olderComments = t?.olderComments || 0;
   useEffect(() => {
     if (!target || !Array.isArray(comments)) return undefined;
+    if (!target.id) {
+      setNotice(`This link's ${target.hash} does not name a comment.`);
+      setTarget(null);
+      return undefined;
+    }
     if (!comments.some((c) => String(c.id) === target.id)) {
+      const targetNum = Number(target.id);
+      const oldestLoadedId =
+        comments.length > 0 && typeof comments[0]?.id === "number"
+          ? comments[0].id
+          : null;
+      const mayBeOlder =
+        olderComments > 0 &&
+        typeof onLoadEarlier === "function" &&
+        Number.isFinite(targetNum) &&
+        (oldestLoadedId === null || targetNum < oldestLoadedId);
+      if (mayBeOlder) {
+        const cursorKey = `${t?.id}:${target.id}:${oldestLoadedId}`;
+        if (fetchingBeforeRef.current !== cursorKey) {
+          fetchingBeforeRef.current = cursorKey;
+          Promise.resolve(
+            onLoadEarlier({
+              commentsLimit: TASK_DEEP_LINK_COMMENTS_LIMIT,
+              commentsOnly: true,
+            }),
+          ).then((loaded) => {
+            if (!loaded) {
+              setNotice(
+                `Comment ${target.id} is not in this task's conversation.`,
+              );
+              setTarget(null);
+            }
+          });
+        }
+        return undefined;
+      }
       setNotice(`Comment ${target.id} is not in this task's conversation.`);
       setTarget(null);
       return undefined;
@@ -126,9 +174,17 @@ export function useCommentDeepLink(t) {
       }
       revealComment(el);
       setTarget(null);
+      // A notice left by an earlier link is about that one, not this.
+      setNotice("");
       // A frame for a <details> just opened to lay its contents out.
       requestAnimationFrame(() => {
         el.scrollIntoView?.({ block: "center" });
+        // Focus goes to the comment too, as it does to a fragment's
+        // target on a page the browser loads itself: a screen reader
+        // reads the comment out, and Tab carries on from it (to its own
+        // Copy link) rather than from wherever focus was.
+        if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+        el.focus?.({ preventScroll: true });
         el.classList.remove("comment-highlight");
         // Restarts the fade on a comment linked to twice in a row.
         void el.offsetWidth;
@@ -141,7 +197,7 @@ export function useCommentDeepLink(t) {
     };
     look();
     return () => clearTimeout(timer);
-  }, [target, comments]);
+  }, [target, comments, olderComments, onLoadEarlier, t?.id]);
 
   return { notice, clearNotice: () => setNotice("") };
 }
@@ -149,8 +205,8 @@ export function useCommentDeepLink(t) {
 // CommentDeepLink is useCommentDeepLink for task t with its notice: a
 // small one at the foot of the page that does not block anything and
 // goes away by itself.
-export default function CommentDeepLink({ t }) {
-  const { notice, clearNotice } = useCommentDeepLink(t);
+export default function CommentDeepLink({ t, onLoadEarlier = null }) {
+  const { notice, clearNotice } = useCommentDeepLink(t, onLoadEarlier);
   return (
     <Snackbar
       open={Boolean(notice)}

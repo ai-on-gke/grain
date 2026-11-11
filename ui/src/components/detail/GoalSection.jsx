@@ -18,6 +18,7 @@ import api from "../../api.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { formatDateTime } from "../../time.js";
 import { knownRepos } from "../../state.js";
+import AccessGate from "../AccessGate.jsx";
 import SearchSelect from "../SearchSelect.jsx";
 import { looksLikeRepo } from "../RepoPicker.jsx";
 
@@ -31,7 +32,7 @@ import { looksLikeRepo } from "../RepoPicker.jsx";
 // The goal is read on a single task's own read only (Task.Goal), so a
 // task with none shows the "Add goal" control and nothing else.
 
-export const GOAL_KINDS = [
+const GOAL_KINDS = [
   ["base-green", "Base branch green"],
   ["pr-merged", "Pull request merged"],
   ["tasks-closed", "Tasks closed"],
@@ -278,13 +279,20 @@ export default function GoalSection({ t, act, config, tasks }) {
             </>
           ) : (
             <>
-              <Button size="small" onClick={() => setDraft(draftOf(goal, t))}>
-                {goal ? "Edit goal" : "Add goal"}
-              </Button>
-              {goal && (
-                <Button size="small" color="warning" onClick={remove}>
-                  Remove goal
+              {/* Setting and removing a goal are PUT and DELETE
+                  /api/tasks/{id}/goal, tasks:write writes a viewer is
+                  refused: disabled with the reason, as Actions.jsx's are. */}
+              <AccessGate scope="tasks:write" repo={t.repo}>
+                <Button size="small" onClick={() => setDraft(draftOf(goal, t))}>
+                  {goal ? "Edit goal" : "Add goal"}
                 </Button>
+              </AccessGate>
+              {goal && (
+                <AccessGate scope="tasks:write" repo={t.repo}>
+                  <Button size="small" color="warning" onClick={remove}>
+                    Remove goal
+                  </Button>
+                </AccessGate>
               )}
             </>
           )}

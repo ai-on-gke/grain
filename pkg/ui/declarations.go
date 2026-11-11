@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -114,6 +115,27 @@ func declaredPushOf(row *model.RepoDeclaration) *DeclaredPush {
 		return nil
 	}
 	return &DeclaredPush{Repo: row.Repo.String(), Path: row.Path, Commit: row.Commit, Refs: row.Push}
+}
+
+// templateDeclaredPush returns id's repository-declared push set, or nil when
+// id names no template with a non-empty push set.
+func (c *Client) templateDeclaredPush(ctx context.Context, id string) (*DeclaredPush, error) {
+	id = strings.TrimSpace(id)
+	if id == "" || c == nil || c.Store == nil {
+		return nil, nil
+	}
+	decl, err := c.Store.GetRepoDeclaration(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("reading declaration %s: %w", id, err)
+	}
+	return declaredPushOf(decl), nil
+}
+
+func (s *Server) templateDeclaredPush(ctx context.Context, id string) (*DeclaredPush, error) {
+	if s == nil || s.tasks == nil {
+		return nil, nil
+	}
+	return s.tasks.templateDeclaredPush(ctx, id)
 }
 
 // declarationOf renders one row's provenance, or nil for a row nothing

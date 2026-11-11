@@ -1,0 +1,146 @@
+{
+  "task": "550",
+  "state": "queued",
+  "attempts": 1,
+  "outcome": "succeeded",
+  "detail": "the run made 8 tool call(s) [mcp_grain-controller_grain_invoke x8]",
+  "inSandbox": {
+    "servers": {
+      "grain-controller": [
+        "serverUrl"
+      ],
+      "grain-sandbox": [
+        "command"
+      ]
+    },
+    "server": "grain-controller",
+    "tools": [
+      "grain_explore_scope",
+      "grain_filing_context",
+      "grain_get_task",
+      "grain_invoke",
+      "grain_list_tasks",
+      "grain_submit_task"
+    ],
+    "calls": [
+      {
+        "tool": "api_deployment_reachable_repos",
+        "args": {},
+        "bytes": 5212,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "total": 305,
+        "truncated": true,
+        "hasNextCursor": true,
+        "items": 100
+      },
+      {
+        "tool": "api_deployment_reachable_repos",
+        "args": {
+          "query": {
+            "push": "true",
+            "owner": "acme",
+            "limit": "5"
+          }
+        },
+        "bytes": 438,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "total": 81,
+        "truncated": true,
+        "hasNextCursor": true,
+        "items": 5
+      },
+      {
+        "tool": "api_deployment_reachable_repos",
+        "args": {
+          "query": {
+            "q": "SERVICE-01"
+          }
+        },
+        "bytes": 708,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "total": 10,
+        "truncated": false,
+        "hasNextCursor": false,
+        "items": 10
+      },
+      {
+        "tool": "api_list_tasks",
+        "args": {},
+        "bytes": 7984,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "total": 552,
+        "truncated": true,
+        "hasNextCursor": true,
+        "items": 10
+      },
+      {
+        "tool": "api_list_tasks",
+        "args": {
+          "query": {
+            "fields": "summary"
+          }
+        },
+        "bytes": 6184,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "total": 552,
+        "truncated": true,
+        "hasNextCursor": true,
+        "items": 50
+      },
+      {
+        "tool": "api_list_tasks",
+        "args": {
+          "query": {
+            "limit": "3",
+            "q": "triage"
+          }
+        },
+        "bytes": 2338,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "total": 287,
+        "truncated": true,
+        "hasNextCursor": true,
+        "items": 3
+      },
+      {
+        "tool": "api_events",
+        "args": {},
+        "bytes": 5210,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "truncated": true,
+        "hasNextCursor": true,
+        "items": 20
+      },
+      {
+        "tool": "api_events",
+        "args": {
+          "query": {
+            "since": "0",
+            "limit": "5"
+          }
+        },
+        "bytes": 1233,
+        "underCap": true,
+        "isError": false,
+        "error": null,
+        "truncated": true,
+        "hasNextCursor": true,
+        "items": 5
+      }
+    ]
+  }
+}

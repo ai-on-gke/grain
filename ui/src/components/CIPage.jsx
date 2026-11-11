@@ -45,6 +45,9 @@ import NarrowingBar from "./NarrowingBar.jsx";
 import { formatBytes } from "./PackageCachePanel.jsx";
 import RepoField from "./RepoField.jsx";
 import SearchSelect from "./SearchSelect.jsx";
+import StaleSchedulesAlert, {
+  useStaleSchedules,
+} from "./StaleSchedulesAlert.jsx";
 import {
   CONCLUSION_LABELS,
   RUN_ATTRIBUTES,
@@ -56,6 +59,7 @@ import {
   narrowRuns,
   queuedByRun,
   queuedOf,
+  repoNarrowedTo,
   runsQuery,
   spanOf,
   useCINarrowing,
@@ -75,11 +79,10 @@ import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
 import AccessGate from "./AccessGate.jsx";
 
-// instantOf, hasStarted and spanOf live with the filter vocabulary now
-// (ciFilters.js), since narrowing and ordering runs by when they started
-// and how long they took needs them -- and are re-exported from here
-// because this is where every reader of them still looks.
-export { hasStarted, instantOf, spanOf };
+// spanOf lives with the filter vocabulary now (ciFilters.js), since
+// narrowing and ordering runs by how long they took needs it -- and is
+// re-exported from here for the readers that still import it from CIPage.
+export { spanOf };
 
 // CIPage is grain's own CI (pkg/ci, GET /api/ci/runs) with somebody
 // looking at it (grain/task-247). The engine and its API have existed
@@ -821,7 +824,7 @@ function JobPanel({ job, zone }) {
 const RETRYABLE = new Set(["errored", "failure", "cancelled"]);
 
 // retryableRun says whether run is over without having passed.
-export function retryableRun(run) {
+function retryableRun(run) {
   return Boolean(run && RETRYABLE.has(run.conclusion));
 }
 
@@ -829,7 +832,7 @@ export function retryableRun(run) {
 // started by hand: the orchestrator and a task's own wait_for_checks ask
 // for a run in the task's id (requesterLabel above), and a person's run
 // carries their principal instead.
-export function runTaskId(run) {
+function runTaskId(run) {
   const by = run?.requestedBy || "";
   return /^\d+$/.test(by) ? by : "";
 }
@@ -1900,6 +1903,13 @@ export default function CIPage({
   // exactly like a cache that is empty -- but it is a footnote, so it
   // does not take the runs table down with it.
   const [cache, setCache] = useState(null);
+  // staleSchedules is every schedule that has stopped running (GET
+  // /api/sandboxes?section=staleSchedules, grain/task-4344): a workflow's
+  // cron the repository's ci_mode drops comes due every night and runs
+  // nothing, and the runs table it should have filled is where its
+  // absence is looked for. A reader without deployment:read gets none,
+  // which is a pane without the banner rather than an error.
+  const staleSchedules = useStaleSchedules();
   const zone = useTimeZone();
 
   // A page of what this deployment remembers, and the pane's own
@@ -2112,6 +2122,13 @@ export default function CIPage({
           the answer to "why was that run so quick" that the rows
           themselves only hint at with "· cached". */}
       <CacheLine cache={cache} onClear={clearCache} />
+      {/* Narrowed to one repository, only that repository's: the banner
+          is about the runs this pane is showing. Not narrowed, all of
+          them, each naming its repository. */}
+      <StaleSchedulesAlert
+        schedules={staleSchedules}
+        repo={repoNarrowedTo(narrowing.filters)}
+      />
       {data?.enabled && starting && (
         <StartRunForm
           repoOptions={repoOptions}

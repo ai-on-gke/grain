@@ -1381,3 +1381,63 @@ func TestScheduleGrainCIOptInDoesNotWidenBeyondTheSchedulesOwnRun(t *testing.T) 
 		}
 	}
 }
+
+// A workflow schedule suppressed by its repository's CI mode (CIModeGitHub
+// without GrainCI, or CIModeNone) must report WorkflowGrainCIOff rather than
+// blaming StandingWorkOff, and SuppressedFiring must surface the CI-mode
+// suppression only for workflow schedules while leaving task schedules alone.
+func TestWorkflowGrainCIOffSuppressionReportsCIModeRatherThanStandingWork(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: declaringRepo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	wfSched := workflowSchedule(t, store, baseTime.Add(-time.Minute))
+	taskSched := model.Schedule{
+		ID:         "sched-task-only",
+		Title:      "Task chore",
+		Body:       "body",
+		Target:     declaringRepo,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 60},
+		Enabled:    true,
+		NextRunAt:  baseTime.Add(24 * time.Hour),
+		CreatedAt:  baseTime,
+	}
+	if err := store.PutSchedule(ctx, taskSched); err != nil {
+		t.Fatal(err)
+	}
+
+	// SuppressedFiring names the CI mode on the workflow schedule and leaves
+	// the ordinary task schedule unsuppressed.
+	sup, err := store.SuppressedFiring(ctx, wfSched, baseTime, time.UTC)
+	if err != nil {
+		t.Fatalf("SuppressedFiring(workflow): %v", err)
+	}
+	if sup == nil || !strings.Contains(sup.Detail, "this repository uses github CI mode") {
+		t.Fatalf("SuppressedFiring(workflow) = %+v, want github CI mode detail", sup)
+	}
+	if got, err := store.SuppressedFiring(ctx, taskSched, baseTime, time.UTC); err != nil || got != nil {
+		t.Fatalf("SuppressedFiring(task) = %+v, %v, want nil", got, err)
+	}
+
+	// Firing the workflow schedule sets WorkflowGrainCIOff (not StandingWorkOff).
+	firing, err := store.FireSchedule(ctx, wfSched, baseTime, time.UTC, model.RepoRef{})
+	if err != nil {
+		t.Fatalf("FireSchedule: %v", err)
+	}
+	if firing.StandingWorkOff != nil {
+		t.Errorf("firing.StandingWorkOff = %v, want nil when standing work is enabled", firing.StandingWorkOff)
+	}
+	if firing.WorkflowGrainCIOff != model.CIModeGitHub {
+		t.Errorf("firing.WorkflowGrainCIOff = %q, want %q", firing.WorkflowGrainCIOff, model.CIModeGitHub)
+	}
+
+	// Opting the workflow schedule into GrainCI lifts SuppressedFiring on CIModeGitHub.
+	wfSched.GrainCI = true
+	if err := store.PutSchedule(ctx, wfSched); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.SuppressedFiring(ctx, wfSched, baseTime, time.UTC); err != nil || got != nil {
+		t.Fatalf("SuppressedFiring(opted-in workflow) = %+v, %v, want nil", got, err)
+	}
+}

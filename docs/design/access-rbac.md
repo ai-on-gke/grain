@@ -135,6 +135,16 @@ role, or at a role that denies scopes. The reason is recorded in
 so it needs a `--reason`. The one-time flag import is automation and
 records its source instead.
 
+An access-code admin is no longer anonymous. The change is recorded
+under the name the code's session signed in with, `access-code:<name>`
+([access-code.md](../access-code.md#who-the-code-is-recorded-as)), and
+every other mutation the code makes goes into the same access history
+under the surface `access-code`. In the code's **recovery** mode
+(`grain access-code mode recovery`), managing access and settings is
+all a code session may do once a person with a full role can sign in
+with a verified identity. So the code stays the way back in for role
+changes, but it stops being an everyday admin credential.
+
 Holding a dangerous scope through a role does not make a person give a
 reason for each call. Per-call reasons stay an agent rule.
 
@@ -156,6 +166,7 @@ follows). Requests with role grants are checked as follows:
 | JSON API routes with a grantable scope (`route_scopes.go`) | The route's scope is checked on the route's repository, which is found the way an agent call's is (`agentCallRepo`: path, body `repo`/`taskId`, `?repo=`, a CI run's repo). A role limited to some repositories that calls a collection without `?repo=` gets the single repository it reaches, or is refused when it reaches several. |
 | Task, template, schedule, suite and session filings and edits (`tasks:write`, `tasks:from-template`, `capabilities:admin`, `templates:write`, `schedules:write`, `suites:write`, `sessions:write`) | Held to the role's own scopes and repository limits by the shared grant- and filing-escalation pass (`filingEscalation`, `roleGrantEscalation`). A limited role may grant only non-dangerous capabilities its own role covers (never a dangerous grant or a `Person` scope set), may not turn on `autoMerge` or `submit`, needs `tasks:admin` on the repository for `approved`/`interactive`/`priority` above default/`fixesBaseBranch`/`autoApproveProposals`, needs `capabilities:admin` on the repository to edit a task's grants (`PATCH /api/tasks/{id}`, `POST /api/tasks/{id}/capabilities`), and may set `writes`/`reads` only to repositories its `tasks:write`/`tasks:read` reach. Refusals name the caller's role and the first refused key. |
 | Approving a stored task (`POST /api/tasks/{id}/approve`, and `POST /api/tasks/{id}/run-now` on a task with no approval yet, since Run now approves it first) | Held to what the role could have filed approved itself (`roleApprovalWithin`): `tasks:admin` on the task's repository (on every repository for a task with none), and a task carrying `autoMerge`, `keepRunning`, a `grain/config` or person-approved change target, or `networkAccess` wider than the deployment's default needs an unlimited role (`grain/operator`). Every grant and the task's `admission` must be one the role may grant, its `writes`/`reads` must be repositories its `tasks:write`/`tasks:read` reach, and a review template other than the repository's default must itself be within the role. Running an already approved task now needs only `dispatch:write`. A `gma_` token presented inside a verified session is intersected with that session's role first, so a wider token cannot approve for it. |
+| Sandbox shape (`sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`) on any filing, edit, approval or run | Every caller, an unlimited role included, is held to the deployment-wide maximum in `sandboxShapeLimits.max` (settings; zero is grain's default of 32 vCPU, 131072 MiB and 1024 GiB), refused with a 400. A limited role is further held to its own ceiling, `sandboxShapeLimits.roles[<scope set name>]` (a dimension left at zero, or a role with no entry, falls back to the maximum; holding several roles gives the largest), on every body it sends and every stored task it approves, runs or edits, refused with a 403. An agent's proposal asking for a larger sandbox than its proposing task runs in is filed for a person and can be approved only by an unlimited role. Nothing is clamped. |
 | `internal` routes a person uses (sign-in, whoami, approving a config change, granting an access request, acknowledging a notification, answering a local-script approval) | Each one has an entry in `humanRouteScopes`, either a grantable scope or `signed-in` (any admitted caller). An `internal` route with no entry there is refused. |
 | HTML pages and the SPA's static files (the `/` handler) | Any admitted caller. They hold no data; every datum comes from a scoped API route. |
 | SSE and event streams, log tails (`/api/console/{id}/output`, `/api/restart-watch`, `/api/logs/...`) | These are ordinary routes in the table and are gated by their scope like any JSON route. |

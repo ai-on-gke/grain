@@ -433,7 +433,7 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 			if provider == "" {
 				provider = "none"
 			}
-			r.failEntry(ctx, entry, fmt.Sprintf("no compute provider is configured (compute.provider is %q), so this registry cannot create hosted instances; configure compute.provider (for example \"gce\") and recreate the entry", provider))
+			r.failEntry(ctx, entry, fmt.Sprintf("no compute provider is configured (compute.provider is %q), so this hub cannot create hosted instances; configure compute.provider (for example \"gce\") and recreate the entry", provider))
 		}
 		return nil
 	}
@@ -471,7 +471,7 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 			if errors.Is(err, hub.ErrServiceAccountNotReady) {
 				if wait, attempt, ok := r.scheduleCreateRetry(entry.ID, bundle, configRepoURL); ok {
 					r.noteCreatingReason(ctx, entry, fmt.Sprintf(
-						"waiting for service account %s, and the registry's permission to attach it, to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
+						"waiting for service account %s, and the hub's permission to attach it, to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
 						bundle.ServiceAccountEmail, attempt, wait, err))
 					return nil
 				}
@@ -1401,7 +1401,33 @@ func InstanceGrainConfig(cfg hub.Config, entry *store.EntryRow, bundle *hub.Inst
 		set("object_store", "gs://"+bucket+"/"+folder+"/")
 	}
 	set("config_repo", configRepoURL)
+	// What the instance is called on its own screen (its tab title and
+	// sidebar badge) until its operator names it something else: the
+	// entry's display name, else its entry name. grain-instance-init.sh
+	// hands it to the daemon as $GRAIN_DEFAULT_ENVIRONMENT_NAME, which
+	// only fills an unnamed deployment's name or one the hub gave it
+	// before (model.Config.AdoptHubEnvironmentName).
+	set("environment_name", envFileSafeEnvironmentName(entry.DisplayName, entry.Name))
 	return env
+}
+
+// envFileSafeEnvironmentName is api.EnvironmentNameForEntry with the
+// characters a daemon.env line cannot carry the same way to both of its
+// readers dropped: systemd's EnvironmentFile= unquotes and unescapes a
+// value where docker's --env-file takes it literally, so a quote,
+// backslash, dollar or backtick would reach the daemon as two different
+// names. Losing one from a display name beats failing the boot over it.
+func envFileSafeEnvironmentName(displayName, entryName string) string {
+	strip := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			switch r {
+			case '"', '\'', '\\', '$', '`':
+				return -1
+			}
+			return r
+		}, s)
+	}
+	return api.EnvironmentNameForEntry(strip(displayName), strip(entryName))
 }
 
 // sqlConnectionName is the `project:region:instance` name cloud-sql-proxy

@@ -188,4 +188,119 @@ describe("HubSection", () => {
       ),
     );
   });
+
+  it("saves edits under the hub settings key", async () => {
+    api.mockResolvedValue({ enabled: true, state: "connected" });
+    const saveChoice = vi.fn();
+    const s = {
+      settings: {
+        hubTokenSet: true,
+        hub: {
+          url: "https://hub.example.com",
+          entry: "acme-widgets",
+          authMode: "token",
+          listed: true,
+          scopes: [],
+        },
+      },
+      saveChoice,
+      onEnterKey: () => {},
+      reloadSettings: vi.fn(),
+      showError: vi.fn(),
+      onSaved: vi.fn(),
+    };
+
+    render(<HubSection s={s} />);
+
+    const urlInput = screen.getByLabelText("Hub URL");
+    fireEvent.change(urlInput, {
+      target: { value: "https://hub-next.example.com" },
+    });
+    fireEvent.blur(urlInput, {
+      target: { value: "https://hub-next.example.com" },
+    });
+
+    expect(saveChoice).toHaveBeenCalledTimes(1);
+    expect(saveChoice).toHaveBeenCalledWith({
+      hub: {
+        url: "https://hub-next.example.com",
+        entry: "acme-widgets",
+        authMode: "token",
+        listed: true,
+        scopes: [],
+      },
+    });
+    expect(saveChoice.mock.calls[0][0]).not.toHaveProperty("registry");
+
+    fireEvent.change(screen.getByLabelText("Repository (owner/name)"), {
+      target: { value: "acme/monorepo" },
+    });
+    fireEvent.change(screen.getByLabelText("Path prefix (optional)"), {
+      target: { value: "/services/billing/" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+
+    expect(saveChoice).toHaveBeenCalledTimes(2);
+    expect(saveChoice).toHaveBeenLastCalledWith({
+      hub: {
+        url: "https://hub.example.com",
+        entry: "acme-widgets",
+        authMode: "token",
+        listed: true,
+        scopes: [
+          {
+            repo: "acme/monorepo",
+            pathPrefix: "services/billing",
+            role: "primary",
+          },
+        ],
+      },
+    });
+  });
+
+  // A saved listed: false is omitted from the settings, and the daemon
+  // registers an unset entry unlisted; the box showed it ticked
+  // (2026-11-11 walkthrough).
+  it("shows an unset or false Listed unticked, and saves a tick as listed", async () => {
+    api.mockResolvedValue({
+      enabled: true,
+      state: "connected",
+      effectiveHostKind: "kubernetes",
+    });
+    const saveChoice = vi.fn();
+    const s = {
+      settings: {
+        hubTokenSet: true,
+        hub: {
+          url: "https://hub.example.com",
+          entry: "acme-widgets",
+          hostKind: "kubernetes",
+        },
+      },
+      saveChoice,
+      onEnterKey: () => {},
+      reloadSettings: vi.fn(),
+      showError: vi.fn(),
+      onSaved: vi.fn(),
+    };
+    render(<HubSection s={s} />);
+    const listed = screen.getByRole("checkbox", {
+      name: /Listed in hub directory/,
+    });
+    expect(listed).not.toBeChecked();
+    fireEvent.click(listed);
+    expect(saveChoice).toHaveBeenLastCalledWith({
+      hub: expect.objectContaining({ listed: true }),
+    });
+
+    // With a kind chosen, the effective kind is that choice, not what
+    // Auto-detect would pick.
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: /Host kind/ }));
+    expect(
+      await screen.findByRole("option", { name: "Auto-detect" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: "Auto-detect (kubernetes)" }),
+    ).toBeNull();
+  });
 });

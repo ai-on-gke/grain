@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,8 +41,9 @@ import (
 //   - without `gate`, as an ordinary task in the repository, coalesced per
 //     (pull request, trigger, group) so a head that moves supersedes an
 //     undispatched one instead of piling up runs;
-//   - with `gate: true`, as a review stacked on the change's branch, and
-//     the change's auto-merge is withdrawn -- the security hold's
+//   - with `gate: true`, as one review per review template however many
+//     gating triggers name it (pathtriggerreview.go), and the change's
+//     auto-merge is withdrawn -- the security hold's
 //     machinery (securityhold.go), on a hold link of its own
 //     (model.LinkPathTriggerHold) naming the strictest `human` setting
 //     among the gating triggers that matched.
@@ -80,6 +82,9 @@ type gateFiring struct {
 	approvers []string
 	// template is what taskID was filed from, for the note.
 	template string
+	// err is set when filing the trigger's review task failed, so the gate
+	// fails closed rather than clearing findings or releasing on Submit.
+	err error
 }
 
 // judgePullRequestTriggers files what task's pull request fires, and
@@ -133,6 +138,9 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 
 	var gates []gateFiring
 	var errs []error
+	// The gating triggers that matched, by the review template they name.
+	byKind := map[string][]reviewMatch{}
+	var kinds []string
 	for _, rule := range rules {
 		if !rule.Trigger.WatchesBranch(detail.BaseRef, def) {
 			continue
@@ -152,43 +160,59 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 				paths: paths, sensitive: rule.Trigger.Sensitive,
 				approvers: triggerApprovers(rule.Trigger, *current), template: template}
 		}
-		if rule.Trigger.Gate && !current.AutoMerge && !hasPathTriggerHold(*current) && !hasSecurityHold(*current) &&
-			linkTarget(*current, model.LinkPathTriggersRead) != "" {
-			// Already waiting for a human, who has had this gate's say
-			// on an earlier head: a fresh gating review of every push
-			// they make would be a review loop, not a gate. A sensitive
-			// path still says *which* human, though.
-			if rule.Trigger.Sensitive {
-				gates = append(gates, firing("", "", flatten(groups)))
-			}
-			continue
-		}
 		if rule.Trigger.Gate && rule.Trigger.Template == model.TemplateNone {
 			// Nothing to file: a person is the whole review.
 			gates = append(gates, firing("", model.TemplateNone, flatten(groups)))
 			continue
 		}
+		if rule.Trigger.Gate {
+			// Gating triggers are reviewed together, one review per kind
+			// (pathtriggerreview.go), below.
+			kind := rule.Trigger.Template
+			if _, ok := byKind[kind]; !ok {
+				kinds = append(kinds, kind)
+			}
+			byKind[kind] = append(byKind[kind], reviewMatch{rule: rule, paths: flatten(groups),
+				approvers: triggerApprovers(rule.Trigger, *current)})
+			continue
+		}
 		for _, group := range sortedKeys(groups) {
-			if rule.Trigger.Gate &&
-				(rule.Trigger.Template == model.SecurityReviewTemplateID || (rule.Trigger.Sensitive && rule.Trigger.Template == "")) &&
-				securityReviewID != "" && allPathsCovered(groups[group], coveredBySecurityReview) {
-				gates = append(gates, firing(securityReviewID, model.SecurityReviewTemplateID, groups[group]))
-				continue
-			}
-			filed, err := filePullRequestTrigger(ctx, store, *current, ref, headSHA, rule, group, groups[group], now)
-			if err != nil {
+			if _, err := filePullRequestTrigger(ctx, store, *current, ref, headSHA, rule, group, groups[group], now); err != nil {
 				errs = append(errs, err)
-				if rule.Trigger.Sensitive {
-					// The review could not be filed; the change is
-					// still held, for a person.
-					gates = append(gates, firing("", "", groups[group]))
-				}
-				continue
-			}
-			if rule.Trigger.Gate {
-				gates = append(gates, firing(filed.ID, rule.Trigger.Template, groups[group]))
 			}
 		}
+	}
+	sort.Strings(kinds)
+	for _, kind := range kinds {
+		matches := byKind[kind]
+		firings := func(taskID, template string) {
+			for _, m := range matches {
+				gates = append(gates, gateFiring{trigger: m.rule.Trigger.Name, human: m.rule.Trigger.Human,
+					taskID: taskID, paths: m.paths, sensitive: m.rule.Trigger.Sensitive,
+					approvers: m.approvers, template: template})
+			}
+		}
+		if kind == model.SecurityReviewTemplateID && securityReviewID != "" &&
+			allPathsCovered(unionPaths(matches), coveredBySecurityReview) {
+			// The trust-boundary hold's review of this head already reads
+			// every one of these paths, with the same brief.
+			firings(securityReviewID, model.SecurityReviewTemplateID)
+			continue
+		}
+		filed, err := filePullRequestReview(ctx, store, client, *current, ref, detail.BaseRef, headSHA, kind, matches, files, known, now)
+		if err != nil {
+			errs = append(errs, err)
+			for _, m := range matches {
+				// Fail closed for every gating trigger whose review could not
+				// be filed, sensitive or not: a missing review is a blocked
+				// review gate, never an unjudged pass or a plain Submit.
+				gates = append(gates, gateFiring{trigger: m.rule.Trigger.Name, human: m.rule.Trigger.Human,
+					paths: m.paths, sensitive: m.rule.Trigger.Sensitive, approvers: m.approvers,
+					template: kind, err: err})
+			}
+			continue
+		}
+		firings(filed.ID, kind)
 	}
 	if len(errs) > 0 && len(gates) == 0 {
 		// Nothing was held, and something that should have been filed was
@@ -222,10 +246,17 @@ func reusableSecurityReviewPaths(ctx context.Context, store *model.Store, client
 	matches := trustboundary.Classify(files)
 	rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
 	matches = append(matches, guarded...)
+	if m, ok := guardTemplatePush(client, *task.Target, headSHA, files); ok {
+		matches = append(matches, m)
+	}
 	if linkTarget(task, model.LinkTrustBoundaryCleared) != clearedTarget(headSHA, rules) {
 		return "", nil
 	}
-	if !securityReviewReusable(ctx, store, reviewID) {
+	var ref model.PullRequestRef
+	if tp := model.TaskPullRequest(task); tp != nil {
+		ref = *tp
+	}
+	if !securityReviewReusable(ctx, store, reviewID, ref) {
 		return "", nil
 	}
 	covered := map[string]bool{}
@@ -252,8 +283,9 @@ func allPathsCovered(paths []string, covered map[string]bool) bool {
 	return true
 }
 
-// filePullRequestTrigger files one group of one pull-request firing:
-// a stacked review for a gating trigger, an ordinary task otherwise.
+// filePullRequestTrigger files one group of one ungated pull-request
+// firing, as an ordinary task in the repository. A gating trigger's
+// review is filePullRequestReview's.
 func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.Task,
 	ref model.PullRequestRef, headSHA string, rule model.RepoPathTrigger, group string, paths []string,
 	now time.Time) (model.Task, error) {
@@ -263,81 +295,43 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 	vars["pr"], vars["head_sha"], vars["base_sha"] = ref.String(), headSHA, rule.Commit
 	facts := triggerFacts(rule, fmt.Sprintf("%s at %s", ref, shortCommit(headSHA)), group, paths,
 		[][2]string{{"pr", ref.String()}, {"head_sha", headSHA}, {"base_sha", rule.Commit}})
-	if rule.Trigger.Gate {
-		facts += fmt.Sprintf("\nThis trigger gates %s: it does not merge until this task is done "+
-			"(human: `%s`).\n", ref, rule.Trigger.Human)
-	}
 
-	filed, err := fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
-		tags := []string{model.PathTriggerMarkerTag, tag, pathTriggerRuleTag(rule.Commit)}
-		if !rule.Trigger.Gate {
-			comp, _, err := store.ComposeTriggerTask(ctx, rule.Trigger.Template, *task.Target, "", rule.Trigger.AutoApprove)
-			if err != nil {
-				return model.Task{}, fmt.Errorf("orchestrator: composing trigger %s's task for %s: %w", rule.Trigger.Name, ref, err)
-			}
-			comp.Title = model.SubstituteFields(comp.Title, vars)
-			if strings.TrimSpace(comp.Title) == "" {
-				comp.Title = fmt.Sprintf("Trigger %s: %s", rule.Trigger.Name, ref)
-			}
-			comp.Body = model.SubstituteFields(comp.Body, vars) + facts
-			id, err := store.NewTaskID(ctx)
-			if err != nil {
-				return model.Task{}, err
-			}
-			filed := comp.Task(id, model.TriggerPrincipal, model.ReasonSchedule, now)
-			filed.OrderKey, err = store.OrderKeyForNewTask(ctx, false)
-			if err != nil {
-				return model.Task{}, err
-			}
-			filed.Tags = tags
-			filed.Links = append(filed.Links, model.Link{Kind: model.LinkProposedBy, Target: task.ID})
-			model.InheritRequester(&filed, task)
-			model.InheritContext(&filed, task)
-			return filed, nil
+	return fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
+		comp, _, err := store.ComposeTriggerTask(ctx, rule.Trigger.Template, *task.Target, "", rule.Trigger.AutoApprove)
+		if err != nil {
+			return model.Task{}, fmt.Errorf("orchestrator: composing trigger %s's task for %s: %w", rule.Trigger.Name, ref, err)
 		}
-
-		tmpl, err := store.ResolveTemplate(ctx, rule.Trigger.Template, model.RepoRef{})
+		comp.Title = model.SubstituteFields(comp.Title, vars)
+		if strings.TrimSpace(comp.Title) == "" {
+			comp.Title = fmt.Sprintf("Trigger %s: %s", rule.Trigger.Name, ref)
+		}
+		comp.Body = model.SubstituteFields(comp.Body, vars) + facts
+		id, err := store.NewTaskID(ctx)
 		if err != nil {
 			return model.Task{}, err
 		}
-		if tmpl == nil {
-			// The template went away after the sync checked it (a
-			// deployment template deleted since). A gate is still a
-			// gate: grain's own security review stands in, rather than
-			// nothing being filed for the change to wait on.
-			log.Printf("orchestrator: trigger %s's template %s does not exist; filing grain's security review "+
-				"for %s instead", rule.Trigger.Name, rule.Trigger.Template, ref)
-			tmpl = model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
-		}
-		filled := *tmpl
-		filled.Title = model.SubstituteFields(filled.Title, vars)
-		filled.Body = model.SubstituteFields(filled.Body, vars)
-		title := reviewTaskTitle(filled, task)
-		body := reviewTaskBody(filled, task, ref, task.BranchName()) + facts
-		review, err := putStackedReview(ctx, store, task, filled, title, body, now)
+		filed := comp.Task(id, model.TriggerPrincipal, model.ReasonSchedule, now)
+		filed.OrderKey, err = store.OrderKeyForNewTask(ctx, false)
 		if err != nil {
 			return model.Task{}, err
 		}
-		review.Tags = tags
-		model.InheritRequester(&review, task)
-		if !rule.Trigger.AutoApprove {
-			review.Approval, review.ApprovedAt = nil, nil
-		}
-		return review, nil
+		filed.Tags = []string{model.PathTriggerMarkerTag, tag, pathTriggerRuleTag(rule.Commit)}
+		filed.Links = append(filed.Links, model.Link{Kind: model.LinkProposedBy, Target: task.ID})
+		model.InheritRequester(&filed, task)
+		model.InheritContext(&filed, task)
+		return filed, nil
 	})
-	return filed, err
 }
 
 // applyPathTriggerGate records that task's head was judged, and holds or
 // unholds it according to gates -- the gating tasks this head filed.
 //
-// Like the security hold, only a change that would otherwise merge
-// itself is held: one with auto-merge on, or one already held (by this
-// gate or by the security hold, whose release must not be the only
-// thing between the change and a merge). A change
-// with auto-merge off is already waiting for a human, who still gets the
-// tasks and the note. selfMerging is whether the change had auto-merge on
-// before this head's trust-boundary classification, which may have just
+// Every gating trigger records its gate, whether auto-merge is on or off:
+// its review is a separate gate from a person's Submit. A change with
+// auto-merge off that none of grain's holds account for -- one never going
+// to merge itself -- still waits for that Submit after the review passes
+// (waitsForPersonToMerge). selfMerging is whether the change had auto-merge
+// on before this head's trust-boundary classification, which may have just
 // withdrawn it.
 func applyPathTriggerGate(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, selfMerging bool, ref model.PullRequestRef, headSHA string, gates []gateFiring, now time.Time) error {
@@ -353,6 +347,7 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 		t.Links = append(withoutLinks(t.Links, model.LinkPathTriggersRead),
 			model.Link{Kind: model.LinkPathTriggersRead, Target: headSHA})
 		wasHeld := hasPathTriggerHold(*t)
+		personMerges := !selfMerging && waitsForPersonToMerge(*t)
 		// Who may release this head is decided afresh with it: an
 		// approval given on an earlier head is not one of this.
 		t.Links = model.WithoutApprovalRules(t.Links, model.ApprovalRuleTrigger)
@@ -360,17 +355,40 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 			t.Links = append(t.Links, approvalLinks(gates)...)
 		}
 		if len(gates) == 0 {
-			if wasHeld {
+			if wasHeld || hasTriggerReviewFindings(*t) {
 				// The change no longer touches any gated path.
 				t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask)
-				if !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
+				clearTriggerReviewQuestions(t)
+				model.ClearReviewFindingsForGate(t, model.GateReview)
+				if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
 					t.AutoMerge, released = true, true
 				}
 			}
 			return nil
 		}
+		active := map[string]bool{}
+		for _, g := range gates {
+			active["trigger:"+g.trigger] = true
+		}
+		for _, rf := range model.ReviewFindings(*t) {
+			if strings.HasPrefix(rf.Gate, "trigger:") && !active[rf.Gate] {
+				model.ClearReviewFindingsForGate(t, rf.Gate)
+			}
+		}
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask)
 		for _, g := range gates {
+			if g.err != nil {
+				if !bypass {
+					model.AddReviewFindings(t, model.ReviewFindingsRecord{
+						Gate:    "trigger:" + g.trigger,
+						Summary: "filing gating review failed: " + g.err.Error(),
+						HeadSHA: headSHA,
+						At:      now,
+					})
+				}
+				continue
+			}
+			model.ClearReviewFindingsForGate(t, "trigger:"+g.trigger)
 			if g.taskID == "" {
 				continue
 			}
@@ -384,12 +402,22 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 				model.Link{Kind: model.LinkBaseRepairBypass, Target: headSHA})
 			return nil
 		}
-		// A security hold that has already withdrawn auto-merge is the
-		// change still on its way to merging itself: this gate holds it
-		// too, or that hold's release would be the only thing left.
-		if t.AutoMerge || selfMerging || wasHeld || hasSecurityHold(*t) {
-			t.AutoMerge, held = false, true
-			t.Links = append(t.Links, model.Link{Kind: model.LinkPathTriggerHold, Target: string(human)})
+		// Gating triggers always record their gate, whether auto-merge was on
+		// or off: configured reviews and a person's Submit are separate gates.
+		t.AutoMerge, held = false, t.AutoMerge || selfMerging || wasHeld || hasSecurityHold(*t)
+		t.Links = append(t.Links, model.Link{Kind: model.LinkPathTriggerHold, Target: string(human)})
+		subMarker := humanApprovalMarker(*t)
+		submittedThisHead := subMarker != "" && headSHA != "" &&
+			(model.HumanSubmittedHead(subMarker) == "" || strings.EqualFold(model.HumanSubmittedHead(subMarker), headSHA))
+		if human == model.TriggerHumanRequired && !submittedThisHead && linkTarget(*t, model.LinkHumanOnlyHold) == "" {
+			t.Links = append(t.Links, model.Link{Kind: model.LinkHumanOnlyHold, Target: "path-trigger"})
+		}
+		// A change that was never going to merge itself still waits for
+		// a person's Submit once its gating tasks finish: their settling
+		// (settlePathTriggerHold) must not hand it an auto-merge it never
+		// had (waitsForPersonToMerge).
+		if personMerges && !submittedThisHead {
+			model.DeclineAutoMerge(t, "")
 		}
 		return nil
 	}); err != nil {
@@ -438,6 +466,8 @@ func pathTriggerBypassComment(gates []gateFiring, branch string) string {
 			fmt.Fprintf(&b, "filed task %s (%s) for %s", g.taskID, templateLabel(g.template), strings.Join(quoted(g.paths), ", "))
 		case g.template == model.TemplateNone:
 			fmt.Fprintf(&b, "files no review (`template: none`) for %s", strings.Join(quoted(g.paths), ", "))
+		case g.err != nil:
+			fmt.Fprintf(&b, "could not file its review (%s) for %s", templateLabel(g.template), strings.Join(quoted(g.paths), ", "))
 		default:
 			fmt.Fprintf(&b, "filed nothing new for %s", strings.Join(quoted(g.paths), ", "))
 		}
@@ -463,6 +493,8 @@ func pathTriggerHoldComment(gates []gateFiring, human model.TriggerHuman, held b
 			fmt.Fprintf(&b, "filed task %s (%s) for %s", g.taskID, templateLabel(g.template), strings.Join(quoted(g.paths), ", "))
 		case g.template == model.TemplateNone:
 			fmt.Fprintf(&b, "files no review (`template: none`) for %s", strings.Join(quoted(g.paths), ", "))
+		case g.err != nil:
+			fmt.Fprintf(&b, "could not file its review (%s) for %s", templateLabel(g.template), strings.Join(quoted(g.paths), ", "))
 		default:
 			fmt.Fprintf(&b, "filed nothing new for %s", strings.Join(quoted(g.paths), ", "))
 		}
@@ -540,16 +572,21 @@ func pathTriggersCurrentFor(ctx context.Context, store *model.Store, client gith
 	return current != nil && current.AutoMerge == task.AutoMerge, nil
 }
 
-// gatingTaskIDs is the tasks a held change waits on.
-func gatingTaskIDs(task model.Task) map[string]string {
-	out := map[string]string{}
+// gatingTaskIDs is the tasks a held change waits on, each with the
+// gating triggers it reviews for: several, when they matched the same
+// head and named the same review (filePullRequestReview).
+func gatingTaskIDs(task model.Task) map[string][]string {
+	out := map[string][]string{}
 	for _, l := range task.Links {
 		if l.Kind != model.LinkPathTriggerTask {
 			continue
 		}
-		if trigger, id, ok := strings.Cut(l.Target, "="); ok {
-			out[id] = trigger
+		if trigger, id, ok := strings.Cut(l.Target, "="); ok && !slices.Contains(out[id], trigger) {
+			out[id] = append(out[id], trigger)
 		}
+	}
+	for id := range out {
+		slices.Sort(out[id])
 	}
 	return out
 }
@@ -567,7 +604,8 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 	if reviewedID == "" {
 		return nil
 	}
-	if reviewed, err := store.GetTask(ctx, reviewedID); err == nil && reviewed != nil && hasBaseRepairBypass(*reviewed) {
+	if reviewed, err := store.GetTask(ctx, reviewedID); err == nil && reviewed != nil &&
+		isPostMergeReview(ctx, store, review, *reviewed) {
 		return nil
 	}
 	dropped := false
@@ -576,14 +614,29 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 		if !hasPathTriggerHold(*t) {
 			return nil
 		}
-		if model.TriggerHuman(linkTarget(*t, model.LinkPathTriggerHold)) == model.TriggerHumanNo {
-			if _, own := gatingTaskIDs(*t)[review.ID]; own {
-				return nil
-			}
+		triggerNames, own := gatingTaskIDs(*t)[review.ID]
+		if len(triggerNames) == 0 {
+			triggerNames = reviewTriggers(review.Tags)
+		}
+		fromTrigger := own || hasTag(review, model.PathTriggerMarkerTag)
+		if model.TriggerHuman(linkTarget(*t, model.LinkPathTriggerHold)) == model.TriggerHumanNo && fromTrigger {
+			return nil
+		}
+		gate := model.GateReview
+		if len(triggerNames) > 0 {
+			gate = "trigger:" + triggerNames[0]
 		}
 		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
-		dropped = true
-		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{
+			Gate:       gate,
+			ReviewTask: review.ID,
+			Summary:    "review " + review.ID + " left findings",
+			At:         now,
+		})
+		if own {
+			dropped = true
+			t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("orchestrator: ending %s's path-trigger hold on its review's findings: %w", reviewedID, err)
@@ -591,9 +644,9 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 	if !dropped {
 		return nil
 	}
-	body := fmt.Sprintf("Review task %s left findings on this change, so its path-trigger hold will not be "+
-		"released automatically: it waits for you. Press Submit once you have decided what the findings "+
-		"are worth.", review.ID)
+	body := fmt.Sprintf("Review task %s left findings on this change, so its path-trigger review gate did not "+
+		"pass. Address the findings so a re-review passes, or override the gate under merge:force with a reason; "+
+		"pressing Submit records your approval only and will not merge over open findings.", review.ID)
 	_, ref, ok, err := reviewedPullRequest(ctx, store, review)
 	if err != nil || !ok {
 		return pathTriggerNote(ctx, store, client, reviewedID, nil, body, now)
@@ -654,6 +707,17 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 
 	gating := gatingTaskIDs(task)
 	if len(gating) == 0 {
+		if humanApprovalMarker(task) != "" && len(model.PendingApprovals(task)) == 0 {
+			_ = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+				if len(gatingTaskIDs(*t)) == 0 {
+					t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
+					if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
+						t.AutoMerge = true
+					}
+				}
+				return nil
+			})
+		}
 		return nil
 	}
 	var pushed, abandoned []string
@@ -671,6 +735,15 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 			return fmt.Errorf("orchestrator: reading gating task %s's observation: %w", id, err)
 		}
 		gatePushed, landed, finished := reviewOutcome(*gate, obs)
+		depPushed, depAbandoned, waitingOnDep, err := checkIncrementalDependencies(ctx, store, *gate, finished)
+		if err != nil {
+			return err
+		}
+		if waitingOnDep {
+			return nil
+		}
+		pushed = append(pushed, depPushed...)
+		abandoned = append(abandoned, depAbandoned...)
 		switch {
 		case gatePushed && finished && !landed:
 			// Fixes closed without merging back: not a clean review.
@@ -697,11 +770,32 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 		}
 		settled = true
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
-		releasable := human == model.TriggerHumanNo ||
-			(human == model.TriggerHumanOnFindings && len(pushed) == 0 && len(abandoned) == 0)
+		clean := len(pushed) == 0 && len(abandoned) == 0
+		if clean || human == model.TriggerHumanNo {
+			clearTriggerReviewQuestions(t)
+			for _, trigs := range gating {
+				for _, trig := range trigs {
+					model.ClearReviewFindingsForGate(t, "trigger:"+trig)
+				}
+			}
+		} else {
+			summary := "gating review did not finish cleanly"
+			if len(pushed) > 0 {
+				summary = "gating review fixes were closed without merging"
+			} else if len(abandoned) > 0 {
+				summary = "gating review closed without finishing"
+			}
+			model.AddReviewFindings(t, model.ReviewFindingsRecord{
+				Gate:    model.GateReview,
+				Summary: summary,
+				At:      now,
+			})
+		}
+		humanMet := human != model.TriggerHumanRequired || humanApprovalMarker(*t) != ""
+		releasable := human == model.TriggerHumanNo || (clean && humanMet)
 		if !releasable {
 			model.AwaitPersonForAutoMerge(t, "a gating trigger's tasks left it for a person")
-		} else if !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
+		} else if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
 			t.AutoMerge, released = true, true
 		}
 		return nil
@@ -716,16 +810,18 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 	case released:
 		body = "Every task this change's gating triggers filed has finished, so it merges automatically " +
 			"again once it reads clean."
-	case human == model.TriggerHumanRequired:
-		body = "Every task this change's gating triggers filed has finished. At least one of those " +
-			"triggers requires a human, so this change waits for you: press Submit once you have read them."
 	case len(pushed) > 0:
 		body = fmt.Sprintf("Gating task(s) %s pushed fixes that were closed without merging into this "+
-			"branch, so this change is not merging automatically: press Submit once you have read them.",
+			"branch, so the review gate has not passed: push fixes for a clean re-review, or override "+
+			"the gate under merge:force with a reason.",
 			strings.Join(pushed, ", "))
 	case len(abandoned) > 0:
-		body = fmt.Sprintf("Gating task(s) %s closed without finishing, so this change waits for you: "+
-			"press Submit when you are satisfied.", strings.Join(abandoned, ", "))
+		body = fmt.Sprintf("Gating task(s) %s closed without finishing, so the review gate has not passed: "+
+			"re-run the review, or override the gate under merge:force with a reason.",
+			strings.Join(abandoned, ", "))
+	case human == model.TriggerHumanRequired:
+		body = "Every task this change's gating triggers filed has finished without findings, clearing " +
+			"their review gate. At least one trigger also requires a human's approval: press Submit to merge."
 	default:
 		// Released over by the security hold, which says so itself.
 		return nil
@@ -733,12 +829,12 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 	return pathTriggerNote(ctx, store, client, task.ID, ref, body, now)
 }
 
-func maps2Equal(a, b map[string]string) bool {
+func maps2Equal(a, b map[string][]string) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for k, v := range a {
-		if b[k] != v {
+		if !slices.Equal(b[k], v) {
 			return false
 		}
 	}
@@ -789,4 +885,84 @@ func flatten(groups map[string][]string) []string {
 		out = append(out, groups[key]...)
 	}
 	return out
+}
+
+func hasTriggerReviewFindings(t model.Task) bool {
+	for _, rf := range model.ReviewFindings(t) {
+		if strings.HasPrefix(rf.Gate, "trigger:") {
+			return true
+		}
+	}
+	return false
+}
+
+// clearTriggerReviewQuestions drops open review questions left by an earlier
+// trigger review once a re-review settles cleanly (or gated paths are dropped),
+// without disturbing questions owned by the trust-boundary or configured code
+// review.
+func clearTriggerReviewQuestions(t *model.Task) {
+	if q, ok := model.ReviewQuestionsOf(*t); ok &&
+		q.ReviewTaskID != linkTarget(*t, model.LinkSecurityReviewTask) &&
+		q.ReviewTaskID != linkTarget(*t, model.LinkReviewTask) {
+		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
+	}
+}
+
+// checkIncrementalDependencies verifies that any earlier review an incremental
+// gating review depended on actually completed cleanly. If the earlier review
+// closed without completing cleanly while gate has not yet been dispatched,
+// gate's incremental restriction is stripped so it reviews the change in full;
+// if gate has already started or finished on the delta alone, the earlier
+// review's failure blocks settling.
+func checkIncrementalDependencies(ctx context.Context, store *model.Store, gate model.Task,
+	gateFinished bool) (pushed, abandoned []string, stillWaiting bool, err error) {
+
+	if reviewSince(gate.Tags) == "" {
+		return nil, nil, false, nil
+	}
+	for _, l := range gate.Links {
+		if l.Kind != model.LinkDependsOn || l.Target == "" {
+			continue
+		}
+		dep, err := store.GetTask(ctx, l.Target)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("orchestrator: reading base review %s of %s: %w", l.Target, gate.ID, err)
+		}
+		if dep == nil {
+			abandoned = append(abandoned, l.Target)
+			continue
+		}
+		if !isReviewTask(*dep) {
+			continue
+		}
+		depObs, err := store.GetObservation(ctx, dep.ID)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("orchestrator: reading base review %s's observation: %w", dep.ID, err)
+		}
+		depPushed, depLanded, depFinished := reviewOutcome(*dep, depObs)
+		switch {
+		case depPushed && depFinished && !depLanded:
+			pushed = append(pushed, dep.ID)
+		case depFinished:
+		case depObs != nil && depObs.ClosedAt != nil:
+			abandoned = append(abandoned, dep.ID)
+		default:
+			return nil, nil, true, nil
+		}
+	}
+	if len(pushed) == 0 && len(abandoned) == 0 {
+		return nil, nil, false, nil
+	}
+	if !gateFinished {
+		if _, refusal, rerr := store.SupersedeCandidate(ctx, gate.ID, gate.Target); rerr == nil && refusal == "" {
+			if uerr := store.UpdateTask(ctx, gate.ID, func(t *model.Task) error {
+				stripIncrementalReview(t)
+				return nil
+			}); uerr != nil {
+				return nil, nil, false, uerr
+			}
+			return nil, nil, true, nil
+		}
+	}
+	return pushed, abandoned, false, nil
 }

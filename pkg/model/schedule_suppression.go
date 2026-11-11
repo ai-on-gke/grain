@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -94,9 +95,24 @@ type ScheduleSuppression struct {
 	Until time.Time
 	// Detail is the sentence to show for a reason that has one of its
 	// own -- SuppressedByStandingWork's "skipped: this deployment doesn't
-	// run <repo>'s standing work" -- and empty for the reasons the task
-	// or the date above already say everything about.
+	// run <repo>'s standing work", or which schedule in a shared overlap
+	// group is holding this one -- and empty for the reasons the task or
+	// the date above already say everything about.
 	Detail string
+	// HeldByScheduleID is the other schedule in this one's overlap group
+	// (Schedule.OverlapGroup, grain/task-3895) whose unfinished firing is
+	// holding it, and empty when what is holding it is its own previous
+	// firing.
+	HeldByScheduleID string
+}
+
+// openReviewID is the review holding the cadence, for
+// ScheduleFiring.OpenReview: set only for SuppressedByOpenReview.
+func (sup ScheduleSuppression) openReviewID() string {
+	if sup.Reason == SuppressedByOpenReview {
+		return sup.TaskID
+	}
+	return ""
 }
 
 // SuppressedFiring reports why sched has come due and is not firing, or
@@ -143,6 +159,14 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 		return &ScheduleSuppression{
 			Reason: SuppressedByStandingWork,
 			Detail: "skipped: " + StandingWorkOffReason(sched.Target),
+		}, nil
+	}
+	if off, mode, err := s.workflowGrainCIOff(ctx, sched, sched.Target); err != nil {
+		return nil, err
+	} else if off {
+		return &ScheduleSuppression{
+			Reason: SuppressedByStandingWork,
+			Detail: "skipped: " + WorkflowGrainCIOffReason(mode),
 		}, nil
 	}
 	if sched.Recurrence.Kind == RecurrenceGitRef && sched.Recurrence.GitRef != nil {
@@ -209,5 +233,193 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 			return &ScheduleSuppression{Reason: SuppressedByOpenTask, TaskID: open.ID}, nil
 		}
 	}
+	// The shared group's check, after the schedule's own as each
+	// fireXSchedule asks it: its own previous firing is the more useful
+	// thing to name when both are true.
+	if sched.OverlapGroup != "" {
+		sup, err := s.OverlapGroupInFlight(ctx, sched, s.overlapGroupRepo(ctx, sched), now)
+		if err != nil {
+			return nil, err
+		}
+		if sup != nil {
+			return sup, nil
+		}
+	}
 	return nil, nil
+}
+
+// overlapGroupRepo is the repository sched's overlap group is scoped to:
+// the repository its firings go into. That is sched.Target, except for a
+// schedule whose template is bound to a repository of its own and which
+// has not fired since (fireTaskSchedule's composed target, which a
+// firing resyncs onto the row).
+func (s *Store) overlapGroupRepo(ctx context.Context, sched Schedule) RepoRef {
+	if sched.Target == (RepoRef{}) && sched.TemplateID != nil && !IsSystemTemplateID(*sched.TemplateID) {
+		if tmpl, err := s.GetTemplate(ctx, *sched.TemplateID); err == nil && tmpl != nil && tmpl.Target != nil {
+			return *tmpl.Target
+		}
+	}
+	return sched.Target
+}
+
+// OverlapGroupInFlight reports which other schedule in sched's overlap
+// group (Schedule.OverlapGroup, grain/task-3895), in repo, has a firing
+// that has not finished, or nil when none has -- the group half of the
+// overlap check, asked by every fireXSchedule after its own and by
+// SuppressedFiring. Unfinished means what it means for that peer's own
+// overlap check: an unfinished suite run, a ScheduledWorkflowRun not
+// yet settled or a review of one still inside its hold, or an open task
+// the peer filed. Then, so a task outlives a schedule that was renamed
+// or withdrawn while it ran, any open task carrying the group's tag.
+//
+// Scoped to repo, which the caller passes as the repository the firing
+// goes into: a group is that repository's own, so a schedule elsewhere
+// naming the same group neither holds nor is held by this one.
+//
+// It writes nothing, which is what lets SuppressedFiring ask it.
+func (s *Store) OverlapGroupInFlight(ctx context.Context, sched Schedule, repo RepoRef,
+	now time.Time) (*ScheduleSuppression, error) {
+
+	group := strings.TrimSpace(sched.OverlapGroup)
+	if sched.Overlap.Allows() || group == "" || repo == (RepoRef{}) {
+		return nil, nil
+	}
+	peers, err := s.SchedulesInOverlapGroup(ctx, repo, group)
+	if err != nil {
+		return nil, err
+	}
+	// Open tasks a peer's own check has already decided are not holding
+	// it (a review past its hold, a standing job resting between wakes),
+	// so the tag sweep below does not hold the group on them either.
+	notHolding := map[string]bool{}
+	for _, peer := range peers {
+		if peer.ID == sched.ID {
+			continue
+		}
+		held := func(reason ScheduleSuppressionReason, taskID string, until time.Time) *ScheduleSuppression {
+			return &ScheduleSuppression{Reason: reason, TaskID: taskID, Until: until,
+				HeldByScheduleID: peer.ID, Detail: overlapGroupDetail(group, peer.ID, peer.Title, reason)}
+		}
+		_, peerWorkflow := workflowReviewSchedule(peer)
+		switch {
+		case peer.SuiteID != nil:
+			active, err := s.HasActiveRunForSchedule(ctx, peer.ID)
+			if err != nil {
+				return nil, fmt.Errorf("checking %s in overlap group %q: %w", peer.ID, group, err)
+			}
+			if active {
+				return held(SuppressedBySuiteRun, "", time.Time{}), nil
+			}
+		case peerWorkflow:
+			hold, err := s.workflowFiringInFlight(ctx, peer, now, peer.Location())
+			if err != nil {
+				return nil, err
+			}
+			switch {
+			case hold.Run:
+				return held(SuppressedByWorkflowRun, "", time.Time{}), nil
+			case hold.Held:
+				return held(SuppressedByOpenReview, hold.Review, hold.Until), nil
+			case hold.Review != "":
+				notHolding[hold.Review] = true
+			}
+		default:
+			open, err := s.OpenTaskWithTag(ctx, ScheduleFiringTag(peer.ID))
+			if err != nil {
+				return nil, fmt.Errorf("checking %s in overlap group %q: %w", peer.ID, group, err)
+			}
+			if open == nil {
+				continue
+			}
+			if peer.TemplateID != nil && IsStandingTemplateID(*peer.TemplateID) {
+				// A standing job's task is open for good; it is only a
+				// firing in flight while it is actually running.
+				st, err := s.State(ctx, open.ID)
+				if err != nil {
+					return nil, err
+				}
+				resting, err := s.RestingTask(ctx, open.ID)
+				if err != nil {
+					return nil, err
+				}
+				if st == StateAwaitingReply || resting {
+					notHolding[open.ID] = true
+					continue
+				}
+			}
+			return held(SuppressedByOpenTask, open.ID, time.Time{}), nil
+		}
+	}
+
+	ids, err := s.OpenTasksWithTag(ctx, ScheduleOverlapGroupTag(repo, group))
+	if err != nil {
+		return nil, fmt.Errorf("checking open tasks in overlap group %q: %w", group, err)
+	}
+	for _, id := range ids {
+		if notHolding[id] {
+			continue
+		}
+		task, err := s.GetTask(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		var holder, title string
+		if task != nil {
+			holder = scheduleIDFromTags(task.Tags)
+		}
+		if holder == sched.ID {
+			// Its own task: the schedule's own check has already
+			// answered for it.
+			continue
+		}
+		if holder != "" {
+			if h, err := s.GetSchedule(ctx, holder); err == nil && h != nil {
+				title = h.Title
+			}
+		}
+		return &ScheduleSuppression{Reason: SuppressedByOpenTask, TaskID: id, HeldByScheduleID: holder,
+			Detail: overlapGroupDetail(group, holder, title, SuppressedByOpenTask)}, nil
+	}
+	return nil, nil
+}
+
+// scheduleIDFromTags is the schedule a task's ScheduleFiringTag names.
+func scheduleIDFromTags(tags []string) string {
+	for _, t := range tags {
+		if id, ok := strings.CutPrefix(t, "schedule:"); ok && id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// scheduleLabel names a schedule in a sentence.
+func scheduleLabel(id, title string) string {
+	switch {
+	case title != "" && id != "" && title != id:
+		return fmt.Sprintf("schedule %q (%s)", title, id)
+	case id != "":
+		return fmt.Sprintf("schedule %s", id)
+	case title != "":
+		return fmt.Sprintf("schedule %q", title)
+	default:
+		return "another schedule"
+	}
+}
+
+// overlapGroupDetail is the sentence for a firing held by another
+// schedule in its overlap group, as the schedules page shows it after
+// "not firing: ".
+func overlapGroupDetail(group, holderID, holderTitle string, reason ScheduleSuppressionReason) string {
+	who := scheduleLabel(holderID, holderTitle)
+	switch reason {
+	case SuppressedBySuiteRun:
+		return fmt.Sprintf("the suite run %s started has not finished, and both are in overlap group %q", who, group)
+	case SuppressedByWorkflowRun:
+		return fmt.Sprintf("the CI run %s started has not finished, and both are in overlap group %q", who, group)
+	case SuppressedByOpenReview:
+		return fmt.Sprintf("the review of %s's last run is still open, and both are in overlap group %q", who, group)
+	default:
+		return fmt.Sprintf("the task %s filed is still open, and both are in overlap group %q", who, group)
+	}
 }

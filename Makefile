@@ -89,9 +89,12 @@ EDITION ?=
 # Dockerfile as MAIN_GRAIN.
 MAIN_grain ?= ./cmd/grain
 # The Grain Hub's main; MAIN_grain-registry is its name from before the
-# Grain Registry was renamed, still honoured for a release.
+# Grain Registry was renamed, still honoured for a release. It has no
+# default of its own: one would win the $(or ...) below, and bin/grain-hub
+# and the hub image would be built from the cmd/grain-registry shim, which
+# warns that it is deprecated every time it starts. `make grain-registry`
+# falls back to ./cmd/grain-registry by the rule's own $(or ...).
 MAIN_grain-hub ?= $(or $(MAIN_grain-registry),./cmd/grain-hub)
-MAIN_grain-registry ?= ./cmd/grain-registry
 # The same for bin/grain-agentd: a build that registers a transport or
 # host-tool grants of its own (pkg/agentd) names its own main here.
 MAIN_grain-agentd ?= ./cmd/grain-agentd
@@ -168,7 +171,7 @@ IMAGE ?= grain:dev
 # IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
 # pre-rename name, honoured for a release (as is `make image-registry`).
 IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -201,10 +204,19 @@ build: frontend $(CMDS)
 # what deleting it was guarding against: server.go serves this directory
 # with http.FileServerFS, so "/" resolves to index.html once a build
 # exists and placeholder.html is reachable only at its own path.
+#
+# ui-ng/ is the Angular rewrite (design/design/angular-ui.design.md),
+# built into pkg/ui/static-next and served under /next/ beside ui/. It
+# gets the same clear-then-build treatment and the same three tracked
+# files, and like ui/ keeps its build toolchain in `dependencies` so
+# `npm ci --omit=dev` is enough to build it.
 frontend:
 	find pkg/ui/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui && npm ci --omit=dev && npm run build
+	find pkg/ui/static-next -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
+		-not -name 'placeholder.html' -delete
+	cd ui-ng && npm ci --omit=dev && npm run build
 	find pkg/hub/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui-hub && npm ci --omit=dev && npm run build
@@ -323,6 +335,7 @@ container-build: builder
 test: frontend
 	go test -race -timeout 30m ./...
 	cd ui && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
+	cd ui-ng && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm run lint && npm test
 	cd ui-hub && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
 
 # The same suite, turned up: what .github/workflows/nightly.yml runs
@@ -516,6 +529,20 @@ security:
 vuln:
 	GOTOOLCHAIN=go$(GO_VERSION) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+# The release images' vulnerability gate (docs/image-vulnerability-scanning.md):
+# Trivy, pinned by scripts/scan-images.sh, over the images' OS and language
+# packages, failing on a fixable CRITICAL or HIGH finding that
+# .grain/baselines/image-vulns-allowlist.yaml does not waive. `vuln` above
+# reads Go source; this reads what ships. With no SCAN_IMAGES it scans what
+# $RELEASE_IMAGES_STATE names if that file exists, else the published
+# images at SCAN_TAG (default main). SCAN_IMAGES is name=ref pairs, such as
+# SCAN_IMAGES="grain=grain:dev hub=grain-hub:dev" for local builds.
+SCAN_TAG ?=
+SCAN_IMAGES ?=
+SCAN_OUT ?= image-vulns-report
+scan-images:
+	./scripts/scan-images.sh --out $(SCAN_OUT) $(if $(SCAN_TAG),--tag $(SCAN_TAG),) $(SCAN_IMAGES)
+
 # The sustained concurrent-load harness (tests/e2e/loadtest_test.go,
 # bwsalmon/agents#416) -- skipped by `test` above (GRAIN_LOAD_TEST unset)
 # since it takes minutes rather than seconds and is meant to be run by
@@ -631,9 +658,11 @@ test-upgrade:
 # third_party/granule is excluded. It is a separate module of vendored
 # upstream code -- `go vet ./...` and `go test ./...` do not reach into
 # it either -- and a red build over formatting we would not be the ones
-# to fix is a gate nobody can act on.
+# to fix is a gate nobody can act on. So is anything under a
+# node_modules directory: some npm packages ship Go sources of their own
+# (ui-ng/go.mod says which), and their formatting is not ours either.
 fmt:
-	@files="$$(find . -name '*.go' -not -path './third_party/*')"; \
+	@files="$$(find . -name '*.go' -not -path './third_party/*' -not -path '*/node_modules/*')"; \
 	unformatted="$$(gofmt -l $$files)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needed on:"; echo "$$unformatted"; echo; \
@@ -664,6 +693,7 @@ fmt:
 # be pure waste.
 fmt-frontend:
 	cd ui && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
+	cd ui-ng && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
 	cd ui-hub && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check && npx prettier --check ../ui-shared
 
 clean:

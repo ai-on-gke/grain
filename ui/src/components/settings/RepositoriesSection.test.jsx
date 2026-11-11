@@ -42,7 +42,15 @@ function routeApi() {
     if (path === "/api/deployment/reachable-repos")
       return Promise.resolve(reach);
     if (path === "/api/repos/acme/widgets/declarations")
-      return Promise.resolve({ declarations: true, ciMode: "grain" });
+      return Promise.resolve({
+        declarations: true,
+        ciMode: "grain",
+        skills: {
+          enabled: true,
+          folders: [".claude/skills", ".gemini/skills"],
+        },
+        effectiveSkillFolders: [".claude/skills", ".gemini/skills"],
+      });
     if (
       opts &&
       path === "/api/repos/acme/widgets/base-repair-bypasses-human-gates"
@@ -83,6 +91,9 @@ describe("RepositoriesSection", () => {
     expect(
       within(widgets).getByTestId("settings-repo-declarations"),
     ).toHaveTextContent("Read");
+    expect(
+      within(widgets).getByTestId("settings-repo-skills"),
+    ).toHaveTextContent(".claude/skills, .gemini/skills");
     expect(within(widgets).getByTestId("settings-repo-ci")).toHaveTextContent(
       "Grain CI",
     );
@@ -93,6 +104,9 @@ describe("RepositoriesSection", () => {
     const gadgets = row("acme/gadgets");
     expect(await within(gadgets).findByText("Unknown")).toBeInTheDocument();
     expect(await within(gadgets).findByText("Not read")).toBeInTheDocument();
+    expect(
+      within(gadgets).getByTestId("settings-repo-skills"),
+    ).toHaveTextContent("Default folders");
     expect(within(gadgets).getByTestId("settings-repo-ci")).toHaveTextContent(
       "GitHub CI",
     );
@@ -282,5 +296,38 @@ describe("RepositoriesSection", () => {
       "Not listed",
     );
     expect(connectionText(reach, "acme/other")).toBe("Not reached");
+  });
+
+  it("warns when a stored hostless entry matches a repository reachable only on a non-default git host", async () => {
+    api.mockImplementation((path) => {
+      if (path === "/api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [
+            { repo: "acme/widgets", push: true },
+            { repo: "git.forge.example/experimental/grain", push: true },
+          ],
+          connections: [
+            { credential: "github-token", host: "github.com", ok: true },
+            { credential: "forge-token", host: "git.forge.example", ok: true },
+          ],
+        });
+      }
+      if (path.endsWith("/declarations"))
+        return Promise.resolve({ declarations: false });
+      if (path.endsWith("/release"))
+        return Promise.resolve({ baseBranches: ["main"] });
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+    render(
+      <RepositoriesSection
+        config={{ targetRepos: ["acme/widgets", "experimental/grain"] }}
+        tasks={[]}
+      />,
+    );
+    const alert = await screen.findByTestId("repo-host-mismatch-alert");
+    expect(alert).toHaveTextContent(
+      "experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+    );
   });
 });

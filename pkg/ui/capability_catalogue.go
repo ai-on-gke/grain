@@ -170,6 +170,11 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 		if adm := model.NormalizeAdmission(task.Admission); adm.AtLeast(model.AdmissionBypass) {
 			personOnly = append(personOnly, "admission "+string(adm))
 		}
+		if push, err := c.templateDeclaredPush(ctx, task.TemplateID); err != nil {
+			return err
+		} else if push != nil {
+			personOnly = append(personOnly, "declared push set from "+push.Path)
+		}
 		if len(personOnly) > 0 {
 			return forbiddenCodeErrorf("requires_person", "task %s holds %s, which only a person acting directly may approve",
 				task.ID, strings.Join(personOnly, ", "))

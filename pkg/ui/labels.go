@@ -1148,6 +1148,9 @@ type Config struct {
 	// session lasts without being used before its access code has to be
 	// entered again; zero is DefaultAccessSessionLifetime.
 	AccessSessionLifetime time.Duration
+	// AccessCodeMode is the access code's mode where the daemon names no
+	// LocalAPITokenFile to keep it beside (access_code_mode.go); "" is on.
+	AccessCodeMode AccessCodeMode
 	// InstallTrackProbe, when set, supplies the host and daemon-flag inputs
 	// that GET /api/config combines with the store's live configuration to
 	// classify this deployment as a Google install ("google") or an

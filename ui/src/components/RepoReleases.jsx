@@ -1001,7 +1001,7 @@ export function withoutDanglingDependencies(items) {
 // readOnly draws the plan with every control disabled, for a reader the
 // API would refuse the save (not one of repo's admins, or settings kept
 // in the config repo).
-export function planFormState(plan) {
+function planFormState(plan) {
   return {
     requireApproval: Boolean(plan.requireApproval),
     autoPromote: Boolean(plan.autoPromote),

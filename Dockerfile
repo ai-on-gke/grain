@@ -136,20 +136,29 @@ ARG GO_IMAGE=golang
 # both versions. Dockerfile.build pins the same value, and
 # TestEveryBaseImageIsPinnedByDigest keeps the two equal.
 ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
-ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # The docker CLI is copied out of this image rather than apt-installed:
 # Debian's own `docker.io` package pulls in the whole daemon --
 # containerd, runc, iptables, a systemd unit -- to get one client binary
-# that only ever talks to a socket mounted from the host.
-ARG DOCKER_CLI_IMAGE=docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349fd857dd85035f98c2c9acbdd4d
+# that only ever talks to a socket mounted from the host. The 29 CLI
+# negotiates down to an older engine's API (it still drives Engine 24),
+# and the hosts grain drives run a current one anyway: docker-ce from
+# pkg/hostinit, or the CI runner's own engine under tests/container and
+# tests/installer.
+ARG DOCKER_CLI_IMAGE=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a
 # distroless base with nothing else in it), and this pin is the whole of
-# what decides which bytes it is. The version is the one
-# scripts/release-images.sh signs with (its COSIGN_VERSION default); the
-# two need not move together, since a signature from one cosign verifies
-# under another, but a bump of one is the moment to look at the other.
-ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31
+# what decides which bytes it is. This cosign only ever verifies, so it
+# is a v3 release while scripts/release-images.sh still signs with v2
+# (its COSIGN_VERSION default): v3 verifies the legacy `.sig`
+# signatures v2 writes, with the same flags and the same JSON on stdout
+# the Kubernetes upgrade path reads its digest from. The signer has to
+# keep writing that legacy format for as long as images carrying the
+# old v2.4.1 verifier are in the field -- v2.4.1 cannot find a v3
+# new-format bundle -- so a bump of one is the moment to look at the
+# other, but they need not move together.
+ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 
@@ -276,9 +285,9 @@ RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
 # `curl: (6) Could not resolve host: dl.k8s.io`, a DNS blip on a step
 # that had passed in about a second on the commit before. --retry alone
 # does not count a failed lookup as transient, hence --retry-all-errors.
-ARG KUBECTL_VERSION=v1.37.0
-ARG KUBECTL_SHA256_AMD64=6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
-ARG KUBECTL_SHA256_ARM64=922df28df248cc00a9e025f947704f1d1482de64ece54cfe57e61f19eaf1eef3
+ARG KUBECTL_VERSION=v1.37.2
+ARG KUBECTL_SHA256_AMD64=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+ARG KUBECTL_SHA256_ARM64=fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
 RUN set -eu; \
 	arch="$(dpkg --print-architecture)"; \
 	case "$arch" in \

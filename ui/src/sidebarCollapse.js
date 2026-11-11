@@ -29,7 +29,7 @@ export const SIDEBAR_TOGGLE_KEY = "[";
 // readSidebarCollapsed is what was chosen here last, or false -- the
 // rail open -- for a browser that has never chosen, or whose storage is
 // unreadable or denied outright.
-export function readSidebarCollapsed() {
+function readSidebarCollapsed() {
   try {
     return localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
   } catch {
@@ -39,7 +39,7 @@ export function readSidebarCollapsed() {
 
 // writeSidebarCollapsed keeps the choice. The open rail is the default,
 // so choosing it removes the key rather than storing "false".
-export function writeSidebarCollapsed(collapsed) {
+function writeSidebarCollapsed(collapsed) {
   try {
     if (collapsed) localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "true");
     else localStorage.removeItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
@@ -59,7 +59,7 @@ function isTypingTarget(el) {
 
 // isSidebarToggleKey is whether a keydown is the rail's shortcut: the
 // bare key, not typed into a field, not already handled.
-export function isSidebarToggleKey(evt) {
+function isSidebarToggleKey(evt) {
   return (
     evt.key === SIDEBAR_TOGGLE_KEY &&
     !evt.defaultPrevented &&

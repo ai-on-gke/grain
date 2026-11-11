@@ -384,12 +384,6 @@ func upgradeCheckBody(status upgrade.Status, stateRepo model.RepoRef, gap upgrad
 	b.WriteString("The upgrade:\n\n")
 	fmt.Fprintf(&b, "- Branch: %s\n", status.Branch)
 	fmt.Fprintf(&b, "- Result: %s\n", status.Phase)
-	if status.Source != "" {
-		fmt.Fprintf(&b, "- Image source: %s\n", status.Source)
-	}
-	if status.FallbackNote != "" {
-		fmt.Fprintf(&b, "- Fallback: %s\n", status.FallbackNote)
-	}
 	if status.Detail != "" {
 		fmt.Fprintf(&b, "- What the upgrade reported: %s\n", status.Detail)
 	}

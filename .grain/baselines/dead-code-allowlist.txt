@@ -23,6 +23,14 @@ pkg/orchestrator/serving_test.go:dialableRunner.DialStream  # satisfies streamRu
 ui/e2e/screenshot.mjs  # make ui-screenshots
 ui/scripts/summarize-trace-network.mjs  # the ui e2e job in .github/workflows/tests.yml and .grain/workflows/tests.yml
 
+# UI exports knip reports that are kept on purpose.
+ui/src/brand/grain-mark.js:DEFAULTS  # vendored verbatim from the grain-mark design pack; ui/scripts/export-mark-sheets.mjs inlines the module and reads it
+ui/src/brand/grain-mark.js:fieldVal  # vendored verbatim from the grain-mark design pack (its public API)
+ui/src/brand/grain-mark.js:overlayLines  # vendored verbatim from the grain-mark design pack (its public API)
+ui/src/brand/grain-mark.js:renderStatic  # vendored design pack; ui/scripts/export-mark-sheets.mjs inlines the module and calls it
+ui/src/components/AttachmentPicker.jsx:getPastedImages  # deliberate alias of getPastedFiles; TaskChat, Timeline and PendingQuestion import it
+ui/src/components/AttachmentPicker.jsx:handleImagePaste  # deliberate alias of handleFilePaste, kept beside getPastedImages and tested
+
 # Historical records: scripts kept beside the test run that used them.
 docs/test-runs/2026-11-03-sandbox-cli-edges/task-sandbox-grepwalk.sh  # test-run record
 docs/test-runs/2026-11-09-hosted-instance-credentials/hosted-vm-walk.sh  # test-run record

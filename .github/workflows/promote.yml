@@ -234,17 +234,19 @@ jobs:
             exit 0
           fi
           if ! command -v cosign >/dev/null 2>&1; then
-            cosign_version="v2.4.1"
+            cosign_version="v2.6.5"
             if ! curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
               "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
               -o /usr/local/bin/cosign; then
               rm -f /usr/local/bin/cosign
-              cosign_image="gcr.io/projectsigstore/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31"
+              cosign_image="ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca"
               docker pull "$cosign_image"
               cid="$(docker create "$cosign_image")"
               docker cp "$cid:/ko-app/cosign" /usr/local/bin/cosign
               docker rm "$cid" >/dev/null
-              echo "6255c3c7146a8f1c3e71d542a9bc21412da7c23a2561adce02381bdbebaff413  /usr/local/bin/cosign" | sha256sum -c -
+              echo "8d5b7d0097b61a89161ef7ac4f169879bf6de798af1be431b595bb552b235d48  /usr/local/bin/cosign" | sha256sum -c -
+            else
+              echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  /usr/local/bin/cosign" | sha256sum -c -
             fi
             chmod +x /usr/local/bin/cosign
           fi
@@ -367,18 +369,28 @@ jobs:
           # promote-version prints nothing but a vX.Y.Z.
           version="$(bash ./scripts/release-assets.sh promote-version "${PROMOTE_VERSION:-}")"
           build=true
-          if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${version}/checksums.txt"; then
+          # The probes' stderr goes to /dev/null: a 404 is an answer here,
+          # not an error, and curl's "(22) ... error: 404" lines only hid
+          # the reason this step logs below.
+          if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${version}/checksums.txt" 2>/dev/null; then
             echo "promote: ${version} already carries the grain CLI"
             build=false
-          elif [ -z "${PROMOTE_VERSION:-}" ]; then
+          elif [ -n "${PROMOTE_VERSION:-}" ]; then
+            echo "promote: building the grain CLI for ${version}: asked for by name, and it carries no checksums.txt"
+          else
             commit="$(git rev-parse "refs/tags/${version}^{commit}")"
             sha_release="sha-${commit:0:12}"
             status="$(curl -fsSIL -o /dev/null -w '%{http_code}' \
               -H 'Accept: application/vnd.github+json' \
               -H 'X-GitHub-Api-Version: 2022-11-28' \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${version}" 2>/dev/null || true)"
-            if [ "$status" = "404" ] &&
-               ! curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${sha_release}/images.json"; then
+            if [ "$status" = "200" ]; then
+              echo "promote: building the grain CLI for ${version}: its GitHub Release exists and carries no checksums.txt"
+            elif [ "$status" != "404" ]; then
+              echo "promote: building the grain CLI for ${version}: the GitHub API answered ${status:-nothing} for releases/tags/${version}, so whether it exists is unknown"
+            elif curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${sha_release}/images.json" 2>/dev/null; then
+              echo "promote: building the grain CLI for ${version}: GitHub Release ${version} does not exist yet, but ${sha_release} has the release assets the assets job creates it from"
+            else
               echo "promote: GitHub Release ${version} does not exist and ${sha_release} has no release assets to create it; skipping grain CLI build"
               build=false
             fi

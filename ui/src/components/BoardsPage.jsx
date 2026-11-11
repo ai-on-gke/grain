@@ -63,7 +63,7 @@ import AccessGate from "./AccessGate.jsx";
 // page's render, which React would treat as a new type -- and so tear
 // down and rebuild -- on every render, dragging one of these rows
 // included.
-function Row({ board, handle, dragging, picked, onOpen }) {
+function Row({ board, handle, dragging, picked, label, onOpen }) {
   return (
     <div
       className={`template-row${dragging ? " task-row-dragging" : ""}${
@@ -78,6 +78,7 @@ function Row({ board, handle, dragging, picked, onOpen }) {
       <RowLink
         className="template-name"
         href={`/boards/${encodeURIComponent(board.id)}`}
+        aria-label={label && label !== board.name ? label : undefined}
         onOpen={onOpen}
       >
         {board.name}

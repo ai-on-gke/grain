@@ -72,6 +72,7 @@ var settingsAppliedLive = map[string]string{
 	"sandboxMemoryOvercommit": "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskOvercommit":   "the budget the next sandbox is admitted against, and on Kubernetes the next pod's ephemeral-storage request (liveConfig.refresh, via config.budget and SetOvercommit)",
 	"sandboxOvercommit":       "the auto overcommit controller's mode and bounds (runOvercommit reconfigures it each step, and config.budget reads its ratios)",
+	"sandboxShapeLimits":      "the ceilings on a task's own sandbox shape (Client.sandboxShapeLimits reads grain_config on every filing, edit, approval and run-now)",
 	"sessionSandboxIdleTtl":   "how long a session's sandbox and in-process agent wait stay warm between turns (RunCycle refreshes deps.Config.SessionSandboxIdleTTL from grain_config each cycle)",
 	"sandboxMemoryReserveMb":  "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskFloorShare": "how much of each volume the next admission is held over (cmd/grain's diskWatch, which asks " +
@@ -106,6 +107,7 @@ var settingsAppliedLive = map[string]string{
 	"ciReserveAfter": "when the CI gate starts holding capacity for a job the budget keeps refusing " +
 		"(ci.SharedGate asks cmd/grain for it on every admission attempt)",
 	"promptExtension":     "the deployment-wide text RunCycle refreshes out of grain_config every cycle (orchestrator.resolvePromptExtension)",
+	"skills":              "the deployment-wide skill discovery defaults RunCycle refreshes out of grain_config every cycle (orchestrator.resolveSkillFolders)",
 	"repairTemplateID":    "orchestrator resolves the repair template dynamically from the config row on each repair/triage filing",
 	"defaultCapabilities": "pkg/ui, which reads grain_config per request (CreateTask's own defaults)",
 	"defaultAdmission":    "pkg/ui, which reads grain_config per request (CreateTask's defaultTaskAdmission)",
@@ -125,13 +127,15 @@ var settingsAppliedLive = map[string]string{
 		"(reconcileAutoUpgrade)",
 	"autoUpgradeOn": "orchestrator's auto-upgrade and release-upgrade reconcilers, which read grain_config every cycle " +
 		"(reconcileAutoUpgrade, reconcileReleaseUpgrade)",
+	"autoUpgradeMinIntervalHours": "orchestrator's release-upgrade reconciler, which reads grain_config every cycle " +
+		"(reconcileReleaseUpgrade)",
 	"taskBranchTemplate":    "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"deploymentId":          "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"externalAgentApi":      "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",
 	"ownerTrust":            "Client.CreateTask, which reads grain_config as each external agent filing is made (ownerTrustApproves)",
 	"autoGrantContextReads": "Client.CreateTask and Client.UpdateTask, which read grain_config on each task filing or edit (resolveContextLinksAndReads)",
 	"settingsLocked":        "pkg/ui, which reads grain_config per request (settingsLocked)",
-	"registry":              "the registry heartbeat manager (pkg/daemon's liveConfig.Refresh and TriggerHubSync)",
+	"hub":                   "the hub heartbeat manager (pkg/daemon's liveConfig.Refresh and TriggerHubSync)",
 }
 
 func TestEverySettingIsEitherAppliedLiveOrRestartOnly(t *testing.T) {

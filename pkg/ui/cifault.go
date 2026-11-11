@@ -53,6 +53,32 @@ type CIFault struct {
 	// fault whose file nobody has an open change against has no fix to
 	// point at yet.
 	Fixes []CIFaultFix `json:"fixes,omitempty"`
+	// RunCount, RefCount and PathCount are how many runs, branches and
+	// files the fault names when a paged read cut Runs to its first
+	// ciFaultPageRuns, Refs to ciFaultPageRefs and Paths to
+	// ciFaultPagePaths, and Trimmed says it did: a fault seen on every
+	// branch of a red day names hundreds. fields=full, and a person's
+	// unpaged read, carry them all.
+	RunCount  int  `json:"runCount,omitempty"`
+	RefCount  int  `json:"refCount,omitempty"`
+	PathCount int  `json:"pathCount,omitempty"`
+	Trimmed   bool `json:"trimmed,omitempty"`
+}
+
+// pagedCIFault is f as a paged row carries it: its first few runs,
+// branches and files, with how many there were. The slices are copied,
+// never cut in place, since f shares them with the fault cache.
+func pagedCIFault(f CIFault) CIFault {
+	if runs, cut := firstOf(f.Runs, ciFaultPageRuns); cut {
+		f.RunCount, f.Runs, f.Trimmed = len(f.Runs), runs, true
+	}
+	if refs, cut := firstOf(f.Refs, ciFaultPageRefs); cut {
+		f.RefCount, f.Refs, f.Trimmed = len(f.Refs), refs, true
+	}
+	if paths, cut := firstOf(f.Paths, ciFaultPagePaths); cut {
+		f.PathCount, f.Paths, f.Trimmed = len(f.Paths), paths, true
+	}
+	return f
 }
 
 // CIFaultFix is one such pull request, and why it is being named --

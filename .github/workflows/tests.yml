@@ -178,8 +178,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -199,7 +200,7 @@ jobs:
         run: make fmt
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -256,8 +257,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -317,7 +319,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -543,8 +545,8 @@ jobs:
         run: |
           set +e
           GRAIN_GOTEST_LOG=/tmp/go-unit.log ./scripts/run-go-tests.sh go test -race -timeout 25m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
-            ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/image-vulns/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... ./cmd/reviewed-merge/... \
+            ./docs/releases/... ./tests/agentdcompat/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
             ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
@@ -555,7 +557,7 @@ jobs:
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
-            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/reviewedmerge/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... ./pkg/usage/... \
@@ -766,6 +768,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # Every release tag: the host agent compatibility step builds
+          # grain-agentd from each released tag.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Cache Go modules and build cache
@@ -796,6 +801,15 @@ jobs:
         env:
           GRAIN_RUNHOST_DOCKER: "1"
         run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys|TestRunHostAgentCannotReachAHostDirectorySandbox)$' -v ./pkg/cli/
+
+      # The host agent contract (design/design/agentd-stable-contract.design.md,
+      # "Guard rails"): this tree's daemon side against grain-agentd built
+      # from the oldest release still accepted and the newest releases after
+      # it -- start, detached start, reattach after a daemon restart,
+      # cancel, stage, listen and drain. A change that would strand an
+      # installed host agent fails here rather than on an operator's machine.
+      - name: Released host agents still work with this daemon
+        run: ./scripts/agentd-compat.sh -timeout 10m
 
   host-script-container:
     name: host-script container
@@ -873,13 +887,14 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -890,6 +905,10 @@ jobs:
       - name: Test frontend
         working-directory: ui
         run: npm test -- --maxWorkers=4
+
+      - name: Lint and test the new (Angular) frontend
+        working-directory: ui-ng
+        run: npm ci && npm run lint && npm test -- --maxWorkers=4
 
       - name: Test registry frontend
         working-directory: ui-hub
@@ -943,8 +962,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -964,7 +984,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -1155,8 +1175,9 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
+            ui-ng/node_modules
             ui-hub/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -1166,7 +1187,7 @@ jobs:
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
           git config --global user.email "grain-ci@example.com"
-          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Configure authenticated Docker Hub pulls
         env:

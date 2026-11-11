@@ -173,6 +173,9 @@ type Template struct {
 	// Hosting is the optional hosting setting for tasks filed from this
 	// template (empty leaves the task on unattended or deployment/repo defaults).
 	Hosting Hosting
+	// Skills is the optional per-task repository skill discovery override
+	// copied onto every task filed from this template.
+	Skills *SkillsConfig
 
 	// Priority is the optional default numeric priority for tasks filed from
 	// this template (nil or 0 leaves the task on DefaultTaskPriority).

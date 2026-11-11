@@ -599,6 +599,12 @@ type HeartbeatResponse struct {
 	ScopeConflicts       []ScopeConflict `json:"scope_conflicts,omitempty"`
 	NextIntervalSeconds  int             `json:"next_interval_seconds,omitempty"`
 	NextHeartbeatSeconds int             `json:"next_heartbeat_seconds,omitempty"`
+	// EnvironmentName is the name the hub gives the entry's grain by
+	// default (EnvironmentNameForEntry: its display name, else its entry
+	// name). The daemon adopts it unless its operator named the deployment
+	// something else (model.Config.AdoptHubEnvironmentName). Empty from a
+	// hub that predates it, which changes nothing.
+	EnvironmentName string `json:"environment_name,omitempty"`
 }
 
 // UnmarshalJSON accepts both "conflicts" and "scope_conflicts" as well as both

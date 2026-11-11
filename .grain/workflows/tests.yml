@@ -532,7 +532,7 @@ jobs:
       - &fill-the-npm-cache
         name: Fill the npm cache from the registry
         infrastructure: true
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
 
       # Before `go build`: pkg/ui go:embeds pkg/ui/static, which is
       # written by the frontend build, so nothing Go here compiles
@@ -597,6 +597,7 @@ jobs:
       - LICENSE
       - NOTICE
       - ui/**
+      - ui-ng/**
       - ui-hub/**
       - ui-shared/**
     sandbox:
@@ -634,6 +635,7 @@ jobs:
       - LICENSE
       - NOTICE
       - ui/**
+      - ui-ng/**
       - ui-hub/**
       - ui-shared/**
       - "!ui/src/state.js"
@@ -647,8 +649,8 @@ jobs:
       - name: Test
         run: |
           ./scripts/run-go-tests.sh go test -race -timeout 20m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
-            ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/image-vulns/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... ./cmd/reviewed-merge/... \
+            ./docs/releases/... ./tests/agentdcompat/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
             ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
@@ -659,7 +661,7 @@ jobs:
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
-            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/reviewedmerge/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... ./pkg/usage/... \
@@ -864,7 +866,7 @@ jobs:
     # a job keyed on the files it reads has to name the script its own
     # first step is, or a change to that script is a cache hit and this
     # job never re-runs against it.
-    paths: [ui/**, ui-hub/**, ui-shared/**, Makefile, scripts/warm-npm-cache.sh]
+    paths: [ui/**, ui-ng/**, ui-hub/**, ui-shared/**, Makefile, scripts/warm-npm-cache.sh]
     sandbox:
       cpus: 8
       memory-mb: 16384
@@ -888,6 +890,10 @@ jobs:
         # rather than on a busy box. Measured across 190 files / 2963 tests:
         # 260s (~4m20s) at four workers on eight vCPU.
         run: npm test -- --maxWorkers=4
+
+      - name: Lint and test the new (Angular) frontend
+        working-directory: ui-ng
+        run: npm ci && npm run lint && npm test -- --maxWorkers=4
 
       - name: Test registry frontend
         working-directory: ui-hub

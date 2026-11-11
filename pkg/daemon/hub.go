@@ -658,8 +658,13 @@ func (m *HubManager) step(parentCtx context.Context) (time.Duration, error) {
 	m.mu.Unlock()
 
 	if wasFailing {
-		m.opts.Logf("grain daemon: registry heartbeat to %s (%s) recovered", inputs.regCfg.URL, inputs.regCfg.Entry)
+		m.opts.Logf("grain daemon: hub heartbeat to %s (%s) recovered", inputs.regCfg.URL, inputs.regCfg.Entry)
 	}
+	// The hub's name for this entry -- its display name, else its entry
+	// name -- as this deployment's default environment name, so a rename
+	// on the hub reaches it on the next heartbeat unless its operator has
+	// named it something else.
+	adoptDefaultEnvironmentName(parentCtx, m.opts.Store, resp.EnvironmentName)
 
 	m.ensureTunnel(parentCtx, inputs, initialTok, tokenSource)
 	return delay, nil
@@ -744,7 +749,7 @@ func (m *HubManager) recordFailure(err error) time.Duration {
 	m.mu.Unlock()
 
 	if failures == 1 || failures%10 == 0 {
-		m.opts.Logf("grain daemon: registry heartbeat failed (attempt %d, retrying in %s): %s",
+		m.opts.Logf("grain daemon: hub heartbeat failed (attempt %d, retrying in %s): %s",
 			failures, backoff.Round(10*time.Millisecond), redactedErr)
 	}
 	return backoff
@@ -839,7 +844,7 @@ func (m *HubManager) resolveCredential(ctx context.Context, dcfg Config, regCfg 
 	if path := strings.TrimSpace(dcfg.HubTokenFile); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return "", "file", fmt.Errorf("reading registry token file %s: %w", path, err)
+			return "", "file", fmt.Errorf("reading hub token file %s: %w", path, err)
 		}
 		if tok := strings.TrimSpace(string(data)); tok != "" {
 			return tok, "file", nil

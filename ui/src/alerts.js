@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import api from "./api.js";
-import { formatDateTime, formatMoment, formatTime } from "./time.js";
+import { formatDateTime, formatMoment } from "./time.js";
 import { hasGitCredential } from "./gitConnections.js";
 import { redBaseRepairSentence, waitingBaseRepair } from "./state.js";
 import { forceMergeOffered } from "./taskWrites.js";
@@ -22,7 +22,7 @@ import { forceMergeOffered } from "./taskWrites.js";
 // a pause scoped to one host is keyed "<connection>@hostd/<host>" on the
 // wire (pkg/daemon's hostdPauseOwner) and reads "<connection> on host
 // <host>".
-export function pauseConnectionLabel(key) {
+function pauseConnectionLabel(key) {
   if (typeof key !== "string") return key;
   const at = key.indexOf("@hostd/");
   if (at < 0) return key;
@@ -63,7 +63,7 @@ export function pauseConnectionLabel(key) {
 //     the queue is not moving where it looks as if it should.
 //   - info: something is unfinished rather than wrong -- a team's setup
 //     steps left. Its tasks may wait on it, but nobody has been surprised.
-export const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
+const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
 // muiSeverity is the MUI Alert / palette colour of a severity.
 export function muiSeverity(severity) {
@@ -136,14 +136,17 @@ export function pauseSubject(entry) {
 // is what somebody deciding whether to wait or to go to lunch actually
 // plans around. On the deployment's clock (grain/task-368), like every
 // other absolute time on screen -- zone empty is the browser's own,
-// which is what a caller with no provider above it gets.
+// which is what a caller with no provider above it gets. The clock time
+// stands alone only when the pause ends today (formatMoment): a quota
+// window can be days away, and "until 9:13 AM" on a pause that lifts on
+// Saturday reads as this morning.
 //
 // A pause on one model says so first, as the model on its connection --
 // "gemini-3-pro on Gemini (deployment default) paused until 3:40 PM — usage
 // limit" -- since the connection's other models are still dispatching;
 // one escalated to the whole connection says why.
-export function pauseMessage(entry, zone = "") {
-  const until = entry?.until ? formatTime(entry.until, zone) : "";
+export function pauseMessage(entry, zone = "", now = new Date()) {
+  const until = entry?.until ? formatMoment(entry.until, zone, now) : "";
   const when = until
     ? `${until} (${formatRemaining(entry.secondsRemaining)})`
     : "the provider's window resets";
@@ -164,8 +167,8 @@ export function pauseMessage(entry, zone = "") {
 // pausedUntil is the same pause as a clause for a place that already
 // names what is paused -- a connection on Team settings, a queued task's
 // pane: "paused until 10:58 PM (about 5h 59m) — <reason>".
-export function pausedUntil(pause, zone = "") {
-  const until = pause?.until ? formatTime(pause.until, zone) : "";
+export function pausedUntil(pause, zone = "", now = new Date()) {
+  const until = pause?.until ? formatMoment(pause.until, zone, now) : "";
   const when = until
     ? `until ${until} (${formatRemaining(pause.secondsRemaining)})`
     : "until the provider's window resets";
@@ -266,7 +269,7 @@ export function pipelinePauseTitle(pause) {
 
 // admissionBypasses is Task.HasPriorityDispatch for the browser: a task
 // whose admission is bypass or durable (durable includes bypass).
-export function admissionBypasses(t) {
+function admissionBypasses(t) {
   return t?.admission === "bypass" || t?.admission === "durable";
 }
 
@@ -385,7 +388,7 @@ export function setupAlertText(left) {
 
 // HOST_SANDBOXES_TITLE is the "no isolation" alert's title
 // (config.hostSandboxes).
-export const HOST_SANDBOXES_TITLE = "No isolation: runs execute on this host";
+const HOST_SANDBOXES_TITLE = "No isolation: runs execute on this host";
 
 // collectAlerts is every standing alert config describes for this viewer,
 // sorted (sortAlerts). Each is
@@ -594,7 +597,7 @@ export function collectAlerts(config, zone = "", tasks = []) {
 // This was a filled strip across the top of every page
 // (RedBaseRepairBanner) until it joined the rest here; its buttons came
 // with it.
-export function redBaseRepairAlerts(config, tasks) {
+function redBaseRepairAlerts(config, tasks) {
   return (tasks || []).filter(waitingBaseRepair).map((t) => {
     const actions = [
       { kind: "open-task", label: `Open #${t.id}`, taskId: t.id },

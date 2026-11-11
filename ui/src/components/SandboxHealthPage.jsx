@@ -956,7 +956,7 @@ export function SandboxClusterFree({ cluster }) {
   );
 }
 
-export function SandboxBudgetPanel({ budget, overcommit, reconciliation }) {
+function SandboxBudgetPanel({ budget, overcommit, reconciliation }) {
   if (!budget && !overcommit && !reconciliation) return null;
   const count = budget?.committedCount || 0;
   const countWord = count === 1 ? "sandbox" : "sandboxes";
@@ -1341,7 +1341,7 @@ export function daemonRestarting(daemon) {
 
 // requestedNote is the start line's account of the restarts grain asked
 // for itself, so a count above one that raises no alarm says why.
-export function requestedNote(daemon) {
+function requestedNote(daemon) {
   const n = daemon?.requestedStarts || 0;
   if (n <= 0) return "";
   return n === 1
@@ -1491,6 +1491,24 @@ export function StaleSandboxImageAlerts({ warnings }) {
         underline="hover"
       >
         Settings → Sandboxes
+      </Link>
+      .
+    </Alert>
+  ));
+}
+
+export function TargetRepoHostAlerts({ warnings }) {
+  if (!Array.isArray(warnings) || warnings.length === 0) return null;
+  return warnings.map((w) => (
+    <Alert
+      key={w.repo}
+      severity="warning"
+      data-testid="repo-host-mismatch-alert"
+      sx={{ mb: "1rem", overflowWrap: "anywhere" }}
+    >
+      <strong>{w.repo}</strong>: {w.message} Update it in{" "}
+      <Link href={buildPath({ view: "repos" })} underline="hover">
+        Repos
       </Link>
       .
     </Alert>
@@ -1811,6 +1829,9 @@ export default function SandboxHealthPage({
       {data !== null && <HostCredentialsAlert warning={data.hostCredentials} />}
       {data !== null && (
         <StaleSandboxImageAlerts warnings={data.sandboxImageWarnings} />
+      )}
+      {data !== null && (
+        <TargetRepoHostAlerts warnings={data.targetRepoHostWarnings} />
       )}
       {data !== null && !data.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>

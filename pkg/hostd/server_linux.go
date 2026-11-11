@@ -323,15 +323,27 @@ func (s *Server) signalChanged() {
 // spool and its exit record on disk, and the next hostd lists it again
 // (loadSpools), so a daemon that was not attached loses nothing.
 func (s *Server) Drain() {
+	if s.refuseStarts() {
+		s.mu.Lock()
+		s.startDrainLocked()
+		s.mu.Unlock()
+	}
+}
+
+// refuseStarts is the first half of Drain: from its return every new CLI
+// start is refused, but the drain loop that exits hostd has not been
+// woken. It reports whether this call began the drain, in which case the
+// caller must go on to startDrainLocked.
+func (s *Server) refuseStarts() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining {
-		return
+		return false
 	}
 	s.draining = true
-	s.startDrainLocked()
 	s.logf("hostd: draining for an upgrade: refusing new starts; %d process(es) still running", s.runningLocked())
+	return true
 }
 
 // Cutover is the drain an upgrade to a build speaking this one's protocol
@@ -594,10 +606,10 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		h.Cutover = !h.Draining && s.CuttingOver()
 		h.Capacity, h.Labels = a.Capacity, a.Labels
 		describeCopies(ctx, &h, s.CurrentLink)
-		h.Logins = ambientLogins()
+		h.Logins = a.ambientLogins()
 		h.AgentsOnly = s.AgentsOnly
 		if sessionMux(ctx) != nil {
-			s.describeRemote(&h)
+			s.describeRemote(&h, a)
 		}
 		if req.Hello != nil {
 			if err := Compatible(h, *req.Hello); err != nil {
@@ -622,12 +634,24 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeFrame(conn, frameOK, nil)
 		return
 	case OpDrain:
+		// Answered before the drain loop starts: with nothing running, it
+		// exits the process at once, and an answer written after it raced
+		// that exit -- a daemon then read EOF for a drain that had in fact
+		// happened (tests/agentdcompat). But starts are refused before the
+		// answer, so a daemon that has been told the drain began never
+		// sees a start it makes next taken.
 		if req.Idle {
+			_ = writeFrame(conn, frameOK, nil)
 			s.Cutover()
-		} else {
-			s.Drain()
+			return
 		}
+		began := s.refuseStarts()
 		_ = writeFrame(conn, frameOK, nil)
+		if began {
+			s.mu.Lock()
+			s.startDrainLocked()
+			s.mu.Unlock()
+		}
 		return
 	case OpSocketOwner:
 		_ = writeJSON(conn, frameSocketOwner, SocketOwner{PID: s.socketOwner(req.Inode)})
@@ -637,7 +661,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			s.refuse(conn, "stage is served only over a session hostd dialed out on (grain hostd -server)")
 			return
 		}
-		_ = writeJSON(conn, frameStaged, s.stage(req.Stage))
+		_ = writeJSON(conn, frameStaged, s.stageWithAllowlist(req.Stage, a))
 		return
 	case OpListen:
 		m := sessionMux(ctx)

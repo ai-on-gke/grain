@@ -17,14 +17,17 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // AddRepoRequest is POST /api/repos' body.
@@ -77,6 +80,7 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 	if err != nil {
 		return Settings{}, validationErrorf("repo: %v", err)
 	}
+	typed := parsed
 	cloneURL = strings.TrimSpace(cloneURL)
 	authoritative := false
 	if cloneURL == "" {
@@ -95,7 +99,11 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 			updated := make([]string, 0, len(cfg.TargetRepos)+1)
 			found := false
 			for _, r := range cfg.TargetRepos {
-				if existing, err := model.ParseRepo(r); err == nil && existing.Same(parsed) {
+				if existing, err := model.ParseRepo(r); err == nil &&
+					(existing.Same(parsed) || (authoritative && existing.Same(typed))) {
+					if found {
+						continue
+					}
 					found = true
 					if authoritative {
 						updated = append(updated, repo)
@@ -126,56 +134,98 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 	return c.GetSettings(ctx)
 }
 
-// RepoNames resolves a repository's own name -- what GitHub calls it, as
-// against what somebody typed. github.(*RESTClient).RepoFullName is the
-// implementation; nil on Config means this deployment cannot ask, which
-// is the ordinary state of a UI with no GitHub client beside it
-// (`grain demo`, and any UI not colocated with a daemon) and the same
-// nil-means-unavailable contract Config.PullRequests already gives.
+// RepoNames resolves a repository's own name on its git host -- what the
+// forge calls it, as against what somebody typed. host is empty on the
+// deployment's default host and normalized otherwise (model.RepoRef.OffDefaultHost).
+// pkg/daemon's repoNameGate routes the lookup to that host's forge connection;
+// nil on Config means this deployment cannot ask, which is the ordinary state
+// of a UI with no GitHub client beside it (`grain demo`, and any UI not
+// colocated with a daemon) and the same nil-means-unavailable contract
+// Config.PullRequests already gives.
 type RepoNames interface {
-	RepoFullName(owner, name string) (string, error)
+	RepoFullName(host, owner, name string) (string, error)
 }
 
-// githubSpelling is repo as GitHub itself spells it, and whether that is
+// githubSpelling is repo as its forge itself spells it, and whether that is
 // in fact where the answer came from -- false meaning repo is returned
-// exactly as given, because this deployment cannot ask or GitHub would
+// exactly as given, because this deployment cannot ask or the forge would
 // not answer.
 //
 // Falling back rather than refusing is the whole of the error handling
 // here, and it is deliberate. The reasons this call fails are a network
-// that is down, a credential that cannot see a private repo, and a
-// deployment with no GitHub client at all -- none of which is a reason
-// to refuse to add a repo to a list. The cost of falling back is that
-// the entry keeps the operator's capitalisation, which is what every
-// entry had before this existed.
+// that is down, a credential that cannot see a private repo, a host with
+// no forge connection configured, and a deployment with no GitHub client at
+// all -- none of which is a reason to refuse to add a repo to a list. The
+// cost of falling back is that the entry keeps the operator's capitalisation,
+// which is what every entry had before this existed.
 //
 // The bool is what keeps that fallback honest: its caller respells an
 // existing entry only on an authoritative answer, so a deployment that
-// cannot reach GitHub goes on treating a re-add as the no-op it always
+// cannot reach the forge goes on treating a re-add as the no-op it always
 // was rather than letting each operator overwrite the last one's
 // capitalisation.
 //
-// A rename is adopted along with the capitalisation, because this
-// endpoint follows GitHub's redirect and so answers under the name the
-// repository has now. That is the same repository under the name it
-// actually responds to, and storing the name it has moved away from
-// would leave the allowlist naming something that only works by
-// redirect.
+// A rename on the same host is adopted along with the capitalisation, because
+// this endpoint follows the forge's redirect and so answers under the name the
+// repository has now. GitHub-style JSON `full_name` never includes the host,
+// so repo.Host is always preserved on the returned RepoRef, and an answer that
+// explicitly names a different host is treated as non-authoritative.
 func (c *Client) githubSpelling(repo model.RepoRef) (model.RepoRef, bool) {
 	if c.Config.RepoNames == nil || model.IsConfigRepo(repo) {
 		// The config repository's name is the one grain's git proxy
 		// gives it; GitHub has no spelling of it to offer.
 		return repo, false
 	}
-	full, err := c.Config.RepoNames.RepoFullName(repo.Owner, repo.Name)
+	full, err := c.Config.RepoNames.RepoFullName(repo.OffDefaultHost(), repo.Owner, repo.Name)
 	if err != nil {
 		return repo, false
 	}
+	full = strings.TrimSpace(full)
 	canonical, err := model.ParseRepo(full)
-	if err != nil {
+	if err != nil || model.IsConfigRepo(canonical) {
+		return repo, false
+	}
+	if explicitHost, hasHost := explicitRepoHost(full); hasHost {
+		if !model.SameGitHost(explicitHost, repo.GitHost(), model.DefaultRepoHost()) {
+			return repo, false
+		}
+	}
+	canonical.Host = repo.Host
+	if canonical.OffDefaultHost() != repo.OffDefaultHost() {
 		return repo, false
 	}
 	return canonical, true
+}
+
+// explicitRepoHost reports the git host text explicitly names -- as a URL,
+// an scp-style SSH remote, or a host/owner/name triple -- and false for a
+// bare owner/name.
+func explicitRepoHost(text string) (string, bool) {
+	spec := strings.TrimSpace(text)
+	if at := strings.Index(spec, "@"); at >= 0 && !strings.Contains(spec, "://") {
+		if colon := strings.Index(spec[at:], ":"); colon >= 0 {
+			h, err := model.NormalizeGitHost(spec[at+1 : at+colon])
+			return h, err == nil && h != ""
+		}
+	}
+	if scheme := strings.Index(spec, "://"); scheme >= 0 {
+		rest := spec[scheme+len("://"):]
+		authority := rest
+		if slash := strings.Index(rest, "/"); slash >= 0 {
+			authority = rest[:slash]
+		}
+		if at := strings.LastIndex(authority, "@"); at >= 0 {
+			authority = authority[at+1:]
+		}
+		h, err := model.NormalizeGitHost(authority)
+		return h, err == nil && h != ""
+	}
+	spec = strings.TrimSuffix(strings.TrimSuffix(strings.Trim(spec, "/"), ".git"), "/")
+	if first, rest, ok := strings.Cut(spec, "/"); ok && rest != "" && strings.ContainsAny(first, ".:") {
+		h, err := model.NormalizeGitHost(first)
+		return h, err == nil && h != ""
+	}
+	return "", false
 }
 
 // RemoveTargetRepo removes repo from the deployment's TargetRepos
@@ -197,8 +247,8 @@ func (c *Client) githubSpelling(repo model.RepoRef) (model.RepoRef, bool) {
 // (orchestrator.reconcileTargetRepos, model.OffAllowlistAtDispatchComment).
 //
 // This used to refuse outright while repo had a task still in play, and
-// now reports instead -- Settings.TargetReposStranded, the same answer
-// PUT /api/settings gives for the same act (Store.StrandedByTargetRepos).
+// now reports instead -- POST /api/repos/plan (PlanTargetRepos), which
+// the pane asks before it removes (Store.StrandedByTargetRepos).
 // Two reasons, and the first is that the refusal's premise expired:
 // it was written when nothing on the dispatch path read TargetRepos, so
 // removal really did hide live work rather than stop it, and since
@@ -267,6 +317,9 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 		return c.GetSettings(ctx)
 	}
 	if removingErr == nil {
+		if err := c.forgetRepoReleaseSecrets(removing); err != nil {
+			return Settings{}, err
+		}
 		if err := c.Store.ForgetRepo(ctx, removing); err != nil {
 			return Settings{}, err
 		}
@@ -279,6 +332,25 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 	}
 	c.triggerHubSync()
 	return c.GetSettings(ctx)
+}
+
+// forgetRepoReleaseSecrets deletes the values of repo's release secrets
+// before ForgetRepo drops the repo_config row that lists them. Without
+// this the values stayed in the encrypted store under the repository's
+// address with nothing left listing them, and a later re-add of the same
+// repository inherited them (grain/task-4249). The repository's whole
+// release namespace goes, not only the names its row lists: a value set
+// whose repo_config write then failed is stored but never listed, and
+// would otherwise survive the removal the same way.
+func (c *Client) forgetRepoReleaseSecrets(repo model.RepoRef) error {
+	if c.Config.Secrets == nil {
+		return nil
+	}
+	namespace, _ := ci.ReleaseSecretAddress(repo.String(), "_")
+	if err := c.Config.Secrets.DeleteSecret(namespace); err != nil && !errors.Is(err, secrets.ErrNoSecret) {
+		return fmt.Errorf("forgetting the release secrets of %s: %w", repo, err)
+	}
+	return nil
 }
 
 // RepoDefaults is one repo's own task defaults -- what GET
@@ -372,8 +444,12 @@ type RepoDefaults struct {
 	// a PUT to this repo's routes writes touches either of them: the
 	// declaration sync owns these two columns, as those routes own the
 	// two above.
-	DeclaredPromptExtension string `json:"declaredPromptExtension,omitempty"`
-	DeclaredSetupCommand    string `json:"declaredSetupCommand,omitempty"`
+	DeclaredPromptExtension string              `json:"declaredPromptExtension,omitempty"`
+	DeclaredSetupCommand    string              `json:"declaredSetupCommand,omitempty"`
+	Skills                  *model.SkillsConfig `json:"skills,omitempty"`
+	DeclaredSkills          *model.SkillsConfig `json:"declaredSkills,omitempty"`
+	DeploymentSkills        *model.SkillsConfig `json:"deploymentSkills,omitempty"`
+	EffectiveSkillFolders   []string            `json:"effectiveSkillFolders"`
 	// RepairTemplateID is this repo's configured default repair template.
 	RepairTemplateID string `json:"repairTemplateID,omitempty"`
 	// PortBranches, DeclaredPortBranches and PairedBranches are which of
@@ -608,15 +684,16 @@ type SetRepoSettingsRequest struct {
 	// MergeRecheck is the overlap re-check's mode: "off", "observe" or
 	// "enforce" (model.RepoConfig.MergeRecheck); "" puts it back to the
 	// default, observe.
-	MergeRecheck        *string   `json:"mergeRecheck,omitempty"`
-	DefaultCapabilities *[]string `json:"defaultCapabilities,omitempty"`
-	DefaultAdmission    *string   `json:"defaultAdmission,omitempty"`
-	DefaultHosting      *string   `json:"defaultHosting,omitempty"`
-	CICapabilities      *[]string `json:"ciCapabilities,omitempty"`
-	PromptExtension     *string   `json:"promptExtension,omitempty"`
-	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
-	SetupCommand        *string   `json:"setupCommand,omitempty"`
-	UnfixableChecks     *[]string `json:"unfixableChecks,omitempty"`
+	MergeRecheck        *string             `json:"mergeRecheck,omitempty"`
+	DefaultCapabilities *[]string           `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission    *string             `json:"defaultAdmission,omitempty"`
+	DefaultHosting      *string             `json:"defaultHosting,omitempty"`
+	CICapabilities      *[]string           `json:"ciCapabilities,omitempty"`
+	PromptExtension     *string             `json:"promptExtension,omitempty"`
+	RepairTemplateID    *string             `json:"repairTemplateID,omitempty"`
+	SetupCommand        *string             `json:"setupCommand,omitempty"`
+	Skills              *model.SkillsConfig `json:"skills,omitempty"`
+	UnfixableChecks     *[]string           `json:"unfixableChecks,omitempty"`
 	// DefaultHostd is read only to be refused (TaskHostdRefusal): a
 	// repository's tasks have no hostd of their own any more.
 	DefaultHostd *string `json:"defaultHostd,omitempty"`
@@ -740,6 +817,8 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.SetupCommand = stored.SetupCommand
 		out.DeclaredPromptExtension = stored.DeclaredPromptExtension
 		out.DeclaredSetupCommand = stored.DeclaredSetupCommand
+		out.Skills = stored.Skills.Clone()
+		out.DeclaredSkills = stored.DeclaredSkills.Clone()
 		out.Declarations = stored.Declarations
 		out.RequireBranchUpToDate = stored.RequireBranchUpToDate
 		out.IgnoreGitHubCI = stored.IgnoreGitHubCI
@@ -780,9 +859,19 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if cfg != nil {
 		out.DeploymentDefaultCapabilities = cfg.DefaultCapabilities
 		out.DeploymentPromptExtension = cfg.PromptExtension
+		out.DeploymentSkills = cfg.Skills.Clone()
 		deploymentAdmission = cfg.DefaultAdmission
 		deploymentHosting = cfg.DefaultHosting
 	}
+	var repoSkillsLayer *model.SkillsConfig
+	if stored != nil {
+		repoSkillsLayer = stored.EffectiveSkills()
+	}
+	effSkillFolders := model.ResolveSkillFolders(out.DeploymentSkills, repoSkillsLayer, nil)
+	if effSkillFolders == nil {
+		effSkillFolders = []string{}
+	}
+	out.EffectiveSkillFolders = effSkillFolders
 	out.DeploymentDefaultAdmission = string(model.NormalizeAdmission(deploymentAdmission))
 	effAdm := model.NormalizeAdmission(deploymentAdmission)
 	if stored != nil {
@@ -1146,6 +1235,16 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		chosenDefaultHosting = &h
 	}
+	var chosenSkills *model.SkillsConfig
+	var hasChosenSkills bool
+	if req.Skills != nil {
+		norm, err := model.NormalizeSkillsConfig(req.Skills)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("skills: %v", err)
+		}
+		chosenSkills = norm
+		hasChosenSkills = true
+	}
 	var ciCaps []string
 	if req.CICapabilities != nil {
 		if ciCaps, err = c.cleanRepoCICapabilities(*req.CICapabilities); err != nil {
@@ -1266,6 +1365,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.SetupCommand != nil {
 			rc.SetupCommand = strings.TrimSpace(*req.SetupCommand)
+		}
+		if hasChosenSkills {
+			rc.Skills = chosenSkills
 		}
 		if req.UpstreamRepo != nil {
 			rc.UpstreamRepo = upstreamRepo
@@ -2066,6 +2168,68 @@ func (s *Server) handleAddTargetRepo(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoveTargetRepo answers DELETE /api/repos/{owner}/{name}: take a
 // repo off a team's targets (?team=, or the default team without one).
+// PlanTargetReposRequest is the body of POST /api/repos/plan: the
+// target repo list an add or a remove is about to leave behind.
+type PlanTargetReposRequest struct {
+	TargetRepos []string `json:"targetRepos"`
+}
+
+// StrandedRepo is one repository a proposed target repo list stops
+// naming, with the work stored against it (model.StrandedWork) and the
+// sentence the Remove and first-Add confirmations show for it.
+type StrandedRepo struct {
+	Repo              string   `json:"repo"`
+	Tasks             []string `json:"tasks,omitempty"`
+	Schedules         []string `json:"schedules,omitempty"`
+	QualificationPlan bool     `json:"qualificationPlan,omitempty"`
+	Summary           string   `json:"summary"`
+}
+
+// TargetReposPlan is what POST /api/repos/plan answers.
+type TargetReposPlan struct {
+	TargetReposStranded []StrandedRepo `json:"targetReposStranded"`
+}
+
+// PlanTargetRepos reports what writing proposed as the deployment's
+// target repo list would strand, without writing it.
+//
+// The repos pane's Remove and the first Add (which narrows an
+// unrestricted deployment to one repository) both confirm with this.
+// Until grain/task-4288 they asked POST /api/settings/plan for it. That
+// route lost targetRepos when the list moved under /api/repos, so the
+// question always failed and the confirmation never named the tasks,
+// schedules and qualification plan the click would strand.
+func (c *Client) PlanTargetRepos(ctx context.Context, req PlanTargetReposRequest) (TargetReposPlan, error) {
+	out := TargetReposPlan{TargetReposStranded: []StrandedRepo{}}
+	if c.Store == nil {
+		return out, nil
+	}
+	stranded, err := c.Store.StrandedByTargetRepos(ctx, req.TargetRepos)
+	if err != nil {
+		return out, err
+	}
+	for _, w := range stranded {
+		out.TargetReposStranded = append(out.TargetReposStranded, StrandedRepo{
+			Repo: w.Repo.String(), Tasks: w.Tasks, Schedules: w.Schedules,
+			QualificationPlan: w.QualificationPlan, Summary: w.Summary(),
+		})
+	}
+	return out, nil
+}
+
+func (s *Server) handlePlanTargetRepos(w http.ResponseWriter, r *http.Request) {
+	var req PlanTargetReposRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	plan, err := s.tasks.PlanTargetRepos(r.Context(), req)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
 func (s *Server) handleRemoveTargetRepo(w http.ResponseWriter, r *http.Request) {
 	repo := r.PathValue("owner") + "/" + r.PathValue("name")
 	teamID := r.URL.Query().Get("team")

@@ -108,6 +108,10 @@ const (
 	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
 	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
 	SourceInternal      AuthSource = "internal"       // grain itself
+	// SourceHostAccount is a caller on the daemon's unix socket whose
+	// account the kernel named (SO_PEERCRED) and the daemon's
+	// -host-accounts map (or -deployment-owner) named a person for.
+	SourceHostAccount AuthSource = "host-account"
 )
 
 // unverifiedSources are the sources that establish nobody in particular:
@@ -922,7 +926,7 @@ func AlignDefaultBases(child, parent Task, defaultBranch func(RepoRef) string) T
 func AutoSubmitRefusedOnLanding(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		!LandsWhereGranted(child, parent)
 }
@@ -1058,7 +1062,7 @@ var AutoSubmitPrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-submit"
 func AutoSubmits(child, parent Task) bool {
 	return (parent.AutoMerge || parent.AutoApproveProposals) &&
 		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
-		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants) &&
 		len(UngrantedReads(child, parent)) == 0 &&
 		LandsWhereGranted(child, parent)
 }
@@ -1313,6 +1317,14 @@ const (
 	// SecurityReviewTemplateID. LinkReviewTask's shape, kept apart from
 	// it so a task can carry both its declared review and a security one.
 	LinkSecurityReviewTask LinkKind = "security-review-task"
+	// LinkReviewsPullRequest records, on a review task grain filed against
+	// a task's pull request, which pull request ("owner/repo#number") that
+	// review was filed to read. A reopened or multi-attempt task can open a
+	// second pull request in the same repository after an earlier one has
+	// settled; naming the pull request on the review itself ensures
+	// settling one pull request never closes a review filed for another.
+	// Provenance and scoping only; blocks nothing.
+	LinkReviewsPullRequest LinkKind = "reviews-pr"
 	// LinkPushesReviewedBranch marks a review task that works on the
 	// reviewed change's own branch rather than one of its own (-> the
 	// reviewed task's ID): its Branch is the reviewed task's, the git
@@ -1421,6 +1433,18 @@ const (
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
 	LinkPathTriggersRead LinkKind = "path-triggers-read"
+	// LinkPathTriggerReviewed records the last review of one kind grain
+	// filed for this task's pull request from its pull-request triggers
+	// (-> "<review template>=<review task ID>@<head sha>"), one per kind:
+	// what the next push's review starts its incremental diff from
+	// (orchestrator's pathtriggerreview.go).
+	LinkPathTriggerReviewed LinkKind = "path-trigger-reviewed"
+	// LinkReviewCommentsOnly marks a review that posts its findings and
+	// fixes nothing (-> the reviewed task's ID): its run never opens a
+	// pull request, whatever it pushed. Grain files every review that
+	// way unless what asked for it asked for fixes
+	// (docs/declarations.md#gating-reviews).
+	LinkReviewCommentsOnly LinkKind = "review-comments-only"
 	// LinkApprovalRequired records that a rule this task's change matched
 	// lets only named people release it (-> "<rule>=<approver>,..."),
 	// and LinkApprovedBy that one of them has (-> "<rule>=<user>"). A
@@ -1440,6 +1464,20 @@ const (
 	// trust-boundary auto-merge withdrawal) under
 	// RepoConfig.BaseRepairBypassesHumanGates while the base branch was red.
 	LinkBaseRepairBypass LinkKind = "base-repair-bypass"
+	// LinkReviewFindings records that a required review of this task's pull
+	// request failed its gate -- left findings or open questions, had fixes
+	// closed without merging, or could not be filed (-> ReviewFindingsRecord
+	// JSON). Cleared only by a clean re-review after fixes or an explicit
+	// merge:force gate override, never by Submit.
+	LinkReviewFindings LinkKind = "review-findings"
+	// LinkGateOverride records an operator's explicit merge:force override
+	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
+	LinkGateOverride LinkKind = "gate-override"
+	// LinkHumanApproved records a person's persisted Submit approval of a
+	// pull request head (-> HumanSubmittedByTarget), kept after
+	// LinkHumanSubmitted is consumed so the UI and merge gates know who
+	// approved which commit.
+	LinkHumanApproved LinkKind = "human-approved"
 	// LinkContinues records that this task carries on a conversation
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
@@ -1473,6 +1511,17 @@ const (
 	// replaced is closed, so there is nothing for either to hold up.
 	LinkSupersedes   LinkKind = "supersedes"
 	LinkSupersededBy LinkKind = "superseded-by"
+	// LinkRolledOverFrom records that this task was filed to carry on a
+	// durable task whose record had grown past its limits (-> the
+	// predecessor's ID), and LinkRolledOverTo is the same fact written on
+	// the predecessor (-> the successor's ID). One writer for both:
+	// Store.Rollover (design/design/durable-tasks.design.md#DT-15).
+	//
+	// LinkSupersedes' shape: both directions stored, provenance only,
+	// neither blocks. A reader resolving a closed task with a
+	// LinkRolledOverTo forwards to the successor.
+	LinkRolledOverFrom LinkKind = "rolled-over-from"
+	LinkRolledOverTo   LinkKind = "rolled-over-to"
 	// LinkGoogleChat records the Google Chat space linked to this task
 	// (-> space resource name like "spaces/AAAAAAAAAAA" or space URL).
 	// Provenance/external reference only, never blocks dispatch.
@@ -1800,6 +1849,9 @@ type Task struct {
 	// Hosting says whether this task runs unattended or opens an interactive
 	// terminal console attached to its sandbox (unattended or console).
 	Hosting Hosting `json:"hosting,omitempty"`
+	// Skills is the per-task repository skill discovery override (nil defers
+	// to the target repository and deployment defaults).
+	Skills *SkillsConfig `json:"skills,omitempty"`
 	// Branch is the resolved branch this task owns. It is fixed when the
 	// task is first written so changing the deployment's naming template
 	// cannot strand work already pushed under an earlier name. Empty is a

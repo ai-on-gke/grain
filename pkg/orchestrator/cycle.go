@@ -582,6 +582,10 @@ func Reconcilers() []Reconciler {
 		// Right after it, so that a branch found green this tick closes
 		// the goal tasks waiting on it on this tick (reconcileTaskGoals).
 		{Name: "task-goals", Reconcile: reconcileTaskGoals},
+		// After it, so a goal met this tick closes its task rather than
+		// rolling it over to a successor that would have to meet it again
+		// (reconcileRollover).
+		{Name: "rollover", Reconcile: reconcileRollover},
 		// Beside it, and deliberately not inside it: the work that
 		// follows a base branch without judging it -- a repository's
 		// content-addressed build cache above all -- is dispatched here,
@@ -839,6 +843,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -928,6 +933,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			}
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
+			deps.Config.Skills = mc.Skills.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -1960,7 +1966,13 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 				gc.TemplateName = tmpl.Name
 			}
 		}
-		if _, err := cat.ValidateGrants(gc); err != nil {
+		verdict, err := cat.ValidateGrants(gc)
+		if err == nil && len(verdict.RequiresPerson) > 0 {
+			if why := catalogueRequiresPersonHold(ctx, deps, *task, verdict.RequiresPerson); why != "" {
+				return why
+			}
+		}
+		if err != nil {
 			if serr := deps.Store.SetGrantWait(ctx, model.GrantWait{
 				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
 			}); serr != nil {
@@ -1979,6 +1991,35 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 		}
 		return ""
 	}
+}
+
+// catalogueRequiresPersonHold holds task when the capability catalogue
+// says only a person may give grants it holds and nobody stands behind
+// its approval (model.Store.PersonStandsBehind): a review, a suite pass,
+// a repository's declared schedule whose acceptance does not cover them,
+// anything an agent or automation approved (task 3971). The approval is
+// withdrawn, so the task waits in the proposals for a person -- whose
+// Approve the catalogue already asks for a person (catalogueApprovalRefusal)
+// -- with the reason on its row. "" when it may run.
+func catalogueRequiresPersonHold(ctx context.Context, deps Deps, task model.Task, needsPerson []string) string {
+	ok, err := deps.Store.PersonStandsBehind(ctx, task, needsPerson)
+	if err != nil {
+		log.Printf("orchestrator: checking who approved %s for the capability catalogue: %v", task.ID, err)
+		return "held by settings/capabilities.yml: who approved the task could not be read to check it"
+	}
+	if ok {
+		return ""
+	}
+	why := model.CatalogueRequiresPersonNote(needsPerson) + ", and nobody approved it"
+	if err := deps.Store.WithdrawApproval(ctx, task.ID); err != nil {
+		log.Printf("orchestrator: returning %s to the proposals for a person: %v", task.ID, err)
+	}
+	if err := deps.Store.SetGrantWait(ctx, model.GrantWait{
+		TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: why, WaitingAt: deps.Config.now(),
+	}); err != nil {
+		log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", task.ID, err)
+	}
+	return "held by settings/capabilities.yml: " + why
 }
 
 // changeTargetHold holds a queued task whose change target refuses it as it
@@ -2328,21 +2369,13 @@ func runQueuedAt(ctx context.Context, store *model.Store, task model.Task, attem
 	}
 	if store != nil {
 		if attempt > 1 {
-			if runs, err := store.Runs(ctx, task.ID); err == nil {
-				for _, r := range runs {
-					if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
-						q = *r.FinishedAt
-					}
-				}
+			if finishedAt, err := store.LatestRunFinishedBefore(ctx, task.ID, attempt, startedAt); err == nil && finishedAt.After(q) {
+				q = finishedAt
 			}
 		}
 		if attempt > 1 || task.Interactive {
-			if comments, err := store.Comments(ctx, task.ID); err == nil {
-				for _, c := range comments {
-					if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
-						q = c.CreatedAt
-					}
-				}
+			if saidAt, err := store.LatestNonAgentCommentAtBefore(ctx, task.ID, startedAt); err == nil && saidAt.After(q) {
+				q = saidAt
 			}
 		}
 	}
@@ -2862,7 +2895,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		tools:              tools,
 		sandboxRoot:        sandboxRoot,
 		placer:             placer,
-		mint:               deps.MintSandboxToken,
+		mint:               mintSandboxTokenFor(deps, d.TaskID, d.Attempt),
 		credentialIdentity: deps.CredentialGitIdentity,
 	})
 	defer stopRecreating()

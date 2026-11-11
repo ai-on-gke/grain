@@ -44,8 +44,8 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
   grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]
                                          Rerun failed (or named) jobs fresh and uncached
   grain pr status [--task <id> | --ref <branch> [--repo <r>]]
-                                         Latest grain CI verdict on this task's branch, or another task's or branch's
-  grain pr base-status                   Latest grain CI verdict on the base branch
+                                         Latest CI verdict on this task's branch (grain CI, or every GitHub Actions workflow), or another task's or branch's
+  grain pr base-status                   Latest CI verdict on the base branch
   grain pr open                          Open or update the pull request for this branch from its commit messages
   grain pr reply <body|--file f> [--comment-id <id>]
                                          Reply to an inline review comment, or post a top-level PR comment
@@ -247,8 +247,8 @@ var sandboxCommandHelp = map[string]string{
 		"  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n  grain ci log --job go --step Test -n 50\n",
 	"ci test-history": "grain ci test-history <test-name> [--limit N] [--repo owner/name] [--provider grain|github-actions]\n\nPass, fail and flake history of one test across recent CI runs. For a repository whose CI is\nGitHub Actions (ci_mode github) the runs are its workflow runs, with what grain recorded of\ntheir failed jobs' logs, and grain CI's older runs of it are left out (--provider grain reads\nthem). Grain keeps no log of an Actions job that passed, so there a test's failures are counted\nand its passes are not: the report names each source's runs and the window they span.\n",
 	"ci artifact":     "grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo owner/name]\n\nDownload a stored CI artifact, to <dest> or stdout. With no run, the latest run on this task's branch (or --task's).\n",
-	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest grain CI run on this task's branch and each job's verdict -- or on another task's\nbranch (--task), or any branch (--ref, in --repo or this task's repository), where this task may read CI.\n",
-	"pr base-status":  "grain pr base-status\n\nThe latest grain CI run on this task's base branch and each job's verdict.\n",
+	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest CI on this task's branch and each job's verdict -- or on another task's branch (--task),\nor any branch (--ref, in --repo or this task's repository), where this task may read CI. For a\ngrain CI branch that is its newest run; for a GitHub Actions branch, every workflow's newest run at\nthe branch's newest commit.\n",
+	"pr base-status":  "grain pr base-status\n\nThe latest CI on this task's base branch and each job's verdict, as grain pr status reports it.\n",
 	"ci wait": "grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Wait for this task's branch CI verdict: GitHub Actions / check runs on a ci_mode: github\n" +
 		"repository, or grain CI on a ci_mode: grain repository (starting or attaching to the run in\n" +

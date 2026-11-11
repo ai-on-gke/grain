@@ -986,6 +986,26 @@ describe("lastBaseForRepo", () => {
     expect(lastBaseForRepo(tasks, "acme/widgets")).toBe("");
   });
 
+  it("looks past a stacked review or repair whatever its author", () => {
+    const tasks = [
+      {
+        repo: "acme/widgets",
+        base: "release/1",
+        createdAt: "2026-08-01T00:00:00Z",
+        authorKind: "human",
+      },
+      {
+        repo: "acme/widgets",
+        base: "grain/task-30",
+        createdAt: "2026-08-02T00:00:00Z",
+        authorKind: "human",
+        stacked: true,
+        review: true,
+      },
+    ];
+    expect(lastBaseForRepo(tasks, "acme/widgets")).toBe("release/1");
+  });
+
   it("still suggests a task carrying no authorKind at all", () => {
     const tasks = [
       {
@@ -2922,6 +2942,24 @@ describe("askedCase", () => {
       title: "Asked you to submit acme/widgets#12",
       action: "submit",
     });
+  });
+
+  // Task 3803: a person's question no run has been shown is waiting on an
+  // agent, not on the owner's Reply.
+  it("names a person's undelivered comment ahead of a plain answer", () => {
+    const t = {
+      state: "awaiting_reply",
+      unansweredCommentFrom: "atyburcy@example.com",
+    };
+    expect(askedCase(t)).toEqual({
+      kind: "unanswered",
+      title: "Unanswered question from atyburcy@example.com",
+      action: "reply",
+    });
+    expect(stateTitle(t)).toBe("Unanswered question from atyburcy@example.com");
+    expect(baseRepairWaitReason(t)).toBe(
+      "unanswered question from atyburcy@example.com",
+    );
   });
 
   it("distinguishes a parked question from an answered report in baseRepairWaitReason", () => {

@@ -44,6 +44,7 @@ import {
 import { SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH } from "../theme.js";
 import { SIDEBAR_TOGGLE_KEY } from "../sidebarCollapse.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
+import { boardLabels } from "../boards.js";
 import { usePinnedNav } from "../PinnedNavContext.jsx";
 import { getPinnedItemInfo, samePin } from "../pinnedNav.js";
 import { useHiddenSections } from "../sidebarSections.js";
@@ -725,6 +726,7 @@ export default function Sidebar({
     (Array.isArray(processTriggers) ? processTriggers.length : 0);
   const visibleCIRuns = Array.isArray(ciRuns) ? ciRuns : [];
   const visibleBoards = Array.isArray(boards) ? boards : [];
+  const boardLabelById = boardLabels(visibleBoards);
   const asideRef = useRef(null);
   const tasksRef = useRef(null);
   const counts = {};
@@ -1560,9 +1562,13 @@ export default function Sidebar({
           if (item.kind === "board") {
             const board = visibleBoards.find((b) => b.id === item.id);
             if (!board) return null;
+            const qualified = boardLabelById.get(board.id) || board.name;
+            const disambiguated = qualified !== board.name;
             return (
               <ListItemButton
                 key={`pinned-board-${board.id}-${idx}`}
+                label={qualified}
+                aria-label={disambiguated ? qualified : undefined}
                 selected={view === "boards" && openBoardId === board.id}
                 onClick={() => onOpenBoard && onOpenBoard(board)}
                 sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
@@ -1583,6 +1589,7 @@ export default function Sidebar({
                 </span>
                 <ListItemText
                   primary={board.name}
+                  title={disambiguated ? qualified : undefined}
                   sx={{ ml: 1 }}
                   primaryTypographyProps={{
                     noWrap: true,

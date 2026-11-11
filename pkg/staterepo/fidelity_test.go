@@ -329,6 +329,14 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("commenting: %v", err)
 	}
+	// task_context and task_brief_edit: a compaction and a brief edit.
+	if _, err := store.CompactTask(ctx, "a1b2", awkward, commentID,
+		model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"}}, "human bwsalmon", sub); err != nil {
+		t.Fatalf("compacting: %v", err)
+	}
+	if err := store.SetTaskBrief(ctx, "a1b2", awkward, "human bwsalmon", awkward, sub); err != nil {
+		t.Fatalf("editing the brief: %v", err)
+	}
 	if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
 		TaskID: "a1b2", Kind: model.TaskEventClosed, At: sub, Reason: awkward,
 		By:         model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon", Source: model.SourceIAP},
@@ -758,6 +766,17 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		"0f1e2d3c4b5a69788796a5b4c3d2e1f001234567", sub); err != nil {
 		t.Fatalf("recording a path trigger cursor: %v", err)
 	}
+	// And a person's acceptance of what one of its CI jobs declares
+	// (model.DeclarationAcceptance, task 3971), in declaration_acceptance.
+	gcpKey := `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"publisher"}`
+	if _, _, err := store.NoteCIJobDeclaration(ctx, declaring, "publish",
+		"0f1e2d3c4b5a69788796a5b4c3d2e1f001234567", []string{gcpKey}, sub); err != nil {
+		t.Fatalf("recording what a CI job declares: %v", err)
+	}
+	if _, err := store.AcceptDeclaration(ctx, model.CIJobDeclarationID(declaring, "publish"), awkward,
+		[]string{"capabilities:admin"}, nil, sub); err != nil {
+		t.Fatalf("accepting a CI job's declaration: %v", err)
+	}
 	if err := store.PutScheduleRefCursor(ctx, model.ScheduleRefCursor{
 		ScheduleID: "sched-ref", Repo: "upstream/core", Ref: "refs/tags/latest",
 		Commit: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d", UpdatedAt: sub,
@@ -1015,7 +1034,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// scheduled (model.AutoUpgradeRelease).
 	if err := store.SetAutoUpgradeRelease(ctx, model.AutoUpgradeRelease{
 		Newest: "v3.6.0", SeenAt: sub, Release: "v3.5.0", Target: "latest", ScheduledAt: &sub,
-		Outcome: model.AutoUpgradeFailed,
+		Outcome: model.AutoUpgradeFailed, SucceededAt: &sub,
 	}); err != nil {
 		t.Fatalf("recording a release-triggered upgrade: %v", err)
 	}

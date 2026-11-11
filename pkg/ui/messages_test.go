@@ -349,7 +349,8 @@ func TestRecordDeliveredOnlyMovesForward(t *testing.T) {
 
 // A message carries the one line it is shown by in the inbox and the task
 // list: on the comment, on the message the route answers with, and as
-// the task's own questionSummary in its detail and in the list.
+// the task's own questionSummary in its detail and in the list -- beside
+// the questionCommentId a row links to the question by.
 func TestPostAgentMessageCarriesItsSummary(t *testing.T) {
 	t.Parallel()
 	client, store, ctx := testClient(t)
@@ -375,6 +376,9 @@ func TestPostAgentMessageCarriesItsSummary(t *testing.T) {
 	if detail.QuestionSummary != "Pick one of two ways: rewrite or patch" {
 		t.Errorf("detail questionSummary = %q", detail.QuestionSummary)
 	}
+	if detail.QuestionCommentID != message.ID {
+		t.Errorf("detail questionCommentId = %d, want %d", detail.QuestionCommentID, message.ID)
+	}
 	list, err := client.ListTasks(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -385,6 +389,9 @@ func TestPostAgentMessageCarriesItsSummary(t *testing.T) {
 			found = true
 			if row.QuestionSummary != "Pick one of two ways: rewrite or patch" {
 				t.Errorf("list questionSummary = %q", row.QuestionSummary)
+			}
+			if row.QuestionCommentID != message.ID {
+				t.Errorf("list questionCommentId = %d, want %d", row.QuestionCommentID, message.ID)
 			}
 		}
 	}

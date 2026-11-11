@@ -159,7 +159,7 @@ runs() {
 # grain/release-qualification check run, posted by app (grain's own,
 # grain-test, unless it names another).
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
-  tunnel-stress ui-e2e-long installer-variants vulns cmd-grain-stress upgrade-test)
+  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test)
 qualification() {
   local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success check2="" attempts=() a id t jobs runs=() ids
   [ "$app" = grain-test ] || app_id=15368
@@ -1076,7 +1076,7 @@ if [ -n "$api" ]; then
     first=1
     for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
       "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
-      "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
+      "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
       "pkg/cli stress under load" "upgrade from previous versions"; do
       [ $first = 1 ] || printf ','
       first=0
@@ -1141,7 +1141,7 @@ runs "$c2" "$c4"
   first=1
   for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
     "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
-    "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
+    "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
     "pkg/cli stress under load" "upgrade from previous versions"; do
     [ $first = 1 ] || printf ','
     first=0
@@ -1653,6 +1653,57 @@ for grant in "" train; do
     expect "$name" "publishes nothing" images_were ""
   done
 done
+
+# --- the continuous loop (playbook section 15, operator 2026-11-10) ---
+# RELEASE_MAX_PER_DAY=0, as scripts/release.conf has it: one rc is always
+# in qualification. A pass releases it and cuts the next in the same run;
+# a fail drops it and cuts the next from a newer known-good commit in the
+# same run; with no newer commit the train waits rather than re-cut; and a
+# day may release any number of times.
+loop() { train RELEASE_MAX_PER_DAY=0 RELEASE_QUALIFICATION_APP=none RELEASE_TRAIN_OUTPUT="$work/train.out"; }
+setup "" c1 c2 c3 c4 c5
+c5="${c[5]}"
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c3"
+: > "$work/train.out"
+loop
+expect "loop, pass" "exits 0" eq "$status" 0
+expect "loop, pass" "releases v2.3.0" eq "$(remote_tag v2.3.0)" "$c2"
+expect "loop, pass" "and cuts v2.4.0-rc.1 in the same run" eq "$(remote_tag v2.4.0-rc.1)" "$c3"
+expect "loop, pass" "outputs both" grep -qxF "rc_tag=v2.4.0-rc.1" "$work/train.out"
+# The next rc qualifies the same day: a second release that day, no cap.
+qualification pass "$c3"
+: > "$work/train.out"
+loop
+expect "loop, second pass" "exits 0" eq "$status" 0
+expect "loop, second pass" "releases v2.4.0 the same day" eq "$(remote_tag v2.4.0)" "$c3"
+expect "loop, second pass" "says there is no cap" has "RELEASE_MAX_PER_DAY is 0, so there is no daily cap"
+expect "loop, second pass" "with nothing newer, cuts nothing" eq "$(remote_tag v2.5.0-rc.1)" ""
+expect "loop, second pass" "and says so" has "no new LKG commit"
+# A newer commit: cut at once.
+runs "$c3" "$c4"
+qualification none
+loop
+expect "loop, new commit" "cuts v2.5.0-rc.1 on it" eq "$(remote_tag v2.5.0-rc.1)" "$c4"
+# Red, with a newer known-good commit: dropped and rc.2 cut on it, same run.
+runs "$c4" "$c5"
+qualification fail "$c4"
+: > "$work/train.out"
+loop
+expect "loop, fail" "exits 0" eq "$status" 0
+expect "loop, fail" "drops v2.5.0-rc.1" eq "$(remote_tag v2.5.0-rc.1-discarded)" "$c4"
+expect "loop, fail" "and cuts v2.5.0-rc.2 on the newer commit in the same run" eq "$(remote_tag v2.5.0-rc.2)" "$c5"
+# Red, and main has not moved past it: dropped, and nothing re-cut.
+qualification fail "$c5"
+loop
+expect "loop, no new commit" "exits 0" eq "$status" 0
+expect "loop, no new commit" "drops v2.5.0-rc.2" eq "$(remote_tag v2.5.0-rc.2-discarded)" "$c5"
+expect "loop, no new commit" "re-cuts nothing on the same commit" eq "$(remote_tag v2.5.0-rc.3)" ""
+expect "loop, no new commit" "waits for a new known-good commit" has "no new LKG commit on main since ${c5:0:12}"
+qualification none
+loop
+expect "loop, still no new commit" "still cuts nothing" eq "$(remote_tag v2.5.0-rc.3)" ""
+expect "loop, several releases" "released twice in one day" eq "$(git -C "$work/remote.git" tag -l 'v2.[34].0' | wc -l | tr -d ' ')" 2
 
 echo
 echo "$((cases - failures))/$cases passed"

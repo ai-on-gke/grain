@@ -180,6 +180,9 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      # The reviewed-merge gate reads the commit's pull request and its
+      # reviews (scripts/release-images.sh check_reviewed_merge).
+      pull-requests: read
     concurrency:
       # An on-demand build is a group of its own, so it neither cancels nor
       # is cancelled by the branch's runs, and a second dispatch of the same
@@ -365,17 +368,19 @@ jobs:
             exit 0
           fi
           if ! command -v cosign >/dev/null 2>&1; then
-            cosign_version="v2.4.1"
+            cosign_version="v2.6.5"
             if ! curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
               "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
               -o /usr/local/bin/cosign; then
               rm -f /usr/local/bin/cosign
-              cosign_image="gcr.io/projectsigstore/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31"
+              cosign_image="ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca"
               docker pull "$cosign_image"
               cid="$(docker create "$cosign_image")"
               docker cp "$cid:/ko-app/cosign" /usr/local/bin/cosign
               docker rm "$cid" >/dev/null
-              echo "6255c3c7146a8f1c3e71d542a9bc21412da7c23a2561adce02381bdbebaff413  /usr/local/bin/cosign" | sha256sum -c -
+              echo "8d5b7d0097b61a89161ef7ac4f169879bf6de798af1be431b595bb552b235d48  /usr/local/bin/cosign" | sha256sum -c -
+            else
+              echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  /usr/local/bin/cosign" | sha256sum -c -
             fi
             chmod +x /usr/local/bin/cosign
           fi
@@ -392,6 +397,45 @@ jobs:
 
       - name: Build the images
         run: bash ./scripts/release-images.sh build
+
+      # The vulnerability gate (docs/image-vulnerability-scanning.md):
+      # every image `build` recorded, scanned before anything is signed or
+      # any moving tag is published. A fixable CRITICAL or HIGH finding
+      # that .grain/baselines/image-vulns-allowlist.yaml does not waive
+      # stops the release here, the way a failing suite does; the two
+      # sandbox sha- tags `build` already pushed stay unsigned and unnamed.
+      - name: Date the vulnerability database
+        id: trivy-db
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the scanner and its vulnerability database
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/trivy
+            ~/.cache/grain
+          key: trivy-${{ runner.os }}-${{ steps.trivy-db.outputs.day }}
+          restore-keys: |
+            trivy-${{ runner.os }}-
+
+      - name: Scan the images for vulnerabilities
+        env:
+          IMAGE_VULNS_SARIF_CATEGORY: release-images
+        run: |
+          bash ./scripts/scan-images.sh --state "$RELEASE_IMAGES_STATE" --out image-vulns-report \
+            --title "Release image vulnerabilities"
+
+      # No code scanning upload from here: that needs security-events:
+      # write on the job that holds the release's packages: write and
+      # signing identity. nightly.yml's image-vulns job scans and uploads
+      # every RC's published images instead.
+      - name: Keep the vulnerability reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-vulns-${{ github.sha }}
+          path: image-vulns-report
+          if-no-files-found: ignore
 
       - name: Run the container e2e suite against what is about to be published
         run: |
@@ -532,6 +576,14 @@ jobs:
           retention-days: 1
 
       - name: Publish the images
+        env:
+          # Refuse a commit that did not reach the branch through a reviewed
+          # merge: one grain made (vars.GRAIN_MERGE_LOGINS, the forge logins
+          # grain merges as) or one the forge's review record covers
+          # (pkg/reviewedmerge). vars.REQUIRE_REVIEWED_MERGE=false skips it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRAIN_MERGE_LOGINS: ${{ vars.GRAIN_MERGE_LOGINS }}
+          REQUIRE_REVIEWED_MERGE: ${{ vars.REQUIRE_REVIEWED_MERGE }}
         run: |
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ]; then

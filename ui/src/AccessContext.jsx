@@ -30,11 +30,6 @@ export function AccessConfigProvider({ config, children }) {
   );
 }
 
-// useAccessConfig is the config the nearest AccessConfigProvider holds.
-export function useAccessConfig() {
-  return useContext(AccessConfigContext);
-}
-
 // useAccess answers canAccess and accessDeniedReason for the provided
 // config, or for override when a component already holds one.
 export function useAccess(override) {

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -690,6 +691,16 @@ type Config struct {
 	// trims it so a stray space is not the difference between named and
 	// unnamed.
 	EnvironmentName string
+	// HubEnvironmentName is the environment name a Grain Hub last gave
+	// this deployment as its default -- a hosted instance's hub entry's
+	// display name or entry name, through -default-environment-name, or a
+	// connected entry's, through its heartbeat -- recorded so the hub's
+	// name can be told apart from one the operator chose. While
+	// EnvironmentName still equals it (or is empty) the name is the hub's,
+	// and a new one from the hub (the entry renamed) replaces it; once the
+	// operator sets anything else, the hub leaves EnvironmentName alone
+	// (AdoptHubEnvironmentName). Empty on every deployment no hub named.
+	HubEnvironmentName string
 	// DefaultCapabilities is the set of capability ids a new task is
 	// filed holding, by id -- the deployment-wide answer to "what should
 	// every task here start out able to do", and the reason gcp-key need
@@ -741,6 +752,9 @@ type Config struct {
 	// onto new ad-hoc tasks when neither the caller nor a template names one
 	// (empty or unattended means unattended).
 	DefaultHosting Hosting
+	// Skills is the deployment-wide default repository skill discovery
+	// configuration (nil means DefaultSkillFolders with discovery enabled).
+	Skills *SkillsConfig
 	// PromptExtension is the standing instruction text every run
 	// dispatched on this deployment is given on top of the prompt grain
 	// builds for it (grain/task-114) -- prompt_extension.go's own doc
@@ -864,6 +878,15 @@ type Config struct {
 	// existed, which AutoUpgradeMode reads the way that grain did: daily
 	// when a channel is set, off when not.
 	AutoUpgradeOn string
+	// AutoUpgradeMinIntervalHours is the minimum interval, in hours,
+	// between two completed automatic upgrades in AutoUpgradeOnRelease mode
+	// (orchestrator's reconcileReleaseUpgrade): once a release-triggered
+	// upgrade has waited out its settle window, it waits until this long
+	// after the last successful automatic upgrade before scheduling a drain,
+	// and then goes straight to whatever release is newest then. Default
+	// DefaultAutoUpgradeMinIntervalHours (6); 0 turns the minimum interval
+	// off.
+	AutoUpgradeMinIntervalHours int
 	// JudgementModel is the model the symbolic model JudgementModelName
 	// ("judgement") resolves to: the model a durable judgement agent --
 	// the pipeline steward -- runs on (design/design/durable-tasks.design.md#DT-11,
@@ -952,6 +975,24 @@ type Config struct {
 	// -- the default -- requires an explicit -read grant for any non-target
 	// context repository. Stored as JSON in one column.
 	AutoGrantContextReads []string
+	// CIAPIRepos lists the repositories (owner/name, or host/owner/name)
+	// whose trusted CI jobs -- a release, an operator's workflow_dispatch,
+	// a cron grain fired -- may hold api:<scope> grants in their
+	// `capabilities:` (pkg/capability/ciapi, docs/agent-api.md § "CI
+	// jobs"), in addition to grain's own repository (GrainSourceRepo),
+	// which is always offered. Empty -- the default -- is grain's own
+	// only. Listing a repository widens nothing else:
+	// the events, the narrowing to the job's own repository and the CI
+	// scope allowlist (CIAPIScopeRefusal) still apply. Read as each job's
+	// grants are resolved, so a change applies to the next job without a
+	// restart. Stored comma-separated in one column, as TargetRepos is.
+	CIAPIRepos []string
+	// SandboxShapeLimits bounds the sandbox shape a task may ask for itself
+	// (Task.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB): a deployment-wide
+	// maximum every caller is held to, and optional per-role ceilings for
+	// limited roles (sandbox_shape_limits.go). Zero is grain's defaults.
+	// Stored as JSON in one column.
+	SandboxShapeLimits SandboxShapeLimits
 	// Registry configures self-registration and periodic heartbeating with a
 	// grain hub as a connected entry (design/design/hub.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in
@@ -1089,6 +1130,26 @@ func (c Config) AutoUpgradeMode() string {
 	return AutoUpgradeOff
 }
 
+// DefaultAutoUpgradeMinIntervalHours is the minimum interval in hours between
+// two completed automatic upgrades in AutoUpgradeOnRelease mode when a
+// deployment has not chosen another (Config.AutoUpgradeMinIntervalHours).
+const DefaultAutoUpgradeMinIntervalHours = 6
+
+// AutoUpgradeMinInterval returns the minimum interval between two completed
+// automatic upgrades in AutoUpgradeOnRelease mode, or 0 when turned off (or
+// negative in a hand-edited row). An hour count too large for a
+// time.Duration is read as the longest one rather than wrapping round to a
+// short or negative interval.
+func (c Config) AutoUpgradeMinInterval() time.Duration {
+	if c.AutoUpgradeMinIntervalHours <= 0 {
+		return 0
+	}
+	if int64(c.AutoUpgradeMinIntervalHours) > math.MaxInt64/int64(time.Hour) {
+		return math.MaxInt64
+	}
+	return time.Duration(c.AutoUpgradeMinIntervalHours) * time.Hour
+}
+
 // ParseAutoUpgradeOn reads a Config.AutoUpgradeOn a person typed:
 // one of AutoUpgradeModes, any case, or "" for AutoUpgradeOff.
 func ParseAutoUpgradeOn(raw string) (string, error) {
@@ -1178,10 +1239,11 @@ func DefaultConfig() Config {
 		// deployment that has chosen nothing keeps grain's own tenth of
 		// each volume free rather than nothing at all, which is what a
 		// zero here would mean (DiskFloor).
-		SandboxDiskFloorShare: DefaultDiskFloorShare,
-		SandboxDiskFloorMinMB: MinDiskFloorMB,
-		UpgradeCheckMode:      UpgradeCheckAuto,
-		DefaultFilters:        DefaultTaskFilters,
+		SandboxDiskFloorShare:       DefaultDiskFloorShare,
+		SandboxDiskFloorMinMB:       MinDiskFloorMB,
+		UpgradeCheckMode:            UpgradeCheckAuto,
+		AutoUpgradeMinIntervalHours: DefaultAutoUpgradeMinIntervalHours,
+		DefaultFilters:              DefaultTaskFilters,
 
 		K8sPriorityClassInteractive: DefaultK8sPriorityClassInteractive,
 		K8sPriorityClassAgent:       DefaultK8sPriorityClassAgent,

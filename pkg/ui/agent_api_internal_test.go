@@ -134,6 +134,8 @@ func TestTaskMutationResponseClassificationIsTotal(t *testing.T) {
 			rawVal = `1`
 		case reflect.Slice:
 			rawVal = `[]`
+		case reflect.Struct:
+			rawVal = `{}`
 		}
 		sample := []byte(`{"` + tag + `":` + rawVal + `}`)
 		if got := editedPatchResponseKeys(sample); !slices.Equal(got, []string{tag}) {
@@ -1127,6 +1129,7 @@ func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
 // unbounded.
 var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/actions-cache":                                         true,
+	"GET /api/tasks/{id}/context":                                    true,
 	"GET /api/agent-backends/{id}/codex-auth":                        true,
 	"GET /api/agent-keys":                                            true,
 	"GET /api/capability-policy":                                     true,

@@ -92,7 +92,7 @@ import { repoApiRoot } from "../repoApi.js";
 // sameWorkflowPath reports whether a path typed in the form names the
 // stored workflow at path: the server fills a bare file name in under
 // the workflows directory, so "tests.yml" is ".grain/workflows/tests.yml".
-export function sameWorkflowPath(path, typed) {
+function sameWorkflowPath(path, typed) {
   const t = (typed || "").trim();
   return t !== "" && (path === t || path.endsWith(`/${t}`));
 }
@@ -101,7 +101,7 @@ export function sameWorkflowPath(path, typed) {
 // shows them: what was typed, or else what imp (the stored
 // issueImport) says, in the boxes' own shape -- the interval in whole
 // minutes, empty for the default.
-export function issueImportDraftOf(draft, imp) {
+function issueImportDraftOf(draft, imp) {
   if (draft) return draft;
   return {
     repo: imp?.repo || "",
@@ -117,7 +117,7 @@ export function issueImportDraftOf(draft, imp) {
 // Unlike the boxes that save when left, these wait for Save, so leaving
 // the page -- "← Repos", the rail, Back, a reload -- used to take a typed
 // label with it without asking (2026-11-07 repository walkthrough).
-export function issueImportDraftUnsaved(draft, imp) {
+function issueImportDraftUnsaved(draft, imp) {
   if (!draft || !imp) return false;
   const stored = issueImportDraftOf(null, imp);
   return (
@@ -153,7 +153,7 @@ export function workflowEditsUnsaved(edits, saved) {
 // returned saved: each row that is still one of the objects that save
 // sent becomes the server's copy of it, and every other row -- one added
 // or edited while the request was out -- is kept exactly as it is.
-export function settleWorkflowEdits(current, sent, saved) {
+function settleWorkflowEdits(current, sent, saved) {
   const sentRows = new Set(sent);
   const unclaimed = [...saved];
   return current.map((row) => {
@@ -503,6 +503,7 @@ export default function RepoPage({
   // which is a real and different answer.
   const [setup, setSetup] = useState(null);
   const [setupText, setSetupText] = useState("");
+  const [skillsFoldersText, setSkillsFoldersText] = useState("");
   // And whether grain reads this repository's own `.grain` directory for
   // the templates, suites and schedules it declares (grain/task-60):
   // what GET /api/repos/{owner}/{name}/declarations last said -- the
@@ -657,6 +658,11 @@ export default function RepoPage({
       const loaded = await api(`${root}/prompt-extension`);
       setPrompt(loaded);
       setPromptText(loaded.promptExtension || "");
+      setSkillsFoldersText(
+        Array.isArray(loaded.skills?.folders)
+          ? loaded.skills.folders.join(", ")
+          : "",
+      );
     } catch (err) {
       showError(err);
     }
@@ -825,9 +831,9 @@ export default function RepoPage({
   const removeRepo = async () => {
     // What this removal would strand is asked of the daemon before the
     // click is honoured, and asked as the very save it is: POST
-    // /api/settings/plan with this repo dropped from targetRepos answers
+    // /api/repos/plan with this repo dropped from targetRepos answers
     // with the tasks, schedules and qualification plan left behind in it
-    // (ui.Settings.TargetReposStranded, grain/task-411).
+    // (ui.TargetReposPlan, grain/task-411 and grain/task-4288).
     //
     // Asked rather than worked out here, for planChanges' own reason: the
     // work behind a repo is the store's to count, and this page holds
@@ -841,7 +847,7 @@ export default function RepoPage({
       const targetRepos = (config?.targetRepos || []).filter(
         (r) => r.toLowerCase() !== repo.toLowerCase(),
       );
-      const plan = await api("/api/settings/plan", {
+      const plan = await api("/api/repos/plan", {
         method: "POST",
         body: JSON.stringify({ targetRepos }),
       });
@@ -1017,6 +1023,33 @@ export default function RepoPage({
       refuseSave("setup", err);
     } finally {
       blurSaving.current.delete("setup");
+    }
+  };
+
+  const saveRepoSkills = async (nextSkills) => {
+    blurSaving.current.add("skills");
+    try {
+      const updated = await api(`${root}/settings`, {
+        method: "PUT",
+        body: JSON.stringify({ skills: nextSkills }),
+      });
+      settleSave("skills");
+      setPrompt(updated);
+      setSkillsFoldersText(
+        Array.isArray(updated.skills?.folders)
+          ? updated.skills.folders.join(", ")
+          : "",
+      );
+      await onRefreshConfig();
+    } catch (err) {
+      setSkillsFoldersText(
+        Array.isArray(prompt?.skills?.folders)
+          ? prompt.skills.folders.join(", ")
+          : "",
+      );
+      refuseSave("skills", err);
+    } finally {
+      blurSaving.current.delete("skills");
     }
   };
 
@@ -2568,6 +2601,130 @@ export default function RepoPage({
                   </Typography>
                 ) : null}
               </Stack>
+            )}
+          </Box>
+
+          <Box sx={{ mt: 3 }} data-testid="repo-skills-section">
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Repository skills
+            </Typography>
+            {prompt === null ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading repository skills…
+              </Typography>
+            ) : (
+              (() => {
+                const effFolders = Array.isArray(prompt.effectiveSkillFolders)
+                  ? prompt.effectiveSkillFolders
+                  : [
+                      ".claude/skills",
+                      ".agents/skills",
+                      ".codex/skills",
+                      ".gemini/skills",
+                      "skills",
+                    ];
+                const storedFolders = Array.isArray(prompt.skills?.folders)
+                  ? prompt.skills.folders.join(", ")
+                  : "";
+                const enabledChecked =
+                  prompt.skills?.enabled !== undefined
+                    ? Boolean(prompt.skills.enabled)
+                    : effFolders.length > 0;
+                return (
+                  <Stack spacing={1}>
+                    <FormControlLabel
+                      sx={{ m: 0 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={enabledChecked}
+                          disabled={readOnly}
+                          onChange={(e) => {
+                            const on = e.target.checked;
+                            const next = { enabled: on };
+                            if (Array.isArray(prompt.skills?.folders)) {
+                              next.folders = prompt.skills.folders;
+                            }
+                            saveRepoSkills(next);
+                          }}
+                          inputProps={{
+                            "aria-label": `Discover SKILL.md folders in ${repo}`,
+                          }}
+                        />
+                      }
+                      label={
+                        <Typography variant="body2">
+                          Discover <code>*/SKILL.md</code> folders from {repo}
+                          &apos;s base branch at run start
+                        </Typography>
+                      }
+                    />
+                    <TextField
+                      id={`${refusalId}-skills-folders`}
+                      name="repoSkillFolders"
+                      label={`Skill folders for ${repo}`}
+                      placeholder=".claude/skills, .agents/skills, .codex/skills, .gemini/skills, skills"
+                      helperText="Comma-separated folders relative to the repository root, scanned one level deep for */SKILL.md on the base branch. Leave empty to inherit the deployment or built-in defaults."
+                      value={skillsFoldersText}
+                      onChange={(e) => setSkillsFoldersText(e.target.value)}
+                      onBlur={(e) => {
+                        const raw = e.target.value.trim();
+                        if (raw === storedFolders) return;
+                        if (raw === "") {
+                          const next =
+                            prompt.skills?.enabled !== undefined
+                              ? { enabled: prompt.skills.enabled }
+                              : {};
+                          saveRepoSkills(next);
+                          return;
+                        }
+                        const folders = raw
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter(Boolean);
+                        const next = { folders };
+                        if (prompt.skills?.enabled !== undefined) {
+                          next.enabled = prompt.skills.enabled;
+                        }
+                        saveRepoSkills(next);
+                      }}
+                      autoComplete="off"
+                      inputProps={{
+                        ...identifierField,
+                        "aria-describedby": refusedBy(
+                          readOnly,
+                          `${refusalId}-skills-folders-helper-text`,
+                        ),
+                      }}
+                      fullWidth
+                      size="small"
+                      disabled={readOnly}
+                    />
+                    <Typography variant="body2" color="text.secondary">
+                      Effective folders for {repo}:{" "}
+                      {effFolders.length > 0 ? (
+                        <code>{effFolders.join(", ")}</code>
+                      ) : (
+                        "off"
+                      )}
+                    </Typography>
+                    {prompt.declaredSkills ? (
+                      <Typography variant="body2" color="text.secondary">
+                        Declared by {repo} in .grain/settings.yml:{" "}
+                        <code>
+                          {prompt.declaredSkills.enabled === false
+                            ? "enabled: false"
+                            : Array.isArray(prompt.declaredSkills.folders)
+                              ? prompt.declaredSkills.folders.length > 0
+                                ? prompt.declaredSkills.folders.join(", ")
+                                : "folders: [] (off)"
+                              : "enabled: true"}
+                        </code>
+                      </Typography>
+                    ) : null}
+                  </Stack>
+                );
+              })()
             )}
           </Box>
           <Box sx={{ mt: 3 }}>

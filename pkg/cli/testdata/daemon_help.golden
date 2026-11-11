@@ -9,6 +9,8 @@ Usage of grain daemon:
     	where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
   -allow-unisolated-host-sandboxes
     	let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user
+  -api-socket string
+    	unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names (default <data-dir>/api/grain.sock, served only when some account is mapped; "none" turns it off)
   -as string
     	principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)
   -backup-gcs-bucket string
@@ -85,6 +87,8 @@ Usage of grain daemon:
     	database backend driver ("sqlite" or "postgres"); defaults to sqlite (default "sqlite")
   -db-dsn string
     	database connection string / DSN or path; for sqlite defaults to <data-dir>/store
+  -default-environment-name string
+    	the environment name (the UI's tab title and sidebar badge) this deployment takes when it has none, or still has the one this flag gave it before: never one its operator set in Settings or its state repo. A Grain Hub sets it to a hosted instance's entry display name ($GRAIN_DEFAULT_ENVIRONMENT_NAME when unset)
   -default-target-repo string
     	owner/name a task created through the UI/API with no repo of its own targets
   -deployment-owner string
@@ -147,6 +151,8 @@ Usage of grain daemon:
     	allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI
   -grit-url url
     	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred)
+  -host-accounts string
+    	comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as (the daemon's own account maps to -deployment-owner unless named here; $GRAIN_HOST_ACCOUNTS when unset)
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
@@ -162,9 +168,9 @@ Usage of grain daemon:
   -hostd-token-owner string
     	the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not
   -hub-auth-mode string
-    	credential mode for registry heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+    	credential mode for hub heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
   -hub-connect
-    	supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)
+    	supervise an outbound wss://<hub-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)
   -hub-display-name string
     	human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
   -hub-entry string
@@ -435,24 +441,18 @@ Usage of grain daemon:
     	maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally)
   -upgrade-image string
     	image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required
-  -upgrade-image-fallback string
-    	fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK)
   -upgrade-image-ref-file string
     	file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image)
-  -upgrade-image-source string
-    	where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE)
   -upgrade-install-path string
     	where a successful upgrade's binary is installed to (required with -upgrade-src-dir)
-  -upgrade-release-asset string
-    	daemon tarball asset name on releases when images.json is not used (e.g. grain-image.tar.gz, or GRAIN_UPGRADE_RELEASE_ASSET)
-  -upgrade-release-checksum string
-    	checksum asset name or suffix (starting with '.') for release-asset tarballs; defaults to .sha256 (or GRAIN_UPGRADE_RELEASE_CHECKSUM)
-  -upgrade-release-repo string
-    	host-qualified repository (<host>/<owner>/<name>) whose releases carry upgrade image assets; defaults to the repository mapped from -upgrade-image or registered by the edition (or GRAIN_UPGRADE_RELEASE_REPO)
   -upgrade-restart-cmd value
     	one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below.
-  -upgrade-sandbox-release-asset value
-    	per-sandbox-image release asset mapping as <role-or-repo>=<asset> -- repeat for each image, e.g. -upgrade-sandbox-release-asset=guest=grain-guest.tar.gz (or comma-separated in GRAIN_UPGRADE_SANDBOX_RELEASE_ASSETS)
+  -upgrade-reviewed-merge-logins string
+    	comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed
+  -upgrade-reviewed-merge-repo string
+    	owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked
+  -upgrade-reviewed-merge-token-file string
+    	file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously)
   -upgrade-src-dir string
     	git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature
   -upgrade-verify-cmd value

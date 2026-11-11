@@ -154,6 +154,44 @@ func mcpJSONResult(v any) mcp.Result {
 	return mcp.Result{Text: string(b)}
 }
 
+// mcpPageResult is mcpJSONResult without the indentation, for the paged
+// list tools: a page is sized to fit an MCP client's ~10 KB tool budget,
+// and two spaces a level across fifty rows is a fifth of that.
+func mcpPageResult(v any) mcp.Result {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return mcp.Result{Text: err.Error(), IsError: true}
+	}
+	return mcp.Result{Text: string(b)}
+}
+
+// The page sizes `grain mcp`'s list tools answer with when the caller
+// names no limit: the agent API's own defaults for the same rows
+// (pkg/ui/list_page.go), so each page fits the ~10 KB a tool result
+// carries before pkg/mcp's backstop cuts it in the middle.
+const (
+	mcpTaskSummaryPage = 50 // list_grain_tasks, fields=summary
+	mcpTaskFullPage    = 5  // list_grain_tasks, fields=full
+	mcpInboxPage       = 20 // grain_inbox
+	mcpCIRunsPage      = 20 // ci_runs, compact view
+	mcpCIRunsFullPage  = 10 // ci_runs, compact: false
+	mcpCIFaultsMax     = 10 // ci_runs' faults, as for an agent's call
+	mcpFaultListMax    = 5  // a fault's refs and runs, compact: false
+	mcpPageMax         = 1000
+	// mcpPageBudget is the most a default page is let run to, under the
+	// ~10 KB budget with room for the client's own framing.
+	mcpPageBudget = 9 * 1024
+)
+
+// mcpPageLimit is a tool's limit argument: def when the caller named none
+// (or zero), and at most mcpPageMax.
+func mcpPageLimit(limit, def int) int {
+	if limit <= 0 {
+		return def
+	}
+	return min(limit, mcpPageMax)
+}
+
 func mcpToolErr(err error) mcp.Result {
 	if err == nil {
 		return mcp.Result{Text: "ok"}
@@ -362,10 +400,32 @@ func externalListTasksTool(c *ui.HTTPClient) mcp.Tool {
 		IncludeClosed   bool     `json:"include_closed"`
 		IncludeDeferred bool     `json:"include_deferred"`
 		Limit           int      `json:"limit"`
+		Cursor          string   `json:"cursor"`
+		Q               string   `json:"q"`
+		Fields          string   `json:"fields"`
+	}
+	// taskSummary is a task under fields=summary, the same row GET
+	// /api/tasks?fields=summary answers with.
+	type taskSummary struct {
+		ID          string      `json:"id"`
+		Title       string      `json:"title"`
+		State       model.State `json:"state"`
+		Repo        string      `json:"repo,omitempty"`
+		ExternalRef string      `json:"externalRef,omitempty"`
+		CreatedAt   *time.Time  `json:"createdAt,omitempty"`
+		BlockedBy   []string    `json:"blockedBy,omitempty"`
+		Stall       string      `json:"stall,omitempty"`
+	}
+	type page struct {
+		Tasks      any    `json:"tasks"`
+		Total      int    `json:"total"`
+		Truncated  bool   `json:"truncated"`
+		NextCursor string `json:"nextCursor,omitempty"`
 	}
 	return mcp.Tool{
-		Name:        "list_grain_tasks",
-		Description: "List Grain tasks with the CLI's attribute and provenance filters (including derived_from:eq: and filed_via:has:).",
+		Name: "list_grain_tasks",
+		Description: "List Grain tasks with the CLI's attribute and provenance filters (including derived_from:eq: and filed_via:has:). " +
+			fmt.Sprintf("Paged: answers {tasks, total, truncated, nextCursor}, %d summary rows (id, title, state, repo, externalRef, createdAt, blockedBy, stall) at a time by default, or %d whole tasks with fields: \"full\"; pass nextCursor back as cursor for the next page.", mcpTaskSummaryPage, mcpTaskFullPage),
 		InputSchema: mcpObjectSchema(map[string]any{
 			"repo":             map[string]any{"type": "string", "description": "Filter by repository (owner/name)."},
 			"state":            map[string]any{"type": "string", "description": "Filter by task state."},
@@ -373,18 +433,36 @@ func externalListTasksTool(c *ui.HTTPClient) mcp.Tool {
 			"author":           map[string]any{"type": "string"},
 			"origin":           map[string]any{"type": "string"},
 			"external_ref":     map[string]any{"type": "string"},
-			"search":           map[string]any{"type": "string"},
+			"search":           map[string]any{"type": "string", "description": "Substring of a task's id, title, branch, external reference or description."},
+			"q":                map[string]any{"type": "string", "description": "Alias for search."},
 			"filters":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Attribute or provenance filter clauses (attribute:comparison:value)."},
 			"filter":           map[string]any{"type": "string", "description": "Single filter clause."},
 			"sort":             map[string]any{"type": "string"},
 			"include_closed":   map[string]any{"type": "boolean"},
 			"include_deferred": map[string]any{"type": "boolean"},
-			"limit":            map[string]any{"type": "integer"},
+			"limit":            map[string]any{"type": "integer", "description": fmt.Sprintf("Tasks per page (default %d, or %d for fields: \"full\"; at most %d).", mcpTaskSummaryPage, mcpTaskFullPage, mcpPageMax)},
+			"cursor":           map[string]any{"type": "string", "description": "A previous answer's nextCursor, for the page after it (leave out for the first page)."},
+			"fields":           map[string]any{"type": "string", "description": "summary (default) for each task's id, title, state, repo, externalRef, createdAt, blockedBy and stall; full for every field (read_grain_task reads one task whole)."},
 		}),
 		Handler: func(ctx context.Context, raw map[string]any) mcp.Result {
 			var a args
 			if err := decodeMCPArgs(raw, &a); err != nil {
 				return mcpToolErr(fmt.Errorf("list_grain_tasks: %w", err))
+			}
+			fields := strings.ToLower(strings.TrimSpace(a.Fields))
+			if fields != "" && fields != "summary" && fields != "full" {
+				return mcpToolErr(fmt.Errorf("list_grain_tasks: fields %q is not summary or full", a.Fields))
+			}
+			offset := 0
+			if cursor := strings.TrimSpace(a.Cursor); cursor != "" {
+				var err error
+				if offset, err = ui.ParseListCursor(cursor); err != nil {
+					return mcpToolErr(fmt.Errorf("list_grain_tasks: %w", err))
+				}
+			}
+			search := strings.TrimSpace(a.Search)
+			if search == "" {
+				search = strings.TrimSpace(a.Q)
 			}
 			f := listFlags{
 				state:       strings.TrimSpace(a.State),
@@ -394,7 +472,7 @@ func externalListTasksTool(c *ui.HTTPClient) mcp.Tool {
 				author:      strings.TrimSpace(a.Author),
 				origin:      strings.TrimSpace(a.Origin),
 				externalRef: strings.TrimSpace(a.ExternalRef),
-				search:      strings.TrimSpace(a.Search),
+				search:      search,
 				sortBy:      strings.TrimSpace(a.Sort),
 			}
 			for _, flt := range a.Filters {
@@ -461,10 +539,30 @@ func externalListTasksTool(c *ui.HTTPClient) mcp.Tool {
 				return mcpToolErr(err)
 			}
 			matched := q.apply(tasks)
-			if a.Limit > 0 && len(matched) > a.Limit {
-				matched = matched[:a.Limit]
+			limit := mcpPageLimit(a.Limit, mcpTaskSummaryPage)
+			if fields == "full" {
+				limit = mcpPageLimit(a.Limit, mcpTaskFullPage)
 			}
-			return mcpJSONResult(matched)
+			start := min(offset, len(matched))
+			end := min(start+limit, len(matched))
+			out := page{Total: len(matched)}
+			if end < len(matched) {
+				out.Truncated = true
+				out.NextCursor = ui.ListCursorFor(end)
+			}
+			if fields == "full" {
+				out.Tasks = matched[start:end]
+				return mcpPageResult(out)
+			}
+			rows := make([]taskSummary, 0, end-start)
+			for _, t := range matched[start:end] {
+				rows = append(rows, taskSummary{
+					ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo, ExternalRef: t.ExternalRef,
+					CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall,
+				})
+			}
+			out.Tasks = rows
+			return mcpPageResult(out)
 		},
 	}
 }

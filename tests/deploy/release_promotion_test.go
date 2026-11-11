@@ -169,9 +169,11 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 	}
 	decl := declarations(t)
 	for _, p := range []string{
+		"scripts/granule/build-granule-image.sh", "scripts/granule/guest-inputs.sh",
 		"scripts/release-images.sh", "scripts/release-notes.sh",
 		"scripts/candidate-gate.sh",
-		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		"scripts/release-patch.sh", "scripts/patch-tag-guard.sh",
+		"scripts/build-version.sh", "scripts/grain-ci-host.sh",
 		"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
@@ -179,7 +181,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
 		"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 	} {
-		if !containsString(trigger.Paths, p) {
+		if len(trigger.Match([]string{p})) == 0 {
 			t.Errorf("the release-machinery trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}
 		if matches := trustboundary.Classify([]string{p}); matches == nil || trustboundary.RequiresHuman(matches) {
@@ -270,6 +272,35 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if strings.Contains(body, "call `comment_on_issue`") {
 		t.Errorf("release-train.yml still instructs calling comment_on_issue, which parks a branchless tick in awaiting_reply and stalls the 20-minute train")
 	}
+}
+
+// trainTickPriority is the least priority a release-train tick may be
+// filed at: above model.PriorityReleaseGate's Stage 2 work, at the top
+// of what a busy queue holds. On 2026-11-10 tick #3946 was filed at the
+// default 5 and sat queued fourteen hours behind priority-9 work while
+// overlap: skip held every later tick, and no rc was cut that day
+// (grain/task-4086).
+const trainTickPriority = 9
+
+// A release-train tick is one script run and a close: it must never wait
+// behind the backlog, because a tick that waits holds every tick after it.
+func TestTheReleaseTrainTickIsFiledAtHighPriority(t *testing.T) {
+	decl := declarations(t)
+	for _, tmpl := range decl.Templates {
+		if tmpl.Path != ".grain/templates/release-train.yml" {
+			continue
+		}
+		if tmpl.Template.Priority == nil {
+			t.Fatalf(".grain/templates/release-train.yml sets no priority:, so every tick files at %d and starves "+
+				"behind the backlog; set priority: %d or more", model.DefaultTaskPriority, trainTickPriority)
+		}
+		if *tmpl.Template.Priority < trainTickPriority || *tmpl.Template.Priority <= model.PriorityReleaseGate {
+			t.Errorf(".grain/templates/release-train.yml priority is %d, want at least %d (above the backlog and "+
+				"Stage 2's %d)", *tmpl.Template.Priority, trainTickPriority, model.PriorityReleaseGate)
+		}
+		return
+	}
+	t.Fatal(".grain/templates/release-train.yml is not declared")
 }
 
 // The train's grant reaches the release now (playbook §1): vM.Y.0 created,
@@ -458,12 +489,16 @@ func TestPromoteCLISkipsMissingReleaseAndPromoteReleaseGatesCLIOnApprove(t *test
 		[]byte("#!/usr/bin/env bash\nprintf '%s\\n' \"${2:-v3.2.0}\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The stub prints curl's own "(22) ... error: 404" line when asked
+	// for -S, so the step's log shows whether it still emits that noise.
 	curlStub := `#!/usr/bin/env bash
-status_fmt=false url=""
+status_fmt=false show_error=false url=""
+miss() { [ "$show_error" = true ] && echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) status_fmt=true; shift ;;
     -o | -H) shift ;;
+    -*S*) show_error=true ;;
     -*) ;;
     *) url="$1" ;;
   esac
@@ -471,12 +506,12 @@ while [ $# -gt 0 ]; do
 done
 case "$url" in
   */releases/download/v3.2.0/checksums.txt)
-    [ "${STUB_CHECKSUMS:-404}" = 200 ] && exit 0 || exit 22 ;;
+    [ "${STUB_CHECKSUMS:-404}" = 200 ] && exit 0 || miss ;;
   */repos/ai-on-gke/grain/releases/tags/v3.2.0)
     [ "$status_fmt" = true ] && printf '%s' "${STUB_RELEASE_API:-404}"
     [ "${STUB_RELEASE_API:-404}" = 200 ] && exit 0 || exit 0 ;;
   */releases/download/sha-*/images.json)
-    [ "${STUB_SHA_IMAGES:-404}" = 200 ] && exit 0 || exit 22 ;;
+    [ "${STUB_SHA_IMAGES:-404}" = 200 ] && exit 0 || miss ;;
   *)
     echo "unexpected curl url: $url" >&2
     exit 99 ;;
@@ -527,16 +562,31 @@ esac
 			name:      "automatic run builds when GitHub Release exists without sha assets",
 			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=200", "STUB_SHA_IMAGES=404"},
 			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: its GitHub Release exists and carries no checksums.txt",
 		},
 		{
 			name:      "automatic run builds when sha assets exist so assets job will create release",
 			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=404", "STUB_SHA_IMAGES=200"},
 			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: GitHub Release v3.2.0 does not exist yet, but sha-",
+		},
+		{
+			name:      "automatic run builds and names the status when the API is rate limited",
+			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=403", "STUB_SHA_IMAGES=404"},
+			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: the GitHub API answered 403 for releases/tags/v3.2.0",
+		},
+		{
+			name:      "automatic run builds and names the status when the API is unreachable",
+			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=000", "STUB_SHA_IMAGES=404"},
+			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: the GitHub API answered 000 for releases/tags/v3.2.0",
 		},
 		{
 			name:      "explicit PROMOTE_VERSION builds so cli-assets fails loudly on missing release",
 			env:       []string{"PROMOTE_VERSION=v3.2.0", "STUB_CHECKSUMS=404", "STUB_RELEASE_API=404", "STUB_SHA_IMAGES=404"},
 			wantBuild: "true",
+			wantLog:   "promote: building the grain CLI for v3.2.0: asked for by name",
 		},
 	} {
 		outFile := filepath.Join(t.TempDir(), "github_output")
@@ -562,6 +612,9 @@ esac
 		}
 		if tc.wantLog != "" && !strings.Contains(string(out), tc.wantLog) {
 			t.Errorf("%s: log = %q, want substring %q", tc.name, out, tc.wantLog)
+		}
+		if strings.Contains(string(out), "curl: (22)") {
+			t.Errorf("%s: log = %q, want no curl error lines for the expected 404s", tc.name, out)
 		}
 	}
 

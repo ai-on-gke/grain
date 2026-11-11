@@ -39,6 +39,11 @@ package upgrade
 // know it needed. The step says, every time, that what it is about to run
 // was not verified; configuring VerifyCmd is how a deployment opts into
 // refusing.
+//
+// A signature says CI built the image, not that a reviewed commit went
+// into it. ImageConfig.ReviewedMerge is the check that does (reviewed.go),
+// and a deployment that configures it without VerifyCmd is refused rather
+// than warned.
 
 import (
 	"context"
@@ -107,57 +112,6 @@ func verifyPinned(ctx context.Context, p *progress, step string, verifyCmd []str
 	}
 	return fmt.Errorf("verifying the signature on %s: the verifier reported signatures for %s and not for the digest it was asked about",
 		target, strings.Join(digests, ", "))
-}
-
-// verifyLoaded runs verifyCmd against an image loaded from release assets,
-// which has a local Docker image ID (`sha256:...`) and tarball checksum
-// rather than a registry RepoDigest, and passes it only when the
-// signature it checked is over that image ID.
-//
-// A signature covers a registry manifest digest, and nothing ties a
-// tarball's bytes to the registry: whoever can upload a release asset
-// can name a signed `repo@sha256:...` in images.json beside a tarball of
-// anything at all. So a ref pinned to a digest passes only when that
-// digest is the loaded image's own ID (as `docker load` gives an OCI
-// image under the containerd image store), and a tag passes only when
-// the verifier prints the digests it verified (cosign's JSON does) and
-// one of them is that ID. Anything else is refused rather than read as a
-// pass: a verifier that prints nothing has said nothing about the bytes
-// this upgrade is about to run.
-func verifyLoaded(ctx context.Context, p *progress, step string, verifyCmd []string, ref, imageID string) error {
-	id := strings.TrimSpace(imageID)
-	if !strings.HasPrefix(id, "sha256:") || len(id) != len("sha256:")+64 {
-		return fmt.Errorf("loaded image %s has no full image ID (%q) a signature could be checked against", ref, imageID)
-	}
-	if target, ok := digestRef(ref); ok {
-		_, digest, _ := strings.Cut(target, "@")
-		if !strings.EqualFold(digest, id) {
-			return fmt.Errorf("%s pins %s, but the image loaded from the release is %s: a signature on that registry digest says nothing about these bytes",
-				ref, digest, id)
-		}
-		return verifyPinned(ctx, p, step, verifyCmd, target)
-	}
-	target := strings.TrimSpace(ref)
-	if target == "" {
-		target = id
-	}
-	argv := append(append([]string{}, verifyCmd...), target)
-	out, err := runAsked(ctx, p, step, verifyTimeout, argv)
-	if err != nil {
-		return fmt.Errorf("verifying the signature on loaded image %s: %w", target, err)
-	}
-	digests := verifiedDigests(out)
-	for _, d := range digests {
-		if strings.EqualFold(d, id) {
-			return nil
-		}
-	}
-	if len(digests) == 0 {
-		return fmt.Errorf("verifying the signature on loaded image %s: the verifier printed no digests it verified, so nothing says it checked %s, the image loaded from the release",
-			target, id)
-	}
-	return fmt.Errorf("verifying the signature on loaded image %s: the verifier reported signatures for %s and not for %s, the image loaded from the release",
-		target, strings.Join(digests, ", "), id)
 }
 
 // verifyTag runs verifyCmd against tag, an image that has not been

@@ -362,6 +362,40 @@ describe("GrantsPicker", () => {
     );
   });
 
+  // settings/new-task-form.yml's capabilities.hidden narrows the "Add
+  // grant…" menu only. A grant the draft already holds is drawn as its own
+  // line, outside the menu, so it stays removable while hidden. (The
+  // legacy checklists needed useHeldIds for this; GrantsPicker does not.)
+  it("keeps a held grant removable when the form hides it from the menu", async () => {
+    serve({ current: [hostScript, gcpKey] });
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[hostScript.ref]}
+        config={config}
+        formCapabilities={{
+          offered: null,
+          hidden: [hostScript.ref],
+          display: {},
+        }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    expect(
+      await screen.findByRole("menuitem", { name: /gcp-key/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /host-script/ })).toBeNull();
+    await user.keyboard("{Escape}");
+    await user.click(
+      await screen.findByRole("button", { name: /^Remove .*host-script/ }),
+    );
+    expect(onRemove).toHaveBeenCalledWith(hostScript.ref);
+  });
+
   // cloudKey has a required argument with no default (account) and one
   // with a default (ttl): picking it leaves a draft to fill in.
   const cloudKey = {

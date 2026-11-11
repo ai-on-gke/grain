@@ -536,6 +536,8 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/state-repo/remote` | `settings:write` | `admin` | Configures `grain/config` remote URL. |
 | `POST /api/state-repo/secrets-key` | `secrets:write` | `admin` | Generates/rotates state-repo secrets encryption key. |
 | `POST /api/state-repo/import-key` | `secrets:write` | `admin` | Imports state-repo secrets encryption key. |
+| `POST /api/state-repo/secrets-key/wrap` | `secrets:write` | `admin` | Wraps the secrets key with a Cloud KMS key, in the daemon (`grain state key wrap`). |
+| `POST /api/state-repo/secrets-key/unwrap` | `secrets:write` | `admin` | Puts the secrets key back in plaintext form (`grain state key unwrap`). |
 | `POST /api/state-repo/secrets-repo` | `secrets:write` | `admin` | Configures encrypted secrets backup repository. |
 | `POST /api/state-repo/reset-notice` | `settings:write` | `admin` | Clears state-repo warning notice. |
 | `GET /api/database` | `settings:read` | `admin` | Reads which database backend is in use. No route migrates it: store moves are offline only (docs/database.md). |

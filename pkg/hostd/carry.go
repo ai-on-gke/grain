@@ -75,8 +75,9 @@ type StageOp struct {
 	Dir     string `json:"dir,omitempty"`
 	Pattern string `json:"pattern,omitempty"`
 	// Target is a Symlink's target, which is outside StageRoot: hostd
-	// takes only its own codex login (Hello.CodexAuth), the operator's
-	// file on that machine, linked into a home under StageRoot.
+	// takes only a resolved regular file named in its allowlist's logins:
+	// map (Hello.LoginTargets; or the built-in table when absent), linked
+	// into a home under StageRoot.
 	Target string        `json:"target,omitempty"`
 	Data   []byte        `json:"data,omitempty"`
 	Perm   uint32        `json:"perm,omitempty"`

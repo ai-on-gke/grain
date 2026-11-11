@@ -124,6 +124,74 @@ describe("PendingAccess", () => {
     });
   });
 
+  it("offers the substitute for an item that cannot be granted, and grants it", async () => {
+    const user = userEvent.setup();
+    const ref = "https://grain.dev/capabilities/grain#ci";
+    const sub =
+      'https://grain.dev/capabilities/api#ci-read={"repo":"acme/lib"}';
+    render(
+      <PendingAccess
+        t={{
+          id: "7",
+          pendingAccess: pending({
+            items: [
+              {
+                kind: "grant",
+                capability: ref,
+                error: "it cannot be attached by hand",
+                substitute: {
+                  kind: "grant",
+                  capability: "https://grain.dev/capabilities/api#ci-read",
+                  with: { repo: "acme/lib" },
+                },
+                substituteGrant: sub,
+              },
+            ],
+          }),
+        }}
+        act={act}
+      />,
+    );
+    expect(screen.getByText(`instead of ${ref}`)).toBeInTheDocument();
+    expect(screen.getByTestId("access-item-error")).toHaveTextContent(
+      "Grant gives this task",
+    );
+    expect(
+      screen.getByRole("checkbox", { name: `Grant ${sub}` }),
+    ).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Grant all" }));
+    expect(api).toHaveBeenCalledWith("/api/tasks/7/access-request/grant", {
+      method: "POST",
+      body: "{}",
+    });
+  });
+
+  it("disables an item that cannot be granted and has no substitute", () => {
+    render(
+      <PendingAccess
+        t={{
+          id: "7",
+          pendingAccess: pending({
+            items: [
+              {
+                kind: "grant",
+                capability: "no-such",
+                error: "unknown capability",
+              },
+            ],
+          }),
+        }}
+        act={act}
+      />,
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "Grant no-such" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Grant 0 of 1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    expect(screen.getByText("unknown capability")).toBeInTheDocument();
+  });
+
   it("names items the way the grants editor does", () => {
     expect(itemText({ kind: "read", repo: "acme/x" })).toBe("acme/x › read");
     expect(itemText({ kind: "network", access: "open" })).toBe(

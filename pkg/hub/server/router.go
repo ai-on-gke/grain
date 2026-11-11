@@ -173,10 +173,10 @@ type Router struct {
 // NewRouter constructs a Router from RouterOptions.
 func NewRouter(opts RouterOptions) (*Router, error) {
 	if opts.Admitter == nil {
-		return nil, errors.New("registry router: Admitter is required")
+		return nil, errors.New("hub router: Admitter is required")
 	}
 	if opts.Signer == nil {
-		return nil, errors.New("registry router: Signer is required")
+		return nil, errors.New("hub router: Signer is required")
 	}
 	if opts.ReplicaHeartbeat <= 0 {
 		opts.ReplicaHeartbeat = 5 * time.Second
@@ -513,7 +513,7 @@ func (rt *Router) PublicHandler(jwksHandler, healthzHandler http.HandlerFunc) ht
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		match := ClassifyHost(r.Host, rt.opts.HubHost, rt.opts.InstanceDomain)
 		if match.Kind != HostRouteHub {
-			writeJSONError(w, http.StatusNotFound, "not_found", "public endpoint only serves registry host")
+			writeJSONError(w, http.StatusNotFound, "not_found", "public endpoint only serves hub host")
 			return
 		}
 		if strings.TrimSpace(r.Header.Get(HeaderOnBehalfOf)) != "" {
@@ -675,6 +675,7 @@ func (rt *Router) HandleEntryHeartbeat(w http.ResponseWriter, r *http.Request, p
 		ScopeConflicts:       conflicts,
 		NextIntervalSeconds:  HeartbeatIntervalSeconds(rt.opts.HeartbeatInterval),
 		NextHeartbeatSeconds: HeartbeatIntervalSeconds(rt.opts.HeartbeatInterval),
+		EnvironmentName:      api.EnvironmentNameForEntry(updated.DisplayName, updated.Name),
 	})
 }
 
@@ -1104,6 +1105,13 @@ func isReplayableRequest(r *http.Request) bool {
 // what is left of the same grace for the real reconnect -- instead of answering
 // 503 inside the grace it was promised, or starting a fresh grace and holding
 // the request for longer than ReconnectGrace in all.
+//
+// Those writers also land in no particular order, so the refresh that saw the
+// old session released can follow the stale one straight away, and a woken
+// waiter then finds no active session at all. That wake is just as hollow: the
+// waiter goes back to waiting out the same grace. A tunnel registered on this
+// replica is routed to whatever the cache says, since a stale refresh can mark
+// it disconnected too.
 func (rt *Router) handleOfflineOrWait(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, graceDeadline time.Time) {
 	now := rt.now()
 	tc, _ := rt.tunnelCache.Get(entry.Name)
@@ -1111,17 +1119,20 @@ func (rt *Router) handleOfflineOrWait(w http.ResponseWriter, r *http.Request, en
 		if graceDeadline.IsZero() && tc.DisconnectedRecently(now, DefaultReconnectWindow) {
 			graceDeadline = time.Now().Add(rt.opts.ReconnectGrace)
 		}
-		if remaining := time.Until(graceDeadline); !graceDeadline.IsZero() && remaining > 0 {
+		for remaining := time.Until(graceDeadline); !graceDeadline.IsZero() && remaining > 0; remaining = time.Until(graceDeadline) {
 			cur, ok, err := rt.tunnelCache.WaitForReconnect(r.Context(), entry.Name, remaining)
-			if err == nil && ok && cur.ReplicaID == rt.replicaID {
+			if err != nil {
+				break
+			}
+			if ok && cur.ReplicaID == rt.replicaID {
 				ok = rt.waitForLocalTunnel(r.Context(), entry.Name, graceDeadline)
 			}
-			if err == nil && ok {
+			if local := rt.GetLocalTunnel(entry.Name); ok || (local != nil && !local.Gone()) {
 				rt.routeConnectedEntry(w, r, entry, isManager, graceDeadline)
 				return
 			}
-			tc, _ = rt.tunnelCache.Get(entry.Name)
 		}
+		tc, _ = rt.tunnelCache.Get(entry.Name)
 	}
 	WriteOfflineConnectedState(w, r, rt.enrichOfflineEntry(r.Context(), entry), tc, rt.now(), isManager)
 }

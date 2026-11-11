@@ -21,13 +21,13 @@
 # the same value as the Dockerfile's RUNTIME_IMAGE and
 # Dockerfile.k8s-sandbox's BASE_IMAGE -- bump all of them together
 # (TestEveryBaseImageIsPinnedByDigest checks they agree).
-ARG BASE_IMAGE=debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+ARG BASE_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 ARG GO_VERSION=1.26.10
 ARG GO_IMAGE=golang
 ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
-ARG NODE_VERSION=20.19.0
-ARG KIND_VERSION=v0.32.0
-ARG ACT_VERSION=v0.2.89
+ARG NODE_VERSION=24.22.2
+ARG KIND_VERSION=v0.33.0
+ARG ACT_VERSION=v0.2.97
 ARG ACTIONLINT_VERSION=1.7.12
 
 FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS grain_connect_builder
@@ -48,6 +48,23 @@ COPY pkg /src/pkg
 COPY cmd/grain-sandbox /src/cmd/grain-sandbox
 RUN cd /src && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/grain ./cmd/grain-sandbox \
     && chmod 0755 /out/grain
+
+# kind and actionlint, built from source with the Go pinned above rather
+# than downloaded. Their newest releases (kind v0.33.0 on go1.26.7,
+# actionlint 1.7.12 on go1.26.1) were linked against Go standard libraries
+# with fixable CRITICAL/HIGH CVEs, which the sandbox-rootfs scan fails on
+# (docs/image-vulnerability-scanning.md); a rebuild picks up every Go
+# patch release this file takes. `go install module@version` checks each
+# module it fetches against the checksum database (sum.golang.org), which
+# is the guarantee the release archives' sha256 pins used to give.
+FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS guest_tools_builder
+ARG KIND_VERSION
+ARG ACTIONLINT_VERSION
+ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOBIN=/out
+RUN go install -trimpath "sigs.k8s.io/kind@${KIND_VERSION}" \
+    && go install -trimpath "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}" \
+    && /out/kind version \
+    && /out/actionlint -version
 
 # ==============================================================================
 # Stage 1: Minimal base guest rootfs (kept in sync with Granulefile.guest-base)
@@ -177,26 +194,37 @@ ARG ACT_VERSION
 ARG ACTIONLINT_VERSION
 
 ARG GO_VERSION=1.26.10
-ARG NODE_VERSION=20.19.0
-ARG KIND_VERSION=v0.32.0
-ARG ACT_VERSION=v0.2.89
+ARG NODE_VERSION=24.22.2
+ARG KIND_VERSION=v0.33.0
+ARG ACT_VERSION=v0.2.97
 ARG ACTIONLINT_VERSION=1.7.12
+# npm replaces the one Node.js ships: Node 24.22.2's own npm 11.19.1 bundles
+# brace-expansion and undici releases with fixable CVEs, and npm's own
+# releases move ahead of Node's.
+ARG NPM_VERSION=11.21.2
+# pip replaces the one in google-cloud-cli's bundled Python, whose pip
+# 26.2.2 vendors msgpack 1.1.2 and urllib3 2.7.0 (pip/_vendor/vendor.txt).
+ARG PIP_VERSION=26.3
+# Checksums of the release archives the versions above name, from the
+# publishers' own sha256 lists: TLS proves who served the bytes, these prove
+# they are the release. Bump them with the version.
+#
 # One checksum per architecture, because a checksum is of a particular
 # tarball and this image is built for whichever architecture its host runs.
 # A single pin meant an arm64 build downloaded the arm64 archive and then
 # failed comparing it against amd64's digest. The version above is shared on
 # purpose -- the same convention Dockerfile uses for KUBECTL and the agent
 # CLIs -- so that a bump of one architecture is a bump of both and two builds
-# of one grain commit cannot carry different toolchains.
-ARG ACTIONLINT_SHA256_AMD64=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-ARG ACTIONLINT_SHA256_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
-# Checksums of the release archives the versions above name, from the
-# publishers' own sha256 lists: TLS proves who served the bytes, these prove
-# they are the release. Bump them with the version.
+# of one grain commit cannot carry different toolchains. npm's tarball and
+# pip's wheel are the same for every architecture.
 ARG GO_SHA256_AMD64=ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5
 ARG GO_SHA256_ARM64=3f4227ce7b206a513e794f1393adb473a07b46e94d18bd15d1c684bbb7319797
-ARG NODE_SHA256_AMD64=b4e336584d62abefad31baecff7af167268be9bb7dd11f1297112e6eed3ca0d5
-ARG NODE_SHA256_ARM64=dbe339e55eb393955a213e6b872066880bb9feceaa494f4d44c7aac205ec2ab9
+ARG NODE_SHA256_AMD64=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75
+ARG NODE_SHA256_ARM64=eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8
+ARG NPM_SHA256=8ad8563b81e71b90ef405b140bccf3ba9b5e7884ab210bd49ee4e2f4bc6f61f5
+ARG PIP_SHA256=f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13
+ARG ACT_SHA256_AMD64=67b4976a56f33ea7870b798912e738ec44eef38e7578ae7b532f2def1c73a5ad
+ARG ACT_SHA256_ARM64=44d48e3d4a6409053fdec6fc6518322467d79a2d5be8f72c021b0421e2ac113d
 ARG PLAYWRIGHT_VERSION=1.62.1
 
 COPY Granulefile* .grain-ca.cr[t] /tmp/
@@ -254,9 +282,9 @@ RUN curl -4 -fsSL --max-time 60 --retry 3 https://download.docker.com/linux/debi
     && systemctl enable docker \
     && rm -rf /var/lib/apt/lists/*
 
-# Kind binary and inotify limits
-RUN curl -4 -fsSL --max-time 120 --retry 3 "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$(dpkg --print-architecture)" -o /usr/local/bin/kind \
-    && chmod 0755 /usr/local/bin/kind \
+# Kind binary (guest_tools_builder) and inotify limits
+COPY --from=guest_tools_builder /out/kind /usr/local/bin/kind
+RUN chmod 0755 /usr/local/bin/kind \
     && printf 'fs.inotify.max_user_watches = 524288\nfs.inotify.max_user_instances = 8192\n' > /etc/sysctl.d/99-grain-kind.conf
 
 # Cloud SDKs, Terraform, and Kubectl
@@ -271,6 +299,17 @@ RUN curl -4 -fsSL --max-time 60 --retry 3 https://packages.cloud.google.com/apt/
         google-cloud-cli-gke-gcloud-auth-plugin \
         kubectl \
     && rm -rf /var/lib/apt/lists/*
+
+# A newer pip in google-cloud-cli's bundled Python (PIP_VERSION above says
+# why). The tree is the deb's own and an upgrade of the package puts its pip
+# back; this guest is rebuilt rather than upgraded in place.
+RUN bundled=/usr/lib/google-cloud-sdk/platform/bundledpythonunix/bin/python3 \
+    && if [ -x "$bundled" ]; then \
+        curl -4 -fsSL --max-time 120 --retry 3 "https://files.pythonhosted.org/packages/py3/p/pip/pip-${PIP_VERSION}-py3-none-any.whl" -o "/tmp/pip-${PIP_VERSION}-py3-none-any.whl" \
+        && echo "${PIP_SHA256}  /tmp/pip-${PIP_VERSION}-py3-none-any.whl" | sha256sum -c - \
+        && "$bundled" -m pip install --no-cache-dir --disable-pip-version-check --no-index "/tmp/pip-${PIP_VERSION}-py3-none-any.whl" \
+        && rm -f "/tmp/pip-${PIP_VERSION}-py3-none-any.whl"; \
+    fi
 
 # Go toolchain
 RUN arch="$(dpkg --print-architecture)" \
@@ -300,6 +339,13 @@ RUN mkdir -p /usr/local/lib/nodejs \
     && echo "${sha}  /tmp/node.tar.xz" | sha256sum -c - \
     && tar -C /usr/local/lib/nodejs --strip-components=1 -xJf /tmp/node.tar.xz \
     && rm -f /tmp/node.tar.xz \
+    && curl -4 -fsSL --max-time 120 --retry 3 "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz" -o /tmp/npm.tgz \
+    && echo "${NPM_SHA256}  /tmp/npm.tgz" | sha256sum -c - \
+    && rm -rf /usr/local/lib/nodejs/lib/node_modules/npm \
+    && mkdir /usr/local/lib/nodejs/lib/node_modules/npm \
+    && tar -C /usr/local/lib/nodejs/lib/node_modules/npm --strip-components=1 -xzf /tmp/npm.tgz \
+    && rm -f /tmp/npm.tgz \
+    && test "$(/usr/local/lib/nodejs/bin/node /usr/local/lib/nodejs/bin/npm --version)" = "${NPM_VERSION}" \
     && ln -sf /usr/local/lib/nodejs/bin/node /usr/local/bin/node \
     && ln -sf /usr/local/lib/nodejs/bin/npx /usr/local/bin/npx \
     && printf '#!/bin/sh\nexport PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD-1}"\nexec /usr/local/lib/nodejs/bin/npm "$@"\n' > /usr/local/bin/npm \
@@ -320,23 +366,20 @@ RUN mkdir -p /var/cache/playwright \
     && chmod -R 777 /var/cache/playwright
 
 # act (GitHub Actions local runner)
-RUN curl -4 -fsSL --max-time 120 --retry 3 "https://github.com/nektos/act/releases/download/${ACT_VERSION}/act_Linux_$(case "$(dpkg --print-architecture)" in amd64) echo x86_64 ;; arm64) echo arm64 ;; esac).tar.gz" -o /tmp/act.tar.gz \
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) act_arch=x86_64; sha="${ACT_SHA256_AMD64}" ;; \
+        arm64) act_arch=arm64; sha="${ACT_SHA256_ARM64}" ;; \
+        *) echo "no pinned act checksum for $arch" >&2; exit 1 ;; \
+       esac \
+    && curl -4 -fsSL --max-time 120 --retry 3 "https://github.com/nektos/act/releases/download/${ACT_VERSION}/act_Linux_${act_arch}.tar.gz" -o /tmp/act.tar.gz \
+    && echo "${sha}  /tmp/act.tar.gz" | sha256sum -c - \
     && tar -C /usr/local/bin -xzf /tmp/act.tar.gz act \
     && rm -f /tmp/act.tar.gz \
     && chmod 0755 /usr/local/bin/act
 
-# actionlint (GitHub Actions workflow linter)
-RUN arch="$(dpkg --print-architecture)" \
-    && case "$arch" in \
-        amd64) sha="${ACTIONLINT_SHA256_AMD64}" ;; \
-        arm64) sha="${ACTIONLINT_SHA256_ARM64}" ;; \
-        *) echo "no pinned actionlint checksum for $arch" >&2; exit 1 ;; \
-       esac \
-    && curl -4 -fsSL --max-time 120 --retry 3 "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz" -o /tmp/actionlint.tar.gz \
-    && echo "${sha}  /tmp/actionlint.tar.gz" | sha256sum -c - \
-    && tar -C /usr/local/bin -xzf /tmp/actionlint.tar.gz actionlint \
-    && rm -f /tmp/actionlint.tar.gz \
-    && chmod 0755 /usr/local/bin/actionlint
+# actionlint (GitHub Actions workflow linter; guest_tools_builder)
+COPY --from=guest_tools_builder /out/actionlint /usr/local/bin/actionlint
 
 # In-guest documentation
 RUN mkdir -p /etc/granule-guest \

@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
@@ -102,8 +103,12 @@ default_model: gemini-3.1-pro
 	if team.DefaultModel != "gemini-3.1-pro" {
 		t.Errorf("default model = %q", team.DefaultModel)
 	}
-	if b, err := os.ReadFile(filepath.Join(dataDir, "secrets", "github", "bot.token")); err != nil || strings.TrimSpace(string(b)) != "ghp_seed" {
-		t.Errorf("bot.token = %q, %v", b, err)
+	// The token goes into the secrets store, not a plaintext file.
+	if v, err := daemon.OpenSecrets(dataDir).Resolve(ctx, gitproxy.CredentialSecretName("bot")+"/token"); err != nil || strings.TrimSpace(v) != "ghp_seed" {
+		t.Errorf("stored bot token = %q, %v", v, err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "secrets", "github", "bot.token")); err == nil {
+		t.Error("the imported token was also written as a plaintext bot.token")
 	}
 	cfg, err := store.GetConfig(ctx)
 	if err != nil || cfg == nil {

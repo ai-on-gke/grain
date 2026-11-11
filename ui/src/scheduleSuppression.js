@@ -31,6 +31,13 @@
 // not -- an unfamiliar word is no reason to leave a stopped schedule
 // looking like a working one.
 export function describeSuppression(suppressed) {
+  // Held by another schedule in its overlap group (grain/task-3895): the
+  // server's sentence names that schedule and the group, which the
+  // per-reason words below -- all about this schedule's own last firing
+  // -- would get wrong.
+  if (suppressed?.heldByScheduleId && suppressed.detail) {
+    return suppressed.detail;
+  }
   switch (suppressed?.reason) {
     case "task":
       return "the task its last firing filed is still open";

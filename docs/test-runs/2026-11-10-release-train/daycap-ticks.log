@@ -1,0 +1,190 @@
+=== tick: day 1 08:00 PDT: cut rc.1
+    fake time: 2026-10-31T15:00:00Z  /  2026-10-31 08:00:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.1.0; next minor v2.2.0; notes from v2.1.0
+    release-from-trunk: the release day is 2026-10-31 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: cutting v2.2.0-rc.1 on a5b6454e6fd9
+    release-from-trunk: phase 2: v2.2.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0-rc.1
+=== tick: day 1 10:00 PDT: rc.1 green -> released
+    fake time: 2026-10-31T17:00:00Z  /  2026-10-31 10:00:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.1.0; next minor v2.2.0; notes from v2.1.0
+    release-from-trunk: the release day is 2026-10-31 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.2.0-rc.1 qualified; releasing it as v2.2.0 and moving latest onto it (a5b6454e6fd9)
+    release-from-trunk: output promoted_version=v2.2.0
+    release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v2.2.0
+    release-from-trunk: phase 2: 2026-10-31 (America/Los_Angeles) has released v2.2.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-10-31
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1
+=== tick: day 1 12:00 PDT: day done, nothing cut
+    fake time: 2026-10-31T19:00:00Z  /  2026-10-31 12:00:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.2.0; next minor v2.3.0; notes from v2.2.0
+    release-from-trunk: the release day is 2026-10-31 (America/Los_Angeles): v2.2.0 released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: 2026-10-31 (America/Los_Angeles) has released v2.2.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-10-31
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1
+=== tick: day 1 14:00 PDT: a later green rc the same day
+    fake time: 2026-10-31T21:00:00Z  /  2026-10-31 14:00:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.2.0; next minor v2.3.0; notes from v2.2.0
+    release-from-trunk: the release day is 2026-10-31 (America/Los_Angeles): v2.2.0 released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 1: dropping v2.3.0-rc.1 (6225f4989dbb): 2026-10-31 (America/Los_Angeles) has already released v2.2.0, RELEASE_MAX_PER_DAY (1); tomorrow starts with a fresh cut from main
+    release-from-trunk: phase 2: 2026-10-31 (America/Los_Angeles) has released v2.2.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-10-31
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0-rc.1 v2.3.0-rc.1-discarded
+=== tick: day 1 14:30 PDT: and once more
+    fake time: 2026-10-31T21:30:00Z  /  2026-10-31 14:30:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.2.0; next minor v2.3.0; notes from v2.2.0
+    release-from-trunk: the release day is 2026-10-31 (America/Los_Angeles): v2.2.0 released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: 2026-10-31 (America/Los_Angeles) has released v2.2.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-10-31
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0-rc.1 v2.3.0-rc.1-discarded
+    v2.3.0-rc.1: Discard-Reason: daily-cap
+=== tick: day 2 00:05 PDT: first tick after midnight
+    fake time: 2026-11-01T07:05:00Z  /  2026-11-01 00:05:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.2.0; next minor v2.3.0; notes from v2.2.0
+    release-from-trunk: the release day is 2026-11-01 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: cutting v2.3.0-rc.2 on 6225f4989dbb
+    release-from-trunk: phase 2: v2.3.0-rc.2 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+    newest rc: v2.3.0-rc.2 on 6225f4989dbb5176a7b276617e2bdf9277f4baeb (c2=6225f4989dbb5176a7b276617e2bdf9277f4baeb)
+=== tick: day 2 01:30 PDT (before fall-back)
+    fake time: 2026-11-01T08:30:00Z  /  2026-11-01 01:30:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.2.0; next minor v2.3.0; notes from v2.2.0
+    release-from-trunk: the release day is 2026-11-01 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.3.0-rc.2 qualified; releasing it as v2.3.0 and moving latest onto it (6225f4989dbb)
+    release-from-trunk: output promoted_version=v2.3.0
+    release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v2.3.0
+    release-from-trunk: phase 2: 2026-11-01 (America/Los_Angeles) has released v2.3.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-11-01
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+=== tick: day 2 01:30 PST (after fall-back, same Pacific day)
+    fake time: 2026-11-01T09:30:00Z  /  2026-11-01 01:30:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-01 (America/Los_Angeles): v2.3.0 released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: 2026-11-01 (America/Los_Angeles) has released v2.3.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-11-01
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+=== tick: day 2 23:45 PST: still day 2 (UTC-8 now; a fixed -7 would say day 3)
+    fake time: 2026-11-02T07:45:00Z  /  2026-11-01 23:45:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-01 (America/Los_Angeles): v2.3.0 released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: 2026-11-01 (America/Los_Angeles) has released v2.3.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-11-01
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+=== tick: day 3 05:00 PST
+    fake time: 2026-11-02T13:00:00Z  /  2026-11-02 05:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-02 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: cutting v2.4.0-rc.1 on fd0d64bb3f11
+    release-from-trunk: phase 2: v2.4.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0-rc.1
+=== tick: day 3 23:30 PST
+    fake time: 2026-11-03T07:30:00Z  /  2026-11-02 23:30:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-02 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+      PENDING nightly: nightly.yml has not run on v2.4.0-rc.1 (fd0d64bb3f11) yet
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+      Qualification: PENDING v2.4.0-rc.1 (nightly).
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0-rc.1
+=== tick: day 4 00:30 PST: v2.4.0-rc.1 green after midnight
+    fake time: 2026-11-03T08:30:00Z  /  2026-11-03 00:30:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-03 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 1: dropping v2.4.0-rc.1 (fd0d64bb3f11): it was cut on 2026-11-02 (America/Los_Angeles), and the train releases only an rc cut on the day it releases; 2026-11-03 starts with a fresh cut from main
+    release-from-trunk: phase 2: cutting v2.4.0-rc.2 on b2c55ee84635
+    release-from-trunk: phase 2: v2.4.0-rc.2 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2
+    v2.4.0-rc.1: Discard-Reason: held-over
+=== tick: day 4 02:00 PST: v2.4.0-rc.2 green, auto-promote off -> staged
+    fake time: 2026-11-03T10:00:00Z  /  2026-11-03 02:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-03 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.4.0-rc.2 qualified, but the train does not release it itself: RELEASE_AUTO_PROMOTE is false; staging v2.4.0-pending for a person to approve (v2.4.0 and latest are not touched)
+    release-from-trunk: output promotion_blocked=RELEASE_AUTO_PROMOTE is false
+    release-from-trunk: RELEASE_NOTIFY=off: no notification that v2.4.0 is ready to promote
+    release-from-trunk: phase 2: 2026-11-03 (America/Los_Angeles) has released v2.4.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-11-03
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0-pending v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2
+=== approve: day 5 09:30 PST: approve v2.4.0-pending after v2.2.1 released day 5
+    fake time: 2026-11-04T17:30:00Z  /  2026-11-04 09:30:00 PST  (exit 0)
+    release-from-trunk: approve: 2026-11-04 (America/Los_Angeles) has already released v2.2.1, RELEASE_MAX_PER_DAY (1); operator@example.com's approval bypasses the cap
+    release-from-trunk: output day_cap_bypassed=v2.4.0
+    release-from-trunk: approve: operator@example.com approved v2.4.0 (v2.4.0-rc.2, b2c55ee84635, qualified); promoting it to v2.4.0 and latest
+    release-from-trunk: approve: v2.4.0 is released (after v2.3.0); v2.4.0-pending is gone
+    output: day_cap_bypassed=v2.4.0
+    output: promoted_version=v2.4.0
+    v2.4.0 tag message: Release v2.4.0  Promoted from v2.4.0-rc.2, approved by operator@example.com; released past RELEASE_MAX_PER_DAY (1): 2026-11-04 (America/Los_Angeles) had already released v2.2.1  
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.2.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2
+=== tick: day 5 10:00 PST: train after the bypass
+    fake time: 2026-11-04T18:00:00Z  /  2026-11-04 10:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.4.0; next minor v2.5.0; notes from v2.4.0
+    release-from-trunk: the release day is 2026-11-04 (America/Los_Angeles): v2.2.1 v2.4.0 released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: 2026-11-04 (America/Los_Angeles) has released v2.2.1 v2.4.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2026-11-04
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.2.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2
+=== tick: 2027-03-14 01:30 PST: cut
+    fake time: 2027-03-14T09:30:00Z  /  2027-03-14 01:30:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.4.0; next minor v2.5.0; notes from v2.4.0
+    release-from-trunk: the release day is 2027-03-14 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: cutting v2.5.0-rc.1 on 6280c1c1a534
+    release-from-trunk: phase 2: v2.5.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.2.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2 v2.5.0-rc.1
+=== tick: 2027-03-14 03:30 PDT: v2.5.0-rc.1 green -> released
+    fake time: 2027-03-14T10:30:00Z  /  2027-03-14 03:30:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.4.0; next minor v2.5.0; notes from v2.4.0
+    release-from-trunk: the release day is 2027-03-14 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.5.0-rc.1 qualified; releasing it as v2.5.0 and moving latest onto it (6280c1c1a534)
+    release-from-trunk: output promoted_version=v2.5.0
+    release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v2.5.0
+    release-from-trunk: phase 2: 2027-03-14 (America/Los_Angeles) has released v2.5.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2027-03-14
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.2.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2 v2.5.0 v2.5.0-rc.1
+=== tick: 2027-03-14 07:00 PDT: v2.6.0-rc.1 green, RELEASE_DAY_CAP_EXEMPT=v2.6.0-rc.1
+    fake time: 2027-03-14T14:00:00Z  /  2027-03-14 07:00:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.5.0; next minor v2.6.0; notes from v2.5.0
+    release-from-trunk: the release day is 2027-03-14 (America/Los_Angeles): v2.5.0 released so far, of RELEASE_MAX_PER_DAY (1)
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: 2027-03-14 has already released v2.5.0, RELEASE_MAX_PER_DAY (1), but RELEASE_DAY_CAP_EXEMPT names v2.6.0-rc.1; the cap does not hold it
+    release-from-trunk: phase 1: v2.6.0-rc.1 qualified; releasing it as v2.6.0 and moving latest onto it (ffdbf41febed)
+    release-from-trunk: output promoted_version=v2.6.0
+    release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v2.6.0
+    release-from-trunk: phase 2: 2027-03-14 (America/Los_Angeles) has released v2.5.0 v2.6.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2027-03-14
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.2.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2 v2.5.0 v2.5.0-rc.1 v2.6.0 v2.6.0-rc.1
+    v2.6.0-rc.1: (no Discard-Reason: red drop)
+=== tick: 2027-03-14 23:30 PDT (06:30 UTC 03-15): still 03-14
+    fake time: 2027-03-15T06:30:00Z  /  2027-03-14 23:30:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.6.0; next minor v2.7.0; notes from v2.6.0
+    release-from-trunk: the release day is 2027-03-14 (America/Los_Angeles): v2.5.0 v2.6.0 released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: 2027-03-14 (America/Los_Angeles) has released v2.5.0 v2.6.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles
+    release-from-trunk: output day_done=2027-03-14
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.2.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2 v2.5.0 v2.5.0-rc.1 v2.6.0 v2.6.0-rc.1
+=== tick: 2027-03-15 00:30 PDT: first tick of the next day (07:30 UTC; a fixed -8 would say 03-14)
+    fake time: 2027-03-15T07:30:00Z  /  2027-03-15 00:30:00 PDT  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.6.0; next minor v2.7.0; notes from v2.6.0
+    release-from-trunk: the release day is 2027-03-15 (America/Los_Angeles): nothing released so far, of RELEASE_MAX_PER_DAY (1)
+    release-from-trunk: phase 2: cutting v2.7.0-rc.1 on 57195818a6aa
+    release-from-trunk: phase 2: v2.7.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.2.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1 v2.4.0-rc.1-discarded v2.4.0-rc.2 v2.5.0 v2.5.0-rc.1 v2.6.0 v2.6.0-rc.1 v2.7.0-rc.1

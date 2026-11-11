@@ -28,6 +28,14 @@ export function commentIdFromHash(hash) {
   return m ? m[1] : "";
 }
 
+// malformedCommentHash is whether hash is a #comment= fragment that names
+// no comment -- "#comment=abc", "#comment=" -- as a link truncated or
+// mistyped on its way to the address bar is.
+export function malformedCommentHash(hash) {
+  const h = String(hash || "").trim();
+  return /^#?comment=/.test(h) && !commentIdFromHash(h);
+}
+
 // commentPath is the root-relative link to comment commentId on task
 // taskId.
 export function commentPath(taskId, commentId) {
@@ -58,11 +66,28 @@ export function inAppHref(href) {
 // dispatched as well, since pushState fires none, for the deep-link
 // hook (useCommentDeepLink) to see a #comment= on a task already open --
 // even the same one again, which scrolls back to it.
+//
+// A task's address names only the task, so the entry pushed for one
+// carries the page it is opened over in its state ({ behind }), as App's
+// own URL effect writes it: the popstate handler rebuilds that page
+// behind the pane -- now and on a later Back or Forward onto the entry
+// -- and the pane's "← Back" returns there rather than to the task list.
+// From one task pane to another the first pane's page stays behind.
 export function navigateInApp(href) {
   const before = window.location.pathname + window.location.search;
-  window.history.pushState({}, "", href);
+  const state = {};
+  const toTask = /^\/tasks\//.test(
+    new URL(href, window.location.href).pathname,
+  );
+  if (toTask) {
+    const behind = /^\/tasks\//.test(window.location.pathname)
+      ? window.history.state?.behind
+      : before;
+    if (typeof behind === "string") state.behind = behind;
+  }
+  window.history.pushState(state, "", href);
   if (window.location.pathname + window.location.search !== before) {
-    window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+    window.dispatchEvent(new PopStateEvent("popstate", { state }));
   }
   if (window.location.hash) {
     window.dispatchEvent(new HashChangeEvent("hashchange"));

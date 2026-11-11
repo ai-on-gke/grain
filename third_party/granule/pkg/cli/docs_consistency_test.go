@@ -178,7 +178,7 @@ func TestDocsGranulefileSettingEnvConsistency(t *testing.T) {
 }
 
 // TestObsoleteLegacyProjectNames verifies that obsolete project names (konturctl, Konturfile)
-// do not appear in active code, scripts, benchmarks, or deployments.
+// do not appear in active code, scripts, benchmarks, deployments, or user documentation.
 func TestObsoleteLegacyProjectNames(t *testing.T) {
 	root := filepath.Join("..", "..")
 	disallowedNames := []string{"konturctl", "Konturfile"}
@@ -225,6 +225,32 @@ func TestObsoleteLegacyProjectNames(t *testing.T) {
 
 		if err != nil {
 			t.Fatalf("filepath.Walk failed for %s: %v", dir, err)
+		}
+	}
+
+	// User documentation may name the old project only in the rename
+	// notice and in the audit's own grep patterns; a whole document under
+	// the old name (docs/konturfile.md once sat beside docs/granulefile.md
+	// for weeks) is what this catches.
+	docs, err := filepath.Glob(filepath.Join(root, "docs", "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs = append(docs, filepath.Join(root, "README.md"))
+	for _, path := range docs {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, "project has been renamed from") {
+				continue
+			}
+			for _, disallowed := range disallowedNames {
+				if strings.Contains(line, disallowed) && !strings.Contains(line, `\b`+disallowed+`\b`) {
+					t.Errorf("%s:%d contains obsolete project name %q outside the rename notice", path, i+1, disallowed)
+				}
+			}
 		}
 	}
 }

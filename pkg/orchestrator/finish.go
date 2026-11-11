@@ -275,6 +275,15 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err := relayHandover(ctx, store, task, proxyResult, now); err != nil {
 		return err
 	}
+	// compact_context and update_brief, on the same terms: written for
+	// the runs after this one, and neither ends anything
+	// (context_compaction.go).
+	if err := relayCompaction(ctx, store, task, proxyResult, runID, now); err != nil {
+		return err
+	}
+	if err := relayBrief(ctx, store, task, proxyResult, now); err != nil {
+		return err
+	}
 
 	// Relayed here for the same reason, and before the same two returns:
 	// a review's findings are the whole product of the run that wrote
@@ -841,6 +850,14 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if !pushed {
 		return false, nil
 	}
+	if reviewCommentsOnly(task) {
+		// A review posts its findings; it was not asked to fix them
+		// (pathtriggerreview.go). What it pushed is left where it is, and
+		// the run ends like any other review's.
+		return false, noteOnTask(ctx, store, task.ID, fmt.Sprintf("Branch %s was pushed, but this review "+
+			"was filed to post findings, not to fix them, so no pull request was opened for it.",
+			task.BranchName()), now)
+	}
 	closed, err := taskClosed(ctx, store, task.ID)
 	if err != nil {
 		return true, err
@@ -848,28 +865,30 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if closed {
 		return true, noteOrphanedPullRequests(ctx, store, client, task.ID, now)
 	}
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
-				host := task.Target.GitHost()
-				note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
-				if !strings.Contains(reason, "a plain git host") {
-					note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
-				}
-				if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
-					return true, err
-				}
-				if taskKeepRunning(ctx, store, task) {
-					markKeepRunningRequeued(store, task.ID, "", false)
-					return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-						o.CompletedAt = nil
-					})
-				}
+	// Asked of the client rather than of a *github.RESTClient's Tokens:
+	// the daemon's client is a StateRepoPullRequestClient around one, and
+	// a type assertion to the REST client never saw a plain git host
+	// through it (tests/e2e/git_hosts_daemon_test.go).
+	if src, ok := client.(github.GitOnlySource); ok {
+		if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
+			host := task.Target.GitHost()
+			note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
+			if !strings.Contains(reason, "a plain git host") {
+				note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
+			}
+			if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
+				return true, err
+			}
+			if taskKeepRunning(ctx, store, task) {
+				markKeepRunningRequeued(store, task.ID, "", false)
 				return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-					o.CompletedAt = &now
-					o.RetryRequestedAt = nil
+					o.CompletedAt = nil
 				})
 			}
+			return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.CompletedAt = &now
+				o.RetryRequestedAt = nil
+			})
 		}
 	}
 	if err := finishWithPullRequest(ctx, store, client, task, now); err != nil {
@@ -984,11 +1003,9 @@ var (
 // plain git host asks about a different repository on GitHub, and a 404
 // from that read every pushed branch there as one nobody could check.
 func targetBranchExists(client github.Client, target model.RepoRef, branch string) (bool, error) {
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitBranchSource); ok {
-			if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
-				return exists, err
-			}
+	if src, ok := client.(github.GitBranchSource); ok {
+		if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
+			return exists, err
 		}
 	}
 	return branchExistsSettled(client, target.Owner, target.Name, branch)
@@ -1412,21 +1429,25 @@ func relayHandover(ctx context.Context, store *model.Store, task model.Task,
 	if !ok || handover == "" {
 		return nil
 	}
-	existing, err := store.Comments(ctx, task.ID)
+	last, err := store.LatestHandover(ctx, task.ID)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading comments before posting handover for %s: %w", task.ID, err)
+		return fmt.Errorf("orchestrator: reading the last handover before posting one for %s: %w", task.ID, err)
 	}
-	for i := len(existing) - 1; i >= 0; i-- {
-		if existing[i].Handover {
-			if strings.TrimSpace(existing[i].Body) == handover {
-				return nil
-			}
-			break
+	if last != nil && strings.TrimSpace(last.Body) == handover {
+		// The same handover written again is the run confirming it is
+		// still true, which resets its age (model.HandoverAge) without a
+		// new version.
+		if err := store.ConfirmHandover(ctx, task.ID, now); err != nil {
+			return fmt.Errorf("orchestrator: confirming handover for %s: %w", task.ID, err)
 		}
+		return nil
 	}
 	now, err = answeringTime(ctx, store, task.ID, now)
 	if err != nil {
 		return fmt.Errorf("orchestrator: posting handover for %s: %w", task.ID, err)
+	}
+	if err := store.BumpHandoverVersion(ctx, task.ID); err != nil {
+		return fmt.Errorf("orchestrator: counting handover for %s: %w", task.ID, err)
 	}
 	agentPrincipal := model.Principal{Kind: model.PrincipalAgent, ID: task.ID}
 	if _, err := store.AddComment(ctx, model.Comment{
@@ -2448,7 +2469,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.Body += otherBranchQueueNote(task, proposal)
 		}
 		asked := proposedAutoMerge(p, task) &&
-			model.GrantsSubsetOf(proposal.Grants, task.Grants)
+			model.GrantsSubsetOf(model.GrantsBeyondCIReadDefault(proposal), task.Grants)
 		proposal.AutoMerge = asked && model.LandsWhereGranted(aligned, task)
 		if scratch {
 			// Merging into the scratch branch is what the fixture is for,
@@ -2610,12 +2631,14 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 		}
 	}
 	if target != nil {
-		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *target)
-		if err == nil && usesGrainCI {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
-		} else if err != nil && grainci.RepoUsesGrainCI(repoCfg, *target) {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
+		ciDefaults, err := store.RepoCIDefaults(ctx, *target)
+		if err != nil {
+			ciDefaults = model.RepoCIDefaults{GrainCI: grainci.RepoUsesGrainCI(repoCfg, *target)}
+			if !ciDefaults.GrainCI && cfg != nil {
+				ciDefaults = model.RepoCIDefaultsFor(false, cfg.CapabilityPolicy, *target)
+			}
 		}
+		grants = model.AdjustRepoCIGrants(grants, *target, ciDefaults)
 	}
 	return grants, nil
 }

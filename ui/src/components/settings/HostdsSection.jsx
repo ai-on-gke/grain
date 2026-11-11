@@ -36,7 +36,7 @@ import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 // formatLabels is a host's labels as the label field takes them:
 // "k=v,k2=v2", sorted.
-export function formatLabels(labels) {
+function formatLabels(labels) {
   return Object.keys(labels || {})
     .sort()
     .map((k) => `${k}=${labels[k]}`)
@@ -58,7 +58,7 @@ export function parseLabels(text) {
 }
 
 // parsePrincipals splits a comma-separated list of allowed principal rules.
-export function parsePrincipals(text) {
+function parsePrincipals(text) {
   return (text || "")
     .split(",")
     .map((s) => s.trim())
@@ -341,21 +341,41 @@ export default function HostdsSection({ showError, dismissError }) {
       setShowNewCode(false);
     });
 
-  const rotateCode = (c) =>
+  // Rotating or revoking a code, rotating or revoking a host's token and
+  // rejecting a join request each took effect on one click: the
+  // 2026-11-11 walkthrough revoked a host by accident, with no way back
+  // but registering it again. Each now says what it breaks and asks.
+  const rotateCode = (c) => {
+    if (
+      !window.confirm(
+        `Rotate enrollment code ${c.name}? Its invite command stops working at once, so hosts not yet joined with it need the new one. Hosts already joined keep their credentials.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(
         `/api/hostds/enrollment-codes/${encodeURIComponent(c.name)}/rotate`,
         { method: "POST" },
       );
     });
+  };
 
-  const revokeCode = (c) =>
+  const revokeCode = (c) => {
+    if (
+      !window.confirm(
+        `Revoke enrollment code ${c.name}? Its invite command stops working for good and the code cannot be restored. Hosts already joined keep their credentials.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(
         `/api/hostds/enrollment-codes/${encodeURIComponent(c.name)}/revoke`,
         { method: "POST" },
       );
     });
+  };
 
   const draftFor = (p) =>
     pendingDrafts[p.id] || {
@@ -383,12 +403,20 @@ export default function HostdsSection({ showError, dismissError }) {
       });
     });
 
-  const rejectPending = (p) =>
+  const rejectPending = (p) => {
+    if (
+      !window.confirm(
+        `Reject the join request from ${p.hostname}? It is discarded, and that host has to run its join command again to ask once more.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(`/api/hostds/pending/${encodeURIComponent(p.id)}/reject`, {
         method: "POST",
       });
     });
+  };
 
   const create = () =>
     act(async () => {
@@ -408,7 +436,14 @@ export default function HostdsSection({ showError, dismissError }) {
       setLabels("");
     });
 
-  const rotate = (h) =>
+  const rotate = (h) => {
+    if (
+      !window.confirm(
+        `Rotate host ${h.name}'s token? Its current token stops working at once, so the host is disconnected until the new token is installed on it.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       setShown(null);
       setIssued(
@@ -417,6 +452,7 @@ export default function HostdsSection({ showError, dismissError }) {
         }),
       );
     });
+  };
 
   const showInstall = async (h) => {
     try {
@@ -430,7 +466,14 @@ export default function HostdsSection({ showError, dismissError }) {
     }
   };
 
-  const revoke = (h) =>
+  const revoke = (h) => {
+    if (
+      !window.confirm(
+        `Revoke host ${h.name}? It is disconnected at once and cannot be restored: using that machine again means enrolling it anew. A revoked host can then be deleted.`,
+      )
+    ) {
+      return;
+    }
     act(async () => {
       await api(`/api/hostds/${encodeURIComponent(h.name)}/revoke`, {
         method: "POST",
@@ -438,6 +481,7 @@ export default function HostdsSection({ showError, dismissError }) {
       if (issued?.hostd?.name === h.name) setIssued(null);
       if (shown?.name === h.name) setShown(null);
     });
+  };
   // remove deletes a revoked hostd from the registry, with its tokens
   // (DELETE /api/hostds/{name}). The daemon refuses one a model
   // connection or capability server still names, listing them.

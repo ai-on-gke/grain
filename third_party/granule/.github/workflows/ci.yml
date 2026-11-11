@@ -137,7 +137,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           # The current release, which is what grain CI's sandbox carries,
-          # rather than go.mod's 1.22 floor.
+          # rather than go.mod's 1.25.13 floor.
           go-version: stable
           cache-dependency-path: go.sum
 
@@ -424,7 +424,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           # The current release, which is what grain CI's sandbox carries,
-          # rather than go.mod's 1.22 floor.
+          # rather than go.mod's 1.25.13 floor.
           go-version: stable
           cache-dependency-path: go.sum
 

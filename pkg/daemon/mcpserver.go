@@ -1517,17 +1517,20 @@ func warnUnknownGrants(grants GrantNames) {
 
 func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID string, client *ui.HTTPClient) []mcp.Tool {
 	var tools []mcp.Tool
+	var redactLines func([]string) ([]string, int)
+	if grainserver.HasJournal(grants) || grainserver.HasHealth(grants) {
+		redactLines = childRedactor(client, secretsDir)
+	}
 	if grainserver.HasJournal(grants) {
 		tools = append(tools, grainlog.Tools(grainlog.Config{
-			TaskID:   taskID,
-			Redactor: grainLogRedactor(secretsDir),
+			TaskID: taskID,
+			Redact: redactLines,
 		})...)
 	}
 	if grainserver.HasHealth(grants) {
-		redactor := grainLogRedactor(secretsDir)
 		var redact func(string) string
-		if redactor != nil {
-			redact = func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
+		if redactLines != nil {
+			redact = func(s string) string { lines, _ := redactLines([]string{s}); return lines[0] }
 		}
 		var reader deploymenthealth.Reader
 		if client != nil {
@@ -1584,8 +1587,99 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 		return nil
 	}
 	known = append(known, knownGitHubTokens(secretsDir)...)
+	known = append(known, knownLooseCredentials(secretsDir)...)
 	return grainlog.NewRedactor(known)
 }
+
+// childRedactor is the redaction a per-run grain mcpserver applies to
+// what read_grain_log and the deployment-health tools hand a run, or nil
+// if it has none (and those tools then refuse).
+//
+// With a daemon to ask (-server), every call asks it first
+// (POST /api/secrets/redact): the daemon holds the secret store with its
+// key already loaded, so this process never opens secrets.key, nor sees
+// a single stored value -- only its own lines back, redacted. The GitHub
+// tokens of the git proxy's ladder, which are not in that store, are
+// still cut here, which is why a run with no -grain-secrets-dir still
+// gets nil (the tools refuse) even with a daemon to ask. Nothing is asked
+// until a tool is called, so listing tools never reaches the daemon.
+//
+// A daemon too old to serve the route (404) is answered by reading the
+// store directly (grainLogRedactor), as this process always did, from
+// then on; so is a process with no daemon at all. Any other failure --
+// a daemon restarting, say -- withholds that call's lines rather than
+// serving them with only the shapes cut: the contract read_grain_log
+// holds is "every known value or nothing".
+func childRedactor(client *ui.HTTPClient, secretsDir string) func([]string) ([]string, int) {
+	if client == nil {
+		redactor := grainLogRedactor(secretsDir)
+		if redactor == nil {
+			return nil
+		}
+		return redactor.Redact
+	}
+	if secretsDir == "" {
+		// The daemon's store is only half of what has to be cut: the git
+		// proxy ladder's GitHub tokens are read from secretsDir here, and
+		// a classic 40-hex PAT has no shape to fall back on. No
+		// -grain-secrets-dir has always meant these tools refuse
+		// (orchestrator.Config.GrainSecretsDir: "a journal nobody could
+		// redact is one nobody should be reading"), and asking the daemon
+		// does not change that.
+		fmt.Fprintln(os.Stderr, "grain mcpserver: read_grain_log is unavailable this run: "+
+			"no -grain-secrets-dir, so this process cannot tell which GitHub tokens to redact")
+		return nil
+	}
+	var (
+		mu       sync.Mutex
+		local    *grainlog.Redactor // the ladder's GitHub tokens, cut beside the daemon's redaction
+		fallback *grainlog.Redactor // set once the daemon has said it does not serve redaction
+		noServe  bool
+	)
+	withhold := func(lines []string) ([]string, int) {
+		out := make([]string, len(lines))
+		for i := range out {
+			out[i] = "[withheld: this line could not be redacted]"
+		}
+		return out, len(lines)
+	}
+	return func(lines []string) ([]string, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		if noServe {
+			if fallback == nil {
+				return withhold(lines)
+			}
+			return fallback.Redact(lines)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), childRedactCallTimeout)
+		defer cancel()
+		resp, err := client.RedactSecrets(ctx, lines)
+		var notFound *ui.NotFoundError
+		switch {
+		case errors.As(err, &notFound):
+			fmt.Fprintf(os.Stderr, "grain mcpserver: the daemon does not serve secret redaction (%v); "+
+				"reading this host's secret store directly instead\n", err)
+			noServe = true
+			fallback = grainLogRedactor(secretsDir)
+			if fallback == nil {
+				return withhold(lines)
+			}
+			return fallback.Redact(lines)
+		case err != nil || len(resp.Lines) != len(lines):
+			return withhold(lines)
+		}
+		if local == nil {
+			local = grainlog.NewRedactor(knownGitHubTokens(secretsDir))
+		}
+		out, n := local.Redact(resp.Lines)
+		return out, resp.Redacted + n
+	}
+}
+
+// childRedactCallTimeout bounds each redaction childRedactor asks the
+// daemon for.
+const childRedactCallTimeout = 30 * time.Second
 
 func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlog.Redactor {
 	if secretStore == nil {
@@ -1600,6 +1694,7 @@ func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlo
 	}
 	if secretsDir != "" {
 		known = append(known, knownGitHubTokens(secretsDir)...)
+		known = append(known, knownLooseCredentials(secretsDir)...)
 	}
 	return grainlog.NewRedactor(known)
 }
@@ -2699,7 +2794,18 @@ func pullRequestToolsWithUpstream(dataDir, githubHost string, insecureHTTP bool,
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"grain mcpserver: pull_request_status and wait_for_checks are unavailable this run: %v\n", err)
-		return mcp.NewPullRequestTools(nil, nil, mcp.PullRequestScope{})
+		return nil
+	}
+	// With no GitHub reader -- a task with no repository, or a host's
+	// sandbox, whose mcpserver is started without -data-dir/-pr-repo --
+	// every one of these tools answers only "no GitHub repository
+	// configured", so they are left off the roster rather than offered to
+	// a run that can only ever get that error (task 4364). Such a run reads
+	// CI with `grain ci wait` and `grain pr open`, which answer through the
+	// daemon on every sandbox; a grain-CI run's own wait_for_checks is
+	// registered by the grain CI tool set, not here.
+	if client == nil {
+		return nil
 	}
 	return mcp.NewPullRequestTools(client, grainCI, scope)
 }
