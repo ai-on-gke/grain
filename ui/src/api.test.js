@@ -14,6 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import api, {
+  forgetETag,
   forgetETags,
   forgetVerifierTrouble,
   isUnreachable,
@@ -439,6 +440,28 @@ describe("api, polling", () => {
     // asserting about: the stored ETag describes nothing it would still
     // recognise.
     expect(fetchMock.mock.calls[2][1].headers["If-None-Match"]).toBeUndefined();
+  });
+
+  it("forgets one path's ETag for a caller that dropped its answer", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, [], { ETag: '"task"' }))
+      .mockResolvedValueOnce(jsonResponse(200, [], { ETag: '"list"' }))
+      .mockResolvedValueOnce(jsonResponse(200, []))
+      .mockResolvedValueOnce(notModified('"list"'));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api("/api/tasks/1", { poll: true });
+    await api("/api/tasks", { poll: true });
+    forgetETag("/api/tasks/1");
+    await api("/api/tasks/1", { poll: true });
+    await api("/api/tasks", { poll: true });
+
+    // The dropped answer's ETag would have the next poll told 304 about
+    // a body its caller never kept (App.jsx's loadSessionTask); other
+    // paths keep theirs.
+    expect(fetchMock.mock.calls[2][1].headers["If-None-Match"]).toBeUndefined();
+    expect(fetchMock.mock.calls[3][1].headers["If-None-Match"]).toBe('"list"');
   });
 
   it("asks unconditionally for a path nobody polls", async () => {

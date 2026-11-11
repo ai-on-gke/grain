@@ -980,6 +980,13 @@ func (c *Client) externalApprovalWithin(ctx context.Context, principal string, t
 			"work it could have filed itself (docs/agent-api.md)", principal, task.ID, field, why)
 	}
 	for _, g := range task.Grants {
+		// The default read of the task's own repository's CI is one the
+		// credential's own filing would have carried as well
+		// (model.DefaultCIReadGrant), so it is not a grant it is asked
+		// to make.
+		if task.Target != nil && model.IsDefaultCIReadGrant(g, *task.Target) {
+			continue
+		}
 		if err := agentGrantRefusal(held, g.Capability, normalize); err != nil {
 			return refuse("capabilities", fmt.Sprintf("it holds %s, which the credential cannot grant", strings.TrimSpace(g.Capability)))
 		}

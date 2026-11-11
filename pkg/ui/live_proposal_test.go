@@ -289,7 +289,7 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(piece.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(piece.Capabilities), []string{model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("capabilities = %v, want [%s] -- the defaults, not the parent's grant set",
 			piece.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
