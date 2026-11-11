@@ -185,7 +185,7 @@ test("a task without the capability cannot ask for a local-script approval", asy
   });
   expect(res.status()).toBe(400);
   expect((await res.json()).error).toContain(
-    "holds no local-scripts capability",
+    "holds no host-script grant",
   );
   await run.dispose();
 });
