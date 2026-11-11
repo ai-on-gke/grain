@@ -198,6 +198,35 @@ func OffAllowlistAtDispatchComment(target RepoRef, allowed []string) string {
 			"reply after that lets it run.", target, QuotedRepoList(allowed))
 }
 
+// OffAllowlistAtProxyReason is what the git proxy refuses a run's clone
+// or push with when the repository it was dispatched against came off
+// the list while the run was live (gitproxy.ModelAuthorizer): the run
+// was let in when the repo was on the list, and the removal is what
+// stops it, so that is what it is told rather than a bare "not in
+// scope" it would read as grain being broken.
+func OffAllowlistAtProxyReason(target RepoRef, allowed []string) string {
+	return fmt.Sprintf(
+		"%s is no longer on this deployment's target repo list, so no sandbox may clone or push "+
+			"it: the repository was removed from the deployment after this run was dispatched "+
+			"against it. The list currently holds %s. An operator puts the repo back under Settings "+
+			"for a later run to reach it.", target, QuotedRepoList(allowed))
+}
+
+// OffAllowlistAtMergeComment is what a task whose pull request is open
+// against a repo that came off the list is told when the merge queue
+// takes its auto-merge back (orchestrator.withdrawForRemovedRepo). The
+// pull request is left open, and putting the repo back does not merge
+// it by itself: a removal is an operator saying the deployment no
+// longer works there, and whatever was queued before it was said is
+// for a person to send again.
+func OffAllowlistAtMergeComment(target RepoRef, allowed []string) string {
+	return fmt.Sprintf(
+		"`%s` is no longer on this deployment's target repo list, so grain will not merge this "+
+			"pull request into it: its auto-merge is withdrawn and the pull request is left open. "+
+			"The list currently holds %s. Putting the repo back under Settings does not merge it "+
+			"by itself -- a person presses Submit after that.", target, QuotedRepoList(allowed))
+}
+
 // StrandedWork is one repository a proposed Config.TargetRepos would
 // stop naming, and the work already stored against it that the narrowing
 // would strand there -- what Store.StrandedByTargetRepos answers with,
