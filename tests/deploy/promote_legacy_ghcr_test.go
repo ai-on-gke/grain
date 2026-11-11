@@ -242,7 +242,7 @@ func TestPromoteOfAPreDockerHubReleaseDoesNotSignAnUnverifiedSource(t *testing.T
 		t.Fatalf("promote without REQUIRE_IMAGE_SIGNING failed on unsigned GHCR source: %v\n%s", err, out)
 	}
 	asked, _ := os.ReadFile(log)
-	if strings.Contains(string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false docker.io/grainai/") {
+	if strings.Contains(string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false --new-bundle-format=false --use-signing-config=false docker.io/grainai/") {
 		t.Errorf("promote signed a copy whose source did not verify:\n%s", asked)
 	}
 	containsRun(t, out, "carries no signature made with")
@@ -278,7 +278,7 @@ func TestPromoteRebuildSignsOnlyWhenShaSourceVerified(t *testing.T) {
 	asked, _ := os.ReadFile(log)
 	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:sha-"+short+" ghcr.io/bwsalmon/grain/grain@sha256:1234")
 	containsRun(t, docker, "pull docker.io/grainai/grain@sha256:1234")
-	containsRun(t, string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false docker.io/grainai/grain@sha256:9999")
+	containsRun(t, string(asked), "sign --yes --key "+env["IMAGE_SIGNING_KEY"]+" --tlog-upload=false --new-bundle-format=false --use-signing-config=false docker.io/grainai/grain@sha256:9999")
 
 	// Unverified sha-<short> source: still pulled by resolved digest, rebuilt unsigned with a warning, never signed.
 	env, log = legacySigningEnv(t, legacyAnswers(t, commits["released"], true, "sha256:1234"), true)

@@ -127,8 +127,28 @@ func TestTheReleaseSignsEveryImageBeforeMovingATag(t *testing.T) {
 		}
 	}
 	sign := body(t, script, "sign_image() {")
-	contains(t, sign, "--tlog-upload=false")
+	contains(t, sign, `"${cosign_legacy_flags[@]}"`)
 	contains(t, sign, `"$digest_ref"`)
+}
+
+// The release signs with cosign v3, whose default sign and attest write a
+// new-format bundle (an OCI referrer) that the v2.4.1 verifier bundled in
+// every grain image before v3.5.0 cannot find -- each of those
+// deployments would refuse its next upgrade as unsigned. So both write
+// cosign's legacy sha256-<hex>.sig / .att instead, with no transparency
+// log, which v3 only allows once its signing config is switched off.
+func TestTheReleaseSignsInTheFormatEveryDeployedVerifierReads(t *testing.T) {
+	script := read(t, "scripts", "release-images.sh")
+	code := stripComments(script)
+	contains(t, code, "cosign_legacy_flags=(--tlog-upload=false --new-bundle-format=false --use-signing-config=false)")
+	for _, fn := range []string{"sign_image() {", "attest_reviewed_merge() {"} {
+		got := body(t, script, fn)
+		contains(t, got, `--key "$signing_key" "${cosign_legacy_flags[@]}"`)
+		absent(t, got, "--tlog-upload=false")
+	}
+	install := body(t, script, "ensure_cosign() {")
+	contains(t, install, "github.com/sigstore/cosign/v3/cmd/cosign@")
+	contains(t, install, "GOTOOLCHAIN=auto")
 }
 
 // The upgrade verifier runs in the daemon's own container, so the image

@@ -3493,7 +3493,7 @@ func TestGitHubWorkflowCosignDownloadsAreChecksummed(t *testing.T) {
 func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
 	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
 		content := stripComments(read(t, ".github", "workflows", name))
-		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:")
+		contains(t, content, "ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:")
 		for _, line := range strings.Split(content, "\n") {
 			if !strings.Contains(line, "curl ") || strings.Contains(line, "curl -fsSIL") {
 				continue
