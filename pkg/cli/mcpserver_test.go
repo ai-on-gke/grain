@@ -16,7 +16,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -38,12 +37,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-// pull_request_status and wait_for_checks have to be registered whatever
-// the flags said, so that a run whose task has no repo gets each tool's
-// own explanation rather than "unknown tool pull_request_status" -- which
-// reads like grain is broken rather than like a task with nothing to
-// look at.
-func TestPullRequestToolsAlwaysRegisterTheTool(t *testing.T) {
+// With no GitHub reader to answer from -- no repo, a repo with no branch,
+// a repo with no data directory (a host's sandbox), a repo that does not
+// parse -- pull_request_status, base_branch_status, wait_for_checks and the
+// review-thread tools could only ever answer "no GitHub repository
+// configured", so none of them is registered: a run is never offered a
+// tool that always errors (task 4364). It reads CI with `grain ci wait`
+// and `grain pr open` instead, which the prompt names.
+func TestPullRequestToolsAreLeftOffWithoutAGitHubReader(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
@@ -61,17 +62,21 @@ func TestPullRequestToolsAlwaysRegisterTheTool(t *testing.T) {
 			var names []string
 			for _, tool := range tools {
 				names = append(names, tool.Name)
-				res := tool.Handler(context.Background(), map[string]any{})
-				if !res.IsError || !strings.Contains(res.Text, "no GitHub repository configured") {
-					t.Errorf("%s answered %q (isError=%v), want the "+
-						"nothing-configured explanation", tool.Name, res.Text, res.IsError)
-				}
 			}
-			if want := []string{"pull_request_status", "base_branch_status",
-				"reply_to_pull_request_comment", "resolve_review_thread", "wait_for_checks"}; !slices.Equal(names, want) {
-				t.Fatalf("pullRequestTools registered %v, want %v", names, want)
+			if len(names) != 0 {
+				t.Fatalf("pullRequestTools registered %v with no GitHub reader, want none", names)
 			}
 		})
+	}
+	// With one, all five are there.
+	tools := daemon.PullRequestTools(t.TempDir(), "github.com", false, "acme/widgets", "grain/task-9", "main", "", false, false, "", nil)
+	var names []string
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	if want := []string{"pull_request_status", "base_branch_status",
+		"reply_to_pull_request_comment", "resolve_review_thread", "wait_for_checks"}; !slices.Equal(names, want) {
+		t.Fatalf("pullRequestTools registered %v, want %v", names, want)
 	}
 }
 
@@ -470,6 +475,9 @@ func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testi
 		"-task", "task-review",
 		"-pr-repo", "acme/app",
 		"-pr-branch", "grain/task-review",
+		// A data directory, so there is a GitHub reader: without one
+		// GitHub's tools are left off the roster altogether.
+		"-data-dir", t.TempDir(),
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("serveMCPServer (full): %v", err)
@@ -567,6 +575,7 @@ func TestServeMCPServerRegistersReadOnlyCIToolsForRepoScopedCIReadGrant(t *testi
 		"-task", "task-review",
 		"-pr-repo", "acme/widgets",
 		"-pr-branch", "grain/task-review",
+		"-data-dir", t.TempDir(),
 	})
 	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("serveMCPServer (control): %v", err)
