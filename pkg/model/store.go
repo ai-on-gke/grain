@@ -2036,6 +2036,30 @@ func (s *Store) MergeQueueStates(ctx context.Context) (map[string]MergeQueueActi
 	return out, err
 }
 
+// CIStatuses reads every open task's grain CI status in one query, for
+// list views that compute each row's merge gates (ui.Client.ListTasks)
+// without reading each task's whole observation. Only the fields a gate
+// reads are filled in.
+func (s *Store) CIStatuses(ctx context.Context) (map[string]CIStatus, error) {
+	out := map[string]CIStatus{}
+	err := each(ctx, s.db,
+		"SELECT `task_id`,`ci_run_id`,`ci_commit`,`ci_conclusion`,`ci_detail`,`ci_finished_at` "+
+			"FROM `task_observation` "+
+			"WHERE `ci_run_id` IS NOT NULL AND `ci_run_id` != '' AND `closed_at` IS NULL", nil,
+		func(rows *sql.Rows) error {
+			var id, runID string
+			var commit, conclusion, detail sql.NullString
+			var finished sql.NullTime
+			if err := rows.Scan(&id, &runID, &commit, &conclusion, &detail, &finished); err != nil {
+				return err
+			}
+			out[id] = CIStatus{RunID: runID, Commit: commit.String, Conclusion: conclusion.String,
+				Detail: detail.String, FinishedAt: timePtr(finished)}
+			return nil
+		})
+	return out, err
+}
+
 // MergeQueueRepairing reads every task whose automatic repair is in flight.
 func (s *Store) MergeQueueRepairing(ctx context.Context) (map[string]bool, error) {
 	out := map[string]bool{}

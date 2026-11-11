@@ -911,6 +911,11 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	// And once for grain CI's verdicts, which each row's CI gate reads.
+	ciStatuses, err := c.Store.CIStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var open, closedTasks []Task
 	for _, t := range tasks {
 		t.GoalKind = goalKinds[t.ID]
@@ -926,8 +931,12 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		} else if at, ok := oomRetries[t.ID]; ok && states[t.ID] == model.StateQueued {
 			doing = oomRetryActivity(at)
 		}
+		var ci *model.CIStatus
+		if st, ok := ciStatuses[t.ID]; ok {
+			ci = &st
+		}
 		task := taskFrom(t, states[t.ID], states, blockedAt, repairing[t.ID], mergeQueueStates[t.ID], doing,
-			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
+			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now), ci)
 		if at, ok := runNow[t.ID]; ok {
 			task.RunNowAt = &at
 			task.RunNowStale = runNowStale[t.ID]
@@ -1256,7 +1265,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		t.GoalKind = goal.Kind
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
-		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()))
+		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()), observationCI(obs))
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt
@@ -1498,7 +1507,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 		t.GoalKind = goal.Kind
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
-		c.stallNote(state, model.StateTimesFrom(*t, obs, tailRuns), c.now()))
+		c.stallNote(state, model.StateTimesFrom(*t, obs, tailRuns), c.now()), observationCI(obs))
 	pendingComment, err := c.pendingQuestionComment(ctx, id, obs, comments)
 	if err != nil {
 		return TaskDetail{}, err
@@ -1947,6 +1956,14 @@ func (c *Client) Attachment(ctx context.Context, taskID string, id int64) (model
 		return model.Attachment{}, &NotFoundError{message: fmt.Sprintf("no attachment %d on task %s", id, taskID)}
 	}
 	return *a, nil
+}
+
+// observationCI is obs's grain CI status, nil for no observation.
+func observationCI(obs *model.Observation) *model.CIStatus {
+	if obs == nil {
+		return nil
+	}
+	return obs.CI
 }
 
 // mergeGateStates resolves only the task states ComputeMergeGates inspects

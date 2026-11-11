@@ -111,3 +111,64 @@ func TestAGateOverrideForAnEarlierHeadSkipsNothingAtTheNewHead(t *testing.T) {
 		t.Fatalf("latest override = %+v (%v), want head B's", ov, ok)
 	}
 }
+
+// A row in a list (the Inbox, the task list) shows the same CI gate as the
+// task page: grain CI's finished verdict, not "waiting for checks"
+// (docs/test-runs/2026-11-11-merge-gates.md, finding F3).
+func TestAListRowsCIGateMatchesTheTaskPage(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.AutoMerge = true
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#5"},
+			model.Link{Kind: model.LinkSecurityHold, Target: "trust-boundary/v5"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "77"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Date(2026, 11, 11, 1, 0, 0, 0, time.UTC)
+	for conclusion, want := range map[string]model.MergeGateState{
+		"success": model.GateStatePassed,
+		"failure": model.GateStateFailing,
+	} {
+		if err := store.Observe(ctx, model.Observation{TaskID: task.ID, CompletedAt: &done,
+			CI: &model.CIStatus{RunID: "r-" + conclusion, Commit: "0123456789abcdef0123456789abcdef01234567",
+				Conclusion: conclusion, FinishedAt: &done}}); err != nil {
+			t.Fatal(err)
+		}
+		detail, err := c.GetTask(ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := c.ListTasks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ciGate := func(gates []model.MergeGate) model.MergeGateState {
+			for _, g := range gates {
+				if g.ID == model.GateCI {
+					return g.State
+				}
+			}
+			return ""
+		}
+		if got := ciGate(detail.MergeGates); got != want {
+			t.Fatalf("%s: task page CI gate = %q, want %q", conclusion, got, want)
+		}
+		found := false
+		for _, row := range list {
+			if row.ID != task.ID {
+				continue
+			}
+			found = true
+			if got := ciGate(row.MergeGates); got != want {
+				t.Fatalf("%s: list row CI gate = %q, want %q like the task page", conclusion, got, want)
+			}
+		}
+		if !found {
+			t.Fatalf("task %s not listed", task.ID)
+		}
+	}
+}

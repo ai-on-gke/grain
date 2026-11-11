@@ -1215,7 +1215,7 @@ type AttemptStartup struct {
 // neither of which belongs in a projection.
 func taskFrom(t model.Task, state model.State, targetStates map[string]model.State, mergeQueueBlockedAt *time.Time,
 	repairing bool, mergeQueue model.MergeQueueActivity, activity *model.RunActivity,
-	reviewTemplateName string, span model.TaskSpan, stall string) Task {
+	reviewTemplateName string, span model.TaskSpan, stall string, ci *model.CIStatus) Task {
 	priority := t.Priority
 	if priority == 0 {
 		priority = model.DefaultTaskPriority
@@ -1434,6 +1434,9 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		MergeQueueNote:      mergeQueue.Note,
 		PrMergedAt:          span.PrMergedAt,
 		PrClosedAt:          span.PrClosedAt,
+		// grain CI's verdict, so a row's CI gate says what the task page
+		// says rather than "waiting for checks" over a finished run.
+		CI: ci,
 	}
 	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
