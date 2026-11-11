@@ -218,7 +218,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 	}
 	staging := grantTestCap + `#key={"account":"staging","scopes":["all"]}`
 	prod := grantTestCap + `#key={"account":"prod","project":"web","scopes":["all"]}`
-	got := refGrants(detail.Capabilities)
+	got := refGrants(withoutDefaultCIRead(detail.Capabilities))
 	if len(got) != 2 || !contains(got, staging) || !contains(got, prod) {
 		t.Fatalf("grants = %q, want staging and prod, normalized, once each", got)
 	}
@@ -229,7 +229,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 		t.Fatalf("replace: %d %v", code, out)
 	}
 	detail, _ = client.GetTask(ctx, task.ID)
-	got = refGrants(detail.Capabilities)
+	got = refGrants(withoutDefaultCIRead(detail.Capabilities))
 	if len(got) != 2 || contains(got, prod) || !contains(got, grantTestCap+`#key={"account":"prod","project":"api","scopes":["all"]}`) {
 		t.Fatalf("after replace: %q", got)
 	}
@@ -239,7 +239,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 		t.Fatalf("detach: %d %v", code, out)
 	}
 	detail, _ = client.GetTask(ctx, task.ID)
-	if got = refGrants(detail.Capabilities); len(got) != 1 || contains(got, staging) {
+	if got = refGrants(withoutDefaultCIRead(detail.Capabilities)); len(got) != 1 || contains(got, staging) {
 		t.Fatalf("after detach: %q", got)
 	}
 
@@ -334,7 +334,7 @@ func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask with read-issues alias: %v", err)
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubReadIssuesGrant {
+	if len(withoutDefaultCIRead(task.Capabilities)) != 1 || withoutDefaultCIRead(task.Capabilities)[0] != model.GitHubReadIssuesGrant {
 		t.Fatalf("CreateTask capabilities = %v, want [%s]", task.Capabilities, model.GitHubReadIssuesGrant)
 	}
 	if err := client.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
@@ -344,7 +344,7 @@ func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(afterDetach.Capabilities) != 0 {
+	if len(withoutDefaultCIRead(afterDetach.Capabilities)) != 0 {
 		t.Fatalf("after detach via alias: %v, want empty", afterDetach.Capabilities)
 	}
 	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
@@ -354,7 +354,7 @@ func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(afterAttach.Capabilities) != 1 || afterAttach.Capabilities[0] != model.GitHubReadIssuesGrant {
+	if len(withoutDefaultCIRead(afterAttach.Capabilities)) != 1 || withoutDefaultCIRead(afterAttach.Capabilities)[0] != model.GitHubReadIssuesGrant {
 		t.Fatalf("after attach via alias: %v, want [%s]", afterAttach.Capabilities, model.GitHubReadIssuesGrant)
 	}
 }
