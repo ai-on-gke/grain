@@ -231,10 +231,32 @@ Today `nightly.yml` has not run on GitHub Actions in over a week because relying
 
 | Job(s) | Workflow | Required now | Required once runner / WIF infra lands |
 | --- | --- | --- | --- |
-| `go-long` (4 shards), `staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `postgres-stress`, `tunnel-stress`, `ui-e2e-long` (4 shards), `installer-variants`, `vulns`, `image-vulns`, `cmd-grain-stress`, `upgrade-test` | `nightly.yml` | **Yes (all 15 jobs, `success` required; `skipped` is a failure)** | **Yes** |
+| `go-long` (4 shards), `staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `postgres-stress`, `tunnel-stress`, `ui-e2e-long` (4 shards), `installer-variants`, `vulns`, `image-vulns`, `cmd-grain-stress`, `upgrade-test`, `security-attacks` | `nightly.yml` | **Yes (all 16 jobs, `success` required; `skipped` is a failure)** | **Yes** |
 | `real-vm`, `real-kubernetes` | `tests.yml` (`ENABLE_SELF_HOSTED_TESTS`) | **No** — skipped on hosted runners lacking nested KVM / cluster fixtures | **Yes** — required in Stage 0/1 once self-hosted KVM runners set `ENABLE_SELF_HOSTED_TESTS=true` |
 | `kvm-sandboxes`, `kvm-route-stress` | `nightly.yml` / `kvm-route-stress.yml` (`ENABLE_SELF_HOSTED_TESTS`) | **No** — skipped without nested KVM, 16 GiB RAM, and cached guest images | **Yes** — required in Stage 1 once `ENABLE_SELF_HOSTED_TESTS=true` |
 | `smoke` (`GCE and GKE lifecycle`) | `gcp-smoke.yml` (`GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`) | **No** — skips every step while WIF variables are unset; a skipped job carries no verdict | **Yes** — dispatched in Stage 1 once WIF variables are set, with non-skipping assertion and transient cloud quota/IAM errors routed through `infra` retry (§4) |
+
+#### The security attack gate (`security-attacks`)
+
+The operator asked (2026-11-10) that the user-attack checks run every night and gate every rc. `nightly.yml`'s `security-attacks` job runs every attack path in [`tests/security/attacks.yaml`](../../tests/security/attacks.yaml) through `cmd/security-attacks`. The paths come from the regression suites of five tasks:
+
+- 3981: the role x route authorization matrix and IDOR;
+- 3982: escalation through tasks, templates, grants and approvals;
+- 3983: credential exposure to non-admins;
+- 3984: sandbox -> host and cross-run credential reach;
+- 3965: insider risk through grain/config Submit and `.grain` declarations.
+
+`security-attacks` is a required Stage 1 job. A red `security-attacks` discards the rc like any other Stage 1 failure, after the usual one flake retry (§3).
+
+- **One verdict per attack path.** The job summary has a table of every path, the task whose suite holds it, and its result: PASS, FAIL, PASS (known gap), INFRA or LIVE. A path passes only when every test it names ran and passed.
+- **Fail closed.** These all fail their path: a failed test, a test that never ran (a rename, a package that did not build, a panic, a timeout) and a skipped test. So does a setup step that fails before anything is judged. Two skip reasons are reported by name instead of failing:
+  - `known gap:` is a documented, filed hole. The test pins it until a fix lands and the test starts passing.
+  - `infrastructure:` means the runner lacks what the test needs, which says nothing about the attack.
+
+  Every other test in a `tests/security` package is run too, and judged as the path `<package>: other tests`.
+- **Complete.** `cmd/security-attacks check` runs first. It also runs on every pull request, as `cmd/security-attacks`'s unit test `TestTheManifestCoversEveryTestPackageUnderTestsSecurity`. It fails if a `tests/security` test package is missing from the manifest's `packages`, or if a path names a test that no longer exists. A new suite has to be added to the manifest before it merges.
+- **Live paths.** Some paths need a real sandbox (`mode: live-vm`, `live-k8s`). They run inside `kvm-sandboxes` and `real-kubernetes`, on the VM and cluster those jobs already set up. `cmd/security-attacks judge` reports them in those jobs' summaries, and a log the suite never wrote fails them. They gate once those jobs become required (the table above), not before.
+- **Triage.** On failure, the job's last step prints the failed paths' names. grain hands the end of that log to the `nightly-ci-review` triage task and the Stage 1 repair task, so both see the names.
 
 #### The image vulnerability gate (`image-vulns`)
 
@@ -520,7 +542,7 @@ Nothing in this playbook design is implemented by this document. Once approved, 
 1. **Workflow — Trigger and shard `.github/workflows/nightly.yml` as Stage 1 RC qualification**
    - Trigger `nightly.yml` on `push: tags: ['v*-rc.*']` as well as `workflow_dispatch` (adding an optional `jobs` input for selective single-job retry and `cancel-in-progress: false` on RC tags).
    - Extend `upgrade-test` in `nightly.yml` to verify both `latest -> RC` and multi-version baseline -> RC schema upgrades.
-   - Verify all 14 hosted `nightly.yml` jobs run and pass end-to-end on GitHub Actions.
+   - Verify all 16 hosted `nightly.yml` jobs run and pass end-to-end on GitHub Actions.
 
 2. **Workflow — Continuous `.github/workflows/release-train.yml` and auto-promotion**
    - Remove `RELEASE_STAGING_URL`, the `GRAIN_API_URL` / `GRAIN_API_TOKEN` hard failure on hosted runners, the 24-hour soak check, and `-pending` staging.

@@ -545,7 +545,7 @@ jobs:
         run: |
           set +e
           GRAIN_GOTEST_LOG=/tmp/go-unit.log ./scripts/run-go-tests.sh go test -race -timeout 25m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/image-vulns/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... ./cmd/reviewed-merge/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/image-vulns/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... ./cmd/reviewed-merge/... ./cmd/security-attacks/... \
             ./docs/releases/... ./tests/agentdcompat/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
