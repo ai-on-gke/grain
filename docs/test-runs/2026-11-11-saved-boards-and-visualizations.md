@@ -311,3 +311,13 @@ injected `500`s, and one `404` described in section 4.
   `cli-run-locations`, `audit-settings-layout`,
   `auto-upgrade-settings-layout` and
   `repository_release_memory_walkthrough`: **168 passed, 1 skipped**.
+
+### 5.1 CI on the first push
+
+The first CI run on this branch failed `ui e2e` on one test (1129
+passed): `e2e/new-session-first-message-sending.spec.js:88` (phone), which
+waits for a queued follow-up message in a new session. Sessions are
+outside this change, and nothing it touches is on that page. Against a
+local build of this branch, that spec and `list-stacked-order.spec.js`
+passed with `--repeat-each=3` (15 passed), so the failure was treated as
+a timing flake and CI was re-run.
