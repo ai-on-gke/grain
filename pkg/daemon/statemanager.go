@@ -774,19 +774,19 @@ func (m *StateManager) checkImage() string {
 // error. There is genuinely no history there, and the section already
 // distinguishes "nothing to read" from "nothing changed" by whether it was
 // handed a reader at all.
-func (m *StateManager) SettingsChanges(ctx context.Context, since time.Time) ([]metrics.SettingsChange, error) {
+func (m *StateManager) SettingsChanges(ctx context.Context, since time.Time) ([]metrics.SettingsChange, time.Time, error) {
 	m.mu.Lock()
 	repo := m.repo
 	m.mu.Unlock()
 	if repo == nil {
-		return nil, nil
+		return nil, time.Time{}, nil
 	}
-	changes, err := repo.SettingsChanges(ctx, since, 0)
+	history, err := repo.SettingsHistory(ctx, since, 0)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	out := make([]metrics.SettingsChange, 0, len(changes))
-	for _, c := range changes {
+	out := make([]metrics.SettingsChange, 0, len(history.Changes))
+	for _, c := range history.Changes {
 		change := metrics.SettingsChange{
 			At: c.At, Commit: c.Commit, Subject: c.Subject,
 			Paths: c.Paths, Truncated: c.Truncated,
@@ -799,7 +799,7 @@ func (m *StateManager) SettingsChanges(ctx context.Context, since time.Time) ([]
 		}
 		out = append(out, change)
 	}
-	return out, nil
+	return out, history.Reaches, nil
 }
 
 // Tree lists this deployment's exported configuration for the State
