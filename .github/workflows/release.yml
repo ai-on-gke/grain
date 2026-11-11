@@ -429,8 +429,15 @@ jobs:
       # write on the job that holds the release's packages: write and
       # signing identity. nightly.yml's image-vulns job scans and uploads
       # every RC's published images instead.
+      # Keeping the reports is a convenience, not the gate: the scan step
+      # above has already passed or stopped the release, and its verdict
+      # is in the step summary. An outage of GitHub's artifact service
+      # (CreateArtifact answering with an HTML error page, five times
+      # over) must not fail a release whose images were built and
+      # scanned clean, so a failed upload here is advisory.
       - name: Keep the vulnerability reports
         if: ${{ !cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: image-vulns-${{ github.sha }}
