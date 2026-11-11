@@ -464,13 +464,13 @@ func APIServer() *protocol.Server {
 // APIStatus is Status for the in-process api server.
 func APIStatus() servers.Status { return statusOf(APIID, APIServer()) }
 
-// repoAccessArgs is the schema of a grant naming one repository.
 // titled is schema with a title, for a oneOf variant to be offered by.
 func titled(schema map[string]any, title string) map[string]any {
 	schema["title"] = title
 	return schema
 }
 
+// repoAccessArgs is the schema of a grant naming one repository.
 func repoAccessArgs() map[string]any {
 	return map[string]any{
 		"type":                 "object",
