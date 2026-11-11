@@ -24,7 +24,7 @@ network listener takes depends on two settings:
 | **No IAP** | neither | accepted from anywhere, as below | not checked (logged and ignored) |
 | **IAP, code still accepted** | `-ui-iap-audience` | accepted from anywhere | verified, and its person is signed in |
 | **IAP required** | `-ui-iap-audience` and `-ui-require-iap` | only over loopback with no forwarding headers ([break-glass](#break-glass-over-loopback)) | verified, and its person is signed in |
-| **Hub required** | `-ui-hub-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
+| **Hub required** | `-ui-hub-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Hub-Assertion` verified, and its person is signed in |
 
 - **No IAP.** Local and standalone deployments. Everything on this page
   applies as written.
@@ -65,12 +65,15 @@ network listener takes depends on two settings:
   (`GRAIN_HUB_ISSUER`), `-ui-hub-audience`
   (`GRAIN_HUB_AUDIENCE`) and `-ui-hub-keys-url`
   (`GRAIN_HUB_KEYS_URL`) are all set. It verifies the short-lived
-  ES256 `X-Grain-Registry-Assertion` JWT that `grain-registry` signs on
+  ES256 `X-Grain-Hub-Assertion` JWT that `grain-hub` signs on
   every proxied request to `https://<name>.<instance-domain>/`, checking
   the signature against the hub's JWKS
   (`https://<registry-host>/.well-known/jwks.json`), exact `iss`
   equality, single-audience `aud` equality
   (`https://<name>.<instance-domain>`), and `exp`/`iat`/`nbf` bounds.
+  The hub also sends the same JWT as `X-Grain-Registry-Assertion`, its
+  name before the Grain Registry became the Grain Hub, and either is
+  accepted.
   Its `AccessCodeWins()` is `false`: a verified hub assertion always
   takes precedence over the access code, and an invalid assertion fails
   closed with `401`. Hosted VM instances created by the hub run with
@@ -82,7 +85,7 @@ network listener takes depends on two settings:
   served in-process over a `MuxListener` (`RemoteAddr` is
   `stream-<id>-remote`, never `127.0.0.1`) behind a mandatory
   tunnel-ingress gate that unconditionally requires a valid
-  `X-Grain-Registry-Assertion` and never accepts `grain_access` cookies,
+  `X-Grain-Hub-Assertion` and never accepts `grain_access` cookies,
   `X-Grain-Access-Code` or bearer access codes over the tunnel -- even if
   a workstation daemon omits `-ui-require-verifier=registry` on its local
   `127.0.0.1` TCP listener so local CLI commands can still use the access
@@ -103,7 +106,8 @@ With `-ui-require-iap` or `-ui-require-verifier=<name>` (including
 `-ui-require-verifier=registry`) the code is still accepted from
 `127.0.0.1` or `::1` when the request carries none of `X-Forwarded-For`,
 `Forwarded`, `X-Real-Ip`, IAP's headers (`X-Goog-IAP-JWT-Assertion`),
-`X-Grain-Registry-Assertion` or any registered verifier's headers. A
+`X-Grain-Hub-Assertion`, `X-Grain-Registry-Assertion` or any registered
+verifier's headers. A
 proxy on the same host therefore cannot relay somebody's code in. That
 leaves a way in which does not depend on IAP or the hub proxy, from
 the daemon's own host:
