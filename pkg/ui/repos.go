@@ -240,6 +240,18 @@ func explicitRepoHost(text string) (string, bool) {
 // declarations for repo, and takes repo off the repos pane once its
 // tasks are settled.
 //
+// Except for the last entry. An empty TargetRepos is an unrestricted
+// deployment (model.RepoAllowed), so removing the only repo on the list
+// widens what a new task may target to every repo rather than narrowing
+// it to none. That is deliberate (grain/task-4287): an empty list has
+// one meaning everywhere it is read, and the alternatives -- refusing
+// the removal, or a second "restricted to nothing" state every reader
+// of the list would have to learn -- cost more than they buy. What the
+// removal owes the operator instead is to say so: the repos list's
+// one-repo note and the repo page's Remove confirmation both tell them
+// that removing it allows any repo again
+// (TestRemovingTheLastRepositoryLeavesAnUnrestrictedDeployment pins it).
+//
 // A task that already targets repo keeps its target, keeps its own page,
 // and keeps every run it ever had. What it does not keep is its next
 // dispatch: the pass that would have started it parks it instead, on
