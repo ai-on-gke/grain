@@ -465,6 +465,12 @@ func APIServer() *protocol.Server {
 func APIStatus() servers.Status { return statusOf(APIID, APIServer()) }
 
 // repoAccessArgs is the schema of a grant naming one repository.
+// titled is schema with a title, for a oneOf variant to be offered by.
+func titled(schema map[string]any, title string) map[string]any {
+	schema["title"] = title
+	return schema
+}
+
 func repoAccessArgs() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -553,7 +559,10 @@ func buildRepoServerFor(configured []string) *protocol.Server {
 			"task branch, with the team's own git credential (formerly git-push-any-ref). Standing jobs " +
 			"declare the refs they push under `push:` in their .grain template instead.",
 		Args: map[string]any{
-			"oneOf": []any{repoAccessArgs(), taskRepoArgs(), map[string]any{
+			"title": "Kind of write",
+			// Each variant's title is what the UI's variant picker offers.
+			"oneOf": []any{titled(repoAccessArgs(), "CI push to another repo"), titled(taskRepoArgs(), "Write target (repo + base)"), map[string]any{
+				"title":                "Push any branch/tag (refs + force)",
 				"type":                 "object",
 				"additionalProperties": false,
 				"required":             []any{"refs", "force"},
