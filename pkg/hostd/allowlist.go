@@ -115,6 +115,13 @@ type Allowlist struct {
 	// the registry's labels for the hostd, which an admin sets, and not
 	// what the hostd says about itself.
 	Labels map[string]string `yaml:"labels"`
+	// Logins maps CLI login names to the files on this host that hold
+	// them (a leading "~/" is hostd's home). hostd reports which exist by
+	// name in Hello.Logins and allows StageSymlink to target only the
+	// regular files named here. Nil (key absent) falls back to the
+	// built-in login table so existing allowlists keep working; an empty
+	// map ("logins: {}") lends none.
+	Logins map[string]string `yaml:"logins"`
 }
 
 // DefaultDrainCap is the allowlist's drain_cap when it sets none.
@@ -209,6 +216,14 @@ func ParseAllowlist(data []byte) (*Allowlist, error) {
 	for k, v := range a.Labels {
 		if k == "" || strings.ContainsAny(k+v, ",= ") {
 			return nil, fmt.Errorf("hostd allowlist: label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
+		}
+	}
+	for name, p := range a.Logins {
+		if !validName(name) {
+			return nil, fmt.Errorf("hostd allowlist: login %q: names are letters, digits, '-', '_' and '.'", name)
+		}
+		if !validLoginPath(p) {
+			return nil, fmt.Errorf("hostd allowlist: login %q: %q must be a clean absolute or ~/ path", name, p)
 		}
 	}
 	for name, e := range a.CLIs {
@@ -826,6 +841,13 @@ func validName(s string) bool {
 		}
 	}
 	return true
+}
+
+func validLoginPath(p string) bool {
+	if p == "" || p == "/" || filepath.Clean(p) != p {
+		return false
+	}
+	return filepath.IsAbs(p) || strings.HasPrefix(p, "~/")
 }
 
 func validEnvName(s string) bool {

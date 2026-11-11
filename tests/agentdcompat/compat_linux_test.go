@@ -39,6 +39,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -266,6 +267,27 @@ func exercise(t *testing.T, label, bin string) {
 	}
 	stageRoot := peer.StageRoot
 
+	t.Run("logins status", func(t *testing.T) {
+		if peer.Has(hostd.FeatureLogins) {
+			deadline := time.Now().Add(10 * time.Second)
+			for !ctl.current().Status().LoginsKnown {
+				if time.Now().After(deadline) {
+					t.Fatalf("daemon never marked empty logins known for host with FeatureLogins: %+v", ctl.current().Status())
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if got := ctl.current().Status().Logins; len(got) != 0 {
+				t.Fatalf("status logins = %q, want none", got)
+			}
+		} else {
+			// Give learnLogins time to complete its Hello stream against an older host.
+			time.Sleep(100 * time.Millisecond)
+			if st := ctl.current().Status(); st.LoginsKnown {
+				t.Fatalf("daemon marked logins known for an older host without FeatureLogins: %+v", st)
+			}
+		}
+	})
+
 	t.Run("list", func(t *testing.T) {
 		offers, err := c.Offers(ctx)
 		if err != nil {
@@ -387,6 +409,94 @@ func exercise(t *testing.T, label, bin string) {
 		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageWriteFile, Path: filepath.Join(root, "escape"), Data: []byte("x")}); err == nil {
 			t.Error("write_file outside the stage root was not refused")
 		}
+
+		// Symlink staging: refused when the login file does not exist or is
+		// not a login; allowed via LoginTargets on hosts with logins_map and
+		// via CodexAuth on older hosts.
+		codexLogin := filepath.Join(home, ".codex", "auth.json")
+		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: filepath.Join(dir, "missing-auth.json"), Target: codexLogin}); err == nil {
+			t.Error("symlink to a missing login file was not refused")
+		}
+		if err := os.MkdirAll(filepath.Dir(codexLogin), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(codexLogin, []byte(`{"compat":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(filepath.Dir(codexLogin))
+
+		h, err := c.Hello(ctx)
+		if err != nil {
+			t.Fatalf("hello with codex login: %v", err)
+		}
+		var target string
+		if h.Has(hostd.FeatureLoginsMap) {
+			target = h.LoginTargets[hostd.LoginCodex]
+		} else {
+			target = h.CodexAuth
+		}
+		if target == "" {
+			t.Fatalf("hello %+v reported no codex login target", h)
+		}
+		stagedAuth := filepath.Join(dir, "auth.json")
+		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: stagedAuth, Target: target}); err != nil {
+			t.Fatalf("symlink to codex login (%s): %v", target, err)
+		}
+		if info, err := os.Lstat(stagedAuth); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("staged auth link Lstat = %v, %v; want symlink", info, err)
+		}
+		if data, err := os.ReadFile(stagedAuth); err != nil || string(data) != `{"compat":true}` {
+			t.Fatalf("reading staged auth link = %q, %v", data, err)
+		}
+		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: filepath.Join(dir, "bad-link"), Target: tokenFile}); err == nil {
+			t.Error("symlink to a non-login file was not refused")
+		}
+
+		// Hosts advertising logins_map accept top-level logins: in the
+		// allowlist and allow StageSymlink to target only what it names.
+		if h.Has(hostd.FeatureLoginsMap) {
+			origAllow, err := os.ReadFile(allowlist)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.WriteFile(allowlist, origAllow, 0o644) }()
+
+			customLogin := filepath.Join(home, ".custom-cli", "creds.json")
+			if err := os.MkdirAll(filepath.Dir(customLogin), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(customLogin, []byte(`{"custom":true}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(filepath.Dir(customLogin))
+
+			mappedAllow := string(origAllow) + "logins:\n  custom: ~/.custom-cli/creds.json\n"
+			if err := os.WriteFile(allowlist, []byte(mappedAllow), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			hm, err := c.Hello(ctx)
+			if err != nil {
+				t.Fatalf("hello with logins: map: %v", err)
+			}
+			if !reflect.DeepEqual(hm.Logins, []string{"custom"}) {
+				t.Fatalf("mapped Hello.Logins = %q, want [\"custom\"]", hm.Logins)
+			}
+			customTarget := hm.LoginTargets["custom"]
+			if customTarget == "" {
+				t.Fatalf("mapped Hello.LoginTargets = %v, want custom target", hm.LoginTargets)
+			}
+			stagedCustom := filepath.Join(dir, "custom.json")
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: stagedCustom, Target: customTarget}); err != nil {
+				t.Fatalf("symlink to mapped custom login: %v", err)
+			}
+			if data, err := os.ReadFile(stagedCustom); err != nil || string(data) != `{"custom":true}` {
+				t.Fatalf("reading staged custom link = %q, %v", data, err)
+			}
+			if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageSymlink, Path: filepath.Join(dir, "unmapped-codex.json"), Target: target}); err == nil {
+				t.Error("symlink to unmapped codex login was not refused when logins: map omitted it")
+			}
+		}
+
 		if _, err := c.Stage(ctx, hostd.StageOp{Op: hostd.StageRemoveAll, Path: dir}); err != nil {
 			t.Fatalf("remove_all: %v", err)
 		}
@@ -610,8 +720,10 @@ func exercise(t *testing.T, label, bin string) {
 	})
 
 	t.Run("drain", func(t *testing.T) {
-		if err := c.Drain(ctx); err != nil {
-			t.Fatalf("drain: %v", err)
+		// An idle agent may exit on s.Drain() before its mux flushes frameOK.
+		drainErr := c.Drain(ctx)
+		if drainErr != nil && !errors.Is(drainErr, io.EOF) {
+			t.Fatalf("drain: %v", drainErr)
 		}
 		select {
 		case err := <-a.exited:
@@ -620,6 +732,9 @@ func exercise(t *testing.T, label, bin string) {
 				t.Fatalf("a drained agent with nothing running exits cleanly: %v", err)
 			}
 		case <-time.After(30 * time.Second):
+			if drainErr != nil {
+				t.Fatalf("drain: %v", drainErr)
+			}
 			// Still up: it must at least say it is draining and refuse starts.
 			h, err := c.Hello(ctx)
 			if err != nil || !h.Draining {
