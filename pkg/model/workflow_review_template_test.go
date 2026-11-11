@@ -142,7 +142,7 @@ func TestTheWorkflowReviewPromptDistinguishesInfrastructureAndCapabilityFailures
 
 	for _, want := range []string{
 		"Capability or secret unavailability",
-		"github-sandbox",
+		"github#sandbox-repo",
 		"CLAUDE_CODE_OAUTH_TOKEN",
 		"Infrastructure or runner preparation errors",
 		"0s",

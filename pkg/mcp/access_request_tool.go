@@ -99,7 +99,7 @@ func requestAccessTool(sink *MockSink) Tool {
 							},
 							"repo":       map[string]any{"type": "string", "description": "owner/name, for read and write."},
 							"base":       map[string]any{"type": "string", "description": "For write: the branch to land work on; omit for the repository's default."},
-							"capability": map[string]any{"type": "string", "description": "For grant: an in-process capability id, an api:<scope> grant, or a capability server method's <capability>#<method> reference."},
+							"capability": map[string]any{"type": "string", "description": "For grant: a capability server method's <capability>#<method> reference (grain's agent API scopes and presets are https://grain.dev/capabilities/api#<scope>), or an in-process capability id."},
 							"with":       map[string]any{"type": "object", "description": "For grant: the method's with: arguments."},
 							"access":     map[string]any{"type": "string", "enum": []string{"open"}, "description": "For network: \"open\"."},
 						},

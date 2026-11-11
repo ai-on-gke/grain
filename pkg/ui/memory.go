@@ -481,7 +481,7 @@ func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error 
 	if APIGrantsOf(grantNames(task.Grants)).Allows("memory:write", strings.TrimSpace(repo)) {
 		return nil
 	}
-	return forbiddenErrorf("task %s does not hold the memory:write scope (api:memory), so its run may not write memory", id)
+	return forbiddenErrorf("task %s does not hold the memory:write scope (https://grain.dev/capabilities/api#memory), so its run may not write memory", id)
 }
 
 // handleListMemories answers GET /api/memory. An old client's ?team= is
