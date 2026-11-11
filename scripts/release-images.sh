@@ -1542,11 +1542,20 @@ check_reviewed_merge() {
     [ "$since" != "$commit" ] || since=""
   fi
   out="${TMPDIR:-/tmp}/reviewed-merge-$short.json"
-  if ! go run ./cmd/reviewed-merge -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
-      -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" >"$out"; then
-    echo "release-images.sh: refusing to publish $short: it did not reach $GRAIN_CI_REF through a reviewed merge (above)" >&2
-    return 1
-  fi
+  local rc=0
+  go run ./cmd/reviewed-merge -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
+    -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" >"$out" || rc=$?
+  case "$rc" in
+    0) ;;
+    3)
+      echo "release-images.sh: not publishing $short: the forge could not be read to check that it reached $GRAIN_CI_REF through a reviewed merge (above); nothing was decided about it, so a re-run may publish it" >&2
+      return 1
+      ;;
+    *)
+      echo "release-images.sh: refusing to publish $short: it did not reach $GRAIN_CI_REF through a reviewed merge (above)" >&2
+      return 1
+      ;;
+  esac
   echo "release-images.sh: $short reached $GRAIN_CI_REF through reviewed merges${since:+ since ${since:0:7}}: $(cat "$out")"
   reviewed_merge_record="$out"
 }
