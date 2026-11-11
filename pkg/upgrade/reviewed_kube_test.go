@@ -223,6 +223,16 @@ func TestRegistryImageRevisionReadsEveryPlatformOfAnIndex(t *testing.T) {
 	if _, err := registryImageRevision(context.Background(), "example/grain:main@"+mixed); err == nil || !strings.Contains(err.Error(), "name different commits") {
 		t.Errorf("registryImageRevision(index of two commits) error = %v, want it refused", err)
 	}
+	// A platform with no label is a platform naming no commit, whichever
+	// side of the labelled one it sits.
+	for _, unlabelled := range []string{
+		reg.index(reg.image(""), reg.imageFor(targetSHA, "arm64")),
+		reg.index(reg.image(targetSHA), reg.imageFor("", "arm64")),
+	} {
+		if got, err := registryImageRevision(context.Background(), "example/grain:main@"+unlabelled); err == nil || !strings.Contains(err.Error(), "name different commits") {
+			t.Errorf("registryImageRevision(index with an unlabelled platform) = %q, %v; want it refused", got, err)
+		}
+	}
 	if _, err := registryImageRevision(context.Background(), "example/grain:main"); err == nil {
 		t.Error("registryImageRevision read an unpinned tag")
 	}

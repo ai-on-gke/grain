@@ -99,7 +99,7 @@ func registryImageRevision(ctx context.Context, ref string) (string, error) {
 	if len(doc.Manifests) > maxIndexPlatforms {
 		return "", fmt.Errorf("%s is an index of %d manifests, more than the %d this reads", pinned, len(doc.Manifests), maxIndexPlatforms)
 	}
-	revision := ""
+	revision, seen := "", false
 	for _, m := range doc.Manifests {
 		// Build attestations sit in the index as manifests of platform
 		// unknown/unknown; no node runs them, and they carry no labels.
@@ -114,12 +114,15 @@ func registryImageRevision(ctx context.Context, ref string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if revision != "" && rev != revision {
-			return "", fmt.Errorf("the platforms of %s name different commits (%s and %s), so which one would run cannot be said", pinned, revision, rev)
+		// Held to the first platform's even when that names none: an
+		// unlabelled platform beside a labelled one is a platform whose
+		// commit nobody asked about.
+		if seen && rev != revision {
+			return "", fmt.Errorf("the platforms of %s name different commits (%q and %q), so which one would run cannot be said", pinned, revision, rev)
 		}
-		revision = rev
+		revision, seen = rev, true
 	}
-	if revision == "" {
+	if !seen {
 		return "", fmt.Errorf("%s is an index naming no image a node would run", pinned)
 	}
 	return revision, nil
