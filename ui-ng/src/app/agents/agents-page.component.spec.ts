@@ -418,4 +418,38 @@ describe("AgentsPageComponent", () => {
     );
     expect(q(f, '[data-testid="contact-open"]')).toBeNull();
   });
+
+  it("shows a loading state, not 0 working, until the first read completes", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const read = api.getIfChanged;
+    api.getIfChanged = (route: string, p?: { id?: string }) =>
+      route === "GET /api/tasks"
+        ? gate.then(() => read(route, p))
+        : read(route, p);
+    TestBed.configureTestingModule({
+      imports: [AgentsPageComponent],
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+        provideRouter([{ path: "**", children: [] }]),
+      ],
+    });
+    const f = TestBed.createComponent(AgentsPageComponent);
+    f.autoDetectChanges();
+    await f.whenStable();
+    const summary = q(f, '[data-testid="agents-summary"]')!;
+    expect(summary.textContent).not.toContain("working");
+    expect(q(f, '[data-testid="agents-loading"]')).toBeTruthy();
+    expect(summary.getAttribute("aria-busy")).toBe("true");
+
+    release();
+    await TestBed.inject(AgentsStore).refresh();
+    await f.whenStable();
+    expect(q(f, '[data-testid="agents-loading"]')).toBeNull();
+    expect(summary.textContent).toContain("1");
+    expect(summary.textContent).toContain("working");
+  });
 });

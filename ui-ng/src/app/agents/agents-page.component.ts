@@ -117,27 +117,36 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
         <div
           class="agents-summary"
           [class.is-processing]="store.agents().length > 0"
+          [attr.aria-busy]="!store.loaded()"
           data-testid="agents-summary"
         >
-          <span
-            ><strong class="tabular">{{ counts().working }}</strong>
-            working</span
-          >
-          <span
-            ><strong class="tabular">{{ counts().setup }}</strong> setting
-            up</span
-          >
-          <span [class.warn]="counts().quiet"
-            ><strong class="tabular">{{ counts().quiet }}</strong> quiet</span
-          >
-          <span
-            gTip="Estimated size of the prompts the current runs were handed, not what they have spent"
-          >
-            <strong class="tabular">≈{{ tokenTotal() }}</strong> prompt tokens
-            (est.)
-          </span>
-          @if (cpuSummary(); as c) {
-            <span>{{ c }}</span>
+          @if (!store.loaded()) {
+            <!-- Before the first read there is nothing to count; "0 working"
+                 would contradict the Tasks page's Running tab. -->
+            <span data-testid="agents-loading"
+              >Reading what the agents are doing…</span
+            >
+          } @else {
+            <span
+              ><strong class="tabular">{{ counts().working }}</strong>
+              working</span
+            >
+            <span
+              ><strong class="tabular">{{ counts().setup }}</strong> setting
+              up</span
+            >
+            <span [class.warn]="counts().quiet"
+              ><strong class="tabular">{{ counts().quiet }}</strong> quiet</span
+            >
+            <span
+              gTip="Estimated size of the prompts the current runs were handed, not what they have spent"
+            >
+              <strong class="tabular">≈{{ tokenTotal() }}</strong> prompt tokens
+              (est.)
+            </span>
+            @if (cpuSummary(); as c) {
+              <span>{{ c }}</span>
+            }
           }
         </div>
         <p class="sr-only" aria-live="polite" data-testid="agents-live">
