@@ -622,7 +622,10 @@ func TestTaskLifecycleOnEveryKindOfGitHost(t *testing.T) {
 // The command-backed forge's failures, through the same git proxy: a
 // lapsed login answers with the login page, and a credential the forge no
 // longer takes answers 401. Neither may read as a missing repository,
-// and the lapsed login names the source's own fix.
+// and each names the source's own fix. (Neither is yet one
+// gitproxy.IsAccessRefusal knows, so the orchestrator's own clone retries
+// such a task rather than parking it on that fix: filed from
+// grain/task-4345.)
 func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	r := newHostsRig(t)
 	depot := r.hosts[3]
@@ -687,6 +690,11 @@ func TestAHostsConnectionRemovedMidTaskRefusesNamingTheHost(t *testing.T) {
 	}
 	if !strings.Contains(out, ghe.host) {
 		t.Errorf("the refusal for %s's repository does not name the host: %q", ghe.host, out)
+	}
+	// What the orchestrator's own clone parks the task on, with the
+	// refusal as its reason, rather than retrying it (stopOnAccessRefused).
+	if !gitproxy.IsAccessRefusal(out) {
+		t.Errorf("the refusal for %s's repository is not one the dispatcher parks on: %q", ghe.host, out)
 	}
 	for _, h := range r.hosts {
 		if seen := h.credentialsSeen(); len(seen) != 0 {
