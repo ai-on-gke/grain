@@ -1897,3 +1897,12 @@ button:disabled {
 g-inbox-page {
   display: contents;
 }
+
+/* A phone has no room for the explanations; the chips and rows carry the
+ * same meaning, and the queue starts higher up the screen. */
+@media (max-width: 599.95px) {
+  .view-subtitle,
+  .queue-group-note {
+    display: none;
+  }
+}
