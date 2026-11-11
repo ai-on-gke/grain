@@ -46,7 +46,7 @@ export const DESTINATIONS: readonly Destination[] = [
     id: "tasks",
     label: "Tasks",
     icon: "tasks",
-    route: null,
+    route: "/tasks",
     classic: "/tasks",
     tip: "Every task: the backlog in run order, what is running, merging and done.",
     phone: true,

@@ -26,6 +26,12 @@ export const routes: Routes = [
     loadComponent: () =>
       import("./inbox/inbox-page.component").then((m) => m.InboxPageComponent),
   },
+  {
+    path: "tasks",
+    title: "Tasks · grain",
+    loadComponent: () =>
+      import("./tasks/tasks-page.component").then((m) => m.TasksPageComponent),
+  },
   { path: "director", redirectTo: "sessions/director" },
   {
     path: "sessions",

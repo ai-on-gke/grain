@@ -48,6 +48,7 @@ import {
 } from "./shell/nav";
 import { CreateTaskService } from "./create/create-task.service";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
+import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
 // Material-style 24px outline paths, drawn for this app.
@@ -97,6 +98,7 @@ type CreateItem =
     TipDirective,
     SnackbarComponent,
     NewTaskSheetComponent,
+    NextUpComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
@@ -252,6 +254,7 @@ type CreateItem =
           >
         </div>
         <div class="top-actions">
+          <g-next-up />
           <label class="search-box">
             <span class="search-icon" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 24 24">

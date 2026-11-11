@@ -75,6 +75,12 @@ export interface Task {
   activityAt?: string;
   activityBySetup?: boolean;
   priority?: number;
+  // Waiting on an open dependency (GET /api/tasks).
+  blocked?: boolean;
+  // Dispatch pool: "standard", "bypass" or "durable" (model.Admission).
+  admission?: string;
+  authorKind?: string;
+  authorLabel?: string;
   body?: string;
   branch?: string;
 }
