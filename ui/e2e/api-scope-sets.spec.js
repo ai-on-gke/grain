@@ -124,13 +124,13 @@ test("surfaces retired in_process and api_scopes.presets catalogue entries in Se
       const policyAlert = page.getByTestId("policy-catalogue-entries");
       await expect(policyAlert).toBeVisible();
       await expect(policyAlert).toContainText(
-        "api:grain/memory — disabled (retired in_process.memory → move to api_scopes.presets.memory)",
+        "https://grain.dev/capabilities/api#grain/memory — disabled (retired in_process.memory → move to api_scopes.presets.memory)",
       );
       await expect(policyAlert).toContainText(
         'https://grain.dev/capabilities/grain#sql={"write":true} — disabled (retired in_process.db-write → move to servers (https://grain.dev/capabilities/grain#sql))',
       );
       await expect(policyAlert).toContainText(
-        "api:grain/release-notes — repos acme/* · requires a person (api_scopes.presets.release-notes)",
+        "https://grain.dev/capabilities/api#grain/release-notes — repos acme/* · requires a person (api_scopes.presets.release-notes)",
       );
 
       const memory = page.getByTestId("api-scope-set-grain/memory");

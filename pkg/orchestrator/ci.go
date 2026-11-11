@@ -537,7 +537,7 @@ func taskUsesGrainCI(ctx context.Context, store *model.Store, task *model.Task) 
 			// failing here would cost this task its run over a marker the
 			// no-status path below clears again.
 			if err := store.ClearGrantWait(ctx, task.ID); err != nil {
-				log.Printf("orchestrator: clearing the grain-ci grant wait on %s: %v", task.ID, err)
+				log.Printf("orchestrator: clearing the grain#ci grant wait on %s: %v", task.ID, err)
 			}
 		}
 		return true, "", nil

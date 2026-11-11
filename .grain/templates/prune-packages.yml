@@ -3,13 +3,13 @@ title: Audit Docker Hub image retention and release.yml's prune step
 base: main
 auto-merge: true
 nothing-needed: close
-capabilities: ["api:ci-read@ai-on-gke/grain"]
+capabilities: [{capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}]
 body: |
   Audit the Docker Hub image retention policy for `docker.io/grainai/*` and
   check that the pruning `release.yml` already does is actually deleting.
 
   This task does **not** delete anything itself. Deleting needs a Docker Hub
-  token with Delete permission, which only CI holds: the `package-publish`
+  token with Delete permission, which only CI holds: the `release#package-publish`
   capability is CI-only and is never placed in a task sandbox, so
   `/home/debian/.package-publish-token`, `DOCKER_PAT` and
   `PACKAGE_PUBLISH_TOKEN` are all absent here and `-apply=true` fails with
