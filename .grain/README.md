@@ -68,11 +68,12 @@ the failure names the missing grant instead of surfacing minutes later
 inside an unrelated step, and that the other six jobs of the suite still
 run.
 
-Three jobs here declare, and no others (grain/task-541):
+Two jobs here declare, and no others (grain/task-541):
 `release.yml:images` and `image.yml:guest-cache` name `package-publish`,
 because each is an hour or more of building whose only point is the push
-at the end of it, and `live-agent.yml:live-agy` names `gemini-key`,
-because every step of it drives a real agy CLI against a real provider.
+at the end of it. (`live-agent.yml:live-agy` named `gemini-key` until the
+live suites moved to `.github/workflows/`, where their keys are secrets of
+the `live-models` environment; see docs/github-actions-ci.md.)
 Nothing in `workflows/tests.yml` names anything: that file began as
 the removed `.github/workflows/tests.yml`'s credential-free half and
 none of its jobs opens a credential. That silence is the point rather than an
@@ -164,10 +165,9 @@ row:
   cost narrowing rather than the default.
 - `work_overrides` holding `release=off`: no `release images` runs for
   `main` while `main` is moving.
-- `gemini-key`: `workflows/live-agent.yml`'s scheduled `live agy run`
-  prints the agent's environment, and `GEMINI_API_KEY=[redacted:
-  GEMINI_API_KEY]` in it is the grant. Without it the job says so at
-  its `Require a credential` step instead.
+- `gemini-key`: no grain CI workflow here asks for it any more; the
+  live agy suite is `.github/workflows/live-agent.yml`, keyed from the
+  `live-models` environment.
 - `grain-ci` in the task defaults: a task filed with nothing granted to
   it by hand can start CI at all.
 - the post-merge dispatch job: `sandbox guest cache` runs for `main`, a

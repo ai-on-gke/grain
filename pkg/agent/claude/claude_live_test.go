@@ -58,7 +58,7 @@ func skipUnlessLiveRequired(t *testing.T, reason string) {
 func TestLiveRunEndToEnd(t *testing.T) {
 	token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 	if token == "" {
-		skipUnlessLiveRequired(t, "CLAUDE_CODE_OAUTH_TOKEN is not set")
+		skipUnlessLiveRequired(t, "CLAUDE_CODE_OAUTH_TOKEN is not set (set secret CLAUDE_CODE_OAUTH_TOKEN in the GitHub environment live-models)")
 	}
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
@@ -171,7 +171,7 @@ func repoRoot(t *testing.T) string {
 func TestLiveMaxTurnsExitIsReportedNotSwallowed(t *testing.T) {
 	token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 	if token == "" {
-		skipUnlessLiveRequired(t, "CLAUDE_CODE_OAUTH_TOKEN is not set")
+		skipUnlessLiveRequired(t, "CLAUDE_CODE_OAUTH_TOKEN is not set (set secret CLAUDE_CODE_OAUTH_TOKEN in the GitHub environment live-models)")
 	}
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {

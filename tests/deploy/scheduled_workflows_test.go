@@ -24,19 +24,18 @@ import (
 
 // Grain reads a cron under .grain/workflows as a task schedule of its own
 // (pkg/repodecl's workflows.go). With ai-on-gke/grain in ci_mode: "github",
-// only the live-agent workflows (live-agent.yml, live-frameworks.yml,
-// live-secrets-repo.yml) carry `on: schedule` in .grain/workflows; all
-// non-agent workflows in .grain/workflows are manual workflow_dispatch only,
-// while the ported nightly, post-reset-e2e and gcp-smoke schedules run in
-// .github/workflows/ (the release train is .grain/templates/release-train.yml).
+// only live-secrets-repo.yml, which needs a grain-only GitHub write
+// credential, carries `on: schedule` in .grain/workflows; every other
+// workflow there is manual workflow_dispatch only, while the ported
+// nightly, post-reset-e2e, gcp-smoke and live model suites (live-agent.yml,
+// live-frameworks.yml) run in .github/workflows/ (the release train is
+// .grain/templates/release-train.yml).
 func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *testing.T) {
 	workflows, err := ci.LoadNativeDir(os.DirFS(repoRoot(t)))
 	if err != nil {
 		t.Fatalf("this repository's own %s does not parse: %v", ci.WorkflowDir, err)
 	}
 	liveScheduled := map[string]bool{
-		".grain/workflows/live-agent.yml":        false,
-		".grain/workflows/live-frameworks.yml":   false,
 		".grain/workflows/live-secrets-repo.yml": false,
 	}
 	for _, w := range workflows {
@@ -70,6 +69,15 @@ func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *te
 	ghNightly := upTo(t, stripComments(read(t, ".github", "workflows", "nightly.yml")), "jobs:")
 	contains(t, ghNightly, "schedule:")
 	contains(t, ghNightly, `cron: "11 2 * * *"`)
+
+	for file, cron := range map[string]string{
+		"live-agent.yml":      `cron: "37 7 * * *"`,
+		"live-frameworks.yml": `cron: "19 6 * * *"`,
+	} {
+		triggers := upTo(t, stripComments(read(t, ".github", "workflows", file)), "jobs:")
+		contains(t, triggers, "schedule:")
+		contains(t, triggers, cron)
+	}
 }
 
 // The publishing credential is refused to a scheduled run a caller asked

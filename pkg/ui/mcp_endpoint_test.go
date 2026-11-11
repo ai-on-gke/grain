@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -908,12 +907,19 @@ func TestControllerMCPSubmitTaskForwardsGrants(t *testing.T) {
 	}
 }
 
-// Gemini rejects eagerly registered MCP tool declarations when any "array"
-// schema omits "items" (INVALID_ARGUMENT: ...properties[...].items: missing
-// field). Verify every controller MCP tool in tools/list -- along with the
-// agent API route tools, sandbox mcpserver tools, and in-process capability
-// toolsets -- defines an object "items" schema on every array node.
-func TestControllerMCPToolSchemasSpecifyArrayItems(t *testing.T) {
+// A provider that refuses one tool declaration refuses the whole tools
+// list, so one bad schema breaks every run handed that surface -- and only
+// against a real model: Gemini refused grain_submit_task's items-less
+// grants array (INVALID_ARGUMENT: ...properties[...].items: missing field)
+// in v3.5.0 while every scripted test stayed green (#4225). This holds
+// every MCP tool surface grain hands a model -- the controller's
+// tools/list, the agent API route tools, the sandbox mcpserver's tools,
+// and the in-process capability toolsets -- to the function-declaration
+// rules of every model in the default_model chain
+// (mcp.FunctionDeclarationProblems), on every pull request, at no model
+// cost. The in-process capability servers' with: schemas are grain's to
+// validate, not a model's, so they are held to the array rule alone.
+func TestMCPToolSurfacesConformToModelFunctionDeclarationRules(t *testing.T) {
 	t.Parallel()
 	srv, _, code := newSingleTenantControllerMCPServer(t)
 	headers := map[string]string{ui.AccessCodeHeader: code}
@@ -921,13 +927,13 @@ func TestControllerMCPToolSchemasSpecifyArrayItems(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("tools/list = %d: %s", rec.Code, rec.Body.String())
 	}
-	assertToolsListJSONHasArrayItems(t, "controller", rec.Body.Bytes())
+	assertToolsListJSONConforms(t, "controller", rec.Body.Bytes())
 
 	var apiGrants []string
 	for _, r := range ui.AgentAPIRoutes() {
 		apiGrants = append(apiGrants, "api:"+string(r.Scope))
 	}
-	assertMCPToolsSpecifyArrayItems(t, "agent_api", ui.AgentAPITools(nil, "1", apiGrants))
+	assertMCPToolsConform(t, "agent_api", ui.AgentAPITools(nil, "1", apiGrants))
 
 	var sandboxTools []mcp.Tool
 	for _, group := range [][]mcp.Tool{
@@ -962,7 +968,7 @@ func TestControllerMCPToolSchemasSpecifyArrayItems(t *testing.T) {
 		sandboxTools = append(sandboxTools, group...)
 	}
 	sandboxTools = append(sandboxTools, mcp.NewProposeConfigChangeTools(nil, "1", sandboxTools)...)
-	assertMCPToolsSpecifyArrayItems(t, "sandbox_mcpserver", sandboxTools)
+	assertMCPToolsConform(t, "sandbox_mcpserver", sandboxTools)
 
 	var capTools []mcp.Tool
 	for _, group := range [][]mcp.Tool{
@@ -974,7 +980,7 @@ func TestControllerMCPToolSchemasSpecifyArrayItems(t *testing.T) {
 	} {
 		capTools = append(capTools, group...)
 	}
-	assertMCPToolsSpecifyArrayItems(t, "capability_tools", capTools)
+	assertMCPToolsConform(t, "capability_tools", capTools)
 
 	for name, ps := range map[string]map[string]any{
 		"grain":  methodsSchemaMap(grainserver.Server().Methods),
@@ -990,7 +996,9 @@ func TestControllerMCPToolSchemasSpecifyArrayItems(t *testing.T) {
 		if err := json.Unmarshal(raw, &normalized); err != nil {
 			t.Fatal(err)
 		}
-		assertArraySchemasHaveItems(t, "capability_server."+name, normalized)
+		for _, p := range mcp.ArrayItemsProblems("capability_server."+name, normalized) {
+			t.Error(p)
+		}
 	}
 }
 
@@ -1006,15 +1014,18 @@ func methodsSchemaMap[M any](methods map[string]M) map[string]any {
 	return out
 }
 
-func assertMCPToolsSpecifyArrayItems(t *testing.T, suite string, tools []mcp.Tool) {
+func assertMCPToolsConform(t *testing.T, suite string, tools []mcp.Tool) {
 	t.Helper()
 	reg := mcp.NewRegistry()
 	reg.Register(tools...)
 	raw := reg.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
-	assertToolsListJSONHasArrayItems(t, suite, raw)
+	assertToolsListJSONConforms(t, suite, raw)
 }
 
-func assertToolsListJSONHasArrayItems(t *testing.T, suite string, payload []byte) {
+// assertToolsListJSONConforms reads a tools/list answer the way a model
+// client does -- off the wire, as JSON -- and fails on every declaration
+// in it a provider would refuse.
+func assertToolsListJSONConforms(t *testing.T, suite string, payload []byte) {
 	t.Helper()
 	var resp struct {
 		Result struct {
@@ -1031,42 +1042,8 @@ func assertToolsListJSONHasArrayItems(t *testing.T, suite string, payload []byte
 		t.Fatalf("%s: tools/list returned no tools", suite)
 	}
 	for _, tool := range resp.Result.Tools {
-		assertArraySchemasHaveItems(t, suite+"."+tool.Name+".inputSchema", tool.InputSchema)
-	}
-}
-
-func assertArraySchemasHaveItems(t *testing.T, path string, node any) {
-	t.Helper()
-	switch v := node.(type) {
-	case map[string]any:
-		if schemaHasArrayType(v["type"]) {
-			items, ok := v["items"].(map[string]any)
-			if !ok || items == nil {
-				t.Errorf("%s: array schema must define an object \"items\" field: %+v", path, v)
-			}
-		}
-		for k, child := range v {
-			assertArraySchemasHaveItems(t, path+"."+k, child)
-		}
-	case []any:
-		for i, child := range v {
-			assertArraySchemasHaveItems(t, fmt.Sprintf("%s[%d]", path, i), child)
+		for _, p := range mcp.FunctionDeclarationProblems(tool.Name, tool.InputSchema) {
+			t.Errorf("%s.%s: %s", suite, tool.Name, p)
 		}
 	}
-}
-
-func schemaHasArrayType(raw any) bool {
-	switch typ := raw.(type) {
-	case string:
-		return typ == "array"
-	case []any:
-		for _, elem := range typ {
-			if s, _ := elem.(string); s == "array" {
-				return true
-			}
-		}
-	case []string:
-		return slices.Contains(typ, "array")
-	}
-	return false
 }
