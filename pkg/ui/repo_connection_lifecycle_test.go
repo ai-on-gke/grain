@@ -25,6 +25,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -124,12 +125,17 @@ func (r *lifecycleRig) credentialExists(name string) bool {
 	return ok
 }
 
-// staticRepoNames is a RepoNames that answers every lookup with one
-// fixed spelling, as the default host's REST client does: owner/name,
-// never a host.
+// staticRepoNames is a RepoNames that answers default-host lookups with one
+// fixed spelling, as a default-host-only REST client does: owner/name,
+// never a host, and an error off the default host.
 type staticRepoNames struct{ full string }
 
-func (s staticRepoNames) RepoFullName(owner, name string) (string, error) { return s.full, nil }
+func (s staticRepoNames) RepoFullName(host, owner, name string) (string, error) {
+	if host != "" {
+		return "", errors.New("default-host RepoNames only")
+	}
+	return s.full, nil
+}
 
 // Scenario 1 and 3 in the repo-first order: connection, repository,
 // pinned repository, task; then the repository goes first and the
