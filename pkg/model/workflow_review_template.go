@@ -179,6 +179,14 @@ func workflowReviewBody(stem string) string {
 		"`--ref` to the branch the comment names) and `grain ci log <run-id> --job <j>` to read any " +
 		"job's output; `grain ls` / `grain read ci://...` reach every file the run kept.\n\n")
 
+	b.WriteString("**Testing and CI.** The scheduled run's own logs (`grain ci log`, `grain ci list`, " +
+		"`grain ci show`) are the test signal: read them rather than re-running suites in your " +
+		"sandbox. Do not run `go test ./...`, package-wide or `-race` runs across packages, or long " +
+		"suites, and do not call `grain ci wait`, `grain ci retrigger` or `grain ci run-job`. Do run " +
+		"a narrowly targeted test (`go test ./pkg/x -run TestName`) only when needed to confirm or " +
+		"refute a specific failure from the log, and say which tests you ran in your closing note or " +
+		"filed task.\n\n")
+
 	b.WriteString("**Nothing in this run was served from grain CI's cache.** grain asks for a " +
 		"scheduled run with the cache bypassed, because the repetition is what a cadence is for: " +
 		"even at a commit nothing has moved since the last firing, every job here really ran " +
@@ -328,9 +336,14 @@ func gitHubWorkflowReviewBody(stem string) string {
 		"whatever ran before it stopped, and reported as machinery rather than as a verdict on the " +
 		"tree.\n\n")
 
-	b.WriteString("**Re-running is GitHub's, not grain's.** `grain ci retrigger` and `grain ci run-job` " +
-		"start grain CI jobs and cannot re-run this run. Whether a failure reproduces is a question " +
-		"for the next GitHub run, or for running the failing step yourself in your sandbox.\n\n")
+	b.WriteString("**Testing and CI.** Re-running is GitHub's, not grain's (`grain ci retrigger` and " +
+		"`grain ci run-job` start grain CI jobs and cannot re-run this run), and this run's own logs " +
+		"(`grain ci log`, `grain ci list`, `grain ci show`) are the test signal: read them rather " +
+		"than re-running suites in your sandbox. Do not run `go test ./...`, package-wide or `-race` " +
+		"runs across packages, or whole workflow steps or long suites, and do not call " +
+		"`grain ci wait`. Do run a narrowly targeted test (`go test ./pkg/x -run TestName`) only " +
+		"when needed to confirm or refute a specific failure from the log, and say which tests you " +
+		"ran in your closing note or filed task.\n\n")
 
 	b.WriteString("**For each job that did not pass, read its log and distinguish the cause.** " +
 		"Name the step, quote the error and the few lines around it, and classify whether the failure " +
