@@ -546,6 +546,14 @@ type Task struct {
 	// straight to it (model.CommentPath), as GET /api/inbox's path does.
 	// 0 when the task is not parked.
 	QuestionCommentID int64 `json:"questionCommentId,omitempty"`
+	// UnansweredCommentFrom is who wrote the newest person's comment on an
+	// awaiting_reply task that no run has been shown yet
+	// (model.UndeliveredPersonComment), "" when there is none. A person's
+	// comment on such a task queues a run at once (reopenAcknowledgeable),
+	// so this is set only where something left one undelivered, and a row
+	// says "unanswered question from X" rather than offering the owner a
+	// plain Reply for a question that was never theirs to answer.
+	UnansweredCommentFrom string `json:"unansweredCommentFrom,omitempty"`
 	// AwaitingAccess is an awaiting_reply task parked on an access
 	// request (request_access) rather than a question: what it wants is
 	// a grant, which its card offers, not a reply.
@@ -804,9 +812,15 @@ type TaskDetail struct {
 	// paged read (?comments_limit=, ?attempts_limit=) left out before the
 	// ones it answered: 0 for the whole record, and for a page that
 	// reaches the start of it. Ask again with comments_before= the first
-	// answered comment's id for the page before.
+	// answered comment's id (or attempts_before= the first answered run's
+	// number) for the page before.
 	OlderComments int `json:"olderComments,omitempty"`
 	OlderAttempts int `json:"olderAttempts,omitempty"`
+	// CompactedThrough is model.TaskContext.CompactedThrough: the last
+	// comment id folded into this task's compaction handover, or 0 for a
+	// task never compacted. Comments at or before it remain in the record
+	// and are collapsed under the handover on the task page (DT-15).
+	CompactedThrough int64 `json:"compactedThrough,omitempty"`
 	// Usage is every attempt's Usage summed: what the task has spent at
 	// its providers so far. Nil when no attempt reported any.
 	Usage *TaskUsage `json:"usage,omitempty"`
@@ -2621,28 +2635,24 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	body, etag, err := s.taskDetails.response(r.Context(), s.tasks, id)
+	q := r.URL.Query()
+	page, paged, err := parseTaskPage(q)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
 	// ?comments_since= (external-cli spec #XC-18) is a polling loop's
 	// cursor: the same detail, with only the conversation items written
-	// strictly after it. Never answered 304 -- the cached ETag is the
-	// whole detail's.
-	if raw := strings.TrimSpace(r.URL.Query().Get("comments_since")); raw != "" {
+	// strictly after it. Built from the store rather than the whole cached
+	// detail, and never answered 304.
+	if raw := strings.TrimSpace(q.Get("comments_since")); raw != "" {
 		since, perr := time.Parse(time.RFC3339Nano, raw)
 		if perr != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("comments_since %q is not an RFC 3339 time", raw))
 			return
 		}
-		var detail TaskDetail
-		if err := json.Unmarshal(body, &detail); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		detail.Comments = commentsAfter(detail.Comments, since)
-		if err := pageTaskDetail(&detail, r.URL.Query()); err != nil {
+		detail, err := s.tasks.GetTaskSince(r.Context(), id, since, page, paged)
+		if err != nil {
 			writeClientError(w, err)
 			return
 		}
@@ -2650,22 +2660,21 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, detail)
 		return
 	}
-	// ?comments_limit=, ?comments_before= and ?attempts_limit= page a
-	// long record (durable-tasks.design.md#DT-15): the newest comments
-	// and runs, and how many older ones were left out. Not cached under
-	// the whole detail's ETag, for the same reason as comments_since.
-	if q := r.URL.Query(); q.Has("comments_limit") || q.Has("comments_before") || q.Has("attempts_limit") {
-		var detail TaskDetail
-		if err := json.Unmarshal(body, &detail); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if err := pageTaskDetail(&detail, q); err != nil {
+	// ?comments_before= / ?attempts_before= fetch an older slice on demand
+	// directly from the store without evicting open panes from taskDetailCache.
+	if paged && (page.CommentsBefore > 0 || page.AttemptsBefore > 0) {
+		detail, err := s.tasks.GetTaskPage(r.Context(), id, page)
+		if err != nil {
 			writeClientError(w, err)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-cache")
 		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	body, etag, err := s.taskDetails.responseFor(r.Context(), s.tasks, id, page, paged)
+	if err != nil {
+		writeClientError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
@@ -3022,6 +3031,21 @@ type addCommentRequest struct {
 	Attachments []AttachmentUpload `json:"attachments"`
 	Author      string             `json:"author,omitempty"`
 	Reviewers   *[]string          `json:"reviewers,omitempty"`
+	// Reopen asks for a closed task to be reopened along with the
+	// comment -- the UI's "Reopen and send" -- so the reopen queues the
+	// run that answers it (Client.AddCommentReopening). Held to whether
+	// the caller may reopen the task, as POST /api/tasks/{id}/reopen is.
+	// Ignored on a task that is not closed.
+	Reopen bool `json:"reopen,omitempty"`
+}
+
+// commentResponse is POST /api/tasks/{id}/comments' answer: the task as
+// it stands after the comment and, for one left on a task that is still
+// closed, CommentDelivery and Notice saying it reached no agent.
+type commentResponse struct {
+	Task
+	CommentDelivery string `json:"commentDelivery,omitempty"`
+	Notice          string `json:"notice,omitempty"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -3032,20 +3056,65 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
+	if req.Reopen {
+		if err := mayReopen(r); err != nil {
+			writeError(w, agentRefusalStatus(err), err)
+			return
+		}
+	}
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {
 			writeClientError(w, err)
 			return
 		}
 	}
-	if err := s.tasks.AddCommentWithAuthor(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
+	add := s.tasks.AddCommentWithAuthor
+	if req.Reopen {
+		add = s.tasks.AddCommentReopening
+	}
+	if err := add(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
 		writeClientError(w, err)
 		return
 	}
 	// Best effort: the comment is written, and a zone that failed to
 	// stick costs the next run only the time of day it is told.
 	_ = s.tasks.noteRequesterTimeZone(r.Context(), id, requestTimeZone(r))
-	s.respondWithTask(w, r, id)
+	task, err := s.tasks.Task(r.Context(), id)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	resp := commentResponse{Task: task}
+	if task.State == model.StateClosed {
+		resp.CommentDelivery = CommentNotDelivered
+		resp.Notice = CommentNotDeliveredNotice
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// mayReopen refuses an agent's comment a reopen: what an agent says
+// never sends a task to the queue, and a run may not reopen its own task
+// (selfMutableTaskRoutes), so the reopen would be one it could not make.
+// A person's role is asked about the reopen with the comment's own
+// (authorizeRoleCall's commentAsksReopen).
+func mayReopen(r *http.Request) error {
+	if _, ok := agentCallFromContext(r.Context()); ok {
+		return errors.New("an agent's comment cannot reopen a task: call POST /api/tasks/{id}/reopen separately")
+	}
+	return nil
+}
+
+// commentAsksReopen is whether a POST /api/tasks/{id}/comments body
+// carries reopen: true, read without consuming it (peekBody).
+func commentAsksReopen(r *http.Request) bool {
+	body, err := peekBody(r)
+	if err != nil || len(body) == 0 {
+		return false
+	}
+	var req struct {
+		Reopen bool `json:"reopen"`
+	}
+	return json.Unmarshal(body, &req) == nil && req.Reopen
 }
 
 // handleGetAttachment serves one attachment's raw content -- the only
@@ -3555,16 +3624,27 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// commentsAfter is the comments created strictly after since, in order.
 // maxTaskDetailPage is the most comments or runs one paged task detail
 // read answers.
 const maxTaskDetailPage = 500
 
-// pageTaskDetail trims detail to the page q asks for: the newest
-// comments_limit comments older than comment comments_before (every
-// comment before it when no limit is given), and the newest
-// attempts_limit runs, recording how many older ones it left out.
-func pageTaskDetail(detail *TaskDetail, q url.Values) error {
+// TaskPage names a bounded slice of a task's conversation and runs on
+// GET /api/tasks/{id} (durable-tasks.design.md#DT-15).
+type TaskPage struct {
+	CommentsLimit  int
+	CommentsBefore int64
+	AttemptsLimit  int
+	AttemptsBefore int
+}
+
+// parseTaskPage parses ?comments_limit=, ?comments_before=, ?attempts_limit=
+// and ?attempts_before= on GET /api/tasks/{id}. paged is true when any of
+// those parameters was passed.
+func parseTaskPage(q url.Values) (TaskPage, bool, error) {
+	has := q.Has("comments_limit") || q.Has("comments_before") || q.Has("attempts_limit") || q.Has("attempts_before")
+	if !has {
+		return TaskPage{}, false, nil
+	}
 	limit := func(name, raw string) (int, error) {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
@@ -3576,42 +3656,27 @@ func pageTaskDetail(detail *TaskDetail, q url.Values) error {
 		}
 		return n, nil
 	}
-	commentsLimit, err := limit("comments_limit", q.Get("comments_limit"))
-	if err != nil {
-		return err
+	var p TaskPage
+	var err error
+	if p.CommentsLimit, err = limit("comments_limit", q.Get("comments_limit")); err != nil {
+		return TaskPage{}, false, err
 	}
-	attemptsLimit, err := limit("attempts_limit", q.Get("attempts_limit"))
-	if err != nil {
-		return err
+	if p.AttemptsLimit, err = limit("attempts_limit", q.Get("attempts_limit")); err != nil {
+		return TaskPage{}, false, err
 	}
 	if raw := strings.TrimSpace(q.Get("comments_before")); raw != "" {
 		before, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || before <= 0 {
-			return validationErrorf("comments_before must be a comment id")
+			return TaskPage{}, false, validationErrorf("comments_before must be a comment id")
 		}
-		end := len(detail.Comments)
-		for end > 0 && detail.Comments[end-1].ID >= before {
-			end--
+		p.CommentsBefore = before
+	}
+	if raw := strings.TrimSpace(q.Get("attempts_before")); raw != "" {
+		before, err := strconv.Atoi(raw)
+		if err != nil || before <= 0 {
+			return TaskPage{}, false, validationErrorf("attempts_before must be an attempt number")
 		}
-		detail.Comments = detail.Comments[:end]
+		p.AttemptsBefore = before
 	}
-	if commentsLimit > 0 && len(detail.Comments) > commentsLimit {
-		detail.OlderComments = len(detail.Comments) - commentsLimit
-		detail.Comments = detail.Comments[detail.OlderComments:]
-	}
-	if attemptsLimit > 0 && len(detail.Attempts) > attemptsLimit {
-		detail.OlderAttempts = len(detail.Attempts) - attemptsLimit
-		detail.Attempts = detail.Attempts[detail.OlderAttempts:]
-	}
-	return nil
-}
-
-func commentsAfter(comments []Comment, since time.Time) []Comment {
-	out := make([]Comment, 0, len(comments))
-	for _, c := range comments {
-		if c.CreatedAt.After(since) {
-			out = append(out, c)
-		}
-	}
-	return out
+	return p, true, nil
 }

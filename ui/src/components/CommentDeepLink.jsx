@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Snackbar } from "@mui/material";
 import { commentIdFromHash, malformedCommentHash } from "../commentLinks.js";
+import { TASK_DEEP_LINK_COMMENTS_LIMIT } from "../taskDetailPages.js";
 
 // HIGHLIGHT_MS is how long a linked comment stays marked once it has
 // been scrolled to (.comment-highlight in style.css fades over the same).
@@ -43,14 +44,18 @@ function findCommentElement(root, id) {
   return all.find(shown) || all[0] || null;
 }
 
-// revealComment opens every closed <details> el is folded inside, so a
-// comment in a collapsed group can be scrolled to.
+// revealComment opens every closed <details> el is folded inside or contains
+// (such as Timeline's .timeline-summarised), so a comment in a collapsed
+// group or collapsed in place can be scrolled to.
 function revealComment(el) {
   for (
     let d = el.closest("details:not([open])");
     d;
     d = d.closest("details:not([open])")
   ) {
+    d.open = true;
+  }
+  for (const d of el.querySelectorAll("details:not([open])")) {
     d.open = true;
   }
 }
@@ -84,18 +89,22 @@ function linkedComment(taskId) {
 // comments), so whether a comment belongs to the task is answered off it
 // rather than off the DOM: a comment far back in a long conversation is
 // in the detail however the page draws it.
-function useCommentDeepLink(t) {
+function useCommentDeepLink(t, onLoadEarlier) {
   const taskId = useRef(t?.id);
   taskId.current = t?.id;
   // An object rather than the bare id, so the same link followed twice
   // scrolls twice.
   const [target, setTarget] = useState(() => linkedComment(t?.id));
   const [notice, setNotice] = useState("");
+  const fetchingBeforeRef = useRef("");
 
   useEffect(() => {
     const read = () => {
       const next = linkedComment(taskId.current);
-      if (next) setTarget(next);
+      if (next) {
+        fetchingBeforeRef.current = "";
+        setTarget(next);
+      }
     };
     window.addEventListener("hashchange", read);
     window.addEventListener("popstate", read);
@@ -106,6 +115,7 @@ function useCommentDeepLink(t) {
   }, []);
 
   const comments = t?.comments;
+  const olderComments = t?.olderComments || 0;
   useEffect(() => {
     if (!target || !Array.isArray(comments)) return undefined;
     if (!target.id) {
@@ -114,6 +124,36 @@ function useCommentDeepLink(t) {
       return undefined;
     }
     if (!comments.some((c) => String(c.id) === target.id)) {
+      const targetNum = Number(target.id);
+      const oldestLoadedId =
+        comments.length > 0 && typeof comments[0]?.id === "number"
+          ? comments[0].id
+          : null;
+      const mayBeOlder =
+        olderComments > 0 &&
+        typeof onLoadEarlier === "function" &&
+        Number.isFinite(targetNum) &&
+        (oldestLoadedId === null || targetNum < oldestLoadedId);
+      if (mayBeOlder) {
+        const cursorKey = `${t?.id}:${target.id}:${oldestLoadedId}`;
+        if (fetchingBeforeRef.current !== cursorKey) {
+          fetchingBeforeRef.current = cursorKey;
+          Promise.resolve(
+            onLoadEarlier({
+              commentsLimit: TASK_DEEP_LINK_COMMENTS_LIMIT,
+              commentsOnly: true,
+            }),
+          ).then((loaded) => {
+            if (!loaded) {
+              setNotice(
+                `Comment ${target.id} is not in this task's conversation.`,
+              );
+              setTarget(null);
+            }
+          });
+        }
+        return undefined;
+      }
       setNotice(`Comment ${target.id} is not in this task's conversation.`);
       setTarget(null);
       return undefined;
@@ -157,7 +197,7 @@ function useCommentDeepLink(t) {
     };
     look();
     return () => clearTimeout(timer);
-  }, [target, comments]);
+  }, [target, comments, olderComments, onLoadEarlier, t?.id]);
 
   return { notice, clearNotice: () => setNotice("") };
 }
@@ -165,8 +205,8 @@ function useCommentDeepLink(t) {
 // CommentDeepLink is useCommentDeepLink for task t with its notice: a
 // small one at the foot of the page that does not block anything and
 // goes away by itself.
-export default function CommentDeepLink({ t }) {
-  const { notice, clearNotice } = useCommentDeepLink(t);
+export default function CommentDeepLink({ t, onLoadEarlier = null }) {
+  const { notice, clearNotice } = useCommentDeepLink(t, onLoadEarlier);
   return (
     <Snackbar
       open={Boolean(notice)}

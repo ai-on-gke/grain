@@ -1012,13 +1012,13 @@ nothing load the whole of it at once. Where that stands:
 |---|---|---|
 | Dispatch prompt | Bounded: the cursor, then the positional cut | Done here |
 | `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
-| `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID) and `?attempts_limit=` answer the newest page, with `olderComments`/`olderAttempts` counts (grain/task-4194). The detail is still built whole, once per change token, and cached | Build the page from the store (`Store.CommentsBefore`), not from the cached whole detail. The derived fields (transitions, the ask a task is parked on, session names) need their own bounded reads first |
+| `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
 | `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
-| Task page (UI) | Renders what the detail returns | Lazy-load the thread and the run list; summarised comments collapsed under the handover |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
-| Reconcilers reading all comments (`WriteTaskHandover`, `relayHandover`, wait targets) | Read the whole thread to find the last handover | Read `handover_version`, and the last handover by index |
+| Reconcilers and tail readers (`WriteTaskHandover`, `relayHandover`, `CarryConsoleSessionHandover`, `TaskHandoverAge`, wait targets, console sessions, `cycle.go`, `Client.Task`, session titles, task owner) | Read `LatestHandover`, `LatestComment`, `Comment(id)`, `FirstHumanComment` or backwards pages (`CommentsBefore`) by index | Done (grain/task-4194, grain/task-4219) |
 
 Measured by grain/task-4194 on 2026-11-10, through `GET /api/tasks/{id}`:
 
@@ -1084,12 +1084,8 @@ storage backstop, not something prompts or page loads depend on.
 
 - A compaction-only dispatch for a person's request on a resting task,
   so the request does not wait for the next wake.
-- The rest of paging the record (the table above): the task detail
-  built from a store page rather than trimmed from the whole, the task
-  page loading 50 comments and 20 runs and fetching older ones on
-  demand, and the reconcilers reading the last handover by index.
-- UI: the Compact button, the brief editor with its edit history,
-  summarised comments collapsed under the handover, and the
+- `grain task read` / `read_grain_task` summary default and `conversation, after:` paging (the remaining open row in the table above).
+- UI: the Compact button, the brief editor with its edit history, and the
   stale-handover badge, all under the deployment's screenshot rule.
   Done in grain/task-4193: a durable task's page shows the current brief
   in place of the description (the original and the edit history folded

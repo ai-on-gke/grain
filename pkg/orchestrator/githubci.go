@@ -304,6 +304,9 @@ func reconcileGitHubCITails(ctx context.Context, deps Deps, now time.Time) error
 	if err := reconcileStage1Repairs(ctx, deps, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := reconcileReleaseLoopIdle(ctx, deps, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
