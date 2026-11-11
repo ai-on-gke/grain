@@ -124,18 +124,24 @@ type Hello struct {
 	// every CLI entry's paths_under and cwd_under take on as well for a
 	// start over the session.
 	StageRoot string `json:"stage_root,omitempty"`
-	// CodexAuth is the codex login on hostd's machine
-	// ($CODEX_HOME/auth.json, else ~/.codex/auth.json), when there is
-	// one: what a codex run there links to in place of a login the
-	// daemon holds.
+	// CodexAuth is the codex login on hostd's machine, when there is
+	// one: what an older daemon links a remote codex run to.
+	//
+	// Deprecated: use LoginTargets (FeatureLoginsMap). Kept for peers
+	// without logins_map until the contract's deprecation window passes.
 	CodexAuth string `json:"codex_auth,omitempty"`
-	// Logins are the agent CLIs (LoginCodex, LoginClaude,
-	// LoginAntigravity) with a login of their own on hostd's machine, as
-	// the user hostd runs as: what a model connection with ambient
-	// credentials placed on this hostd spends (loginsUnder). Set by
-	// hostd alone, local or remote; an older hostd says nothing, which
-	// is "not known", not "none".
+	// Logins are the named CLI logins present on hostd's machine, from
+	// the allowlist's logins: map (or the built-in table when absent), as
+	// names only and never file contents: what a model connection with
+	// ambient credentials placed on this hostd spends. Set by hostd
+	// alone, local or remote; Has(FeatureLogins) distinguishes "none"
+	// (empty with FeatureLogins) from "not known" (without it).
 	Logins []string `json:"logins,omitempty"`
+	// LoginTargets maps each existing regular-file login in the
+	// allowlist's logins: map (or the built-in table when absent) to its
+	// resolved path on hostd's machine, set on remote sessions for
+	// StageSymlink (FeatureLoginsMap).
+	LoginTargets map[string]string `json:"login_targets,omitempty"`
 	// AgentsOnly is set by a host agent that runs agent CLIs and nothing
 	// else (grain-agentd, Server.AgentsOnly): its allowlist has no
 	// capabilities: and may not have any, so a run: host capability
