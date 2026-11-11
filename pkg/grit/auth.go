@@ -174,7 +174,10 @@ type clientWindow struct {
 	uploads []windowEvent
 }
 
-const rateWindow = time.Minute
+const (
+	rateWindow  = time.Minute
+	eventBucket = time.Second
+)
 
 func newClientRateLimiter() *clientRateLimiter {
 	return &clientRateLimiter{windows: make(map[string]*clientWindow)}
@@ -237,7 +240,22 @@ func (l *clientRateLimiter) allowTreeUpload(c ClientRecord, nBytes int64, now ti
 	// client sending them as fast as it can would otherwise grow the
 	// window by one event a request.
 	if nBytes > 0 {
-		w.uploads = append(w.uploads, windowEvent{at: now, n: nBytes})
+		w.uploads = addEvent(w.uploads, now, nBytes)
 	}
 	return true
+}
+
+// addEvent records n at now, folding it into the last event when both fall
+// in the same eventBucket, so a client making many small uploads keeps at
+// most one event a second rather than one a request. A folded event is
+// stamped with the latest time in it, so its bytes leave the window at most
+// eventBucket late and never early: the limit is only ever stricter for it.
+func addEvent(events []windowEvent, now time.Time, n int64) []windowEvent {
+	if last := len(events) - 1; last >= 0 && !now.Before(events[last].at) &&
+		now.Truncate(eventBucket).Equal(events[last].at.Truncate(eventBucket)) {
+		events[last].at = now
+		events[last].n += n
+		return events
+	}
+	return append(events, windowEvent{at: now, n: n})
 }

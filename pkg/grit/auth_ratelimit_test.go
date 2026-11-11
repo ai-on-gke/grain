@@ -46,3 +46,27 @@ func TestClientRateLimiterSlidesAcrossMinuteBoundary(t *testing.T) {
 		t.Fatal("upload a minute after the first refused")
 	}
 }
+
+// Many small uploads in the same second are kept as one event, and their
+// bytes stay counted for a full minute after the last of them.
+func TestClientRateLimiterFoldsSmallUploadsWithoutLettingThemOutEarly(t *testing.T) {
+	l := newClientRateLimiter()
+	c := ClientRecord{ID: "c", TreeUploadBytesPerMinute: 1000}
+	base := time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 100; i++ {
+		if !l.allowTreeUpload(c, 1, base.Add(time.Duration(i)*5*time.Millisecond)) {
+			t.Fatalf("upload %d within the limit refused", i)
+		}
+	}
+	if n := len(l.windows["c"].uploads); n != 1 {
+		t.Errorf("100 uploads in one second kept %d events, want 1", n)
+	}
+	last := base.Add(99 * 5 * time.Millisecond)
+	if l.allowTreeUpload(c, 901, last.Add(time.Minute-time.Millisecond)) {
+		t.Fatal("bytes folded into a bucket left the window before a minute after the last of them")
+	}
+	if !l.allowTreeUpload(c, 901, last.Add(time.Minute+time.Millisecond)) {
+		t.Fatal("upload a minute after the last folded one refused")
+	}
+}
