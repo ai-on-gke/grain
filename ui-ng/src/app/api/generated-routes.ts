@@ -270,6 +270,7 @@ export const ROUTE_SCOPES = {
   "POST /api/registry/heartbeat": "settings:write",
   "POST /api/releases/{version}/rollback": "releases:write",
   "POST /api/repos": "repos:write",
+  "POST /api/repos/plan": "repos:read",
   "POST /api/repos/{owner}/{name}/base-branch-runs": "ci:write",
   "POST /api/repos/{owner}/{name}/branches": "repos:write",
   "POST /api/repos/{owner}/{name}/candidates/{id}/qualification/approve": "releases:write",
