@@ -232,6 +232,13 @@ type Input struct {
 	// read the same (changes.go).
 	SettingsChanges []SettingsChange
 	SettingsHistory bool
+	// SettingsReaches is how far back the reader of SettingsChanges got
+	// (staterepo.SettingsHistory.Reaches): the moment before which a
+	// change might be missing. A reader that skips runtime bookkeeping and
+	// pages back over the whole window reaches further than its oldest
+	// change, and this is how it says so. Zero means the reader did not
+	// say, and the oldest change read stands in for it.
+	SettingsReaches time.Time
 	// Host is what the machine underneath this deployment was doing while
 	// it worked, as hourly rollups (sysstat.History, converted). The third
 	// input that is not a row and cannot be one: a load average is a fact
@@ -1165,7 +1172,7 @@ func Compute(in Input) Report {
 	// On the same buckets again, which is the entire point of this
 	// section: a series of numbers and a series of the changes made to the
 	// deployment producing them, point for point (changes.go).
-	rep.Changes = changesOf(w, buckets, in.SettingsHistory, in.SettingsChanges)
+	rep.Changes = changesOf(w, buckets, in.SettingsHistory, in.SettingsChanges, in.SettingsReaches)
 
 	// --- and the machine all of it ran on -----------------------------
 	// On the same buckets again, which is what makes "the jobs got slower
