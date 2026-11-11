@@ -660,7 +660,12 @@ import "strconv"
 // 141 adds `schedule`.`skip_when` (model.Schedule.SkipWhen): a condition
 // outside the schedule, such as its base branch's publishing being held,
 // that holds its firings (grain/task-4393).
-const SchemaVersion = 141
+// 142 changes no table: it rewrites the owner column of the qualification
+// plan tables and `scheduled_workflow_run` to StoredOwner (host/owner off
+// the default host), which every other repo-keyed table already holds,
+// for rows their schedule or a target repo places on another host
+// (migrateStoredOwners, grain/task-4335).
+const SchemaVersion = 142
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
