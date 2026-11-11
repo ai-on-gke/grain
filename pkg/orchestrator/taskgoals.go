@@ -80,6 +80,8 @@ func checkGoal(ctx context.Context, deps Deps, g model.TaskGoal, now time.Time) 
 			return goalReading{evidence: fmt.Sprintf("no grain CI verdict on `%s` of %s yet", g.Spec.Branch, repo)}, err
 		}
 		return baseGreenReading(ctx, store, g, *row, now)
+	case model.GoalNightlyGreen:
+		return nightlyGreenReading(ctx, store, g)
 	case model.GoalPRMerged:
 		taskID := g.Spec.Task
 		what := "task " + taskID + "'s pull request"

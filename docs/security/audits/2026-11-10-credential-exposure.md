@@ -42,7 +42,7 @@ agent granted the same `:read` scopes.
 | CE-2 | Capability server `env` / `headers` / `args` / `serverUrl` accepted typed-in credentials, and `GET /api/capability-servers` (`capabilities:read`) returned them verbatim | High | **Fixed here** for the API and new saves; state repo, grain/config pull requests and existing rows → follow-up task |
 | CE-3 | Attempt transcripts (`tasks:read`): with no object store, the DB copy is redacted only of the sandbox env and credential shapes, and a live tail not at all | High | **Fixed here** (redacted on read) |
 | CE-4 | Credentials kept in files beside the store (Codex logins, GitHub App webhook secrets, setup.sh agent key files, state/secrets repo tokens, relay token file, Postgres password) were in no redaction list | Medium | **Fixed here** |
-| CE-5 | `sessions:write` (e.g. `grain/delegate`) can type into any task's console, whatever grants that run holds | High | Follow-up task |
+| CE-5 | `sessions:write` (e.g. `grain/delegate`) can type into any task's console, whatever grants that run holds | High | **Fixed** (follow-up task 4004) |
 | CE-6 | A bare access code / `LocalAPIToken`, the legacy `grain-local-<hex>` token and the secrets private key (`grain-secret-key-v1:`) had no redaction shape (only the `X-Grain-Access-Code:` header did) | Low | **Fixed here** |
 | CE-7 | State browser (`GET /api/state-repo/file`, `settings:read`) served exported rows with no redaction | Low (CE-2's carrier) | **Fixed here** |
 | CE-8 | Capability server errors (`Status.Error`) are scrubbed of the server's own resolved secrets, not of shapes or other secrets | Low | Noted; no confirmed leak |
@@ -57,7 +57,13 @@ secret file. **Fix:** output now goes through `Config.LogRedactor`, the
 list the Logs pane uses, before it is encoded. Offsets stay the session's
 own. If that list cannot be built, the output is withheld rather than
 served. **Residual:** redaction runs per polled chunk, so a value split
-across two reads can survive. That is covered with CE-5's follow-up.
+across two reads can survive. That is covered with CE-5's follow-up, which
+closed it from both ends: a poll reads from the start of the line its
+offset falls in, so a credential begun before the offset is cut whole; and
+while a live console has printed within the last 500 ms, the trailing
+token it has not finished (8 bytes to 8 KiB with no whitespace after it)
+is left for the next poll rather than served half-printed
+(`consoleHeldTail`, `pkg/ui/console.go`).
 
 ### CE-2: typed-in capability server credentials (reproduced)
 
@@ -132,6 +138,21 @@ by the PEM block rule, and their installation tokens by the `ghs_` shape.
 they don't. That reaches every credential the run holds. Follow-up task:
 hold console input to the caller's own grants, the way
 `roleApprovalWithin` holds approvals.
+
+**Fix:** every `/api/console/{id}` route -- input, resize, close and
+reading output -- resolves its session through `Server.console`, which
+holds a limited role to `roleTaskWithin` ("access console of"): the
+caller's role must cover every grant (bar repository defaults it does not
+deny), write, read, admission and setting the console's task carries, or
+the call answers 403. Standing console sessions' edit, restart, cancel and
+delete go through `roleConsoleSessionWithin`, which applies the same
+containment to the session's configuration and its open task. Only an
+unlimited role (`grain/operator`, the access code) drives every console.
+`TestDelegatePersonCannotDriveAConsoleHoldingMoreThanItsRole`
+(`tests/security`) is the regression test: a `grain/delegated` person is
+refused input, resize, close and output on a console whose task holds
+`api:secrets:write`, and still types into one whose task holds nothing
+past their role.
 
 ### CE-6: grain's own credentials had no shape (reproduced)
 

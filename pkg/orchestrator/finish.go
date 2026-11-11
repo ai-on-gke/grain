@@ -1425,23 +1425,18 @@ func relayHandover(ctx context.Context, store *model.Store, task model.Task,
 	if !ok || handover == "" {
 		return nil
 	}
-	existing, err := store.Comments(ctx, task.ID)
+	last, err := store.LatestHandover(ctx, task.ID)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading comments before posting handover for %s: %w", task.ID, err)
+		return fmt.Errorf("orchestrator: reading the last handover before posting one for %s: %w", task.ID, err)
 	}
-	for i := len(existing) - 1; i >= 0; i-- {
-		if existing[i].Handover {
-			if strings.TrimSpace(existing[i].Body) == handover {
-				// The same handover written again is the run confirming
-				// it is still true, which resets its age
-				// (model.HandoverAge) without a new version.
-				if err := store.ConfirmHandover(ctx, task.ID, now); err != nil {
-					return fmt.Errorf("orchestrator: confirming handover for %s: %w", task.ID, err)
-				}
-				return nil
-			}
-			break
+	if last != nil && strings.TrimSpace(last.Body) == handover {
+		// The same handover written again is the run confirming it is
+		// still true, which resets its age (model.HandoverAge) without a
+		// new version.
+		if err := store.ConfirmHandover(ctx, task.ID, now); err != nil {
+			return fmt.Errorf("orchestrator: confirming handover for %s: %w", task.ID, err)
 		}
+		return nil
 	}
 	now, err = answeringTime(ctx, store, task.ID, now)
 	if err != nil {

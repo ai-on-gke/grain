@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func humanSays(ctx context.Context, t *testing.T, store *model.Store, taskID, bo
 // promptFor builds the prompt a dispatch of tk would get now.
 func promptFor(ctx context.Context, t *testing.T, store *model.Store, tk model.Task) string {
 	t.Helper()
-	comments, err := store.Comments(ctx, tk.ID)
+	comments, err := dispatchComments(ctx, store, tk.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,5 +257,72 @@ func TestDurableParkOwesAHandover(t *testing.T) {
 	}
 	if !owesHandover(durable, &agent.Result{}, model.SuspendRequested) {
 		t.Error("a durable run that suspended without a handover does not owe one")
+	}
+}
+
+// A dispatch of a compacted task reads the comments after its cursor and
+// the handover that summarises the rest, never the summarised comments
+// themselves: what it reads grows with what was said since the
+// compaction, not with the whole record (durable-tasks.design.md#DT-15).
+func TestDispatchReadsOnlyTheCommentsAfterTheCursor(t *testing.T) {
+	store, ctx := openTestStore(t)
+	tk := durableTask("hub")
+	if err := store.PutTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	var summarised []int64
+	for i := 0; i < 5; i++ {
+		summarised = append(summarised, humanSays(ctx, t, store, tk.ID, fmt.Sprintf("old %d", i), standingNow.Add(-time.Hour)))
+	}
+	if _, err := store.CompactTask(ctx, tk.ID, "the old five, summarised", 0,
+		model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}, "alice", standingNow); err != nil {
+		t.Fatal(err)
+	}
+	later := humanSays(ctx, t, store, tk.ID, "new", standingNow.Add(time.Minute))
+
+	got, err := dispatchComments(ctx, store, tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got[0].Handover || got[0].Body != "the old five, summarised" || got[1].ID != later {
+		t.Fatalf("dispatch read %+v, want the handover then comment %d", got, later)
+	}
+	for _, c := range got {
+		if slices.Contains(summarised, c.ID) {
+			t.Errorf("dispatch read summarised comment %d", c.ID)
+		}
+	}
+
+	// A task never compacted still reads its whole thread.
+	plain := durableTask("plain")
+	if err := store.PutTask(ctx, plain); err != nil {
+		t.Fatal(err)
+	}
+	humanSays(ctx, t, store, plain.ID, "one", standingNow)
+	humanSays(ctx, t, store, plain.ID, "two", standingNow)
+	if all, err := dispatchComments(ctx, store, plain.ID); err != nil || len(all) != 2 {
+		t.Fatalf("uncompacted dispatch read %d comments (%v), want both", len(all), err)
+	}
+}
+
+// The prompt says the summarised messages are in "the handover below",
+// so the newest handover survives the cut even when it is at or before
+// the cursor, and only when no handover is after it.
+func TestCommentsPastCursorKeepsTheHandoverThatSummarisesThem(t *testing.T) {
+	thread := []model.Comment{
+		{ID: 1, Body: "old"},
+		{ID: 2, Body: "older summary", Handover: true},
+		{ID: 3, Body: "summary", Handover: true},
+		{ID: 4, Body: "summarised too"},
+		{ID: 5, Body: "new"},
+	}
+	got := commentsPastCursor(thread, 4)
+	if len(got) != 2 || got[0].ID != 3 || got[1].ID != 5 {
+		t.Fatalf("past cursor 4 = %+v, want the handover (3) then comment 5", got)
+	}
+	thread = append(thread, model.Comment{ID: 6, Body: "newer summary", Handover: true})
+	got = commentsPastCursor(thread, 4)
+	if len(got) != 2 || got[0].ID != 5 || got[1].ID != 6 {
+		t.Fatalf("past cursor 4 with a later handover = %+v, want comments 5 and 6 only", got)
 	}
 }

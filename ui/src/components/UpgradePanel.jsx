@@ -885,6 +885,57 @@ export function resolvedImage(image, repo, branch) {
   return `${from}:${tagForBranch(target)}`;
 }
 
+// EditionSwitchDialog is the confirmation an edition switch always
+// gets before it starts: from which edition to which, the image, and
+// what is lost (GET /api/upgrade's editionSwitchLosses) -- named here
+// rather than left to a general warning, because the cost of a switch
+// pressed by mistake is a deployment without its edition until
+// somebody upgrades back.
+function EditionSwitchDialog({ open, status, image, onClose, onConfirm }) {
+  if (!status) return null;
+  const repo = repositoryOfImage(image);
+  const to = (status.otherEditionImageRepos || []).find(
+    (o) => o.repository === repo,
+  )?.edition;
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      aria-labelledby="confirm-edition-switch-title"
+    >
+      <DialogTitle id="confirm-edition-switch-title">
+        Switch edition{status.edition ? ` from ${status.edition}` : ""}
+        {to ? ` to ${to}` : ""}?
+      </DialogTitle>
+      <DialogContent>
+        <DialogContentText component="div" sx={{ overflowWrap: "anywhere" }}>
+          <Box>
+            This upgrade pulls <code>{image.trim()}</code>, another
+            edition&apos;s build, and restarts this deployment on it. It loses:
+          </Box>
+          <EditionSwitchLosses losses={status.editionSwitchLosses} />
+          {status.inFlightRuns > 0 && (
+            <Box sx={{ mt: 1 }}>
+              {inFlightWarning(status.inFlightRuns, status.atRisk)}
+            </Box>
+          )}
+        </DialogContentText>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          variant="contained"
+          color="warning"
+          className="upgrade-switch-edition-confirm"
+          onClick={onConfirm}
+        >
+          Switch edition
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 // ImageRepoWarning is GET /api/upgrade's imageRepoWarning: the repository
 // this deployment upgrades from names no registry host -- typically an
 // -upgrade-image a release-asset-era installer wrote -- so the Upgrade
@@ -932,17 +983,24 @@ function ImageChooser({
   onChange,
   disabled,
   scheduling,
+  switchEdition,
+  onSwitchEdition,
 }) {
+  const [showSwitch, setShowSwitch] = useState(false);
   if (!status?.imageRepo) return null;
   const repos = status.imageRepos || [];
+  const others = status.otherEditionImageRepos || [];
   const will = resolvedImage(scheduling ? "" : image, status.imageRepo, branch);
+  const switchingTo = switchEdition
+    ? others.find((o) => o.repository === repositoryOfImage(image))
+    : null;
   return (
     <Box className="upgrade-image" sx={{ mt: 1 }}>
       <TextField
         name="image"
         label="Image (optional)"
         value={image}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => onChange(e.target.value, false)}
         placeholder={status.imageRepo}
         helperText={
           scheduling
@@ -974,7 +1032,9 @@ function ImageChooser({
               label={
                 repo === status.defaultImageRepo ? `${repo} (default)` : repo
               }
-              onClick={() => onChange(repo === status.imageRepo ? "" : repo)}
+              onClick={() =>
+                onChange(repo === status.imageRepo ? "" : repo, false)
+              }
               disabled={disabled || scheduling}
             />
           ))}
@@ -987,9 +1047,161 @@ function ImageChooser({
           sx={{ mt: 1, overflowWrap: "anywhere" }}
         >
           Will pull <code className="upgrade-will-ref">{will}</code>
+          {switchEdition && (
+            <strong className="upgrade-will-switch">
+              {" "}
+              &middot; switches this deployment from the {status.edition}{" "}
+              edition to {switchingTo?.edition || "another"}
+            </strong>
+          )}
         </Typography>
       )}
+      {others.length > 0 && !scheduling && (
+        <EditionSwitchChooser
+          status={status}
+          others={others}
+          image={image}
+          open={showSwitch || switchEdition}
+          switchEdition={switchEdition}
+          disabled={disabled}
+          onOpen={() => setShowSwitch(true)}
+          onPick={(repo) => onSwitchEdition(repo)}
+          onCancel={() => {
+            setShowSwitch(false);
+            if (switchEdition) onChange("", false);
+          }}
+        />
+      )}
     </Box>
+  );
+}
+
+// repositoryOfImage is image without its tag or digest -- the part
+// GET /api/upgrade's repository lists name.
+export function repositoryOfImage(image) {
+  const named = (image || "").trim().split("@")[0];
+  const colon = named.lastIndexOf(":");
+  return colon > named.lastIndexOf("/") ? named.slice(0, colon) : named;
+}
+
+// EditionSwitchChooser is the one way the pane offers another edition's
+// image (grain/task-4153): GET /api/upgrade's otherEditionImageRepos are
+// never among the ordinary repository chips, because pulling one
+// restarts this deployment as a different edition. It stays folded
+// behind a clearly labelled "Switch edition…" button, says what a switch
+// gives up before anything is picked, and picking one turns on the
+// request's switchEdition -- which the Upgrade button then confirms
+// again (EditionSwitchDialog).
+function EditionSwitchChooser({
+  status,
+  others,
+  image,
+  open,
+  switchEdition,
+  disabled,
+  onOpen,
+  onPick,
+  onCancel,
+}) {
+  if (!open) {
+    return (
+      <Box sx={{ mt: 1 }}>
+        <Button
+          size="small"
+          color="warning"
+          variant="outlined"
+          className="upgrade-switch-edition-open"
+          onClick={onOpen}
+          disabled={disabled}
+        >
+          Switch edition…
+        </Button>
+      </Box>
+    );
+  }
+  const chosen = repositoryOfImage(image);
+  return (
+    <Alert
+      severity="warning"
+      className="upgrade-switch-edition"
+      sx={{ mt: 1, overflowWrap: "anywhere" }}
+    >
+      <Box>
+        <strong>Switch edition</strong>: this deployment runs the{" "}
+        <code>{status.edition}</code> edition. Upgrading onto another
+        edition&apos;s image replaces it with that edition&apos;s build.
+      </Box>
+      <EditionSwitchLosses losses={status.editionSwitchLosses} />
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        flexWrap="wrap"
+        sx={{ mt: 1 }}
+      >
+        {others.map((o) => (
+          <Chip
+            key={o.repository}
+            size="small"
+            color="warning"
+            className="upgrade-switch-edition-repo"
+            variant={
+              switchEdition && chosen === o.repository ? "filled" : "outlined"
+            }
+            label={`${o.repository} (${o.edition} edition)`}
+            onClick={() => onPick(o.repository)}
+            disabled={disabled}
+          />
+        ))}
+      </Stack>
+      <Box sx={{ mt: 1 }}>
+        <Button
+          size="small"
+          className="upgrade-switch-edition-cancel"
+          onClick={onCancel}
+          disabled={disabled}
+        >
+          {switchEdition ? "Don't switch edition" : "Close"}
+        </Button>
+      </Box>
+    </Alert>
+  );
+}
+
+// EditionSwitchLosses lists what switching edition gives up, as GET
+// /api/upgrade's editionSwitchLosses says it.
+function EditionSwitchLosses({ losses }) {
+  if (!losses?.length) return null;
+  return (
+    <Box
+      component="ul"
+      className="upgrade-switch-losses"
+      sx={{ my: 0.5, pl: 2.5 }}
+    >
+      {losses.map((loss) => (
+        <li key={loss}>{loss}</li>
+      ))}
+    </Box>
+  );
+}
+
+// LastEditionSwitch says, while the last upgrade's status is on screen,
+// that it crossed editions on purpose and who asked
+// (GET /api/upgrade's editionSwitch).
+function LastEditionSwitch({ editionSwitch }) {
+  if (!editionSwitch) return null;
+  const { from, to, repository, requestedBy } = editionSwitch;
+  return (
+    <Alert
+      severity="info"
+      className="upgrade-last-edition-switch"
+      sx={{ mb: 2, overflowWrap: "anywhere" }}
+    >
+      The last upgrade switched this deployment&apos;s edition
+      {from ? ` from ${from}` : ""}
+      {to ? ` to ${to}` : ""}, pulling from <code>{repository}</code>
+      {requestedBy ? `, as ${requestedBy} asked` : ""}.
+    </Alert>
   );
 }
 
@@ -1125,6 +1337,11 @@ export default function UpgradePanel({
   // branch's tag in the configured repository (ImageChooser); "" for
   // the usual.
   const [image, setImage] = useState("");
+  // switchEdition is whether image is another edition's, picked through
+  // the "Switch edition…" override -- the request's switchEdition, and
+  // the one thing that opens EditionSwitchDialog.
+  const [switchEdition, setSwitchEdition] = useState(false);
+  const [switchConfirmOpen, setSwitchConfirmOpen] = useState(false);
   // chosen is whether the operator has picked or typed a target, which
   // is when what it brings is previewed (UpgradeReleaseNotes).
   const [chosen, setChosen] = useState(false);
@@ -1242,13 +1459,13 @@ export default function UpgradePanel({
     setUnchangedBranch("");
     try {
       const chosenImage = afterTasksFinish ? "" : image.trim();
+      const body = chosenImage
+        ? { branch: trimmed, image: chosenImage, afterTasksFinish }
+        : { branch: trimmed, afterTasksFinish };
+      if (chosenImage && switchEdition) body.switchEdition = true;
       const next = await api("/api/upgrade", {
         method: "POST",
-        body: JSON.stringify(
-          chosenImage
-            ? { branch: trimmed, image: chosenImage, afterTasksFinish }
-            : { branch: trimmed, afterTasksFinish },
-        ),
+        body: JSON.stringify(body),
       });
       if (next.phase === "running") sawRunning.current = true;
       setStatus(next);
@@ -1268,6 +1485,12 @@ export default function UpgradePanel({
       isSameRunningVersion(trimmed, status, version, preview)
     ) {
       setUnchangedBranch(trimmed);
+      return;
+    }
+    // Switching edition is always confirmed, whatever is running: what it
+    // gives up is not runs but the edition itself.
+    if (chosenImage && switchEdition) {
+      setSwitchConfirmOpen(true);
       return;
     }
     // Only when there is something to lose, and only when the upgrade is
@@ -1398,6 +1621,7 @@ export default function UpgradePanel({
             }}
           />
           <ImageRepoWarning status={status} />
+          <LastEditionSwitch editionSwitch={status.editionSwitch} />
           <LastRestart report={status.lastRestart} />
           <ScheduledUpgrade
             scheduled={status.scheduled}
@@ -1435,6 +1659,16 @@ export default function UpgradePanel({
               </Button>
             </DialogActions>
           </Dialog>
+          <EditionSwitchDialog
+            open={switchConfirmOpen}
+            status={status}
+            image={image}
+            onClose={() => setSwitchConfirmOpen(false)}
+            onConfirm={async () => {
+              setSwitchConfirmOpen(false);
+              await executeUpgrade(branch);
+            }}
+          />
           <form onSubmit={submit}>
             <BranchPicker
               branch={branch}
@@ -1456,8 +1690,16 @@ export default function UpgradePanel({
               status={status}
               branch={branch}
               image={image}
-              onChange={(next) => {
+              onChange={(next, switching) => {
                 setImage(next);
+                setSwitchEdition(!!switching);
+                setUnchangedBranch("");
+              }}
+              switchEdition={switchEdition}
+              onSwitchEdition={(repo) => {
+                setImage(repo);
+                setSwitchEdition(true);
+                setAfterTasksFinish(false);
                 setUnchangedBranch("");
               }}
               disabled={running}
@@ -1498,7 +1740,9 @@ export default function UpgradePanel({
                   ? "Upgrading…"
                   : afterTasksFinish
                     ? "Schedule upgrade"
-                    : "Upgrade"}
+                    : switchEdition && image.trim()
+                      ? "Switch edition and upgrade"
+                      : "Upgrade"}
               </Button>
             </Stack>
           </form>

@@ -58,11 +58,18 @@ const (
 	// or one named CL has (changelists.md §6), as its change provider
 	// observes it.
 	GoalCLSubmitted GoalKind = "cl-submitted"
+	// GoalNightlyGreen is met by the next fully green run of a GitHub
+	// Actions workflow -- a release train's Stage 1, nightly.yml -- on the
+	// repository's default branch or one of its release candidates
+	// (design/playbook/releases.playbook.md, section 15), concluded after
+	// the goal was declared. Grain's own Stage 1 repairs carry it.
+	GoalNightlyGreen GoalKind = "nightly-green"
 )
 
 // GoalKinds is every GoalKind, in the design's order.
 func GoalKinds() []GoalKind {
-	return []GoalKind{GoalBaseGreen, GoalPRMerged, GoalTasksClosed, GoalPersonCloses, GoalPipelineHealthy, GoalCLSubmitted}
+	return []GoalKind{GoalBaseGreen, GoalPRMerged, GoalTasksClosed, GoalPersonCloses, GoalPipelineHealthy, GoalCLSubmitted,
+		GoalNightlyGreen}
 }
 
 // Valid reports whether k is a declared kind.
@@ -119,6 +126,9 @@ type GoalSpec struct {
 	Repos []string `json:"repos,omitempty"`
 	// cl-submitted: every CL of Task, or the one CL numbered CL.
 	CL int64 `json:"cl,omitempty"`
+	// nightly-green: Repo and the workflow's name as GitHub reports it
+	// ("nightly").
+	Workflow string `json:"workflow,omitempty"`
 }
 
 // GoalDecl is a goal as it is declared -- by a template, propose_task, a
@@ -141,6 +151,9 @@ func GoalDefaults(kind GoalKind) (maxResumes int, maxStall time.Duration, onLimi
 	switch kind {
 	case GoalBaseGreen:
 		return 6, 12 * time.Hour, GoalHoldOnLimit
+	case GoalNightlyGreen:
+		// A red Stage 1 stalls every release: never held, only louder.
+		return 6, 12 * time.Hour, GoalNotifyOnLimit
 	case GoalPRMerged, GoalTasksClosed, GoalCLSubmitted:
 		return 6, 24 * time.Hour, GoalHoldOnLimit
 	case GoalPipelineHealthy:
@@ -207,6 +220,15 @@ func (d *GoalDecl) Normalize() error {
 			spec.CL = s.CL
 		default:
 			return errors.New("goal cl-submitted needs a task, or a cl number")
+		}
+	case GoalNightlyGreen:
+		repo, err := ParseRepo(strings.TrimSpace(s.Repo))
+		if err != nil {
+			return fmt.Errorf("goal nightly-green: %w", err)
+		}
+		spec.Repo, spec.Workflow = repo.String(), strings.TrimSpace(s.Workflow)
+		if spec.Workflow == "" {
+			return errors.New("goal nightly-green needs a workflow")
 		}
 	case GoalPipelineHealthy:
 		for _, r := range s.Repos {
