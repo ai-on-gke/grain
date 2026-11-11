@@ -17,12 +17,14 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -167,6 +169,14 @@ func (c *Client) githubSpelling(repo model.RepoRef) (model.RepoRef, bool) {
 		// gives it; GitHub has no spelling of it to offer.
 		return repo, false
 	}
+	if repo.OffDefaultHost() != "" {
+		// RepoNames asks the default host by owner/name alone, and its
+		// answer carries no host: adopting it stored
+		// git.example.org/team/app as the default host's team/app, a
+		// different repository (grain/task-4249). Another host's
+		// repository is kept as written.
+		return repo, false
+	}
 	full, err := c.Config.RepoNames.RepoFullName(repo.Owner, repo.Name)
 	if err != nil {
 		return repo, false
@@ -267,6 +277,9 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 		return c.GetSettings(ctx)
 	}
 	if removingErr == nil {
+		if err := c.forgetRepoReleaseSecrets(ctx, removing); err != nil {
+			return Settings{}, err
+		}
 		if err := c.Store.ForgetRepo(ctx, removing); err != nil {
 			return Settings{}, err
 		}
@@ -279,6 +292,35 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 	}
 	c.triggerHubSync()
 	return c.GetSettings(ctx)
+}
+
+// forgetRepoReleaseSecrets deletes the values of the release secrets
+// repo's repo_config row declares, before ForgetRepo drops the row that
+// names them. Without this the values stayed in the encrypted store under
+// the repository's address with nothing left listing them, and a later
+// re-add of the same repository inherited them (grain/task-4249).
+func (c *Client) forgetRepoReleaseSecrets(ctx context.Context, repo model.RepoRef) error {
+	if c.Config.Secrets == nil {
+		return nil
+	}
+	rc, err := c.Store.GetRepoConfig(ctx, repo)
+	if err != nil || rc == nil {
+		return err
+	}
+	for _, name := range rc.ReleaseSecrets {
+		secret, key := ci.ReleaseSecretAddress(rc.Repo.String(), name)
+		stored, err := c.Config.Secrets.Has(secret, key)
+		if err != nil {
+			return err
+		}
+		if !stored {
+			continue
+		}
+		if err := c.Config.Secrets.DeleteKey(secret, key); err != nil {
+			return fmt.Errorf("forgetting release secret %s of %s: %w", name, repo, err)
+		}
+	}
+	return nil
 }
 
 // RepoDefaults is one repo's own task defaults -- what GET
