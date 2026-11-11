@@ -421,7 +421,7 @@ func (r *Repo) settingsChangeOf(ctx context.Context, rec settingsRecord) (Settin
 // -- a file the commit created has nothing at its parent, and a root
 // commit has no parent at all.
 func (r *Repo) blob(ctx context.Context, spec string) string {
-	out, err := r.git(ctx, "cat-file", "blob", spec)
+	out, err := r.git(ctx, "cat-file", "blob", "--end-of-options", spec)
 	if err != nil {
 		return ""
 	}
