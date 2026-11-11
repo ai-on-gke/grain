@@ -733,4 +733,14 @@ func TestRepoNameGateRoutesByHostAndAddTargetRepoKeepsHost(t *testing.T) {
 	if len(targets) != 3 || targets[2] != "unconfigured.forge.test/Team/Service" {
 		t.Fatalf("TargetRepos = %v, want unconfigured.forge.test/Team/Service kept", targets)
 	}
+
+	// A repoNameGate with no store also fails closed rather than dialing a
+	// non-default host without checking GitConnectionOn.
+	depotReqsBeforeNilStore := len(f.depot.requests())
+	if _, err := (repoNameGate{defaultHost: model.DefaultGitHost}).RepoFullName(depotTestHost, "Experimental", "Bsalmon-Test"); err == nil {
+		t.Fatal("repoNameGate with nil store succeeded on non-default host")
+	}
+	if len(f.depot.requests()) != depotReqsBeforeNilStore {
+		t.Fatalf("repoNameGate with nil store dialed %s", depotTestHost)
+	}
 }

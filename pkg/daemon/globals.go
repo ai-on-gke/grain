@@ -208,7 +208,10 @@ func (g repoNameGate) RepoFullName(host, owner, name string) (string, error) {
 				resolvedHost = host
 			}
 		}
-		if !model.SameGitHost(resolvedHost, defHost, model.DefaultGitHost) && g.store != nil {
+		if !model.SameGitHost(resolvedHost, defHost, model.DefaultGitHost) {
+			if g.store == nil {
+				return "", fmt.Errorf("no git connection configured for %s", resolvedHost)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			conn, err := g.store.GitConnectionOn(ctx, resolvedHost, ref.Owner, ref.Name)
 			cancel()

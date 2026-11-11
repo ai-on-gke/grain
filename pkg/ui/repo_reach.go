@@ -145,7 +145,7 @@ type ReachableReposResult struct {
 	Repos          []gitproxy.ReachableRepo `json:"repos"`
 	Errors         []ConnectionReachError   `json:"errors"`
 	Connections    []ReachConnection        `json:"connections"`
-	HostMismatches []TargetRepoHostMismatch `json:"hostMismatches,omitempty"`
+	HostMismatches []TargetRepoHostMismatch `json:"hostMismatches"`
 	Total          int                      `json:"total"`
 	Truncated      bool                     `json:"truncated"`
 	NextCursor     string                   `json:"nextCursor,omitempty"`
@@ -262,7 +262,7 @@ func (c *Client) ReachableReposFiltered(ctx context.Context, team string, f Reac
 // the picker to show rather than an empty list that reads as "nothing".
 func (c *Client) ReachableRepos(ctx context.Context, team string) (ReachableReposResult, error) {
 	out := ReachableReposResult{Repos: []gitproxy.ReachableRepo{}, Errors: []ConnectionReachError{},
-		Connections: []ReachConnection{}}
+		Connections: []ReachConnection{}, HostMismatches: []TargetRepoHostMismatch{}}
 	if team == "" {
 		team = model.DefaultTeamID
 	}
@@ -398,12 +398,13 @@ func (c *Client) reachDefaultHost(cfg *model.Config) string {
 }
 
 func (c *Client) targetRepoHostMismatchesFromReach(ctx context.Context, res ReachableReposResult) []TargetRepoHostMismatch {
+	out := []TargetRepoHostMismatch{}
 	if c.Store == nil || !res.Available || len(res.Repos) == 0 {
-		return nil
+		return out
 	}
 	cfg, err := c.Store.GetConfig(ctx)
 	if err != nil || cfg == nil || len(cfg.TargetRepos) == 0 {
-		return nil
+		return out
 	}
 	defaultHost := c.reachDefaultHost(cfg)
 	var hasDefaultConn, anyDefaultOK bool
@@ -416,7 +417,7 @@ func (c *Client) targetRepoHostMismatchesFromReach(ctx context.Context, res Reac
 		}
 	}
 	if hasDefaultConn && !anyDefaultOK {
-		return nil
+		return out
 	}
 
 	onDefault := map[string]bool{}
@@ -442,7 +443,6 @@ func (c *Client) targetRepoHostMismatchesFromReach(ctx context.Context, res Reac
 		}
 	}
 
-	var out []TargetRepoHostMismatch
 	for _, raw := range cfg.TargetRepos {
 		entry := strings.TrimSpace(raw)
 		if entry == "" {
@@ -539,14 +539,16 @@ func (c *Client) targetRepoHostWarnings(ctx context.Context) []TargetRepoHostMis
 	}
 
 	res, err := c.ReachableRepos(ctx, model.DefaultTeamID)
-	if err != nil {
+	if err != nil || len(res.HostMismatches) == 0 {
 		return nil
 	}
 	return res.HostMismatches
 }
 
 // reposReadable reports which repositories r's caller holds repos:read on, and
-// whether that grant is unrestricted across every repository.
+// whether that grant is unrestricted across every repository. When both a
+// limited RBAC role and an acting-task grant are present on r, only
+// repositories both reach are readable.
 func (s *Server) reposReadable(r *http.Request) (func(string) bool, bool) {
 	ctx := r.Context()
 	call, isAgent := agentCallFromContext(ctx)
@@ -560,16 +562,21 @@ func (s *Server) reposReadable(r *http.Request) (func(string) bool, bool) {
 		}
 		return func(string) bool { return true }, true
 	}
-	if isAgent {
-		if call.grants.Allows("repos:read", "") {
-			return func(string) bool { return true }, true
-		}
-		return func(repo string) bool { return call.grants.Allows("repos:read", repo) }, false
-	}
-	if role.allows("repos:read", "") {
+	if (!isAgent || call.grants.Allows("repos:read", "")) && (role == nil || role.allows("repos:read", "")) {
 		return func(string) bool { return true }, true
 	}
-	return func(repo string) bool { return role.allows("repos:read", repo) }, false
+	return func(repo string) bool {
+		if repo == "" {
+			return false
+		}
+		if isAgent && !call.grants.Allows("repos:read", repo) {
+			return false
+		}
+		if role != nil && !role.allows("repos:read", repo) {
+			return false
+		}
+		return true
+	}, false
 }
 
 func (s *Server) reachableReposForRequest(r *http.Request, filter ReachableReposFilter) (ReachableReposResult, error) {
@@ -581,7 +588,7 @@ func (s *Server) reachableReposForRequest(r *http.Request, filter ReachableRepos
 		res.Repos = filterList(res.Repos, func(rr gitproxy.ReachableRepo) bool {
 			return readable(rr.Repo)
 		})
-		var filteredMismatches []TargetRepoHostMismatch
+		filteredMismatches := []TargetRepoHostMismatch{}
 		for _, m := range res.HostMismatches {
 			if !readable(m.Repo) {
 				continue
