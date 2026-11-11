@@ -14,6 +14,7 @@
 
 import { DOCUMENT } from "@angular/common";
 import { Injectable, NgZone, OnDestroy, inject, signal } from "@angular/core";
+import { readStorage, writeStorage } from "./theme.service";
 
 export interface Shortcut {
   // The KeyboardEvent.key it answers to, e.g. "c", "1", ",", "?".
@@ -38,19 +39,14 @@ const KEY_TAKING_ROLES =
 // shortcut.
 export function isTypingTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
-  if (!el || !el.tagName) return false;
+  return !!el?.tagName && isTypingTargetValue(el);
+}
+
+function isTypingTargetValue(el: HTMLElement): boolean {
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return true;
   if (el.isContentEditable === true) return true;
   const role = el.getAttribute?.("role");
   return !!role && KEY_TAKING_ROLES.test(role);
-}
-
-function loadEnabled(): boolean {
-  try {
-    return localStorage.getItem(SHORTCUTS_STORAGE_KEY) !== "off";
-  } catch {
-    return true;
-  }
 }
 
 // KeyboardService owns the app-wide single-key shortcuts (c, the number
@@ -65,7 +61,7 @@ export class KeyboardService implements OnDestroy {
   private readonly zone = inject(NgZone);
   private readonly shortcuts = new Map<string, Shortcut>();
   readonly list = signal<readonly Shortcut[]>([]);
-  readonly enabled = signal(loadEnabled());
+  readonly enabled = signal(readStorage(SHORTCUTS_STORAGE_KEY) !== "off");
 
   private readonly onKey = (ev: KeyboardEvent): void => {
     if (!this.enabled()) return;
@@ -87,11 +83,7 @@ export class KeyboardService implements OnDestroy {
 
   setEnabled(on: boolean): void {
     this.enabled.set(on);
-    try {
-      localStorage.setItem(SHORTCUTS_STORAGE_KEY, on ? "on" : "off");
-    } catch {
-      // Storage unavailable: the choice lasts for this page only.
-    }
+    writeStorage(SHORTCUTS_STORAGE_KEY, on ? "on" : "off");
   }
 
   // register adds a shortcut and returns the call that removes it again.

@@ -24,7 +24,7 @@ export const THEME_STORAGE_KEY = "grain.themeMode";
 // over"). The classic page reads the same key.
 export const PREFER_NEXT_STORAGE_KEY = "grain.ui.preferNext";
 
-function read(key: string): string | null {
+export function readStorage(key: string): string | null {
   try {
     return localStorage.getItem(key);
   } catch {
@@ -32,7 +32,7 @@ function read(key: string): string | null {
   }
 }
 
-function write(key: string, value: string | null): void {
+export function writeStorage(key: string, value: string | null): void {
   try {
     if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, value);
@@ -42,7 +42,7 @@ function write(key: string, value: string | null): void {
 }
 
 function storedMode(): ThemeMode {
-  const raw = read(THEME_STORAGE_KEY);
+  const raw = readStorage(THEME_STORAGE_KEY);
   return raw === "light" || raw === "dark" || raw === "auto" ? raw : "auto";
 }
 
@@ -58,7 +58,9 @@ function systemPrefersDark(): boolean {
 export class ThemeService {
   private readonly _mode = signal<ThemeMode>(storedMode());
   private readonly _systemDark = signal(systemPrefersDark());
-  private readonly _preferNext = signal(read(PREFER_NEXT_STORAGE_KEY) === "1");
+  private readonly _preferNext = signal(
+    readStorage(PREFER_NEXT_STORAGE_KEY) === "1",
+  );
 
   readonly mode = this._mode.asReadonly();
   readonly preferNext = this._preferNext.asReadonly();
@@ -87,11 +89,11 @@ export class ThemeService {
 
   setMode(mode: ThemeMode): void {
     this._mode.set(mode);
-    write(THEME_STORAGE_KEY, mode);
+    writeStorage(THEME_STORAGE_KEY, mode);
   }
 
   setPreferNext(on: boolean): void {
     this._preferNext.set(on);
-    write(PREFER_NEXT_STORAGE_KEY, on ? "1" : null);
+    writeStorage(PREFER_NEXT_STORAGE_KEY, on ? "1" : null);
   }
 }

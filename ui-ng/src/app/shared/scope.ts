@@ -28,6 +28,8 @@ export interface Scope {
   owners: ScopeCount[];
   // Set when the batch spans more than one repository.
   multiRepo: boolean;
+  // Set when the batch includes work owned by someone other than the viewer.
+  otherOwner: boolean;
 }
 
 export const NO_REPO = "no repository";
@@ -42,23 +44,28 @@ function counted(values: string[]): ScopeCount[] {
 
 export function scopeOf(
   rows: readonly { repo?: string | null; owner?: string | null }[],
+  viewer = "",
 ): Scope {
   const repos = counted(rows.map((r) => r.repo || NO_REPO));
   const owners = counted(rows.map((r) => r.owner || "").filter(Boolean));
+  const otherOwner =
+    !!viewer &&
+    owners.some((o) => o.name.toLowerCase() !== viewer.toLowerCase());
   return {
     total: rows.length,
     repos,
     owners,
     multiRepo: repos.length > 1,
+    otherOwner,
   };
 }
 
 // scopeLines is the scope in plain sentences, for the dialog and tests:
 // one line per repository, then one per owner when there is more than
-// one owner.
+// one owner or another person owns the work.
 export function scopeLines(s: Scope): string[] {
   const lines = s.repos.map((r) => `${r.n} in ${r.name}`);
-  if (s.owners.length > 1) {
+  if (s.owners.length > 1 || s.otherOwner) {
     for (const o of s.owners) lines.push(`${o.n} owned by ${o.name}`);
   }
   return lines;

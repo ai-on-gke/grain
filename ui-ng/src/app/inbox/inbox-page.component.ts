@@ -20,7 +20,8 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { scopeOf } from "../shared/scope";
-import { ciChip, repoShort } from "../shared/gates";
+import { ciChip, repoShort } from "../shared/chips";
+import { withDetailGates } from "../shared/gates";
 import { TipDirective } from "../shared/tip.directive";
 import {
   ChangeDetectionStrategy,
@@ -40,7 +41,7 @@ import {
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
-import type { DiffPreview, TaskDetail } from "../api/models";
+import type { DiffPreview, Task, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ThemeService } from "../services/theme.service";
@@ -119,7 +120,11 @@ const ONE_KEY = new Set(["approve"]);
   encapsulation: ViewEncapsulation.None,
   styleUrl: "../shared/work-surface.css",
   template: `
-    <section class="view-panel is-active" aria-labelledby="inbox-headline">
+    <section
+      class="view-panel is-active"
+      aria-labelledby="inbox-headline"
+      [attr.inert]="confirming() || helpOpen() ? '' : null"
+    >
       <div class="stage-header">
         <div class="view-headline-row">
           <div class="headline-cluster">
@@ -129,6 +134,9 @@ const ONE_KEY = new Set(["approve"]);
               data-testid="next-inbox-headline"
             >
               {{ headline() }}
+              @if (store.pendingUpdates(); as n) {
+                <span class="muted"> ({{ n }} not shown)</span>
+              }
             </h1>
           </div>
           <div class="headline-actions">
@@ -534,7 +542,11 @@ const ONE_KEY = new Set(["approve"]);
                 </button>
               </div>
               <div class="inspector-header-row2">
-                <h2 class="inspector-title" data-testid="inspector-title">
+                <h2
+                  class="inspector-title"
+                  data-testid="inspector-title"
+                  tabindex="-1"
+                >
                   {{ sel.ref }} · {{ sel.title }}
                 </h2>
                 <div class="inspector-provenance tabular muted">
@@ -546,7 +558,7 @@ const ONE_KEY = new Set(["approve"]);
                       [class]="'ci-chip ' + c.tone"
                       data-testid="inspector-ci"
                       [attr.title]="c.tip"
-                      >CI {{ c.text }}</span
+                      >{{ c.text }}</span
                     >
                   }
                 </div>
@@ -986,66 +998,66 @@ const ONE_KEY = new Set(["approve"]);
               !!store.busy() || !access.can(a.route, a.repo) || !!a.blocked
             "
             [title]="a.blocked || access.deniedReason(a.route, a.repo)"
-            (click)="run(a)"
+            (click)="run(sel, a)"
           >
             {{ a.label }}
           </button>
         }
       </ng-template>
-
-      @if (helpOpen()) {
-        <div class="scrim" aria-hidden="true" (click)="closeHelp()"></div>
-        <div
-          class="g-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="inbox-help-title"
-          data-testid="inbox-help"
-        >
-          <h2 id="inbox-help-title">Inbox keys</h2>
-          <dl class="facts key-list">
-            <dt><kbd>j</kbd> / <kbd>k</kbd></dt>
-            <dd>Next / previous item</dd>
-            <dt><kbd>Enter</kbd></dt>
-            <dd>Open the full task</dd>
-            <dt><kbd>a</kbd></dt>
-            <dd>Answer with the item's main action</dd>
-            <dt><kbd>e</kbd></dt>
-            <dd>Write a reply</dd>
-            <dt><kbd>x</kbd></dt>
-            <dd>Select the item</dd>
-            <dt><kbd>*</kbd></dt>
-            <dd>Select everything in this filter</dd>
-            <dt><kbd>Shift</kbd>+<kbd>A</kbd></dt>
-            <dd>Approve the selected items</dd>
-            <dt><kbd>u</kbd></dt>
-            <dd>Undo the last answer</dd>
-            <dt><kbd>/</kbd></dt>
-            <dd>Filter this view</dd>
-            <dt><kbd>Esc</kbd></dt>
-            <dd>Clear the selection, or close</dd>
-            <dt>Divider</dt>
-            <dd>
-              Arrows move it, Shift+arrows faster, Home/End to the ends, Enter
-              hides the list, double-click resets to 30 / 70
-            </dd>
-          </dl>
-          <div class="dialog-actions">
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="inbox-help-close"
-              (click)="closeHelp()"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      }
-      @if (confirming(); as c) {
-        <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
-      }
     </section>
+
+    @if (helpOpen()) {
+      <div class="scrim" aria-hidden="true" (click)="closeHelp()"></div>
+      <div
+        class="g-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="inbox-help-title"
+        data-testid="inbox-help"
+      >
+        <h2 id="inbox-help-title">Inbox keys</h2>
+        <dl class="facts key-list">
+          <dt><kbd>j</kbd> / <kbd>k</kbd></dt>
+          <dd>Next / previous item</dd>
+          <dt><kbd>Enter</kbd></dt>
+          <dd>Open the full task</dd>
+          <dt><kbd>a</kbd></dt>
+          <dd>Answer with the item's main action</dd>
+          <dt><kbd>e</kbd></dt>
+          <dd>Write a reply</dd>
+          <dt><kbd>x</kbd></dt>
+          <dd>Select the item</dd>
+          <dt><kbd>*</kbd></dt>
+          <dd>Select everything in this filter</dd>
+          <dt><kbd>Shift</kbd>+<kbd>A</kbd></dt>
+          <dd>Approve the selected items</dd>
+          <dt><kbd>u</kbd></dt>
+          <dd>Undo the last answer</dd>
+          <dt><kbd>/</kbd></dt>
+          <dd>Filter this view</dd>
+          <dt><kbd>Esc</kbd></dt>
+          <dd>Clear the selection, or close</dd>
+          <dt>Divider</dt>
+          <dd>
+            Arrows move it, Shift+arrows faster, Home/End to the ends, Enter
+            hides the list, double-click resets to 30 / 70
+          </dd>
+        </dl>
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="inbox-help-close"
+            (click)="closeHelp()"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    }
+    @if (confirming(); as c) {
+      <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
+    }
   `,
   imports: [NgTemplateOutlet, RouterLink, ConfirmDialogComponent, TipDirective],
 })
@@ -1087,7 +1099,10 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly draft = signal("");
   protected readonly target = signal<ReplyTarget | null>(null);
   protected readonly short = repoShort;
-  protected readonly chip = ciChip;
+  protected chip(t: Task) {
+    const { task, hasDetail } = withDetailGates(t, this.store.details()[t.id]);
+    return ciChip(task, !hasDetail);
+  }
   private readonly selectedKey = computed(
     () => this.store.selected()?.key ?? null,
   );
@@ -1163,6 +1178,8 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   // The shell keeps the store running for the rail badge; opening the
   // page reads the queue at once rather than waiting for the next poll.
   ngOnInit(): void {
+    this.store.applyUpdates();
+    this.store.clearChecked();
     this.store.start();
   }
 
@@ -1275,18 +1292,48 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     this.unticked.set(next);
   }
 
-  protected run(a: InboxAction): void {
+  private async actAndFocus(
+    key: string,
+    actionOrId: string | InboxAction,
+    body?: unknown,
+  ): Promise<boolean> {
+    const ok = await this.store.actByKey(key, actionOrId, body);
+    if (ok) this.focusAfterAction();
+    return ok;
+  }
+
+  private focusAfterAction(): void {
+    setTimeout(() => {
+      const root = this.host.nativeElement as HTMLElement;
+      const next = root.querySelector(
+        '[data-testid="next-item"]',
+      ) as HTMLElement | null;
+      if (next) {
+        next.focus();
+        return;
+      }
+      (
+        root.querySelector(
+          '[data-testid="inspector-title"]',
+        ) as HTMLElement | null
+      )?.focus();
+    });
+  }
+
+  protected run(sel: InboxEntry, a: InboxAction): void {
+    const key = sel.key;
+    const aid = a.id;
     if (a.confirm) {
       this.confirming.set({
         title: a.label,
         message: a.confirm,
         accept: a.label,
         destructive: !!a.destructive,
-        run: () => this.store.act(a),
+        run: () => this.actAndFocus(key, aid),
       });
       return;
     }
-    void this.store.act(a);
+    void this.actAndFocus(key, aid);
   }
 
   // confirmBulk asks before answering the checked rows. The rows are
@@ -1308,7 +1355,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       message: `${label}: ${n} selected ${n === 1 ? "item" : "items"}? Each is answered as if you had pressed its own button.`,
       accept: `${label} (${n})`,
       destructive: id === "close" || id === "decline",
-      scope: scopeOf(rows),
+      scope: scopeOf(rows, this.access.viewer()),
       run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
   }
@@ -1319,7 +1366,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   }
 
   // sendReply posts to the task the composer was opened for. The store
-  // reads the queue again first and refuses if that task no longer waits
+  // reads the task again first and refuses if that task no longer waits
   // on the same question.
   protected async sendReply(sel: InboxEntry): Promise<void> {
     const tgt = this.target() ?? (sel.taskId ? { taskId: sel.taskId } : null);
@@ -1331,32 +1378,37 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     if (ok) {
       this.draft.set("");
       this.target.set(null);
+      this.focusAfterAction();
     }
   }
 
   protected grant(sel: InboxEntry, items: { error?: string }[]): void {
     const chosen = this.chosenItems(items);
     const all = chosen.length === items.length;
-    void this.store.act(
+    void this.actAndFocus(
+      sel.key,
       {
         id: "grant",
         label: "Grant",
         route: this.grantRoute,
         params: { id: sel.taskId as string },
         variant: "primary",
+        repo: sel.repo || undefined,
       },
       all ? {} : { items: chosen },
     );
   }
 
   protected async deny(sel: InboxEntry): Promise<void> {
-    const ok = await this.store.act(
+    const ok = await this.actAndFocus(
+      sel.key,
       {
         id: "deny",
         label: "Deny",
         route: this.denyRoute,
         params: { id: sel.taskId as string },
         variant: "tonal",
+        repo: sel.repo || undefined,
       },
       { reason: this.draft().trim() },
     );
@@ -1373,19 +1425,22 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       ...(shortSoakOk ? { short_soak_ok: true } : {}),
       ...(allowBreaking ? { allow_breaking: true } : {}),
     };
+    const key = sel.key;
     this.confirming.set({
       title: approve ? `Approve ${r.version}` : `Reject ${r.version}`,
       message: releaseConfirm(r, approve, shortSoakOk, allowBreaking),
       accept: approve ? this.releaseLabel(r) : "Reject",
       destructive: !approve || shortSoakOk || allowBreaking,
       run: () =>
-        this.store.act(
+        this.actAndFocus(
+          key,
           {
             id: approve ? "approve-release" : "reject-release",
             label: approve ? "Approve" : "Reject",
             route: approve ? this.releaseApproveRoute : this.releaseRejectRoute,
             params: { owner, name, version: r.version },
             variant: "primary",
+            repo: sel.repo || undefined,
           },
           Object.keys(body).length ? body : undefined,
         ),
@@ -1456,7 +1511,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       message: `Approve ${keys.length} ${keys.length === 1 ? "proposal" : "proposals"} in \u201c${group.title}\u201d? Each starts in the Backlog at its priority.`,
       accept: `Approve ${keys.length}`,
       destructive: false,
-      scope: scopeOf(rows),
+      scope: scopeOf(rows, this.access.viewer()),
       run: () => this.batch("approve", "Approved", keys),
     });
   }
@@ -1534,6 +1589,13 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       if (ev.key === "Escape") {
         ev.preventDefault();
         this.closeHelp();
+      } else if (ev.key === "Tab") {
+        ev.preventDefault();
+        (
+          this.host.nativeElement.querySelector(
+            '[data-testid="inbox-help-close"]',
+          ) as HTMLElement | null
+        )?.focus();
       }
       return;
     }
@@ -1541,10 +1603,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     // turned shortcuts off (WCAG 2.1.4). Escape always works.
     const letters = this.keyboard.enabled() && !ev.repeat;
     const sel = this.store.selected();
+    const pinned = this.store.selectedKey() !== null;
     if (letters && ev.key === "j") this.store.step(1);
     else if (letters && ev.key === "k") this.store.step(-1);
     else if (letters && ev.key === "x") {
-      if (sel) this.store.toggleChecked(sel.key);
+      if (pinned && sel) this.store.toggleChecked(sel.key);
     } else if (letters && ev.key === "*") {
       // Adds the filter's rows to whatever is already selected.
       this.store.checked.set(
@@ -1558,27 +1621,37 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         this.bulkActions().find((b) => b.id === "approve")?.allowed ?? 0;
       if (n) this.confirmBulk("approve", "Approve all");
     } else if (letters && ev.code === "KeyA" && !ev.shiftKey) {
-      // Resolve: the selected row's primary answer. Only a plain approval
-      // goes through in one keystroke; anything else (approving a host
-      // script, submitting a merge) asks first.
-      const primary = sel?.actions.find((x) => x.variant === "primary");
+      // Resolve: the selected pinned row's primary answer. Only a plain
+      // approval goes through in one keystroke; anything else (approving
+      // a host script, resuming, submitting a merge) asks first.
+      const primary =
+        pinned && !sel?.gone
+          ? sel?.actions.find((x) => x.variant === "primary")
+          : undefined;
       if (
+        sel &&
         primary &&
         !primary.blocked &&
         this.access.can(primary.route, primary.repo)
       ) {
-        if (ONE_KEY.has(primary.id) || primary.confirm) this.run(primary);
-        else
+        if (ONE_KEY.has(primary.id) || primary.confirm) {
+          this.run(sel, primary);
+        } else {
+          const key = sel.key;
+          const aid = primary.id;
           this.confirming.set({
             title: primary.label,
-            message: `${primary.label}: ${sel?.title ?? "this item"}?`,
+            message: `${primary.label}: ${sel.title || "this item"}?`,
             accept: primary.label,
             destructive: !!primary.destructive,
-            run: () => this.store.act(primary),
+            run: () => this.actAndFocus(key, aid),
           });
+        }
       }
     } else if (letters && ev.key === "e") {
-      setTimeout(() => this.replyBox()?.nativeElement.focus());
+      if (pinned && sel && !sel.gone) {
+        setTimeout(() => this.replyBox()?.nativeElement.focus());
+      }
     } else if (letters && ev.key === "u") {
       // Only this page's own last Undo, never another page's snack.
       const snack = this.snackbar.current();
@@ -1595,6 +1668,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       this.openHelp();
     } else if (
       ev.key === "Enter" &&
+      pinned &&
       sel?.taskLink &&
       this.isRowOrPage(ev.target)
     ) {

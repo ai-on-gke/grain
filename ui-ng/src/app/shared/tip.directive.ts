@@ -90,22 +90,24 @@ export class TipDirective implements OnDestroy {
   private readonly onDocKey = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape") this.hide();
   };
-  private readonly onTipEnter = (): void => this.clearLeave();
+  private readonly onTipEnter = (): void => {
+    this.leaveTimer = clearTimer(this.leaveTimer);
+  };
   private readonly onTipLeave = (): void => this.hoverOut();
 
   hoverIn(): void {
-    this.clearLeave();
+    this.leaveTimer = clearTimer(this.leaveTimer);
     if (!this.gTip() || owner === this) return;
-    this.clearShow();
+    this.showTimer = clearTimer(this.showTimer);
     this.zone.runOutsideAngular(() => {
       this.showTimer = setTimeout(() => this.show(), TIP_DELAY_MS);
     });
   }
 
   hoverOut(): void {
-    this.clearShow();
+    this.showTimer = clearTimer(this.showTimer);
     if (owner !== this) return;
-    this.clearLeave();
+    this.leaveTimer = clearTimer(this.leaveTimer);
     this.zone.runOutsideAngular(() => {
       this.leaveTimer = setTimeout(() => this.hide(), TIP_LEAVE_MS);
     });
@@ -121,7 +123,7 @@ export class TipDirective implements OnDestroy {
     } catch {
       // A browser without :focus-visible: show it.
     }
-    this.clearShow();
+    this.showTimer = clearTimer(this.showTimer);
     this.show();
   }
 
@@ -147,8 +149,8 @@ export class TipDirective implements OnDestroy {
   }
 
   hide(): void {
-    this.clearShow();
-    this.clearLeave();
+    this.showTimer = clearTimer(this.showTimer);
+    this.leaveTimer = clearTimer(this.leaveTimer);
     if (owner !== this) return;
     owner = null;
     const el = this.doc.getElementById(TIP_ID);
@@ -186,17 +188,12 @@ export class TipDirective implements OnDestroy {
     el.style.top = `${Math.round(top)}px`;
   }
 
-  private clearShow(): void {
-    if (this.showTimer) clearTimeout(this.showTimer);
-    this.showTimer = null;
-  }
-
-  private clearLeave(): void {
-    if (this.leaveTimer) clearTimeout(this.leaveTimer);
-    this.leaveTimer = null;
-  }
-
   ngOnDestroy(): void {
     this.hide();
   }
+}
+
+function clearTimer(timer: ReturnType<typeof setTimeout> | null): null {
+  if (timer) clearTimeout(timer);
+  return null;
 }

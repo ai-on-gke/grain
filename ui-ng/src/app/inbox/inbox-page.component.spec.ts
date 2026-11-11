@@ -39,7 +39,11 @@ class FakeApi {
   config = () => Promise.resolve(this.cfg);
   tasks = () => Promise.resolve(this.taskList);
   task = (id: string) =>
-    Promise.resolve(this.details[id] ?? ({ id } as TaskDetail));
+    Promise.resolve(
+      this.details[id] ??
+        (this.taskList.find((t) => t.id === id) as TaskDetail | undefined) ??
+        ({ id } as TaskDetail),
+    );
   openNotifications = () => Promise.resolve(this.notes);
   localScriptApprovals = () => Promise.resolve([]);
   diffs: Record<string, DiffPreview> = {};
@@ -132,6 +136,7 @@ describe("InboxPageComponent", () => {
       q(f, '[data-testid="inspector-open-task"]')?.getAttribute("href"),
     ).toBe("/task/9?from=inbox");
     (q(f, '[data-testid="action-approve"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r));
     await f.whenStable();
     await TestBed.inject(InboxStore).refresh();
     await f.whenStable();
@@ -277,6 +282,7 @@ describe("InboxPageComponent", () => {
       "BREAKING",
     );
     (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r));
     await f.whenStable();
     expect(api.posts[0]).toEqual({
       route:
@@ -321,6 +327,7 @@ describe("InboxPageComponent", () => {
       "Grant 1 of 2",
     );
     (q(f, '[data-testid="grant-access"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r));
     await f.whenStable();
     expect(api.posts[0]).toMatchObject({
       route: "POST /api/tasks/{id}/access-request/grant",
@@ -594,20 +601,34 @@ describe("InboxPageComponent", () => {
     expect(q(f, '[data-testid="inbox-help"]')).toBeNull();
   });
 
-  it("opens the full task with Enter", async () => {
+  it("opens the full task with Enter only after pinning a selection", async () => {
     const api = new FakeApi();
     proposals(api);
     const f = await render(api);
     const nav = vi
       .spyOn(TestBed.inject(Router), "navigateByUrl")
       .mockResolvedValue(true);
+    const enter = () =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    enter();
+    await f.whenStable();
+    expect(nav).not.toHaveBeenCalled();
+
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", {
-        key: "Enter",
+        key: "j",
         bubbles: true,
         cancelable: true,
       }),
     );
+    await f.whenStable();
+    enter();
     await f.whenStable();
     expect(nav).toHaveBeenCalledWith(
       expect.stringMatching(/^\/task\/\d+\?from=inbox$/),
@@ -646,7 +667,7 @@ describe("InboxPageComponent", () => {
     );
   });
 
-  it("asks before answering anything but a plain approval with the a key", async () => {
+  it("asks before answering anything but a plain approval with the a key, and requires a pinned row", async () => {
     const api = new FakeApi();
     api.taskList = [
       {
@@ -654,6 +675,7 @@ describe("InboxPageComponent", () => {
         title: "Fix",
         state: "awaiting_submit",
         pullRequest: "acme/web#3",
+        mergeGates: [{ id: "ci", label: "CI", state: "passed" }],
       },
     ];
     const f = await render(api);
@@ -661,18 +683,27 @@ describe("InboxPageComponent", () => {
     const primary = store
       .selected()
       ?.actions.find((a) => a.variant === "primary");
-    document.body.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "a",
-        code: "KeyA",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    const fire = (key: string, code: string) =>
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          code,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    fire("a", "KeyA");
+    await f.whenStable();
+    expect(q(f, '[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.posts).toHaveLength(0);
+
+    fire("j", "KeyJ");
+    await f.whenStable();
+    fire("a", "KeyA");
     await f.whenStable();
     if (primary && primary.id !== "approve") {
       expect(api.posts).toHaveLength(0);
-      expect((f.nativeElement as HTMLElement).textContent).toContain(
+      expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
         primary.label,
       );
     }
@@ -718,6 +749,8 @@ describe("inbox page helpers", () => {
   });
 
   describe("M7 safety", () => {
+    afterEach(() => TestBed.inject(InboxStore).stop());
+
     function rowByRef(f: ComponentFixture<unknown>, ref: string): HTMLElement {
       return [
         ...(f.nativeElement as HTMLElement).querySelectorAll<HTMLElement>(
@@ -909,7 +942,7 @@ describe("inbox page helpers", () => {
       expect(rows(f)).toEqual(["First", "Second", "Third"]);
       expect(rowByRef(f, "#1").classList).toContain("is-gone");
       expect(q(f, '[data-testid="updates-chip"]')?.textContent).toContain(
-        "4 updates",
+        "3 updates",
       );
       expect(q(f, '[data-testid="inspector-title"]')?.textContent).toContain(
         "#2",
@@ -1127,10 +1160,197 @@ describe("inbox page helpers", () => {
 
       (q(f, '[data-testid="action-resume"]') as HTMLButtonElement).click();
       await f.whenStable();
+      expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
+        "Roman stopped it.",
+      );
+      (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
       expect(api.posts[0]).toMatchObject({
         route: "POST /api/tasks/{id}/retry",
         params: { id: "2" },
       });
+    });
+
+    it("resolves list 'waiting for checks' via detail read, blocks Submit, and avoids duplicate CI label", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "33",
+          title: "CI drill",
+          state: "awaiting_submit",
+          pullRequest: "sidthe/grain-scratch-repo#3",
+          mergeGates: [
+            {
+              id: "ci",
+              label: "CI",
+              state: "running",
+              detail: "waiting for checks",
+            },
+          ],
+        },
+      ];
+      api.details["33"] = {
+        ...api.taskList[0],
+        mergeGates: [
+          {
+            id: "ci",
+            label: "CI",
+            state: "failing",
+            detail: "Tests failed",
+          },
+        ],
+      } as TaskDetail;
+      const f = await render(api);
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      expect(q(f, '[data-testid="inspector-ci"]')?.textContent?.trim()).toBe(
+        "✕ CI",
+      );
+      expect(q(f, '[data-testid="row-ci"]')?.textContent?.trim()).toBe("✕ CI");
+      const store = TestBed.inject(InboxStore);
+      const primary = store
+        .selected()!
+        .actions.find((a) => a.variant === "primary")!;
+      expect(primary.blocked).toContain("CI is failing");
+      const btn = q<HTMLButtonElement>(
+        f,
+        `[data-testid="action-${primary.id}"]`,
+      )!;
+      expect(btn.disabled).toBe(true);
+    });
+
+    it("re-verifies live state on confirm accept and aborts when item moved on", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        { id: "9", title: "Bump Go", state: "proposed", repo: "acme/web" },
+      ];
+      const f = await render(api);
+      (q(f, '[data-testid="action-decline"]') as HTMLButtonElement).click();
+      await f.whenStable();
+      expect(document.activeElement).toBe(
+        q(f, '[data-testid="confirm-cancel"]'),
+      );
+      const dlg = q(f, '[data-testid="confirm-dialog"]')!;
+      dlg.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Tab",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(dlg.contains(document.activeElement)).toBe(true);
+
+      // Item leaves before Confirm is clicked.
+      api.taskList = [];
+      (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      expect(api.posts).toEqual([]);
+      expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+        "moved on",
+      );
+    });
+
+    it("refuses reply when direct detail read fails, focuses next-item on resolution, and clears held state on revisit", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "36",
+          title: "First question",
+          state: "awaiting_reply",
+          questionCommentId: 5,
+        },
+        { id: "9", title: "Second proposal", state: "proposed" },
+      ];
+      const f = await render(api);
+      rowByRef(f, "#36").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      await type(f, "Go ahead");
+
+      api.task = () =>
+        new Promise((_r, rej) => setTimeout(() => rej(new Error("offline"))));
+      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 15));
+      await f.whenStable();
+      expect(comments(api)).toEqual([]);
+      expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+        "Could not verify #36",
+      );
+      expect(
+        (q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement).value,
+      ).toBe("Go ahead");
+
+      // Held updates show "(N not shown)" in headline; ngOnInit clears held & checked.
+      const store = TestBed.inject(InboxStore);
+      store.toggleChecked("task:9");
+      api.taskList.push({ id: "10", title: "Third", state: "proposed" });
+      await store.refresh();
+      await f.whenStable();
+      expect(
+        q(f, '[data-testid="next-inbox-headline"]')?.textContent,
+      ).toContain("(1 not shown)");
+
+      f.componentInstance.ngOnInit();
+      await f.whenStable();
+      expect(store.pendingUpdates()).toBe(0);
+      expect(store.checked().size).toBe(0);
+
+      // Acting on pinned #9 moves focus to next-item when it leaves.
+      rowByRef(f, "#9").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      api.onPost = (route, params) => {
+        if (route === "POST /api/tasks/{id}/approve") {
+          api.taskList = api.taskList.filter((t) => t.id !== params["id"]);
+        }
+      };
+      (q(f, '[data-testid="action-approve"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(document.activeElement).toBe(q(f, '[data-testid="next-item"]'));
+    });
+
+    it("requires confirm tick for single non-viewer owner and prunes stale details on refresh", async () => {
+      const api = new FakeApi();
+      api.cfg = { access: null, version: "v1.2.3", viewerOwner: "rarcea" };
+      api.taskList = [
+        {
+          id: "9",
+          title: "One",
+          state: "proposed",
+          repo: "acme/web",
+          owner: "bob",
+        },
+        {
+          id: "10",
+          title: "Two",
+          state: "proposed",
+          repo: "acme/web",
+          owner: "bob",
+        },
+      ];
+      api.details["9"] = { ...api.taskList[0], comments: [] } as TaskDetail;
+      const f = await render(api);
+      const store = TestBed.inject(InboxStore);
+      store.details.update((d) => ({
+        ...d,
+        "999": { id: "999", title: "Old", state: "closed" } as TaskDetail,
+      }));
+      await store.refresh();
+      expect(store.details()["999"]).toBeUndefined();
+
+      (
+        q(f, '[data-testid="group-approve-proposal"]') as HTMLButtonElement
+      ).click();
+      await f.whenStable();
+      expect(
+        (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(q(f, '[data-testid="confirm-scope"]')?.textContent).toContain(
+        "2 owned by bob",
+      );
     });
   });
 });

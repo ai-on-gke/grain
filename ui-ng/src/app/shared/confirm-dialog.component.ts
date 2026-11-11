@@ -50,6 +50,7 @@ export interface ConfirmRequest {
     @let c = request();
     <div class="modal-backdrop">
       <div
+        #dialog
         class="modal-dialog"
         role="dialog"
         aria-modal="true"
@@ -57,6 +58,8 @@ export interface ConfirmRequest {
         aria-describedby="confirm-body"
         data-testid="confirm-dialog"
         (keydown.escape)="cancel($event)"
+        (keydown.tab)="onTab($event)"
+        (keydown.shift.tab)="onTab($event)"
       >
         <h2 id="confirm-title" class="modal-title">{{ c.title }}</h2>
         <p id="confirm-body" class="modal-body">{{ c.message }}</p>
@@ -66,7 +69,7 @@ export interface ConfirmRequest {
               <li>{{ line }}</li>
             }
           </ul>
-          @if (s.multiRepo) {
+          @if (needsTick()) {
             <label class="check-line scope-check">
               <input
                 #scopeCheck
@@ -75,16 +78,17 @@ export interface ConfirmRequest {
                 [checked]="ticked()"
                 (change)="ticked.set(!ticked())"
               />
-              I am approving work in {{ s.repos.length }} repositories
+              {{ tickLabel() }}
             </label>
           }
         }
         <div class="action-btn-group modal-actions">
           <button
+            #cancelBtn
             type="button"
             class="btn-text"
             data-testid="confirm-cancel"
-            (click)="done.emit(false)"
+            (click)="close(false)"
           >
             Cancel
           </button>
@@ -96,7 +100,7 @@ export interface ConfirmRequest {
             "
             data-testid="confirm-accept"
             [disabled]="needsTick() && !ticked()"
-            (click)="done.emit(true)"
+            (click)="close(true)"
           >
             {{ c.accept }}
           </button>
@@ -116,24 +120,74 @@ export class ConfirmDialogComponent {
     return s ? scopeLines(s) : [];
   });
   protected readonly needsTick = computed(
-    () => !!this.request().scope?.multiRepo,
+    () =>
+      !!(this.request().scope?.multiRepo || this.request().scope?.otherOwner),
   );
+  protected readonly tickLabel = computed(() => {
+    const s = this.request().scope;
+    if (!s) return "";
+    if (s.multiRepo && s.otherOwner) {
+      return `I am approving work in ${s.repos.length} repositories, including work owned by someone else`;
+    }
+    if (s.multiRepo) {
+      return `I am approving work in ${s.repos.length} repositories`;
+    }
+    return "I am approving work owned by someone else";
+  });
+  private readonly dialog = viewChild<ElementRef<HTMLElement>>("dialog");
+  private readonly cancelBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("cancelBtn");
   private readonly acceptBtn =
     viewChild<ElementRef<HTMLButtonElement>>("acceptBtn");
   private readonly scopeCheck =
     viewChild<ElementRef<HTMLInputElement>>("scopeCheck");
+  private readonly returnFocus =
+    typeof document !== "undefined"
+      ? (document.activeElement as HTMLElement | null)
+      : null;
 
   constructor() {
-    // Focus goes to the first thing the person must do: the second tick
-    // when there is one, otherwise the accept button.
+    // Destructive actions focus Cancel so a hurried Enter does not commit.
+    // Otherwise focus goes to the second tick when present, or Accept.
     afterNextRender(() =>
-      (this.scopeCheck() ?? this.acceptBtn())?.nativeElement.focus(),
+      (this.request().destructive
+        ? this.cancelBtn()
+        : (this.scopeCheck() ?? this.acceptBtn())
+      )?.nativeElement.focus(),
     );
+  }
+
+  protected onTab(ev: Event): void {
+    const kev = ev as KeyboardEvent;
+    const box = this.dialog()?.nativeElement;
+    if (!box) return;
+    const items = Array.from(
+      box.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (kev.shiftKey && (active === first || !box.contains(active))) {
+      kev.preventDefault();
+      last.focus();
+    } else if (!kev.shiftKey && (active === last || !box.contains(active))) {
+      kev.preventDefault();
+      first.focus();
+    }
+  }
+
+  protected close(ok: boolean): void {
+    const back = this.returnFocus;
+    this.done.emit(ok);
+    if (!ok && back?.isConnected) setTimeout(() => back.focus());
   }
 
   protected cancel(ev: Event): void {
     ev.preventDefault();
     ev.stopPropagation();
-    this.done.emit(false);
+    this.close(false);
   }
 }

@@ -21,23 +21,39 @@ import {
 } from "@angular/core";
 import { Router } from "@angular/router";
 import { isTypingTarget } from "../services/keyboard.service";
+import { PHONE_QUERY } from "../shared/split";
 import { TABS, isTabId } from "../tasks/task-view";
 import { type BackLink, TaskDetailComponent } from "./task-detail.component";
 
 export { duration } from "./task-detail.component";
 export type { TaskTab } from "./task-detail.component";
 
+function isPhoneViewport(): boolean {
+  return typeof matchMedia === "function" && matchMedia(PHONE_QUERY).matches;
+}
+
 // backFrom reads ?from= into the back link: "inbox" goes back to the
-// Inbox, "tasks:<tab>" to that Tasks tab with this task selected, and
-// anything else to Tasks with this task selected.
-export function backFrom(from: string | undefined, id: string): BackLink {
+// Inbox, "tasks:<tab>" to that Tasks tab with this task selected (except on
+// phones where the list does not show a side pane), and anything else to
+// Tasks with this task selected.
+export function backFrom(
+  from: string | undefined,
+  id: string,
+  phone = isPhoneViewport(),
+): BackLink {
   if (from === "inbox") return { label: "Inbox", commands: ["/inbox"] };
   const tab = from?.startsWith("tasks:") ? from.slice(6) : "";
   const def = isTabId(tab) ? TABS.find((t) => t.id === tab) : undefined;
   return {
     label: def ? `Tasks · ${def.label}` : "Tasks",
     commands: ["/tasks"],
-    query: def ? { tab: def.id, task: id } : { task: id },
+    query: phone
+      ? def
+        ? { tab: def.id }
+        : null
+      : def
+        ? { tab: def.id, task: id }
+        : { task: id },
   };
 }
 
@@ -49,7 +65,9 @@ export function backFrom(from: string | undefined, id: string): BackLink {
   imports: [TaskDetailComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: { "(document:keydown.escape)": "onEscape($event)" },
-  template: ` <g-task-detail [id]="id()" [tab]="tab()" [back]="back()" /> `,
+  template: `
+    <g-task-detail [id]="id()" [tab]="tab()" [from]="from()" [back]="back()" />
+  `,
 })
 export class TaskPageComponent {
   private readonly router = inject(Router);
@@ -68,6 +86,9 @@ export class TaskPageComponent {
     if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
     ev.preventDefault();
     const b = this.back();
-    void this.router.navigate(b.commands, { queryParams: b.query ?? {} });
+    void this.router.navigate(b.commands, {
+      queryParams: b.query ?? {},
+      replaceUrl: true,
+    });
   }
 }

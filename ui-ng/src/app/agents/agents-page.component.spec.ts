@@ -452,4 +452,28 @@ describe("AgentsPageComponent", () => {
     expect(summary.textContent).toContain("1");
     expect(summary.textContent).toContain("working");
   });
+
+  it("keeps loaded=false and shows load failure note when the initial read fails", async () => {
+    const api = new FakeApi();
+    api.getIfChanged = () =>
+      new Promise((_r, rej) => setTimeout(() => rej(new Error("boom"))));
+    TestBed.configureTestingModule({
+      imports: [AgentsPageComponent],
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+        provideRouter([{ path: "**", children: [] }]),
+      ],
+    });
+    const f = TestBed.createComponent(AgentsPageComponent);
+    f.autoDetectChanges();
+    await new Promise((r) => setTimeout(r, 15));
+    await TestBed.inject(AgentsStore).refresh();
+    await new Promise((r) => setTimeout(r, 15));
+    await f.whenStable();
+    expect(TestBed.inject(AgentsStore).loaded()).toBe(false);
+    expect(q(f, '[data-testid="agents-load-failed"]')!.textContent).toContain(
+      "Running agents could not be loaded.",
+    );
+  });
 });

@@ -29,6 +29,8 @@ export const RATIO_KEY = "grain.inbox.splitRatio";
 export const COLLAPSED_KEY = "grain.inbox.collapsed";
 // Below this the inspector is a sheet over the list, not beside it.
 export const SPLIT_MIN_VIEWPORT = 1080;
+// Below this width a selected task opens full screen instead of a pane.
+export const PHONE_QUERY = "(max-width: 599.95px)";
 
 export interface Bounds {
   min: number; // px

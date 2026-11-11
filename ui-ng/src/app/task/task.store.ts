@@ -208,8 +208,8 @@ export class TaskStore {
     }
   }
 
-  isBusy(key: string): boolean {
-    return this.busy().has(key);
+  isBusy(key: string, id = this.id()): boolean {
+    return !!id && this.busy().has(`${id}:${key}`);
   }
 
   // act makes one call on this task and reads it again; the caller says
@@ -221,8 +221,9 @@ export class TaskStore {
     call: (id: string) => Promise<unknown>,
     id: string | null = this.id(),
   ): Promise<boolean> {
-    if (!id || this.isBusy(key)) return false;
-    this.mark(key, true);
+    if (!id || this.isBusy(key, id)) return false;
+    const busyKey = `${id}:${key}`;
+    this.mark(busyKey, true);
     this.actionError.set(null);
     try {
       await call(id);
@@ -233,25 +234,53 @@ export class TaskStore {
     } finally {
       await this.refresh();
       void this.inbox.refresh();
-      this.mark(key, false);
+      this.mark(busyKey, false);
     }
   }
 
-  // send posts the draft as a comment (a reply when the task asked),
-  // keeping anything typed while it was on its way.
-  async send(): Promise<boolean> {
+  // send verifies the task live before posting (as a reply when the task
+  // asked), keeping anything typed if verification or posting fails.
+  async send(
+    expectedId: string | null = this.id(),
+    refuse?: (d: TaskDetail | undefined) => string,
+  ): Promise<boolean> {
     const typed = this.draft();
     const body = typed.trim();
-    if (!body) return false;
-    const ok = await this.act("send", (id) =>
-      this.api.post(
-        "POST /api/tasks/{id}/comments",
-        { id },
-        { body, attachments: [] },
-      ),
+    if (!body || !expectedId || this.id() !== expectedId) return false;
+    return this.act(
+      "send",
+      async (id) => {
+        let fresh: TaskDetail | undefined;
+        try {
+          const r = await this.api.getIfChanged<TaskDetail>(
+            "GET /api/tasks/{id}",
+            { id },
+            DETAIL_QUERY,
+          );
+          fresh = r.changed
+            ? r.body
+            : (r.body ??
+              (this.detail()?.id === id
+                ? (this.detail() ?? undefined)
+                : undefined));
+        } catch {
+          throw new Error(`Could not verify #${id} before sending.`);
+        }
+        if (fresh && this.id() === id) this.detail.set(fresh);
+        if (this.id() !== expectedId) {
+          throw new Error(`Moved away from #${expectedId} while sending.`);
+        }
+        const why = refuse?.(fresh);
+        if (why) throw new Error(why);
+        await this.api.post(
+          "POST /api/tasks/{id}/comments",
+          { id },
+          { body, attachments: [] },
+        );
+        if (this.draft() === typed) this.draft.set("");
+      },
+      expectedId,
     );
-    if (ok && this.draft() === typed) this.draft.set("");
-    return ok;
   }
 
   private mark(key: string, on: boolean): void {

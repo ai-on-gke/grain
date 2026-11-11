@@ -15,7 +15,13 @@
 import type { RouteKey } from "../api/generated-routes";
 import type { RouteParams } from "../api/grain-api.service";
 import type { LocalScriptApproval, Notification, Task } from "../api/models";
-import { gateSummary, isMerged, submitBlock } from "../shared/gates";
+import type { TaskDetail } from "../api/models";
+import {
+  gateSummary,
+  isMerged,
+  submitBlock,
+  withDetailGates,
+} from "../shared/gates";
 
 // The classification here is a port of the React Inbox's (ui/src/state.js
 // waitsOnUser and ui/src/components/InboxPage.jsx GROUPS, plus
@@ -512,7 +518,7 @@ function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
 
 // classifyTask puts one waiting task in the first group that claims it,
 // so no task is listed twice (InboxPage.jsx's groupTasks).
-export function classifyTask(t: Task): InboxEntry | null {
+export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
   if (!waitsOnUser(t)) return null;
   if (waitingBaseRepair(t)) {
     const e = taskEntry(t, "base-repair", "base-repair");
@@ -522,7 +528,7 @@ export function classifyTask(t: Task): InboxEntry | null {
       "A red base branch's repair pull request waits for your approval.";
     e.rationale = "Nothing else lands on this branch until its repair merges.";
     if (!t.humanApprovedBy) {
-      const blocked = submitBlock(t);
+      const blocked = submitBlock(t, listOnly);
       e.actions.push(
         taskAction(
           t,
@@ -553,12 +559,15 @@ export function classifyTask(t: Task): InboxEntry | null {
       e.rationale =
         "Somebody stopped this run. It waits until a person resumes or closes it; nothing was asked.";
       e.actions.push(
-        taskAction(
-          t,
-          "resume",
-          "Resume",
-          "POST /api/tasks/{id}/retry",
-          "primary",
+        Object.assign(
+          taskAction(
+            t,
+            "resume",
+            "Resume",
+            "POST /api/tasks/{id}/retry",
+            "primary",
+          ),
+          { confirm: `Resume #${t.id}? A person stopped this run.` },
         ),
         taskAction(t, "close", "Close", "POST /api/tasks/{id}/close", "tonal", {
           confirm: `Close #${t.id}? The task is closed, and reopening puts it back.`,
@@ -589,13 +598,13 @@ export function classifyTask(t: Task): InboxEntry | null {
   }
   if (awaitsHumanSubmit(t)) {
     const review = !!t.reviewQuestions;
-    const blocked = submitBlock(t);
+    const blocked = submitBlock(t, listOnly);
     const e = taskEntry(
       t,
       review ? "review" : "submit",
       review ? "review" : "submit",
     );
-    const red = gateSummary(t).state === "failing";
+    const red = gateSummary(t, listOnly).state === "failing";
     e.pillLabel = review ? "Review questions" : red ? "CI failing" : "Submit";
     e.pillTone = review ? "blast" : red ? "error" : "healthy";
     e.summary = review
@@ -832,10 +841,12 @@ export function buildEntries(
   tasks: Task[],
   notifications: Notification[],
   localScripts: LocalScriptApproval[],
+  details?: Record<string, TaskDetail>,
 ): InboxEntry[] {
   const out: InboxEntry[] = [];
-  for (const t of tasks) {
-    const e = classifyTask(t);
+  for (const raw of tasks) {
+    const { task: t, hasDetail } = withDetailGates(raw, details?.[raw.id]);
+    const e = classifyTask(t, !!details && !hasDetail);
     if (e) out.push(e);
   }
   for (const n of notifications) out.push(classifyNotification(n));

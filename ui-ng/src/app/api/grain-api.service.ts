@@ -125,16 +125,26 @@ export class GrainApi {
     this.etags.clear();
   }
 
-  patch<T = unknown>(
+  private send<T>(
+    method: "patch" | "put" | "post" | "delete",
     key: RouteKey,
     params?: RouteParams,
     body?: unknown,
   ): Promise<T> {
     return firstValueFrom(
-      this.http.patch<T>(routePath(key, params), body ?? null, {
+      this.http.request<T>(method, routePath(key, params), {
         headers: JSON_HEADERS,
+        body: method === "delete" ? undefined : (body ?? null),
       }),
     );
+  }
+
+  patch<T = unknown>(
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+  ): Promise<T> {
+    return this.send<T>("patch", key, params, body);
   }
 
   put<T = unknown>(
@@ -142,11 +152,7 @@ export class GrainApi {
     params?: RouteParams,
     body?: unknown,
   ): Promise<T> {
-    return firstValueFrom(
-      this.http.put<T>(routePath(key, params), body ?? null, {
-        headers: JSON_HEADERS,
-      }),
-    );
+    return this.send<T>("put", key, params, body);
   }
 
   post<T = unknown>(
@@ -154,17 +160,11 @@ export class GrainApi {
     params?: RouteParams,
     body?: unknown,
   ): Promise<T> {
-    return firstValueFrom(
-      this.http.post<T>(routePath(key, params), body ?? null, {
-        headers: JSON_HEADERS,
-      }),
-    );
+    return this.send<T>("post", key, params, body);
   }
 
   delete<T = unknown>(key: RouteKey, params?: RouteParams): Promise<T> {
-    return firstValueFrom(
-      this.http.delete<T>(routePath(key, params), { headers: JSON_HEADERS }),
-    );
+    return this.send<T>("delete", key, params);
   }
 
   config(): Promise<GrainConfig> {

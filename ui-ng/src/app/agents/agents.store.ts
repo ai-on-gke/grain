@@ -153,13 +153,13 @@ export class AgentsStore {
       }
       this.record(this.tasks());
       this.loadError.set(null);
+      this.loaded.set(true);
     } catch (err) {
       this.loadError.set(
         `Running tasks could not be read: ${errorText(err)}. This page tries again on its own.`,
       );
     }
     this.now.set(Date.now());
-    this.loaded.set(true);
     // A run that appeared since the last slow read gets its detail now.
     const now = Date.now();
     const missing = running(this.tasks()).filter(

@@ -120,7 +120,11 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
           [attr.aria-busy]="!store.loaded()"
           data-testid="agents-summary"
         >
-          @if (!store.loaded()) {
+          @if (!store.loaded() && store.loadError()) {
+            <span data-testid="agents-load-failed"
+              >Running agents could not be loaded.</span
+            >
+          } @else if (!store.loaded()) {
             <!-- Before the first read there is nothing to count; "0 working"
                  would contradict the Tasks page's Running tab. -->
             <span data-testid="agents-loading"

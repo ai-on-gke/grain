@@ -16,7 +16,8 @@ import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { InboxStore } from "../inbox/inbox.store";
-import type { Task } from "../api/models";
+import type { Task, TaskDetail } from "../api/models";
+import { isListCiPlaceholder } from "../shared/gates";
 import { errorText } from "../sessions/session-view";
 import {
   type MovePlan,
@@ -52,6 +53,7 @@ export class TasksStore {
   private readonly inbox = inject(InboxStore);
 
   readonly live = signal<Task[]>([]);
+  readonly details = signal<Record<string, TaskDetail>>({});
   readonly closed = signal<Task[]>([]);
   readonly closedCursor = signal<string | null>(null);
   readonly closedLoaded = signal(false);
@@ -83,7 +85,8 @@ export class TasksStore {
   private eventSub: { unsubscribe(): void } | null = null;
   private refreshing: Promise<void> | null = null;
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
-  private pending = false;
+  private queuedRefresh: Promise<void> | null = null;
+  private readonly detailInFlight = new Set<string>();
 
   start(): void {
     void this.refresh();
@@ -113,33 +116,81 @@ export class TasksStore {
   }
 
   refresh(): Promise<void> {
-    if (this.refreshing) {
-      this.pending = true;
+    if (!this.refreshing) {
+      this.refreshing = this.load().finally(() => {
+        this.refreshing = null;
+      });
       return this.refreshing;
     }
-    this.refreshing = this.load().finally(() => {
-      this.refreshing = null;
-      if (this.pending) {
-        this.pending = false;
-        void this.refresh();
-      }
-    });
-    return this.refreshing;
+    return (this.queuedRefresh ??= this.refreshing
+      .catch(() => undefined)
+      .then(() => {
+        this.queuedRefresh = null;
+        return this.refresh();
+      }));
   }
 
   private async load(): Promise<void> {
+    let loadedLive = false;
     try {
       const r = await this.api.getIfChanged<Task[]>("GET /api/tasks");
       if (r.changed || this.live().length === 0) {
         this.live.set(Array.isArray(r.body) ? r.body : []);
       }
       this.loadError.set(null);
+      loadedLive = true;
     } catch (err) {
       this.loadError.set(
         `The task list could not be read: ${errorText(err)}. This page tries again on its own.`,
       );
     }
     this.loaded.set(true);
+    if (loadedLive) await this.ensureSubmitDetails(this.live());
+  }
+
+  private async ensureSubmitDetails(tasks: readonly Task[]): Promise<void> {
+    const liveIds = new Set(tasks.map((t) => t.id));
+    const cur = this.details();
+    if (Object.keys(cur).some((id) => !liveIds.has(id))) {
+      this.details.update((m) => {
+        const next: Record<string, TaskDetail> = {};
+        for (const id of Object.keys(m)) {
+          if (liveIds.has(id)) next[id] = m[id];
+        }
+        return next;
+      });
+    }
+    const ids = tasks
+      .filter(
+        (t) =>
+          isWork(t) &&
+          !this.detailInFlight.has(t.id) &&
+          (t.state === "awaiting_submit" ||
+            t.reason?.reason === "base_repair" ||
+            t.reason?.reason === "awaiting_submit" ||
+            !!t.mergeGates?.some(isListCiPlaceholder)),
+      )
+      .map((t) => t.id)
+      .slice(0, 20);
+    await Promise.all(ids.map((id) => this.readSubmitDetail(id)));
+  }
+
+  private async readSubmitDetail(id: string): Promise<void> {
+    this.detailInFlight.add(id);
+    try {
+      const d = await this.api.getIfChanged<TaskDetail>(
+        "GET /api/tasks/{id}",
+        { id },
+        "comments_limit=1&attempts_limit=1",
+      );
+      if (d.changed && d.body) {
+        this.details.update((m) => ({ ...m, [id]: d.body! }));
+      }
+    } catch {
+      // Leave cached/list gates when detail fails.
+    } finally {
+      this.detailInFlight.delete(id);
+    }
   }
 
   // loadClosed reads the first page of closed tasks (or the next one).

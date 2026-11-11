@@ -131,7 +131,12 @@ export class InboxStore {
   // applied ("N updates").
   readonly liveEntries = computed(() =>
     this.withStoppers(
-      buildEntries(this.tasks(), this.notifications(), this.localScripts()),
+      buildEntries(
+        this.tasks(),
+        this.notifications(),
+        this.localScripts(),
+        this.details(),
+      ),
     ),
   );
   private readonly frozen = signal<readonly InboxEntry[] | null>(null);
@@ -164,7 +169,17 @@ export class InboxStore {
     const removed = held.filter((e) => !liveKeys.has(e.key)).length;
     const a = held.map((e) => e.key).filter((k) => liveKeys.has(k));
     const b = live.map((e) => e.key).filter((k) => heldKeys.has(k));
-    const moved = a.filter((k, i) => b[i] !== k).length;
+    const n = a.length;
+    const dp = new Array<number>(n + 1).fill(0);
+    for (const k of b) {
+      let prev = 0;
+      for (let j = 1; j <= n; j++) {
+        const tmp = dp[j];
+        dp[j] = k === a[j - 1] ? prev + 1 : Math.max(dp[j], dp[j - 1]);
+        prev = tmp;
+      }
+    }
+    const moved = n - dp[n];
     return added + removed + moved;
   });
   // decisions is what is waiting on a person: the live queue without the
@@ -219,6 +234,7 @@ export class InboxStore {
   private picked: InboxEntry | null = null;
   // What this page last did to a task, so a row it answered says so.
   private readonly answered = new Map<string, string>();
+  private readonly detailInFlight = new Set<string>();
   answeredWith(taskId: string): string | undefined {
     return this.answered.get(taskId);
   }
@@ -240,7 +256,7 @@ export class InboxStore {
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private refreshing: Promise<void> | null = null;
-  private pending = false;
+  private queuedRefresh: Promise<void> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
 
   start(): void {
@@ -278,21 +294,22 @@ export class InboxStore {
     });
   }
 
-  // refresh reads everything again. Overlapping calls coalesce into one
-  // more read after the one in flight.
+  // refresh reads everything again. Concurrent calls wait on a fresh read
+  // started after the active one finishes so callers never observe stale
+  // pre-mutation state.
   refresh(): Promise<void> {
-    if (this.refreshing) {
-      this.pending = true;
+    if (!this.refreshing) {
+      this.refreshing = this.load().finally(() => {
+        this.refreshing = null;
+      });
       return this.refreshing;
     }
-    this.refreshing = this.load().finally(() => {
-      this.refreshing = null;
-      if (this.pending) {
-        this.pending = false;
-        void this.refresh();
-      }
-    });
-    return this.refreshing;
+    return (this.queuedRefresh ??= this.refreshing
+      .catch(() => undefined)
+      .then(() => {
+        this.queuedRefresh = null;
+        return this.refresh();
+      }));
   }
 
   private async load(): Promise<void> {
@@ -314,9 +331,7 @@ export class InboxStore {
       this.tasks.set(Array.isArray(tasks.value) ? tasks.value : []);
       this.loadError.set(null);
     } else {
-      this.loadError.set(
-        "The task list could not be read, so this page cannot show what is waiting on you yet. It tries again on its own.",
-      );
+      this.loadError.set("Could not read tasks; retrying.");
     }
     if (notifications.status === "fulfilled") {
       this.notifications.set(notifications.value);
@@ -326,7 +341,7 @@ export class InboxStore {
     this.trackIndex();
     await Promise.all([
       this.ensureDetail(),
-      this.ensureStoppers(),
+      this.ensureQueueDetails(),
       this.ensureDiff(),
     ]);
   }
@@ -342,12 +357,9 @@ export class InboxStore {
     this.diffAt.set(id, Date.now());
     let preview: DiffPreview | null = null;
     if (this.access.can("GET /api/tasks/{id}/diff-preview", e!.repo)) {
-      try {
-        preview = await this.api.diffPreview(id, DIFF_PREVIEW_HUNKS);
-      } catch {
-        // No branch pushed yet, or no comparison here: the inspector
-        // links to the pull request instead.
-      }
+      preview = await this.api
+        .diffPreview(id, DIFF_PREVIEW_HUNKS)
+        .catch(() => null);
     }
     this.diffs.update((m) => ({ ...m, [id]: preview }));
   }
@@ -355,13 +367,34 @@ export class InboxStore {
   private remember(): void {
     for (const e of this.liveEntries()) this.lastSeen.set(e.key, e);
     // Only rows still shown, held or selected are worth keeping.
-    const keep = new Set([
-      ...this.liveEntries().map((e) => e.key),
-      ...(this.frozen() ?? []).map((e) => e.key),
-      this.selectedKey() ?? "",
-    ]);
-    for (const k of [...this.lastSeen.keys()]) {
+    const selKey = this.selectedKey();
+    const keepTasks = new Set<string>();
+    const keep = new Set<string>(selKey ? [selKey] : []);
+    const mark = (e: InboxEntry | null | undefined) => {
+      if (!e) return;
+      keep.add(e.key);
+      if (e.taskId) keepTasks.add(e.taskId);
+    };
+    this.liveEntries().forEach(mark);
+    this.frozen()?.forEach(mark);
+    mark(
+      selKey === null
+        ? null
+        : (this.lastSeen.get(selKey) ??
+            (this.picked?.key === selKey ? this.picked : null)),
+    );
+    for (const k of this.lastSeen.keys()) {
       if (!keep.has(k)) this.lastSeen.delete(k);
+    }
+    if (Object.keys(this.details()).some((id) => !keepTasks.has(id))) {
+      this.details.update((m) =>
+        Object.fromEntries(
+          Object.entries(m).filter(([id]) => keepTasks.has(id)),
+        ),
+      );
+    }
+    for (const id of this.answered.keys()) {
+      if (!keepTasks.has(id)) this.answered.delete(id);
     }
   }
 
@@ -400,25 +433,45 @@ export class InboxStore {
     return list.map((e) => {
       if (e.kind !== "stopped" || !e.taskId) return e;
       const who = stopperOf(details[e.taskId], e.task?.questionCommentId);
-      return who ? { ...e, summary: `Stopped by ${who}.` } : e;
+      if (!who) return e;
+      return {
+        ...e,
+        summary: `Stopped by ${who}.`,
+        actions: e.actions.map((a) =>
+          a.id === "resume"
+            ? { ...a, confirm: `Resume #${e.taskId}? ${who} stopped it.` }
+            : a,
+        ),
+      };
     });
   }
 
-  private async ensureStoppers(): Promise<void> {
-    const missing = this.liveEntries()
-      .filter((e) => e.kind === "stopped" && e.taskId)
-      .map((e) => e.taskId as string)
-      .filter((id) => !this.details()[id])
-      .slice(0, 10);
-    await Promise.all(missing.map((id) => this.readDetail(id)));
+  private async ensureQueueDetails(): Promise<void> {
+    const cached = this.details();
+    const ids = new Set<string>();
+    for (const e of this.liveEntries()) {
+      if (!e.taskId || this.detailInFlight.has(e.taskId)) continue;
+      if (e.kind === "stopped" && !cached[e.taskId]) ids.add(e.taskId);
+      else if (
+        e.kind === "submit" ||
+        e.kind === "review" ||
+        e.kind === "base-repair"
+      ) {
+        ids.add(e.taskId);
+      }
+    }
+    await Promise.all([...ids].slice(0, 20).map((id) => this.readDetail(id)));
   }
 
   private async readDetail(id: string): Promise<void> {
+    this.detailInFlight.add(id);
     try {
       const d = await this.api.task(id);
       this.details.update((m) => ({ ...m, [id]: d }));
     } catch {
       // The row still shows its summary; the inspector says less.
+    } finally {
+      this.detailInFlight.delete(id);
     }
   }
 
@@ -466,6 +519,10 @@ export class InboxStore {
   step(delta: number): void {
     const list = this.ordered();
     if (list.length === 0) return;
+    if (this.selectedKey() === null) {
+      this.select(list[0].key);
+      return;
+    }
     const sel = this.selected();
     const cur = list.findIndex((e) => e.key === sel?.key);
     let i: number;
@@ -504,16 +561,44 @@ export class InboxStore {
     this.checked.set(new Set());
   }
 
-  // act makes one call and reads the queue again; an answered row leaves
-  // the queue because the server no longer lists it, never on a guess.
-  async act(action: InboxAction, body?: unknown): Promise<boolean> {
-    if (action.blocked) {
-      this.actionError.set(action.blocked);
+  // Re-reads the queue and verifies the entry, action, merge gates, and
+  // access still hold before posting (server 409 preconditions close the
+  // remaining TOCTOU window).
+  async actByKey(
+    entryKey: string,
+    actionOrId: string | InboxAction,
+    body?: unknown,
+  ): Promise<boolean> {
+    if (typeof actionOrId !== "string" && actionOrId.blocked) {
+      this.actionError.set(actionOrId.blocked);
       return false;
     }
-    this.busy.set(action.id);
+    this.busy.set(typeof actionOrId === "string" ? actionOrId : actionOrId.id);
     this.actionError.set(null);
     try {
+      await this.refresh();
+      const loadErr = this.loadError();
+      if (loadErr) {
+        this.actionError.set(loadErr);
+        return false;
+      }
+      const entry = this.liveEntries().find((e) => e.key === entryKey);
+      const action =
+        typeof actionOrId === "string"
+          ? entry?.actions.find((a) => a.id === actionOrId)
+          : actionOrId;
+      if (!entry || !action) {
+        this.actionError.set("This item moved on.");
+        return false;
+      }
+      if (action.blocked) {
+        this.actionError.set(action.blocked);
+        return false;
+      }
+      if (!this.access.can(action.route, action.repo)) {
+        this.actionError.set("No permission for this action.");
+        return false;
+      }
       await this.api.post(action.route, action.params, body ?? action.body);
       this.noteAnswered(action);
       await this.refresh();
@@ -537,13 +622,9 @@ export class InboxStore {
   }
 
   // actAll gives every checked row (or the given keys) that offers it the
-  // same answer and reads the queue once. The keys are the ones the
-  // person saw when they pressed the button; a row that has since left
-  // or changed no longer offers the answer and is skipped, never
-  // replaced by another. It reports how many rows went
-  // through, and which tasks can be undone and by which call (the inverse
-  // of the route used: approve -> withdraw approval, defer -> undefer,
-  // close -> reopen). Rows that failed stay selected.
+  // same answer after reading the queue fresh. Keys that moved on or
+  // turned blocked are skipped, never replaced by another. Rows that
+  // failed stay selected.
   async actAll(
     actionId: string,
     keys?: readonly string[],
@@ -552,18 +633,23 @@ export class InboxStore {
     failed: number;
     undo: { route: RouteKey; ids: string[] } | null;
   }> {
-    const pool = keys
-      ? this.liveEntries().filter((e) => keys.includes(e.key))
-      : this.checkedEntries();
-    const targets = pool
-      .map((e) => ({ e, a: e.actions.find((x) => x.id === actionId) }))
-      .filter(
-        (t): t is { e: InboxEntry; a: InboxAction } =>
-          !!t.a && !t.a.blocked && this.access.can(t.a.route, t.a.repo),
-      );
+    const wantKeys = new Set(keys ?? [...this.checked()]);
     this.busy.set(actionId);
     this.actionError.set(null);
     try {
+      await this.refresh();
+      const loadErr = this.loadError();
+      if (loadErr) {
+        this.actionError.set(loadErr);
+        return { count: 0, failed: 0, undo: null };
+      }
+      const pool = this.liveEntries().filter((e) => wantKeys.has(e.key));
+      const targets = pool
+        .map((e) => ({ e, a: e.actions.find((x) => x.id === actionId) }))
+        .filter(
+          (t): t is { e: InboxEntry; a: InboxAction } =>
+            !!t.a && !t.a.blocked && this.access.can(t.a.route, t.a.repo),
+        );
       // Each call is its own promise, so one that throws at once still
       // leaves the others to finish.
       const results = await Promise.allSettled(
@@ -591,7 +677,7 @@ export class InboxStore {
       const failed = results.length - landed.size;
       if (failed > 0) {
         this.actionError.set(
-          `${failed} of ${targets.length} did not go through; they stay selected.`,
+          `${failed} of ${targets.length} failed; they stay selected.`,
         );
       }
       this.checked.update((c) => new Set([...c].filter((k) => !landed.has(k))));
@@ -627,10 +713,12 @@ export class InboxStore {
       this.applyUpdates();
       if (failedIds.length) {
         const which = failedIds.map((id) => `#${id}`).join(", ");
+        const tail =
+          "(a task that has started cannot be withdrawn; close it to cancel).";
         const msg =
           failedIds.length === taskIds.length
-            ? `Could not undo: ${which} ${failedIds.length === 1 ? "has" : "have"} moved on (a task that has started cannot be withdrawn; close it to cancel).`
-            : `Undid ${taskIds.length - failedIds.length} of ${taskIds.length}; ${which} could not be undone (a task that has started cannot be withdrawn; close it to cancel).`;
+            ? `Could not undo: ${which} ${failedIds.length === 1 ? "has" : "have"} moved on ${tail}`
+            : `Undid ${taskIds.length - failedIds.length} of ${taskIds.length}; ${which} could not be undone ${tail}`;
         this.actionError.set(msg);
         if (failedIds.length === taskIds.length) throw new Error(msg);
       }
@@ -640,9 +728,9 @@ export class InboxStore {
   }
 
   // reply posts to the task the person was typing to, and only while it
-  // still waits on the question they saw: the queue is read again first,
-  // and a task that has moved on (or asked something new) is refused
-  // with the reason. It never posts to any other task.
+  // still waits on the question they saw: the task is read directly
+  // before posting, and a read error or changed state refuses. Server 409
+  // preconditions on questionCommentId close the remaining race.
   async reply(
     taskId: string,
     body: string,
@@ -651,8 +739,15 @@ export class InboxStore {
     this.busy.set("reply");
     this.actionError.set(null);
     try {
-      await this.refresh();
-      const why = refuse(this.tasks().find((t) => t.id === taskId));
+      let fresh: TaskDetail;
+      try {
+        fresh = await this.api.task(taskId);
+      } catch (err) {
+        this.actionError.set(`Could not verify #${taskId}: ${errorText(err)}`);
+        return false;
+      }
+      this.details.update((m) => ({ ...m, [taskId]: fresh }));
+      const why = refuse(fresh);
       if (why) {
         this.actionError.set(why);
         return false;

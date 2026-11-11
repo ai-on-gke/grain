@@ -29,6 +29,10 @@ export class AccessService {
   private readonly config = signal<GrainConfig | null>(null);
 
   readonly roleLabel = computed(() => this.config()?.access?.role ?? "");
+  // Signed-in person for "owned by someone else" checks (pkg/ui ConfigResponse).
+  readonly viewer = computed(
+    () => this.config()?.viewerOwner || this.config()?.actor || "",
+  );
   readonly limited = computed(() => {
     const a = this.config()?.access;
     return !!a && !a.full;

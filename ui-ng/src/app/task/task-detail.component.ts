@@ -34,9 +34,16 @@ import type { Attempt, Comment } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { replyRefusal } from "../inbox/departure";
+import { stopperOf } from "../inbox/inbox.store";
 import { authorOf, isHuman, renderMarkdown } from "../sessions/session-view";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import { TipDirective } from "../shared/tip.directive";
-import { ciChip, submitBlock } from "../shared/gates";
+import { ciChip } from "../shared/chips";
+import { submitBlock } from "../shared/gates";
 import {
   LEVELS,
   ago,
@@ -87,7 +94,7 @@ export function duration(from?: string, to?: string): string {
 // tab in ?pane= so the list's ?tab= is left alone.
 @Component({
   selector: "g-task-detail",
-  imports: [RouterLink, TipDirective, NgTemplateOutlet],
+  imports: [RouterLink, TipDirective, NgTemplateOutlet, ConfirmDialogComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
   styleUrl: "../shared/work-surface.css",
@@ -96,6 +103,7 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       aria-labelledby="task-title"
+      [attr.inert]="confirming() ? '' : null"
     >
       @if (store.loadError(); as err) {
         <div class="stage-header">
@@ -141,7 +149,7 @@ export function duration(from?: string, to?: string): string {
                 [class]="'ci-chip ' + c.tone"
                 data-testid="task-ci"
                 [gTip]="c.tip"
-                >CI {{ c.text }}</span
+                >{{ c.text }}</span
               >
             }
             @if (pane()) {
@@ -187,13 +195,13 @@ export function duration(from?: string, to?: string): string {
                 type="button"
                 class="btn-primary"
                 data-testid="act-approve"
-                [disabled]="store.isBusy('approve')"
+                [disabled]="store.isBusy('approve', t.id)"
                 (click)="approve()"
               >
                 Approve
               </button>
             }
-            @if (t.state === "awaiting_reply" && !parked()) {
+            @if (t.state === "awaiting_reply" && !parked() && !isStopped()) {
               <button
                 type="button"
                 class="btn-primary"
@@ -209,7 +217,7 @@ export function duration(from?: string, to?: string): string {
                 class="btn-tonal"
                 data-testid="act-stop"
                 gTip="Interrupt this turn; the task waits for your reply"
-                [disabled]="store.isBusy('stop')"
+                [disabled]="store.isBusy('stop', t.id)"
                 (click)="stop()"
               >
                 Stop
@@ -217,14 +225,15 @@ export function duration(from?: string, to?: string): string {
             }
             @if (
               (t.state === "failed" ||
-                (t.state === "awaiting_reply" && t.turnStopped)) &&
+                (t.state === "awaiting_reply" && t.turnStopped) ||
+                isStopped()) &&
               can("POST /api/tasks/{id}/retry")
             ) {
               <button
                 type="button"
                 class="btn-primary"
                 data-testid="act-retry"
-                [disabled]="store.isBusy('retry')"
+                [disabled]="store.isBusy('retry', t.id)"
                 (click)="retry()"
               >
                 {{ t.state === "failed" ? "Retry" : "Resume" }}
@@ -242,7 +251,7 @@ export function duration(from?: string, to?: string): string {
                   submitOff() ||
                   'Submit the pull request; review gates still apply'
                 "
-                [disabled]="store.isBusy('submit') || !!submitOff()"
+                [disabled]="store.isBusy('submit', t.id) || !!submitOff()"
                 (click)="submit()"
               >
                 Submit
@@ -424,7 +433,9 @@ export function duration(from?: string, to?: string): string {
                   [routerLink]="[]"
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
-                  [attr.aria-current]="current() === tab.id ? 'page' : null"
+                  [attr.aria-current]="
+                    current() === tab.id ? (pane() ? 'true' : 'page') : null
+                  "
                   [attr.data-testid]="'task-tab-' + tab.id"
                   >{{ tab.label }}
                   @if (tab.id === "conversation" && comments().length) {
@@ -493,7 +504,8 @@ export function duration(from?: string, to?: string): string {
                   @if (
                     can("POST /api/tasks/{id}/comments") &&
                     t.state !== "closed" &&
-                    !parked()
+                    !parked() &&
+                    !isStopped()
                   ) {
                     <form class="chat-composer" (submit)="send($event)">
                       <textarea
@@ -512,10 +524,19 @@ export function duration(from?: string, to?: string): string {
                             : 'Comment on this task'
                         "
                         [value]="store.draft()"
-                        (input)="store.draft.set(val($event))"
+                        (input)="onDraft(val($event))"
                         (keydown.control.enter)="onEnter($event)"
                         (keydown.meta.enter)="onEnter($event)"
                       ></textarea>
+                      @if (replyBlocked(); as why) {
+                        <p
+                          class="muted dock-note"
+                          role="status"
+                          data-testid="reply-blocked"
+                        >
+                          {{ why }}
+                        </p>
+                      }
                       <div class="composer-actions">
                         <span class="muted composer-hint"
                           >Ctrl+Enter sends</span
@@ -525,13 +546,16 @@ export function duration(from?: string, to?: string): string {
                           class="btn-primary"
                           data-testid="task-send"
                           [disabled]="
-                            !store.draft().trim() || store.isBusy('send')
+                            !store.draft().trim() ||
+                            store.isBusy('send', t.id) ||
+                            !!replyBlocked()
                           "
                         >
                           {{
-                            t.state === "awaiting_reply"
-                              ? "Send reply"
-                              : "Comment"
+                            (replyTarget()?.reply ??
+                            t.state === "awaiting_reply")
+                              ? "Send to #" + (replyTarget()?.taskId ?? t.id)
+                              : "Comment on #" + (replyTarget()?.taskId ?? t.id)
                           }}
                         </button>
                       </div>
@@ -836,6 +860,10 @@ export function duration(from?: string, to?: string): string {
       }
     </section>
 
+    @if (confirming(); as c) {
+      <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
+    }
+
     <ng-template #treeNode let-n let-level="level">
       <li class="tree-item">
         <span class="tree-row" [class.is-root]="n.root">
@@ -881,6 +909,7 @@ export class TaskDetailComponent implements OnDestroy {
   // pane is the Tasks right-hand pane: narrower, Details as a tab, its
   // tab kept in ?pane=, links to other tasks select them in the pane.
   readonly pane = input(false);
+  readonly from = input<string>();
   readonly back = input<BackLink | null>(null);
   // acted fires after an action went through, so a list beside the pane
   // can read again at once.
@@ -898,6 +927,12 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly human = isHuman;
   protected readonly confirmClose = signal(false);
   protected readonly closePr = signal(false);
+  protected readonly confirming = signal<ConfirmRequest | null>(null);
+  protected readonly replyTarget = signal<{
+    taskId: string;
+    questionCommentId?: number;
+    reply: boolean;
+  } | null>(null);
   protected readonly pendingPriority = signal<number | null>(null);
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
   private readonly closeYes =
@@ -931,6 +966,30 @@ export class TaskDetailComponent implements OnDestroy {
     if (t["pendingSecret"]) return "a secret";
     if (t["pendingAccess"]) return "an access grant";
     if (t["pendingConfigChange"]) return "a configuration change";
+    return "";
+  });
+  protected readonly isStopped = computed(() => {
+    const t = this.t();
+    return (
+      t?.state === "awaiting_reply" &&
+      (!!t.turnStopped || t.reason?.reason === "awaiting_reply/stopped")
+    );
+  });
+  protected readonly replyBlocked = computed(() => {
+    const tgt = this.replyTarget();
+    const t = this.t();
+    if (!tgt) return "";
+    if (!t || t.id !== tgt.taskId) {
+      return `Switched away from #${tgt.taskId}; this message will not be sent.`;
+    }
+    if (tgt.reply) return replyRefusal(t, tgt.taskId, tgt.questionCommentId);
+    if (
+      t.state === "closed" ||
+      !!t.turnStopped ||
+      t.reason?.reason === "awaiting_reply/stopped"
+    ) {
+      return `#${tgt.taskId} can no longer receive this comment. Your text is kept.`;
+    }
     return "";
   });
   // Details is a tab only where it is not beside the tabs (CSS hides the
@@ -1021,7 +1080,11 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected linkQuery(id: string): Record<string, string> | null {
-    return this.pane() ? { task: id } : null;
+    return this.pane()
+      ? { task: id }
+      : this.from()
+        ? { from: this.from()! }
+        : null;
   }
 
   constructor() {
@@ -1029,6 +1092,8 @@ export class TaskDetailComponent implements OnDestroy {
       const id = this.id();
       untracked(() => {
         this.confirmClose.set(false);
+        this.confirming.set(null);
+        this.replyTarget.set(null);
         this.pendingPriority.set(null);
         this.store.open(id);
       });
@@ -1142,7 +1207,9 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async approve(): Promise<void> {
-    const id = this.id();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
     if (
       await this.store.act(
         "approve",
@@ -1164,7 +1231,9 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async stop(): Promise<void> {
-    const id = this.id();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
     if (
       await this.store.act("stop", this.post("POST /api/tasks/{id}/stop"), id)
     ) {
@@ -1173,7 +1242,32 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async retry(): Promise<void> {
-    const id = this.id();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    if (this.isStopped()) {
+      const who = stopperOf(t, t.questionCommentId);
+      this.confirming.set({
+        title: "Resume",
+        message: who
+          ? `Resume #${id}? ${who} stopped it.`
+          : `Resume #${id}? A person stopped this run.`,
+        accept: "Resume",
+        destructive: false,
+        run: async () => {
+          if (
+            await this.store.act(
+              "retry",
+              this.post("POST /api/tasks/{id}/retry"),
+              id,
+            )
+          ) {
+            this.done(`Resumed #${id}`);
+          }
+        },
+      });
+      return;
+    }
     if (
       await this.store.act("retry", this.post("POST /api/tasks/{id}/retry"), id)
     ) {
@@ -1182,8 +1276,9 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async submit(): Promise<void> {
-    const id = this.id();
-    if (this.submitOff()) return;
+    const t = this.t();
+    if (!t || t.id !== this.id() || submitBlock(t)) return;
+    const id = t.id;
     if (
       await this.store.act(
         "submit",
@@ -1196,7 +1291,9 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async defer(): Promise<void> {
-    const id = this.id();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
     if (
       await this.store.act(
         "defer",
@@ -1219,7 +1316,9 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async withdraw(): Promise<void> {
-    const id = this.id();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
     if (
       await this.store.act(
         "withdraw",
@@ -1232,7 +1331,9 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async undefer(): Promise<void> {
-    const id = this.id();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
     if (
       await this.store.act(
         "undefer",
@@ -1245,7 +1346,9 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected async reopen(): Promise<void> {
-    const id = this.id();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
     if (
       await this.store.act(
         "reopen",
@@ -1260,7 +1363,10 @@ export class TaskDetailComponent implements OnDestroy {
   // Closing queued, proposed or deferred work can be undone by reopening;
   // anything further along asks first and offers no Undo.
   protected async close(confirmed: boolean): Promise<void> {
-    const state = this.t()?.state ?? "";
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    const state = t.state ?? "";
     const reversible = ["queued", "proposed", "deferred"].includes(state);
     if (!reversible && !confirmed) {
       this.confirmClose.set(true);
@@ -1269,7 +1375,6 @@ export class TaskDetailComponent implements OnDestroy {
       return;
     }
     this.confirmClose.set(false);
-    const id = this.id();
     const ok = await this.store.act(
       "close",
       this.post("POST /api/tasks/{id}/close", {
@@ -1304,9 +1409,11 @@ export class TaskDetailComponent implements OnDestroy {
   // Priority is set with an explicit Set, never on change: arrowing
   // through a select must not send a PATCH per step (WCAG 3.2.2).
   protected async applyPriority(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
     const p = this.pendingPriority();
-    const id = this.id();
-    const before = priorityOf(this.t()!);
+    const id = t.id;
+    const before = priorityOf(t);
     if (p === null || !(p > 0) || p === before) return;
     const ok = await this.store.act(
       "priority",
@@ -1346,14 +1453,62 @@ export class TaskDetailComponent implements OnDestroy {
     });
   }
 
+  protected onDraft(value: string): void {
+    if (!this.replyTarget()) {
+      const t = this.t();
+      if (t && t.id === this.id()) {
+        this.replyTarget.set({
+          taskId: t.id,
+          questionCommentId: t.questionCommentId,
+          reply: t.state === "awaiting_reply",
+        });
+      }
+    }
+    this.store.draft.set(value);
+  }
+
+  protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
+    this.confirming.set(null);
+    if (ok) await c.run();
+  }
+
+  private async submitComment(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id() || this.isStopped() || this.replyBlocked())
+      return;
+    const tgt = this.replyTarget() ?? {
+      taskId: t.id,
+      questionCommentId: t.questionCommentId,
+      reply: t.state === "awaiting_reply",
+    };
+    const ok = await this.store.send(tgt.taskId, (fresh) => {
+      if (tgt.reply) {
+        return replyRefusal(fresh, tgt.taskId, tgt.questionCommentId);
+      }
+      if (!fresh) return `#${tgt.taskId} could not be read.`;
+      if (
+        fresh.state === "closed" ||
+        !!fresh.turnStopped ||
+        fresh.reason?.reason === "awaiting_reply/stopped"
+      ) {
+        return `#${tgt.taskId} can no longer receive this comment. Your text is kept.`;
+      }
+      return "";
+    });
+    if (ok) {
+      this.replyTarget.set(null);
+      this.done("Sent");
+    }
+  }
+
   protected onEnter(ev: Event): void {
     if ((ev as KeyboardEvent).isComposing) return;
     ev.preventDefault();
-    void this.store.send();
+    void this.submitComment();
   }
 
   protected send(ev: Event): void {
     ev.preventDefault();
-    void this.store.send().then((ok) => ok && this.done("Sent"));
+    void this.submitComment();
   }
 }

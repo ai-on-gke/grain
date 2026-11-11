@@ -18,6 +18,7 @@ import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
+import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TasksPageComponent } from "./tasks-page.component";
 import { TasksStore } from "./tasks.store";
@@ -79,7 +80,8 @@ class FakeApi {
     return Promise.resolve({ tasks: this.closed, nextCursor: "", total: 1 });
   };
   // The shell's Inbox store, refreshed after actions.
-  config = () => Promise.resolve({ access: null });
+  cfg: Record<string, unknown> = { access: null };
+  config = () => Promise.resolve(this.cfg);
   tasks = () => Promise.resolve(this.live);
   openNotifications = () => Promise.resolve([]);
   localScriptApprovals = () => Promise.resolve([]);
@@ -678,6 +680,157 @@ describe("TasksPageComponent", () => {
       await settle(f);
       expect(q(f, '[data-testid="confirm-dialog"]')).toBeNull();
       expect(api.calls).toEqual([]);
+    });
+
+    it("opens the pane on clicking anywhere on a row outside controls, across tabs", async () => {
+      const api = new FakeApi();
+      const f = await render(api, "backlog");
+      const nav = vi.spyOn(TestBed.inject(Router), "navigate");
+      q<HTMLElement>(f, '[data-testid="row-1"] .row-repo')!.click();
+      await settle(f);
+      expect(nav).toHaveBeenCalledWith(
+        [],
+        expect.objectContaining({ queryParams: { task: "1" } }),
+      );
+      nav.mockClear();
+
+      q<HTMLInputElement>(
+        f,
+        '[data-testid="row-2"] input[type="checkbox"]',
+      )!.click();
+      await settle(f);
+      expect(nav).not.toHaveBeenCalled();
+
+      f.componentRef.setInput("tab", "proposed");
+      await settle(f);
+      q<HTMLElement>(f, '[data-testid="row-10"] .row-sub')!.click();
+      await settle(f);
+      expect(nav).toHaveBeenCalledWith(
+        [],
+        expect.objectContaining({ queryParams: { task: "10" } }),
+      );
+    });
+
+    it("merges detail CI for awaiting_submit placeholder rows and prunes closed tasks", async () => {
+      const api = new FakeApi();
+      api.live.push(
+        task("40", "awaiting_submit", 5, {
+          mergeGates: [
+            {
+              id: "ci",
+              label: "CI",
+              state: "running",
+              detail: "waiting for checks",
+            },
+          ],
+        }),
+      );
+      const baseGet = api.getIfChanged;
+      api.getIfChanged = (route: string, params?: { id?: string }) =>
+        route === "GET /api/tasks/{id}" && params?.id === "40"
+          ? Promise.resolve({
+              body: {
+                ...task("40", "awaiting_submit", 5, {
+                  mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
+                }),
+                comments: [],
+                attempts: [],
+              },
+              changed: true,
+            })
+          : baseGet(route, params);
+      const f = await render(api, "merging");
+      expect(q(f, '[data-testid="ci-40"]')!.textContent).toContain("✕ CI");
+
+      api.live = api.live.filter((t) => t.id !== "40");
+      await TestBed.inject(TasksStore).refresh();
+      await settle(f);
+      expect(TestBed.inject(TasksStore).details()["40"]).toBeUndefined();
+    });
+
+    it("hides the side pane on phone viewports even when ?task= is set, and returns focus on close", async () => {
+      const prevMatch = (window as { matchMedia?: unknown }).matchMedia;
+      try {
+        (window as { matchMedia?: unknown }).matchMedia = () => ({
+          matches: true,
+          media: "(max-width: 720px)",
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        });
+        const api = new FakeApi();
+        const f = await render(api, "backlog");
+        f.componentRef.setInput("task", "1");
+        await settle(f);
+        expect(q(f, '[data-testid="tasks-resizer"]')).toBeNull();
+        expect(q(f, "g-task-detail")).toBeNull();
+
+        (window as { matchMedia?: unknown }).matchMedia = () => ({
+          matches: false,
+          media: "(max-width: 720px)",
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        });
+        window.dispatchEvent(new Event("resize"));
+        await settle(f);
+        expect(q(f, '[data-testid="tasks-resizer"]')).toBeTruthy();
+
+        const openLink = q<HTMLElement>(f, '[data-testid="open-1"]')!;
+        const focusSpy = vi.spyOn(openLink, "focus");
+        q<HTMLButtonElement>(f, '[data-testid="pane-close"]')!.click();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(focusSpy).toHaveBeenCalled();
+      } finally {
+        (window as { matchMedia?: unknown }).matchMedia = prevMatch;
+      }
+    });
+
+    it("counts only current tab selected in inline close, keeps Escape inside .confirm-inline, and requires confirm tick for non-viewer owner", async () => {
+      const api = new FakeApi();
+      api.cfg = { access: null, viewerOwner: "rarcea" };
+      api.live = [
+        task("1", "queued", 8, { repo: "acme/web", owner: "bob" }),
+        task("10", "running", 8, { repo: "acme/web", owner: "bob" }),
+        task("11", "proposed", 8, { repo: "acme/web", owner: "bob" }),
+        task("12", "proposed", 5, { repo: "acme/web", owner: "bob" }),
+      ];
+      const f = await render(api, "running");
+      const cmp = f.componentInstance as unknown as {
+        checked: { set(v: ReadonlySet<string>): void };
+      };
+      cmp.checked.set(new Set(["1", "10"]));
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+      await settle(f);
+      expect(q(f, '[data-testid="close-confirm"]')!.textContent).toContain(
+        "Close 1?",
+      );
+
+      // Escape inside .confirm-inline should not close the pane.
+      f.componentRef.setInput("task", "10");
+      await settle(f);
+      const nav = vi.spyOn(TestBed.inject(Router), "navigate");
+      const inlineBtn = document.createElement("button");
+      inlineBtn.className = "confirm-inline";
+      document.body.appendChild(inlineBtn);
+      inlineBtn.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      inlineBtn.remove();
+      expect(nav).not.toHaveBeenCalled();
+
+      TestBed.inject(AccessService).setConfig({
+        access: null,
+        viewerOwner: "rarcea",
+      });
+      f.componentRef.setInput("tab", "proposed");
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="approve-all"]')!.click();
+      await settle(f);
+      const accept = q<HTMLButtonElement>(f, '[data-testid="confirm-accept"]')!;
+      expect(accept.disabled).toBe(true);
+      expect(q(f, '[data-testid="confirm-scope"]')!.textContent).toContain(
+        "2 owned by bob",
+      );
     });
   });
 });

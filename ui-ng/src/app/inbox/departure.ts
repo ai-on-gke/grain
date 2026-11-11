@@ -49,7 +49,7 @@ export function whyGone(
     case "deferred":
       return "it was deferred";
     default:
-      return `it is ${t.state.replace(/_/g, " ")} now`;
+      return `it is ${(t.state ?? "unknown").replace(/_/g, " ")} now`;
   }
 }
 
@@ -64,7 +64,7 @@ export function replyRefusal(
 ): string {
   if (!t) return `Not sent: #${id} is no longer waiting on a reply.`;
   if (t.state !== "awaiting_reply" || t.awaitingAccess) {
-    return `Not sent: #${id} is no longer waiting on a reply (it is ${t.state.replace(/_/g, " ")}).`;
+    return `Not sent: #${id} is no longer waiting on a reply (it is ${(t.state ?? "unknown").replace(/_/g, " ")}).`;
   }
   if (t.turnStopped || t.reason?.reason === "awaiting_reply/stopped") {
     return `Not sent: #${id} was stopped rather than asking; resume it instead.`;

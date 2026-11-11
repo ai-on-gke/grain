@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { MergeGate, Task } from "../api/models";
-import { ciChip, gateSummary, isMerged, repoShort, submitBlock } from "./gates";
+import type { MergeGate, Task, TaskDetail } from "../api/models";
+import { ciChip, repoShort } from "./chips";
+import { gateSummary, isMerged, submitBlock, withDetailGates } from "./gates";
 import { scopeLines, scopeOf } from "./scope";
 
 const t = (gates?: MergeGate[], extra: Partial<Task> = {}): Task => ({
@@ -105,6 +106,34 @@ describe("merge gates", () => {
       false,
     );
   });
+  it("treats list-only 'waiting for checks' as Checking CI and merges detail gates", () => {
+    const listPlaceholder = t([
+      { id: "ci", label: "CI", state: "running", detail: "waiting for checks" },
+      approval,
+    ]);
+    expect(gateSummary(listPlaceholder, true)).toMatchObject({
+      state: "unknown",
+      checking: true,
+    });
+    expect(submitBlock(listPlaceholder, true)).toContain("Checking CI");
+    expect(ciChip(listPlaceholder, true)?.text).toBe("Checking CI…");
+
+    const noDetail = withDetailGates(listPlaceholder, null);
+    expect(noDetail.hasDetail).toBe(false);
+    expect(noDetail.task).toBe(listPlaceholder);
+
+    const detail = {
+      ...listPlaceholder,
+      mergeGates: [
+        { id: "ci", label: "CI", state: "failing", detail: "unit tests" },
+        approval,
+      ],
+    } as TaskDetail;
+    const merged = withDetailGates(listPlaceholder, detail);
+    expect(merged.hasDetail).toBe(true);
+    expect(submitBlock(merged.task)).toContain("CI is failing");
+    expect(ciChip(merged.task)?.text).toBe("✕ CI");
+  });
 });
 
 describe("batch scope", () => {
@@ -125,12 +154,26 @@ describe("batch scope", () => {
     ]);
   });
 
-  it("names one owner only when there is more than one", () => {
-    const s = scopeOf([
-      { repo: "acme/web", owner: "ana" },
-      { repo: "acme/web", owner: "ana" },
-    ]);
-    expect(s.multiRepo).toBe(false);
-    expect(scopeLines(s)).toEqual(["2 in acme/web"]);
+  it("names one owner when other than the viewer or when multiple owners exist", () => {
+    const sameViewer = scopeOf(
+      [
+        { repo: "acme/web", owner: "ana" },
+        { repo: "acme/web", owner: "ana" },
+      ],
+      "ana",
+    );
+    expect(sameViewer.multiRepo).toBe(false);
+    expect(sameViewer.otherOwner).toBe(false);
+    expect(scopeLines(sameViewer)).toEqual(["2 in acme/web"]);
+
+    const otherOwner = scopeOf(
+      [
+        { repo: "acme/web", owner: "bob" },
+        { repo: "acme/web", owner: "bob" },
+      ],
+      "alice",
+    );
+    expect(otherOwner.otherOwner).toBe(true);
+    expect(scopeLines(otherOwner)).toEqual(["2 in acme/web", "2 owned by bob"]);
   });
 });

@@ -387,6 +387,7 @@ describe("duration", () => {
       );
       expect(nav).toHaveBeenCalledWith(["/tasks"], {
         queryParams: { tab: "merging", task: "7" },
+        replaceUrl: true,
       });
       // The full page has no pane controls.
       expect(q(f, '[data-testid="pane-expand"]')).toBeNull();
@@ -423,10 +424,100 @@ describe("duration", () => {
       const f = await render(api);
       const submit = q<HTMLButtonElement>(f, '[data-testid="act-submit"]')!;
       expect(submit.disabled).toBe(true);
-      expect(q(f, '[data-testid="task-ci"]')!.textContent).toContain("✕ CI");
+      expect(q(f, '[data-testid="task-ci"]')!.textContent?.trim()).toBe("✕ CI");
       submit.click();
       await settle(f);
       expect(api.calls).toEqual([]);
+    });
+
+    it("omits task query on phone backFrom, sets pane aria-current='true', and carries ?from= on full-page links", async () => {
+      expect(backFrom("tasks:merging", "7", true)).toEqual({
+        label: "Tasks · Submit & land",
+        commands: ["/tasks"],
+        query: { tab: "merging" },
+      });
+      expect(backFrom(undefined, "7", true).query).toBeNull();
+
+      TestBed.configureTestingModule({
+        imports: [TaskPageComponent],
+        providers: [
+          provideRouter([{ path: "**", children: [] }]),
+          { provide: GrainApi, useValue: new FakeApi() },
+          { provide: GrainEvents, useValue: { events: () => NEVER } },
+        ],
+      });
+      const f = TestBed.createComponent(TaskPageComponent);
+      f.componentRef.setInput("id", "7");
+      f.componentRef.setInput("tab", "tree");
+      f.componentRef.setInput("from", "tasks:asked");
+      f.autoDetectChanges();
+      await TestBed.inject(TaskStore).refresh();
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-tree"]')!.getAttribute("aria-current"),
+      ).toBe("page");
+      const depLink = q<HTMLAnchorElement>(f, ".plain-list a")!;
+      expect(depLink.getAttribute("href")).toBe("/task/3?from=tasks:asked");
+    });
+
+    it("hides composer and confirms Resume naming stopper on stopped turn, and refuses stale send on re-read", async () => {
+      const api = new FakeApi();
+      api.detail = {
+        ...api.detail,
+        turnStopped: true,
+        questionCommentId: 1,
+      };
+      const f = await render(api);
+      expect(q(f, '[data-testid="task-composer"]')).toBeNull();
+      q<HTMLButtonElement>(f, '[data-testid="act-retry"]')!.click();
+      await settle(f);
+      expect(q(f, '[data-testid="confirm-dialog"]')!.textContent).toContain(
+        "Ana stopped it.",
+      );
+      q<HTMLButtonElement>(f, '[data-testid="confirm-accept"]')!.click();
+      await settle(f);
+      expect(api.calls[0]).toMatchObject({
+        route: "POST /api/tasks/{id}/retry",
+        params: { id: "7" },
+      });
+
+      // Now open an awaiting_reply task, start typing, then change question before send.
+      TestBed.inject(TaskStore).close();
+      TestBed.resetTestingModule();
+      const api2 = new FakeApi();
+      const f2 = await render(api2);
+      const box = q<HTMLTextAreaElement>(f2, '[data-testid="task-composer"]')!;
+      box.value = "Do both";
+      box.dispatchEvent(new Event("input"));
+      await settle(f2);
+      expect(q(f2, '[data-testid="task-send"]')!.textContent).toContain(
+        "Send to #7",
+      );
+
+      // Simulate question changing on server before client refresh notices.
+      api2.detail = { ...api2.detail, questionCommentId: 99 };
+      q<HTMLButtonElement>(f2, '[data-testid="task-send"]')!.click();
+      await settle(f2);
+      expect(api2.calls).toEqual([]);
+      expect(q(f2, '[data-testid="task-action-error"]')!.textContent).toContain(
+        "#7",
+      );
+      expect(TestBed.inject(TaskStore).draft()).toBe("Do both");
+
+      // Busy key is scoped per task ID.
+      const store = TestBed.inject(TaskStore);
+      store.open("7");
+      let resolvePost!: () => void;
+      api2.post = () => new Promise((r) => (resolvePost = () => r({})));
+      const p = store.act(
+        "approve",
+        () => api2.post("POST /api/tasks/{id}/approve"),
+        "7",
+      );
+      expect(store.isBusy("approve", "7")).toBe(true);
+      expect(store.isBusy("approve", "8")).toBe(false);
+      resolvePost();
+      await p;
     });
   });
 });

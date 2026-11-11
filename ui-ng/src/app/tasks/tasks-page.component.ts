@@ -39,9 +39,10 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
-import { ciChip, isMerged, repoShort } from "../shared/gates";
+import { ciChip, repoShort } from "../shared/chips";
+import { isMerged, withDetailGates } from "../shared/gates";
 import { scopeOf } from "../shared/scope";
-import { WIDE_RATIO } from "../shared/split";
+import { PHONE_QUERY, WIDE_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskDetailComponent } from "../task/task-detail.component";
@@ -73,9 +74,6 @@ const CLOSED_FILTERS: { id: ClosedFilter; label: string }[] = [
   { id: "all", label: "All" },
 ];
 
-// Below this width a selected task opens full screen instead of a pane.
-const PHONE_QUERY = "(max-width: 599.95px)";
-
 const SORTS: { id: SortId; label: string }[] = [
   { id: "run", label: "Run order" },
   { id: "priority", label: "Priority" },
@@ -105,12 +103,14 @@ const SORTS: { id: SortId; label: string }[] = [
     "(document:click)": "onDocClick($event)",
     "(document:keydown.escape)": "onEscape($event)",
     "(document:keydown.enter)": "onEnter($event)",
-    "(window:resize)": "sp.measure()",
+    "(window:resize)": "onResize()",
+    "(click)": "onHostClick($event)",
   },
   template: `
     <section
       class="view-panel is-active tasks-panel"
       aria-labelledby="tasks-headline"
+      [attr.inert]="confirming() ? '' : null"
     >
       <div class="stage-header tasks-header">
         <div class="view-headline-row">
@@ -342,6 +342,7 @@ const SORTS: { id: SortId; label: string }[] = [
                       class="task-row approval-row"
                       [class.is-selected]="selectedId() === t.id"
                       [attr.data-testid]="'row-' + t.id"
+                      [attr.data-task-id]="t.id"
                     >
                       <input
                         type="checkbox"
@@ -441,6 +442,7 @@ const SORTS: { id: SortId; label: string }[] = [
                       class="task-row"
                       [class.is-selected]="selectedId() === t.id"
                       [attr.data-testid]="'row-' + t.id"
+                      [attr.data-task-id]="t.id"
                     >
                       <input
                         type="checkbox"
@@ -510,7 +512,7 @@ const SORTS: { id: SortId; label: string }[] = [
             }
           </div>
         </div>
-        @if (selectedId(); as id) {
+        @if (!phone() && selectedId(); as id) {
           <div
             class="inbox-resizer"
             role="separator"
@@ -670,7 +672,7 @@ const SORTS: { id: SortId; label: string }[] = [
           } @else if (canClose()) {
             @if (confirmClose()) {
               <span data-testid="close-confirm"
-                >Close {{ checked().size }}? Running work stops and open pull
+                >Close {{ selected().length }}? Running work stops and open pull
                 requests are left behind; this cannot be undone.</span
               >
               <button
@@ -704,10 +706,11 @@ const SORTS: { id: SortId; label: string }[] = [
           </button>
         </div>
       }
-      @if (confirming(); as c) {
-        <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
-      }
     </section>
+
+    @if (confirming(); as c) {
+      <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
+    }
 
     <ng-template #titleLink let-t>
       <a
@@ -752,6 +755,7 @@ const SORTS: { id: SortId; label: string }[] = [
         [class.is-picked]="picked() === t.id"
         [class.drop-before]="dropAt() === pos"
         [attr.data-testid]="'row-' + t.id"
+        [attr.data-task-id]="t.id"
         (dragover)="onDragOver($event, pos)"
         (drop)="onDrop($event, pos)"
       >
@@ -942,12 +946,17 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly closedFilters = CLOSED_FILTERS;
   protected readonly closedFilter = signal<ClosedFilter>("all");
   protected readonly confirming = signal<ConfirmRequest | null>(null);
+  protected readonly phone = signal(this.isPhone());
   protected readonly short = repoShort;
-  protected readonly chip = ciChip;
   protected readonly blocked = isBlocked;
   // The selection is the task id in the URL, never a position.
   protected readonly selectedId = computed(() => this.task() || null);
   private lastIndex = 0;
+
+  protected chip(t: Task) {
+    const { task, hasDetail } = withDetailGates(t, this.store.details()[t.id]);
+    return ciChip(task, !hasDetail);
+  }
 
   protected readonly tabs = TABS;
   protected readonly sorts = SORTS;
@@ -1120,6 +1129,40 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return typeof matchMedia === "function" && matchMedia(PHONE_QUERY).matches;
   }
 
+  protected onResize(): void {
+    this.sp.measure();
+    this.phone.set(this.isPhone());
+  }
+
+  protected onHostClick(ev: Event): void {
+    const me = ev as MouseEvent;
+    const row = (me.target as HTMLElement | null)?.closest?.(
+      "li.task-row[data-task-id]",
+    ) as HTMLElement | null;
+    const id = row?.dataset["taskId"];
+    if (id) this.onRowClick(me, id);
+  }
+
+  protected onRowClick(ev: MouseEvent, id: string): void {
+    if (
+      ev.defaultPrevented ||
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    )
+      return;
+    const el = ev.target as HTMLElement | null;
+    if (el?.closest("a,button,input,select,textarea,label,[role='menuitem']"))
+      return;
+    if (this.isPhone()) {
+      this.openFull(id);
+      return;
+    }
+    this.select(id);
+  }
+
   private fromParam(): string {
     return `tasks:${this.current()}`;
   }
@@ -1160,10 +1203,20 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected closePane(): void {
+    const prev = this.selectedId();
     void this.router.navigate([], {
       queryParams: { task: null, pane: null },
       queryParamsHandling: "merge",
     });
+    if (prev) {
+      setTimeout(() =>
+        (
+          document.querySelector(
+            `[data-testid="open-${prev}"]`,
+          ) as HTMLElement | null
+        )?.focus(),
+      );
+    }
   }
 
   protected openFull(id: string): void {
@@ -1348,6 +1401,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected onEscape(ev: Event): void {
     if (ev.defaultPrevented) return;
     if (document.querySelector('[aria-modal="true"]')) return;
+    if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
     if (this.openMenu()) {
       ev.preventDefault();
       this.closeMenu(true);
@@ -1380,7 +1434,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       message: `Approve ${ids.length} tasks? Each goes into the Backlog at its priority and can start right away.`,
       accept: `Approve ${ids.length}`,
       destructive: false,
-      scope: scopeOf(rows),
+      scope: scopeOf(rows, this.access.viewer()),
       run: () => this.approve(ids),
     });
   }

@@ -628,11 +628,7 @@ export class AppComponent implements OnInit, OnDestroy {
   // page with a full navigation.
   open(d: Destination): void {
     if (d.route) void this.router.navigateByUrl(d.route);
-    else this.go(d.classic);
-  }
-
-  private go(href: string): void {
-    this.doc.defaultView?.location.assign(href);
+    else this.doc.defaultView?.location.assign(d.classic);
   }
 
   protected toggleCreate(ev: Event): void {
