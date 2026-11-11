@@ -496,4 +496,30 @@ describe("AgentsPageComponent", () => {
     );
     expect(rowLink?.textContent).toContain("Part of Voice goal");
   });
+
+  it("renders polyline sparkline, .is-fresh pulse on recent activity, and reactive Aurora states", async () => {
+    const api = new FakeApi();
+    api.live = [
+      run("1", { activityAt: iso(4000), author: "ana", authorKind: "human" }),
+    ];
+    const f = await render(api);
+
+    const summary = q(f, '[data-testid="agents-summary"]')!;
+    expect(summary.getAttribute("data-aurora-state")).toBe("processing");
+
+    const card = q(f, '[data-testid="agent-1"]')!;
+    expect(card.classList).toContain("is-fresh");
+    expect(card.querySelector(".spark-line")).not.toBeNull();
+    expect(card.querySelector('[data-testid="actor-chip"]')).not.toBeNull();
+
+    // When all agents finish, summary pulses "responding" then settles to "idle".
+    api.live = [];
+    await TestBed.inject(AgentsStore).refresh();
+    await f.whenStable();
+    expect(summary.getAttribute("data-aurora-state")).toBe("responding");
+
+    await new Promise((r) => setTimeout(r, 500));
+    await f.whenStable();
+    expect(summary.getAttribute("data-aurora-state")).toBe("idle");
+  });
 });

@@ -27,16 +27,16 @@ g-agents-page {
   flex-wrap: wrap;
   gap: 4px 20px;
   margin-top: 12px;
-  padding: 8px 12px;
-  border-radius: var(--md-sys-shape-corner-small);
+  padding: 10px 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-low);
   font-size: 13px;
   color: var(--md-sys-color-on-surface-variant);
 }
 
 .agents-summary.is-processing {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+  color: var(--md-sys-color-on-surface);
 }
 
 .agents-summary strong {
@@ -100,10 +100,33 @@ g-agents-page {
   padding: 14px 16px 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-medium);
-  background: var(
-    --md-sys-color-surface-container-lowest,
-    var(--md-sys-color-surface)
-  );
+  background: var(--md-sys-color-surface);
+  transition: border-color 220ms var(--md-sys-motion-effects);
+}
+
+:root[data-theme="dark"] .agent-card {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.agent-card.is-fresh {
+  border-color: var(--md-sys-color-tertiary);
+  animation: agent-fresh-pulse 1.2s var(--md-sys-motion-effects) 1;
+}
+
+@keyframes agent-fresh-pulse {
+  0% {
+    box-shadow: 0 0 0 2px
+      color-mix(in srgb, var(--md-sys-color-tertiary) 35%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-card.is-fresh {
+    animation: none;
+  }
 }
 
 .agent-card.is-quiet {
@@ -245,9 +268,25 @@ g-agents-page {
   font-size: 11px;
 }
 
-.spark rect {
-  fill: var(--md-sys-color-primary);
-  opacity: 0.7;
+.spark {
+  overflow: visible;
+  flex: none;
+}
+
+.spark-area {
+  fill: color-mix(in srgb, var(--md-sys-color-primary) 16%, transparent);
+}
+
+.spark-line {
+  fill: none;
+  stroke: var(--md-sys-color-primary);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.spark-dot {
+  fill: var(--md-sys-color-tertiary);
 }
 
 .spark-base {

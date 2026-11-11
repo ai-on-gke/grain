@@ -17,6 +17,7 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { InboxStore } from "../inbox/inbox.store";
 import type { Task, TaskDetail } from "../api/models";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { isListCiPlaceholder } from "../shared/gates";
 import { errorText } from "../sessions/session-view";
 import {
@@ -48,17 +49,19 @@ export class TasksStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly zone = inject(NgZone);
+  private readonly feed = inject(TaskFeedStore);
   // The shell's list feeds Next up and the Inbox badge; it is told to
   // read again after every action here so neither lags behind.
   private readonly inbox = inject(InboxStore);
 
-  readonly live = signal<Task[]>([]);
+  readonly live = this.feed.tasks;
   readonly details = signal<Record<string, TaskDetail>>({});
   readonly closed = signal<Task[]>([]);
   readonly closedCursor = signal<string | null>(null);
   readonly closedLoaded = signal(false);
   readonly closedTotal = signal<number | null>(null);
-  readonly loaded = signal(false);
+  private readonly ownLoaded = signal(false);
+  readonly loaded = computed(() => this.ownLoaded() || this.feed.loaded());
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
   readonly busy = signal<ReadonlySet<string>>(new Set());
@@ -87,8 +90,13 @@ export class TasksStore {
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
   private queuedRefresh: Promise<void> | null = null;
   private readonly detailInFlight = new Set<string>();
+  private started = false;
 
   start(): void {
+    if (!this.started) {
+      this.started = true;
+      this.feed.start(true);
+    }
     void this.refresh();
     // Events come in bursts; one read covers a burst.
     this.eventSub ??= this.events.events().subscribe(() => {
@@ -109,6 +117,10 @@ export class TasksStore {
   }
 
   stop(): void {
+    if (this.started) {
+      this.started = false;
+      this.feed.stop(true);
+    }
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.eventSub?.unsubscribe();
@@ -131,21 +143,16 @@ export class TasksStore {
   }
 
   private async load(): Promise<void> {
-    let loadedLive = false;
-    try {
-      const r = await this.api.getIfChanged<Task[]>("GET /api/tasks");
-      if (r.changed || this.live().length === 0) {
-        this.live.set(Array.isArray(r.body) ? r.body : []);
-      }
+    const ok = await this.feed.refresh();
+    if (ok) {
       this.loadError.set(null);
-      loadedLive = true;
-    } catch (err) {
+    } else {
       this.loadError.set(
-        `The task list could not be read: ${errorText(err)}. This page tries again on its own.`,
+        `The task list could not be read: ${this.feed.loadError() ?? "The request failed."}. This page tries again on its own.`,
       );
     }
-    this.loaded.set(true);
-    if (loadedLive) await this.ensureSubmitDetails(this.live());
+    this.ownLoaded.set(true);
+    if (ok) await this.ensureSubmitDetails(this.live());
   }
 
   private async ensureSubmitDetails(tasks: readonly Task[]): Promise<void> {

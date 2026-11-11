@@ -101,7 +101,7 @@ const SORTS: { id: SortId; label: string }[] = [
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "../shared/work-surface.css",
+  styleUrls: ["../shared/work-surface.css", "./tasks-page.component.css"],
   host: {
     "(document:click)": "onDocClick($event)",
     "(document:keydown.escape)": "onEscape($event)",

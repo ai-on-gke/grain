@@ -77,8 +77,17 @@ export class ThemeService {
         .addEventListener?.("change", (e) => this._systemDark.set(e.matches));
     }
     effect(() => {
+      const polarity = this.resolved();
       if (typeof document !== "undefined") {
-        document.documentElement.dataset["theme"] = this.resolved();
+        document.documentElement.dataset["theme"] = polarity;
+        const svg = document.getElementById(
+          "grain-favicon-svg",
+        ) as HTMLLinkElement | null;
+        svg?.setAttribute("href", `grain-favicon-${polarity}.svg`);
+        const png = document.getElementById(
+          "grain-favicon-png",
+        ) as HTMLLinkElement | null;
+        png?.setAttribute("href", `/grain-mark-${polarity}.png`);
       }
     });
   }

@@ -19,6 +19,7 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { Task, TaskDetail, TaskListPage } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { type Scope, scopeOf } from "../shared/scope";
 import {
   DONE_RETENTION_DAYS,
@@ -82,10 +83,11 @@ export class WorkstreamsStore {
   private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
   private readonly inbox = inject(InboxStore);
+  private readonly feed = inject(TaskFeedStore);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
 
-  readonly openTasks = signal<Task[]>([]);
+  readonly openTasks = this.feed.tasks;
   readonly closedTasks = signal<Task[]>([]);
   readonly extraTasks = signal<Record<string, TaskDetail>>({});
   readonly loaded = signal(false);
@@ -190,7 +192,10 @@ export class WorkstreamsStore {
   }
 
   start(): void {
-    this.active = true;
+    if (!this.active) {
+      this.active = true;
+      this.feed.start(true);
+    }
     void this.refresh(!this.closedFetchedOnce);
     if (!this.eventSub) {
       this.eventSub = this.events
@@ -202,7 +207,10 @@ export class WorkstreamsStore {
   }
 
   stop(): void {
-    this.active = false;
+    if (this.active) {
+      this.active = false;
+      this.feed.stop(true);
+    }
     this.eventSub?.unsubscribe();
     this.eventSub = null;
     if (this.debounceTimer) {
@@ -275,20 +283,15 @@ export class WorkstreamsStore {
   }
 
   private async load(fetchClosed: boolean, contextOnly = false): Promise<void> {
-    let openChanged = false;
-    let currentOpen = this.openTasks();
-    try {
-      const fresh = await this.api.getIfChanged<Task[]>("GET /api/tasks");
-      openChanged = fresh.changed;
-      if (fresh.changed || !this.loaded()) {
-        currentOpen = Array.isArray(fresh.body) ? fresh.body : [];
-        this.openTasks.set(currentOpen);
-      }
+    const ok = await this.feed.refresh();
+    const openChanged = this.feed.lastChanged();
+    const currentOpen = this.openTasks();
+    if (ok) {
       this.loadError.set(null);
-    } catch (err) {
-      if (!this.loaded()) {
-        this.loadError.set(`Could not read workstreams: ${errorText(err)}`);
-      }
+    } else if (!this.loaded()) {
+      this.loadError.set(
+        `Could not read workstreams: ${this.feed.loadError() ?? errorText(this.feed.lastError())}`,
+      );
     }
 
     this.pollCount++;

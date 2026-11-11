@@ -24,9 +24,11 @@ import type {
   DiffPreview,
   GrainConfig,
   LocalScriptApproval,
+  LogoutResponse,
   Notification,
   Task,
   TaskDetail,
+  WhoamiResponse,
 } from "./models";
 
 // Path parameters a route key names, e.g. {id} or {owner}.
@@ -202,5 +204,13 @@ export class GrainApi {
     >("GET /api/local-script-approvals").then((r) =>
       Array.isArray(r) ? r : (r?.approvals ?? []),
     );
+  }
+
+  whoami(): Promise<WhoamiResponse> {
+    return this.get<WhoamiResponse>("GET /api/whoami");
+  }
+
+  logout(): Promise<LogoutResponse> {
+    return this.post<LogoutResponse>("POST /api/auth/logout");
   }
 }

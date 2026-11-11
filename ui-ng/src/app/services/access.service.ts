@@ -15,24 +15,76 @@
 import { Injectable, computed, signal } from "@angular/core";
 import type { RouteKey } from "../api/generated-routes";
 import { routeScope } from "../api/grain-api.service";
-import type { GrainConfig } from "../api/models";
+import type { GrainConfig, WhoamiResponse } from "../api/models";
+
+export function initialsFromIdentity(raw: string): string {
+  const clean = (raw || "").trim();
+  if (!clean) return "G";
+  const local = clean.includes("@") ? clean.split("@")[0] : clean;
+  const words = local
+    .replace(/[._-]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+  const w = words[0] ?? clean;
+  return w.slice(0, 2).toUpperCase();
+}
 
 // AccessService answers "may the signed-in person make this call?" the
 // way the server will when they try: the role GET /api/config reports
 // (pkg/ui/access_roles.go's AccessRoleInfo) against the scope the route
 // table says the call needs (generated-routes.ts, read off RoleScopeOf).
-// It is ui/src/access.js's canAccess, keyed by route rather than by a
-// scope string a page has to know. It only decides what is offered;
-// the server still checks every call.
+// It also holds GET /api/whoami identity metadata for the Account menu.
 @Injectable({ providedIn: "root" })
 export class AccessService {
   private readonly config = signal<GrainConfig | null>(null);
+  readonly whoami = signal<WhoamiResponse | null>(null);
 
   readonly roleLabel = computed(() => this.config()?.access?.role ?? "");
+  readonly roles = computed(() => this.config()?.access?.roles ?? []);
+  readonly isFullAccess = computed(() => {
+    const a = this.config()?.access;
+    return !a || !!a.full;
+  });
+  readonly scopes = computed(() => this.config()?.access?.scopes ?? []);
+  readonly repoLimits = computed(
+    () => this.config()?.access?.repoLimits ?? ({} as Record<string, string[]>),
+  );
+
   // Signed-in person for "owned by someone else" checks (pkg/ui ConfigResponse).
   readonly viewer = computed(
-    () => this.config()?.viewerOwner || this.config()?.actor || "",
+    () =>
+      this.whoami()?.actor?.id ||
+      this.config()?.viewerOwner ||
+      this.config()?.actor ||
+      "",
   );
+
+  readonly identityLabel = computed(() => {
+    const w = this.whoami();
+    if (w?.actor?.label) return w.actor.label;
+    if (w?.actor?.id) return w.actor.id;
+    const v = this.config()?.viewerOwner || this.config()?.actor;
+    if (v) return String(v);
+    const r = this.roleLabel();
+    return r || "Operator";
+  });
+
+  readonly initials = computed(() =>
+    initialsFromIdentity(this.identityLabel()),
+  );
+
+  readonly scopesSummary = computed(() => {
+    const a = this.config()?.access;
+    if (!a || a.full) return "Full operator access across all scopes";
+    const n = a.scopes?.length ?? 0;
+    if (n === 0) return "Signed-in read access only";
+    return `${n} granted scope${n === 1 ? "" : "s"}`;
+  });
+
   readonly limited = computed(() => {
     const a = this.config()?.access;
     return !!a && !a.full;
@@ -40,6 +92,10 @@ export class AccessService {
 
   setConfig(config: GrainConfig | null): void {
     this.config.set(config);
+  }
+
+  setWhoami(who: WhoamiResponse | null): void {
+    this.whoami.set(who);
   }
 
   canScope(scope: string | null, repo?: string | string[]): boolean {

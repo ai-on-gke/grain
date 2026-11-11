@@ -336,3 +336,23 @@ export interface TaskListPage {
   merged?: number;
   sessions?: number;
 }
+
+export interface WirePrincipal {
+  kind: string;
+  id: string;
+  source: string;
+  label: string;
+}
+
+export interface WhoamiResponse {
+  actor: WirePrincipal;
+  onBehalfOf?: WirePrincipal | null;
+  via?: string;
+  source: string;
+  verified: boolean;
+  allowed: boolean;
+}
+
+export interface LogoutResponse {
+  redirect?: string;
+}

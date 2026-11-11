@@ -16,10 +16,12 @@ import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  NgZone,
   type OnDestroy,
   type OnInit,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   signal,
 } from "@angular/core";
@@ -29,6 +31,8 @@ import { KeyboardService } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-view";
+import { ActorChipComponent } from "../shared/actor-chip.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import {
   type Agent,
@@ -73,7 +77,13 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
 // summary strip, and a wall view for a team display.
 @Component({
   selector: "g-agents-page",
-  imports: [RouterLink, TipDirective, NgTemplateOutlet],
+  imports: [
+    RouterLink,
+    TipDirective,
+    NgTemplateOutlet,
+    StatusIconComponent,
+    ActorChipComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./agents-page.component.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -119,8 +129,9 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
         </div>
 
         <div
-          class="agents-summary"
+          class="agents-summary aurora-surface"
           [class.is-processing]="store.agents().length > 0"
+          [attr.data-aurora-state]="auroraState()"
           [attr.aria-busy]="!store.loaded()"
           data-testid="agents-summary"
         >
@@ -295,7 +306,14 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                           >
                         }
                       </td>
-                      <td>{{ statusText(a) }}</td>
+                      <td>
+                        <span [class]="'status-pill ' + statusTone(a)"
+                          ><g-status-icon
+                            [tone]="statusTone(a)"
+                            [kind]="a.status"
+                          />{{ statusText(a) }}</span
+                        >
+                      </td>
                       <td>
                         @if (a.status === "quiet") {
                           <strong class="quiet-line">{{
@@ -323,6 +341,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
       <article
         class="agent-card"
         [class.is-quiet]="a.status === 'quiet'"
+        [class.is-fresh]="isFresh(a)"
         [attr.data-testid]="'agent-' + a.task.id"
         [attr.aria-labelledby]="'agent-title-' + a.task.id"
       >
@@ -347,11 +366,12 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
         }
         <p class="agent-activity">
           @if (a.task.activityBySetup) {
-            <span
-              class="status-pill neutral grain-chip"
+            <g-actor-chip
+              class="grain-chip"
+              label="grain"
+              kind="grain"
               gTip="Grain's own setup, not the agent"
-              >grain</span
-            >
+            />
           }
           {{ a.task.activity || "Working" }}
           @if (a.task.activityAt) {
@@ -367,9 +387,11 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
             <dt class="sr-only">Host work</dt>
             <dd>{{ h }}</dd>
           }
-          @if (a.task.authorLabel) {
+          @if (a.task.authorLabel || a.task.author; as filer) {
             <dt class="sr-only">Filed by</dt>
-            <dd class="muted">{{ a.task.authorLabel }}</dd>
+            <dd>
+              <g-actor-chip [label]="filer" [kind]="a.task.authorKind" />
+            </dd>
           }
           @if (partOf(a.task.id); as ps) {
             <dt class="sr-only">Workstream</dt>
@@ -415,7 +437,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
               >
               @if (c.bound) {
                 <span class="status-pill error cpu-bound" aria-hidden="true"
-                  >CPU-bound</span
+                  ><g-status-icon tone="error" kind="error" />CPU-bound</span
                 >
               }
             } @else {
@@ -425,22 +447,23 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
           </span>
           <svg
             class="spark"
-            viewBox="0 0 48 16"
-            width="48"
-            height="16"
+            viewBox="0 0 72 18"
+            width="72"
+            height="18"
             role="img"
+            data-testid="agent-spark"
             [attr.aria-label]="sparkLabel(a)"
           >
-            <line class="spark-base" x1="0" y1="15.5" x2="48" y2="15.5" />
-            @for (v of sparkOf(a); track $index) {
-              @if (v) {
-                <rect
-                  [attr.x]="$index * 4"
-                  [attr.y]="16 - barH(v, a)"
-                  width="3"
-                  [attr.height]="barH(v, a)"
-                />
-              }
+            <line class="spark-base" x1="0" y1="16.5" x2="72" y2="16.5" />
+            @if (hasSpark(a)) {
+              <polygon class="spark-area" [attr.points]="sparkAreaPoints(a)" />
+              <polyline class="spark-line" [attr.points]="sparkPoints(a)" />
+              <circle
+                class="spark-dot"
+                cx="71"
+                [attr.cy]="sparkEndY(a)"
+                r="2"
+              />
             }
           </svg>
         </div>
@@ -505,6 +528,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   private readonly keyboard = inject(KeyboardService);
   protected readonly viewFilter = inject(ViewFilter);
   private readonly doc = inject(DOCUMENT);
+  private readonly zone = inject(NgZone);
   private unregisterF: (() => void) | null = null;
 
   protected readonly filters = FILTERS;
@@ -516,6 +540,35 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   protected readonly contactOpen = signal(false);
   protected readonly contactText = signal("");
   protected readonly sending = signal(false);
+  private readonly respondingPulse = signal(false);
+  private respondTimer: ReturnType<typeof setTimeout> | null = null;
+  private hadRunning = false;
+
+  protected readonly auroraState = computed<
+    "anticipating" | "processing" | "responding" | "idle"
+  >(() => {
+    if (!this.store.loaded()) return "anticipating";
+    if (this.store.agents().length > 0) return "processing";
+    if (this.respondingPulse()) return "responding";
+    return "idle";
+  });
+
+  constructor() {
+    effect(() => {
+      const n = this.store.agents().length;
+      if (this.hadRunning && n === 0) {
+        if (this.respondTimer) clearTimeout(this.respondTimer);
+        this.respondingPulse.set(true);
+        this.zone.runOutsideAngular(() => {
+          this.respondTimer = setTimeout(() => {
+            this.respondTimer = null;
+            this.zone.run(() => this.respondingPulse.set(false));
+          }, 450);
+        });
+      }
+      this.hadRunning = n > 0;
+    });
+  }
 
   protected readonly canContact = computed(() =>
     this.access.can("POST /api/deployment/broadcast"),
@@ -577,9 +630,23 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.respondTimer) clearTimeout(this.respondTimer);
     this.store.stop();
     this.unregisterF?.();
     this.setWall(false);
+  }
+
+  protected statusTone(a: Agent): string {
+    if (a.status === "quiet") return "quiet";
+    if (a.status === "setup") return "setup";
+    return "healthy";
+  }
+
+  protected isFresh(a: Agent): boolean {
+    const at = Date.parse(a.task.activityAt ?? "");
+    if (!Number.isFinite(at)) return false;
+    const diff = this.store.now() - at;
+    return diff >= 0 && diff <= 12_000;
   }
 
   protected partOf(id: string) {
@@ -634,9 +701,32 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     return spark(this.store.history()[a.task.id] ?? [], this.store.now());
   }
 
-  protected barH(v: number, a: Agent): number {
-    const max = Math.max(1, ...this.sparkOf(a));
-    return Math.max(2, Math.round((v / max) * 16));
+  protected hasSpark(a: Agent): boolean {
+    return this.sparkOf(a).some((v) => v > 0);
+  }
+
+  protected sparkPoints(a: Agent): string {
+    const vals = this.sparkOf(a);
+    const max = Math.max(1, ...vals);
+    const last = Math.max(1, vals.length - 1);
+    return vals
+      .map((v, i) => {
+        const x = Number(((i / last) * 70 + 1).toFixed(1));
+        const y = Number((16.5 - (v / max) * 14).toFixed(1));
+        return `${x},${y}`;
+      })
+      .join(" ");
+  }
+
+  protected sparkAreaPoints(a: Agent): string {
+    return `1,16.5 ${this.sparkPoints(a)} 71,16.5`;
+  }
+
+  protected sparkEndY(a: Agent): number {
+    const vals = this.sparkOf(a);
+    const max = Math.max(1, ...vals);
+    const end = vals[vals.length - 1] ?? 0;
+    return Number((16.5 - (end / max) * 14).toFixed(1));
   }
 
   protected sparkLabel(a: Agent): string {

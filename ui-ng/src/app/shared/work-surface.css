@@ -255,3 +255,131 @@ g-task-detail .pane-priority {
 g-task-detail .task-header-top .ci-chip {
   margin-left: 4px;
 }
+
+/* ---------- Diff preview cards (Inbox & Task Changes) ---------- */
+.evidence-card.diff-container {
+  padding: 8px;
+}
+
+.diff-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 0;
+}
+
+.diff-count {
+  font-size: 12px;
+}
+
+.diff-file {
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  overflow: hidden;
+  min-width: 0;
+  background: var(--md-sys-color-surface-container-lowest);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--md-sys-color-surface-container-low);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.diff-path {
+  font-family: var(--grain-font-mono);
+  color: var(--md-sys-color-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.diff-status {
+  color: var(--md-sys-color-on-surface-variant);
+  text-transform: capitalize;
+}
+
+.diff-stat {
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--grain-font-mono);
+  flex-shrink: 0;
+}
+
+.diff-stat-add {
+  color: var(--grain-diff-add-fg);
+}
+
+.diff-stat-del {
+  color: var(--grain-diff-del-fg);
+}
+
+.diff-hunk {
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-x: auto;
+  background: var(--md-sys-color-surface-container-lowest);
+}
+
+.diff-hunk:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.diff-hunk-body {
+  width: max-content;
+  min-width: 100%;
+}
+
+.diff-hunk-head {
+  padding: 2px 10px;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-low);
+  white-space: pre;
+}
+
+.diff-line {
+  display: flex;
+  white-space: pre;
+  padding: 0 10px 0 0;
+  color: var(--md-sys-color-on-surface);
+}
+
+.diff-sign {
+  display: inline-block;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.diff-line-add {
+  background: var(--grain-diff-add-bg);
+  color: var(--grain-diff-add-fg);
+}
+
+.diff-line-del {
+  background: var(--grain-diff-del-bg);
+  color: var(--grain-diff-del-fg);
+}
+
+.diff-line-more {
+  padding-left: 20px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-style: italic;
+}
+
+.diff-note {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}

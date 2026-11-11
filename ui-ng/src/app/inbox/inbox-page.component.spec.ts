@@ -1408,5 +1408,48 @@ describe("inbox page helpers", () => {
         queryParamsHandling: "merge",
       });
     });
+
+    it("drives 5-state reactive Aurora on resolution-dock and renders CVD icons + actor chips", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "44",
+          title: "Clarify auth TTL",
+          state: "awaiting_reply",
+          owner: "ana",
+          authorKind: "human",
+          questionCommentId: 1,
+        },
+      ];
+      api.details["44"] = {
+        id: "44",
+        title: "Clarify auth TTL",
+        state: "awaiting_reply",
+        comments: [{ id: 1, body: "Use 15m or 1h?" }],
+      };
+      const f = await render(api);
+      const dock = q(f, '[data-testid="resolution-dock"]')!;
+      expect(dock.getAttribute("data-aurora-state")).toBe("anticipating");
+      expect(q(f, ".status-pill svg")).not.toBeNull();
+      expect(q(f, '[data-testid="actor-chip"]')).not.toBeNull();
+
+      const ta = q<HTMLTextAreaElement>(f, '[data-testid="reply-input"]')!;
+      ta.value = "Use 15m with refresh token rotation.";
+      ta.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      expect(dock.getAttribute("data-aurora-state")).toBe("receiving");
+      expect(
+        Number(dock.style.getPropertyValue("--aurora-intensity")),
+      ).toBeGreaterThan(0.35);
+
+      q<HTMLButtonElement>(f, '[data-testid="send-reply"]')!.click();
+      await f.whenStable();
+      // Once answered, pinned item #44 has left the Inbox so dock settles to idle.
+      await new Promise((r) => setTimeout(r, 15));
+      await f.whenStable();
+      expect(["responding", "idle"]).toContain(
+        dock.getAttribute("data-aurora-state"),
+      );
+    });
   });
 });

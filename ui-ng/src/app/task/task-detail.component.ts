@@ -98,7 +98,11 @@ export function duration(from?: string, to?: string): string {
   imports: [RouterLink, TipDirective, NgTemplateOutlet, ConfirmDialogComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "../shared/work-surface.css",
+  styleUrls: [
+    "../shared/work-surface.css",
+    "./task-detail.component.css",
+    "../shared/conversation.css",
+  ],
   template: `
     <section
       class="view-panel is-active task-page"

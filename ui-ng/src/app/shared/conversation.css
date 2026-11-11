@@ -1,0 +1,116 @@
+/* Shared conversation thread and composer styles (Sessions & Task Detail). */
+
+.chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-log:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.msg {
+  max-width: 72ch;
+  padding: 10px 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface);
+  overflow-wrap: anywhere;
+}
+
+.msg.is-human {
+  align-self: flex-end;
+  background: var(
+    --md-sys-color-primary-container,
+    var(--md-sys-color-secondary-container)
+  );
+  color: var(
+    --md-sys-color-on-primary-container,
+    var(--md-sys-color-on-secondary-container)
+  );
+  border-color: transparent;
+}
+
+.msg.is-handover {
+  border-style: dashed;
+}
+
+.msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.msg.is-human .msg-meta {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.msg-author {
+  font-weight: 500;
+}
+
+.msg-body > :first-child {
+  margin-top: 0;
+}
+
+.msg-body > :last-child {
+  margin-bottom: 0;
+}
+
+.msg-body pre {
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  font-size: 12px;
+}
+
+.msg-body code {
+  font-family: var(--grain-font-mono, monospace);
+  font-size: 0.92em;
+}
+
+.msg-body a {
+  color: var(--md-sys-color-primary);
+}
+
+.chat-composer .reply-textarea {
+  box-sizing: border-box;
+  font-family: var(--grain-font-body);
+  font-size: 14px;
+}
+
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.composer-hint {
+  font-size: 12px;
+}

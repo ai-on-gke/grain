@@ -18,6 +18,7 @@ import {
   ElementRef,
   type OnDestroy,
   type OnInit,
+  ViewEncapsulation,
   computed,
   effect,
   inject,
@@ -31,6 +32,8 @@ import { Router, RouterLink } from "@angular/router";
 import type { Comment } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { ActorChipComponent } from "../shared/actor-chip.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import {
   DIRECTOR_ID,
@@ -61,7 +64,9 @@ export function clock(iso: string | undefined, now = new Date()): string {
 // phone the list and the conversation are separate screens.
 @Component({
   selector: "g-sessions-page",
-  imports: [RouterLink, TipDirective],
+  imports: [RouterLink, TipDirective, StatusIconComponent, ActorChipComponent],
+  encapsulation: ViewEncapsulation.None,
+  styleUrls: ["./sessions-page.component.css", "../shared/conversation.css"],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",
@@ -120,9 +125,11 @@ export function clock(iso: string | undefined, now = new Date()): string {
                 >
                   <span class="session-item-top">
                     <span class="s-name">{{ r.session.title }}</span>
-                    <span [class]="'status-pill ' + st.tone">{{
-                      st.label
-                    }}</span>
+                    <span [class]="'status-pill ' + st.tone"
+                      ><g-status-icon [tone]="st.tone" [kind]="st.label" />{{
+                        st.label
+                      }}</span
+                    >
                   </span>
                   @if (r.line) {
                     <span class="session-line">{{ r.line }}</span>
@@ -158,7 +165,9 @@ export function clock(iso: string | undefined, now = new Date()): string {
                 data-testid="chat-status"
                 role="status"
                 [gTip]="st.tip"
-                >{{ st.label }}<span class="sr-only">: {{ st.tip }}</span></span
+                ><g-status-icon [tone]="st.tone" [kind]="st.label" />{{
+                  st.label
+                }}<span class="sr-only">: {{ st.tip }}</span></span
               >
               @if (st.live && canStop()) {
                 <button
@@ -325,7 +334,12 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   [attr.data-testid]="'msg-' + c.id"
                 >
                   <span class="msg-meta">
-                    <span class="msg-author">{{ author(c) }}</span>
+                    <span class="msg-author"
+                      ><g-actor-chip
+                        [label]="author(c)"
+                        [kind]="c.authorKind"
+                        [behalf]="c.onBehalfOfLabel || c.onBehalfOf"
+                    /></span>
                     @if (c.handover) {
                       <span class="status-pill neutral">Handover note</span>
                     }

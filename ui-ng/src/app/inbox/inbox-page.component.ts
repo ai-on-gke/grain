@@ -44,8 +44,11 @@ import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type { DiffPreview, Task, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { HelpService } from "../services/help.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ThemeService } from "../services/theme.service";
+import { ActorChipComponent } from "../shared/actor-chip.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import {
   type FilterId,
   type InboxAction,
@@ -120,7 +123,11 @@ const ONE_KEY = new Set(["approve"]);
   changeDetection: ChangeDetectionStrategy.OnPush,
   // The work-surface rules load with this page, not the shell.
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "../shared/work-surface.css",
+  styleUrls: [
+    "../shared/work-surface.css",
+    "./inbox-queue.css",
+    "./inbox-inspector.css",
+  ],
   template: `
     <section
       class="view-panel is-active"
@@ -347,9 +354,12 @@ const ONE_KEY = new Set(["approve"]);
                               }}</span>
                             </span>
                             <span class="row-line2">
-                              <span [class]="'status-pill ' + e.pillTone">{{
-                                e.pillLabel
-                              }}</span>
+                              <span [class]="'status-pill ' + e.pillTone"
+                                ><g-status-icon
+                                  [tone]="e.pillTone"
+                                  [kind]="e.kind"
+                                />{{ e.pillLabel }}</span
+                              >
                               <span class="row-summary muted">{{
                                 e.summary
                               }}</span>
@@ -371,8 +381,11 @@ const ONE_KEY = new Set(["approve"]);
                                 }
                                 @if (e.owner) {
                                   <span class="row-owner muted"
-                                    >· {{ e.owner }}</span
-                                  >
+                                    >·
+                                    <g-actor-chip
+                                      [label]="e.owner"
+                                      [kind]="e.task?.authorKind"
+                                  /></span>
                                 }
                                 @if (e.task && chip(e.task); as c) {
                                   <span
@@ -493,9 +506,11 @@ const ONE_KEY = new Set(["approve"]);
             <div class="inspector-header">
               <div class="inspector-header-row1">
                 <div class="inspector-meta-cluster">
-                  <span [class]="'status-pill ' + sel.pillTone">{{
-                    sel.pillLabel
-                  }}</span>
+                  <span [class]="'status-pill ' + sel.pillTone"
+                    ><g-status-icon [tone]="sel.pillTone" [kind]="sel.kind" />{{
+                      sel.pillLabel
+                    }}</span
+                  >
                   @if (sel.taskLink) {
                     <a
                       class="btn-text"
@@ -586,9 +601,17 @@ const ONE_KEY = new Set(["approve"]);
                   {{ sel.ref }} · {{ sel.title }}
                 </h2>
                 <div class="inspector-provenance tabular muted">
-                  {{ sel.repo || "no repository"
-                  }}{{ sel.owner ? " · owned by " + sel.owner : ""
-                  }}{{ sel.at ? " · " + ago(sel.at) + " ago" : "" }}
+                  {{ sel.repo || "no repository" }}
+                  @if (sel.owner) {
+                    <span>
+                      · owned by
+                      <g-actor-chip
+                        [label]="sel.owner"
+                        [kind]="sel.task?.authorKind"
+                      />
+                    </span>
+                  }
+                  {{ sel.at ? " · " + ago(sel.at) + " ago" : "" }}
                   @if (sel.task && chip(sel.task); as c) {
                     <span
                       [class]="'ci-chip ' + c.tone"
@@ -633,7 +656,8 @@ const ONE_KEY = new Set(["approve"]);
 
             <div
               class="resolution-dock aurora-surface"
-              data-aurora-state="anticipating"
+              [attr.data-aurora-state]="dockAuroraState()"
+              [style.--aurora-intensity]="dockAuroraIntensity()"
               data-testid="resolution-dock"
             >
               @switch (sel.kind) {
@@ -1104,13 +1128,21 @@ const ONE_KEY = new Set(["approve"]);
       <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
     }
   `,
-  imports: [NgTemplateOutlet, RouterLink, ConfirmDialogComponent, TipDirective],
+  imports: [
+    NgTemplateOutlet,
+    RouterLink,
+    ConfirmDialogComponent,
+    TipDirective,
+    StatusIconComponent,
+    ActorChipComponent,
+  ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
   protected readonly wsStore = inject(WorkstreamsStore);
   protected readonly access = inject(AccessService);
   protected readonly theme = inject(ThemeService);
+  private readonly helpService = inject(HelpService);
   private readonly api = inject(GrainApi);
   private readonly host = inject(ElementRef<HTMLElement>);
   private readonly router = inject(Router);
@@ -1161,6 +1193,25 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   protected readonly draft = signal("");
   protected readonly target = signal<ReplyTarget | null>(null);
+  private readonly respondingPulse = signal(false);
+  private respondTimer: ReturnType<typeof setTimeout> | null = null;
+
+  protected readonly dockAuroraState = computed<
+    "idle" | "anticipating" | "receiving" | "processing" | "responding"
+  >(() => {
+    const sel = this.store.selected();
+    if (!sel || sel.gone) return "idle";
+    if (this.store.busy()) return "processing";
+    if (this.respondingPulse()) return "responding";
+    if (this.draft().length > 0) return "receiving";
+    return "anticipating";
+  });
+
+  protected readonly dockAuroraIntensity = computed(() => {
+    const len = this.draft().length;
+    if (!len) return 0.45;
+    return Number(Math.min(0.85, 0.35 + Math.min(len, 180) / 360).toFixed(2));
+  });
   protected readonly short = repoShort;
   protected chip(t: Task) {
     const { task, hasDetail } = withDetailGates(t, this.store.details()[t.id]);
@@ -1277,9 +1328,19 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.respondTimer) clearTimeout(this.respondTimer);
     this.store.wsTaskIds.set(null);
     this.wsStore.selectedKey.set(null);
     this.sp.detach();
+  }
+
+  private pulseResponding(): void {
+    if (this.respondTimer) clearTimeout(this.respondTimer);
+    this.respondingPulse.set(true);
+    this.respondTimer = setTimeout(() => {
+      this.respondTimer = null;
+      this.respondingPulse.set(false);
+    }, 450);
   }
 
   // Focus leaving the list lets it follow the server again, unless a row
@@ -1393,7 +1454,10 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     body?: unknown,
   ): Promise<boolean> {
     const ok = await this.store.actByKey(key, actionOrId, body);
-    if (ok) this.focusAfterAction();
+    if (ok) {
+      this.pulseResponding();
+      this.focusAfterAction();
+    }
     return ok;
   }
 
@@ -1471,6 +1535,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       replyRefusal(t, tgt.taskId, asked),
     );
     if (ok) {
+      this.pulseResponding();
       this.draft.set("");
       this.target.set(null);
       this.focusAfterAction();
@@ -1694,6 +1759,12 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       }
       return;
     }
+    if (
+      this.helpService.isOpen() ||
+      document.querySelector('[aria-modal="true"], #account-popover')
+    ) {
+      return;
+    }
     // j, k and x are character-key shortcuts: off when the person has
     // turned shortcuts off (WCAG 2.1.4). Escape always works.
     const letters = this.keyboard.enabled() && !ev.repeat;
@@ -1760,7 +1831,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         ) as HTMLElement | null
       )?.focus();
     } else if (letters && ev.key === "?") {
-      this.openHelp();
+      if (this.helpService.attached()) {
+        this.helpService.open("about");
+      } else {
+        this.openHelp();
+      }
     } else if (
       ev.key === "Enter" &&
       pinned &&

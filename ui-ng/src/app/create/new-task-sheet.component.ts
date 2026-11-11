@@ -16,6 +16,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  ViewEncapsulation,
   computed,
   effect,
   inject,
@@ -60,6 +61,8 @@ import {
 // hands the draft to the Director to file in conversation.
 @Component({
   selector: "g-new-task-sheet",
+  encapsulation: ViewEncapsulation.None,
+  styleUrl: "./new-task-sheet.component.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",

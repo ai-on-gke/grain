@@ -12,11 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
+import {
+  Injectable,
+  NgZone,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task, TaskDetail } from "../api/models";
-import { errorText } from "../sessions/session-view";
+import { TaskFeedStore } from "../services/task-feed.service";
 import {
   type Agent,
   type SandboxReading,
@@ -34,21 +42,23 @@ export const DETAIL_CONCURRENCY = 4;
 
 type Host = { cpus?: number; loadAverage1?: number };
 
-// AgentsStore is the Agents screen's state: running tasks from the same
-// ETag task poll as Tasks, each run's current attempt, sandbox CPU probes
-// where the backend has them, and a short history of activity updates
-// for the sparklines. Polling pauses while the tab is hidden.
+// AgentsStore is the Live view over TaskFeedStore: running tasks come
+// directly from the shared open-task feed, enriched with each run's
+// current attempt, sandbox CPU probes where the backend has them, and a
+// short history of activity updates for the sparklines.
 @Injectable({ providedIn: "root" })
 export class AgentsStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
+  private readonly feed = inject(TaskFeedStore);
   private readonly zone = inject(NgZone);
 
-  readonly tasks = signal<Task[]>([]);
+  readonly tasks = this.feed.tasks;
   readonly details = signal<Record<string, TaskDetail>>({});
   readonly readings = signal<SandboxReading[]>([]);
   readonly host = signal<Host | null>(null);
-  readonly loaded = signal(false);
+  private readonly ownLoaded = signal(false);
+  readonly loaded = computed(() => this.ownLoaded() || this.feed.loaded());
   readonly loadError = signal<string | null>(null);
   readonly now = signal(Date.now());
   // Activity update times per task, for the sparkline.
@@ -63,16 +73,16 @@ export class AgentsStore {
     );
   });
 
+  private active = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private slowTimer: ReturnType<typeof setInterval> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
   private refreshing: Promise<void> | null = null;
   private pending = false;
   private slowRefreshing: Promise<void> | null = null;
-  // Detail reads in flight, and when a read last failed, so the fast poll
-  // neither repeats a pending read nor retries a failing one every 3 s.
   private readonly detailInFlight = new Set<string>();
   private readonly detailFailedAt = new Map<string, number>();
+
   private readonly onVisibility = (): void => {
     if (document.visibilityState === "visible") {
       this.resume();
@@ -81,9 +91,29 @@ export class AgentsStore {
     }
   };
 
+  constructor() {
+    // Keep sparkline history and missing details in sync whenever any
+    // surface refreshes TaskFeedStore.
+    effect(() => {
+      const list = this.feed.tasks();
+      const feedLoaded = this.feed.loaded();
+      untracked(() => {
+        if (!feedLoaded && list.length === 0) return;
+        this.record(list);
+        this.now.set(Date.now());
+        if (this.active) {
+          this.fetchMissingDetails(list);
+        }
+      });
+    });
+  }
+
   start(): void {
-    // Cards from an earlier visit must not show old quiet times.
     this.now.set(Date.now());
+    if (!this.active) {
+      this.active = true;
+      this.feed.start(true);
+    }
     this.eventSub ??= this.events.events().subscribe(() => void this.refresh());
     document.addEventListener("visibilitychange", this.onVisibility);
     if (document.visibilityState === "hidden") {
@@ -95,6 +125,10 @@ export class AgentsStore {
   }
 
   stop(): void {
+    if (this.active) {
+      this.active = false;
+      this.feed.stop(true);
+    }
     this.pause();
     this.eventSub?.unsubscribe();
     this.eventSub = null;
@@ -124,9 +158,6 @@ export class AgentsStore {
     this.slowTimer = null;
   }
 
-  // refresh reads the task list. One read at a time: a call while one is
-  // in flight asks for one more read after it, so answers never land out
-  // of order.
   refresh(): Promise<void> {
     if (this.refreshing) {
       this.pending = true;
@@ -143,26 +174,23 @@ export class AgentsStore {
   }
 
   private async load(): Promise<void> {
-    try {
-      const r = await this.api.getIfChanged<Task[]>("GET /api/tasks");
-      // An unchanged answer still carries the newest body: another page
-      // may have taken the fresh copy (getIfChanged shares tags per URL).
-      const list = Array.isArray(r.body) ? r.body : [];
-      if (r.changed || list !== this.tasks()) {
-        this.tasks.set(list);
-      }
+    const ok = await this.feed.refresh();
+    if (ok) {
       this.record(this.tasks());
       this.loadError.set(null);
-      this.loaded.set(true);
-    } catch (err) {
+      this.ownLoaded.set(true);
+    } else {
       this.loadError.set(
-        `Running tasks could not be read: ${errorText(err)}. This page tries again on its own.`,
+        `Running tasks could not be read: ${this.feed.loadError() ?? "The request failed."}. This page tries again on its own.`,
       );
     }
     this.now.set(Date.now());
-    // A run that appeared since the last slow read gets its detail now.
+    this.fetchMissingDetails(this.tasks());
+  }
+
+  private fetchMissingDetails(list: readonly Task[]): void {
     const now = Date.now();
-    const missing = running(this.tasks()).filter(
+    const missing = running(list).filter(
       (t) =>
         !this.details()[t.id] &&
         now - (this.detailFailedAt.get(t.id) ?? 0) >= SLOW_POLL_MS,
@@ -208,7 +236,6 @@ export class AgentsStore {
         Promise.resolve().then(worker),
       ),
     );
-    // Keep details for running tasks only.
     const live = new Set(running(this.tasks()).map((t) => t.id));
     const merged: Record<string, TaskDetail> = {};
     for (const [id, d] of Object.entries({ ...this.details(), ...got })) {
@@ -229,15 +256,11 @@ export class AgentsStore {
       this.readings.set(r?.sandboxes ?? []);
       this.host.set(r?.host ?? null);
     } catch {
-      // No probe data (a role without deployment:read, or no backend
-      // support): cards show CPU as unknown.
       this.readings.set([]);
       this.host.set(null);
     }
   }
 
-  // record keeps when each running task last reported, for sparklines,
-  // and drops times older than the window and tasks no longer running.
   private record(list: readonly Task[]): void {
     const now = Date.now();
     const h: Record<string, number[]> = {};
@@ -257,8 +280,6 @@ export class AgentsStore {
     this.history.set(h);
   }
 
-  // contact sends one notice to every running agent (the classic "Send a
-  // notice to all currently running task agents").
   async contact(message: string): Promise<number> {
     const r = await this.api.post<{ delivered_count?: number }>(
       "POST /api/deployment/broadcast",
