@@ -115,6 +115,11 @@ type ImageConfig struct {
 	// Nil skips the check, and the signature step says so on every
 	// upgrade: see verify.go for why that warns rather than refuses.
 	VerifyCmd []string
+	// ReviewedMerge, when set, also refuses an image whose commit did not
+	// reach its branch through a reviewed merge, asked of the forge in the
+	// signature step after the signature (reviewed.go). It needs
+	// VerifyCmd: an upgrade with this set and no VerifyCmd is refused.
+	ReviewedMerge *ReviewedMergeConfig
 	// RemoveCmd removes an image ref, appended as its last argument;
 	// {"docker", "image", "rm"} when left nil. Overridable so a test can
 	// swap in something that needs no docker daemon. Never give it -f:
@@ -139,6 +144,13 @@ type ImageConfig struct {
 	// pulling one it will never run would be a slow no-op with a real
 	// failure mode of its own.
 	SandboxImageArgs []string
+	// EditionArgs, when set, is the subcommand the verify step runs in
+	// the pulled image to ask which edition it is ("version", "--json":
+	// its "edition" stamp, absent for core). On a deployment with a
+	// Track, an image that answers with another edition is refused
+	// before anything cuts over, unless the upgrade is an explicit
+	// edition switch (edition.go). Unset asks nothing.
+	EditionArgs []string
 	// SandboxImagePin is the sandbox image this deployment's own
 	// configuration pins on purpose, when it pins one --
 	// pkg/cli/daemon.go's chooseSandboxImage, which is also what
@@ -368,12 +380,21 @@ func (u *Upgrader) effectiveRepository() (string, error) {
 	// (StartImage) -- stay on that shifted repository across subsequent
 	// upgrades, provided the shift is still a permitted one. A re-run of
 	// scripts/setup.sh rewrites both, so it is what moves a deployment back.
+	//
+	// Except onto another edition's repository: a ref file naming one is
+	// a deployment an edition switch (or, before grain/task-4153, a
+	// mistaken pick on the pane) moved, and the next ordinary upgrade
+	// goes back to this track's own repository rather than quietly
+	// carrying on in the other edition. Staying there is another
+	// explicit switch.
 	if base != "" && u.cfg.Image.RefFile != "" {
 		if prevRef, err := u.readImageRef(); err == nil {
 			prevRepo := repositoryOf(prevRef)
 			if prevRepo != "" && prevRepo != base &&
 				installtrack.CanTransitionRepository(base, prevRepo, u.cfg.Image.AllowedRepositories...) {
-				return installtrack.RepositoryForTrack(prevRepo, u.cfg.Image.Track), nil
+				if _, cross := u.otherEdition(prevRepo); !cross {
+					return installtrack.RepositoryForTrack(prevRepo, u.cfg.Image.Track), nil
+				}
 			}
 		}
 	}

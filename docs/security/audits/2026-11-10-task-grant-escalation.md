@@ -108,7 +108,7 @@ Every task-creation entry point — the browser form (`POST /api/tasks`), `grain
   originally `validateSandboxShape` (`pkg/ui/client.go`) validated only lower bounds
   (`>= 1` CPU, `>= 128` MB RAM, `>= 0` GB disk), and neither `filingEscalation` nor
   `propose_task` enforced an upper bound or role ceiling. Task 4018 adds
-  `grain_config.sandbox_shape_limits` (`model.SandboxShapeLimits`, schema 136, settable as
+  `grain_config.sandbox_shape_limits` (`model.SandboxShapeLimits`, schema 137, settable as
   `sandboxShapeLimits` through `PUT /api/settings`):
   - a deployment-wide maximum (defaults 32 vCPU, 128 GiB memory, 1024 GiB disk) that binds
     every caller, `grain/operator` included, on create, `PATCH`, approve, run-now, and

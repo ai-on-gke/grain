@@ -340,7 +340,13 @@ const CLOSE_SYNC_WINDOW_MS = 60 * 60 * 1000;
 // unrecoverable) -- so this can skip a state without that being a bug to
 // chase. One it could only place approximately comes flagged inferred,
 // and its time is shown as approximate.
-function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
+function timelineEvents(
+  t,
+  zone,
+  now = Date.now(),
+  onOpenTask = null,
+  context = null,
+) {
   const events = [];
   const push = (e) => events.push({ ...e, seq: events.length });
   const transitions = t.transitions || [];
@@ -685,7 +691,17 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
   });
   prEvents.forEach(push);
 
+  // A durable task's compaction cursor (DT-15): comments at or before it
+  // are folded into a handover and left out of prompts, so they are
+  // drawn collapsed -- still here, and still opened by a deep link
+  // (CommentDeepLink's revealComment opens the <details>). The newest
+  // handover says when it is stale.
+  const compactedThrough = context?.compacted_through || 0;
+  const lastHandover = (t.comments || []).findLastIndex((c) => c.handover);
   const commentEvents = (t.comments || []).map((c, i) => {
+    const summarised =
+      compactedThrough > 0 && c.id != null && c.id <= compactedThrough;
+    const stale = context?.handover_stale && i === lastHandover;
     // onBehalfOf is set when grain relayed somebody else's words -- a
     // question from a dispatched run reads as grain speaking for an
     // agent, not as grain's own.
@@ -709,6 +725,8 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               {who} · {c.authorKind}
               {c.filedVia ? ` · from ${c.filedVia}` : ""}
               {c.handover ? " · handover" : ""}
+              {stale ? " · stale" : ""}
+              {summarised ? " · summarised" : ""}
             </span>
             <span className="timeline-comment-actions">
               {c.id != null && (
@@ -752,10 +770,19 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               <strong>{c.summary}</strong>
             </p>
           )}
-          {c.body && (
-            <ExpandableMarkdown className="timeline-comment-body">
-              {c.authorKind === "automation" ? linkTaskRefs(c.body) : c.body}
-            </ExpandableMarkdown>
+          {c.body && summarised ? (
+            <details className="timeline-summarised">
+              <summary>Summarised by compaction -- show</summary>
+              <ExpandableMarkdown className="timeline-comment-body">
+                {c.authorKind === "automation" ? linkTaskRefs(c.body) : c.body}
+              </ExpandableMarkdown>
+            </details>
+          ) : (
+            c.body && (
+              <ExpandableMarkdown className="timeline-comment-body">
+                {c.authorKind === "automation" ? linkTaskRefs(c.body) : c.body}
+              </ExpandableMarkdown>
+            )
           )}
           <AttachmentLinks taskId={t.id} attachments={c.attachments} />
         </>
@@ -793,12 +820,18 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
 // put: under a newest-first feed it sits above the list, so replying to
 // what a run just said is never a scroll past the whole history to reach
 // the box.
-export default function Timeline({ t, act, showError, onOpenTask }) {
+export default function Timeline({
+  t,
+  context = null,
+  act,
+  showError,
+  onOpenTask,
+}) {
   const textareaRef = useRef(null);
   const zone = useTimeZone();
   const { order } = useTimelineOrder();
   const newestFirst = order === "newest";
-  const events = timelineEvents(t, zone, Date.now(), onOpenTask);
+  const events = timelineEvents(t, zone, Date.now(), onOpenTask, context);
   const ordered = newestFirst ? [...events].reverse() : events;
   // openAttempt is the attempt (bwsalmon/agents#446's own Attempt shape,
   // off t.attempts) whose transcript is open, or null -- local to

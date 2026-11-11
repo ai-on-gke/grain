@@ -972,7 +972,17 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version:     136,
+		Version: 136,
+		Description: "add task_context and task_brief_edit, a durable task's compaction cursor, handover version " +
+			"and current brief (grain/task-4107)",
+		Statements: []string{
+			taskContextTable,
+			taskBriefEditTable,
+			taskBriefEditTaskIndex,
+		},
+	},
+	{
+		Version:     137,
 		Description: "add grain_config.sandbox_shape_limits, the deployment and per-role ceilings on a task's sandbox shape (grain/task-4018)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_shape_limits` TEXT NOT NULL DEFAULT ''",
