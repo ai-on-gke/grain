@@ -95,6 +95,22 @@ export function questionOf(
   return c?.body || entry.summary;
 }
 
+// What a batch answer is called once given, for the snackbar.
+const PAST: Record<string, string> = {
+  approve: "Approved",
+  defer: "Deferred",
+  close: "Closed",
+  decline: "Declined",
+  acknowledge: "Acknowledged",
+  submit: "Submitted",
+  retry: "Retried",
+  "retry-merge": "Retried the merge of",
+};
+
+// Answers the `a` key may give in one keystroke; anything else (approving
+// a host script, submitting a merge) asks first.
+const ONE_KEY = new Set(["approve"]);
+
 @Component({
   selector: "g-inbox-page",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -181,7 +197,7 @@ export function questionOf(
         #split
         [class.is-collapsed]="collapsed()"
         [class.is-dragging]="dragging()"
-        [style.--queue-w.%]="ratioPct()"
+        [style.--queue-w.%]="ratioExact()"
       >
         <section
           class="queue-pane"
@@ -218,10 +234,14 @@ export function questionOf(
                     type="button"
                     class="btn-text group-select"
                     [attr.data-testid]="'group-select-' + group.id"
-                    [attr.aria-label]="'Select all in ' + group.title"
+                    [attr.aria-label]="
+                      (allChecked(group.entries)
+                        ? 'Clear the selection in '
+                        : 'Select all in ') + group.title
+                    "
                     (click)="selectGroup(group.entries)"
                   >
-                    Select all
+                    {{ allChecked(group.entries) ? "Clear" : "Select all" }}
                   </button>
                   @if (approvable(group.entries); as n) {
                     <button
@@ -301,7 +321,7 @@ export function questionOf(
               aria-label="Selected items"
               data-testid="batch-bar"
             >
-              <span class="batch-count tabular"
+              <span class="batch-count tabular" role="status"
                 >{{ store.checked().size }} selected
                 @if (outsideFilter(); as n) {
                   <span class="muted" data-testid="outside-filter"
@@ -343,7 +363,7 @@ export function questionOf(
           aria-orientation="vertical"
           aria-controls="queue-pane"
           aria-label="Resize the list"
-          [attr.aria-valuemin]="minPct()"
+          [attr.aria-valuemin]="collapsed() ? 0 : minPct()"
           [attr.aria-valuemax]="maxPct()"
           [attr.aria-valuenow]="collapsed() ? 0 : ratioPct()"
           [attr.aria-valuetext]="
@@ -355,7 +375,7 @@ export function questionOf(
           (pointerdown)="onResizeStart($event)"
           (pointermove)="onResizeMove($event)"
           (pointerup)="onResizeEnd($event)"
-          (pointercancel)="onResizeCancel()"
+          (pointercancel)="onResizeEnd($event)"
           (lostpointercapture)="onResizeEnd($event)"
           (dblclick)="resetSplit()"
           (keydown)="onResizerKey($event)"
@@ -880,7 +900,7 @@ export function questionOf(
       </ng-template>
 
       @if (helpOpen()) {
-        <div class="scrim" aria-hidden="true"></div>
+        <div class="scrim" aria-hidden="true" (click)="closeHelp()"></div>
         <div
           class="g-dialog"
           role="dialog"
@@ -921,7 +941,7 @@ export function questionOf(
               type="button"
               class="btn-primary"
               data-testid="inbox-help-close"
-              (click)="helpOpen.set(false)"
+              (click)="closeHelp()"
             >
               Close
             </button>
@@ -987,6 +1007,16 @@ export class InboxPageComponent implements OnInit {
   protected readonly dragging = signal(false);
   private readonly stage = signal(0);
   private dragFrom: number | null = null;
+  // The column gets the exact share; ARIA gets a whole percent.
+  protected readonly ratioExact = computed(
+    () =>
+      (this.stage() ? clampRatio(this.ratio(), this.stage()) : this.ratio()) *
+      100,
+  );
+  private lastUndoSnack: number | null = null;
+  private dragWasCollapsed = false;
+  private helpReturn: HTMLElement | null = null;
+  private resizeObs: ResizeObserver | null = null;
   protected readonly ratioPct = computed(() =>
     percent(
       this.stage() ? clampRatio(this.ratio(), this.stage()) : this.ratio(),
@@ -1059,7 +1089,16 @@ export class InboxPageComponent implements OnInit {
 
   constructor() {
     // The divider's bounds depend on the split's width, known once drawn.
-    afterNextRender(() => this.measure());
+    afterNextRender(() => {
+      this.measure();
+      // The rail or a window change can resize the split without a window
+      // resize event.
+      const el = this.split()?.nativeElement;
+      if (el && typeof ResizeObserver === "function") {
+        this.resizeObs = new ResizeObserver(() => this.measure());
+        this.resizeObs.observe(el);
+      }
+    });
     // A new selection starts with a clean dock. Only the selected row's key
     // is tracked: every refresh (an SSE event, another row answered) builds
     // fresh entry objects, and resetting on those would wipe a reply the
@@ -1168,8 +1207,7 @@ export class InboxPageComponent implements OnInit {
       message: `${label}: ${n} selected ${n === 1 ? "item" : "items"}? Each is answered as if you had pressed its own button.`,
       accept: label,
       destructive: id === "close" || id === "decline",
-      run: () =>
-        this.batch(id, label.replace(/ all$/, "d").replace(/ed?d$/, "ed")),
+      run: () => this.batch(id, PAST[id] ?? "Done:"),
     });
   }
 
@@ -1267,7 +1305,11 @@ export class InboxPageComponent implements OnInit {
     if (ev.button !== 0) return;
     this.measure();
     this.dragFrom = this.ratio();
+    this.dragWasCollapsed = this.collapsed();
     this.dragging.set(true);
+    // Escape cancels a drag wherever focus is: the separator does not take
+    // focus on pointerdown, so its own keydown would not see the key.
+    window.addEventListener("keydown", this.onDragEscape, true);
     (ev.currentTarget as HTMLElement).setPointerCapture?.(ev.pointerId);
     ev.preventDefault();
   }
@@ -1282,8 +1324,16 @@ export class InboxPageComponent implements OnInit {
     this.ratio.set(clampRatio(x / w, w));
   }
 
+  private readonly onDragEscape = (ev: KeyboardEvent): void => {
+    if (ev.key !== "Escape" || !this.dragging()) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.onResizeCancel();
+  };
+
   protected onResizeEnd(ev?: Event): void {
     if (!this.dragging()) return;
+    window.removeEventListener("keydown", this.onDragEscape, true);
     this.dragging.set(false);
     this.dragFrom = null;
     saveRatio(this.ratio());
@@ -1296,7 +1346,9 @@ export class InboxPageComponent implements OnInit {
   // Escape during a drag puts the divider back where it started.
   protected onResizeCancel(): void {
     if (!this.dragging()) return;
+    window.removeEventListener("keydown", this.onDragEscape, true);
     if (this.dragFrom !== null) this.ratio.set(this.dragFrom);
+    if (this.dragWasCollapsed) this.collapsed.set(true);
     this.dragging.set(false);
     this.dragFrom = null;
   }
@@ -1351,6 +1403,11 @@ export class InboxPageComponent implements OnInit {
     this.store.checked.set(next);
   }
 
+  protected allChecked(entries: InboxEntry[]): boolean {
+    const c = this.store.checked();
+    return entries.length > 0 && entries.every((e) => c.has(e.key));
+  }
+
   protected approvable(entries: InboxEntry[]): number {
     return entries.filter((e) =>
       e.actions.some(
@@ -1384,21 +1441,55 @@ export class InboxPageComponent implements OnInit {
     verb: string,
     keys?: readonly string[],
   ): Promise<void> {
-    const { done } = await this.store.actAll(id, keys);
-    if (!done.length) return;
-    const undoable = ["approve", "defer", "close", "decline"].includes(id);
-    this.snackbar.show(
-      `${verb} ${done.length === 1 ? `#${done[0]}` : `${done.length} tasks`}`,
-      undoable
-        ? { label: "Undo", run: () => this.store.undoAll(id, done) }
+    const { count, undo } = await this.store.actAll(id, keys);
+    if (!count) return;
+    const snack = this.snackbar.show(
+      `${verb} ${count === 1 ? "1 item" : `${count} items`}`,
+      undo
+        ? { label: "Undo", run: () => this.store.undoAll(undo.route, undo.ids) }
         : undefined,
+    );
+    this.lastUndoSnack = undo ? snack.id : null;
+  }
+
+  // j and k move focus with the selection, so Enter acts on what is
+  // selected, not on the row clicked last.
+  private focusRow(): void {
+    const row = (this.host.nativeElement as HTMLElement).querySelector(
+      ".queue-row.is-selected",
+    );
+    row?.scrollIntoView?.({ block: "nearest" });
+    const main = row?.querySelector(".row-main") as HTMLElement | null;
+    if (main && this.host.nativeElement.contains(document.activeElement))
+      main.focus();
+  }
+
+  // Enter opens the selected task from its own row or from nowhere in
+  // particular, never from another control (a checkbox, a reply box).
+  private isRowOrPage(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el || el === document.body) return true;
+    if (el.closest(".queue-row.is-selected .row-main")) return true;
+    return !el.closest("a,button,input,textarea,select");
+  }
+
+  protected openHelp(): void {
+    this.helpReturn = document.activeElement as HTMLElement | null;
+    this.helpOpen.set(true);
+    setTimeout(() =>
+      (
+        this.host.nativeElement.querySelector(
+          '[data-testid="inbox-help-close"]',
+        ) as HTMLElement | null
+      )?.focus(),
     );
   }
 
-  private focusRow(): void {
-    this.host.nativeElement
-      .querySelector(".queue-row.is-selected")
-      ?.scrollIntoView?.({ block: "nearest" });
+  protected closeHelp(): void {
+    this.helpOpen.set(false);
+    const back = this.helpReturn;
+    this.helpReturn = null;
+    if (back?.isConnected) setTimeout(() => back.focus());
   }
 
   @HostListener("document:keydown", ["$event"])
@@ -1407,6 +1498,13 @@ export class InboxPageComponent implements OnInit {
     // mark it handled; typing and widgets keep their keys.
     if (ev.defaultPrevented || isTypingTarget(ev.target)) return;
     if (ev.metaKey || ev.ctrlKey || ev.altKey || this.confirming()) return;
+    if (this.helpOpen()) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        this.closeHelp();
+      }
+      return;
+    }
     // j, k and x are character-key shortcuts: off when the person has
     // turned shortcuts off (WCAG 2.1.4). Escape always works.
     const letters = this.keyboard.enabled() && !ev.repeat;
@@ -1416,21 +1514,41 @@ export class InboxPageComponent implements OnInit {
     else if (letters && ev.key === "x") {
       if (sel) this.store.toggleChecked(sel.key);
     } else if (letters && ev.key === "*") {
-      this.store.checked.set(new Set(this.store.visible().map((e) => e.key)));
-    } else if (letters && ev.key === "A" && ev.shiftKey) {
-      if (this.store.checked().size)
-        this.confirmBulk("approve", "Approve all", this.store.checked().size);
-    } else if (letters && ev.key === "a") {
-      // Resolve: the selected row's primary answer, through its own
-      // confirmation when it has one.
+      // Adds the filter's rows to whatever is already selected.
+      this.store.checked.set(
+        new Set([
+          ...this.store.checked(),
+          ...this.store.visible().map((e) => e.key),
+        ]),
+      );
+    } else if (letters && ev.code === "KeyA" && ev.shiftKey) {
+      const n =
+        this.bulkActions().find((b) => b.id === "approve")?.allowed ?? 0;
+      if (n) this.confirmBulk("approve", "Approve all", n);
+    } else if (letters && ev.code === "KeyA" && !ev.shiftKey) {
+      // Resolve: the selected row's primary answer. Only a plain approval
+      // goes through in one keystroke; anything else (approving a host
+      // script, submitting a merge) asks first.
       const primary = sel?.actions.find((x) => x.variant === "primary");
-      if (primary && this.access.can(primary.route, primary.repo))
-        this.run(primary);
+      if (primary && this.access.can(primary.route, primary.repo)) {
+        if (ONE_KEY.has(primary.id) || primary.confirm) this.run(primary);
+        else
+          this.confirming.set({
+            title: primary.label,
+            message: `${primary.label}: ${sel?.title ?? "this item"}?`,
+            accept: primary.label,
+            destructive: !!primary.destructive,
+            run: () => this.store.act(primary),
+          });
+      }
     } else if (letters && ev.key === "e") {
       setTimeout(() => this.replyBox()?.nativeElement.focus());
     } else if (letters && ev.key === "u") {
+      // Only this page's own last Undo, never another page's snack.
       const snack = this.snackbar.current();
-      if (snack?.action) void this.snackbar.runAction(snack.id);
+      if (snack?.action && snack.id === this.lastUndoSnack) {
+        void this.snackbar.runAction(snack.id);
+      }
     } else if (letters && ev.key === "/") {
       (
         document.querySelector(
@@ -1438,16 +1556,15 @@ export class InboxPageComponent implements OnInit {
         ) as HTMLElement | null
       )?.focus();
     } else if (letters && ev.key === "?") {
-      this.helpOpen.set(true);
+      this.openHelp();
     } else if (
       ev.key === "Enter" &&
-      sel?.taskId &&
-      !(ev.target as HTMLElement)?.closest("a,button")
+      sel?.taskLink &&
+      this.isRowOrPage(ev.target)
     ) {
-      void this.router.navigate(["/task", sel.taskId]);
+      void this.router.navigateByUrl(sel.taskLink);
     } else if (ev.key === "Escape") {
-      if (this.helpOpen()) this.helpOpen.set(false);
-      else if (this.dragging()) this.onResizeCancel();
+      if (this.dragging()) this.onResizeCancel();
       else if (this.store.checked().size && !this.store.sheetOpen())
         this.store.clearChecked();
       else this.store.closeSheet();

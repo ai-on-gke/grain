@@ -36,6 +36,13 @@ import {
   matchesQuery,
 } from "./inbox-classifier";
 
+// The call that takes back an answer, by the route that gave it.
+const INVERSE: Partial<Record<RouteKey, RouteKey>> = {
+  "POST /api/tasks/{id}/approve": "POST /api/tasks/{id}/withdraw-approval",
+  "POST /api/tasks/{id}/defer": "POST /api/tasks/{id}/undefer",
+  "POST /api/tasks/{id}/close": "POST /api/tasks/{id}/reopen",
+};
+
 export const SEEN_STORAGE_KEY = "grain.next.inbox.seen";
 // POLL_MS backs the event stream up. Tasks, notifications and
 // host-script approvals all have events (GRAIN_EVENT_TYPES), so the
@@ -350,12 +357,18 @@ export class InboxStore {
   }
 
   // actAll gives every checked row (or the given keys) that offers it the
-  // same answer, reads the queue once, and reports which tasks it landed
-  // on, so the caller can offer Undo. Rows that failed stay selected.
+  // same answer and reads the queue once. It reports how many rows went
+  // through, and which tasks can be undone and by which call (the inverse
+  // of the route used: approve -> withdraw approval, defer -> undefer,
+  // close -> reopen). Rows that failed stay selected.
   async actAll(
     actionId: string,
     keys?: readonly string[],
-  ): Promise<{ done: string[]; failed: number }> {
+  ): Promise<{
+    count: number;
+    failed: number;
+    undo: { route: RouteKey; ids: string[] } | null;
+  }> {
     const pool = keys
       ? this.entries().filter((e) => keys.includes(e.key))
       : this.checkedEntries();
@@ -367,49 +380,76 @@ export class InboxStore {
       );
     this.busy.set(actionId);
     this.actionError.set(null);
-    // Each call is its own promise, so one that throws at once still
-    // leaves the others to finish.
-    const results = await Promise.allSettled(
-      targets.map((t) =>
-        Promise.resolve().then(() =>
-          this.api.post(t.a.route, t.a.params, t.a.body),
+    try {
+      // Each call is its own promise, so one that throws at once still
+      // leaves the others to finish.
+      const results = await Promise.allSettled(
+        targets.map((t) =>
+          Promise.resolve().then(() =>
+            this.api.post(t.a.route, t.a.params, t.a.body),
+          ),
         ),
-      ),
-    );
-    const done: string[] = [];
-    const landed = new Set<string>();
-    results.forEach((r, i) => {
-      if (r.status === "fulfilled") {
-        landed.add(targets[i].e.key);
-        if (targets[i].e.taskId) done.push(targets[i].e.taskId as string);
-      }
-    });
-    const failed = results.length - landed.size;
-    if (failed > 0) {
-      this.actionError.set(
-        `${failed} of ${targets.length} did not go through; they stay selected.`,
       );
+      const landed = new Set<string>();
+      const undoIds: string[] = [];
+      let route: RouteKey | null = null;
+      results.forEach((r, i) => {
+        if (r.status !== "fulfilled") return;
+        const { e, a } = targets[i];
+        landed.add(e.key);
+        const inverse = INVERSE[a.route];
+        const id = (a.params as { id?: string })?.id;
+        if (inverse && id && a.route.startsWith("POST /api/tasks/{id}/")) {
+          route = inverse;
+          undoIds.push(id);
+        }
+      });
+      const failed = results.length - landed.size;
+      if (failed > 0) {
+        this.actionError.set(
+          `${failed} of ${targets.length} did not go through; they stay selected.`,
+        );
+      }
+      this.checked.update((c) => new Set([...c].filter((k) => !landed.has(k))));
+      await this.refresh();
+      return {
+        count: landed.size,
+        failed,
+        undo: route && undoIds.length ? { route, ids: undoIds } : null,
+      };
+    } finally {
+      this.busy.set(null);
     }
-    this.checked.update((c) => new Set([...c].filter((k) => !landed.has(k))));
-    await this.refresh();
-    this.busy.set(null);
-    return { done, failed };
   }
 
-  // undoAll reverses a batch answer on the tasks it landed on, where the
-  // server has an inverse: approve -> withdraw approval, defer -> undefer,
-  // close or decline -> reopen.
-  async undoAll(actionId: string, taskIds: readonly string[]): Promise<void> {
-    const inverse: Record<string, RouteKey> = {
-      approve: "POST /api/tasks/{id}/withdraw-approval",
-      defer: "POST /api/tasks/{id}/undefer",
-      close: "POST /api/tasks/{id}/reopen",
-      decline: "POST /api/tasks/{id}/reopen",
-    };
-    const route = inverse[actionId];
-    if (!route) return;
-    await Promise.allSettled(taskIds.map((id) => this.api.post(route, { id })));
-    await this.refresh();
+  // undoAll makes the inverse calls and says plainly what could not be
+  // undone (the server refuses to withdraw approval from a task that has
+  // started, for one). It throws when nothing was undone, so the snackbar
+  // reports the failure too.
+  async undoAll(route: RouteKey, taskIds: readonly string[]): Promise<void> {
+    this.busy.set("undo");
+    try {
+      const results = await Promise.allSettled(
+        taskIds.map((id) =>
+          Promise.resolve().then(() => this.api.post(route, { id })),
+        ),
+      );
+      const failedIds = taskIds.filter(
+        (_, i) => results[i].status === "rejected",
+      );
+      await this.refresh();
+      if (failedIds.length) {
+        const which = failedIds.map((id) => `#${id}`).join(", ");
+        const msg =
+          failedIds.length === taskIds.length
+            ? `Could not undo: ${which} ${failedIds.length === 1 ? "has" : "have"} moved on (a task that has started cannot be withdrawn; close it to cancel).`
+            : `Undid ${taskIds.length - failedIds.length} of ${taskIds.length}; ${which} could not be undone (a task that has started cannot be withdrawn; close it to cancel).`;
+        this.actionError.set(msg);
+        if (failedIds.length === taskIds.length) throw new Error(msg);
+      }
+    } finally {
+      this.busy.set(null);
+    }
   }
 
   async reply(taskId: string, body: string): Promise<boolean> {

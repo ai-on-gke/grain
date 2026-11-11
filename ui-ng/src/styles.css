@@ -506,6 +506,8 @@ body {
     z-index: 4;
     display: block;
     width: 0;
+    /* A touch drag moves the divider instead of scrolling the page. */
+    touch-action: none;
   }
   /* A 24px-wide hit zone over the 0px track (WCAG 2.5.8). */
   .inbox-resizer::before {
@@ -624,6 +626,8 @@ body {
 }
 
 .queue-list {
+  /* A selected row never hides under the sticky group header. */
+  scroll-padding-top: 56px;
   list-style: none;
   margin: 0;
   padding: 0;
