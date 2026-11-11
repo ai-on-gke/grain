@@ -21,6 +21,10 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { SnackbarService } from "../services/snackbar.service";
+import {
+  STARTED_STORAGE_KEY,
+  WorkstreamsStore,
+} from "../workstreams/workstreams.store";
 import { CreateTaskService } from "./create-task.service";
 import { NewTaskSheetComponent } from "./new-task-sheet.component";
 
@@ -55,10 +59,13 @@ class FakeApi {
     ] as Task[]);
   openNotifications = () => Promise.resolve([]);
   localScriptApprovals = () => Promise.resolve([]);
-  get = () =>
-    Promise.resolve({
+  getIfChanged = () => this.tasks().then((body) => ({ body, changed: true }));
+  get = (route: string) => {
+    if (route === "GET /api/tasks") return Promise.resolve({ tasks: [] });
+    return Promise.resolve({
       sessions: [{ id: "director", title: "Director", taskId: "1" }],
     });
+  };
   post = (route: string, params?: unknown, body?: unknown) => {
     this.calls.push({ route, params, body });
     const err = this.fail[route];
@@ -339,5 +346,51 @@ describe("NewTaskSheetComponent", () => {
     expect(
       q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
     ).toBe(true);
+  });
+
+  it("opens in Start a workstream mode, records the started root, and opens Workstreams", async () => {
+    localStorage.removeItem(STARTED_STORAGE_KEY);
+    const api = new FakeApi();
+    const f = await render(api);
+    const opener = document.getElementById("opener")!;
+    TestBed.inject(CreateTaskService).open(
+      { workstream: true, origin: "" },
+      opener,
+    );
+    await settle(f);
+
+    expect(q("#new-task-title")?.textContent?.trim()).toBe(
+      "Start a workstream",
+    );
+    expect(q('[data-testid="ws-start-banner"]')).not.toBeNull();
+    const autoSw = q<HTMLButtonElement>('[data-testid="auto-approve-switch"]')!;
+    autoSw.click();
+    type('[data-testid="nt-title"]', "Voice input stream");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Voice input stream",
+      origin: "",
+      autoApproveProposals: true,
+    });
+    expect(TestBed.inject(WorkstreamsStore).startedIds().has("42")).toBe(true);
+    const navSpy = vi.spyOn(TestBed.inject(Router), "navigate");
+    const snack = TestBed.inject(SnackbarService).current()!;
+    expect(snack.message).toContain("workstream #42");
+    await TestBed.inject(SnackbarService).runAction(snack.id);
+    expect(navSpy).toHaveBeenCalledWith(["/workstreams", "task:42"]);
+  });
+
+  it("shows workstream context when prefilled with origin", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    TestBed.inject(CreateTaskService).open({ origin: "task:4" });
+    await settle(f);
+
+    expect(q('[data-testid="ws-origin-banner"]')?.textContent).toContain(
+      "#4 Inbox split",
+    );
   });
 });

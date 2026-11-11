@@ -18,6 +18,7 @@ import {
   Component,
   type OnDestroy,
   type OnInit,
+  ViewEncapsulation,
   computed,
   inject,
   signal,
@@ -43,6 +44,7 @@ import {
   tokens,
 } from "./agent-view";
 import { AgentsStore } from "./agents.store";
+import { WorkstreamsStore } from "../workstreams/workstreams.store";
 
 type FilterId = "all" | AgentStatus;
 
@@ -72,6 +74,8 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
 @Component({
   selector: "g-agents-page",
   imports: [RouterLink, TipDirective, NgTemplateOutlet],
+  encapsulation: ViewEncapsulation.None,
+  styleUrl: "./agents-page.component.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "[class.is-wall]": "wall()",
@@ -280,6 +284,16 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                         <a [routerLink]="['/task', a.task.id]"
                           >#{{ a.task.id }} {{ a.task.title }}</a
                         >
+                        @if (partOf(a.task.id); as ps) {
+                          <a
+                            class="part-of-link"
+                            style="margin-left:6px"
+                            [routerLink]="['/workstreams', ps.key]"
+                            [queryParams]="{ node: a.task.id }"
+                            data-testid="agent-row-part-of"
+                            >Part of {{ ps.title }}</a
+                          >
+                        }
                       </td>
                       <td>{{ statusText(a) }}</td>
                       <td>
@@ -356,6 +370,18 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
           @if (a.task.authorLabel) {
             <dt class="sr-only">Filed by</dt>
             <dd class="muted">{{ a.task.authorLabel }}</dd>
+          }
+          @if (partOf(a.task.id); as ps) {
+            <dt class="sr-only">Workstream</dt>
+            <dd>
+              <a
+                class="part-of-link"
+                [routerLink]="['/workstreams', ps.key]"
+                [queryParams]="{ node: a.task.id }"
+                data-testid="agent-part-of"
+                >Part of {{ ps.title }}</a
+              >
+            </dd>
           }
         </dl>
         <div class="agent-foot">
@@ -473,6 +499,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
 })
 export class AgentsPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(AgentsStore);
+  private readonly wsStore = inject(WorkstreamsStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly keyboard = inject(KeyboardService);
@@ -541,6 +568,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.store.start();
+    this.wsStore.ensureLoaded();
     this.unregisterF = this.keyboard.register({
       key: "f",
       description: "Wall view on or off (Agents)",
@@ -552,6 +580,10 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     this.store.stop();
     this.unregisterF?.();
     this.setWall(false);
+  }
+
+  protected partOf(id: string) {
+    return this.wsStore.taskToStream().get(id) ?? null;
   }
 
   protected quiet = quietReason;

@@ -34,6 +34,8 @@ export interface ConfirmRequest {
   // For a batch: the repositories and owners it touches, counted when
   // the button was pressed.
   scope?: Scope;
+  // Gerund phrase for multi-repo/owner confirm tick (defaults to "approving work").
+  actionVerb?: string;
   run: () => Promise<unknown>;
 }
 
@@ -126,13 +128,14 @@ export class ConfirmDialogComponent {
   protected readonly tickLabel = computed(() => {
     const s = this.request().scope;
     if (!s) return "";
+    const verb = this.request().actionVerb || "approving work";
     if (s.multiRepo && s.otherOwner) {
-      return `I am approving work in ${s.repos.length} repositories, including work owned by someone else`;
+      return `I am ${verb} in ${s.repos.length} repositories, including work owned by someone else`;
     }
     if (s.multiRepo) {
-      return `I am approving work in ${s.repos.length} repositories`;
+      return `I am ${verb} in ${s.repos.length} repositories`;
     }
-    return "I am approving work owned by someone else";
+    return `I am ${verb} owned by someone else`;
   });
   private readonly dialog = viewChild<ElementRef<HTMLElement>>("dialog");
   private readonly cancelBtn =

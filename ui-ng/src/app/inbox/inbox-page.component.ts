@@ -34,6 +34,7 @@ import {
   computed,
   effect,
   inject,
+  input,
   signal,
   untracked,
   viewChild,
@@ -54,6 +55,7 @@ import {
 } from "./inbox-classifier";
 import { InboxStore } from "./inbox.store";
 import { replyRefusal, whyGone } from "./departure";
+import { WorkstreamsStore } from "../workstreams/workstreams.store";
 
 const FILTERS: { id: FilterId; label: string }[] = [
   { id: "all", label: "All" },
@@ -219,6 +221,25 @@ const ONE_KEY = new Set(["approve"]);
           (focusin)="store.hold()"
           (focusout)="onListBlur($event)"
         >
+          @if (ws(); as wsKey) {
+            <div
+              class="banner banner-info left-banner"
+              data-testid="inbox-ws-filter"
+            >
+              <span>
+                Workstream:
+                <strong>{{ wsStream()?.title || wsKey }}</strong>
+              </span>
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="inbox-ws-clear"
+                (click)="clearWsFilter()"
+              >
+                Show all
+              </button>
+            </div>
+          }
           @if (store.pendingUpdates(); as n) {
             <div class="updates-bar">
               <button
@@ -309,63 +330,78 @@ const ONE_KEY = new Set(["approve"]);
                           [attr.aria-label]="'Select ' + e.ref + ' ' + e.title"
                           (change)="store.toggleChecked(e.key)"
                         />
-                        <button
-                          type="button"
-                          class="row-main"
-                          [attr.aria-current]="
-                            store.selected()?.key === e.key ? 'true' : null
-                          "
-                          (click)="store.select(e.key)"
-                        >
-                          <span class="row-line1">
-                            <span class="row-ref tabular">{{ e.ref }}</span>
-                            <span class="row-title">{{ e.title }}</span>
-                            <span class="row-age tabular muted">{{
-                              ago(e.at)
-                            }}</span>
-                          </span>
-                          <span class="row-line2">
-                            <span [class]="'status-pill ' + e.pillTone">{{
-                              e.pillLabel
-                            }}</span>
-                            <span class="row-summary muted">{{
-                              e.summary
-                            }}</span>
-                            @if (e.acked) {
-                              <span class="muted row-acked">acknowledged</span>
-                            }
-                          </span>
-                          @if (e.repo || e.owner || e.task) {
-                            <span class="row-line3">
-                              @if (e.repo) {
-                                <span
-                                  class="row-repo"
-                                  data-testid="row-repo"
-                                  [attr.title]="e.repo"
-                                  >{{ short(e.repo) }}</span
-                                >
-                              }
-                              @if (e.owner) {
-                                <span class="row-owner muted"
-                                  >· {{ e.owner }}</span
-                                >
-                              }
-                              @if (e.task && chip(e.task); as c) {
-                                <span
-                                  [class]="'ci-chip ' + c.tone"
-                                  data-testid="row-ci"
-                                  [attr.title]="c.tip"
-                                  >{{ c.text }}</span
-                                >
-                              }
-                              @if (e.gone) {
-                                <span class="muted row-gone"
-                                  >left the Inbox</span
+                        <div class="row-main-wrap">
+                          <button
+                            type="button"
+                            class="row-main"
+                            [attr.aria-current]="
+                              store.selected()?.key === e.key ? 'true' : null
+                            "
+                            (click)="store.select(e.key)"
+                          >
+                            <span class="row-line1">
+                              <span class="row-ref tabular">{{ e.ref }}</span>
+                              <span class="row-title">{{ e.title }}</span>
+                              <span class="row-age tabular muted">{{
+                                ago(e.at)
+                              }}</span>
+                            </span>
+                            <span class="row-line2">
+                              <span [class]="'status-pill ' + e.pillTone">{{
+                                e.pillLabel
+                              }}</span>
+                              <span class="row-summary muted">{{
+                                e.summary
+                              }}</span>
+                              @if (e.acked) {
+                                <span class="muted row-acked"
+                                  >acknowledged</span
                                 >
                               }
                             </span>
+                            @if (e.repo || e.owner || e.task || e.gone) {
+                              <span class="row-line3">
+                                @if (e.repo) {
+                                  <span
+                                    class="row-repo"
+                                    data-testid="row-repo"
+                                    [attr.title]="e.repo"
+                                    >{{ short(e.repo) }}</span
+                                  >
+                                }
+                                @if (e.owner) {
+                                  <span class="row-owner muted"
+                                    >· {{ e.owner }}</span
+                                  >
+                                }
+                                @if (e.task && chip(e.task); as c) {
+                                  <span
+                                    [class]="'ci-chip ' + c.tone"
+                                    data-testid="row-ci"
+                                    [attr.title]="c.tip"
+                                    >{{ c.text }}</span
+                                  >
+                                }
+                                @if (e.gone) {
+                                  <span class="muted row-gone"
+                                    >left the Inbox</span
+                                  >
+                                }
+                              </span>
+                            }
+                          </button>
+                          @if (e.taskId && partOf(e.taskId); as ps) {
+                            <div class="row-part-of">
+                              <a
+                                class="part-of-link"
+                                [routerLink]="['/workstreams', ps.key]"
+                                [queryParams]="{ node: e.taskId }"
+                                data-testid="inbox-part-of"
+                                >Part of {{ ps.title }}</a
+                              >
+                            </div>
                           }
-                        </button>
+                        </div>
                       </div>
                     </li>
                   }
@@ -559,6 +595,15 @@ const ONE_KEY = new Set(["approve"]);
                       data-testid="inspector-ci"
                       [attr.title]="c.tip"
                       >{{ c.text }}</span
+                    >
+                  }
+                  @if (sel.taskId && partOf(sel.taskId); as ps) {
+                    <a
+                      class="part-of-link"
+                      [routerLink]="['/workstreams', ps.key]"
+                      [queryParams]="{ node: sel.taskId }"
+                      data-testid="inbox-inspector-part-of"
+                      >Part of {{ ps.title }}</a
                     >
                   }
                 </div>
@@ -1063,6 +1108,7 @@ const ONE_KEY = new Set(["approve"]);
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
+  protected readonly wsStore = inject(WorkstreamsStore);
   protected readonly access = inject(AccessService);
   protected readonly theme = inject(ThemeService);
   private readonly api = inject(GrainApi);
@@ -1072,6 +1118,23 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   private readonly split = viewChild<ElementRef<HTMLElement>>("split");
   private readonly replyBox =
     viewChild<ElementRef<HTMLTextAreaElement>>("replyBox");
+
+  readonly ws = input<string>();
+  protected readonly wsStream = computed(() => {
+    const k = this.ws();
+    return k ? (this.wsStore.byKey().get(k) ?? null) : null;
+  });
+
+  protected partOf(taskId: string) {
+    return this.wsStore.taskToStream().get(taskId) ?? null;
+  }
+
+  protected clearWsFilter(): void {
+    void this.router.navigate([], {
+      queryParams: { ws: null },
+      queryParamsHandling: "merge",
+    });
+  }
 
   // ---------- the split (D-3) ----------
   protected readonly sp = new SplitController({
@@ -1114,7 +1177,9 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly confirming = signal<ConfirmRequest | null>(null);
 
   protected readonly headline = computed(() => {
-    const n = this.store.decisions().length;
+    const n = this.ws()
+      ? this.store.scopedDecisions().length
+      : this.store.decisions().length;
     if (!this.store.loaded()) return "Inbox";
     if (n === 0) return "Nothing waiting on you";
     return `${n} ${n === 1 ? "decision" : "decisions"} waiting on you`;
@@ -1173,6 +1238,33 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       this.allowBreaking.set(!!sel?.release?.breaking);
       this.shortSoakOk.set(!!sel?.release?.shortSoak);
     });
+    effect(() => {
+      const k = this.ws() || null;
+      untracked(() => {
+        this.wsStore.selectedKey.set(k);
+        if (k) this.wsStore.ensureLoaded(true);
+      });
+    });
+    effect(() => {
+      const k = this.ws();
+      if (!k) {
+        this.store.wsTaskIds.set(null);
+        return;
+      }
+      const ids = new Set<string>();
+      const s = this.wsStore.byKey().get(k);
+      if (s) {
+        for (const n of s.nodes) {
+          if (n.virtual) continue;
+          for (const tid of n.foldedTaskIds) ids.add(tid);
+        }
+      }
+      for (const [tid, st] of this.wsStore.taskToStream()) {
+        if (st.key === k) ids.add(tid);
+      }
+      if (k.startsWith("task:") && !s) ids.add(k.slice(5));
+      this.store.wsTaskIds.set(ids);
+    });
   }
 
   // The shell keeps the store running for the rail badge; opening the
@@ -1181,9 +1273,12 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     this.store.applyUpdates();
     this.store.clearChecked();
     this.store.start();
+    this.wsStore.ensureLoaded(!!this.ws());
   }
 
   ngOnDestroy(): void {
+    this.store.wsTaskIds.set(null);
+    this.wsStore.selectedKey.set(null);
     this.sp.detach();
   }
 

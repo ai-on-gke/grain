@@ -112,6 +112,7 @@ export class InboxStore {
   readonly busy = signal<string | null>(null);
   readonly filter = signal<FilterId>("all");
   readonly query = inject(ViewFilter).query;
+  readonly wsTaskIds = signal<ReadonlySet<string> | null>(null);
   readonly selectedKey = signal<string | null>(null);
   readonly checked = signal<ReadonlySet<string>>(new Set());
   readonly seen = signal<ReadonlySet<string>>(loadSeen());
@@ -139,30 +140,50 @@ export class InboxStore {
       ),
     ),
   );
+  readonly scopedLiveEntries = computed(() => {
+    const ids = this.wsTaskIds();
+    const live = this.liveEntries();
+    return ids ? live.filter((e) => !!e.taskId && ids.has(e.taskId)) : live;
+  });
+  // decisions is what is waiting on a person across the entire Inbox (used by
+  // the global rail badge). scopedDecisions tracks the current ?ws= scope.
+  readonly decisions = computed(() =>
+    this.liveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId)),
+  );
+  readonly scopedDecisions = computed(() =>
+    this.scopedLiveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId)),
+  );
   private readonly frozen = signal<readonly InboxEntry[] | null>(null);
   // The last version of every row seen, so a row that left still shows
   // what it was.
   private readonly lastSeen = new Map<string, InboxEntry>();
   readonly entries = computed<InboxEntry[]>(() => {
-    const live = this.liveEntries();
+    const live = this.scopedLiveEntries();
     const held = this.frozen();
     if (!held) return live;
+    const ids = this.wsTaskIds();
     const byKey = new Map(live.map((e) => [e.key, e]));
-    return held.map(
-      (e) =>
-        byKey.get(e.key) ?? {
-          ...(this.lastSeen.get(e.key) ?? e),
-          gone: true,
-          actions: [],
-        },
-    );
+    return held
+      .filter((e) => !ids || (!!e.taskId && ids.has(e.taskId)))
+      .map(
+        (e) =>
+          byKey.get(e.key) ?? {
+            ...(this.lastSeen.get(e.key) ?? e),
+            gone: true,
+            actions: [],
+          },
+      );
   });
   // pendingUpdates is how many changes the held order is not showing:
   // rows that arrived, rows that left, and rows that moved.
   readonly pendingUpdates = computed(() => {
-    const held = this.frozen();
-    if (!held) return 0;
-    const live = this.liveEntries();
+    const rawHeld = this.frozen();
+    if (!rawHeld) return 0;
+    const ids = this.wsTaskIds();
+    const held = ids
+      ? rawHeld.filter((e) => !!e.taskId && ids.has(e.taskId))
+      : rawHeld;
+    const live = this.scopedLiveEntries();
     const heldKeys = new Set(held.map((e) => e.key));
     const liveKeys = new Set(live.map((e) => e.key));
     const added = live.filter((e) => !heldKeys.has(e.key)).length;
@@ -182,11 +203,6 @@ export class InboxStore {
     const moved = n - dp[n];
     return added + removed + moved;
   });
-  // decisions is what is waiting on a person: the live queue without the
-  // quiet groups (paused turns).
-  readonly decisions = computed(() =>
-    this.liveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId)),
-  );
   readonly visible = computed(() => {
     const f = this.filter();
     const q = this.query();
@@ -199,7 +215,7 @@ export class InboxStore {
   readonly ordered = computed(() => this.groups().flatMap((g) => g.entries));
   readonly counts = computed(() => {
     const seen = this.seen();
-    const all = this.liveEntries();
+    const all = this.scopedLiveEntries();
     const n = (f: FilterId) =>
       all.filter((e) => matchesFilter(e, f, seen)).length;
     return {
@@ -643,7 +659,7 @@ export class InboxStore {
         this.actionError.set(loadErr);
         return { count: 0, failed: 0, undo: null };
       }
-      const pool = this.liveEntries().filter((e) => wantKeys.has(e.key));
+      const pool = this.scopedLiveEntries().filter((e) => wantKeys.has(e.key));
       const targets = pool
         .map((e) => ({ e, a: e.actions.find((x) => x.id === actionId) }))
         .filter(

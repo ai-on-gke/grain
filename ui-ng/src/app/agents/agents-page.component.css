@@ -1,0 +1,326 @@
+/* Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* ---------- Agents (D-5) ---------- */
+g-agents-page {
+  display: contents;
+}
+
+.agents-header {
+  padding-bottom: 12px;
+}
+
+.agents-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-low);
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.agents-summary.is-processing {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.agents-summary strong {
+  color: inherit;
+  font-weight: 600;
+}
+
+.agents-summary .warn {
+  color: var(
+    --md-sys-color-on-warning-container,
+    var(--md-sys-color-on-tertiary-container)
+  );
+  font-weight: 600;
+}
+
+.agents-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 12px;
+}
+
+.agents-controls .filter-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agents-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+
+.agent-group + .agent-group {
+  margin-top: 8px;
+}
+
+.agent-grid {
+  list-style: none;
+  margin: 0;
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: 12px;
+}
+
+.agent-grid > li {
+  display: flex;
+  min-width: 0;
+}
+
+.agent-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(
+    --md-sys-color-surface-container-lowest,
+    var(--md-sys-color-surface)
+  );
+}
+
+.agent-card.is-quiet {
+  border: 2px solid
+    var(--md-sys-color-warning, var(--md-sys-color-on-tertiary-container));
+  padding: 13px 15px 11px;
+}
+
+.agent-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.agent-top .live-dot {
+  margin-top: 6px;
+}
+
+.agent-title {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.agent-title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.agent-title a:hover,
+.agent-title a:focus-visible {
+  text-decoration: underline;
+}
+
+.quiet-line {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(
+    --md-sys-color-on-warning-container,
+    var(--md-sys-color-on-tertiary-container)
+  );
+}
+
+.quiet-line.is-stuck {
+  color: var(--md-sys-color-error);
+}
+
+.agent-activity {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.grain-chip {
+  margin-right: 4px;
+  vertical-align: 1px;
+}
+
+.agent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.agent-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-foot {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.agent-foot .spark {
+  margin-left: auto;
+}
+
+.cpu {
+  border-radius: var(--md-sys-shape-corner-extra-small, 4px);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cpu:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.cpu-meter {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 4px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+
+.cpu-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+}
+
+.cpu-fill.low {
+  background: var(--md-sys-color-outline);
+}
+
+.cpu-fill.mid {
+  background: var(--md-sys-color-primary);
+}
+
+.cpu-fill.high {
+  background: var(--md-sys-color-warning, var(--md-sys-color-error));
+}
+
+.cpu-bound {
+  font-size: 11px;
+}
+
+.spark rect {
+  fill: var(--md-sys-color-primary);
+  opacity: 0.7;
+}
+
+.spark-base {
+  stroke: var(--md-sys-color-outline-variant);
+  stroke-width: 1;
+}
+
+.agent-table {
+  width: calc(100% - 40px);
+  margin: 12px 20px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.agent-table th,
+.agent-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-table th {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.agent-table tr.is-quiet td:first-child {
+  box-shadow: inset 3px 0 0
+    var(--md-sys-color-warning, var(--md-sys-color-on-tertiary-container));
+}
+
+.agent-table a {
+  color: inherit;
+}
+
+/* Wall view: the page alone, full screen, for a team display. */
+body.agents-wall .nav-rail,
+body.agents-wall .top-bar,
+body.agents-wall .bottom-bar,
+body.agents-wall .compact-nav,
+body.agents-wall .phone-fab {
+  display: none;
+}
+
+body.agents-wall .app-shell {
+  grid-template-rows: 1fr;
+  grid-template-columns: 1fr;
+  grid-template-areas: "main";
+}
+
+body.agents-wall .agent-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+}
+
+body.agents-wall .agent-title {
+  font-size: 16px;
+}
+
+@media (max-width: 599.95px) {
+  .agent-grid {
+    padding: 12px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agent-table th:nth-child(4),
+  .agent-table td:nth-child(4),
+  .agent-table th:nth-child(7),
+  .agent-table td:nth-child(7) {
+    display: none;
+  }
+  .agent-table {
+    width: calc(100% - 24px);
+    margin: 12px;
+  }
+}

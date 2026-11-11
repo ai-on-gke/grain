@@ -15,31 +15,15 @@
 import { Injectable, NgZone, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { TaskDetail } from "../api/models";
+import type { TaskDetail, TreeNode, WorkTree } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { errorText } from "../sessions/session-view";
+
+export type { TreeNode, WorkTree };
 
 export const POLL_MS = 3000;
 export const TRANSCRIPT_POLL_MS = 5000;
 export const DETAIL_QUERY = "comments_limit=100&attempts_limit=20";
-
-export interface TreeNode {
-  id: string;
-  title: string;
-  status: string;
-  pullRequest?: string;
-  done: boolean;
-  root?: boolean;
-  children?: TreeNode[];
-}
-
-export interface WorkTree {
-  origin?: string;
-  rootTask?: string;
-  done: number;
-  total: number;
-  nodes: TreeNode[];
-}
 
 // TaskStore is the task page's state: one task's detail (polled with
 // ETags), its work tree, and the transcript of the attempt being read,

@@ -225,4 +225,30 @@ describe("new task form", () => {
     expect(msg).toContain("Repository: sidthe/grain");
     expect(msg).toContain("Depends on: #4");
   });
+
+  it("includes origin and autoApproveProposals in the payload only when supplied", () => {
+    const plain = buildPayload(emptyDraft(config, tasks), config);
+    expect(plain).not.toHaveProperty("origin");
+    expect(plain).not.toHaveProperty("autoApproveProposals");
+
+    const wsPayload = buildPayload(
+      emptyDraft(config, tasks, {
+        workstream: true,
+        origin: "",
+        autoApproveProposals: true,
+      }),
+      config,
+    );
+    expect(wsPayload).toMatchObject({
+      origin: "",
+      autoApproveProposals: true,
+    });
+
+    const childPayload = buildPayload(
+      emptyDraft(config, tasks, { origin: "task:12" }),
+      config,
+    );
+    expect(childPayload).toMatchObject({ origin: "task:12" });
+    expect(childPayload).not.toHaveProperty("autoApproveProposals");
+  });
 });

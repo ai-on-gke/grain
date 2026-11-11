@@ -46,6 +46,7 @@ import {
   SETTINGS,
   hrefFor,
 } from "./shell/nav";
+import type { NewTaskDraft } from "./create/new-task-form";
 import { CreateTaskService } from "./create/create-task.service";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
 import { NextUpComponent } from "./shell/next-up.component";
@@ -55,6 +56,8 @@ import { SnackbarComponent } from "./shell/snackbar.component";
 const ICONS: Record<string, string> = {
   inbox:
     "M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 12h-4a3 3 0 0 1-6 0H5V5h14v10z",
+  workstreams:
+    "M3 4h6v5H3zm12 0h6v5h-6zm0 11h6v5h-6zM9 5.5h6v2H9zM5 9h2v9.5H5zM7 16.5h8v2H7z",
   tasks:
     "M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z",
   agents:
@@ -80,7 +83,13 @@ const ICONS: Record<string, string> = {
 };
 
 type CreateItem =
-  | { kind: "task"; label: string; tip: string }
+  | {
+      kind: "task";
+      label: string;
+      tip: string;
+      testid?: string;
+      prefill?: Partial<NewTaskDraft>;
+    }
   | {
       kind: "route";
       label: string;
@@ -420,7 +429,18 @@ type CreateItem =
           <ul class="more-sheet-list">
             @for (d of moreDestinations; track d.id) {
               <li>
-                <a class="more-sheet-item" [href]="hrefOf(d)">{{ d.label }}</a>
+                @if (d.route) {
+                  <a
+                    class="more-sheet-item"
+                    [routerLink]="d.route"
+                    (click)="closeMenus()"
+                    >{{ d.label }}</a
+                  >
+                } @else {
+                  <a class="more-sheet-item" [href]="hrefOf(d)">{{
+                    d.label
+                  }}</a>
+                }
               </li>
             }
             @for (item of createItems; track item.label) {
@@ -443,10 +463,10 @@ type CreateItem =
             <button
               type="button"
               [class]="cls"
-              data-testid="create-new-task"
+              [attr.data-testid]="item.testid ?? 'create-new-task'"
               [gTip]="item.tip"
               gTipPlacement="right"
-              (click)="openNewTask($event)"
+              (click)="openNewTask($event, item.prefill)"
             >
               {{ item.label }}
             </button>
@@ -514,6 +534,13 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "task",
       label: "New task",
       tip: "Describe a piece of work for an agent to do.",
+    },
+    {
+      kind: "task",
+      label: "Start a workstream",
+      testid: "create-start-workstream",
+      tip: "State a goal; an agent plans it and proposes tasks into one stream.",
+      prefill: { workstream: true, origin: "" },
     },
     {
       kind: "route",
@@ -608,7 +635,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   // openNewTask opens the New task sheet from whatever was clicked, so
   // focus goes back there when it closes.
-  protected openNewTask(ev: Event): void {
+  protected openNewTask(ev: Event, prefill: Partial<NewTaskDraft> = {}): void {
     const opener =
       this.createOpen() || this.moreOpen()
         ? this.moreOpen()
@@ -616,7 +643,7 @@ export class AppComponent implements OnInit, OnDestroy {
           : this.createBtn()?.nativeElement
         : (ev.currentTarget as HTMLElement | null);
     this.closeMenus();
-    this.createTask.open({}, opener);
+    this.createTask.open(prefill, opener);
   }
 
   protected closeMenus(): void {

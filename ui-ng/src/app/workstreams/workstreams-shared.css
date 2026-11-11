@@ -1,0 +1,242 @@
+.ws-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  font: 600 12px/1 var(--grain-font-display);
+  flex: none;
+}
+
+.ws-mark.person {
+  border-radius: 50%;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.ws-mark.person.you {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.ws-mark.system {
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+}
+
+.ws-mark.sm {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+.ws-chip-warn,
+.ws-chip-err,
+.ws-chip-done,
+.ws-chip-run,
+.ws-chip-series {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ws-chip-warn {
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}
+
+.ws-chip-err {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.ws-chip-done {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+
+.ws-chip-run {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.ws-chip-series {
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 10px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.ws-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  gap: 2px;
+  background: var(--md-sys-color-surface-container-highest);
+}
+
+.ws-bar i,
+.ws-legend i {
+  display: block;
+  height: 100%;
+}
+
+.ws-legend i {
+  width: 12px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.c-done {
+  background: var(--md-sys-color-tertiary);
+  color: var(--md-sys-color-tertiary);
+}
+
+.c-run {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-primary);
+}
+
+.c-person {
+  background: var(--md-sys-color-warning);
+  color: var(--md-sys-color-warning);
+}
+
+.c-proposed {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--md-sys-color-warning) 0 4px,
+    transparent 4px 7px
+  );
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-warning);
+}
+
+.c-blocked {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--md-sys-color-on-surface-variant) 0 3px,
+    transparent 3px 6px
+  );
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.c-failed {
+  background: var(--md-sys-color-error);
+  color: var(--md-sys-color-error);
+}
+
+.c-queued {
+  background: var(--md-sys-color-outline);
+  color: var(--md-sys-color-outline);
+}
+
+.ws-ptext {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: nowrap;
+}
+
+.ws-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.ws-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ws-timeline {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 30px;
+}
+
+.ws-day {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 1px;
+  width: 14px;
+  min-height: 6px;
+}
+
+.ws-day.is-today {
+  border-bottom: 2px solid var(--md-sys-color-primary);
+}
+
+.ws-day i {
+  display: block;
+  width: 10px;
+  height: 4px;
+  border-radius: 1px;
+}
+
+.ws-day i.cr {
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline);
+}
+
+.ws-day i.dn {
+  background: var(--md-sys-color-tertiary);
+}
+
+.ws-rel {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.ws-rel h3 {
+  margin: 0 0 8px;
+  font: 600 13px/18px var(--grain-font-body);
+}
+
+.ws-rel-group {
+  margin-bottom: 8px;
+}
+
+.ws-rel-lbl {
+  display: block;
+  font-size: 11px;
+  color: var(--md-sys-color-on-surface-variant);
+  margin-bottom: 4px;
+}
+
+.ws-rel-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 5px 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-lowest);
+  color: inherit;
+  font: 12px/16px var(--grain-font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-rel-btn .tt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -51,6 +51,7 @@ import {
   priorityOf,
   stateLabel,
 } from "../tasks/task-view";
+import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskStore } from "./task.store";
 
 export type TaskTab = "conversation" | "runs" | "changes" | "tree" | "details";
@@ -66,7 +67,7 @@ const TABS: { id: TaskTab; label: string }[] = [
   { id: "conversation", label: "Conversation" },
   { id: "runs", label: "Runs" },
   { id: "changes", label: "Changes and CI" },
-  { id: "tree", label: "Work tree" },
+  { id: "tree", label: "Workstream" },
   { id: "details", label: "Details" },
 ];
 
@@ -151,6 +152,17 @@ export function duration(from?: string, to?: string): string {
                 [gTip]="c.tip"
                 >{{ c.text }}</span
               >
+            }
+            @if (partOfStream(); as ps) {
+              @if (!from()?.startsWith("workstreams:")) {
+                <a
+                  class="part-of-link"
+                  [routerLink]="['/workstreams', ps.key]"
+                  [queryParams]="{ node: t.id }"
+                  data-testid="task-part-of"
+                  >Part of {{ ps.title }}</a
+                >
+              }
             }
             @if (pane()) {
               <span class="pane-tools">
@@ -713,6 +725,20 @@ export function duration(from?: string, to?: string): string {
                       } @else {
                         Nothing has been filed from this task.
                       }
+                      @if (partOfStream() || tree.origin) {
+                        ·
+                        <a
+                          [routerLink]="[
+                            '/workstreams',
+                            partOfStream()?.key ||
+                              tree.origin ||
+                              'task:' + t.id,
+                          ]"
+                          [queryParams]="{ node: t.id }"
+                          data-testid="open-in-workstreams"
+                          >Open in Workstreams</a
+                        >
+                      }
                     </p>
                     <ul class="tree" aria-label="Work tree">
                       @for (n of tree.nodes; track n.id) {
@@ -875,6 +901,7 @@ export function duration(from?: string, to?: string): string {
               [routerLink]="linkTo(n.id)"
               [queryParams]="linkQuery(n.id)"
               [queryParamsHandling]="pane() ? 'merge' : ''"
+              (click)="onTreeNodeClick($event, n.id)"
               >#{{ n.id }} {{ n.title }}</a
             >
           }
@@ -898,6 +925,7 @@ export function duration(from?: string, to?: string): string {
 })
 export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
+  private readonly wsStore = inject(WorkstreamsStore);
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
@@ -916,6 +944,7 @@ export class TaskDetailComponent implements OnDestroy {
   readonly acted = output<void>();
   readonly closed = output<void>();
   readonly expand = output<void>();
+  readonly openTask = output<string>();
 
   protected readonly levels = LEVELS;
   protected readonly label = stateLabel;
@@ -944,6 +973,10 @@ export class TaskDetailComponent implements OnDestroy {
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
 
   protected readonly t = computed(() => this.store.detail());
+  protected readonly partOfStream = computed(() => {
+    const id = this.t()?.id;
+    return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
+  });
   protected readonly current = computed<TaskTab>(() => {
     const v = this.tab();
     // Details sits beside the tabs on a wide screen; its tab there would
@@ -1073,6 +1106,13 @@ export class TaskDetailComponent implements OnDestroy {
     return { [this.pane() ? "pane" : "tab"]: tab };
   }
 
+  protected onTreeNodeClick(ev: MouseEvent, id: string): void {
+    if (this.pane() && this.from()?.startsWith("workstreams:")) {
+      ev.preventDefault();
+      this.openTask.emit(id);
+    }
+  }
+
   // Another task from the work tree or the dependency list: in the pane
   // it is selected there; on the full page it opens as a page.
   protected linkTo(id: string): unknown[] {
@@ -1097,6 +1137,14 @@ export class TaskDetailComponent implements OnDestroy {
         this.pendingPriority.set(null);
         this.store.open(id);
       });
+    });
+    // Ensure workstream context when inspecting a task that belongs to a tree.
+    effect(() => {
+      const t = this.t();
+      const tree = this.store.tree();
+      if (t && (t.origin || t.generatedFrom || (tree?.total ?? 0) > 0)) {
+        untracked(() => this.wsStore.ensureLoaded(false));
+      }
     });
     // The work tree is read when its tab opens (or the task changes).
     effect(() => {

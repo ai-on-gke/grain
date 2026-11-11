@@ -65,6 +65,9 @@ import {
   stateLabel,
 } from "./task-view";
 import { type Undo, TasksStore } from "./tasks.store";
+import { WorkstreamsStore } from "../workstreams/workstreams.store";
+
+export type TasksGroupBy = "none" | "workstream" | "repo";
 
 export type ClosedFilter = "all" | "merged" | "unmerged";
 
@@ -115,6 +118,27 @@ const SORTS: { id: SortId; label: string }[] = [
       <div class="stage-header tasks-header">
         <div class="view-headline-row">
           <h1 class="view-headline" id="tasks-headline">Tasks</h1>
+          <span class="toolbar-spacer"></span>
+          <label class="group-by">
+            <span>Group by</span>
+            <select
+              data-testid="tasks-group"
+              (change)="setGroup($any($event.target).value)"
+            >
+              <option value="none" [selected]="groupBy() === 'none'">
+                None
+              </option>
+              <option
+                value="workstream"
+                [selected]="groupBy() === 'workstream'"
+              >
+                Workstream
+              </option>
+              <option value="repo" [selected]="groupBy() === 'repo'">
+                Repository
+              </option>
+            </select>
+          </label>
         </div>
         <nav class="tab-strip" aria-label="Task views">
           @for (t of tabs; track t.id) {
@@ -246,7 +270,30 @@ const SORTS: { id: SortId; label: string }[] = [
                     }
                   </p>
                 }
-                @if (sort() === "run") {
+                @if (groupBy() !== "none") {
+                  @if (backlogChecks()) {
+                    <ng-container [ngTemplateOutlet]="selectAll" />
+                  }
+                  @for (g of groupedRows(); track g.key) {
+                    <section
+                      class="band"
+                      [attr.aria-labelledby]="'tgrp-' + $index"
+                    >
+                      <h2 class="band-header" [id]="'tgrp-' + $index">
+                        {{ g.label }}
+                        <span class="tabular muted">{{ g.tasks.length }}</span>
+                      </h2>
+                      <ul class="task-rows">
+                        @for (t of g.tasks; track t.id) {
+                          <ng-container
+                            [ngTemplateOutlet]="backlogRow"
+                            [ngTemplateOutletContext]="{ $implicit: t }"
+                          />
+                        }
+                      </ul>
+                    </section>
+                  }
+                } @else if (sort() === "run") {
                   @if (backlogChecks()) {
                     <ng-container [ngTemplateOutlet]="selectAll" />
                   }
@@ -436,69 +483,36 @@ const SORTS: { id: SortId; label: string }[] = [
                 } @else if (store.loaded() && rows().length === 0) {
                   <p class="empty-state">Nothing here.</p>
                 }
-                <ul class="task-rows">
-                  @for (t of rows(); track t.id) {
-                    <li
-                      class="task-row"
-                      [class.is-selected]="selectedId() === t.id"
-                      [attr.data-testid]="'row-' + t.id"
-                      [attr.data-task-id]="t.id"
+                @if (groupBy() !== "none") {
+                  @for (g of groupedRows(); track g.key) {
+                    <section
+                      class="band"
+                      [attr.aria-labelledby]="'tdefgrp-' + $index"
                     >
-                      <input
-                        type="checkbox"
-                        [attr.aria-label]="'Select #' + t.id"
-                        [checked]="checked().has(t.id)"
-                        (change)="toggle(t.id)"
-                      />
-                      <span [class]="'status-pill ' + toneOf(t)">{{
-                        label(t.state)
-                      }}</span>
-                      <div class="row-main">
-                        <ng-container
-                          [ngTemplateOutlet]="titleLink"
-                          [ngTemplateOutletContext]="{ $implicit: t }"
-                        />
-                        <span class="row-sub muted">
+                      <h2 class="band-header" [id]="'tdefgrp-' + $index">
+                        {{ g.label }}
+                        <span class="tabular muted">{{ g.tasks.length }}</span>
+                      </h2>
+                      <ul class="task-rows">
+                        @for (t of g.tasks; track t.id) {
                           <ng-container
-                            [ngTemplateOutlet]="scopeLine"
+                            [ngTemplateOutlet]="defaultTaskRow"
                             [ngTemplateOutletContext]="{ $implicit: t }"
                           />
-                          @if (chip(t); as c) {
-                            <span
-                              [class]="'ci-chip ' + c.tone"
-                              [attr.data-testid]="'ci-' + t.id"
-                              [gTip]="c.tip"
-                              >{{ c.text }}</span
-                            >
-                          }
-                        </span>
-                        @if (t.state === "running" && t.activity) {
-                          <span class="row-sub activity">{{ t.activity }}</span>
                         }
-                      </div>
-                      <ng-container
-                        [ngTemplateOutlet]="priorityChip"
-                        [ngTemplateOutletContext]="{
-                          $implicit: t,
-                          editable: t.state === 'deferred',
-                        }"
-                      />
-                      <span class="row-age muted tabular">{{
-                        ago(t.updatedAt || t.createdAt)
-                      }}</span>
-                      @if (t.state === "deferred" && canDefer()) {
-                        <button
-                          type="button"
-                          class="btn-text"
-                          [attr.data-testid]="'undefer-' + t.id"
-                          (click)="undefer([t.id])"
-                        >
-                          Bring back
-                        </button>
-                      }
-                    </li>
+                      </ul>
+                    </section>
                   }
-                </ul>
+                } @else {
+                  <ul class="task-rows">
+                    @for (t of rows(); track t.id) {
+                      <ng-container
+                        [ngTemplateOutlet]="defaultTaskRow"
+                        [ngTemplateOutletContext]="{ $implicit: t }"
+                      />
+                    }
+                  </ul>
+                }
                 @if (current() === "closed" && store.closedCursor()) {
                   <button
                     type="button"
@@ -723,12 +737,82 @@ const SORTS: { id: SortId; label: string }[] = [
       >
     </ng-template>
 
+    <ng-template #defaultTaskRow let-t>
+      <li
+        class="task-row"
+        [class.is-selected]="selectedId() === t.id"
+        [attr.data-testid]="'row-' + t.id"
+        [attr.data-task-id]="t.id"
+      >
+        <input
+          type="checkbox"
+          [attr.aria-label]="'Select #' + t.id"
+          [checked]="checked().has(t.id)"
+          (change)="toggle(t.id)"
+        />
+        <span [class]="'status-pill ' + toneOf(t)">{{ label(t.state) }}</span>
+        <div class="row-main">
+          <ng-container
+            [ngTemplateOutlet]="titleLink"
+            [ngTemplateOutletContext]="{ $implicit: t }"
+          />
+          <span class="row-sub muted">
+            <ng-container
+              [ngTemplateOutlet]="scopeLine"
+              [ngTemplateOutletContext]="{ $implicit: t }"
+            />
+            @if (chip(t); as c) {
+              <span
+                [class]="'ci-chip ' + c.tone"
+                [attr.data-testid]="'ci-' + t.id"
+                [gTip]="c.tip"
+                >{{ c.text }}</span
+              >
+            }
+          </span>
+          @if (t.state === "running" && t.activity) {
+            <span class="row-sub activity">{{ t.activity }}</span>
+          }
+        </div>
+        <ng-container
+          [ngTemplateOutlet]="priorityChip"
+          [ngTemplateOutletContext]="{
+            $implicit: t,
+            editable: t.state === 'deferred',
+          }"
+        />
+        <span class="row-age muted tabular">{{
+          ago(t.updatedAt || t.createdAt)
+        }}</span>
+        @if (t.state === "deferred" && canDefer()) {
+          <button
+            type="button"
+            class="btn-text"
+            [attr.data-testid]="'undefer-' + t.id"
+            (click)="undefer([t.id])"
+          >
+            Bring back
+          </button>
+        }
+      </li>
+    </ng-template>
+
     <ng-template #scopeLine let-t>
       <span class="row-repo" [attr.title]="t.repo || null">{{
         short(t.repo) || "No repository"
       }}</span>
       @if (t.owner) {
         <span class="row-owner"> · {{ t.owner }}</span>
+      }
+      @if (partOf(t.id); as ps) {
+        <a
+          class="part-of-link"
+          [routerLink]="['/workstreams', ps.key]"
+          [queryParams]="{ node: t.id }"
+          data-testid="tasks-part-of"
+          (click)="$event.stopPropagation()"
+          >Part of {{ ps.title }}</a
+        >
       }
     </ng-template>
 
@@ -923,6 +1007,7 @@ const SORTS: { id: SortId; label: string }[] = [
 })
 export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(TasksStore);
+  private readonly wsStore = inject(WorkstreamsStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly filter = inject(ViewFilter);
@@ -936,6 +1021,23 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   // ?task= is the task open in the pane, ?pane= that pane's own tab.
   readonly task = input<string>();
   readonly pane = input<string>();
+  readonly group = input<string>();
+
+  protected readonly groupBy = computed<TasksGroupBy>(() => {
+    const g = this.group();
+    return g === "workstream" || g === "repo" ? g : "none";
+  });
+
+  protected setGroup(g: TasksGroupBy): void {
+    void this.router.navigate([], {
+      queryParams: { group: g === "none" ? null : g },
+      queryParamsHandling: "merge",
+    });
+  }
+
+  protected partOf(id: string) {
+    return this.wsStore.taskToStream().get(id) ?? null;
+  }
 
   protected readonly sp = new SplitController({
     ratioKey: "grain.tasks.splitRatio",
@@ -1008,6 +1110,33 @@ export class TasksPageComponent implements OnInit, OnDestroy {
         );
     else list = this.store.work().filter((t) => inTab(t, tab));
     return list.filter((t) => this.matches(t));
+  });
+  protected readonly groupedRows = computed(() => {
+    const mode = this.groupBy();
+    const list = this.rows();
+    if (mode === "none") return [];
+    const groups = new Map<
+      string,
+      { key: string; label: string; tasks: Task[] }
+    >();
+    for (const t of list) {
+      const ps = mode === "workstream" ? this.partOf(t.id) : null;
+      const key =
+        mode === "workstream"
+          ? (ps?.key ?? "__standalone__")
+          : t.repo || "__no_repo__";
+      const label =
+        mode === "workstream"
+          ? (ps?.title ?? "Standalone tasks")
+          : t.repo || "No repository";
+      let g = groups.get(key);
+      if (!g) {
+        g = { key, label, tasks: [] };
+        groups.set(key, g);
+      }
+      g.tasks.push(t);
+    }
+    return [...groups.values()];
   });
   protected readonly rowIds = computed(() => this.rows().map((t) => t.id));
   protected readonly runBands = computed(() => bands(this.rows()));
@@ -1103,6 +1232,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.store.start();
+    this.wsStore.ensureLoaded();
     this.unregister = [
       this.keyboard.register({
         key: "j",

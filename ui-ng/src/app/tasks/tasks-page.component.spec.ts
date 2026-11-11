@@ -832,5 +832,49 @@ describe("TasksPageComponent", () => {
         "2 owned by bob",
       );
     });
+
+    it("groups tasks by Workstream and Repository and renders Part of stream links", async () => {
+      const api = new FakeApi();
+      api.live = [
+        task("1", "queued", 5, { title: "Standalone task", repo: "acme/api" }),
+        task("100", "queued", 5, { title: "Voice stream", repo: "acme/web" }),
+        task("2", "queued", 5, {
+          title: "Mic UI",
+          repo: "acme/web",
+          origin: "task:100",
+          generatedFrom: "100",
+        }),
+      ];
+      const f = await render(api, "backlog");
+      const nav = vi.spyOn(TestBed.inject(Router), "navigate");
+      const row2 = q(f, '[data-testid="row-2"]')!;
+      const partOf = row2.querySelector<HTMLAnchorElement>(
+        '[data-testid="tasks-part-of"]',
+      );
+      expect(partOf?.textContent).toContain("Part of Voice stream");
+      expect(partOf?.getAttribute("href")).toContain("/workstreams/task:100");
+
+      const sel = q<HTMLSelectElement>(f, '[data-testid="tasks-group"]')!;
+      sel.value = "workstream";
+      sel.dispatchEvent(new Event("change"));
+      expect(nav).toHaveBeenCalledWith([], {
+        queryParams: { group: "workstream" },
+        queryParamsHandling: "merge",
+      });
+
+      f.componentRef.setInput("group", "workstream");
+      await settle(f);
+      const headers = all(f, ".band-header").map((h) => h.textContent?.trim());
+      expect(headers.some((h) => h?.includes("Voice stream"))).toBe(true);
+      expect(headers.some((h) => h?.includes("Standalone tasks"))).toBe(true);
+
+      f.componentRef.setInput("group", "repo");
+      await settle(f);
+      const repoHeaders = all(f, ".band-header").map((h) =>
+        h.textContent?.trim(),
+      );
+      expect(repoHeaders.some((h) => h?.includes("acme/web"))).toBe(true);
+      expect(repoHeaders.some((h) => h?.includes("acme/api"))).toBe(true);
+    });
   });
 });

@@ -75,6 +75,8 @@ describe("AppComponent shell", () => {
       ...DESTINATIONS.map((d) => d.label),
       SETTINGS.label,
     ]);
+    expect(labels.indexOf("Workstreams")).toBe(1);
+    expect(labels.indexOf("Tasks")).toBe(2);
   });
 
   it("routes built pages inside the app and links the rest to the classic UI", async () => {
@@ -101,6 +103,7 @@ describe("AppComponent shell", () => {
     ];
     expect(links.map((e) => e.textContent?.trim())).toEqual([
       "New task",
+      "Start a workstream",
       "New session",
       "Task from template",
       "Run a suite",

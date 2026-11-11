@@ -57,6 +57,20 @@ g-inbox-page .queue-row.is-gone .row-main {
   opacity: 0.55;
 }
 
+g-inbox-page .row-main-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+g-inbox-page .row-part-of {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
 g-inbox-page .row-line3 {
   display: flex;
   align-items: center;
@@ -199,6 +213,22 @@ g-task-detail .task-page.is-pane .task-layout {
 
 g-task-detail .task-page.is-pane .task-tabs [data-testid="task-tab-details"] {
   display: inline-flex;
+}
+
+g-task-detail .task-page.is-pane .task-tabs {
+  flex-wrap: wrap;
+  row-gap: 2px;
+  padding: 0 14px;
+}
+
+g-task-detail .task-page.is-pane .task-tabs .tab-link {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+g-task-detail .task-page.is-pane .task-tabs .tab-link[aria-current="true"] {
+  color: var(--md-sys-color-primary);
+  border-bottom-color: var(--md-sys-color-primary);
 }
 
 g-task-detail .task-page.is-pane .task-title {

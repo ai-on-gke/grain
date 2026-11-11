@@ -27,6 +27,23 @@ export const routes: Routes = [
       import("./inbox/inbox-page.component").then((m) => m.InboxPageComponent),
   },
   {
+    path: "workstreams",
+    title: "Workstreams · grain",
+    loadComponent: () =>
+      import("./workstreams/workstreams-page.component").then(
+        (m) => m.WorkstreamsPageComponent,
+      ),
+  },
+  {
+    path: "workstreams/:key",
+    title: "Workstream · grain",
+    loadComponent: () =>
+      import("./workstreams/workstreams-page.component").then(
+        (m) => m.WorkstreamsPageComponent,
+      ),
+  },
+  { path: "topology", redirectTo: "/workstreams", pathMatch: "prefix" },
+  {
     path: "tasks",
     title: "Tasks · grain",
     loadComponent: () =>

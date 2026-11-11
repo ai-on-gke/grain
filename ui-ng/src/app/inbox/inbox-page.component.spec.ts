@@ -1352,5 +1352,61 @@ describe("inbox page helpers", () => {
         "2 owned by bob",
       );
     });
+
+    it("filters queue by ?ws= workstream and shows Part of links on rows and inspector", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        { id: "1", title: "Voice goal", state: "completed" },
+        {
+          id: "9",
+          title: "Mic UI",
+          state: "proposed",
+          origin: "task:1",
+          generatedFrom: "1",
+        },
+        { id: "10", title: "Unrelated item", state: "proposed" },
+      ];
+      const f = await render(api);
+      expect(rows(f)).toEqual(["Mic UI", "Unrelated item"]);
+      expect(q(f, '[data-testid="inbox-part-of"]')?.textContent).toContain(
+        "Part of Voice goal",
+      );
+      expect(
+        q(f, '[data-testid="inbox-inspector-part-of"]')?.textContent,
+      ).toContain("Part of Voice goal");
+
+      const nav = vi.spyOn(TestBed.inject(Router), "navigate");
+      f.componentRef.setInput("ws", "task:1");
+      await f.whenStable();
+      await new Promise((r) => setTimeout(r));
+      f.detectChanges();
+
+      const store = TestBed.inject(InboxStore);
+      expect(rows(f)).toEqual(["Mic UI"]);
+      expect(
+        q(f, '[data-testid="next-inbox-headline"]')?.textContent,
+      ).toContain("1 decision waiting on you");
+      expect(store.counts().all).toBe(1);
+      expect(store.counts().proposals).toBe(1);
+      expect(store.selected()?.title).toBe("Mic UI");
+      expect(q(f, '[data-testid="inbox-ws-filter"]')?.textContent).toContain(
+        "Voice goal",
+      );
+      expect(q(f, '[data-testid="inbox-ws-clear"]')).not.toBeNull();
+
+      // Press * and verify unrelated task #10 outside ?ws= is NOT checked or acted on.
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "*", bubbles: true }),
+      );
+      f.detectChanges();
+      expect([...store.checked()]).toEqual(["task:9:proposal"]);
+      expect(store.decisions().length).toBe(2);
+
+      q<HTMLButtonElement>(f, '[data-testid="inbox-ws-clear"]')!.click();
+      expect(nav).toHaveBeenCalledWith([], {
+        queryParams: { ws: null },
+        queryParamsHandling: "merge",
+      });
+    });
   });
 });

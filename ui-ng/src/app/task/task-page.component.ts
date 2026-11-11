@@ -42,6 +42,13 @@ export function backFrom(
   phone = isPhoneViewport(),
 ): BackLink {
   if (from === "inbox") return { label: "Inbox", commands: ["/inbox"] };
+  if (from?.startsWith("workstreams:")) {
+    return {
+      label: "Workstream",
+      commands: ["/workstreams", from.slice("workstreams:".length)],
+      query: { node: id },
+    };
+  }
   const tab = from?.startsWith("tasks:") ? from.slice(6) : "";
   const def = isTabId(tab) ? TABS.find((t) => t.id === tab) : undefined;
   return {

@@ -115,6 +115,7 @@ class FakeApi {
 async function render(
   api: FakeApi,
   tab?: string,
+  from?: string,
 ): Promise<ComponentFixture<TaskPageComponent>> {
   TestBed.configureTestingModule({
     imports: [TaskPageComponent],
@@ -127,6 +128,7 @@ async function render(
   const f = TestBed.createComponent(TaskPageComponent);
   f.componentRef.setInput("id", "7");
   if (tab) f.componentRef.setInput("tab", tab);
+  if (from) f.componentRef.setInput("from", from);
   f.autoDetectChanges();
   await TestBed.inject(TaskStore).refresh();
   await settle(f);
@@ -518,6 +520,27 @@ describe("duration", () => {
       expect(store.isBusy("approve", "8")).toBe(false);
       resolvePost();
       await p;
+    });
+
+    it("handles from=workstreams:<key> back link and renames tree tab to Workstream", async () => {
+      expect(backFrom("workstreams:task:7", "9")).toEqual({
+        label: "Workstream",
+        commands: ["/workstreams", "task:7"],
+        query: { node: "9" },
+      });
+
+      const f = await render(new FakeApi(), "tree", "workstreams:task:7");
+      expect(q(f, '[data-testid="task-back"]')?.textContent).toContain(
+        "Workstream",
+      );
+      expect(q(f, '[data-testid="task-tab-tree"]')?.textContent).toContain(
+        "Workstream",
+      );
+      const openWs = q<HTMLAnchorElement>(
+        f,
+        '[data-testid="open-in-workstreams"]',
+      );
+      expect(openWs?.getAttribute("href")).toContain("/workstreams/task:7");
     });
   });
 });

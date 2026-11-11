@@ -43,6 +43,14 @@ export const DESTINATIONS: readonly Destination[] = [
     phone: true,
   },
   {
+    id: "workstreams",
+    label: "Workstreams",
+    icon: "workstreams",
+    route: "/workstreams",
+    classic: "/tasks",
+    tip: "Goals and every task filed for them, drawn as trees.",
+  },
+  {
     id: "tasks",
     label: "Tasks",
     icon: "tasks",

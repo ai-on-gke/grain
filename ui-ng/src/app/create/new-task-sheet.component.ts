@@ -35,6 +35,7 @@ import type {
 import { InboxStore } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { DIRECTOR_ID, errorText } from "../sessions/session-view";
 import { CLASSIC_NEW_TASK } from "../shell/nav";
 import { CreateTaskService } from "./create-task.service";
@@ -81,22 +82,44 @@ import {
           <div class="sheet-head">
             <div class="sheet-head-row">
               <span class="status-pill neutral">{{
-                draft().approved ? "Starts on create" : "Proposal"
+                draft().workstream
+                  ? "Workstream"
+                  : draft().approved
+                    ? "Starts on create"
+                    : "Proposal"
               }}</span>
               <button
                 type="button"
                 class="icon-btn"
-                aria-label="Close New task"
+                [attr.aria-label]="
+                  draft().workstream
+                    ? 'Close Start a workstream'
+                    : 'Close New task'
+                "
                 data-testid="new-task-close"
                 (click)="close()"
               >
                 ×
               </button>
             </div>
-            <h2 id="new-task-title" class="sheet-title">New task</h2>
+            <h2 id="new-task-title" class="sheet-title">
+              {{ draft().workstream ? "Start a workstream" : "New task" }}
+            </h2>
           </div>
 
           <div class="sheet-body">
+            @if (draft().workstream) {
+              <p class="banner banner-info" data-testid="ws-start-banner">
+                State the goal and what done looks like. Its first run plans the
+                work and proposes tasks into one stream.
+              </p>
+            } @else if (draft().origin) {
+              <p class="banner banner-info" data-testid="ws-origin-banner">
+                Filing into workstream
+                <strong>{{ originLabel() }}</strong
+                >.
+              </p>
+            }
             @if (!canCreate()) {
               <p class="banner" data-testid="new-task-denied">
                 {{ deniedReason() }}
@@ -191,6 +214,28 @@ import {
                   }}</span>
                 </div>
               }
+              @if (draft().workstream) {
+                <div class="switch-row">
+                  <button
+                    type="button"
+                    role="switch"
+                    class="g-switch"
+                    data-testid="auto-approve-switch"
+                    aria-labelledby="sw-auto-approve"
+                    [attr.aria-checked]="!!draft().autoApproveProposals"
+                    (click)="
+                      set('autoApproveProposals', !draft().autoApproveProposals)
+                    "
+                  >
+                    <span class="sr-only"
+                      >Auto-approve this stream's proposals</span
+                    >
+                  </button>
+                  <span id="sw-auto-approve"
+                    >Auto-approve this stream's proposals</span
+                  >
+                </div>
+              }
             </div>
             <div class="sheet-actions">
               <button type="button" class="btn-text" (click)="close()">
@@ -213,7 +258,15 @@ import {
                 data-testid="new-task-submit"
                 [disabled]="busy() || !canCreate()"
               >
-                {{ draft().approved ? "Create and start" : "Save as proposal" }}
+                {{
+                  draft().workstream
+                    ? draft().approved
+                      ? "Start workstream"
+                      : "Save stream proposal"
+                    : draft().approved
+                      ? "Create and start"
+                      : "Save as proposal"
+                }}
               </button>
             </div>
           </div>
@@ -458,6 +511,7 @@ export class NewTaskSheetComponent {
   protected readonly svc = inject(CreateTaskService);
   private readonly api = inject(GrainApi);
   private readonly inbox = inject(InboxStore);
+  private readonly wsStore = inject(WorkstreamsStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly router = inject(Router);
@@ -483,9 +537,28 @@ export class NewTaskSheetComponent {
 
   // Live tasks a new one can wait for; standing session tasks are not
   // work anybody depends on.
+  private readonly knownTasks = computed(() => {
+    const byId = new Map<string, Task>();
+    for (const t of this.inbox.tasks()) byId.set(t.id, t);
+    for (const t of this.wsStore.allTasks()) {
+      if (!byId.has(t.id)) byId.set(t.id, t);
+    }
+    return [...byId.values()];
+  });
   private readonly liveTasks = computed(() =>
-    this.inbox.tasks().filter((t) => !t.consoleSession && !t.interactive),
+    this.knownTasks().filter((t) => !t.consoleSession && !t.interactive),
   );
+  protected readonly originLabel = computed(() => {
+    const orig = this.draft().origin?.trim() ?? "";
+    if (!orig) return "";
+    const ws = this.wsStore.byKey().get(orig);
+    if (ws) return ws.title;
+    if (orig.startsWith("task:")) {
+      const t = this.knownTasks().find((x) => x.id === orig.slice(5));
+      if (t?.title) return `#${t.id} ${t.title}`;
+    }
+    return orig;
+  });
   protected readonly repos = computed(() =>
     targetableRepos(this.config(), this.inbox.tasks()),
   );
@@ -550,6 +623,7 @@ export class NewTaskSheetComponent {
           );
         }
         setTimeout(() => this.titleInput()?.nativeElement.focus());
+        if (prefill.origin || prefill.workstream) this.wsStore.ensureLoaded();
         void this.loadConfig(prefill);
       });
     });
@@ -633,7 +707,7 @@ export class NewTaskSheetComponent {
   }
 
   protected titleOf(id: string): string {
-    return this.inbox.tasks().find((t) => t.id === id)?.title ?? "";
+    return this.knownTasks().find((t) => t.id === id)?.title ?? "";
   }
 
   protected addDep(ev: Event): void {
@@ -689,10 +763,15 @@ export class NewTaskSheetComponent {
         undefined,
         buildPayload(d, this.config()),
       );
+      if (d.workstream && created?.id) {
+        this.wsStore.recordStartedWorkstream(created.id);
+        void this.wsStore.refresh(true);
+      } else if (d.origin) {
+        void this.wsStore.refresh(true);
+      }
       this.svc.clearSaved();
       this.svc.close();
-      void this.inbox.refresh();
-      this.announce(created, d.approved);
+      this.announce(created, d.approved, !!d.workstream);
     } catch (err) {
       this.error.set({
         field: "title",
@@ -707,18 +786,37 @@ export class NewTaskSheetComponent {
   // snackbar (closing it is all that discarding is); a started task
   // cannot be taken back that way -- it may already be running, and a
   // requested branch is already being cut -- so it only offers Open.
-  private announce(created: Task, approved: boolean): void {
+  private announce(created: Task, approved: boolean, workstream = false): void {
     const id = created?.id;
     if (!id) {
-      this.snackbar.show(approved ? "Task filed" : "Proposal saved");
+      this.snackbar.show(
+        workstream
+          ? approved
+            ? "Workstream started"
+            : "Workstream proposal saved"
+          : approved
+            ? "Task filed"
+            : "Proposal saved",
+      );
       return;
     }
     const open = {
       label: "Open",
       run: () => {
-        void this.router.navigate(["/task", id]);
+        void this.router.navigate(
+          workstream ? ["/workstreams", `task:${id}`] : ["/task", id],
+        );
       },
     };
+    if (workstream) {
+      this.snackbar.show(
+        approved
+          ? `Started workstream #${id}; planning its tasks`
+          : `Saved workstream #${id} as a proposal`,
+        open,
+      );
+      return;
+    }
     if (approved) {
       this.snackbar.show(`Filed #${id}; it starts when a slot is free`, open);
       return;

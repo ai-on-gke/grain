@@ -476,4 +476,24 @@ describe("AgentsPageComponent", () => {
       "Running agents could not be loaded.",
     );
   });
+
+  it("shows Part of workstream links on agent cards and table rows", async () => {
+    const api = new FakeApi();
+    api.live = [
+      { id: "90", title: "Voice goal", state: "completed" } as Task,
+      run("1", { origin: "task:90", generatedFrom: "90" }),
+    ];
+    const f = await render(api);
+    const cardLink = q<HTMLAnchorElement>(f, '[data-testid="agent-part-of"]');
+    expect(cardLink?.textContent).toContain("Part of Voice goal");
+    expect(cardLink?.getAttribute("href")).toContain("/workstreams/task:90");
+
+    q<HTMLButtonElement>(f, '[data-testid="layout-list"]')!.click();
+    await f.whenStable();
+    const rowLink = q<HTMLAnchorElement>(
+      f,
+      '[data-testid="agent-row-part-of"]',
+    );
+    expect(rowLink?.textContent).toContain("Part of Voice goal");
+  });
 });

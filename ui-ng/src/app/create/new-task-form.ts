@@ -254,6 +254,9 @@ export interface NewTaskDraft {
   promptExtension: string;
   approved: boolean;
   atFront: boolean;
+  origin?: string;
+  workstream?: boolean;
+  autoApproveProposals?: boolean;
 }
 
 export function emptyDraft(
@@ -314,6 +317,10 @@ export function buildPayload(
     attachments: [],
     approved: d.approved,
     atFront: d.atFront,
+    ...(d.origin !== undefined ? { origin: d.origin } : {}),
+    ...(d.autoApproveProposals !== undefined
+      ? { autoApproveProposals: d.autoApproveProposals }
+      : {}),
   };
 }
 

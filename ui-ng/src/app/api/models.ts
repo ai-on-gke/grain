@@ -46,7 +46,6 @@ export interface Task {
   title: string;
   state: string;
   repo?: string;
-  repos?: string[];
   createdAt?: string;
   updatedAt?: string;
   proposedBy?: string;
@@ -69,6 +68,8 @@ export interface Task {
   mergeQueueBlockedAt?: string;
   redBaseBranch?: unknown;
   stall?: string;
+  deferredUntil?: string;
+  writes?: { repo: string; base?: string }[];
   consoleSession?: unknown;
   interactive?: boolean;
   // What the current run is doing, in a sentence, and when it said so;
@@ -84,7 +85,9 @@ export interface Task {
   authorKind?: string;
   authorLabel?: string;
   author?: string;
+  authorSource?: string;
   branch?: string;
+  base?: string;
   // Tasks this one waits for (task detail).
   dependsOn?: string[];
   description?: string;
@@ -94,9 +97,31 @@ export interface Task {
   creator?: string;
   approvedBy?: string;
   approvedByLabel?: string;
+  approvedByKind?: string;
+  approvedBySource?: string;
   // The task that filed this one, and the work tree it belongs to.
   generatedFrom?: string;
   origin?: string;
+  stacked?: boolean;
+  review?: boolean;
+  scheduled?: boolean;
+  suiteRun?: boolean;
+  imported?: boolean;
+  awaitingImportApproval?: boolean;
+  grainBaseRepair?: boolean;
+  fixesBaseBranch?: boolean;
+  reviewTask?: string;
+  securityReviewTask?: string;
+  autoApproveProposals?: boolean;
+  externalRef?: string;
+  continues?: string;
+  startedAt?: string;
+  endedAt?: string;
+  closedAt?: string;
+  filedVia?: string;
+  changelists?: string[];
+  derivedFrom?: string[];
+  designs?: string[];
   // Open dependencies and the state of each (GET /api/tasks).
   blockedBy?: string[];
   dependsOnStates?: Record<string, string>;
@@ -283,4 +308,31 @@ export interface DiffPreview {
   totalFiles: number;
   totalHunks: number;
   truncated?: boolean;
+}
+
+export interface TreeNode {
+  id: string;
+  title: string;
+  status: string;
+  pullRequest?: string;
+  done: boolean;
+  root?: boolean;
+  children?: TreeNode[];
+}
+
+export interface WorkTree {
+  origin?: string;
+  rootTask?: string;
+  done: number;
+  total: number;
+  nodes: TreeNode[];
+}
+
+export interface TaskListPage {
+  tasks: Task[];
+  nextCursor?: string;
+  truncated?: boolean;
+  total?: number;
+  merged?: number;
+  sessions?: number;
 }
