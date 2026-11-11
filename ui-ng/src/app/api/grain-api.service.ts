@@ -161,6 +161,12 @@ export class GrainApi {
     );
   }
 
+  delete<T = unknown>(key: RouteKey, params?: RouteParams): Promise<T> {
+    return firstValueFrom(
+      this.http.delete<T>(routePath(key, params), { headers: JSON_HEADERS }),
+    );
+  }
+
   config(): Promise<GrainConfig> {
     return this.get<GrainConfig>("GET /api/config");
   }

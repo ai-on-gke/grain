@@ -26,6 +26,7 @@ import {
   viewChild,
 } from "@angular/core";
 import {
+  NavigationEnd,
   NavigationStart,
   Router,
   RouterLink,
@@ -311,16 +312,20 @@ interface CreateItem {
         </span>
       </footer>
 
-      <a
-        class="phone-fab"
-        data-testid="phone-new-task"
-        [href]="newTaskHref"
-        aria-label="New task"
-      >
-        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-          <path [attr.d]="icons['add']" fill="currentColor" />
-        </svg>
-      </a>
+      <!-- Sessions has a composer where the phone FAB would sit, and is
+        itself a place to ask for work (the prototype hides it there too). -->
+      @if (!onSessions()) {
+        <a
+          class="phone-fab"
+          data-testid="phone-new-task"
+          [href]="newTaskHref"
+          aria-label="New task"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+            <path [attr.d]="icons['add']" fill="currentColor" />
+          </svg>
+        </a>
+      }
 
       <nav class="compact-nav" aria-label="Primary destinations (compact)">
         @for (d of phoneDestinations; track d.id) {
@@ -438,6 +443,7 @@ export class AppComponent implements OnInit, OnDestroy {
       tip: "Start a standing conversation with an agent.",
     },
   ];
+  protected readonly onSessions = signal(false);
   protected readonly inboxCount = computed(() => this.store.entries().length);
   protected readonly createOpen = signal(false);
   protected readonly createPos = signal({ top: 0, left: 0 });
@@ -463,11 +469,17 @@ export class AppComponent implements OnInit, OnDestroy {
     );
     r(",", "Open Settings", () => this.open(SETTINGS));
     r("t", "Switch light and dark", () => this.theme.toggle());
+    // The rail's Inbox badge and the footer's version come from the Inbox
+    // store, so it runs on every page, not only on the Inbox.
+    this.store.start();
     // Menus belong to the page they were opened on.
     this.navSub = this.router.events.subscribe((e) => {
       if (e instanceof NavigationStart) {
         this.createOpen.set(false);
         this.moreOpen.set(false);
+      }
+      if (e instanceof NavigationEnd) {
+        this.onSessions.set(e.urlAfterRedirects.startsWith("/sessions"));
       }
     });
     // The create menu is placed from its button once; a scrolled rail or
@@ -481,6 +493,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.store.stop();
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
     this.doc.defaultView?.removeEventListener("resize", this.onViewportChange);

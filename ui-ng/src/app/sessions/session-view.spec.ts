@@ -1,0 +1,138 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import type { Comment, Task } from "../api/models";
+import {
+  apiGrantCount,
+  authorOf,
+  grantName,
+  isApiCapability,
+  isStaleEdit,
+  lastLine,
+  otherGrants,
+  renderMarkdown,
+  sessionStatus,
+  toggleRows,
+} from "./session-view";
+
+const task = (state: string, extra: Partial<Task> = {}) =>
+  ({ id: "1", title: "Director", state, ...extra }) as Task;
+
+describe("sessionStatus", () => {
+  it("reads the session task's state the way the classic page does", () => {
+    expect(sessionStatus(task("running"))).toMatchObject({
+      label: "Working",
+      live: true,
+    });
+    expect(sessionStatus(task("queued"))).toMatchObject({
+      label: "Starting",
+      live: true,
+    });
+    expect(sessionStatus(task("awaiting_reply"))).toMatchObject({
+      label: "Asked",
+      tip: "Waiting for your message",
+      live: false,
+    });
+    expect(sessionStatus(task("failed")).label).toBe("Last reply failed");
+    expect(sessionStatus(task("closed")).label).toBe("Closed");
+    expect(sessionStatus(null).label).toBe("No conversation");
+  });
+});
+
+describe("capability rows", () => {
+  const offered = [
+    { id: "api:task-admin" },
+    { id: "https://grain.dev/capabilities/api#ci-read" },
+    { id: "self-debug", name: "Self debug" },
+    { id: "gcloud", ready: false },
+    { id: "github", ready: false },
+  ];
+
+  it("tells API grants from the rest", () => {
+    expect(isApiCapability("api:tasks:read")).toBe(true);
+    expect(isApiCapability("https://grain.dev/capabilities/api#x")).toBe(true);
+    expect(
+      isApiCapability("https://grain.dev/capabilities/grain#health={}"),
+    ).toBe(false);
+  });
+
+  it("lists ready non-API capabilities, plus unready ones already held", () => {
+    expect(toggleRows(offered, ["github"]).map((r) => r.id)).toEqual([
+      "self-debug",
+      "github",
+    ]);
+  });
+
+  it("names held grants no toggle shows, and counts API grants", () => {
+    const session = {
+      id: "director",
+      title: "Director",
+      capabilities: [
+        "self-debug",
+        "https://grain.dev/capabilities/api#ci-read",
+        "https://grain.dev/capabilities/grain#health={}",
+        'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}',
+      ],
+    };
+    const rows = toggleRows(offered, session.capabilities);
+    expect(otherGrants(session, rows)).toEqual([
+      "health",
+      "config-map: bootstrap",
+    ]);
+    expect(apiGrantCount(session)).toBe(1);
+    expect(grantName("plain")).toBe("plain");
+  });
+});
+
+describe("messages", () => {
+  const c = (extra: Partial<Comment>): Comment => ({
+    id: 1,
+    body: "hi",
+    ...extra,
+  });
+
+  it("names authors by label, with on-behalf-of", () => {
+    expect(
+      authorOf(c({ author: "console-session", authorKind: "automation" })),
+    ).toBe("Grain");
+    expect(authorOf(c({ author: "a", authorLabel: "Ana (access code)" }))).toBe(
+      "Ana (access code)",
+    );
+    expect(authorOf(c({ author: "bot", onBehalfOfLabel: "Ana" }))).toBe(
+      "bot for Ana",
+    );
+  });
+
+  it("gives the list one plain line from the newest message", () => {
+    expect(lastLine([c({ body: "old" }), c({ body: "## Done\n**ok**" })])).toBe(
+      "Done ok",
+    );
+    expect(lastLine([])).toBe("");
+    expect(lastLine([c({ body: "x".repeat(200) })])).toHaveLength(120);
+  });
+
+  it("renders Markdown and shows raw HTML as text", () => {
+    const html = renderMarkdown("**bold** <script>alert(1)</script>");
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(renderMarkdown("`a < b`")).toContain("<code>a &lt; b</code>");
+  });
+
+  it("recognises the stale-grants refusal", () => {
+    expect(isStaleEdit({ status: 409, error: { code: "stale" } })).toBe(true);
+    expect(isStaleEdit({ status: 409, error: { code: "other" } })).toBe(false);
+    expect(isStaleEdit({ status: 500 })).toBe(false);
+  });
+});

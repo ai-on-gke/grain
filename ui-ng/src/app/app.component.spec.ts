@@ -33,7 +33,10 @@ async function render(): Promise<ComponentFixture<AppComponent>> {
   TestBed.configureTestingModule({
     imports: [AppComponent],
     providers: [
-      provideRouter([{ path: "inbox", children: [] }]),
+      provideRouter([
+        { path: "inbox", children: [] },
+        { path: "sessions", children: [] },
+      ]),
       { provide: APP_BASE_HREF, useValue: "/next/" },
       { provide: GrainApi, useValue: fakeApi },
       { provide: GrainEvents, useValue: { events: () => NEVER } },
@@ -168,5 +171,16 @@ describe("AppComponent shell", () => {
     open.mockImplementation(() => undefined);
     press(",");
     expect(open).toHaveBeenLastCalledWith(SETTINGS);
+  });
+
+  it("hides the phone FAB on Sessions, where the composer sits", async () => {
+    const f = await render();
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl("/inbox");
+    await f.whenStable();
+    expect(el(f).querySelector('[data-testid="phone-new-task"]')).toBeTruthy();
+    await router.navigateByUrl("/sessions");
+    await f.whenStable();
+    expect(el(f).querySelector('[data-testid="phone-new-task"]')).toBeNull();
   });
 });

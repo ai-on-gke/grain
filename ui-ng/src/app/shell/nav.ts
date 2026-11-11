@@ -55,7 +55,7 @@ export const DESTINATIONS: readonly Destination[] = [
     id: "sessions",
     label: "Sessions",
     icon: "sessions",
-    route: null,
+    route: "/sessions",
     classic: "/sessions",
     tip: "Standing conversations with agents, the Director first.",
     phone: true,

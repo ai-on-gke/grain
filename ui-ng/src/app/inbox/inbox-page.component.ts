@@ -17,7 +17,6 @@ import {
   Component,
   ElementRef,
   HostListener,
-  OnDestroy,
   OnInit,
   computed,
   effect,
@@ -797,7 +796,7 @@ export function questionOf(
   `,
   imports: [NgTemplateOutlet],
 })
-export class InboxPageComponent implements OnInit, OnDestroy {
+export class InboxPageComponent implements OnInit {
   protected readonly store = inject(InboxStore);
   protected readonly access = inject(AccessService);
   protected readonly theme = inject(ThemeService);
@@ -882,12 +881,10 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  // The shell keeps the store running for the rail badge; opening the
+  // page reads the queue at once rather than waiting for the next poll.
   ngOnInit(): void {
     this.store.start();
-  }
-
-  ngOnDestroy(): void {
-    this.store.stop();
   }
 
   protected can(

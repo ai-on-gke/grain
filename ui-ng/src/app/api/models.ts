@@ -68,6 +68,13 @@ export interface Task {
   redBaseBranch?: unknown;
   stall?: string;
   consoleSession?: unknown;
+  interactive?: boolean;
+  // What the current run is doing, in a sentence, and when it said so;
+  // activityBySetup marks grain's own setup steps rather than the agent.
+  activity?: string;
+  activityAt?: string;
+  activityBySetup?: boolean;
+  priority?: number;
   body?: string;
   branch?: string;
 }
@@ -96,15 +103,71 @@ export interface AccessRequestView {
 export interface Comment {
   id: number;
   author?: string;
+  // "human", "agent" or "automation" (pkg/ui tasks.go Comment).
+  authorKind?: string;
+  authorLabel?: string;
+  onBehalfOf?: string;
+  onBehalfOfLabel?: string;
   body: string;
   summary?: string;
+  handover?: boolean;
   createdAt?: string;
+  attachments?: {
+    id: string;
+    filename: string;
+    contentType?: string;
+    size?: number;
+  }[];
+}
+
+export interface Attempt {
+  number: number;
+  startedAt?: string;
+  finishedAt?: string;
+  outcome?: string;
+  detail?: string;
+  model?: string;
 }
 
 export interface TaskDetail extends Task {
   comments?: Comment[];
+  attempts?: Attempt[];
   pendingAccess?: AccessRequestView | null;
   pendingSecret?: { name: string; secret?: string; key?: string } | null;
+}
+
+// One standing conversation (pkg/ui console_sessions.go
+// ConsoleSessionSetting). Its conversation is the comments of its task.
+export interface ConsoleSession {
+  id: string;
+  title: string;
+  taskId?: string;
+  capabilities?: string[];
+  missingShippedDefaults?: string[];
+  networkAccess?: string;
+  effectiveNetworkAccess?: string;
+  tasksApproved?: boolean;
+  keepRunning?: boolean;
+  model?: string;
+  crowded?: boolean;
+  crowdedNote?: string;
+}
+
+// A capability this deployment offers (ui.Capability): what a picker
+// lists. `ready: false` means it is not set up here.
+export interface CapabilityOption {
+  id: string;
+  name?: string;
+  description?: string;
+  ready?: boolean;
+  needs?: string;
+}
+
+export interface ConsoleSessionList {
+  sessions: ConsoleSession[];
+  created?: string;
+  capabilities?: CapabilityOption[];
+  networkAccessOptions?: string[];
 }
 
 export interface Notification {
