@@ -15,9 +15,12 @@
 package ui_test
 
 import (
+	"context"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -145,5 +148,53 @@ func TestCapabilityPolicyDenyTurnsTheDefaultCIReadOff(t *testing.T) {
 				t.Errorf("DroppedDefaults = %+v: an opted-out default is not offered and dropped, it is not offered", task.DroppedDefaults)
 			}
 		})
+	}
+}
+
+// The agent API gate (authorizeAgentCall) opens to the default grant
+// exactly the CI reads the prompt lists for a GitHub-CI run -- `grain ci
+// list`, `grain ci show/log` of a GitHub Actions run (gha:<owner>:<name>:<run>)
+// -- on the task's own repository, and nothing beyond it: another
+// repository's runs, and every other scope, are refused.
+func TestDefaultCIReadOpensOnlyItsOwnRepositorysCIOverTheAgentAPI(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	forge := newFakeActions(now)
+	srv, client, store := actionsServer(t, forge, now)
+	filed, err := client.CreateTask(context.Background(), ui.CreateTaskRequest{Title: "github ci", Approved: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetTask(context.Background(), filed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Grants) != 1 || !model.IsDefaultCIReadGrant(stored.Grants[0], model.RepoRef{Owner: "acme", Name: "widgets"}) {
+		t.Fatalf("grants = %+v, want only the default ci-read on acme/widgets", stored.Grants)
+	}
+	id := filed.ID
+	for _, path := range []string{
+		"/api/ci/runs",
+		"/api/ci/runs?repo=acme/widgets",
+		"/api/ci/runs/gha:acme:widgets:42",
+		"/api/ci/runs/gha:acme:widgets:42/log",
+	} {
+		if code, body := asAgent(t, srv, id, http.MethodGet, path, "", ""); code != http.StatusOK {
+			t.Errorf("the default ci-read was refused %s: %d %s", path, code, body)
+		}
+	}
+	for _, path := range []string{
+		"/api/ci/runs?repo=acme/other",
+		"/api/ci/runs/gha:acme:other:42",
+		"/api/ci/runs/gha:acme:other:42/log",
+		"/api/tasks",
+		"/api/memory",
+	} {
+		if code, body := asAgent(t, srv, id, http.MethodGet, path, "", ""); code != http.StatusForbidden {
+			t.Errorf("the default ci-read reached %s: %d %s", path, code, body)
+		}
+	}
+	if code, body := asAgent(t, srv, id, http.MethodPost, "/api/ci/runs", `{"repo":"acme/widgets","ref":"main"}`, "rerun"); code != http.StatusForbidden {
+		t.Errorf("the default ci-read started a CI run: %d %s", code, body)
 	}
 }

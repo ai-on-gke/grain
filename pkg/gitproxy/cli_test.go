@@ -90,7 +90,7 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 		t.Errorf("base status: %d %s", rec.Code, rec.Body)
 	}
 	rec = get("tok-plain", "/cli/ci/runs")
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `does not hold the "https://grain.dev/capabilities/grain#ci" capability`) {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `needs "https://grain.dev/capabilities/api#ci-read" on bwsalmon/grain`) {
 		t.Errorf("ci runs without grain-ci: %d %s", rec.Code, rec.Body)
 	}
 	rec = get("tok-plain", "/cli/db/query")

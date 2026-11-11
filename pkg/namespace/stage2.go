@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/safepath"
 )
 
@@ -40,6 +41,24 @@ func RefuseCapability(subject, capability string) error {
 		"%w: %s: that tool belongs to the %q capability, and this run does not hold it (this run does not hold the %q capability). "+
 			"Nothing you can do from inside this run will add it -- a human attaches it to the task.",
 		ErrForbidden, subject, capability, capability)
+}
+
+// RefuseCIRead is RefuseCapability for a CI read -- `grain ci list/show/log`,
+// `grain pr status/base-status`, ci:// -- by a run holding no read of CI.
+// It names the grant that opens those reads, api#ci-read on the run's own
+// repository, rather than grain#ci: grain#ci is attached only where grain
+// CI gates a repository, so on any other a run told it lacked grain#ci
+// asked a person for a grant nobody could give there (task 4364).
+func RefuseCIRead(subject, repo string) error {
+	on := "this task's repository"
+	if strings.TrimSpace(repo) != "" {
+		on = repo
+	}
+	return fmt.Errorf(
+		"%w: %s: reading CI needs %q on %s, and this run does not hold it. "+
+			"Ask a person for it with request_access (%s on %s) -- not for grain#ci, which only a repository "+
+			"grain CI gates is given. `grain ci wait` and `grain pr open` work without it.",
+		ErrForbidden, subject, model.APIRef("ci-read"), on, model.APIRef("ci-read"), on)
 }
 
 // TaskAttemptView is one attempt's addressable prompt and transcript under
