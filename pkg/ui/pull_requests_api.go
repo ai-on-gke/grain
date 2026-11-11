@@ -221,7 +221,7 @@ func (c *Client) checkAdoptedShepherdApproval(ctx context.Context, repo model.Re
 	}
 	if call, ok := agentCallFromContext(ctx); ok {
 		if !call.grants.Allows("tasks:admin", targetRepo) {
-			return forbiddenErrorf("task %s cannot approve task %s: approving work needs api:tasks:admin", by.ID, task.ID)
+			return forbiddenErrorf("task %s cannot approve task %s: approving work needs https://grain.dev/capabilities/api#tasks:admin", by.ID, task.ID)
 		}
 		if strings.TrimSpace(call.reason) == "" {
 			return forbiddenErrorf("task %s cannot approve task %s without a reason: it is not approved, and adopting it would "+
@@ -244,14 +244,14 @@ func (c *Client) checkAdoptedShepherdApproval(ctx context.Context, repo model.Re
 			how = "it is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
 		}
 		return forbiddenErrorf("task %s cannot approve task %s: %s, and an agent never approves its own proposals, "+
-			"directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them "+
+			"directly or through the tasks they filed, even under https://grain.dev/capabilities/api#tasks:admin or dispatch:write -- a person approves them "+
 			"(docs/agent-api.md)", me, task.ID, how)
 	}
 	if holds, err := c.proposalPersonHolds(ctx, task, proposer, acting); err != nil {
 		return err
 	} else if len(holds) > 0 {
 		return forbiddenErrorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
-			"approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)",
+			"approves a task held for a person, even under https://grain.dev/capabilities/api#tasks:admin or dispatch:write (docs/agent-api.md)",
 			me, task.ID, strings.Join(holds, "; "))
 	}
 	return c.agentMayApprove(ctx, task)
