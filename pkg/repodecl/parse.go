@@ -796,6 +796,7 @@ type rawSchedule struct {
 	OverlapGroup         string               `yaml:"overlap-group"`
 	Review               string               `yaml:"review"`
 	GrainCI              *bool                `yaml:"grain-ci"`
+	SkipWhen             string               `yaml:"skip-when"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
@@ -1095,6 +1096,12 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 				"grain CI even on a ci_mode: github repository, and this schedule runs no `workflow:`", f.path)
 		}
 		sched.GrainCI = *raw.GrainCI
+	}
+	// A condition outside the schedule that holds its firings
+	// (model.Schedule.SkipWhen): `skip-when: publishing-held` holds them
+	// while its base branch's publishing is held by a release triage task.
+	if sched.SkipWhen, err = model.ParseScheduleSkipWhen(raw.SkipWhen); err != nil {
+		return model.Schedule{}, fmt.Errorf("%s: skip-when: %w", f.path, err)
 	}
 	if raw.AutoApproveProposals != nil {
 		sched.AutoApproveProposals = *raw.AutoApproveProposals
