@@ -44,10 +44,19 @@ import (
 // for that host, "owner" (or "owner/*") an owner or organization, and
 // "owner/repo" one repository. A team wanting one credential for several
 // specific repositories lists one connection per repository.
+//
+// MergeCredential, when set, is the credential grain merges the
+// connection's pull requests with, in place of Credential: a GitHub
+// App's, so that the forge records the merge as `<app>[bot]` rather than
+// as the person whose token clones and pushes (task 4386,
+// docs/github-actions-ci.md#a-merge-identity-of-grains-own). Only the
+// merge itself, and the hand-off to GitHub's merge queue, go out under
+// it; every other call stays on Credential.
 type TeamGitConnection struct {
-	Credential string `json:"credential" yaml:"credential"`
-	Host       string `json:"host,omitempty" yaml:"host,omitempty"`
-	Scope      string `json:"scope,omitempty" yaml:"scope,omitempty"`
+	Credential      string `json:"credential" yaml:"credential"`
+	Host            string `json:"host,omitempty" yaml:"host,omitempty"`
+	Scope           string `json:"scope,omitempty" yaml:"scope,omitempty"`
+	MergeCredential string `json:"merge_credential,omitempty" yaml:"merge_credential,omitempty"`
 }
 
 // connectionSpecificity ranks a scope: a repository beats an owner beats
@@ -66,6 +75,10 @@ func NormalizeTeamGitConnection(c TeamGitConnection) (TeamGitConnection, error) 
 	c.Credential = strings.TrimSpace(c.Credential)
 	if c.Credential == "" {
 		return c, fmt.Errorf("a git connection needs a credential")
+	}
+	c.MergeCredential = strings.TrimSpace(c.MergeCredential)
+	if c.MergeCredential == "anonymous" {
+		return c, fmt.Errorf("a git connection's merge credential cannot be anonymous: an unauthenticated request merges nothing")
 	}
 	host, err := NormalizeGitHost(c.Host)
 	if err != nil {

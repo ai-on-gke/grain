@@ -365,7 +365,7 @@ describe("RepoPage", () => {
       }),
     );
     await user.click(
-      within(defaults).getByRole("button", { name: /^Remove api:tasks:read/ }),
+      within(defaults).getByRole("button", { name: /^Remove api#tasks:read/ }),
     );
     await waitFor(() =>
       expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/capabilities", {

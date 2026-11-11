@@ -1972,6 +1972,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err != nil {
 			return fmt.Errorf("orchestrator: re-reading %s after merge: %w", ref, err)
 		}
+		recordMergedAs(ctx, store, client, task.ID, ref, detail, now)
 		health = healthOf(detail, checks, e.requiredCheck, checksKnown, checksSettled, grain)
 		if member {
 			// Under MergeRecheckEnforce, each entry in the lane is checked
@@ -2505,6 +2506,15 @@ func advanceMergeQueueHead(ctx context.Context, store *model.Store, client githu
 		var ev buildEvidence
 		if health == model.PrFailing && !gateIsGrainCI && !model.IsConfigRepo(ref.Repo) {
 			ev = readBuildEvidence(client, ref, detail.HeadSHA)
+		}
+		// A red whose every failing job died on the runner -- its DNS, a
+		// package mirror it could not reach, the runner itself lost --
+		// is waited out with re-runs of the failed jobs, not repaired:
+		// no commit clears it, and an outage longer than the repair
+		// budget used to leave every queued pull request in
+		// merge_failed (prinfra.go, 2026-11-11).
+		if held, err := waitOutInfraFailure(ctx, store, client, e, ev, now); err != nil || held {
+			return err
 		}
 		// Startup failures, from either direction: this pull request's
 		// own runs all died before a step (github.OnlyStartupFailures),

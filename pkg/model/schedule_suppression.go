@@ -65,6 +65,12 @@ const (
 	// must be reported ahead of the due-time check so Processes does not
 	// render it as actively polling ("on ref move").
 	SuppressedByWatchedRepoOffTarget ScheduleSuppressionReason = "watchedRepoOffTarget"
+	// SuppressedByPublishingHeld is a schedule that declares
+	// `skip-when: publishing-held` (SkipWhenPublishingHeld) whose base
+	// branch's publishing is held pending the release triage task TaskID
+	// names (BaseBranchPublishing.Gated, grain/task-4393). Held, as an
+	// overlap is: it fires once when that task closes.
+	SuppressedByPublishingHeld ScheduleSuppressionReason = "publishingHeld"
 )
 
 // ScheduleSuppression is a firing that has come due and is not
@@ -189,8 +195,12 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 			}
 		}
 	}
-	if sched.Overlap.Allows() || sched.NextRunAt.After(now) {
+	if sched.NextRunAt.After(now) {
 		return nil, nil
+	}
+	if sched.Overlap.Allows() {
+		// Nothing of its own holds it; its declared condition still may.
+		return s.publishingSuppression(ctx, sched, now)
 	}
 	_, workflow := workflowReviewSchedule(sched)
 	switch {
@@ -245,7 +255,9 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 			return sup, nil
 		}
 	}
-	return nil, nil
+	// A declared condition last, as each fireXSchedule asks it: a
+	// previous firing still going is the more useful thing to name.
+	return s.publishingSuppression(ctx, sched, now)
 }
 
 // overlapGroupRepo is the repository sched's overlap group is scoped to:

@@ -1836,7 +1836,7 @@ export default function RepoPage({
                             >
                               It swaps the gate rather than removing it. Tasks
                               filed against {repo} while this is on are granted
-                              the <code>grain-ci</code> capability, so their
+                              the <code>grain#ci</code> capability, so their
                               branches are judged by {repo}&rsquo;s{" "}
                               <code>.grain/workflows</code>. A commit with no
                               grain CI verdict stays pending and is eventually
@@ -3240,8 +3240,8 @@ export default function RepoPage({
               grain/config state repository and the repository's half is
               its own .grain/settings.yml, so this has no control for any
               role. portWarnings names the port-types entries that cannot
-              take effect, the operator's included, which the declarations
-              status above does not show. */}
+              take effect, the operator's included; the declarations status
+              above already shows the repository's own. */}
           {declarations &&
           ((declarations.pairedBranches || []).length > 0 ||
             (declarations.portDirections || []).length > 0) ? (
@@ -3294,16 +3294,29 @@ export default function RepoPage({
                   ))}
                 </TableBody>
               </Table>
-              {(declarations.portWarnings || []).map((w) => (
-                <Typography
-                  key={w}
-                  variant="body2"
-                  color="warning.main"
-                  className="port-warning"
-                >
-                  Warning: {w}
-                </Typography>
-              ))}
+              {/* Only what the declarations status above has not already
+                  said: the repository's own port-types findings are on
+                  that list too (ui.Client.RepoDefaults appends them to
+                  it), and drawing them twice read as two problems
+                  (2026-11-11 repository walkthrough). The operator's
+                  findings appear here alone. */}
+              {(declarations.portWarnings || [])
+                .filter(
+                  (w) =>
+                    !(declarations.declarationsStatus?.warnings || []).includes(
+                      w,
+                    ),
+                )
+                .map((w) => (
+                  <Typography
+                    key={w}
+                    variant="body2"
+                    color="warning.main"
+                    className="port-warning"
+                  >
+                    Warning: {w}
+                  </Typography>
+                ))}
             </Box>
           ) : null}
 

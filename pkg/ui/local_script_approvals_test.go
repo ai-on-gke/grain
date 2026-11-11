@@ -260,7 +260,7 @@ func TestLocalScriptApprovalRefusedWithoutTheCapability(t *testing.T) {
 	_, err := accessCodeClient(client, srv.URL).RequestLocalScriptApproval(ctx, task.ID, approvalRequest{
 		ID: "1", Tool: "local_deploy", Script: "deploy",
 	})
-	if err == nil || !strings.Contains(err.Error(), "holds no local-scripts capability") {
+	if err == nil || !strings.Contains(err.Error(), "holds no host-script grant") {
 		t.Fatalf("err %v: want 403 for a task holding no local-scripts capability", err)
 	}
 }

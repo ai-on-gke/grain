@@ -246,7 +246,13 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	comment, hasComment := effectiveCommentOnIssue(result)
 	if hasComment {
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "comment_on_issue"), staged)
-		if _, err := relayCommentWithAttachments(ctx, store, task, withDroppedAttachments(comment, dropped), attachments, now); err != nil {
+		// The note's own one line, when the run gave one: what the inbox
+		// and the task row show of a task resting on it (ui.Task.NoteSummary).
+		// None is not derived -- a report's opening sentence is not a
+		// summary of what anybody has to do.
+		summary, _ := firstToolCallArg(result, "comment_on_issue", "summary")
+		summary = model.NormalizeQuestionSummary(summary)
+		if _, err := relayQuestion(ctx, store, task, withDroppedAttachments(comment, dropped), summary, attachments, now); err != nil {
 			return fmt.Errorf("orchestrator: posting comment for %s: %w", task.ID, err)
 		}
 		checkAndRecordStewardReportText(ctx, store, task, runID, comment, result, now)

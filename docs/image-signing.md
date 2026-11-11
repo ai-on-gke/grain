@@ -264,7 +264,12 @@ It is asked in two places:
   history leaves `main`. The check reads the forge with `GITHUB_TOKEN`
   (`pull-requests: read`) and needs the repository variable
   `GRAIN_MERGE_LOGINS`, the logins grain merges as. Until that variable
-  is set, only forge-approved merges publish. Setting
+  is set, only forge-approved merges publish. It must name only an
+  identity no person merges as by hand -- a GitHub App grain merges
+  through, as `<slug>[bot]` -- never the login of a person whose token
+  grain pushes with, or that person's hand merges pass too; `grain health`
+  warns when it names a user account ([A merge identity of grain's
+  own](github-actions-ci.md#a-merge-identity-of-grains-own)). Setting
   `REQUIRE_REVIEWED_MERGE=false` skips the check, and the build log says
   so. The record of how each commit was merged is attested onto every
   image the release signs, as in-toto predicate type
