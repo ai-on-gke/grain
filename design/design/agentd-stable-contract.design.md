@@ -73,15 +73,15 @@ equal to the code.
 
 `~/.config/grain/agentd.yaml` for agentd, `/etc/grain/hostd.yaml` for a
 root-installed host (`allowlist.go`). Parsed **strictly**
-(`KnownFields(true)`): a key this build does not know is a parse error.
+(`KnownFields(true)`, ignoring `x-*` annotation keys at top level and on entries): a key this build does not know is a parse error.
 
 | Key | Meaning |
 |---|---|
 | `clis.<name>` / `capabilities.<name>` | one program the host may start; agentd refuses any `capabilities:` |
-| `path` / `command` | the binary, absolute; the request names the entry, never a binary |
+| `path` / `command` | the binary, absolute (`path` also accepts `~/`); the request names the entry, never a binary |
 | `args`, `extra_args` | prepended argv; whether the daemon may append (default yes for a CLI) |
-| `paths_under`, `cwd_under` | where path-like args and the working directory must sit (the stage root is added for a start over a session) |
-| `env` | names (or `NAME_*` patterns) the daemon may set; identity variables and `LD_*` only by exact name |
+| `paths_under`, `cwd_under` | where path-like args and the working directory must sit, absolute or `~/` (the stage root is added for a start over a session) |
+| `env` | names, `NAME_*` patterns, or `*` (any name outside the frozen deny set); identity, `LD_*` and injection variables only by exact name |
 | `pass_env`, `set_env` | host-supplied variables the daemon may not override |
 | `max_duration` | cap on one process's life (24 h default) |
 | `drain_cap`, `capacity`, `labels` | drain bound, concurrent CLI runs, display labels |
@@ -239,6 +239,7 @@ that predates the list is credited from its protocol version
 | `logins` | contract v1 | `Hello.logins` is authoritative: empty means none | treats logins as unknown |
 | `agents_only` | contract v1 | `Hello.agents_only` is authoritative | treats it as unknown |
 | `features` | contract v1 | `Hello.features` itself, so silence about a feature is a statement | infers features from the protocol version |
+| `env_open` | contract v1 | `env: ["*"]` (any variable outside the frozen deny set), `~/`-relative `path`/`paths_under`/`cwd_under`, and ignored `x-*` annotation keys | installer and Settings snippets write closed `env:` lists and absolute paths |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -511,6 +512,7 @@ feature renew
 feature logins
 feature agents_only
 feature features
+feature env_open
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]
@@ -670,6 +672,20 @@ identity_env USER
 identity_env LOGNAME
 identity_env LANG
 identity_env TZ
+env_deny PATH
+env_deny HOME
+env_deny USER
+env_deny LOGNAME
+env_deny LANG
+env_deny TZ
+env_deny LD_*
+env_deny BASH_ENV
+env_deny ENV
+env_deny NODE_OPTIONS
+env_deny PYTHONSTARTUP
+env_deny PYTHONPATH
+env_deny PERL5OPT
+env_deny RUBYOPT
 max_frame 1048576
 max_stage_data 524288
 ```

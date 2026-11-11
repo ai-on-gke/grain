@@ -296,16 +296,6 @@ func prune(dir string, maxAge time.Duration, keep int) error {
 	return nil
 }
 
-// expandHome turns a leading "~/" into hostd's home.
-func expandHome(path string) string {
-	if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, rest)
-		}
-	}
-	return path
-}
-
 // confined is path, "~/" expanded and cleaned, when it is root or under
 // it and nothing between root and its last element is a symlink: a link
 // planted inside the staging root cannot take a write outside it. The
