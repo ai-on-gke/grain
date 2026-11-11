@@ -262,14 +262,16 @@ type Config struct {
 	// hazard this design is built around.
 	PostCheckRun func(ctx context.Context, post CheckRunPost) (int64, error)
 	// CheckTree, if set, replaces running the check as a subprocess: it
-	// is handed a checked-out tree and answers with what a reader of the
-	// check run should be shown, or an error whose message is that.
+	// is handed a checked-out tree and the commit it is checked against
+	// (the deployment's own branch head, `grain state check -base`), and
+	// answers with what a reader of the check run should be shown, or an
+	// error whose message is that.
 	//
 	// Only tests set it. What a deployment does instead is exec its own
 	// binary (runCheckSubprocess) -- see postChecks on why an unmerged
 	// pull request's tree is not something to import inside the daemon's
 	// own process.
-	CheckTree func(ctx context.Context, dir string) (string, error)
+	CheckTree func(ctx context.Context, dir, base string) (string, error)
 	// Now is this repository's clock -- the timestamp an export commit
 	// carries, and what the hourly work inside a sync is measured
 	// against (the workflow health check, git's own maintenance). nil
