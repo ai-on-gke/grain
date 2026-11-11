@@ -48,6 +48,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -627,6 +628,16 @@ func TestTaskLifecycleOnEveryKindOfGitHost(t *testing.T) {
 // gitproxy.IsAccessRefusal knows, so the orchestrator's own clone retries
 // such a task rather than parking it on that fix: filed from
 // grain/task-4345.)
+// readsAsMissingRepo reports whether git's output says the repository was
+// not there: "not found", or a 404 status. 404 is matched as a number of
+// its own, since the output also quotes the git proxy's URL, and a random
+// port such as 127.0.0.1:40439 contains it.
+func readsAsMissingRepo(out string) bool {
+	return strings.Contains(out, "not found") || status404.MatchString(out)
+}
+
+var status404 = regexp.MustCompile(`\b404\b`)
+
 func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	r := newHostsRig(t)
 	depot := r.hosts[3]
@@ -644,7 +655,7 @@ func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	if !strings.Contains(out, gitproxytest.Summary) && !strings.Contains(out, gitproxytest.Action) {
 		t.Errorf("a lapsed login on %s said %q, want the source's login fix (%q)", depotHost, out, gitproxytest.Summary)
 	}
-	if strings.Contains(out, "not found") || strings.Contains(out, "404") {
+	if readsAsMissingRepo(out) {
 		t.Errorf("a lapsed login on %s read as a missing repository: %q", depotHost, out)
 	}
 
@@ -659,7 +670,7 @@ func TestACommandBackedForgesLapsedLoginSaysToRenewIt(t *testing.T) {
 	if fix := "GH_HOST=" + depotHost + " forgecli auth login"; !strings.Contains(out, fix) {
 		t.Errorf("a refused credential on %s said %q, want the login renewed (%q)", depotHost, out, fix)
 	}
-	if strings.Contains(out, "not found") || strings.Contains(out, "404") {
+	if readsAsMissingRepo(out) {
 		t.Errorf("a refused credential on %s read as a missing repository: %q", depotHost, out)
 	}
 }
