@@ -25,6 +25,9 @@ import { targetRepoHostMismatches } from "../RepoList.jsx";
 import UnbackedStateDot, { stateDot } from "../UnbackedStateDot.jsx";
 import GitHubBudgetPanel from "./GitHubBudgetPanel.jsx";
 import HealthCountersPanel from "./HealthCountersPanel.jsx";
+import StaleSchedulesAlert, {
+  useStaleSchedules,
+} from "../StaleSchedulesAlert.jsx";
 import { HostdHealthNote } from "../HostdMissingNote.jsx";
 import { settingLabel, settingLocation } from "../../settingsPlan.js";
 
@@ -51,6 +54,7 @@ export default function HealthTab({
   // beside it: unreachable, or missing some of grain's own entries.
   const [hostExecutor, setHostExecutor] = useState(null);
   const [reach, setReach] = useState(null);
+  const staleSchedules = useStaleSchedules();
   const hasTargets = (config?.targetRepos || []).length > 0;
   useEffect(() => {
     let live = true;
@@ -108,6 +112,7 @@ export default function HealthTab({
         testId="health-install-notice"
       />
       <HostdHealthNote hostExecutor={hostExecutor} />
+      <StaleSchedulesAlert schedules={staleSchedules} />
       <TargetRepoHostAlerts warnings={hostMismatches} />
       {stateDot(config) && (
         <Alert
