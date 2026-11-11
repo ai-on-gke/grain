@@ -322,6 +322,23 @@ func gateIsGrainCINotice(judged bool) string {
 		"in what you report."
 }
 
+// noGitHubRepoMessage is what pull_request_status, base_branch_status and
+// wait_for_checks answer a run built without a GitHub client or a complete
+// scope -- an mcpserver started without the data it reads GitHub through,
+// as runhost and hosts sandboxes' are. The task usually does have a
+// repository and branch, and the sandbox's own grain CLI reaches the same
+// checks through the daemon without any grant, so the answer names those
+// commands rather than leaving the run to conclude it needs a CI grant
+// (task 4361: a run read this as "ask for grain#ci" and parked on a request
+// nobody could grant).
+func noGitHubRepoMessage(what string) string {
+	return what + ": this run has no GitHub repository configured for it in this tool. " +
+		"If this task has a repository and branch, run `grain pr open` in the sandbox " +
+		"for its pull request and checks, and `grain ci wait` for the CI verdict on your " +
+		"pushed commit (GitHub Actions included): both work without any grant. Otherwise " +
+		"do the work in the sandbox and report what you found instead."
+}
+
 // elisionAdviceCIReport is what the three GitHub CI reports say if the
 // backstop ever has to cut one -- a commit with more failing checks than
 // a screenful, say. None of them takes an argument that would return
@@ -365,9 +382,7 @@ func pullRequestStatusTool(client PullRequestReader, grainCI GrainCIReader, scop
 			Handler: func(ctx context.Context, _ map[string]any) Result {
 				if client == nil || !scope.complete() {
 					return Result{
-						Text: "There is no pull request to report on: this run has no GitHub " +
-							"repository configured for it. Do the work in the sandbox and " +
-							"report what you found instead.",
+						Text:    noGitHubRepoMessage("There is no pull request to report on"),
 						IsError: true,
 					}
 				}
@@ -410,9 +425,7 @@ func pullRequestStatusTool(client PullRequestReader, grainCI GrainCIReader, scop
 		Handler: func(ctx context.Context, _ map[string]any) Result {
 			if client == nil || !scope.complete() {
 				return Result{
-					Text: "There is no pull request to report on: this run has no GitHub " +
-						"repository configured for it. Do the work in the sandbox and " +
-						"report what you found instead.",
+					Text:    noGitHubRepoMessage("There is no pull request to report on"),
 					IsError: true,
 				}
 			}
