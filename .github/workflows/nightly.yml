@@ -395,6 +395,81 @@ jobs:
             exit "$status"
           fi
 
+  grant-matrix-ui:
+    name: grant matrix through the UI
+    needs: [idle-gate]
+    if: needs.idle-gate.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',grant-matrix-ui,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: ${{ github.workflow }}-grant-matrix-ui-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Fill the npm cache from the registry
+        run: ./scripts/warm-npm-cache.sh ui
+
+      - name: Install Playwright browsers
+        run: |
+          sudo mkdir -p /var/cache/playwright
+          sudo chown -R "$USER:$USER" /var/cache/playwright
+          make frontend playwright-browsers
+
+      # Every capability method through the real Add grant… form
+      # (ui/e2e/grant-matrix-ui.spec.js, grain/task-4401); the API half
+      # of the same matrix runs in ui e2e on every pull request.
+      - name: Grant matrix
+        env:
+          GRANT_MATRIX_UI: "1"
+          GRANT_MATRIX_OUT: /tmp/grant-matrix-ui.json
+          GRANT_MATRIX_SHOTS: /tmp/grant-matrix-shots
+        run: cd ui && npx playwright test e2e/grant-matrix-ui.spec.js --project=chromium
+
+      - name: Upload grant matrix results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: grant-matrix-ui
+          path: |
+            /tmp/grant-matrix-ui.json
+            /tmp/grant-matrix-shots
+          if-no-files-found: ignore
+
   loadtest:
     name: sustained load
     needs: [idle-gate]
