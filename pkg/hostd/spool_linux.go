@@ -683,7 +683,10 @@ func (s *Server) loadSpools() {
 			exit = Exit{Code: -1, Draining: true, Error: "the host agent stopped while it ran", FinishedAt: time.Now().UTC()}
 			_ = writeExitFile(dir, exit)
 		}
-		s.forget(info.PID)
+		// The pid's start-time record is left for ReapRecorded, which runs
+		// next: a process that survived the previous hostd without being
+		// this one's child is still its to kill, not to leave running
+		// unsupervised while its spool says it ended.
 		info.Spool = dir
 		info.Exited = true
 		info.Exit = &exit

@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1019,4 +1020,56 @@ func TestDrainCapMarksCancelledProcessesAsDraining(t *testing.T) {
 	if !p.Exited || p.Exit == nil || !p.Exit.Draining {
 		t.Fatalf("unclean-stop spool listing = %+v, want Exited with Draining=true", p)
 	}
+}
+
+// A previous hostd's detached run that survived it without becoming this
+// hostd's child (so loadSpools cannot adopt it) has its process group
+// killed by ReapRecorded, not left running unsupervised while its spool
+// says it ended.
+func TestAnUnadoptableSurvivingDetachedRunIsReaped(t *testing.T) {
+	// setsid makes sleep its own group leader; sh exits at once, so sleep
+	// is reparented away from this process.
+	out, err := exec.Command("sh", "-c", "setsid sleep 60 >/dev/null 2>&1 & echo $!").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	var start string
+	for i := 0; ; i++ {
+		ppid, s, err := procStatFields(pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ppid != os.Getpid() && syscall.Kill(-pid, 0) == nil {
+			start = s
+			break
+		}
+		if i > 100 {
+			t.Fatalf("pid %d is still this process's child, or not yet its own group leader", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	state := filepath.Join(t.TempDir(), "state")
+	spoolDir := filepath.Join(state, "spool", "p-orphan")
+	if err := os.MkdirAll(spoolDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, strconv.Itoa(pid)), []byte(start), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	infoBytes, _ := json.Marshal(Process{ID: "p-orphan", Kind: KindCLI, Name: "sh", PID: pid, Detached: true, Run: "orphaned"})
+	if err := os.WriteFile(filepath.Join(spoolDir, spoolProcess), infoBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts := startServer(t, "", func(s *Server) { s.StateDir = state })
+	p := listed(t, ts, "p-orphan")
+	if !p.Exited || p.Exit == nil || !p.Exit.Draining {
+		t.Fatalf("orphaned spool listing = %+v, want Exited with Draining=true", p)
+	}
+	waitGone(t, pid, 10*time.Second)
 }
