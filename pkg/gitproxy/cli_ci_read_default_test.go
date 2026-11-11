@@ -114,10 +114,10 @@ func TestDefaultCIReadScopeReadsItsOwnGitHubActionsCI(t *testing.T) {
 		rec := get("tok-none", path)
 		body := rec.Body.String()
 		// namespace.RefuseCIRead (task 4361): the grant to request is
-		// api:ci-read on this repository, and grain#ci is named only as
-		// what not to ask for.
+		// api#ci-read on this repository, in the canonical spelling
+		// (task 4366), and grain#ci is named only as what not to ask for.
 		if rec.Code != http.StatusForbidden || !strings.Contains(body, "request_access for https://grain.dev/capabilities/api#ci-read") ||
-			!strings.Contains(body, "api:ci-read@acme/widgets") || !strings.Contains(body, "Do not ask for https://grain.dev/capabilities/grain#ci") {
+			!strings.Contains(body, `api#ci-read with {repo: "acme/widgets"}`) || !strings.Contains(body, "Do not ask for https://grain.dev/capabilities/grain#ci") {
 			t.Errorf("%s without a CI read: %d %s, want a refusal naming api#ci-read on acme/widgets and not to ask for grain#ci", path, rec.Code, body)
 		}
 	}
