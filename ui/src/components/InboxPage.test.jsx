@@ -359,6 +359,13 @@ describe("InboxPage", () => {
   // grain/task-372: the inbox has a figure of its own now -- the tray --
   // and this heading carries it at heading size, the way every other
   // page carries the figure of the rail entry that opened it.
+  it("links to the new Inbox", () => {
+    renderInbox();
+    expect(
+      screen.getByRole("link", { name: "Try the new Inbox" }),
+    ).toHaveAttribute("href", "/next/inbox");
+  });
+
   it("heads the pane with the inbox figure", () => {
     const { container } = renderInbox({ tasks });
     expect(
