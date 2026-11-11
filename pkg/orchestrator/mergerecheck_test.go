@@ -17,7 +17,6 @@ package orchestrator_test
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path"
 	"strings"
 	"testing"
@@ -41,19 +40,6 @@ func newBatchFixture(t *testing.T) *simFixture {
 	t.Helper()
 	sim, client := newSim(t, "acme", "widgets", "main")
 	return &simFixture{sim: sim, client: client, repo: model.RepoRef{Owner: "acme", Name: "widgets"}}
-}
-
-func shortSHAOf(t *testing.T, bareRepo, branch string) string {
-	t.Helper()
-	out, err := exec.Command("git", "-C", bareRepo, "rev-parse", "refs/heads/"+branch).CombinedOutput()
-	if err != nil {
-		t.Fatalf("rev-parse %s: %v\n%s", branch, err, out)
-	}
-	sha := strings.TrimSpace(string(out))
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
 }
 
 // recheckOn is the one overlap re-check row on branch, whichever change

@@ -39,7 +39,7 @@ import (
 // parameters, its query and its body as arguments. Their names,
 // descriptions and input schemas are what grain_explore_scope advertises
 // on POST /api/mcp (mcp_endpoint.go), where grain_invoke dispatches them
-// in-process through s.mux, and what ExternalAgentAPITools serves as one
+// in-process through s.mux, and what externalAgentAPITools serves as one
 // tool per route on POST /mcp. Either way the route runs exactly as the
 // UI's does -- same handler, same validation, same side effects -- and
 // agentAPIGate holds the call to the caller's grants and records it.
@@ -314,6 +314,7 @@ var routeDocs = map[string]string{
 	"POST /api/host/shutdown":                                              "Power off the machine grain runs on; it does not come back on its own.",
 	"POST /api/host/restart":                                               "Restart the grain service, without touching the machine it runs on.",
 	"POST /api/upgrade":                                                    "Start or schedule upgrading grain to a branch or image; set afterTasksFinish: true to drain running tasks and CI jobs first (your own run counts, so finish rather than polling), as false restarts grain immediately and discards in-flight work.",
+	"DELETE /api/upgrade/current":                                          "Cancel an upgrade currently in progress before its point of no return (returns 409 Conflict once cut-over or restart has begun).",
 	"DELETE /api/upgrade/scheduled":                                        "Cancel an upgrade waiting for running tasks to finish.",
 	"POST /api/persistent-sandboxes/{name}/{action}":                       "Act on a persistent sandbox: action is stop, start, restart or rebuild.",
 	"DELETE /api/pause":                                                    "Lift agent pauses: those of a connection (query connection, and model), of a team (team, and framework), or every pause the caller may lift.",
@@ -474,6 +475,7 @@ var routeBodies = map[string]any{
 	"POST /api/state-repo/secrets-key/wrap":                             secretsKeyWrapRequest{},
 	"POST /api/state-repo/secrets-repo":                                 secretsRepoRequest{},
 	"POST /api/upgrade":                                                 startUpgradeRequest{},
+	"DELETE /api/upgrade/current":                                       CancelUpgradeRequest{},
 	"POST /api/console/{id}/input":                                      consoleInputRequest{},
 	"POST /api/console/{id}/resize":                                     consoleResizeRequest{},
 	"POST /api/console-sessions":                                        CreateConsoleSessionRequest{},
@@ -581,6 +583,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/release-notes/stats":                                {"period": "The week whose figures to read; the week just ended without one."},
 	"POST /api/repos":                                             {"team": "The team whose targets to add to; the default team without one."},
 	"DELETE /api/repos/{owner}/{name}":                            {"team": "The team whose targets to remove from; the default team without one."},
+	"GET /api/tasks/{id}/diff-preview":                            {"max": "How many hunks to return (default 6, at most 30)."},
 	"GET /api/repos/{owner}/{name}/compare":                       {"base": "The branch or commit to compare from.", "head": "The branch or commit to compare to."},
 	"GET /api/repos/{owner}/{name}/workflows":                     listObjectQueryDocs("workflow path or name", listPageTiny, nil),
 	"GET /api/repos/{owner}/{name}/releases/{release}/candidates": listQueryDocs("branch, status or release", listPageLarge, nil),
@@ -644,6 +647,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/host/top":              {"lines": "At most this many processes."},
 	"GET /api/upgrade/targets":       listObjectQueryDocs("target name or kind", listPageMedium, nil),
 	"GET /api/upgrade/release-notes": {"branch": "The branch whose notes to read."},
+	"DELETE /api/upgrade/current":    {"reason": "Why the in-progress upgrade is being cancelled (also accepted in the JSON body)."},
 	"GET /api/logs/{source}": {
 		"lines": "At most this many of the newest lines.",
 		"unit": "For the daemon source on a host with both grain's system unit (grain-daemon.service) and its user unit (grain.service): which to read. " +

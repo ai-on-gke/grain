@@ -60,10 +60,12 @@ GIT, TASK & COLLABORATION:
   grain status <one-line-note>           Update this run's live activity status in the UI (<120 chars)
   grain handover write (<text> | --file <f>)
                                          Write or replace the standing handover summary for this task
+  grain report check (<text> | --file <f>)
+                                         Check a draft closing report against the records this run read
   grain task wait <id>... [--until closed|merged] [--timeout 9m]
                                          Block until other task(s) close or merge (with wait credit)
-  grain task message <id> (<body|--file f>)
-                                         Leave a note on a parent or child task's conversation
+  grain task message <id> (<body|--file f>) [--relay]
+                                         Leave a note on a parent or child task's conversation, or (--relay) a person's answer
   grain task propose --title <t> (--body <b> | --file <f>) [flags]
                                          File an unapproved follow-up task proposal (run 'grain help propose' for full reference)
   grain notify --subject <s> --title <t> [--body <b>] [--severity info|warning] [--clears-when <json>]
@@ -301,10 +303,15 @@ var sandboxCommandHelp = map[string]string{
 	"status":         "grain status <one-line-note>\n\nSet this run's live one-line status synopsis in grain's UI (at most 120 chars, no newlines).\n",
 	"handover":       "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\n",
 	"handover write": "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\nUse '--file -' to read from stdin.\n",
-	"notify":         "grain notify --subject <key> --title <one-line> [--body <md> | --file <f>] [--severity info|warning|critical] [--task <id>] [--clears-when <json>]\n\nRaise an operator notification without parking this task.\n",
-	"task list":      sandboxTaskListHelp,
-	"task read":      "grain task read <id>\n\nA task's record (task://<id>/record.md). grain ls task://<id> shows its other files.\n",
-	"task prompt":    "grain task prompt <id> [--attempt N] [--tail N] [--offset N --limit N] [--lines N]\n\nA task's latest prompt, or attempt N's.\n\n" + byteRangeHelp,
+	"report":         "grain report check (<text> | --file <f>)\n\nCheck a draft closing report before you post it. Run 'grain help report check'.\n",
+	"report check": "grain report check (<text> | --file <f>)\n\nCheck a draft closing report the way grain checks it once it is posted:\n" +
+		"every claim must cite a task, CI run or batch id, every cited task must have\nbeen read in this run (grain task read, grain read, grain task list, ...), and\n" +
+		"a state or kind a line gives a task must match its record. Lines under an\n\"Unverified\" heading are not checked.\n\n" +
+		"Exits non-zero when the report fails, naming each unread id and offending\nline. Use '--file -' to read from stdin.\n",
+	"notify":      "grain notify --subject <key> --title <one-line> [--body <md> | --file <f>] [--severity info|warning|critical] [--task <id>] [--clears-when <json>]\n\nRaise an operator notification without parking this task.\n",
+	"task list":   sandboxTaskListHelp,
+	"task read":   "grain task read <id>\n\nA task's record (task://<id>/record.md). grain ls task://<id> shows its other files.\n",
+	"task prompt": "grain task prompt <id> [--attempt N] [--tail N] [--offset N --limit N] [--lines N]\n\nA task's latest prompt, or attempt N's.\n\n" + byteRangeHelp,
 	"task transcript": "grain task transcript <id> [--attempt N] [--tail N] [--offset N --limit N] [--lines N]\n\n" +
 		"A task's latest transcript, or attempt N's. How big the whole file is goes to stderr: a\n" +
 		"transcript can run to hundreds of KB, so read part of it.\n\n" + byteRangeHelp + "\n" +
@@ -313,7 +320,7 @@ var sandboxCommandHelp = map[string]string{
 		"Block until every named task has closed (or merged), up to a 9m slice with wait credit.\n" +
 		"To park and free the sandbox VM across a long wait, call the wait_for_task (park: true)\n" +
 		"or resume_later MCP control tool instead.\n",
-	"task message":          "grain task message <id> (<body> | --body <b> | --file <f>)\n\nLeave a note on a parent or child task's conversation (or any task with api:tasks:admin).\n",
+	"task message":          "grain task message <id> (<body> | --body <b> | --file <f>) [--relay]\n\nLeave a note on a parent or child task's conversation (or any task with api:tasks:admin).\n\nA note is the agent's own words: it never answers a question the task is waiting on a person for.\n--relay is for a director or console session passing on what the person it is talking to said:\nthe comment is written as that person's answer (\"<person> via <session>\") and wakes the task as\ntheir own reply would. Only a console session acting for a signed-in person may relay, and only\nonto a task that person could reply on themselves.\n",
 	"task propose":          sandboxProposeHelp,
 	"propose":               sandboxProposeHelp,
 	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",

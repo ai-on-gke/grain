@@ -211,6 +211,10 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 		if err != nil {
 			return err
 		}
+		refused, err := keepHeldBack(repo, declared, withdrawn, keep)
+		if err != nil {
+			return err
+		}
 		for _, row := range withdrawn {
 			if keep[row.ID] {
 				continue
@@ -238,12 +242,89 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 		if err := putMergeRules(ctx, tx, repo, commit, declared.MergeRules); err != nil {
 			return err
 		}
-		return recordDeclarationSync(ctx, tx, repo, commit, now, now, "")
+		return recordDeclarationSync(ctx, tx, repo, commit, now, now, refused)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return changed, nil
+}
+
+// HeldBackMarker opens the LastError of a sync that wrote everything but
+// the files it held back (DescribeHeldBack), so a reader can tell "these
+// files were not read" from "nothing was".
+const HeldBackMarker = "declarations held back by this grain build: "
+
+// keepHeldBack is what a sync does with declared.Refused, the files the
+// daemon's own parser could not decode (repodecl.LoadForwardCompatible).
+//
+// A held-back file that already has a row keeps it, and the template,
+// suite or schedule it points at, untouched: that is its last good
+// version, from the commit on the row, and it stays in force until a
+// build that can read the new one does. One with no row -- a file new in
+// this commit -- is simply not loaded, unless something the sync is
+// writing names it, which would leave a suite or a schedule pointing at
+// nothing; that refuses the whole sync instead, the way a name that
+// resolves to nothing always has.
+//
+// It returns the sync's LastError: empty when nothing was held back, and
+// otherwise one line per file saying what was kept.
+func keepHeldBack(repo RepoRef, declared RepoDeclarations, existing []RepoDeclaration, keep map[string]bool) (string, error) {
+	if len(declared.Refused) == 0 {
+		return "", nil
+	}
+	rows := make(map[string]RepoDeclaration, len(existing))
+	for _, row := range existing {
+		rows[row.ID] = row
+	}
+	missing := map[string]RefusedDeclaration{}
+	var lines []string
+	for _, r := range declared.Refused {
+		id := RepoDeclaredID(r.Kind, repo, r.Stem)
+		if row, ok := rows[id]; ok {
+			keep[id] = true
+			lines = append(lines, fmt.Sprintf("%s: %s (its version from %s stays in force)", r.Path, r.Message, shortSHA(row.Commit)))
+			continue
+		}
+		missing[id] = r
+		lines = append(lines, fmt.Sprintf("%s: %s (not loaded: no earlier version of it is in force)", r.Path, r.Message))
+	}
+	var errs []error
+	names := func(path, id string) {
+		if r, ok := missing[id]; ok {
+			errs = append(errs, fmt.Errorf("%s names %s, which this grain build could not read: %s", path, r.Path, r.Message))
+		}
+	}
+	for _, f := range declared.Suites {
+		for _, it := range f.Suite.Items {
+			names(f.Path, it.TemplateID)
+		}
+	}
+	for _, f := range declared.Schedules {
+		if f.Schedule.TemplateID != nil {
+			names(f.Path, *f.Schedule.TemplateID)
+		}
+		if f.Schedule.SuiteID != nil {
+			names(f.Path, *f.Schedule.SuiteID)
+		}
+	}
+	for _, t := range declared.Triggers {
+		names(t.Path, t.Template)
+	}
+	if len(errs) > 0 {
+		return "", DeclarationRefusal{Err: errors.Join(errs...)}
+	}
+	return HeldBackMarker + strings.Join(lines, "\n"), nil
+}
+
+func shortSHA(commit string) string {
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	if commit == "" {
+		return "an earlier commit"
+	}
+	return commit
 }
 
 // canonicalizeDeclaredGrants rewrites retired bare capability names (such as

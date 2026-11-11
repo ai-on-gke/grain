@@ -67,11 +67,6 @@ var PlaintextIdentityHeaders = []string{
 // configuration (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url).
 type HubConfig = webauth.HubConfig
 
-// WithHubConfig attaches a HubConfig to ctx.
-func WithHubConfig(ctx context.Context, cfg HubConfig) context.Context {
-	return webauth.WithHubConfig(ctx, cfg)
-}
-
 // HubConfigFromContext extracts HubConfig from ctx if present.
 func HubConfigFromContext(ctx context.Context) (HubConfig, bool) {
 	return webauth.HubConfigFromContext(ctx)
@@ -163,16 +158,6 @@ func GetIAPAudience() string {
 	return webauth.GetIAPAudience()
 }
 
-// SetIAPIssuer sets the expected issuer for Google Cloud IAP JWT verification.
-func SetIAPIssuer(issuer string) {
-	webauth.SetIAPIssuer(issuer)
-}
-
-// GetIAPIssuer returns the issuer a signed assertion must carry.
-func GetIAPIssuer() string {
-	return webauth.GetIAPIssuer()
-}
-
 // SetIAPHTTPClient sets a custom http.Client for fetching IAP public keys.
 func SetIAPHTTPClient(client *http.Client) {
 	webauth.SetIAPHTTPClient(client)
@@ -247,19 +232,9 @@ type HubClaims = webauth.HubClaims
 // HubValidator validates a grain-registry JWT assertion token string for a target audience.
 type HubValidator = webauth.HubValidator
 
-// SetHubAudience sets the expected audience for grain-registry JWT verification.
-func SetHubAudience(aud string) {
-	webauth.SetHubAudience(aud)
-}
-
 // GetHubAudience returns the configured audience for grain-registry JWT verification.
 func GetHubAudience() string {
 	return webauth.GetHubAudience()
-}
-
-// SetHubIssuer sets the expected issuer for grain-registry JWT verification.
-func SetHubIssuer(issuer string) {
-	webauth.SetHubIssuer(issuer)
 }
 
 // GetHubIssuer returns the configured issuer for grain-registry JWT verification.
@@ -267,64 +242,9 @@ func GetHubIssuer() string {
 	return webauth.GetHubIssuer()
 }
 
-// SetHubKeysURL sets the JWKS endpoint URL for grain-registry JWT verification.
-func SetHubKeysURL(u string) {
-	webauth.SetHubKeysURL(u)
-}
-
 // GetHubKeysURL returns the configured JWKS endpoint URL for grain-registry JWT verification.
 func GetHubKeysURL() string {
 	return webauth.GetHubKeysURL()
-}
-
-// SetHubHTTPClient sets a custom http.Client for fetching grain-registry JWKS keys.
-func SetHubHTTPClient(client *http.Client) {
-	webauth.SetHubHTTPClient(client)
-}
-
-// SetHubRefetchFloor overrides the minimum interval between registry JWKS
-// refetches triggered by an unknown key ID.
-func SetHubRefetchFloor(d time.Duration) {
-	webauth.SetHubRefetchFloor(d)
-}
-
-// ResetHubConfig resets all registry package-level configurations to defaults.
-func ResetHubConfig() {
-	webauth.ResetHubConfig()
-	refusedVerifiersMu.Lock()
-	clear(refusedVerifiersLogged)
-	refusedVerifiersMu.Unlock()
-}
-
-// VerifyHubToken validates a grain-registry JWT assertion and returns the
-// authenticated user email/identity.
-func VerifyHubToken(ctx context.Context, tokenStr string) (string, error) {
-	tokenStr = strings.TrimSpace(tokenStr)
-	if tokenStr == "" {
-		return "", errors.New("empty registry assertion token")
-	}
-
-	var claims *HubClaims
-	var err error
-	handled := false
-	for _, v := range registeredVerifiersSnapshot() {
-		if rv, ok := v.(*hubVerifier); ok {
-			claims, _, err = rv.inner.VerifyToken(ctx, tokenStr)
-			handled = true
-			break
-		}
-	}
-	if !handled {
-		claims, err = webauth.ValidateHubToken(ctx, tokenStr, webauth.HubAudienceFor(ctx))
-	}
-	if err != nil {
-		return "", err
-	}
-	id, err := webauth.IdentityFromHubClaims(claims)
-	if err != nil {
-		return "", err
-	}
-	return id.Email, nil
 }
 
 // testSourceNets are networks singleTenantTrusted trusts as it does an

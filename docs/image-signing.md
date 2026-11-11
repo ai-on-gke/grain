@@ -92,8 +92,11 @@ workflow -- publishes unsigned and warns about it. Setting `REQUIRE_IMAGE_SIGNIN
   unsigned, and a verifying deployment refuses them. A signature covers a digest, not a tag, so the branch tag and
   the registry-side retags `promote` makes (`latest`, `vX.Y.Z`) carry the
   same signature, and nothing needs re-signing. cosign is installed from
-  the Go module proxy at a pinned version (`COSIGN_VERSION`) when the
-  sandbox does not already have it.
+  the Go module proxy at a pinned version (`COSIGN_VERSION`, a v3
+  release, `go install github.com/sigstore/cosign/v3/cmd/cosign` with
+  `GOTOOLCHAIN=auto` because v3 needs a newer Go than go.mod pins) when
+  the sandbox does not already have it. The GitHub release workflows put
+  the same version on the runner first, checked against a pinned sha256.
 - **GitHub Actions** (`.github/workflows/build-artifacts.yml`,
   `publish-grain-image`): **does not sign.** That workflow runs on every
   branch push, so any secret in it can be read by anyone who can push a
@@ -177,19 +180,38 @@ refused at its signature step, while the daemon itself runs normally. No
 `--output` flag is passed, because the Kubernetes path reads the verified
 digest out of cosign's default JSON.
 
-The image's cosign is a v3 release (v3.1.4) while the release signs with
-v2 (`COSIGN_VERSION`, v2.6.5). That mix works because the signer writes
-cosign's legacy `.sig` signature, which every verifier reads: v2.4.1,
-v2.6.5 and v3.1.4 each verified the others' `--tlog-upload=false`
-signatures with the flags above, and printed the same
-`critical.image.docker-manifest-digest` JSON. The reverse is not true.
-cosign v3's default `sign` writes a new-format bundle (an OCI referrer)
-that v2.4.1's `verify` reports as "no signatures found", and v3 refuses
-`--tlog-upload=false` unless `--use-signing-config=false` is also given.
-Deployments still running an image with the v2.4.1 verifier must be
-able to verify the next release. So a move of the signer to v3 has to
-pass `--use-signing-config=false --new-bundle-format=false`, or wait
-until no supported image carries a v2.4.1 verifier.
+The release signs with cosign v3 (`COSIGN_VERSION`, v3.1.4, the same
+release the image bundles as its verifier), but in cosign's legacy
+format. Every `cosign sign` and `cosign attest` in
+`scripts/release-images.sh` passes
+`--tlog-upload=false --new-bundle-format=false --use-signing-config=false`
+(`cosign_legacy_flags`), for these reasons:
+
+- **Grain images before v3.5.0 bundle cosign v2.4.1 as their verifier,**
+  and an upgrade is verified by the image being upgraded _from_. cosign
+  v3's default `sign` writes a new-format bundle, an OCI referrer tagged
+  `sha256-<hex>` with no suffix. v2.4.1's `verify` does not look there
+  and reports "no signatures found" (exit 10), so every one of those
+  deployments would refuse its next upgrade. `--new-bundle-format=false`
+  writes the legacy `sha256-<hex>.sig` (and `.att` for attestations)
+  instead. Against a local registry, a v3.1.4 signature written this way
+  was verified by v2.4.1, v2.6.5 and v3.1.4 alike, by digest and by tag,
+  with the flags above, and each printed the same
+  `critical.image.docker-manifest-digest` JSON (`pkg/upgrade/verify.go`'s
+  `verifiedDigests`). `verify-attestation` read the reviewed-merge
+  attestation from all three, and a wrong key was still refused (exit 12).
+  `cmd/ghcr-prune` groups those same `.sig`/`.att` tags by digest.
+- **v3 refuses `--tlog-upload=false` whenever a signing config is in
+  play,** and it fetches one from TUF by default. A `--signing-config`
+  with no Rekor URLs does not help here: v3 then insists on
+  `--new-bundle-format`, which is the format v2.4.1 cannot read. So the
+  signing config is switched off with `--use-signing-config=false`.
+  v3.1.4 prints that this flag is deprecated, "an offline signing flag
+  will be added in the future"; when that flag lands, it replaces this one.
+
+The legacy format can be dropped, and the new bundle format taken, only
+once no supported upgrade starts from an image carrying a v2.4.1
+verifier (v3.4.0 and earlier).
 
 ### No verifier configured: warn, don't refuse
 
@@ -252,9 +274,13 @@ It is asked in two places:
   that rewrote the release workflow gets past it, and so does any
   attestation that workflow writes. The check that holds against such a
   commit is the deployment's own. `grain daemon
-  -upgrade-reviewed-merge-repo=owner/name` (with
+  -upgrade-reviewed-merge-repo=owner/name` (or `host/owner/name` for a
+  GitHub Enterprise Server, asked at `https://<host>/api/v3`; with
   `-upgrade-reviewed-merge-logins` and, for a private repository or the
-  API's rate limit, `-upgrade-reviewed-merge-token-file`) reads the
+  API's rate limit, `-upgrade-reviewed-merge-token-file` -- without one,
+  a host that a command-backed ambient source claims is read through
+  that source's own tool, on the host through grain's host bridge when
+  the daemon runs in a container) reads the
   pulled image's revision label, which the signature covers. It then
   asks the forge how that commit was merged, and how every first-parent
   commit since the running build's was merged. For an image of another

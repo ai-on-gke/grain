@@ -1,0 +1,42 @@
+
+== 4a. daemon A with -object-store gs://walk-objects/instances/a/
+imported 0 git and 1 model connections
+2026/11/08 02:52:01 ci: a failing job's declared artifacts are backed by the object store with read-through cache at /tmp/walk/i4-a/state/ci-artifacts
+secret deploy/token put 200
+approve task 2 200
+task 2 state: awaiting_reply
+
+== 4b. what reached the bucket
+  ./instances/a/agent-sessions/claude/walk-session.tar.gz
+  ./instances/a/transcripts/2-1.jsonl
+  ./instances/a/transcripts/2-1.md
+secret occurrences in bucket objects: 0
+secret occurrences in local raw transcripts: 0
+DEPLOY_TOKEN=[redacted: secret deploy/token]
+
+== 4c. read back through the API and the CLI
+{"transcript":"\u003e run_command({\"command\":\"cat deploy.env\"})\nDEPLOY_TOKEN=[redacted: secret deploy/token]\n\nthe token was [redacted: secret deploy/token]; done\n\n* the agent ended its turn without finishing; grain resumed the session once with: A reply without a tool call ends your run, and this run has not finished: nothing has been pushed and nothing has been reported. Before you stop, do one of these: push your branch, leave your findings with `comment_on_issue`, ask with `ask_question`, request a credential with `request_secret`, ask for more access with `request_access`, park on
+secret in API transcript: 0
+
+== 4d. transcript survives the local cache being wiped (replacement VM)
+n another task with `wait_for_task`, or say no change is needed with `nothing_needed`. If you meant to keep working, keep working now.\n\n\u003e run_command({\"command\":\"cat deploy.env\"})\nDEPLOY_TOKEN=[redacted: secret deploy/token]\n\nthe token was [redacted: secret deploy/token]; done"}
+
+[200]
+
+== 4e. fail closed: uploads to the bucket fail
+failing uploads matching "instances/a/"
+approve task 3 200
+task 3 state with uploads failing: awaiting_reply
+2026/11/08 02:52:32 grain daemon: syncing live transcripts to object store: objectstore: GCS put gs://walk-objects/instances/a/transcripts/3-1.jsonl: googleapi: Error 503: injected failure
+2026/11/08 02:52:36 orchestrator: run 3-1: flushing transcript to object store: objectstore: GCS put gs://walk-objects/instances/a/transcripts/3-1.jsonl: googleapi: Error 503: injected failure
+objectstore: GCS put gs://walk-objects/instances/a/transcripts/3-1.md: googleapi: Error 503: injected failure
+task 3 transcript in the bucket while failing: 0 object(s)
+failing uploads matching ""
+after the bucket recovers: 
+secret occurrences in bucket objects: 0
+task 3 narrative via the API (kept in the database instead): d({"command":"cat deploy.env"}) DEPLOY_TOKEN=wlk-deploy-s3cr3t-7f3a9c2e  the token was wlk-deploy-s3cr3t-7f3a9c2e; done 
+secret in any task_run row: 1
+
+== 4f. CI artifacts: daemons A and B share the bucket, same run/job/artifact name
+instances/a/ci-artifacts/run-77/test.logs.tar.gz: missing
+instances/b/ci-artifacts/run-77/test.logs.tar.gz: missing

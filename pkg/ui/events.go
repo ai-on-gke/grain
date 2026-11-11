@@ -47,8 +47,8 @@ const (
 	defaultEventsKeepalive = 15 * time.Second
 )
 
-// IntegrationEvent is one ordered task lifecycle, question, comment, or CI
-// verdict event on GET /api/events (design/design/integration-events.design.md).
+// IntegrationEvent is one ordered task lifecycle, question, comment, CI
+// verdict, notification, or host-script approval event on GET /api/events (design/design/integration-events.design.md).
 // It carries identifiers, one-line summaries, external references, and actor
 // attribution only -- never secret values, raw comment bodies, prompts,
 // transcripts, or CI failure logs.
@@ -71,12 +71,24 @@ type IntegrationEvent struct {
 	CICommit        string                     `json:"ciCommit,omitempty"`
 	CIConclusion    string                     `json:"ciConclusion,omitempty"`
 	CIDetail        string                     `json:"ciDetail,omitempty"`
-	Actor           string                     `json:"actor,omitempty"`
-	ActorKind       model.PrincipalKind        `json:"actorKind,omitempty"`
-	ActorSource     model.AuthSource           `json:"actorSource,omitempty"`
-	ActorLabel      string                     `json:"actorLabel,omitempty"`
-	OnBehalfOf      string                     `json:"onBehalfOf,omitempty"`
-	OnBehalfOfKind  model.PrincipalKind        `json:"onBehalfOfKind,omitempty"`
+	// NotificationID, Subject and Severity identify a notification.*
+	// event's notification; Summary is its title, or a local_script.*
+	// event's script call.
+	NotificationID int64  `json:"notificationId,omitempty"`
+	Subject        string `json:"subject,omitempty"`
+	Severity       string `json:"severity,omitempty"`
+	Summary        string `json:"summary,omitempty"`
+	// ApprovalID and Script identify a local_script.* event's call;
+	// Decision is approved, denied, or expired on local_script.answered.
+	ApprovalID     string              `json:"approvalId,omitempty"`
+	Script         string              `json:"script,omitempty"`
+	Decision       string              `json:"decision,omitempty"`
+	Actor          string              `json:"actor,omitempty"`
+	ActorKind      model.PrincipalKind `json:"actorKind,omitempty"`
+	ActorSource    model.AuthSource    `json:"actorSource,omitempty"`
+	ActorLabel     string              `json:"actorLabel,omitempty"`
+	OnBehalfOf     string              `json:"onBehalfOf,omitempty"`
+	OnBehalfOfKind model.PrincipalKind `json:"onBehalfOfKind,omitempty"`
 }
 
 // EventsResponse is GET /api/events's JSON envelope for immediate and
@@ -135,6 +147,13 @@ func toWireIntegrationEvent(e model.IntegrationEvent) IntegrationEvent {
 		CICommit:        e.CICommit,
 		CIConclusion:    e.CIConclusion,
 		CIDetail:        e.CIDetail,
+		NotificationID:  e.NotificationID,
+		Subject:         e.Subject,
+		Severity:        e.Severity,
+		Summary:         e.Summary,
+		ApprovalID:      e.ApprovalID,
+		Script:          e.Script,
+		Decision:        e.Decision,
 		Actor:           e.Actor.Actor.ID,
 		ActorKind:       e.Actor.Actor.Kind,
 		ActorSource:     e.Actor.Actor.Source,
@@ -226,7 +245,11 @@ func (s *Server) parseEventsQuery(r *http.Request) (eventsQuery, error) {
 	for _, rawType := range splitList(q["types"]) {
 		et := model.IntegrationEventType(rawType)
 		if !et.Valid() {
-			return out, validationErrorf("event type %q is not one of task.state, task.question, task.comment, task.ci", rawType)
+			names := make([]string, len(model.ValidIntegrationEventTypes))
+			for i, t := range model.ValidIntegrationEventTypes {
+				names[i] = string(t)
+			}
+			return out, validationErrorf("event type %q is not one of %s", rawType, strings.Join(names, ", "))
 		}
 		out.types = append(out.types, et)
 	}

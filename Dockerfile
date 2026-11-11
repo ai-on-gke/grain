@@ -111,7 +111,7 @@
 # `docker build` with no --build-arg gets, so it is written down twice on
 # purpose and GOTOOLCHAIN=local below turns a stale copy into an error
 # naming both versions rather than a silently different compiler.
-ARG GO_VERSION=1.26.10
+ARG GO_VERSION=1.26.11
 # Separate from the tag so a mirror can be substituted whole
 # (GO_IMAGE=mirror.gcr.io/library/golang) on a network that does not
 # reach Docker Hub -- the same escape hatch Dockerfile.build and the
@@ -135,7 +135,7 @@ ARG GO_IMAGE=golang
 # and GOTOOLCHAIN=local below turns the mismatch into an error naming
 # both versions. Dockerfile.build pins the same value, and
 # TestEveryBaseImageIsPinnedByDigest keeps the two equal.
-ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
+ARG GO_IMAGE_DIGEST=sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
 ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # The docker CLI is copied out of this image rather than apt-installed:
 # Debian's own `docker.io` package pulls in the whole daemon --
@@ -149,15 +149,15 @@ ARG DOCKER_CLI_IMAGE=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e5624
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a
 # distroless base with nothing else in it), and this pin is the whole of
-# what decides which bytes it is. This cosign only ever verifies, so it
-# is a v3 release while scripts/release-images.sh still signs with v2
-# (its COSIGN_VERSION default): v3 verifies the legacy `.sig`
-# signatures v2 writes, with the same flags and the same JSON on stdout
-# the Kubernetes upgrade path reads its digest from. The signer has to
-# keep writing that legacy format for as long as images carrying the
-# old v2.4.1 verifier are in the field -- v2.4.1 cannot find a v3
-# new-format bundle -- so a bump of one is the moment to look at the
-# other, but they need not move together.
+# what decides which bytes it is. This cosign only ever verifies. It is
+# the same v3 release scripts/release-images.sh signs with (its
+# COSIGN_VERSION default), which writes the legacy `.sig` signature
+# (--new-bundle-format=false) rather than v3's new-format bundle: images
+# carrying the old v2.4.1 verifier are still in the field and cannot find
+# the new format. v3 verifies the legacy format with the same flags and
+# the same JSON on stdout the Kubernetes upgrade path reads its digest
+# from. A bump of one is the moment to look at the other, but they need
+# not move together.
 ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli

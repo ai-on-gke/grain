@@ -468,27 +468,6 @@ func (s *Server) Handler() http.Handler {
 	return s.router.WrapMainHandler(controlPlane)
 }
 
-func (s *Server) extractInstanceSubdomain(hostHeader string) (string, bool) {
-	host := strings.ToLower(strings.TrimSpace(hostHeader))
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	instDomain := strings.ToLower(strings.TrimSpace(s.cfg.InstanceDomain))
-	regHost := strings.ToLower(strings.TrimSpace(s.cfg.Host))
-	if instDomain == "" || host == "" || host == regHost {
-		return "", false
-	}
-	suffix := "." + instDomain
-	if !strings.HasSuffix(host, suffix) {
-		return "", false
-	}
-	sub := strings.TrimSuffix(host, suffix)
-	if sub == "" || strings.Contains(sub, ".") {
-		return "", false
-	}
-	return sub, true
-}
-
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if s.IsDraining() {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -2457,51 +2436,6 @@ func (s *Server) handleInternalHeartbeat(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (s *Server) serveEntrySubdomain(w http.ResponseWriter, r *http.Request, entryName string) {
-	caller, err := s.admitter.Admit(r)
-	if err != nil {
-		s.metrics.IncAdmissionRejected()
-		switch {
-		case errors.Is(err, webauth.ErrGroupLookupUnavailable):
-			w.Header().Set("Retry-After", "5")
-			writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
-		case errors.Is(err, webauth.ErrCallerForbidden):
-			writeJSONError(w, http.StatusForbidden, "forbidden", err.Error())
-		default:
-			writeJSONError(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
-		}
-		return
-	}
-	if caller.Kind != webauth.PrincipalHuman {
-		writeJSONError(w, http.StatusForbidden, "forbidden", "service principals cannot access instance subdomains")
-		return
-	}
-	if s.store == nil {
-		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", entryName))
-		return
-	}
-	entry, err := s.store.GetEntryByName(r.Context(), entryName)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", entryName))
-		return
-	}
-	if err != nil {
-		writeInternalError(w, err)
-		return
-	}
-	allowed, err := s.canCallerAccessEntry(r.Context(), caller, entry)
-	if err != nil {
-		w.Header().Set("Retry-After", "5")
-		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
-		return
-	}
-	if !allowed {
-		writeJSONError(w, http.StatusForbidden, "forbidden", fmt.Sprintf("caller %q does not have access to %q", caller.Email, entryName))
-		return
-	}
-	writeJSONError(w, http.StatusServiceUnavailable, "entry_not_ready", fmt.Sprintf("entry %q (%s) backend proxy is not yet active", entry.Name, entry.Kind))
-}
-
 func normalizeGroupSpec(g string) string {
 	g = strings.TrimSpace(g)
 	if g == "" {
@@ -2530,28 +2464,6 @@ func (s *Server) canCallerManageEntry(ctx context.Context, caller *webauth.Admit
 	}
 	if g := normalizeGroupSpec(e.OwnerGroup); g != "" {
 		return s.matchesAccessList(ctx, caller.Email, []string{g})
-	}
-	return false, nil
-}
-
-func (s *Server) canCallerAccessEntry(ctx context.Context, caller *webauth.AdmittedCaller, e *store.EntryRow) (bool, error) {
-	if caller == nil || e == nil || caller.Kind != webauth.PrincipalHuman {
-		return false, nil
-	}
-	if caller.IsAdmin || strings.EqualFold(e.OwnerEmail, caller.Email) || e.Visibility == store.VisibilityPublic {
-		return true, nil
-	}
-	if g := normalizeGroupSpec(e.OwnerGroup); g != "" {
-		ok, err := s.matchesAccessList(ctx, caller.Email, []string{g})
-		if err != nil {
-			return false, err
-		}
-		if ok {
-			return true, nil
-		}
-	}
-	if e.Visibility == store.VisibilityShared {
-		return s.matchesAccessList(ctx, caller.Email, e.AccessList)
 	}
 	return false, nil
 }

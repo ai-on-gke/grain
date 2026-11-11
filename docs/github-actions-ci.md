@@ -133,9 +133,9 @@ These `.grain/workflows/` files have no Actions counterpart, because they need s
 | :--- | :--- | :--- |
 | `agy-surface.yml`, `claude-surface.yml`, `codex-surface.yml` | `workflow_dispatch` | They capture each agent CLI's tool and config surface inside grain's own sandbox image and network, which is what they compare against. They hold no credential. |
 | `kvm-route-stress.yml` | `workflow_dispatch` | The grain-sandbox form of the stress run; the scheduled form is `nightly.yml`'s `kvm-route-stress` job. |
-| `live-secrets-repo.yml` | `schedule` (05:53 UTC), `workflow_dispatch` | It needs the `github-sandbox` capability: a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. **Its schedule no longer fires in a `ci_mode: github` repository**; it needs a `.grain/schedules/` entry with `grain-ci: true` (`docs/declarations.md`) to run nightly again. |
+| `live-secrets-repo.yml` | `.grain/schedules/live-secrets-repo.yml` (05:53 UTC, `grain-ci: true`), `workflow_dispatch` | It needs the `github-sandbox` capability: a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. Its own `on: schedule` cron is dropped in a `ci_mode: github` repository; it stays because a schedule can only run a workflow that answers a schedule event. The schedule file's `grain-ci: true` (`docs/declarations.md`) is what runs it nightly. |
 
-A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
+A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself; `tests/deploy/scheduled_workflows_test.go` requires a `grain-ci: true` schedule for every `.grain/workflows` file that declares `on: schedule`. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
 
 ## What Was Emulated from the Grain Sandbox Image (`Granulefile`)
 
@@ -144,8 +144,8 @@ Grain CI runs jobs inside a pre-provisioned VM/container image built from `Granu
 1. **Grain Dialect Keys Removed**:
    - Grain-only keys (`capabilities:`, `optional-capabilities:`, `sandbox:`, `infrastructure:`, `guest-cache:`, and job-level `paths:` / `paths-ignore:` / `artifacts:`) are removed or translated to standard GitHub Actions equivalents (`actions/upload-artifact`).
 2. **Checkout and Toolchains (`actions/checkout`, `actions/setup-go`, `actions/setup-node`)**:
-   - Grain sandboxes start with the repository pre-checked-out and Go `1.26.10` + Node.js `20` pre-installed.
-   - Every GitHub Actions job checks out the repository with `actions/checkout` (`persist-credentials: false`; jobs that invoke `scripts/export-source.sh` or inspect git tags/history pass `fetch-depth: 0`), installs Go from `go.mod`'s `toolchain` directive (`go1.26.10`) via `actions/setup-go`, and installs Node.js `20` via `actions/setup-node` where needed.
+   - Grain sandboxes start with the repository pre-checked-out and Go `1.26.11` + Node.js `20` pre-installed.
+   - Every GitHub Actions job checks out the repository with `actions/checkout` (`persist-credentials: false`; jobs that invoke `scripts/export-source.sh` or inspect git tags/history pass `fetch-depth: 0`), installs Go from `go.mod`'s `toolchain` directive (`go1.26.11`) via `actions/setup-go`, and installs Node.js `20` via `actions/setup-node` where needed.
    - Jobs that run Go tests launching `git` subprocesses with scrubbed environments configure system and global `git config user.name` and `user.email`.
 3. **Explicit Caching (`actions/cache`)**:
    - Go jobs cache `~/go/pkg/mod` and `~/.cache/go-build` keyed on `hashFiles('go.sum', 'third_party/granule/go.sum')`.

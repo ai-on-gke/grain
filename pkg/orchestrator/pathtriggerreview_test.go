@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -257,6 +258,45 @@ func TestATriggerReviewOpensNoPullRequestUnlessAskedForFixes(t *testing.T) {
 	review = reloaded(t, ctx, store, distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0])
 	if linkOf(review, model.LinkPushesReviewedBranch) != task.ID || review.Branch != model.BranchName(task.ID) {
 		t.Errorf("the trigger's security review does not work on the change's own branch: %+v", review)
+	}
+}
+
+// A catch-all gating trigger (`paths: ["**"]`, the shape that reviews every
+// pull request) never files a review of a review: even one whose triggers
+// ask for fixes, so that it opens a pull request of its own and pushes
+// files the trigger watches, is not judged against the triggers.
+func TestACatchAllTriggerNeverReviewsItsOwnReview(t *testing.T) {
+	t.Parallel()
+	every := gateTrigger("every-pr", model.TriggerHumanOnFindings, "**")
+	every.Fixes = true
+	ctx, store, sim, client, task := finishGated(t, []model.PathTrigger{every}, "pkg/widget/widget.go")
+	ids := distinctGatingIDs(reloaded(t, ctx, store, task.ID))
+	if len(ids) != 1 {
+		t.Fatalf("a catch-all trigger filed %v reviews of one head, want one", ids)
+	}
+	review := reloaded(t, ctx, store, ids[0])
+
+	pushFileCommit(t, sim.BareRepo, model.BranchName(review.ID), model.BranchName(task.ID),
+		"widget.go", "fixed\n", "fix the widget")
+	result := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+	if err := orchestrator.ProcessResult(ctx, store, client, review, result, review.ID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult for the review: %v", err)
+	}
+	got := reloaded(t, ctx, store, review.ID)
+	if linkOf(got, model.LinkFixes) == "" {
+		t.Fatalf("the fixing review opened no pull request, so this test proves nothing: links %+v", got.Links)
+	}
+	if linkOf(got, model.LinkPathTriggersRead) != "" || len(gatingIDs(got)) != 0 {
+		t.Errorf("the review's own pull request was judged against the triggers: links %+v", got.Links)
+	}
+	all, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, other := range all {
+		if other.ID != review.ID && other.Parent() == review.ID {
+			t.Errorf("task %s (%q) was filed against the review %s", other.ID, other.Title, review.ID)
+		}
 	}
 }
 

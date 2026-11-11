@@ -987,7 +987,14 @@ export default function Actions({ t, config, act, onOpenTask }) {
           back to an agent. Nothing else here sends one back except the
           queue's own repair, which is automatic and granted once. */}
       {t.state !== "closed" && t.state !== "running" && (
-        <AccessGate scope="dispatch:write" repo={t.repo}>
+        <AccessGate
+          scope={
+            t.state === "proposed" || (t.state === "deferred" && !t.approved)
+              ? ["dispatch:write", "tasks:admin"]
+              : "dispatch:write"
+          }
+          repo={t.repo}
+        >
           <Button
             variant="outlined"
             disabled={Boolean(t.runNowAt) && !runNowRestamps}

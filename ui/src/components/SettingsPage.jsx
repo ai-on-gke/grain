@@ -137,7 +137,6 @@ const SECTION_ROLE_READ_ONLY = {
 // Sections that read GET /api/settings, and so wait for it.
 const READS_SETTINGS = new Set([
   "general",
-  "access",
   "cli",
   "agents",
   "tasks",
@@ -659,6 +658,7 @@ export default function SettingsPage({
             s={s}
             {...common}
             whoami={whoami}
+            onSaved={onSaved}
             onLogout={onLogout}
           />
         );

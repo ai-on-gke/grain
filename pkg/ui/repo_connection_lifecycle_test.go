@@ -505,10 +505,11 @@ func TestTheConfigRepositoryCannotBeRemoved(t *testing.T) {
 
 // Removing the last repository leaves TargetRepos empty, and an empty
 // allowlist is an unrestricted deployment: new tasks against the
-// repository just removed are accepted again. This pins today's
-// behaviour so a change to it is deliberate; whether the last removal
-// should instead be refused or leave the deployment closed is a
-// follow-up (filed from grain/task-4249).
+// repository just removed are accepted again. This is the decided
+// behaviour rather than a gap (grain/task-4287): refusing the last
+// removal or keeping the deployment closed were both considered and
+// turned down in favour of one meaning for an empty list, with the
+// repos pane warning that removing the only repo allows any repo again.
 func TestRemovingTheLastRepositoryLeavesAnUnrestrictedDeployment(t *testing.T) {
 	r := newLifecycleRig(t)
 	r.must(http.MethodPost, "/api/repos", `{"repo":"acme/widgets"}`)
@@ -524,7 +525,7 @@ func TestRemovingTheLastRepositoryLeavesAnUnrestrictedDeployment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if after.State == model.StateAwaitingReply {
-		t.Fatalf("today an empty allowlist is unrestricted, but the task was parked: %+v", after.State)
+		t.Fatalf("an empty allowlist is unrestricted, but the task was parked: %+v", after.State)
 	}
 }
 
