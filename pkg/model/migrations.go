@@ -679,7 +679,7 @@ var Migrations = []Migration{
 	},
 	{
 		// schema99AutoUpgradeReleaseTable creates auto_upgrade_release at
-		// its schema-99 shape so migration 138's ALTER TABLE runs cleanly
+		// its schema-99 shape so migration 139's ALTER TABLE runs cleanly
 		// from any baseline predating 99.
 		Version:     99,
 		Description: "add grain_config.auto_upgrade_on, which turns on upgrading when a release is published",
@@ -991,7 +991,14 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version: 138,
+		Version:     138,
+		Description: "add grain_config.sandbox_shape_limits, the deployment and per-role ceilings on a task's sandbox shape (grain/task-4018)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_shape_limits` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 139,
 		Description: "add grain_config.auto_upgrade_min_interval_hours and auto_upgrade_release.succeeded_at, " +
 			"the minimum interval between release-triggered upgrades (grain/task-4230)",
 		Statements: []string{
@@ -1002,7 +1009,7 @@ var Migrations = []Migration{
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
-// created it, frozen so migration 99 followed by migration 138's ALTER TABLE
+// created it, frozen so migration 99 followed by migration 139's ALTER TABLE
 // runs cleanly from any earlier baseline.
 const schema99AutoUpgradeReleaseTable = `CREATE TABLE IF NOT EXISTS ` + "`auto_upgrade_release`" + ` (
   ` + "`id`" + `           INTEGER  NOT NULL,

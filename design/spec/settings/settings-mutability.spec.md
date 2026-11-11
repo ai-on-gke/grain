@@ -71,7 +71,7 @@ With no state repository (`Config.StateRepo == nil` and no external remote, e.g.
 The bootstrap set is exactly what `clearBootstrap` (`pkg/ui/config_bootstrap.go`) zeroes:
 
 - **Models:** `agentBackends`, `defaultModel`, `agentBackendId`, `modelSettings`, `judgementModel`.
-- **Sandboxes:** `maxWorkers`, `sandboxBackend`, `sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`, `sandbox{Cpu,Memory,Disk}Overcommit`, `sandboxMemoryReserveMb`, `sandboxDiskFloorShare`, `sandboxDiskFloorMinMb`, `sandboxOvercommit` (adaptive overcommit), `networkAccess`, `sandboxImage`, `sandboxImageMirror`, every `k8s*` field (including `k8sPriorityClass{Interactive,Agent,Ci}`).
+- **Sandboxes:** `maxWorkers`, `sandboxBackend`, `sandboxCpus`, `sandboxMemoryMb`, `sandboxDiskGb`, `sandbox{Cpu,Memory,Disk}Overcommit`, `sandboxMemoryReserveMb`, `sandboxDiskFloorShare`, `sandboxDiskFloorMinMb`, `sandboxOvercommit` (adaptive overcommit), `sandboxShapeLimits`, `networkAccess`, `sandboxImage`, `sandboxImageMirror`, every `k8s*` field (including `k8sPriorityClass{Interactive,Agent,Ci}`).
 - **CLI run locations:** `cliRun`.
 - **The lock:** `settingsLocked`.
 

@@ -1775,6 +1775,85 @@ func (s *Store) PendingQuestions(ctx context.Context) (map[string]PendingQuestio
 	return out, err
 }
 
+// CommentByPerson reports whether a comment is a person's: a human's
+// own, or one a service relayed on a human's behalf. What agents and
+// grain itself say on a task is never something a run is owed for.
+func CommentByPerson(c Comment) bool {
+	return PersonOf(c.Author) != nil
+}
+
+// PersonOf is the person a comment's attribution speaks for -- its
+// human actor, or the human a service relayed it for -- or nil.
+func PersonOf(a Attribution) *Principal {
+	if a.Actor.Kind == PrincipalHuman {
+		p := a.Actor
+		return &p
+	}
+	if a.Actor.Kind == PrincipalService && a.OnBehalfOf != nil && a.OnBehalfOf.Kind == PrincipalHuman {
+		p := *a.OnBehalfOf
+		return &p
+	}
+	return nil
+}
+
+// UndeliveredPersonComment is the newest comment a person posted on a
+// task past what its runs have been shown (Observation.DeliveredCommentID)
+// and past the question it is parked on, if any -- the comment a run is
+// still owed for. nil when there is none, and when the task has no
+// delivered mark at all: with nothing to judge by, every old comment
+// would read as unanswered.
+func UndeliveredPersonComment(comments []Comment, obs *Observation) *Comment {
+	if obs == nil || obs.DeliveredCommentID == nil {
+		return nil
+	}
+	for i := len(comments) - 1; i >= 0; i-- {
+		c := comments[i]
+		if c.ID <= *obs.DeliveredCommentID {
+			return nil
+		}
+		if obs.PendingQuestionCommentID != nil && c.ID <= *obs.PendingQuestionCommentID {
+			return nil
+		}
+		if CommentByPerson(c) {
+			return &comments[i]
+		}
+	}
+	return nil
+}
+
+// UndeliveredPersonComments is UndeliveredPersonComment for every open
+// task at once, keyed by task, with the person who wrote it -- one query
+// for a whole list, as PendingQuestions is, so a row can say a question
+// is waiting for an agent rather than for its owner.
+func (s *Store) UndeliveredPersonComments(ctx context.Context) (map[string]Principal, error) {
+	out := map[string]Principal{}
+	err := each(ctx, s.db,
+		"SELECT `c`.`task_id`, `c`.`author_kind`, `c`.`author_id`, `c`.`author_behalf_kind`, `c`.`author_behalf_id` "+
+			"FROM `task_comment` `c` JOIN `task_observation` `o` ON `o`.`task_id` = `c`.`task_id` "+
+			"WHERE `o`.`closed_at` IS NULL AND `o`.`delivered_comment_id` IS NOT NULL "+
+			"AND `c`.`id` > `o`.`delivered_comment_id` "+
+			"AND (`o`.`pending_question_comment_id` IS NULL OR `c`.`id` > `o`.`pending_question_comment_id`) "+
+			"AND (`c`.`author_kind` = ? OR (`c`.`author_kind` = ? AND `c`.`author_behalf_kind` = ?)) "+
+			"ORDER BY `c`.`id`",
+		[]any{string(PrincipalHuman), string(PrincipalService), string(PrincipalHuman)},
+		func(rows *sql.Rows) error {
+			var id, kind, actor string
+			var behalfKind, behalfID sql.NullString
+			if err := rows.Scan(&id, &kind, &actor, &behalfKind, &behalfID); err != nil {
+				return err
+			}
+			a := Attribution{Actor: Principal{Kind: PrincipalKind(kind), ID: actor}}
+			if behalfKind.Valid {
+				a.OnBehalfOf = &Principal{Kind: PrincipalKind(behalfKind.String), ID: behalfID.String}
+			}
+			if p := PersonOf(a); p != nil {
+				out[id] = *p
+			}
+			return nil
+		})
+	return out, err
+}
+
 // PendingAccessRequests is every open task parked on a request_access
 // call (Observation.PendingAccess) -- one query for a whole list, so a
 // row can say it is waiting on a grant rather than on an answer.
@@ -6215,7 +6294,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`,`registry`,`default_admission`,`default_hosting`,`skills`,`ci_api_repos`,`hub_environment_name`,`auto_upgrade_min_interval_hours`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`,`registry`,`default_admission`,`default_hosting`,`skills`,`ci_api_repos`,`hub_environment_name`,`sandbox_shape_limits`,`auto_upgrade_min_interval_hours`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -6246,6 +6325,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	var ownerTrust string
 	var autoGrantContextReads string
 	var ciAPIRepos string
+	var sandboxShapeLimits string
 	var hub string
 	var cliRun string
 	var sandboxOvercommit string
@@ -6282,7 +6362,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads, &hub, &defaultAdmission, &defaultHosting, &skills, &ciAPIRepos, &c.HubEnvironmentName, &c.AutoUpgradeMinIntervalHours); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads, &hub, &defaultAdmission, &defaultHosting, &skills, &ciAPIRepos, &c.HubEnvironmentName, &sandboxShapeLimits, &c.AutoUpgradeMinIntervalHours); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -6338,6 +6418,9 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	c.Skills = DecodeSkillsConfig(skills)
 	c.TargetRepos = splitCSV(targetRepos)
 	c.CIAPIRepos = splitCSV(ciAPIRepos)
+	if c.SandboxShapeLimits, err = DecodeSandboxShapeLimits(sandboxShapeLimits); err != nil {
+		return Config{}, err
+	}
 	c.K8sNodeSelector = splitCSV(k8sNodeSelector)
 	// Same folding, for the same reason, one setting over: a row written
 	// before this column existed carries the empty string, which means
@@ -6419,12 +6502,16 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 	if err != nil {
 		return err
 	}
+	sandboxShapeLimits, err := EncodeSandboxShapeLimits(c.SandboxShapeLimits)
+	if err != nil {
+		return err
+	}
 	autoGrantContextReads, err := EncodeAutoGrantContextReads(c.AutoGrantContextReads)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -6461,7 +6548,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
 		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror),
 		c.SessionSandboxIdleTTL.Milliseconds(), c.SettingsLocked, newTaskForm, strings.TrimSpace(c.AutoUpgradeOn), ownerTrust, autoGrantContextReads, hub, string(c.DefaultAdmission), string(c.DefaultHosting), EncodeSkillsConfig(c.Skills),
-		joinCSV(c.CIAPIRepos), strings.TrimSpace(c.HubEnvironmentName), c.AutoUpgradeMinIntervalHours)
+		joinCSV(c.CIAPIRepos), strings.TrimSpace(c.HubEnvironmentName), sandboxShapeLimits, c.AutoUpgradeMinIntervalHours)
 	return err
 }
 

@@ -307,6 +307,12 @@ var settingsDiffRows = []settingsDiffRow{
 		b, _ := json.Marshal(s.SandboxOvercommit)
 		return string(b)
 	}},
+	// The sandbox shape ceilings, as the one JSON object they are stored
+	// as, so a change to the maximum or any role's ceiling is one row.
+	{"sandboxShapeLimits", "sandbox shape limits", func(s ui.Settings) any {
+		b, _ := json.Marshal(s.SandboxShapeLimits)
+		return string(b)
+	}},
 	{"externalAgentApi", "external agent api", func(s ui.Settings) any { return s.ExternalAgentAPI }},
 	{"sessionSandboxIdleTtl", "session sandbox idle ttl", func(s ui.Settings) any { return s.SessionSandboxIdleTTL }},
 	{"sandboxDiskFloorShare", "sandbox disk floor share", func(s ui.Settings) any { return s.SandboxDiskFloorShare }},
