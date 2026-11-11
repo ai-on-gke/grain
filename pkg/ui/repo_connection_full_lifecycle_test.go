@@ -263,10 +263,16 @@ func sandboxToken(root string) string {
 // proxy: before, and after.
 type removalSeen struct {
 	token                   string
-	before                  [2]int // clone, push advertisement
-	clone, push             [2]any // status, body
+	cloneBefore, pushBefore proxyAnswer
+	clone, push             proxyAnswer
 	gitClone, gitPush       string
 	gitCloneErr, gitPushErr error
+}
+
+// proxyAnswer is the proxy's status and body for one request.
+type proxyAnswer struct {
+	code int
+	body string
 }
 
 const removedFromList = "no longer on this deployment's target repo list"
@@ -302,8 +308,8 @@ func runFullLifecycle(t *testing.T, connectionFirst bool) {
 	f.agent(agentRun(func(_ context.Context, cfg agent.RunConfig) (*agent.Result, error) {
 		root := cfg.SandboxRoot
 		seen.token = sandboxToken(root)
-		seen.before[0], _ = f.proxyAsks(seen.token, "git-upload-pack")
-		seen.before[1], _ = f.proxyAsks(seen.token, "git-receive-pack")
+		seen.cloneBefore.code, seen.cloneBefore.body = f.proxyAsks(seen.token, "git-upload-pack")
+		seen.pushBefore.code, seen.pushBefore.body = f.proxyAsks(seen.token, "git-receive-pack")
 		removals := []string{"/api/repos/acme/widgets", "/api/deployment/git-connections/" + cred}
 		if connectionFirst {
 			removals[0], removals[1] = removals[1], removals[0]
@@ -313,10 +319,8 @@ func runFullLifecycle(t *testing.T, connectionFirst bool) {
 				return nil, fmt.Errorf("DELETE %s: %d %s", path, code, out)
 			}
 		}
-		code, body := f.proxyAsks(seen.token, "git-upload-pack")
-		seen.clone = [2]any{code, body}
-		code, body = f.proxyAsks(seen.token, "git-receive-pack")
-		seen.push = [2]any{code, body}
+		seen.clone.code, seen.clone.body = f.proxyAsks(seen.token, "git-upload-pack")
+		seen.push.code, seen.push.body = f.proxyAsks(seen.token, "git-receive-pack")
 		seen.gitClone, seen.gitCloneErr = sandboxGit(root, root, "clone", "-q", f.proxyURL+"/acme/widgets.git", "again")
 		work := filepath.Join(root, "work")
 		if _, err := sandboxGit(root, work, "commit", "-q", "--allow-empty", "-m", "after removal"); err != nil {
@@ -334,13 +338,13 @@ func runFullLifecycle(t *testing.T, connectionFirst bool) {
 	if seen.token == "" {
 		t.Fatalf("task %s's run never started", live.ID)
 	}
-	if seen.before != [2]int{http.StatusOK, http.StatusOK} {
-		t.Fatalf("before the removal the proxy answered clone/push with %v, want 200s", seen.before)
+	if seen.cloneBefore.code != http.StatusOK || seen.pushBefore.code != http.StatusOK {
+		t.Fatalf("before the removal the proxy answered clone %+v and push %+v, want 200s", seen.cloneBefore, seen.pushBefore)
 	}
-	for what, got := range map[string][2]any{"clone": seen.clone, "push": seen.push} {
-		if got[0] != http.StatusForbidden || !strings.Contains(got[1].(string), removedFromList) ||
-			!strings.Contains(got[1].(string), "acme/widgets") {
-			t.Errorf("after the removal the proxy answered a %s with %v %q, want a 403 saying the repository was removed", what, got[0], got[1])
+	for what, got := range map[string]proxyAnswer{"clone": seen.clone, "push": seen.push} {
+		if got.code != http.StatusForbidden || !strings.Contains(got.body, removedFromList) ||
+			!strings.Contains(got.body, "acme/widgets") {
+			t.Errorf("after the removal the proxy answered a %s with %d %q, want a 403 saying the repository was removed", what, got.code, got.body)
 		}
 	}
 	if seen.gitCloneErr == nil || !strings.Contains(seen.gitClone, removedFromList) {
