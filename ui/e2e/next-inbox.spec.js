@@ -80,8 +80,10 @@ test("signs in at /next/inbox, sees seeded and live items, approves one and answ
     await expect(page.getByTestId("next-inbox-headline")).toContainText(
       "waiting on you",
     );
-    // The demo store's seeded parked question.
-    await expect(row(page, "Investigate the merge queue stall")).toBeVisible();
+    // What `grain demo` seeded is waiting there. Not one named row: other
+    // specs on this worker answer seeded items (inbox.spec.js spends the
+    // parked question), so this asks only that the seeded queue is shown.
+    await expect(page.getByTestId("queue-row").first()).toBeVisible();
 
     // Queue and inspector side by side, nothing overflowing sideways.
     const queue = await page.getByTestId("next-inbox-queue").boundingBox();
