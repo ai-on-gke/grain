@@ -69,11 +69,6 @@ func sessionTurnAuthor(ctx context.Context, store *model.Store, taskID string) *
 	if store == nil {
 		return nil
 	}
-	comments, err := store.Comments(ctx, taskID)
-	if err != nil {
-		log.Printf("grain api: reading session %s's conversation for who it acts for: %v", taskID, err)
-		return nil
-	}
 	shown := func(model.Comment) bool { return true }
 	if live := liveRun(ctx, store, taskID); live != nil {
 		var through int64 = -1
@@ -85,30 +80,35 @@ func sessionTurnAuthor(ctx context.Context, store *model.Store, taskID string) *
 		started := live.StartedAt
 		shown = func(c model.Comment) bool { return c.ID <= through || !c.CreatedAt.After(started) }
 	}
-	for i := len(comments) - 1; i >= 0; i-- {
-		c := comments[i]
-		who := attributedHuman(c.Author)
-		if who == nil || !shown(c) {
-			continue
+	var before int64
+	for {
+		comments, more, err := store.CommentsBefore(ctx, taskID, before, 50)
+		if err != nil {
+			log.Printf("grain api: reading session %s's conversation for who it acts for: %v", taskID, err)
+			return nil
 		}
-		return who
+		for i := len(comments) - 1; i >= 0; i-- {
+			c := comments[i]
+			who := attributedHuman(c.Author)
+			if who == nil || !shown(c) {
+				continue
+			}
+			return who
+		}
+		if !more || len(comments) == 0 {
+			return nil
+		}
+		before = comments[0].ID
 	}
-	return nil
 }
 
 // liveRun is taskID's run that has not finished, the latest started if
 // somehow there are several, and nil for none.
 func liveRun(ctx context.Context, store *model.Store, taskID string) *model.Run {
-	runs, err := store.Runs(ctx, taskID)
+	live, err := store.LiveRun(ctx, taskID)
 	if err != nil {
 		log.Printf("grain api: reading session %s's runs for who it acts for: %v", taskID, err)
 		return nil
-	}
-	var live *model.Run
-	for i := range runs {
-		if runs[i].FinishedAt == nil && (live == nil || runs[i].StartedAt.After(live.StartedAt)) {
-			live = &runs[i]
-		}
 	}
 	return live
 }

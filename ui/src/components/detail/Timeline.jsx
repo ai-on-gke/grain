@@ -12,11 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Link, TextField } from "@mui/material";
 import LinkIcon from "@mui/icons-material/Link";
 import api from "../../api.js";
 import AccessGate from "../AccessGate.jsx";
+import {
+  earlierButtonLabel,
+  mergeFreshDetail,
+  prependEarlierPage,
+  taskEarlierPath,
+} from "../../taskDetailPages.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { useTimelineOrder } from "../../TimelineOrderContext.jsx";
 import { formatDateTime } from "../../time.js";
@@ -697,7 +703,8 @@ function timelineEvents(
   // drawn collapsed -- still here, and still opened by a deep link
   // (CommentDeepLink's revealComment opens the <details>). The newest
   // handover says when it is stale.
-  const compactedThrough = context?.compacted_through || 0;
+  const compactedThrough =
+    context?.compacted_through || t.compactedThrough || 0;
   const lastHandover = (t.comments || []).findLastIndex((c) => c.handover);
   const commentEvents = (t.comments || []).map((c, i) => {
     const summarised =
@@ -711,7 +718,7 @@ function timelineEvents(
     const who = commentAuthor(c);
     const at = timelineTime(c.createdAt);
     return {
-      key: `comment-${i}`,
+      key: `comment-${c.id ?? i}`,
       // The comment's own id, which a /tasks/<id>#comment=<id> link
       // names (commentLinks.js) and the entry is marked with.
       commentId: c.id,
@@ -822,18 +829,81 @@ function timelineEvents(
 // what a run just said is never a scroll past the whole history to reach
 // the box.
 export default function Timeline({
-  t,
+  t: propTask,
   context = null,
   act,
   showError,
   onOpenTask,
+  onLoadEarlier = null,
 }) {
+  const [localTask, setLocalTask] = useState(null);
+  useEffect(() => {
+    setLocalTask((prev) => {
+      if (!prev || String(prev.id) !== String(propTask?.id)) return null;
+      return mergeFreshDetail(prev, propTask);
+    });
+  }, [propTask]);
+  const t = !onLoadEarlier && localTask ? localTask : propTask;
+
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const textareaRef = useRef(null);
   const zone = useTimeZone();
   const { order } = useTimelineOrder();
   const newestFirst = order === "newest";
   const events = timelineEvents(t, zone, Date.now(), onOpenTask, context);
   const ordered = newestFirst ? [...events].reverse() : events;
+
+  const handleLoadEarlier = async () => {
+    if (loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      if (onLoadEarlier) {
+        await onLoadEarlier();
+      } else {
+        const path = taskEarlierPath(t);
+        if (!path) return;
+        const wantComments =
+          (t.olderComments || 0) > 0 && (t.comments || []).length > 0;
+        const wantAttempts =
+          (t.olderAttempts || 0) > 0 && (t.attempts || []).length > 0;
+        const earlier = await api(path);
+        setLocalTask((prev) =>
+          prependEarlierPage(prev || propTask, earlier, {
+            loadedComments: wantComments,
+            loadedAttempts: wantAttempts,
+          }),
+        );
+      }
+    } catch (err) {
+      if (showError) showError(err);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
+  const earlierLabel = earlierButtonLabel(
+    t?.olderComments || 0,
+    t?.olderAttempts || 0,
+  );
+  const earlierControl = earlierLabel ? (
+    <div
+      id="timeline-show-earlier"
+      className={
+        newestFirst
+          ? "timeline-earlier timeline-earlier-bottom"
+          : "timeline-earlier timeline-earlier-top"
+      }
+      data-testid="timeline-show-earlier"
+    >
+      <Button
+        size="small"
+        variant="outlined"
+        disabled={loadingEarlier}
+        onClick={handleLoadEarlier}
+      >
+        {loadingEarlier ? "Loading earlier…" : earlierLabel}
+      </Button>
+    </div>
+  ) : null;
   // openAttempt is the attempt (bwsalmon/agents#446's own Attempt shape,
   // off t.attempts) whose transcript is open, or null -- local to
   // Timeline, since nothing outside it needs to know.
@@ -1008,6 +1078,7 @@ export default function Timeline({
         </div>
       )}
       {newestFirst && composer}
+      {!newestFirst && earlierControl}
       {ordered.length > 0 && (
         <ul className="timeline-list">
           {ordered.map((e) => (
@@ -1104,6 +1175,7 @@ export default function Timeline({
           ))}
         </ul>
       )}
+      {newestFirst && earlierControl}
       {openAttempt && (
         <AttemptTranscriptOverlay
           taskId={t.id}

@@ -232,22 +232,32 @@ func relayCompaction(ctx context.Context, store *model.Store, task model.Task,
 	if !ok || strings.TrimSpace(handover) == "" {
 		return nil
 	}
-	comments, err := store.Comments(ctx, task.ID)
-	if err != nil {
-		return fmt.Errorf("orchestrator: reading comments before compacting %s: %w", task.ID, err)
-	}
 	cutoff := now
 	if started, ok := store.RunStartedAt(ctx, runID); ok {
 		cutoff = started
 	}
-	through := model.LastCommentBefore(comments, cutoff)
+	var through int64
+	var before int64
+	for {
+		page, more, cerr := store.CommentsBefore(ctx, task.ID, before, 50)
+		if cerr != nil {
+			return fmt.Errorf("orchestrator: reading comments before compacting %s: %w", task.ID, cerr)
+		}
+		if id := model.LastCommentBefore(page, cutoff); id > through {
+			through = id
+		}
+		if through > 0 || !more || len(page) == 0 {
+			break
+		}
+		before = page[0].ID
+	}
 	if through <= 0 {
 		// Nothing was said before this run: there is nothing to fold,
 		// and a cursor of 0 would read as "everything" to CompactTask.
 		return relayHandover(ctx, store, task, &agent.Result{ToolCalls: []agent.ToolCall{{
 			Name: "write_handover", Arguments: map[string]any{"handover": handover}}}}, now)
 	}
-	now, err = answeringTime(ctx, store, task.ID, now)
+	now, err := answeringTime(ctx, store, task.ID, now)
 	if err != nil {
 		return fmt.Errorf("orchestrator: compacting %s: %w", task.ID, err)
 	}

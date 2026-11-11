@@ -5328,6 +5328,59 @@ fieldset legend {
   margin-top: 4px;
 }
 
+/* Paged timeline "Show earlier" control and chat summarised comments
+   disclosure (durable-tasks.design.md#DT-15). */
+.timeline-earlier {
+  display: flex;
+  justify-content: center;
+}
+.timeline-earlier-bottom {
+  padding: 0.75rem 0 0.25rem;
+}
+.timeline-earlier-top {
+  padding: 0.25rem 0 0.75rem;
+}
+.task-chat-earlier {
+  display: flex;
+  justify-content: center;
+  padding: 0 0 0.5rem;
+}
+.task-chat-summarised {
+  margin-top: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  background: var(--canvas);
+}
+.task-chat-summarised > .timeline-summarised-summary {
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.task-chat-summarised[open] > .timeline-summarised-summary {
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-summarised-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.timeline-summarised-item {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-summarised-item:first-child {
+  padding-top: 0;
+}
+.timeline-summarised-item:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 /* The closed-tasks pager at the end of a task view (ClosedTasksMore.jsx). */
 .closed-tasks-more {
   display: flex;

@@ -62,6 +62,7 @@ import App, {
   POLL_INTERVAL_MS,
 } from "./App.jsx";
 import api from "./api.js";
+import { taskDetailPath } from "./taskDetailPages.js";
 import {
   config,
   initialTasks,
@@ -1216,7 +1217,7 @@ describe("App", () => {
         });
       }
       if (
-        path === "/api/tasks/session-1" &&
+        path === taskDetailPath("session-1") &&
         (opts?.method || "GET") === "GET"
       ) {
         return respondSessionTask(opts);
@@ -1231,7 +1232,7 @@ describe("App", () => {
     ).toBeInTheDocument();
 
     const sessionCalls = () =>
-      api.mock.calls.filter(([p]) => p === "/api/tasks/session-1");
+      api.mock.calls.filter(([p]) => p === taskDetailPath("session-1"));
     expect(sessionCalls().length).toBeGreaterThanOrEqual(1);
     expect(sessionCalls().at(-1)[1]).toEqual({ poll: true });
 
@@ -1322,7 +1323,7 @@ describe("App", () => {
           });
         }
         if (
-          path === "/api/tasks/session-1" &&
+          path === taskDetailPath("session-1") &&
           (opts?.method || "GET") === "GET"
         ) {
           return Promise.resolve({
@@ -1344,7 +1345,7 @@ describe("App", () => {
           });
         }
         if (
-          path === "/api/tasks/session-2" &&
+          path === taskDetailPath("session-2") &&
           (opts?.method || "GET") === "GET"
         ) {
           return Promise.resolve({
@@ -1444,7 +1445,7 @@ describe("App", () => {
         if (path === "/api/tasks" && method === "GET") {
           return Promise.resolve([...sessionTasks]);
         }
-        if (path === "/api/tasks/session-99" && method === "GET") {
+        if (path === taskDetailPath("session-99") && method === "GET") {
           return Promise.resolve(sessionTasks[0]);
         }
         return rest(path, opts);
@@ -1574,7 +1575,7 @@ describe("App", () => {
           sessionsState = sessionsState.filter((s) => s.id !== delMatch[1]);
           return Promise.resolve({ ok: true });
         }
-        if (path === "/api/tasks/session-2" && method === "GET") {
+        if (path === taskDetailPath("session-2") && method === "GET") {
           return Promise.resolve({
             id: "session-2",
             title: "Release planning",
@@ -1584,7 +1585,7 @@ describe("App", () => {
             comments: [],
           });
         }
-        if (path === "/api/tasks/session-1" && method === "GET") {
+        if (path === taskDetailPath("session-1") && method === "GET") {
           return Promise.resolve({
             id: "session-1",
             title: "Director",
@@ -1651,7 +1652,7 @@ describe("App", () => {
             ],
           });
         }
-        if (path === "/api/tasks/session-1" && method === "GET") {
+        if (path === taskDetailPath("session-1") && method === "GET") {
           return Promise.resolve({
             id: "session-1",
             title: "Director",
@@ -1670,7 +1671,7 @@ describe("App", () => {
             ],
           });
         }
-        if (path === "/api/tasks/session-2" && method === "GET") {
+        if (path === taskDetailPath("session-2") && method === "GET") {
           return reviewerTaskPromise;
         }
         return rest(path, opts);

@@ -30,6 +30,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { LOADING_PANE_DELAY_MS, POLL_INTERVAL_MS } from "./App.jsx";
 import api from "./api.js";
+import { isTaskDetailGetPath } from "./taskDetailPages.js";
 import { navigateInApp } from "./commentLinks.js";
 import {
   config,
@@ -177,7 +178,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, { method: "GET" }));
         });
@@ -222,7 +223,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -263,7 +264,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -306,7 +307,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/2" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "2") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -348,7 +349,7 @@ describe("App", () => {
     setupApi();
     const realImpl = api.getMockImplementation();
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return Promise.reject(new Error("task 1 is gone"));
       }
       return realImpl(path, opts);
@@ -372,7 +373,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -439,7 +440,7 @@ describe("App", () => {
     const base = api.getMockImplementation();
     let failing = true;
     api.mockImplementation((p, opts) => {
-      if (failing && p === "/api/tasks/1") {
+      if (failing && isTaskDetailGetPath(p, "1")) {
         const err = new Error("500 Internal Server Error");
         err.status = 500;
         return Promise.reject(err);
@@ -472,7 +473,7 @@ describe("App", () => {
     const base = api.getMockImplementation();
     let failing = true;
     api.mockImplementation((p, opts) =>
-      failing && p === "/api/tasks/1"
+      failing && isTaskDetailGetPath(p, "1")
         ? Promise.reject(new TypeError("Failed to fetch"))
         : base(p, opts),
     );
@@ -498,7 +499,7 @@ describe("App", () => {
     setupApi();
     const base = api.getMockImplementation();
     api.mockImplementation((p, opts) => {
-      if (p === "/api/tasks/1") {
+      if (isTaskDetailGetPath(p, "1")) {
         const err = new Error("no such task");
         err.status = 404;
         return Promise.reject(err);
@@ -553,7 +554,7 @@ describe("App", () => {
     const base = api.getMockImplementation();
     const loads = [];
     api.mockImplementation((p, opts) =>
-      p === "/api/tasks/1"
+      isTaskDetailGetPath(p, "1")
         ? new Promise((resolve) =>
             loads.push(() => base(p, opts).then(resolve)),
           )
