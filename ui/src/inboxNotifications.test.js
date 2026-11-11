@@ -286,6 +286,23 @@ describe("a question's notification", () => {
     expect(entry.body).toBe("Ship the exporter");
     expect(entry.key).toBe("task:42:reply");
   });
+
+  it("names whose question an answered task still owes a run", () => {
+    const [entry] = inboxEntries(
+      [
+        {
+          id: "42",
+          title: "Ship the exporter",
+          state: "awaiting_reply",
+          unansweredCommentFrom: "atyburcy@example.com",
+        },
+      ],
+      [],
+    );
+    expect(entry.title).toBe(
+      "42 has an unanswered question from atyburcy@example.com",
+    );
+  });
 });
 
 describe("taskReason for a CL", () => {

@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Link, TextField } from "@mui/material";
 import LinkIcon from "@mui/icons-material/Link";
 import api from "../../api.js";
+import AccessGate from "../AccessGate.jsx";
 import {
   earlierButtonLabel,
   mergeFreshDetail,
@@ -912,7 +913,11 @@ export default function Timeline({
   const [attachments, setAttachments] = useState([]);
   const sending = useRef(false);
 
-  const send = async () => {
+  // reopen asks for a closed task to be reopened with the comment
+  // ("Reopen and send"), so the reopen queues the run that answers it
+  // (ui.Client.AddCommentReopening); a closed task's comment otherwise
+  // reaches no agent.
+  const send = async (reopen = false) => {
     if (sending.current) return;
     const body = textareaRef.current?.value || "";
     if (!body.trim() && attachments.length === 0) return;
@@ -938,6 +943,7 @@ export default function Timeline({
             body: JSON.stringify({
               body,
               attachments: uploaded,
+              ...(reopen && { reopen: true }),
             }),
           }),
         t.id,
@@ -969,42 +975,62 @@ export default function Timeline({
         Sending a comment reopens this task for another run.
       </p>
     ) : null;
+  // A closed task stays closed when commented on, so the box says before
+  // it is used that the comment reaches no agent, and offers the reopen
+  // that would deliver it. The note stays for a role that may not reopen
+  // (AccessGate leaves the button out); Comment only is the plain post.
+  const closed = t.state === "closed";
+  const closedNote = closed ? (
+    <p className="hint comment-form-closed">
+      This task is closed; a comment won&apos;t reach an agent.
+    </p>
+  ) : null;
   const composer = (
-    <div
-      className="comment-form"
-      onPaste={(evt) => {
-        const files = getPastedImages(evt);
-        if (files.length > 0) {
+    <>
+      {closedNote}
+      <div
+        className="comment-form"
+        onPaste={(evt) => {
+          const files = getPastedImages(evt);
+          if (files.length > 0) {
+            evt.preventDefault();
+            setAttachments((current) => [...current, ...files]);
+          }
+        }}
+        onDrop={(evt) => {
+          const dropped = getDroppedFiles(evt);
+          if (dropped.length > 0) {
+            evt.preventDefault();
+            setAttachments((current) => [...current, ...dropped]);
+          }
+        }}
+        onDragOver={(evt) => {
           evt.preventDefault();
-          setAttachments((current) => [...current, ...files]);
-        }
-      }}
-      onDrop={(evt) => {
-        const dropped = getDroppedFiles(evt);
-        if (dropped.length > 0) {
-          evt.preventDefault();
-          setAttachments((current) => [...current, ...dropped]);
-        }
-      }}
-      onDragOver={(evt) => {
-        evt.preventDefault();
-      }}
-    >
-      <TextField
-        multiline
-        rows={2}
-        placeholder={t.interactive ? "Message..." : "Reply..."}
-        inputRef={textareaRef}
-        autoFocus={t.interactive}
-        fullWidth
-        size="small"
-      />
-      <AttachmentPicker files={attachments} onChange={setAttachments} />
-      <Button variant="outlined" onClick={send}>
-        Comment
-      </Button>
-      {reopens}
-    </div>
+        }}
+      >
+        <TextField
+          multiline
+          rows={2}
+          placeholder={t.interactive ? "Message..." : "Reply..."}
+          inputRef={textareaRef}
+          autoFocus={t.interactive}
+          fullWidth
+          size="small"
+        />
+        <AttachmentPicker files={attachments} onChange={setAttachments} />
+        {closed && (
+          <AccessGate scope="tasks:write" repo={t.repo} hide>
+            <Button variant="contained" onClick={() => send(true)}>
+              Reopen and send
+            </Button>
+          </AccessGate>
+        )}
+        <Button variant="outlined" onClick={() => send()}>
+          {closed ? "Comment only" : "Comment"}
+        </Button>
+        {reopens}
+      </div>
+    </>
   );
 
   return (

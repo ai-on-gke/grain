@@ -1775,6 +1775,85 @@ func (s *Store) PendingQuestions(ctx context.Context) (map[string]PendingQuestio
 	return out, err
 }
 
+// CommentByPerson reports whether a comment is a person's: a human's
+// own, or one a service relayed on a human's behalf. What agents and
+// grain itself say on a task is never something a run is owed for.
+func CommentByPerson(c Comment) bool {
+	return PersonOf(c.Author) != nil
+}
+
+// PersonOf is the person a comment's attribution speaks for -- its
+// human actor, or the human a service relayed it for -- or nil.
+func PersonOf(a Attribution) *Principal {
+	if a.Actor.Kind == PrincipalHuman {
+		p := a.Actor
+		return &p
+	}
+	if a.Actor.Kind == PrincipalService && a.OnBehalfOf != nil && a.OnBehalfOf.Kind == PrincipalHuman {
+		p := *a.OnBehalfOf
+		return &p
+	}
+	return nil
+}
+
+// UndeliveredPersonComment is the newest comment a person posted on a
+// task past what its runs have been shown (Observation.DeliveredCommentID)
+// and past the question it is parked on, if any -- the comment a run is
+// still owed for. nil when there is none, and when the task has no
+// delivered mark at all: with nothing to judge by, every old comment
+// would read as unanswered.
+func UndeliveredPersonComment(comments []Comment, obs *Observation) *Comment {
+	if obs == nil || obs.DeliveredCommentID == nil {
+		return nil
+	}
+	for i := len(comments) - 1; i >= 0; i-- {
+		c := comments[i]
+		if c.ID <= *obs.DeliveredCommentID {
+			return nil
+		}
+		if obs.PendingQuestionCommentID != nil && c.ID <= *obs.PendingQuestionCommentID {
+			return nil
+		}
+		if CommentByPerson(c) {
+			return &comments[i]
+		}
+	}
+	return nil
+}
+
+// UndeliveredPersonComments is UndeliveredPersonComment for every open
+// task at once, keyed by task, with the person who wrote it -- one query
+// for a whole list, as PendingQuestions is, so a row can say a question
+// is waiting for an agent rather than for its owner.
+func (s *Store) UndeliveredPersonComments(ctx context.Context) (map[string]Principal, error) {
+	out := map[string]Principal{}
+	err := each(ctx, s.db,
+		"SELECT `c`.`task_id`, `c`.`author_kind`, `c`.`author_id`, `c`.`author_behalf_kind`, `c`.`author_behalf_id` "+
+			"FROM `task_comment` `c` JOIN `task_observation` `o` ON `o`.`task_id` = `c`.`task_id` "+
+			"WHERE `o`.`closed_at` IS NULL AND `o`.`delivered_comment_id` IS NOT NULL "+
+			"AND `c`.`id` > `o`.`delivered_comment_id` "+
+			"AND (`o`.`pending_question_comment_id` IS NULL OR `c`.`id` > `o`.`pending_question_comment_id`) "+
+			"AND (`c`.`author_kind` = ? OR (`c`.`author_kind` = ? AND `c`.`author_behalf_kind` = ?)) "+
+			"ORDER BY `c`.`id`",
+		[]any{string(PrincipalHuman), string(PrincipalService), string(PrincipalHuman)},
+		func(rows *sql.Rows) error {
+			var id, kind, actor string
+			var behalfKind, behalfID sql.NullString
+			if err := rows.Scan(&id, &kind, &actor, &behalfKind, &behalfID); err != nil {
+				return err
+			}
+			a := Attribution{Actor: Principal{Kind: PrincipalKind(kind), ID: actor}}
+			if behalfKind.Valid {
+				a.OnBehalfOf = &Principal{Kind: PrincipalKind(behalfKind.String), ID: behalfID.String}
+			}
+			if p := PersonOf(a); p != nil {
+				out[id] = *p
+			}
+			return nil
+		})
+	return out, err
+}
+
 // PendingAccessRequests is every open task parked on a request_access
 // call (Observation.PendingAccess) -- one query for a whole list, so a
 // row can say it is waiting on a grant rather than on an answer.
@@ -7028,6 +7107,27 @@ func (s *Store) OpenTaskWithTag(ctx context.Context, tag string) (*Task, error) 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("looking up the open task tagged %s: %w", tag, err)
+	}
+	return s.GetTask(ctx, id)
+}
+
+// NewestTaskWithTag is the newest task carrying tag, open or closed, or nil
+// when none has ever carried it -- OpenTaskWithTag without the unclosed
+// filter, for a caller reading what a schedule's most recent firing did even
+// after that task finished or failed.
+func (s *Store) NewestTaskWithTag(ctx context.Context, tag string) (*Task, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `tg`.`task_id` FROM `task_tag` AS `tg` "+
+			"JOIN `task` AS `t` ON `t`.`id` = `tg`.`task_id` "+
+			"WHERE `tg`.`tag` = ? "+
+			"ORDER BY `t`.`created_at` DESC, `tg`.`task_id` DESC LIMIT 1",
+		tag).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("looking up the newest task tagged %s: %w", tag, err)
 	}
 	return s.GetTask(ctx, id)
 }
