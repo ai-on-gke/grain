@@ -419,3 +419,28 @@ func TestUnapprovedTriggerReviewLandsUnapproved(t *testing.T) {
 		t.Fatalf("auto-approve: false review state = %s, approval = %+v; want proposed and unapproved", st, review.Approval)
 	}
 }
+
+func TestPathTriggerReviewCarriesTestingGuidanceAndRepoScopedCIRead(t *testing.T) {
+	t.Parallel()
+	for _, fixes := range []bool{false, true} {
+		tr := gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")
+		tr.Fixes = fixes
+		ctx, store, _, _, task := finishGated(t, []model.PathTrigger{tr}, "config/secrets/prod.yml")
+		reviewID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+		review := reloaded(t, ctx, store, reviewID)
+		wantGrant := model.APIGrantString("ci-read", "acme/widgets")
+		if len(review.Grants) != 1 || review.Grants[0].Capability != wantGrant || review.Grants[0].Via != model.GrantByGrain {
+			t.Errorf("fixes=%v: review grants = %+v, want [{Capability:%s Via:grain}]", fixes, review.Grants, wantGrant)
+		}
+		for _, want := range []string{
+			"Testing and CI",
+			"Do not run `go test ./...`",
+			"grain ci wait",
+			"narrowly targeted test (`go test ./pkg/x -run TestName`)",
+		} {
+			if !strings.Contains(review.Body, want) {
+				t.Errorf("fixes=%v: review body missing %q:\n%s", fixes, want, review.Body)
+			}
+		}
+	}
+}
