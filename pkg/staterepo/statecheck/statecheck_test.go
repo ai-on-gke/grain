@@ -152,6 +152,21 @@ func TestWarnsAboutSettingsGrainCannotRunOn(t *testing.T) {
 		t.Errorf("k8s_node_selector warnings = %v, want one naming k8s_node_selector and bad-selector", warnings)
 	}
 
+	if err := store.PutConfig(ctx, model.Config{
+		PollInterval:                30 * time.Second,
+		MaxWorkers:                  1,
+		AutoUpgradeMinIntervalHours: -2,
+	}); err != nil {
+		t.Fatalf("putting a settings row with negative auto_upgrade_min_interval_hours: %v", err)
+	}
+	warnings, err = UnrunnableSettings(ctx, db)
+	if err != nil {
+		t.Fatalf("checking: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "auto_upgrade_min_interval_hours") {
+		t.Errorf("auto_upgrade_min_interval_hours warnings = %v, want one naming auto_upgrade_min_interval_hours", warnings)
+	}
+
 	// Capability servers: an entry the daemon would refuse, and a
 	// credential committed in cleartext, each warned about without the
 	// value being repeated.

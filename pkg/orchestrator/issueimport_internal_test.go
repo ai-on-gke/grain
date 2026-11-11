@@ -393,3 +393,27 @@ func TestUpstreamImportSaysNothingUpstreamAndFixesNothing(t *testing.T) {
 		t.Fatalf("an upstream import's pull request body closes an issue in the fork:\n%s", body)
 	}
 }
+
+func TestUpstreamImportOnNonDefaultHostPassesStoredOwnerAndKeepsHost(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	client := &issueClient{
+		issues: map[string][]github.Issue{
+			"git.forge.example/org/issues": {openIssue(7, "Hosted issue")},
+		},
+	}
+	putImportConfig(t, ctx, store, model.IssueImport{
+		Enabled: true,
+		Repo:    "git.forge.example/org/issues",
+	})
+	now := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	if err := reconcileIssueImports(ctx, Deps{Store: store, Client: client}, now); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(client.listed, []string{"git.forge.example/org/issues?label="}) {
+		t.Fatalf("ListIssues called with %v, want [git.forge.example/org/issues?label=]", client.listed)
+	}
+	imported := tasksByReason(t, ctx, store, model.ReasonImported)
+	if len(imported) != 1 || !strings.Contains(imported[0].Title, "git.forge.example/org/issues#7") {
+		t.Fatalf("imported tasks = %+v, want title referencing git.forge.example/org/issues#7", imported)
+	}
+}
