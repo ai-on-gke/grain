@@ -32,6 +32,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { TipDirective } from "../shared/tip.directive";
 import {
+  jumpsQueue,
   LEVELS,
   type SortId,
   type TabId,
@@ -86,6 +87,7 @@ const SORTS: { id: SortId; label: string }[] = [
               class="tab-link"
               [routerLink]="[]"
               [queryParams]="{ tab: t.id }"
+              queryParamsHandling="merge"
               [attr.aria-current]="current() === t.id ? 'page' : null"
               [attr.data-testid]="'tab-' + t.id"
               [gTip]="t.tip"
@@ -102,6 +104,10 @@ const SORTS: { id: SortId; label: string }[] = [
         </nav>
       </div>
 
+      <p class="sr-only" id="reorder-help">
+        Press Space to pick the task up, the arrow keys or Home and End to move
+        it, Space to drop it, Escape to cancel.
+      </p>
       <p class="sr-only" aria-live="polite" data-testid="announcer">
         {{ announcement() }}
       </p>
@@ -180,6 +186,9 @@ const SORTS: { id: SortId; label: string }[] = [
               </p>
             }
             @if (sort() === "run") {
+              @if (backlogChecks()) {
+                <ng-container [ngTemplateOutlet]="selectAll" />
+              }
               @for (band of runBands(); track band.key) {
                 <section
                   class="band"
@@ -198,6 +207,15 @@ const SORTS: { id: SortId; label: string }[] = [
                     }
                   </ul>
                 </section>
+              }
+              @if (rows().length) {
+                <div
+                  class="drop-end"
+                  aria-hidden="true"
+                  [class.drop-before]="dropAt() === store.backlog().length"
+                  (dragover)="onDragOver($event, store.backlog().length)"
+                  (drop)="onDrop($event, store.backlog().length)"
+                ></div>
               }
             } @else {
               <ul class="task-rows">
@@ -297,6 +315,7 @@ const SORTS: { id: SortId; label: string }[] = [
                     <button
                       type="button"
                       class="btn-text"
+                      [disabled]="!canDefer()"
                       [attr.data-testid]="'defer-' + t.id"
                       (click)="defer([t.id])"
                     >
@@ -309,6 +328,9 @@ const SORTS: { id: SortId; label: string }[] = [
           }
 
           @default {
+            @if (rows().length) {
+              <ng-container [ngTemplateOutlet]="selectAll" />
+            }
             @if (current() === "closed" && !store.closedLoaded()) {
               <p class="empty-state">Loading closed tasks…</p>
             } @else if (store.loaded() && rows().length === 0) {
@@ -348,7 +370,7 @@ const SORTS: { id: SortId; label: string }[] = [
                   <span class="row-age muted tabular">{{
                     ago(t.updatedAt || t.createdAt)
                   }}</span>
-                  @if (t.state === "deferred") {
+                  @if (t.state === "deferred" && canDefer()) {
                     <button
                       type="button"
                       class="btn-text"
@@ -377,7 +399,7 @@ const SORTS: { id: SortId; label: string }[] = [
       @if (picked(); as p) {
         <div
           class="pickup-bar"
-          role="toolbar"
+          role="group"
           aria-label="Move the picked task"
           data-testid="pickup-bar"
         >
@@ -410,7 +432,7 @@ const SORTS: { id: SortId; label: string }[] = [
       } @else if (checked().size) {
         <div
           class="batch-bar"
-          role="toolbar"
+          role="group"
           [attr.aria-label]="checked().size + ' selected'"
           data-testid="batch-bar"
         >
@@ -451,7 +473,9 @@ const SORTS: { id: SortId; label: string }[] = [
               </select>
             </label>
           }
-          @if (current() === "backlog" || current() === "proposed") {
+          @if (
+            (current() === "backlog" || current() === "proposed") && canDefer()
+          ) {
             <button type="button" class="btn-text" (click)="defer(selected())">
               Defer
             </button>
@@ -460,15 +484,37 @@ const SORTS: { id: SortId; label: string }[] = [
             <button type="button" class="btn-text" (click)="reopen(selected())">
               Reopen
             </button>
-          } @else {
-            <button
-              type="button"
-              class="btn-text"
-              data-testid="batch-close"
-              (click)="close(selected())"
-            >
-              Close
-            </button>
+          } @else if (canClose()) {
+            @if (confirmClose()) {
+              <span data-testid="close-confirm"
+                >Close {{ checked().size }}? Running work stops and open pull
+                requests are left behind; this cannot be undone.</span
+              >
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="close-yes"
+                (click)="close(selected(), true)"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                class="btn-text"
+                (click)="confirmClose.set(false)"
+              >
+                Keep
+              </button>
+            } @else {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="batch-close"
+                (click)="close(selected())"
+              >
+                Close
+              </button>
+            }
           }
           <button type="button" class="btn-text" (click)="clearChecked()">
             Clear
@@ -476,6 +522,21 @@ const SORTS: { id: SortId; label: string }[] = [
         </div>
       }
     </section>
+
+    <ng-template #selectAll>
+      <div class="list-toolbar select-toolbar">
+        <label class="check-row">
+          <input
+            type="checkbox"
+            data-testid="select-all"
+            [checked]="allChecked()"
+            [indeterminate]="someChecked()"
+            (change)="toggleAll()"
+          />
+          <span>Select all</span>
+        </label>
+      </div>
+    </ng-template>
 
     <ng-template #backlogRow let-t>
       @let pos = positionOf(t);
@@ -488,20 +549,25 @@ const SORTS: { id: SortId; label: string }[] = [
         (drop)="onDrop($event, pos)"
       >
         @if (sort() === "run" && canMove()) {
-          <button
-            type="button"
-            class="drag-handle"
+          <span
+            class="drag-wrap"
             draggable="true"
-            [attr.aria-label]="'Move #' + t.id + ', position ' + (pos + 1)"
-            [attr.aria-pressed]="picked() === t.id"
-            [attr.data-testid]="'handle-' + t.id"
-            (click)="togglePick(t.id)"
-            (keydown)="onHandleKey($event, t.id)"
             (dragstart)="onDragStart($event, t.id)"
-            (dragend)="dropAt.set(null)"
+            (dragend)="onDragEnd()"
+            ><button
+              type="button"
+              class="drag-handle"
+              aria-describedby="reorder-help"
+              [disabled]="store.isBusy('move:' + t.id)"
+              [attr.aria-label]="'Move #' + t.id + ', position ' + (pos + 1)"
+              [attr.aria-pressed]="picked() === t.id"
+              [attr.data-testid]="'handle-' + t.id"
+              (click)="togglePick(t.id)"
+              (keydown)="onHandleKey($event, t.id)"
+            >
+              ⠿
+            </button></span
           >
-            ⠿
-          </button>
         }
         <span class="row-pos tabular muted">{{ pos + 1 }}</span>
         <input
@@ -524,6 +590,13 @@ const SORTS: { id: SortId; label: string }[] = [
                 >Waits on a dependency</span
               >
             }
+            @if (jumps(t)) {
+              <span
+                class="status-pill healthy waits"
+                gTip="Admitted past worker limits: it starts ahead of ordinary work as soon as it is first among such tasks."
+                >Skips worker limits</span
+              >
+            }
           </span>
         </div>
         <ng-container
@@ -541,13 +614,18 @@ const SORTS: { id: SortId; label: string }[] = [
             class="icon-btn row-menu-btn"
             [attr.aria-label]="'More actions for #' + t.id"
             [attr.aria-expanded]="openMenu() === 'row:' + t.id"
+            [attr.aria-controls]="'menu-list-' + t.id"
             [attr.data-testid]="'menu-' + t.id"
             (click)="toggleMenu('row:' + t.id, $event)"
           >
             ⋮
           </button>
           @if (openMenu() === "row:" + t.id) {
-            <ul class="pop-menu" [attr.data-testid]="'menu-list-' + t.id">
+            <ul
+              class="pop-menu"
+              [id]="'menu-list-' + t.id"
+              [attr.data-testid]="'menu-list-' + t.id"
+            >
               @if (canMove() && sort() === "run") {
                 <li>
                   <button type="button" (click)="moveTo(t.id, 0)">
@@ -592,6 +670,7 @@ const SORTS: { id: SortId; label: string }[] = [
             [class]="'prio-chip ' + lvl.arrow"
             [attr.aria-label]="'Priority ' + lvl.name + ' ' + p + ', change'"
             [attr.aria-expanded]="openMenu() === 'prio:' + t.id"
+            [attr.aria-controls]="'prio-menu-' + t.id"
             [attr.data-testid]="'prio-' + t.id"
             (click)="toggleMenu('prio:' + t.id, $event)"
           >
@@ -599,7 +678,11 @@ const SORTS: { id: SortId; label: string }[] = [
             {{ lvl.name }} {{ p }}
           </button>
           @if (openMenu() === "prio:" + t.id) {
-            <ul class="pop-menu" [attr.data-testid]="'prio-menu-' + t.id">
+            <ul
+              class="pop-menu"
+              [id]="'prio-menu-' + t.id"
+              [attr.data-testid]="'prio-menu-' + t.id"
+            >
               @for (l of levels; track l.value) {
                 <li>
                   <button
@@ -639,6 +722,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly label = stateLabel;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;
+  protected readonly jumps = jumpsQueue;
 
   protected readonly sort = signal<SortId>("run");
   protected readonly checked = signal<ReadonlySet<string>>(new Set());
@@ -695,6 +779,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly canMove = computed(() =>
     this.access.can("POST /api/tasks/reorder"),
   );
+  protected readonly canDefer = computed(() =>
+    this.access.can("POST /api/tasks/{id}/defer"),
+  );
+  protected readonly canClose = computed(() =>
+    this.access.can("POST /api/tasks/{id}/close"),
+  );
+  protected readonly backlogChecks = computed(() => this.rows().length > 0);
+  protected readonly confirmClose = signal(false);
   protected readonly priorityEditable = computed(
     () =>
       this.canEdit() &&
@@ -715,6 +807,22 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       });
     });
   }
+
+  // A picked task that leaves the backlog (dispatched, closed elsewhere)
+  // ends the pick-up; a shrinking backlog keeps the preview in range.
+  private readonly pickGuard = effect(() => {
+    const id = this.picked();
+    const backlog = this.store.backlog();
+    if (!id) return;
+    untracked(() => {
+      if (!backlog.some((t) => t.id === id)) {
+        this.picked.set(null);
+        this.say(`#${id} left the backlog, so the move was cancelled`);
+      } else if (this.previewPos() > backlog.length - 1) {
+        this.previewPos.set(backlog.length - 1);
+      }
+    });
+  });
 
   ngOnInit(): void {
     this.store.start();
@@ -776,14 +884,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return order;
   }
 
+  // Every row's position, computed once per change rather than per row.
+  private readonly positions = computed(() => {
+    const order = this.previewOrder([...this.store.backlog()]);
+    return new Map(order.map((t, i) => [t.id, i]));
+  });
+
   protected positionOf(t: Task): number {
-    return this.previewOrder([...this.store.backlog()]).findIndex(
-      (x) => x.id === t.id,
-    );
+    return this.positions().get(t.id) ?? -1;
   }
 
   protected placementOf(t: Task) {
-    return placement(this.store.backlog(), priorityOf(t));
+    return placement(this.store.work(), t);
   }
 
   protected setSort(s: SortId): void {
@@ -810,9 +922,39 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   // ---------- menus ----------
 
+  private menuTrigger: HTMLElement | null = null;
+
+  // Menus are disclosures: focus moves to the first item on open, and
+  // back to the trigger on Escape or after a choice.
   protected toggleMenu(key: string, ev: Event): void {
     ev.stopPropagation();
-    this.openMenu.update((m) => (m === key ? null : key));
+    const opening = this.openMenu() !== key;
+    this.openMenu.set(opening ? key : null);
+    this.menuTrigger = opening ? (ev.currentTarget as HTMLElement) : null;
+    if (opening) {
+      setTimeout(() =>
+        (
+          document.querySelector(".pop-menu button") as HTMLElement | null
+        )?.focus(),
+      );
+    }
+  }
+
+  private closeMenu(returnFocus: boolean): void {
+    this.openMenu.set(null);
+    const t = this.menuTrigger;
+    this.menuTrigger = null;
+    if (returnFocus && t) {
+      const sel = t.getAttribute("data-testid");
+      setTimeout(() =>
+        (
+          (sel &&
+            document.querySelector(
+              `[data-testid="${sel}"]`,
+            )) as HTMLElement | null
+        )?.focus(),
+      );
+    }
   }
 
   protected onDocClick(ev: Event): void {
@@ -826,7 +968,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (document.querySelector('[aria-modal="true"]')) return;
     if (this.openMenu()) {
       ev.preventDefault();
-      this.openMenu.set(null);
+      this.closeMenu(true);
     } else if (this.picked()) {
       ev.preventDefault();
       this.cancelPick();
@@ -841,8 +983,9 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     setTimeout(() => this.announcement.set(text));
   }
 
+  // The snackbar's own live region speaks the message; saying it here as
+  // well would announce it twice.
   private snack(message: string, undo?: Undo | null): void {
-    this.say(message);
     this.snackbar.show(message, undo ?? undefined);
   }
 
@@ -851,7 +994,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected async approve(ids: readonly string[]): Promise<void> {
-    this.openMenu.set(null);
+    this.closeMenu(true);
     const failed = await this.store.approve(ids);
     const done = ids.length - failed;
     if (done) {
@@ -863,7 +1006,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected async defer(ids: readonly string[]): Promise<void> {
-    this.openMenu.set(null);
+    this.closeMenu(true);
     const failed = await this.store.defer(ids);
     if (failed < ids.length) {
       this.clearChecked();
@@ -889,16 +1032,35 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async close(ids: readonly string[]): Promise<void> {
+  // Closing queued, proposed or deferred work is undone by reopening it.
+  // Closing running or merging work is not: the run stops and the pull
+  // request is orphaned, so it asks first and offers no Undo.
+  protected async close(
+    ids: readonly string[],
+    confirmed = false,
+  ): Promise<void> {
+    const live = ids
+      .map((id) => this.store.find(id))
+      .some((t) => t && !["queued", "proposed", "deferred"].includes(t.state));
+    if (live && !confirmed) {
+      this.confirmClose.set(true);
+      return;
+    }
+    this.confirmClose.set(false);
     const failed = await this.store.close(ids);
     if (failed < ids.length) {
       this.clearChecked();
-      this.snack(`Closed ${this.ids(ids)}`, {
-        label: "Undo",
-        run: async () => {
-          await this.store.reopen(ids);
-        },
-      });
+      this.snack(
+        `Closed ${this.ids(ids)}`,
+        live
+          ? null
+          : {
+              label: "Undo",
+              run: async () => {
+                await this.store.reopen(ids);
+              },
+            },
+      );
     }
   }
 
@@ -914,7 +1076,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     ids: readonly string[],
     p: number,
   ): Promise<void> {
-    this.openMenu.set(null);
+    this.closeMenu(true);
     const { failed, undo } = await this.store.setPriority(ids, p);
     if (failed < ids.length) {
       this.snack(
@@ -965,7 +1127,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected moveTo(id: string, to: number): void {
-    this.openMenu.set(null);
+    this.closeMenu(true);
     void this.commit(id, to);
   }
 
@@ -1059,11 +1221,20 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     this.dropAt.set(pos);
   }
 
+  // The line is drawn before row `pos` (or after the last row for
+  // pos === length); moving down, the task itself leaves a gap above.
   protected onDrop(ev: DragEvent, pos: number): void {
     ev.preventDefault();
     const id = this.dragId;
     this.dragId = null;
     this.dropAt.set(null);
-    if (id) void this.commit(id, pos);
+    if (!id) return;
+    const from = this.store.backlog().findIndex((t) => t.id === id);
+    void this.commit(id, from < pos ? pos - 1 : pos);
+  }
+
+  protected onDragEnd(): void {
+    this.dragId = null;
+    this.dropAt.set(null);
   }
 }

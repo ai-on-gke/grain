@@ -79,9 +79,7 @@ const SHOWN = 7;
               @for (t of shown(); track t.id; let i = $index) {
                 <li [class.is-head]="t.id === h.id">
                   <a [href]="'/tasks/' + t.id" (click)="open.set(false)">
-                    <span class="tabular muted">{{
-                      jumps(t) ? "↑↑" : i + 1
-                    }}</span>
+                    <span class="tabular muted">{{ i + 1 }}</span>
                     <span class="next-up-row-title"
                       >#{{ t.id }} {{ t.title }}</span
                     >
@@ -94,8 +92,9 @@ const SHOWN = 7;
               <p class="muted next-up-more">and {{ more() }} more</p>
             }
             <p class="muted next-up-note">
-              Order: tasks that jump the queue, then priority, then manual
-              order. A task waiting on a dependency is skipped.
+              Queue order is priority, then manual order. Tasks admitted past
+              worker limits start first; a task waiting on a dependency is
+              skipped.
             </p>
             <a
               class="btn-text"
@@ -131,7 +130,7 @@ export class NextUpComponent {
     return (
       `#${h.id} is first in run order` +
       (jumpsQueue(h)
-        ? " because it jumps the queue"
+        ? " because it is admitted past worker limits"
         : `, at priority ${priorityOf(h)}`) +
       (skipped > 0 ? `; ${skipped} ahead of it wait on dependencies` : "")
     );

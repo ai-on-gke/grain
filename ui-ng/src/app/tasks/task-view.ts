@@ -59,8 +59,8 @@ export const TABS: readonly TabDef[] = [
   {
     id: "asked",
     label: "Asked",
-    states: ["awaiting_reply", "awaiting_access", "awaiting_secret", "failed"],
-    tip: "Stopped on a person: a question, an access or secret request, or a run that failed.",
+    states: ["awaiting_reply", "failed"],
+    tip: "Stopped on a person: a question, or a run that failed.",
   },
   {
     id: "merging",
@@ -110,8 +110,6 @@ const STATE_LABELS: Record<string, string> = {
   queued: "Waiting",
   running: "Running",
   awaiting_reply: "Asked",
-  awaiting_access: "Needs access",
-  awaiting_secret: "Needs a secret",
   failed: "Failed",
   awaiting_submit: "Ready to submit",
   completed: "Merging",
@@ -157,36 +155,39 @@ export function levelOf(p: number): Level {
 
 // ---------- Run order (D-28) ----------
 
-// Admission bypass or durable lets a task skip worker limits: it runs
-// before every priority band (model.Admission).
+// Admission bypass or durable lets a task start past worker limits
+// (model.Admission). It is not part of the queue order itself
+// (taskQueueOrderSQL: priority, base-branch repairs, order_key, FIFO), so
+// such a task stays in its priority band with a badge.
 export function jumpsQueue(t: Task): boolean {
   const a = (t as Task & { admission?: string }).admission;
   return a === "bypass" || a === "durable";
 }
 
 export interface Band {
-  key: string; // "jump" or the priority number
+  key: string; // the priority number
   label: string;
-  priority: number | null;
+  priority: number;
   tasks: Task[];
 }
 
 // bands groups the backlog (already in dispatch order: GET /api/tasks
-// lists open tasks in backlog order) under headers in that same order.
-// Order applies within a priority only, so each run of one priority is
-// a band.
+// lists open tasks in backlog order) under one header per priority.
+// Order applies within a priority only. A priority that shows up twice
+// (it cannot in a fresh list) gets a distinct key so headers never clash.
 export function bands(backlog: readonly Task[]): Band[] {
   const out: Band[] = [];
+  const seen = new Map<number, number>();
   for (const t of backlog) {
-    const jump = jumpsQueue(t);
     const p = priorityOf(t);
-    const key = jump ? "jump" : String(p);
     let band = out[out.length - 1];
-    if (!band || band.key !== key) {
+    if (!band || band.priority !== p) {
+      const n = (seen.get(p) ?? 0) + 1;
+      seen.set(p, n);
       band = {
-        key,
-        label: jump ? "Jumps the queue" : `${levelOf(p).name} ${p}`,
-        priority: jump ? null : p,
+        key: n === 1 ? String(p) : `${p}-${n}`,
+        label: `${levelOf(p).name} ${p}`,
+        priority: p,
         tasks: [],
       };
       out.push(band);
@@ -241,13 +242,10 @@ export function planMove(
   const rest = backlog.filter((_, i) => i !== from);
   const above = rest[clamped - 1];
   const below = rest[clamped];
-  let priority: number | null = null;
-  if (!jumpsQueue(t)) {
-    // The band it joins: the row above's, or the row below's at the top.
-    const ref = [above, below].find((x) => x && !jumpsQueue(x));
-    const target = ref ? priorityOf(ref) : priorityOf(t);
-    if (target !== priorityOf(t)) priority = target;
-  }
+  // The band it joins: the row above's, or the row below's at the top.
+  const ref = above ?? below;
+  const target = ref ? priorityOf(ref) : priorityOf(t);
+  const priority = target !== priorityOf(t) ? target : null;
   return {
     id: t.id,
     afterId: above?.id ?? "",
@@ -270,26 +268,37 @@ export function neighbours(
   };
 }
 
-// placement is where a proposal would land if approved now: after every
-// queued task that jumps the queue or has at least its priority.
+// placement is where a proposal would land if approved now. Approving
+// keeps the task's place in the queue order (Store.Approve leaves its
+// order key alone), and GET /api/tasks lists every open task in that
+// order, so it lands after the queued tasks listed before it.
 export function placement(
-  backlog: readonly Task[],
-  priority: number,
+  work: readonly Task[],
+  proposal: Task,
 ): { position: number; of: number; band: string } {
-  const ahead = backlog.filter(
-    (t) => jumpsQueue(t) || priorityOf(t) >= priority,
-  ).length;
+  let ahead = 0;
+  let queued = 0;
+  let seen = false;
+  for (const t of work) {
+    if (t.id === proposal.id) seen = true;
+    if (t.state !== "queued") continue;
+    queued++;
+    if (!seen) ahead++;
+  }
+  const p = priorityOf(proposal);
   return {
     position: ahead + 1,
-    of: backlog.length + 1,
-    band: `${levelOf(priority).name} ${priority}`,
+    of: queued + 1,
+    band: `${levelOf(p).name} ${p}`,
   };
 }
 
-// nextUp is the task a free worker takes next: the first backlog task
-// not waiting on a dependency.
+// nextUp is the task a free worker takes next: tasks admitted past
+// worker limits are dispatched in an earlier pass, then the rest in
+// queue order; a task waiting on a dependency is skipped.
 export function nextUp(backlog: readonly Task[]): Task | null {
-  return backlog.find((t) => !t.blocked) ?? null;
+  const ready = backlog.filter((t) => !t.blocked);
+  return ready.find(jumpsQueue) ?? ready[0] ?? null;
 }
 
 // ago is a short relative time ("4m", "3h", "2d").

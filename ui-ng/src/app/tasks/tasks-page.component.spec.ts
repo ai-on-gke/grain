@@ -56,7 +56,16 @@ class FakeApi {
 
   getIfChanged = () =>
     Promise.resolve({ body: structuredClone(this.live), changed: true });
-  get = () => Promise.resolve({ tasks: this.closed, nextCursor: "" });
+  queries: string[] = [];
+  get = (_route: string, _p?: unknown, query?: string) => {
+    this.queries.push(query ?? "");
+    return Promise.resolve({ tasks: this.closed, nextCursor: "", total: 1 });
+  };
+  // The shell's Inbox store, refreshed after actions.
+  config = () => Promise.resolve({ access: null });
+  tasks = () => Promise.resolve(this.live);
+  openNotifications = () => Promise.resolve([]);
+  localScriptApprovals = () => Promise.resolve([]);
   private rec(method: string, route: string, params?: unknown, body?: unknown) {
     this.calls.push({ method, route, params, body });
     return Promise.resolve({});
@@ -136,7 +145,8 @@ describe("TasksPageComponent", () => {
     const api = new FakeApi();
     const f = await render(api, "proposed");
     expect(q(f, '[data-testid="row-10"]')!.textContent).toContain(
-      "If approved: position 2 of 5, High 8",
+      // GET /api/tasks lists it after every queued task (filed later).
+      "If approved: position 5 of 5, High 8",
     );
     q<HTMLButtonElement>(f, '[data-testid="approve-10"]')!.click();
     await settle(f);
@@ -297,5 +307,104 @@ describe("TasksPageComponent", () => {
     f = await render(api, "closed");
     expect(q(f, '[data-testid="row-50"]')).toBeTruthy();
     expect(q(f, '[data-testid="tab-closed"]')!.textContent).toContain("1");
+    // The server pages only when cursor= is present.
+    expect(api.queries[0]).toBe("state=closed&limit=50&cursor=");
+  });
+  it("drops by mouse where the line is drawn, in both directions and at the end", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const page = f.componentInstance as unknown as {
+      onDragStart(e: DragEvent, id: string): void;
+      onDrop(e: DragEvent, pos: number): void;
+    };
+    const ev = {
+      preventDefault() {},
+      dataTransfer: null,
+    } as unknown as DragEvent;
+    // Down: #2 (index 1) onto the line before #4 (index 3) lands after #3.
+    page.onDragStart(ev, "2");
+    page.onDrop(ev, 3);
+    await settle(f);
+    const reorders = () =>
+      api.calls.filter((c) => c.route === "POST /api/tasks/reorder");
+    expect(reorders().at(-1)?.body).toEqual({
+      ids: ["2"],
+      afterId: "3",
+      beforeId: "4",
+    });
+    // The end slot: after the last row.
+    page.onDragStart(ev, "1");
+    page.onDrop(ev, 4);
+    await settle(f);
+    expect(reorders().at(-1)?.body).toEqual({
+      ids: ["1"],
+      afterId: "4",
+      beforeId: "",
+    });
+  });
+
+  it("asks before closing running work and offers no Undo for it", async () => {
+    const api = new FakeApi();
+    const f = await render(api, "running");
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-20"] input[type="checkbox"]',
+    )!.click();
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="close-confirm"]')?.textContent).toContain(
+      "cannot be undone",
+    );
+    expect(api.calls).toHaveLength(0);
+    q<HTMLButtonElement>(f, '[data-testid="close-yes"]')!.click();
+    await settle(f);
+    expect(api.calls[0]).toMatchObject({ route: "POST /api/tasks/{id}/close" });
+    expect(TestBed.inject(SnackbarService).current()?.action).toBeUndefined();
+  });
+
+  it("ends a pick-up when the picked task leaves the backlog", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="handle-2"]')!.click();
+    await f.whenStable();
+    api.live = api.live.map((t) =>
+      t.id === "2" ? { ...t, state: "running" } : t,
+    );
+    await TestBed.inject(TasksStore).refresh();
+    await settle(f);
+    expect(q(f, '[data-testid="pickup-bar"]')).toBeNull();
+    expect(q(f, '[data-testid="announcer"]')!.textContent).toContain(
+      "left the backlog",
+    );
+  });
+
+  it("restores a priority when the reorder after it fails", async () => {
+    const api = new FakeApi();
+    const post = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route !== "POST /api/tasks/reorder") return post(route, params, body);
+      api.calls.push({ method: "POST", route, params, body });
+      return new Promise((_, reject) =>
+        setTimeout(() =>
+          reject({ status: 404, error: { error: "no such task" } }),
+        ),
+      );
+    };
+    const f = await render(api);
+    const undo = await TestBed.inject(TasksStore).move({
+      id: "4",
+      afterId: "1",
+      beforeId: "2",
+      priority: 8,
+      from: 3,
+      to: 1,
+    });
+    await settle(f);
+    expect(undo).toBeNull();
+    const patches = api.calls
+      .filter((c) => c.method === "PATCH")
+      .map((c) => c.body);
+    expect(patches).toEqual([{ priority: 8 }, { priority: 3 }]);
   });
 });

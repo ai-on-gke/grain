@@ -15,6 +15,7 @@
 import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
+import { InboxStore } from "../inbox/inbox.store";
 import type { Task } from "../api/models";
 import { errorText } from "../sessions/session-view";
 import {
@@ -45,11 +46,15 @@ export class TasksStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly zone = inject(NgZone);
+  // The shell's list feeds Next up and the Inbox badge; it is told to
+  // read again after every action here so neither lags behind.
+  private readonly inbox = inject(InboxStore);
 
   readonly live = signal<Task[]>([]);
   readonly closed = signal<Task[]>([]);
   readonly closedCursor = signal<string | null>(null);
   readonly closedLoaded = signal(false);
+  readonly closedTotal = signal<number | null>(null);
   readonly loaded = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
@@ -64,9 +69,7 @@ export class TasksStore {
     for (const tab of TABS) {
       c[tab.id] =
         tab.id === "closed"
-          ? this.closedLoaded()
-            ? this.closed().length
-            : null
+          ? this.closedTotal()
           : this.work().filter((t) => inTab(t, tab.id)).length;
     }
     return c;
@@ -75,11 +78,19 @@ export class TasksStore {
   private timer: ReturnType<typeof setInterval> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
   private refreshing: Promise<void> | null = null;
+  private eventTimer: ReturnType<typeof setTimeout> | null = null;
   private pending = false;
 
   start(): void {
     void this.refresh();
-    this.eventSub ??= this.events.events().subscribe(() => void this.refresh());
+    // Events come in bursts; one read covers a burst.
+    this.eventSub ??= this.events.events().subscribe(() => {
+      if (this.eventTimer) return;
+      this.eventTimer = setTimeout(() => {
+        this.eventTimer = null;
+        void this.refresh();
+      }, 250);
+    });
     if (!this.timer) {
       this.zone.runOutsideAngular(() => {
         this.timer = setInterval(
@@ -131,16 +142,23 @@ export class TasksStore {
   async loadClosed(more = false): Promise<void> {
     const cursor = more ? this.closedCursor() : null;
     if (more && !cursor) return;
-    const q = `state=closed&limit=${CLOSED_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+    // cursor= is always sent: the server pages (newest closed first, with
+    // nextCursor and total) only when the parameter is present.
+    const q = `state=closed&limit=${CLOSED_PAGE}&cursor=${encodeURIComponent(cursor ?? "")}`;
     try {
       const r = await this.api.get<
-        { tasks?: Task[]; nextCursor?: string } | Task[]
+        { tasks?: Task[]; nextCursor?: string; total?: number } | Task[]
       >("GET /api/tasks", undefined, q);
-      const page = Array.isArray(r) ? r : (r.tasks ?? []);
+      const page = (Array.isArray(r) ? r : (r.tasks ?? [])).filter(isWork);
       const next = Array.isArray(r) ? null : (r.nextCursor ?? null);
+      if (!Array.isArray(r) && typeof r.total === "number") {
+        this.closedTotal.set(r.total);
+      }
       this.closed.update((c) => (more ? [...c, ...page] : page));
       this.closedCursor.set(next || null);
       this.closedLoaded.set(true);
+      if (this.closedTotal() === null)
+        this.closedTotal.set(this.closed().length);
     } catch (err) {
       this.actionError.set(`Closed tasks could not be read: ${errorText(err)}`);
     }
@@ -234,11 +252,25 @@ export class TasksStore {
           { priority: plan.priority },
         );
       }
-      await this.api.post("POST /api/tasks/reorder", undefined, {
-        ids: [plan.id],
-        afterId: plan.afterId,
-        beforeId: plan.beforeId,
-      });
+      try {
+        await this.api.post("POST /api/tasks/reorder", undefined, {
+          ids: [plan.id],
+          afterId: plan.afterId,
+          beforeId: plan.beforeId,
+        });
+      } catch (err) {
+        // Half a move is worse than none: put the priority back.
+        if (plan.priority !== null) {
+          await this.api
+            .patch(
+              "PATCH /api/tasks/{id}",
+              { id: plan.id },
+              { priority: oldPriority },
+            )
+            .catch(() => undefined);
+        }
+        throw err;
+      }
     });
     if (!ok) return null;
     return {
@@ -276,7 +308,9 @@ export class TasksStore {
     const edge = end === "top" ? rest[0] : rest[rest.length - 1];
     const target = edge ? priorityOf(edge) : null;
     const before = new Map(picked.map((t) => [t.id, priorityOf(t)]));
-    const was = picked.map((t) => ({ id: t.id, ...neighbours(backlog, t.id) }));
+    // Undo puts each picked task back after the task that preceded it,
+    // in the original order, so earlier restored picks anchor later ones.
+    const order = backlog.map((t) => t.id);
     const needs = picked.filter(
       (t) =>
         target !== null &&
@@ -313,11 +347,16 @@ export class TasksStore {
               ),
             ),
           );
-          for (const w of was) {
+          for (const t of picked) {
+            const i = order.indexOf(t.id);
+            const after = i > 0 ? order[i - 1] : "";
+            const before = after
+              ? ""
+              : (order.slice(i + 1).find((id) => !ids.includes(id)) ?? "");
             await this.api.post("POST /api/tasks/reorder", undefined, {
-              ids: [w.id],
-              afterId: w.afterId,
-              beforeId: w.beforeId,
+              ids: [t.id],
+              afterId: after,
+              beforeId: before,
             });
           }
           await this.refresh();
@@ -354,6 +393,7 @@ export class TasksStore {
       );
     }
     await this.refresh();
+    void this.inbox.refresh();
     if (key === "close" || key === "reopen") void this.loadClosed();
     this.mark(key, false);
     return failures.length;
@@ -370,6 +410,7 @@ export class TasksStore {
       return false;
     } finally {
       await this.refresh();
+      void this.inbox.refresh();
       this.mark(key, false);
     }
   }
