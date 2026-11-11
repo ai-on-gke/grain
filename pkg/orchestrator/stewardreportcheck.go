@@ -86,14 +86,20 @@ func IsReadAPICall(tool string) bool {
 	return false
 }
 
-// ReadIDsFromAPICalls returns the set of task or CI run IDs read in calls
-// prior to the closing report call.
+// ReadIDsFromAPICalls returns the set of task or CI run IDs read anywhere
+// in the run's calls.
+//
+// It does not stop at the closing report call. The run's rows are its MCP
+// tool calls in their own order followed by every read the in-sandbox grain
+// CLI made through the sandbox proxy (Store.mergeWithProxyAPICalls), so a
+// CLI read sits after comment_on_issue in seq even though it happened
+// before it; cutting the list there threw away every read a steward made
+// through `grain` and reported each of its citations as unread. The
+// closing report ends the run, so nothing read after it is in the report
+// anyway.
 func ReadIDsFromAPICalls(calls []model.RunAPICall) map[string]bool {
 	read := map[string]bool{}
 	for _, call := range calls {
-		if call.Tool == "comment_on_issue" || call.Tool == "nothing_needed" {
-			break
-		}
 		if !IsReadAPICall(call.Tool) || call.TargetIDs == "" {
 			continue
 		}
@@ -133,6 +139,7 @@ func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks ma
 	}
 
 	inFence := false
+	inUnverified := false
 	seenOffending := map[string]bool{}
 	addOffending := func(line string) {
 		if !seenOffending[line] {
@@ -148,7 +155,24 @@ func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks ma
 			inFence = !inFence
 			continue
 		}
-		if inFence || line == "" || strings.HasPrefix(line, "#") || isMarkdownTableSeparator(line) {
+		if inFence || line == "" || isMarkdownTableSeparator(line) {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			inUnverified = isUnverifiedHeading(line)
+			continue
+		}
+		if isBoldHeading(line) {
+			// A bold line may be a heading or a claim: it opens or closes
+			// the Unverified section, and is otherwise checked as a claim.
+			if inUnverified = isUnverifiedHeading(line); inUnverified {
+				continue
+			}
+		}
+		if inUnverified {
+			// Said to be unverified, which is what the steward is told to
+			// do with a claim it could not ground this wake: not a claim
+			// the report asserts, so neither counted nor flagged.
 			continue
 		}
 
@@ -197,6 +221,28 @@ func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks ma
 	}
 
 	return res
+}
+
+// unverifiedHeadingRe matches a report heading that sets its lines apart as
+// not grounded this wake: "## Unverified", "**Unverified:**".
+var unverifiedHeadingRe = regexp.MustCompile(`(?i)^[#*\s]*unverified\b`)
+
+// isUnverifiedHeading reports whether heading line opens the report's
+// "Unverified" section (model.PipelineStewardUnverifiedHeading).
+func isUnverifiedHeading(line string) bool {
+	return unverifiedHeadingRe.MatchString(line)
+}
+
+// isBoldHeading reports whether line is wholly bold, the way a report
+// writes a heading without '#': "**Unverified**", "**Unverified:**".
+func isBoldHeading(line string) bool {
+	inner, ok := strings.CutPrefix(line, "**")
+	if !ok {
+		return false
+	}
+	inner, ok = strings.CutSuffix(strings.TrimSuffix(inner, ":"), "**")
+	inner = strings.TrimSpace(strings.TrimSuffix(inner, ":"))
+	return ok && inner != "" && !strings.Contains(inner, "**")
 }
 
 func isMarkdownTableSeparator(line string) bool {
@@ -298,9 +344,13 @@ func hasTaskAttributeMismatch(line, taskID string, allCited []string, task Stewa
 		return true
 	}
 
-	// 2. Check fixed vocabulary of task states.
+	// 2. Check fixed vocabulary of task states. Only the state the line
+	// says the task is in now: a transition's source ("queued→running",
+	// "moved from queued to running") is history, and the record has
+	// already left it.
+	stateScope := stripPriorStates(scope)
 	for _, st := range stateVocabularyChecks {
-		if !st.matches(scope) {
+		if !st.matches(stateScope) {
 			continue
 		}
 		if st.satisfiedBy(task.State) {
@@ -313,6 +363,16 @@ func hasTaskAttributeMismatch(line, taskID string, allCited []string, task Stewa
 	}
 
 	return false
+}
+
+// priorStateRe matches a state the line says a task was in before, not
+// one it is in: the source of a transition arrow (the pipeline-changes
+// feed's "queued→running"), or a state after "from", "previously" or
+// "formerly".
+var priorStateRe = regexp.MustCompile(`[a-z_]+\s*(?:→|->|=>)|\b(?:from|previously|formerly)\s+[a-z_]+`)
+
+func stripPriorStates(scope string) string {
+	return priorStateRe.ReplaceAllString(scope, " ")
 }
 
 type stateVocabCheck struct {
@@ -355,7 +415,7 @@ var stateVocabularyChecks = []stateVocabCheck{
 	{
 		name:        "running",
 		phrases:     []string{"running"},
-		ignoreAfter: []string{"running ci", "running job", "running check"},
+		ignoreAfter: []string{"running ci", "running job", "running check", "ci running", "ci is running", "checks running", "job running"},
 		satisfiedBy: func(s model.State) bool {
 			return s == model.StateRunning
 		},
@@ -363,7 +423,10 @@ var stateVocabularyChecks = []stateVocabCheck{
 	{
 		name:        "failed",
 		phrases:     []string{"failed"},
-		ignoreAfter: []string{"failed attempt", "failed attempts", "failed run", "failed runs", "failed job", "failed jobs", "failed check", "failed checks", "failed ci"},
+		ignoreAfter: []string{"failed attempt", "failed attempts", "failed run", "failed runs", "failed job", "failed jobs", "failed check", "failed checks", "failed ci",
+			// A task's CI, a job or a batch failing is not the task failing.
+			"ci failed", "ci has failed", "checks failed", "check failed", "job failed", "jobs failed", "tests failed",
+			"test failed", "run failed", "runs failed", "build failed", "batch failed", "merge failed", "qualification failed"},
 		satisfiedBy: func(s model.State) bool {
 			return s == model.StateFailed
 		},
@@ -603,7 +666,9 @@ func checkAndRecordStewardReportText(ctx context.Context, store *model.Store, ta
 		return
 	}
 
-	promptIDs := extractCitedTaskIDs(task.Body)
+	// The steward's own task is not a record it has to read to name: its
+	// notify subjects and messages are agent.<its id>:...
+	promptIDs := append([]string{task.ID}, extractCitedTaskIDs(task.Body)...)
 	if comments, err := store.Comments(ctx, task.ID); err == nil {
 		for _, c := range comments {
 			if c.Author.Actor == model.SchedulePrincipal {

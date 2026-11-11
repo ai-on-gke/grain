@@ -139,7 +139,7 @@ func (p *GitProxy) ServeCLIHTTP(w http.ResponseWriter, r *http.Request) {
 	scope := toNamespaceScope(modelScope)
 	act := CLIRouteActivity(r.URL.Path)
 	p.noteActivity(r.Context(), modelScope.TaskID, act.Phrase)
-	cw := &countingResponseWriter{ResponseWriter: w}
+	cw := newCountingResponseWriter(w, act)
 	p.serveCLIRoute(cw, r, scope)
 	p.recordRouteCall(r.Context(), modelScope.RunID, act, cw)
 }
