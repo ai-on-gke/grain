@@ -21,6 +21,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func TestRepoSkillsDiscoveryDefaultFoldersAndCustomFolders(t *testing.T) {
 		t.Fatalf("prepareCheckout: %v", err)
 	}
 
-	gotDefault := discoverRepoSkills(context.Background(), tools, prepared, task, model.DefaultSkillFolders, "run-1", nil)
+	gotDefault := discoverRepoSkills(context.Background(), tools, prepared, task, model.DefaultSkillFolders, "run-1", nil).Skills
 	if len(gotDefault) != 5 {
 		t.Fatalf("default discovery = %+v, want 5 skills", gotDefault)
 	}
@@ -88,7 +89,7 @@ func TestRepoSkillsDiscoveryDefaultFoldersAndCustomFolders(t *testing.T) {
 		t.Errorf("gotDefault[2].Description = %q, want first paragraph", gotDefault[2].Description)
 	}
 
-	gotCustom := discoverRepoSkills(context.Background(), tools, prepared, task, []string{"custom/skills", ".gemini/skills"}, "run-2", nil)
+	gotCustom := discoverRepoSkills(context.Background(), tools, prepared, task, []string{"custom/skills", ".gemini/skills"}, "run-2", nil).Skills
 	if len(gotCustom) != 2 || gotCustom[0].Name != "k-skill" || gotCustom[1].Name != "gemini-one" {
 		t.Fatalf("custom folder discovery = %+v, want [k-skill, gemini-one]", gotCustom)
 	}
@@ -123,7 +124,7 @@ func TestRepoSkillsBaseBranchOnlyReading(t *testing.T) {
 		t.Fatalf("prepareCheckout: %v", err)
 	}
 
-	got := discoverRepoSkills(context.Background(), tools, prepared, task, model.DefaultSkillFolders, "run-202", nil)
+	got := discoverRepoSkills(context.Background(), tools, prepared, task, model.DefaultSkillFolders, "run-202", nil).Skills
 	if len(got) != 1 {
 		t.Fatalf("discovered = %+v, want only 1 skill from base branch", got)
 	}
@@ -186,10 +187,38 @@ func TestRepoSkillsPathEscapeSymlinkMalformedAndCaps(t *testing.T) {
 	log.SetOutput(&logBuf)
 	t.Cleanup(func() { log.SetOutput(prevOut) })
 
+	// Count the sandbox calls discovery makes: once it holds
+	// MaxRepoSkills it must stop reading SKILL.md blobs rather than spend
+	// a run_command per pair of the remaining candidates.
+	calls := 0
+	counted := slices.Clone(tools)
+	for i := range counted {
+		if counted[i].Name == "run_command" {
+			inner := counted[i].Handler
+			counted[i].Handler = func(ctx context.Context, args map[string]any) mcp.Result {
+				calls++
+				return inner(ctx, args)
+			}
+		}
+	}
 	folders := append([]string{"../escape"}, model.DefaultSkillFolders...)
-	got := discoverRepoSkills(context.Background(), tools, prepared, task, folders, "run-303", nil)
+	found := discoverRepoSkills(context.Background(), counted, prepared, task, folders, "run-303", nil)
+	got := found.Skills
 	if len(got) != intree.MaxRepoSkills {
 		t.Fatalf("len(got) = %d, want capped at %d", len(got), intree.MaxRepoSkills)
+	}
+	// 54 valid skills (sk-01 is a checkout symlink): 4 left unlisted.
+	if found.Unlisted != 4 {
+		t.Errorf("Unlisted = %d, want 4 (54 valid skills less the cap of 50)", found.Unlisted)
+	}
+	if !slices.Equal(found.Folders, model.DefaultSkillFolders) {
+		t.Errorf("Folders = %v, want the cleaned defaults %v", found.Folders, model.DefaultSkillFolders)
+	}
+	// One listing call, then 2 blobs per call: the malformed SKILL.md and
+	// sk-00..sk-50 less sk-01 is 51 candidates read to reach 50 valid
+	// skills, 26 calls. Reading all 55 candidates would take 29.
+	if maxCalls := 1 + (intree.MaxRepoSkills+1+skillReadBatchSize-1)/skillReadBatchSize; calls > maxCalls {
+		t.Errorf("discovery made %d run_command calls, want at most %d: it kept reading past the cap", calls, maxCalls)
 	}
 	if utf8.RuneCountInString(got[0].Description) != intree.MaxSkillDescriptionChars+1 {
 		t.Errorf("got[0].Description rune len = %d, want %d", utf8.RuneCountInString(got[0].Description), intree.MaxSkillDescriptionChars+1)
@@ -207,7 +236,7 @@ func TestRepoSkillsPathEscapeSymlinkMalformedAndCaps(t *testing.T) {
 		`.claude/skills/symfile/SKILL.md`,
 		`skills/sk-01`,
 		`skipping malformed repo skill .claude/skills/malformed/SKILL.md`,
-		`capped discovered repo skills at 50`,
+		`capped discovered repo skills at 50 (4 more SKILL.md candidate(s) left unlisted)`,
 	} {
 		if !strings.Contains(logged, wantLog) {
 			t.Errorf("run log missing %q:\n%s", wantLog, logged)
@@ -248,7 +277,7 @@ GCP credentials placed at /home/debian/.config/gcloud.
 		},
 	}
 
-	keptInProc, unified, keptPass := mergePromptSkills(nil, passSections, nil, repoSkills, "acme/widgets", "run-merge", nil)
+	keptInProc, unified, keptPass := mergePromptSkills(nil, passSections, nil, repoSkillDiscovery{Skills: repoSkills}, "acme/widgets", "run-merge", nil)
 	if len(keptInProc) != 0 {
 		t.Errorf("keptInProc = %v, want empty", keptInProc)
 	}
@@ -443,5 +472,44 @@ func TestRepoSkillsNeverFallBackToAnotherRemoteBranch(t *testing.T) {
 	script := buildSkillTreeListScript("/home/debian/work", "", model.DefaultSkillFolders)
 	if strings.Contains(script, "for-each-ref") {
 		t.Errorf("skill listing script walks every remote branch for a base:\n%s", script)
+	}
+}
+
+// TestRepoSkillsUnlistedNote: an index that left skills out -- past the
+// 50-skill cap in discovery or the 8 KiB budget in the formatter -- says so
+// after the <repo-skills> block, in grain's voice, with the folders to look
+// in; one that listed everything says nothing.
+func TestRepoSkillsUnlistedNote(t *testing.T) {
+	t.Parallel()
+	var many []intree.SkillIndexEntry
+	for i := range 50 {
+		many = append(many, intree.SkillIndexEntry{
+			Name:        fmt.Sprintf("sk-%02d", i),
+			Path:        fmt.Sprintf("/home/debian/work/skills/sk-%02d/SKILL.md", i),
+			RepoRelDir:  fmt.Sprintf("skills/sk-%02d", i),
+			Description: strings.Repeat("words ", 40),
+		})
+	}
+	_, unified, _ := mergePromptSkills(nil, "", nil,
+		repoSkillDiscovery{Skills: many, Unlisted: 8, Folders: []string{".claude/skills", "skills"}},
+		"acme/widgets", "run-note", func(string, ...any) {})
+	listed := len(intree.ParsePromptSkills(unified))
+	if listed >= 50 {
+		t.Fatalf("listed %d skills, want the 8 KiB budget to drop some", listed)
+	}
+	want := fmt.Sprintf("%d more repository skill(s) are not listed above", 50-listed+8)
+	if !strings.Contains(unified, want) {
+		t.Errorf("index missing %q:\n%s", want, unified)
+	}
+	if !strings.Contains(unified, "under .claude/skills/, skills/ in the checkout") {
+		t.Errorf("note does not name the searched folders:\n%s", unified)
+	}
+	if strings.Index(unified, "</repo-skills>") > strings.Index(unified, "more repository skill(s)") {
+		t.Errorf("note must follow the <repo-skills> block (grain's voice, not the repository's):\n%s", unified)
+	}
+
+	_, all, _ := mergePromptSkills(nil, "", nil, repoSkillDiscovery{Skills: many[:3]}, "acme/widgets", "run-note", nil)
+	if strings.Contains(all, "more repository skill") {
+		t.Errorf("an index listing every skill carries the note:\n%s", all)
 	}
 }

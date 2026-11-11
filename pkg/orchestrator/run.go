@@ -37,7 +37,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -3341,7 +3340,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			cc.Task = task
 		}
 	}
-	var repoSkills []intree.SkillIndexEntry
+	var repoSkills repoSkillDiscovery
 	if checkoutErr == nil && prepErr == nil && len(skillFolders) > 0 && prepared.Dir != "" {
 		repoSkills = discoverRepoSkills(runCtx, tools, prepared, task, skillFolders, d.RunID, nil)
 	}
@@ -4517,7 +4516,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 	maxRuntime time.Duration) (string, []string, error) {
 	p, dyn, _, err := prepareCapabilityPromptWithSkills(ctx, cc, materialized, tools, history,
 		attachments, prepared, settingsRepo, checkImage, canOpenPullRequest, promptExtension, memory, maxRuntime,
-		nil, "")
+		repoSkillDiscovery{}, "")
 	return p, dyn, err
 }
 
@@ -4525,7 +4524,7 @@ func prepareCapabilityPromptWithSkills(ctx context.Context, cc model.CapabilityC
 	materialized []model.Materialized, tools []mcp.Tool, history History,
 	attachments []model.Attachment, prepared checkout, settingsRepo model.RepoRef,
 	checkImage string, canOpenPullRequest bool, promptExtension, memory string,
-	maxRuntime time.Duration, repoSkills []intree.SkillIndexEntry, passPromptSections string) (string, []string, string, error) {
+	maxRuntime time.Duration, repoSkills repoSkillDiscovery, passPromptSections string) (string, []string, string, error) {
 
 	extension := appendSection(memorySection(memory), promptExtensionSection(promptExtension))
 	prompt := BuildPrompt(cc.Task, prepared.Dir, prepared.Root, canOpenPullRequest, maxRuntime, history, prepared.Setup)
