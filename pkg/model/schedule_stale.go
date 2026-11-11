@@ -56,6 +56,32 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSched
 		return nil, err
 	}
 	modes := map[RepoRef]CIMode{}
+	modeOf := func(repo RepoRef) CIMode {
+		mode, seen := modes[repo]
+		if !seen && repo != (RepoRef{}) {
+			if cfg, err := s.GetRepoConfig(ctx, repo); err == nil && cfg != nil {
+				mode = cfg.CIMode
+			}
+			modes[repo] = mode
+		}
+		return mode
+	}
+	// covered is every workflow some enabled schedule does run under its
+	// repository's CI mode: the .grain/schedules/ entry with grain-ci: true
+	// the reason below tells a reader to declare. Once it exists the
+	// workflow's own cron, still dropped at every firing, is not a
+	// schedule that stopped running -- the workflow is running, from the
+	// other schedule, which is judged on its own.
+	type workflowKey struct {
+		repo       RepoRef
+		stem, base string
+	}
+	covered := map[workflowKey]bool{}
+	for _, sched := range scheds {
+		if stem, ok := workflowReviewSchedule(sched); ok && sched.Enabled && sched.WorkflowRunsUnder(modeOf(sched.Target)) {
+			covered[workflowKey{sched.Target, stem, sched.Base}] = true
+		}
+	}
 	var out []StaleSchedule
 	for _, sched := range scheds {
 		if !sched.Enabled {
@@ -75,17 +101,21 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSched
 		stale := StaleSchedule{ID: sched.ID, Title: sched.Title, Repo: sched.Target, Cadence: cadence, LastRunAt: sched.LastRunAt}
 		if stem, ok := workflowReviewSchedule(sched); ok {
 			stale.Workflow = stem
-			mode, seen := modes[sched.Target]
-			if !seen && sched.Target != (RepoRef{}) {
-				if cfg, err := s.GetRepoConfig(ctx, sched.Target); err == nil && cfg != nil {
-					mode = cfg.CIMode
-				}
-				modes[sched.Target] = mode
-			}
+			mode := modeOf(sched.Target)
 			if mode != "" && !sched.WorkflowRunsUnder(mode) {
+				if covered[workflowKey{sched.Target, stem, sched.Base}] {
+					continue
+				}
 				stale.Reason = fmt.Sprintf("%s, so .grain/workflows/%s.yml's cron is dropped at every firing: "+
 					"port it to .github/workflows/ or declare a .grain/schedules/ entry with grain-ci: true",
 					WorkflowGrainCIOffReason(mode), stem)
+			}
+		}
+		if stale.Reason == "" && sched.OverlapGroup != "" {
+			// Held by another schedule in its overlap group: still not
+			// running, but the holder is the thing to look at.
+			if sup, err := s.SuppressedFiring(ctx, sched, now, sched.Location()); err == nil && sup != nil && sup.HeldByScheduleID != "" {
+				stale.Reason = "held: " + sup.Detail
 			}
 		}
 		out = append(out, stale)

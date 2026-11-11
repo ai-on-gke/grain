@@ -166,3 +166,79 @@ func TestAStarvedGroupFiringNamesTheHolder(t *testing.T) {
 		t.Errorf("own-firing title %q, want \"from its previous firing\"", own)
 	}
 }
+
+// Following the stale alert's own advice -- declare a .grain/schedules/
+// entry with grain-ci: true for the workflow -- clears the workflow's
+// cron from the list, though the cron itself is still dropped at every
+// firing: the workflow is running, from the other schedule. A grain-ci
+// entry on another branch does not cover the default branch's cron.
+func TestAGrainCIScheduleForTheWorkflowClearsItsDroppedCron(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	now := time.Date(2026, 11, 11, 6, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	daily := model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 2*60 + 11}
+	live := model.WorkflowReviewTemplateID("live")
+	other := model.WorkflowReviewTemplateID("other")
+	put := func(s model.Schedule) {
+		t.Helper()
+		s.Target, s.Recurrence, s.Enabled, s.NextRunAt = repo, daily, true, now.Add(time.Hour)
+		s.CreatedAt = now.Add(-10 * 24 * time.Hour)
+		if err := store.PutSchedule(ctx, s); err != nil {
+			t.Fatalf("PutSchedule(%s): %v", s.ID, err)
+		}
+	}
+	put(model.Schedule{ID: "workflow.live", Title: "live", TemplateID: &live})
+	put(model.Schedule{ID: "workflow.other", Title: "other", TemplateID: &other})
+	ids := func() string {
+		t.Helper()
+		stale, err := store.StaleSchedules(ctx, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, s := range stale {
+			out = append(out, s.ID)
+		}
+		slices.Sort(out)
+		return strings.Join(out, ",")
+	}
+	if got := ids(); got != "workflow.live,workflow.other" {
+		t.Fatalf("before = %q, want both dropped crons", got)
+	}
+	ran := now.Add(-time.Hour)
+	put(model.Schedule{ID: "live", Title: "live", TemplateID: &live, GrainCI: true, LastRunAt: &ran})
+	put(model.Schedule{ID: "other-candidate", Title: "other", TemplateID: &other, GrainCI: true, Base: "candidate", LastRunAt: &ran})
+	if got := ids(); got != "workflow.other" {
+		t.Fatalf("after = %q, want only workflow.other (its grain-ci entry runs another branch)", got)
+	}
+}
+
+// A schedule its overlap group has held past twice its cadence says who
+// is holding it.
+func TestAStaleScheduleHeldByItsGroupSaysByWhom(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	groupedSchedule(t, store, ctx, "sync", repo, "train")
+	groupedSchedule(t, store, ctx, "safety-net", repo, "train")
+	fireGrouped(t, store, ctx, "sync", groupStart)
+	stale, err := store.StaleSchedules(ctx, groupStart.Add(3*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	for _, s := range stale {
+		if s.ID == "safety-net" {
+			reason = s.Reason
+		}
+	}
+	if !strings.HasPrefix(reason, "held: ") || !strings.Contains(reason, "sync") || !strings.Contains(reason, `overlap group "train"`) {
+		t.Errorf("safety-net's reason = %q, want it held by schedule sync in group train", reason)
+	}
+}
