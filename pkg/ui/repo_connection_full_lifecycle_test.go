@@ -35,6 +35,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -435,4 +437,148 @@ func TestFullLifecycleRemovingTheRepoThenTheConnection(t *testing.T) {
 
 func TestFullLifecycleRemovingTheConnectionThenTheRepo(t *testing.T) {
 	runFullLifecycle(t, true)
+}
+
+// The daemon's dispatcher -- orchestrator.RunCycle, looping as the
+// daemon's own loop runs it -- dispatching, cloning and pushing through
+// the proxy while the repository is added and removed, its connection
+// pinned and unpinned, and tasks filed against it, all at once. Task
+// 4288's race (TestAddingAndRemovingRepositoriesWhileTasksAreFiledAgainstThem)
+// had the UI client filing tasks and nothing dispatching them; this one
+// has both, and runs under -race in every Go job.
+func TestDispatchingWhileRepositoriesAndConnectionsAreAddedAndRemoved(t *testing.T) {
+	f := newFullLifecycleRig(t)
+	f.must(http.MethodPost, "/api/repos", `{"repo":"acme/gadgets"}`)
+	cred := f.addConnection("github.com", "acme", "ghp_dispatch_race")
+	f.must(http.MethodPost, "/api/repos", `{"repo":"acme/widgets"}`)
+	f.must(http.MethodPut, "/api/repos/acme/widgets/ci-mode", `{"ciMode":"none"}`)
+
+	// rounds tasks are filed; the add/remove and pin loops go on for at
+	// least rounds turns and until the dispatcher has run minCycles
+	// cycles alongside them, however slow -race makes a cycle.
+	const rounds, minCycles = 8, 4
+	errs := make(chan string, 16*rounds)
+	report := func(format string, args ...any) { errs <- fmt.Sprintf(format, args...) }
+	okOr400 := func(what string, code int, out string) {
+		if code != http.StatusOK && code != http.StatusBadRequest {
+			report("%s: %d %s", what, code, out)
+		}
+	}
+
+	stop := make(chan struct{})
+	var dispatcher sync.WaitGroup
+	dispatcher.Add(1)
+	var cycles atomic.Int32
+	racing := func(i int) bool { return i < rounds || cycles.Load() < minCycles }
+	go func() {
+		defer dispatcher.Done()
+		clock := f.clock
+		for {
+			select {
+			case <-stop:
+				f.clock = clock
+				return
+			default:
+			}
+			clock = clock.Add(time.Minute)
+			n := cycles.Add(1)
+			// A cycle whose clone or push met a removal fails that run,
+			// as it does on a deployment; that is the race, not a fault
+			// in it. What -race and the settled checks below look for is
+			// anything else.
+			if err := orchestrator.RunCycle(f.ctx, f.deps, clock); err != nil {
+				t.Logf("cycle %d: %v", n, err)
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	var filed sync.Map
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := 0; racing(i); i++ {
+			code, out := f.serve(http.MethodPost, "/api/repos", `{"repo":"acme/widgets"}`)
+			okOr400("add", code, out)
+			code, out = f.serve(http.MethodPut, "/api/repos/acme/widgets/ci-mode", `{"ciMode":"none"}`)
+			okOr400("ci mode", code, out)
+			time.Sleep(20 * time.Millisecond)
+			code, out = f.serve(http.MethodDelete, "/api/repos/acme/widgets", "")
+			okOr400("remove", code, out)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			task, err := f.client.CreateTask(f.ctx, ui.CreateTaskRequest{Title: fmt.Sprintf("race %d", i),
+				Repo: "acme/widgets", Approved: true, AutoMerge: true})
+			if err != nil {
+				report("filing task %d: %v", i, err)
+				continue
+			}
+			filed.Store(task.ID, true)
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; racing(i); i++ {
+			code, out := f.serve(http.MethodPut, "/api/deployment/repos/acme/widgets/git-connection", `{"credential":"`+cred+`"}`)
+			okOr400("pin", code, out)
+			code, out = f.serve(http.MethodPut, "/api/deployment/repos/acme/widgets/git-connection", `{"credential":""}`)
+			okOr400("unpin", code, out)
+		}
+	}()
+	wg.Wait()
+	// The connection goes last, while the dispatcher is still running.
+	f.must(http.MethodDelete, "/api/deployment/git-connections/"+cred, "")
+	close(stop)
+	dispatcher.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+	if cycles.Load() < minCycles {
+		t.Fatalf("the dispatcher ran %d cycles across the race, want at least %d", cycles.Load(), minCycles)
+	}
+
+	// Settled: the last remove won. Whatever pull requests the race
+	// opened into acme/widgets are clean now, and none of them merges.
+	if got := f.targets(); len(got) != 1 || got[0] != "acme/gadgets" {
+		t.Fatalf("targets after the race = %v", got)
+	}
+	f.markMergeable()
+	for i := 0; i < 3; i++ {
+		f.clock = f.clock.Add(time.Minute)
+		if err := orchestrator.RunCycle(f.ctx, f.deps, f.clock); err != nil {
+			t.Logf("settled cycle: %v", err)
+		}
+	}
+	withPR := map[string]bool{}
+	for _, pr := range f.sim.PullRequests {
+		if pr.Merged {
+			t.Errorf("pull request #%d (%s) merged into acme/widgets after it was removed", pr.Number, pr.Head)
+		}
+		withPR[pr.Head] = true
+	}
+	n := 0
+	filed.Range(func(id, _ any) bool {
+		n++
+		task, err := f.store.GetTask(f.ctx, id.(string))
+		if err != nil || task == nil {
+			t.Errorf("task %s filed during the race is gone: %v", id, err)
+			return true
+		}
+		if withPR[model.BranchName(task.ID)] && task.AutoMerge {
+			t.Errorf("task %s's pull request into the removed repository still has auto-merge on", id)
+		}
+		return true
+	})
+	if n != rounds {
+		t.Fatalf("filed %d tasks, want %d", n, rounds)
+	}
+	if f.credentialExists(cred) {
+		t.Fatalf("the removed connection's credential %s is still stored", cred)
+	}
+	t.Logf("%d cycles ran across the race; %d pull requests opened", cycles.Load(), len(f.sim.PullRequests))
 }
