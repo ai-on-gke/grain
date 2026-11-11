@@ -250,7 +250,7 @@ func (v *iapVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 	}, true, nil
 }
 
-// HubVerifierOption configures a registry IdentityVerifier created by NewHubVerifier.
+// HubVerifierOption configures a registry IdentityVerifier created by webauth.NewHubVerifier.
 type HubVerifierOption = webauth.HubVerifierOption
 
 type hubVerifier struct {

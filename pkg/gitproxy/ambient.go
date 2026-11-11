@@ -936,7 +936,7 @@ var (
 )
 
 // RegisterAmbientHomeDir adds dir as a parent directory of per-user
-// local-disk homes (<dir>/<username>) that AmbientHome prefers over the
+// local-disk homes (<dir>/<username>) that ambientHome prefers over the
 // passwd entry's HomeDir when <dir>/<username> is a directory owned by the
 // daemon's own uid -- for workstations whose NSS/LDAP passwd entry names an
 // autofs home that hangs on non-interactive access. It returns a function
