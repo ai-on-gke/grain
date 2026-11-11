@@ -13,8 +13,9 @@
 // limitations under the License.
 
 import React from "react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -1786,6 +1787,186 @@ describe("Grain Hub UI", () => {
     );
     expect(screen.getByTestId("entry-health-detail")).toHaveTextContent(
       "previous probe ok",
+    );
+  });
+});
+
+describe("Entry detail auto-refresh", () => {
+  let hidden = false;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    hidden = false;
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => hidden,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    delete document.hidden;
+  });
+
+  // serveEntry answers GET /api/entries/<name> with whatever current() holds
+  // and counts how often the detail page asked.
+  function serveEntry(name, current) {
+    const calls = { count: 0 };
+    globalThis.fetch = createFetchMock({
+      [`GET /api/entries/${name}`]: () => {
+        calls.count += 1;
+        const res = current();
+        if (res instanceof Response) return res;
+        return new Response(JSON.stringify(res), { status: 200 });
+      },
+    });
+    return calls;
+  }
+
+  async function advance(ms) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("polls quickly while an entry is provisioning and backs off once it is running", async () => {
+    let entry = {
+      ...sampleEntries[0],
+      name: "late-vm",
+      state: "creating",
+      status: "offline",
+      status_detail: "creating the GCE instance",
+    };
+    const calls = serveEntry("late-vm", () => entry);
+    renderApp("/entries/late-vm");
+    expect(
+      await screen.findByTestId("lifecycle-badge-late-vm"),
+    ).toHaveTextContent("creating");
+    expect(calls.count).toBe(1);
+    expect(screen.getByTestId("entry-refresh-status")).toHaveTextContent(
+      "refreshing every 4s while creating",
+    );
+
+    await advance(4000);
+    await waitFor(() => expect(calls.count).toBe(2));
+
+    entry = { ...entry, state: "running", status: "online", status_detail: "" };
+    await advance(4000);
+    await waitFor(() => expect(calls.count).toBe(3));
+    expect(
+      await screen.findByTestId("lifecycle-badge-late-vm"),
+    ).toHaveTextContent("running");
+    expect(screen.getByTestId("entry-refresh-status")).toHaveTextContent(
+      "refreshing every 20s",
+    );
+
+    // Steady now: nothing for the next 4s, the next poll at 20s.
+    await advance(4000);
+    expect(calls.count).toBe(3);
+    await advance(16000);
+    await waitFor(() => expect(calls.count).toBe(4));
+
+    const timeline = screen.getByTestId("entry-status-timeline");
+    const items = within(timeline).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("running · online");
+    expect(items[1]).toHaveTextContent("creating · offline");
+    expect(items[1]).toHaveTextContent("creating the GCE instance");
+  });
+
+  it("pauses polling while the tab is hidden and refreshes as soon as it is shown again", async () => {
+    const entry = { ...sampleEntries[0] };
+    const calls = serveEntry(entry.name, () => entry);
+    renderApp(`/entries/${entry.name}`);
+    await screen.findByTestId(`lifecycle-badge-${entry.name}`);
+    expect(calls.count).toBe(1);
+
+    hidden = true;
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await advance(120000);
+    expect(calls.count).toBe(1);
+
+    hidden = false;
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(calls.count).toBe(2));
+  });
+
+  it("merges server updates into untouched fields only and flags a dirty field that changed underneath", async () => {
+    let entry = { ...sampleEntries[0] };
+    serveEntry(entry.name, () => entry);
+    renderApp(`/entries/${entry.name}`);
+    const displayInput = await screen.findByLabelText("Display name");
+    expect(displayInput).toHaveValue("Platform Core VM");
+
+    fireEvent.change(displayInput, { target: { value: "My local edit" } });
+    entry = {
+      ...entry,
+      display_name: "Renamed elsewhere",
+      purpose: "Purpose set elsewhere",
+    };
+    await advance(20000);
+
+    expect(
+      await screen.findByTestId("server-changed-displayName"),
+    ).toHaveTextContent('Updated on the server to "Renamed elsewhere"');
+    expect(screen.getByLabelText("Display name")).toHaveValue("My local edit");
+    expect(screen.getByLabelText("Purpose")).toHaveValue(
+      "Purpose set elsewhere",
+    );
+    expect(screen.queryByTestId("server-changed-purpose")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard my edits" }));
+    expect(screen.getByLabelText("Display name")).toHaveValue(
+      "Renamed elsewhere",
+    );
+    expect(screen.queryByTestId("server-changed-displayName")).toBeNull();
+
+    // Back in sync, the next poll writes the field again.
+    entry = { ...entry, display_name: "Renamed twice" };
+    await advance(20000);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Display name")).toHaveValue(
+        "Renamed twice",
+      ),
+    );
+  });
+
+  it("keeps showing the last good entry with a subtle indicator when a poll fails", async () => {
+    const entry = { ...sampleEntries[0] };
+    let fail = false;
+    serveEntry(entry.name, () =>
+      fail
+        ? new Response(JSON.stringify({ error: "hub unavailable" }), {
+            status: 503,
+          })
+        : entry,
+    );
+    renderApp(`/entries/${entry.name}`);
+    await screen.findByTestId(`lifecycle-badge-${entry.name}`);
+    expect(screen.getByTestId("entry-refresh-status")).toHaveTextContent(
+      "Last updated",
+    );
+
+    fail = true;
+    await advance(20000);
+    expect(await screen.findByTestId("entry-refresh-failed")).toHaveTextContent(
+      "last refresh failed",
+    );
+    expect(
+      screen.getByTestId(`lifecycle-badge-${entry.name}`),
+    ).toHaveTextContent("running");
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    fail = false;
+    await advance(20000);
+    await waitFor(() =>
+      expect(screen.queryByTestId("entry-refresh-failed")).toBeNull(),
     );
   });
 });

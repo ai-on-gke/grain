@@ -140,19 +140,25 @@ ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca
 # The docker CLI is copied out of this image rather than apt-installed:
 # Debian's own `docker.io` package pulls in the whole daemon --
 # containerd, runc, iptables, a systemd unit -- to get one client binary
-# that only ever talks to a socket mounted from the host.
-ARG DOCKER_CLI_IMAGE=docker:28-cli@sha256:625d9431a9f54c5a2bc90f24f0e1c3d55b1349fd857dd85035f98c2c9acbdd4d
+# that only ever talks to a socket mounted from the host. The 29 CLI
+# negotiates down to an older engine's API (it still drives Engine 24),
+# and the hosts grain drives run a current one anyway: docker-ce from
+# pkg/hostinit, or the CI runner's own engine under tests/container and
+# tests/installer.
+ARG DOCKER_CLI_IMAGE=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d
 # cosign, copied out of sigstore's own release image for the same reason:
 # it is one static binary (ko builds it into /ko-app/cosign, on a
 # distroless base with nothing else in it), and this pin is the whole of
-# what decides which bytes it is. The version is the one
-# scripts/release-images.sh signs with (its COSIGN_VERSION default); the
-# two need not move together, since a signature from one cosign verifies
-# under another, but a bump of one is the moment to look at the other.
-# Not v3 yet: v3 signs `--tlog-upload=false` only with
-# `--use-signing-config=false`, and its new-bundle signatures do not
-# verify under the v2.4.1 that installs before this one carry.
-ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca
+# what decides which bytes it is. This cosign only ever verifies, so it
+# is a v3 release while scripts/release-images.sh still signs with v2
+# (its COSIGN_VERSION default): v3 verifies the legacy `.sig`
+# signatures v2 writes, with the same flags and the same JSON on stdout
+# the Kubernetes upgrade path reads its digest from. The signer has to
+# keep writing that legacy format for as long as images carrying the
+# old v2.4.1 verifier are in the field -- v2.4.1 cannot find a v3
+# new-format bundle -- so a bump of one is the moment to look at the
+# other, but they need not move together.
+ARG COSIGN_IMAGE=ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 

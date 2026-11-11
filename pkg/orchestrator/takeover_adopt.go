@@ -619,6 +619,11 @@ func PullRequestStatusOf(ctx context.Context, deps Deps, ref model.PullRequestRe
 	if err != nil {
 		return out, err
 	}
+	if owner != nil {
+		obs, _ := deps.Store.GetObservation(ctx, owner.ID)
+		states, _ := deps.Store.States(ctx)
+		out.Gates = model.ComputeMergeGates(*owner, obs, states)
+	}
 	if owner != nil && isTakeoverTask(*owner) {
 		state, err := deps.Store.State(ctx, owner.ID)
 		if err != nil {

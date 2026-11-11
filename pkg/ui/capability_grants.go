@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -61,6 +62,30 @@ type CapabilityMethod struct {
 	// why the capability policy (§4.2.2) denies this method to that run;
 	// empty where it admits it, and on a listing that names no run.
 	PolicyRefusal string `json:"policyRefusal,omitempty"`
+	// DescriptionTruncated and ArgsTruncated say a paged call cut this
+	// row to fit an agent's tool-result budget: Description to its first
+	// pageRowDescriptionBytes bytes, and each array in Args (an enum of
+	// gchat's spaces, say) to its first pageRowArrayItems items, with
+	// ArgItemCounts giving each cut array's full length by its path in
+	// the schema. Ask with fields=full (and q=<ref>) for the whole row.
+	DescriptionTruncated bool           `json:"descriptionTruncated,omitempty"`
+	ArgsTruncated        bool           `json:"argsTruncated,omitempty"`
+	ArgItemCounts        map[string]int `json:"argItemCounts,omitempty"`
+}
+
+// pagedCapabilityMethod is m as a paged row carries it: the first
+// pageRowDescriptionBytes of its description and the first
+// pageRowArrayItems items of each array in its argument schema. A
+// method whose description and schema enumerate a configured list --
+// gchat#post names every space -- was 26 KB on its own.
+func pagedCapabilityMethod(m CapabilityMethod) CapabilityMethod {
+	if desc, cut := truncateText(m.Description, pageRowDescriptionBytes); cut {
+		m.Description, m.DescriptionTruncated = desc, true
+	}
+	if args, cut := capJSONObject(m.Args, pageRowArrayItems); len(cut) > 0 {
+		m.Args, m.ArgsTruncated, m.ArgItemCounts = args, true, cut
+	}
+	return m
 }
 
 // ListCapabilityMethods is every method of every attached capability
@@ -224,6 +249,15 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 
 func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.Lookup) GrantCheck {
 	check := GrantCheck{Grant: s}
+	// grain#ci is a well-formed reference to a registered method, so the
+	// checks below would pass it -- and SetCapability would then refuse
+	// it (capabilityByID). A check that says yes to what the edit says no
+	// to is how request_access relayed a grain#ci nobody could grant
+	// (task 4361): refuse it here, in the same words.
+	if grainci.IsGrant(s) {
+		check.Error = capabilityRefusal(s)
+		return check
+	}
 	if !model.IsCapabilityRef(s) {
 		if _, ok := c.capabilityByID(s); !ok {
 			check.Error = capabilityRefusal(s)
@@ -424,7 +458,7 @@ func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Requ
 	methods = filterList(methods, func(m CapabilityMethod) bool {
 		return list.matches(m.Ref, m.Capability, m.Method, m.Description)
 	})
-	writeList(w, methods, list)
+	writePageTrimmed(w, r, methods, list, nil, pagedCapabilityMethod)
 }
 
 func (s *Server) handleCheckCapabilityGrants(w http.ResponseWriter, r *http.Request) {

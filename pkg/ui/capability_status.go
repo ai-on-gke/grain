@@ -379,7 +379,7 @@ func ciOnlyCapability(name string) bool {
 // true of the picker and useless to the person reading it.
 func capabilityRefusal(id string) string {
 	if grainci.IsGrant(id) {
-		return grainci.Refusal()
+		return grainci.Refusal("", "")
 	}
 	if ciOnlyCapability(id) {
 		return model.CIOnlyRefusal(id)

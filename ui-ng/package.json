@@ -1,0 +1,40 @@
+{
+  "name": "grain-ui-ng",
+  "version": "0.0.0",
+  "private": true,
+  "description": "grain's Angular UI, served under /next/ beside ui/ (design/design/angular-ui.design.md).",
+  "scripts": {
+    "build": "ng build --configuration production",
+    "start": "ng serve",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@angular/build": "~19.2.0",
+    "@angular/cli": "~19.2.0",
+    "@angular/common": "~19.2.0",
+    "@angular/compiler": "~19.2.0",
+    "@angular/compiler-cli": "~19.2.0",
+    "@angular/core": "~19.2.0",
+    "@angular/platform-browser": "~19.2.0",
+    "@angular/router": "~19.2.0",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.8.0",
+    "typescript": "~5.7.0",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@analogjs/vite-plugin-angular": "^1.15.0",
+    "@analogjs/vitest-angular": "^1.15.0",
+    "@angular/platform-browser-dynamic": "~19.2.0",
+    "@eslint/js": "^9.39.5",
+    "angular-eslint": "~19.2.0",
+    "eslint": "^9.20.0",
+    "jsdom": "^25.0.0",
+    "prettier": "^3.5.0",
+    "typescript-eslint": "^8.24.0",
+    "vitest": "^3.0.0"
+  }
+}

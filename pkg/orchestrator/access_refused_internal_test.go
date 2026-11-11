@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -80,7 +81,8 @@ func TestAccessRefusedCloneParksAtTheFirstFailure(t *testing.T) {
 	if err != nil || len(comments) != 1 {
 		t.Fatalf("comments = %+v (%v), want one", comments, err)
 	}
-	for _, want := range []string{"the deployment's GitHub credential", "acme/private", "GitHub answered 404", "Settings → Git", "reply"} {
+	for _, want := range []string{"the git credential this deployment clones acme/private with", "acme/private on github.com",
+		"GitHub answered 404", "Settings → Git", "reply"} {
 		if !strings.Contains(comments[0].Body, want) {
 			t.Errorf("comment %q does not mention %q", comments[0].Body, want)
 		}
@@ -102,5 +104,85 @@ func TestOtherCloneFailuresAreNotAccessRefusals(t *testing.T) {
 	var refused *accessRefusedError
 	if errors.As(err, &refused) {
 		t.Errorf("error = %v; a 502 was read as an access refusal", err)
+	}
+}
+
+// A clone refused because the grain host's own login for a command-backed
+// forge has lapsed is not the team's credential failing to reach the
+// repository: every task on that host fails the same way until somebody
+// renews the login there. So it ends the run as expired host credentials
+// do -- model.EnvironmentOutcome, off the failure streak -- and the task
+// is parked on the proxy's sentence saying what to run, not on advice to
+// give a credential access it already has.
+func TestALapsedHostLoginCloneParksOnRenewingIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	now := time.Date(2026, 11, 11, 6, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets", Host: "depot.code.forge.test"}
+	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
+	task := model.Task{
+		ID: "t1", Title: "work on a forge whose login lapsed", Target: &repo,
+		Origin:   model.Origin{Attribution: human, Reason: model.ReasonDirect},
+		Approval: &human, Binding: model.BindingDirective,
+	}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, refusal, want string }{
+		{"login page",
+			"remote: " + gitproxy.LoginLapsedMarker + "upstream request failed: forge login needed: run `forgecli-login` " +
+				"as the daemon's account, then retry (depot.code.forge.test answered: redirected to login.forge.test)\n" +
+				"fatal: unable to access 'http://172.17.0.1:9000/depot.code.forge.test/acme/widgets.git/': " +
+				"The requested URL returned error: 502",
+			"run `forgecli-login`"},
+		{"refused token",
+			"remote: " + gitproxy.LoginLapsedMarker + "acme/widgets: depot.code.forge.test refused the \"depot\" credential's " +
+				"token (401), and `GH_HOST=depot.code.forge.test forgecli api user` failed too, so the forgecli login on " +
+				"the grain host is no longer valid: exit status 1. Run `GH_HOST=depot.code.forge.test forgecli auth login` " +
+				"as alice on build-1, then retry\n" +
+				"fatal: unable to access 'http://172.17.0.1:9000/depot.code.forge.test/acme/widgets.git/': " +
+				"The requested URL returned error: 403",
+			"Run `GH_HOST=depot.code.forge.test forgecli auth login` as alice on build-1"},
+	} {
+		_, err := prepareCheckout(ctx, refusingSandbox(tc.refusal), "http://proxy", task, "", setupNotes{})
+		var lapsed *hostLoginLapsedError
+		if !errors.As(err, &lapsed) || lapsed.Repo != repo {
+			t.Fatalf("%s: prepareCheckout error = %#v; want a *hostLoginLapsedError naming %s", tc.name, err, repo)
+		}
+		var refused *accessRefusedError
+		if errors.As(err, &refused) {
+			t.Errorf("%s: a lapsed login read as the credential lacking access: %v", tc.name, err)
+		}
+		outcome, detail := setupEnding(err, "failed", err.Error())
+		if outcome != model.EnvironmentOutcome {
+			t.Errorf("%s: outcome = %q, want %q -- off the task's failure streak", tc.name, outcome, model.EnvironmentOutcome)
+		}
+		if got := model.EndingOf(outcome, detail); got != model.EndingEnvironment {
+			t.Errorf("%s: EndingOf = %q, want %q", tc.name, got, model.EndingEnvironment)
+		}
+		for _, want := range []string{"depot.code.forge.test", "has lapsed", tc.want} {
+			if !strings.Contains(detail, want) {
+				t.Errorf("%s: detail %q does not mention %q", tc.name, detail, want)
+			}
+		}
+		if strings.Contains(detail, gitproxy.LoginLapsedMarker) || strings.Contains(detail, "remote:") {
+			t.Errorf("%s: detail %q carries git's or the marker's own wording", tc.name, detail)
+		}
+
+		if err := stopOnExpiredHostCredentials(ctx, store, task, detail, now); err != nil {
+			t.Fatal(err)
+		}
+		if st, err := store.State(ctx, task.ID); err != nil || st != model.StateAwaitingReply {
+			t.Fatalf("%s: state = %q (%v), want awaiting_reply -- not queued for another attempt", tc.name, st, err)
+		}
+		comments, err := store.Comments(ctx, task.ID)
+		if err != nil || len(comments) == 0 {
+			t.Fatalf("%s: comments = %+v (%v), want the park's", tc.name, comments, err)
+		}
+		if body := comments[len(comments)-1].Body; !strings.Contains(body, tc.want) || strings.Contains(body, "Give that credential access") {
+			t.Errorf("%s: parked on %q, want it to say to renew the login (%q)", tc.name, body, tc.want)
+		}
 	}
 }

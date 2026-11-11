@@ -37,6 +37,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 type Config struct {
@@ -249,9 +251,16 @@ type Config struct {
 	UiRequireVerifier string
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
-	UiRequireIAP            bool
-	UiAllowedPrincipals     []string
-	DeploymentOwner         string
+	UiRequireIAP        bool
+	UiAllowedPrincipals []string
+	DeploymentOwner     string
+	// HostAccounts is -host-accounts: who each host account's requests on
+	// the API socket are recorded as (ui.HostAccountHandler). The daemon's
+	// own account maps to DeploymentOwner unless it names it.
+	HostAccounts ui.HostAccounts
+	// APISocket is -api-socket: where the API is served on a unix socket
+	// as well; "" is ui.APISocketPath(DataDir), "none" serves none.
+	APISocket               string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool
 	Actor                   string
@@ -438,18 +447,19 @@ type Config struct {
 	// runs grain from a container (bwsalmon/agents#645).
 	UpgradeImage        string
 	UpgradeImageRefFile string
-	// UpgradeImageSource selects where ModeImage pulls candidate images from
-	// ("registry"; empty uses the track or default registry source).
-	// UpgradeImageSourceLocked records that the setting came from a daemon
-	// flag or environment variable.
-	UpgradeImageSource           string
-	UpgradeImageSourceLocked     bool
-	UpgradeImageFallback         string
-	UpgradeImageFallbackExplicit bool
 	// upgradeVerifyCmd checks an image's signature before either image
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
 	UpgradeVerifyCmd []string
+	// UpgradeReviewedMergeRepo, when set (owner/name), also refuses an
+	// image upgrade whose commit did not reach that repository's release
+	// branches through a reviewed merge (upgrade.ImageConfig.ReviewedMerge,
+	// pkg/reviewedmerge). UpgradeReviewedMergeLogins are the forge logins
+	// its grain merges as, and UpgradeReviewedMergeTokenFile a file holding
+	// a read token for its API (none reads anonymously).
+	UpgradeReviewedMergeRepo      string
+	UpgradeReviewedMergeLogins    []string
+	UpgradeReviewedMergeTokenFile string
 	// upgradeAllowedBranches is the only branches either path may upgrade
 	// to (upgrade.Config.AllowedBranches); empty means its default.
 	UpgradeAllowedBranches []string
@@ -465,6 +475,13 @@ type Config struct {
 	// deployment's lifecycle and upgrades are managed externally
 	// (-management-url / $GRAIN_MANAGEMENT_URL).
 	ManagementURL string
+	// DefaultEnvironmentName is the environment name a Grain Hub gives
+	// this deployment by default (-default-environment-name /
+	// $GRAIN_DEFAULT_ENVIRONMENT_NAME, set from a hosted instance's
+	// grain-config): applied at start to a deployment with no name, or
+	// still the hub's previous one, and never over one its operator set
+	// (model.Config.AdoptHubEnvironmentName).
+	DefaultEnvironmentName string
 
 	// rebootCmd is what the UI's reboot-host button runs; empty means
 	// rebootHost's own `sudo systemctl reboot` default.
@@ -859,6 +876,10 @@ type Config struct {
 	SandboxAccessAddr     string
 	SandboxAccessDial     string
 	SandboxAccessCASecret string
+	// caSecrets is the secrets store the sandbox-access and package-cache
+	// CA bundles are kept in (ca_store.go), set by Run once it has opened
+	// one. Nil keeps them in their <data-dir>/*.pem files.
+	caSecrets *secrets.Store
 	// K8sGranuleAccess is how grain reaches a k8s-granule sandbox's guest
 	// once its pod is Ready: orchestrator.K8sGranuleAccessKubectl (the
 	// default, `granule exec` over `kubectl exec`) or

@@ -354,3 +354,128 @@ func (m *countingManaged) Rotate(string, func() (string, error)) error {
 	m.onEnsure()
 	return nil
 }
+
+// waitingCaller is a built-in whose configure takes an empty config and
+// refuses it, while waiting is set, as waiting on something outside
+// grain (protocol.WaitingError) -- a host credential that has expired --
+// or, with refuse set, refuses it outright.
+type waitingCaller struct {
+	fakeCaller
+	h *waitingHarness
+}
+
+type waitingHarness struct {
+	mu        sync.Mutex
+	waiting   string
+	refuse    string
+	configure int
+}
+
+func (c *waitingCaller) ListTools(ctx context.Context) ([]protocol.Tool, error) {
+	tools, err := c.fakeCaller.ListTools(ctx)
+	return append(tools, protocol.Tool{Name: protocol.ConfigureTool, InputSchema: map[string]any{
+		"type": "object", "required": []any{"config"},
+		"properties": map[string]any{"config": map[string]any{"type": "object", "properties": map[string]any{}}},
+	}}), err
+}
+
+func (c *waitingCaller) CallTool(_ context.Context, name string, _ map[string]any) ([]byte, error) {
+	if name != protocol.ConfigureTool {
+		return nil, errors.New("not used")
+	}
+	c.h.mu.Lock()
+	defer c.h.mu.Unlock()
+	c.h.configure++
+	if c.h.waiting != "" {
+		return nil, protocol.Waiting(c.h.waiting, errors.New("the host credential expired an hour ago"))
+	}
+	if c.h.refuse != "" {
+		return nil, errors.New(c.h.refuse)
+	}
+	return []byte(`{"status":"ok"}`), nil
+}
+
+func (h *waitingHarness) attach(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
+	return protocol.AttachCaller(ctx, id, cfg, secrets, &waitingCaller{fakeCaller: fakeCaller{methods: []string{"key"}}, h: h})
+}
+
+func (h *waitingHarness) calls() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.configure
+}
+
+// A built-in with no secret refs whose configure refused at start only
+// because a host credential had expired (2026-11-10: three servers sat
+// "not configured" long after it was renewed) is retried every
+// RetryInterval and attaches by itself once it is renewed, reporting
+// what it waits for meanwhile; one refused outright still waits for an
+// edit.
+func TestAWaitingConfigureRefusalIsRetriedUntilItAttaches(t *testing.T) {
+	h := &waitingHarness{waiting: "a renewed host credential"}
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	var drops []Status
+	var attaches []string
+	var logs strings.Builder
+	r := New(Options{
+		Attach:        h.attach,
+		Now:           func() time.Time { return now },
+		RetryInterval: time.Minute,
+		OnDrop:        func(st Status) { drops = append(drops, st) },
+		OnAttach:      func(id string) { attaches = append(attaches, id) },
+		Logf:          func(f string, a ...any) { fmt.Fprintf(&logs, f+"\n", a...) },
+	})
+	ctx := context.Background()
+	servers := map[string]protocol.ServerConfig{gcp: {Builtin: "corp-thing", Command: "grain"}}
+	r.Sync(ctx, servers)
+	st := r.Statuses()[0]
+	if st.State != NeedsConfig || st.Waiting != "a renewed host credential" || st.ConfigRefused || !strings.Contains(st.Reason, "expired") {
+		t.Fatalf("status = %+v, want needs-config waiting for the credential, its reason kept, not refused", st)
+	}
+	if WaitingLabel(st) != "waiting for a renewed host credential" {
+		t.Errorf("WaitingLabel = %q", WaitingLabel(st))
+	}
+	if len(drops) != 1 || drops[0].Waiting == "" {
+		t.Errorf("drops = %+v, want the wait raised once", drops)
+	}
+	if !strings.Contains(logs.String(), "waiting for a renewed host credential, retrying every 1m0s") {
+		t.Errorf("log does not say it is waiting and retrying:\n%s", logs.String())
+	}
+
+	now = now.Add(30 * time.Second)
+	r.Sync(ctx, servers)
+	if n := h.calls(); n != 1 {
+		t.Errorf("retried before RetryInterval: %d configures", n)
+	}
+	now = now.Add(31 * time.Second)
+	r.Sync(ctx, servers)
+	if n := h.calls(); n != 2 {
+		t.Errorf("not retried once RetryInterval passed: %d configures", n)
+	}
+	if len(drops) != 1 {
+		t.Errorf("an unchanged wait was raised again (%d drops)", len(drops))
+	}
+
+	h.mu.Lock()
+	h.waiting = ""
+	h.mu.Unlock()
+	now = now.Add(time.Minute)
+	r.Sync(ctx, servers)
+	if st := r.Statuses()[0]; st.State != Attached || st.Waiting != "" || st.Reason != "" {
+		t.Fatalf("after the renewal status = %+v, want attached", st)
+	}
+	if len(attaches) != 1 {
+		t.Errorf("attaches = %v, want the renewal to attach it", attaches)
+	}
+
+	// A configure that refuses without waiting is not retried: it needs
+	// somebody's edit.
+	h2 := &waitingHarness{refuse: "no project is set"}
+	r2 := New(Options{Attach: h2.attach, Now: func() time.Time { return now }, RetryInterval: time.Minute})
+	r2.Sync(ctx, servers)
+	now = now.Add(2 * time.Minute)
+	r2.Sync(ctx, servers)
+	if st := r2.Statuses()[0]; st.State != NeedsConfig || st.Waiting != "" || h2.calls() != 1 {
+		t.Errorf("plain refusal: status %+v after %d configures, want needs-config tried once", st, h2.calls())
+	}
+}

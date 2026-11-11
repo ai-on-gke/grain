@@ -40,6 +40,14 @@ import GrantChip from "../GrantChip.jsx";
 // is what the next run is told. Both routes answer a person only -- an
 // agent cannot approve its own request, whatever scopes it holds.
 //
+// An item that cannot be granted as asked says why under its chip. One
+// that stands for something that can -- grain#ci on a repository grain
+// CI does not gate, whose substitute is api:ci-read@<repo> -- is offered
+// as that substitute instead (it.substitute, it.substituteGrant): Grant
+// grants the substitute in its place, and Deny is there as ever. An item
+// with neither is unticked and disabled, so Grant never sends what the
+// server would only refuse.
+//
 // t.pendingAccess is nil for almost every task, and this renders nothing
 // for those. act is DetailOverlay's (fn, id) -> Promise; the inbox passes
 // its own.
@@ -54,7 +62,7 @@ export default function PendingAccess({ t, act }) {
 
   const chosen = items
     .map((_, i) => i)
-    .filter((i) => !unticked.has(i) && !items[i].error);
+    .filter((i) => !unticked.has(i) && grantable(items[i]));
   const toggle = (i) =>
     setUnticked((prev) => {
       const next = new Set(prev);
@@ -147,10 +155,12 @@ export default function PendingAccess({ t, act }) {
               control={
                 <Checkbox
                   size="small"
-                  checked={!unticked.has(i) && !it.error}
-                  disabled={busy || Boolean(it.error)}
+                  checked={!unticked.has(i) && grantable(it)}
+                  disabled={busy || !grantable(it)}
                   onChange={() => toggle(i)}
-                  inputProps={{ "aria-label": `Grant ${itemText(it)}` }}
+                  inputProps={{
+                    "aria-label": `Grant ${it.substitute ? it.substituteGrant || itemText(it.substitute) : itemText(it)}`,
+                  }}
                 />
               }
               label={<AccessItemChip it={it} />}
@@ -172,13 +182,24 @@ export default function PendingAccess({ t, act }) {
               />
             )}
             {it.held && <Chip size="small" label="already held" />}
+            {it.substitute && (
+              <Chip
+                size="small"
+                color="warning"
+                variant="outlined"
+                label={`instead of ${requestedText(it)}`}
+              />
+            )}
             {it.error && (
               <Typography
                 variant="caption"
-                color="error"
+                color={it.substitute ? "text.secondary" : "error"}
                 sx={{ flexBasis: "100%", pl: 4, overflowWrap: "anywhere" }}
+                data-testid="access-item-error"
               >
-                {it.error}
+                {it.substitute
+                  ? `${requestedText(it)} cannot be granted: ${it.error}. Grant gives this task ${it.substituteGrant || itemText(it.substitute)} in its place; Deny declines it.`
+                  : it.error}
               </Typography>
             )}
           </Box>
@@ -281,9 +302,31 @@ export default function PendingAccess({ t, act }) {
   );
 }
 
+// grantable is whether Grant may send item: one with no error, or one
+// whose substitute is what Grant gives instead.
+function grantable(it) {
+  return !it.error || Boolean(it.substitute);
+}
+
+// requestedText is what the run asked for, as asked: an item with a
+// substitute is otherwise shown as its substitute.
+function requestedText(it) {
+  return it.capability || itemText(it);
+}
+
 // AccessItemChip is one requested item as a chip: a grant the way the
 // grants editor shows it (GrantChip), anything else in the same shape.
+// An item with a substitute is shown as the substitute, which is what
+// Grant would give.
 function AccessItemChip({ it }) {
+  if (it.substitute) {
+    return (
+      <GrantChip
+        grant={it.substituteGrant || it.substitute.capability}
+        data-testid="access-item-chip"
+      />
+    );
+  }
   if (it.kind === "grant") {
     return (
       <GrantChip

@@ -59,7 +59,7 @@ func TestContextExhaustionSuspendsAndAsksForAHandover(t *testing.T) {
 	}
 
 	fw := &handoverFramework{}
-	lastTurnForHandover(ctx, store, cfg, fw, agent.RunConfig{Prompt: "the original prompt", MaxTurns: 100}, tk, "sess-1")
+	lastTurnForHandover(ctx, store, cfg, fw, agent.RunConfig{Prompt: "the original prompt", MaxTurns: 100}, tk, "sess-1", contextHandoverPrompt)
 	if len(fw.got) != 1 || fw.got[0].ResumeSession != "sess-1" || fw.got[0].MaxTurns != contextHandoverTurns ||
 		!strings.Contains(fw.got[0].Prompt, "write_handover") {
 		t.Fatalf("last turn = %+v, want one turn in sess-1 asking for the handover", fw.got)
@@ -72,7 +72,7 @@ func TestContextExhaustionSuspendsAndAsksForAHandover(t *testing.T) {
 		!strings.Contains(comments[len(comments)-1].Body, "half the parser") {
 		t.Fatalf("comments = %+v, want the handover relayed", comments)
 	}
-	lastTurnForHandover(ctx, store, cfg, fw, agent.RunConfig{}, tk, "")
+	lastTurnForHandover(ctx, store, cfg, fw, agent.RunConfig{}, tk, "", contextHandoverPrompt)
 	if len(fw.got) != 1 {
 		t.Fatal("a run with no session was given a last turn")
 	}

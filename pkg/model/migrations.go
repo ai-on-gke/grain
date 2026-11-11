@@ -678,12 +678,14 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		// The table itself is created by Statements, which Migrate
-		// applies after every rung; only the column needs saying here.
+		// schema99AutoUpgradeReleaseTable creates auto_upgrade_release at
+		// its schema-99 shape so migration 139's ALTER TABLE runs cleanly
+		// from any baseline predating 99.
 		Version:     99,
 		Description: "add grain_config.auto_upgrade_on, which turns on upgrading when a release is published",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `auto_upgrade_on` TEXT NOT NULL DEFAULT ''",
+			schema99AutoUpgradeReleaseTable,
 		},
 	},
 	{
@@ -964,7 +966,61 @@ var Migrations = []Migration{
 			"ALTER TABLE `scheduled_firing_skip` ADD COLUMN `held_by_schedule_id` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     135,
+		Description: "add grain_config.ci_api_repos, the repositories whose trusted CI jobs may hold api grants (grain/task-4040)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `ci_api_repos` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 136,
+		Description: "add task_context and task_brief_edit, a durable task's compaction cursor, handover version " +
+			"and current brief (grain/task-4107)",
+		Statements: []string{
+			taskContextTable,
+			taskBriefEditTable,
+			taskBriefEditTaskIndex,
+		},
+	},
+	{
+		Version:     137,
+		Description: "add grain_config.hub_environment_name, the environment name a Grain Hub last supplied as this deployment's default (grain/task-4200)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `hub_environment_name` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     138,
+		Description: "add grain_config.sandbox_shape_limits, the deployment and per-role ceilings on a task's sandbox shape (grain/task-4018)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `sandbox_shape_limits` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 139,
+		Description: "add grain_config.auto_upgrade_min_interval_hours and auto_upgrade_release.succeeded_at, " +
+			"the minimum interval between release-triggered upgrades (grain/task-4230)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_upgrade_min_interval_hours` INTEGER NOT NULL DEFAULT 6",
+			"ALTER TABLE `auto_upgrade_release` ADD COLUMN `succeeded_at` DATETIME NULL",
+		},
+	},
 }
+
+// schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
+// created it, frozen so migration 99 followed by migration 139's ALTER TABLE
+// runs cleanly from any earlier baseline.
+const schema99AutoUpgradeReleaseTable = `CREATE TABLE IF NOT EXISTS ` + "`auto_upgrade_release`" + ` (
+  ` + "`id`" + `           INTEGER  NOT NULL,
+  ` + "`newest`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`seen_at`" + `      DATETIME NOT NULL,
+  ` + "`release_tag`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`scheduled_at`" + ` DATETIME NULL,
+  ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `)
+)`
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
 // schema 92 created them, frozen so migration 92 followed by migration 117's

@@ -199,7 +199,14 @@ type Settings struct {
 	// reads as the figure in effect. The controller's live ratios, recent
 	// adjustments and OOM kills are SandboxCommitment.Budget.Overcommit.
 	SandboxOvercommit model.OvercommitSettings `json:"sandboxOvercommit"`
-	ExternalAgentAPI  bool                     `json:"externalAgentApi"`
+	// SandboxShapeLimits is model.Config.SandboxShapeLimits as stored: the
+	// deployment-wide maximum on a task's own sandbox shape and the
+	// per-role ceilings beneath it. SandboxShapeMax is the maximum in
+	// effect, grain's defaults filled into whatever the stored one leaves
+	// at zero.
+	SandboxShapeLimits model.SandboxShapeLimits `json:"sandboxShapeLimits"`
+	SandboxShapeMax    model.SandboxShape       `json:"sandboxShapeMax"`
+	ExternalAgentAPI   bool                     `json:"externalAgentApi"`
 	// SessionSandboxIdleTTL is model.Config.SessionSandboxIdleTTL: how long
 	// an interactive chat/session task's sandbox (and in-process agent run)
 	// stays warm awaiting a reply after a turn ends before being released,
@@ -649,6 +656,11 @@ type Settings struct {
 	// vocabulary, in a picker's order.
 	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
 	AutoUpgradeModes []string `json:"autoUpgradeModes"`
+	// AutoUpgradeMinIntervalHours is model.Config.AutoUpgradeMinIntervalHours:
+	// the minimum interval in hours between two completed automatic upgrades
+	// in release mode (0 = off; default AutoUpgradeMinIntervalHoursDefault).
+	AutoUpgradeMinIntervalHours        int `json:"autoUpgradeMinIntervalHours"`
+	AutoUpgradeMinIntervalHoursDefault int `json:"autoUpgradeMinIntervalHoursDefault"`
 	// OwnerTrust is the owner-trust proposal policy
 	// (model.Config.OwnerTrust): the (owner, repo) pairs -- repo "*" for
 	// every repository -- whose external agent credentials' unapproved
@@ -1169,6 +1181,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxDiskOvercommitDefault:       model.DefaultDiskOvercommit,
 		SandboxMemoryReserveMBDefault:      c.sandboxMemoryReserveDefault(),
 		SandboxOvercommit:                  cfg.SandboxOvercommit.Resolved(),
+		SandboxShapeLimits:                 cfg.SandboxShapeLimits,
+		SandboxShapeMax:                    cfg.SandboxShapeLimits.ResolvedMax(),
 		ExternalAgentAPI:                   cfg.ExternalAgentAPI,
 		SessionSandboxIdleTTL:              durationSetting(cfg.SessionSandboxIdleTTL),
 		SessionSandboxIdleTTLDefault:       model.DefaultSessionSandboxIdleTTL.String(),
@@ -1204,6 +1218,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
 		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
 		AutoUpgradeModes:                   model.AutoUpgradeModes(),
+		AutoUpgradeMinIntervalHours:        cfg.AutoUpgradeMinIntervalHours,
+		AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
 		AutoGrantContextReads:              stringsOrEmpty(cfg.AutoGrantContextReads),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
@@ -1405,6 +1421,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SandboxDiskOvercommit:          def.SandboxDiskOvercommit,
 			SandboxDiskOvercommitDefault:   model.DefaultDiskOvercommit,
 			SandboxOvercommit:              def.SandboxOvercommit.Resolved(),
+			SandboxShapeLimits:             def.SandboxShapeLimits,
+			SandboxShapeMax:                def.SandboxShapeLimits.ResolvedMax(),
 			ExternalAgentAPI:               def.ExternalAgentAPI,
 			SessionSandboxIdleTTL:          durationSetting(def.SessionSandboxIdleTTL),
 			SessionSandboxIdleTTLDefault:   model.DefaultSessionSandboxIdleTTL.String(),
@@ -1488,6 +1506,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
 			AutoUpgradeOn:                      def.AutoUpgradeMode(),
 			AutoUpgradeModes:                   model.AutoUpgradeModes(),
+			AutoUpgradeMinIntervalHours:        def.AutoUpgradeMinIntervalHours,
+			AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
 			AutoGrantContextReads:              stringsOrEmpty(def.AutoGrantContextReads),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
@@ -1541,7 +1561,11 @@ type UpdateSettingsRequest struct {
 	SandboxDiskOvercommit   *float64 `json:"sandboxDiskOvercommit"`
 	// SandboxOvercommit replaces the whole overcommit mode and its bounds
 	// (model.OvercommitSettings); zero bounds are grain's defaults.
-	SandboxOvercommit      *model.OvercommitSettings `json:"sandboxOvercommit"`
+	SandboxOvercommit *model.OvercommitSettings `json:"sandboxOvercommit"`
+	// SandboxShapeLimits replaces the whole deployment maximum and the
+	// per-role ceilings on a task's own sandbox shape
+	// (model.SandboxShapeLimits); a zero dimension is grain's default.
+	SandboxShapeLimits     *model.SandboxShapeLimits `json:"sandboxShapeLimits"`
 	ExternalAgentAPI       *bool                     `json:"externalAgentApi"`
 	SessionSandboxIdleTTL  *string                   `json:"sessionSandboxIdleTtl"`
 	SandboxMemoryReserveMB *int                      `json:"sandboxMemoryReserveMb"`
@@ -1604,6 +1628,9 @@ type UpdateSettingsRequest struct {
 	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
 	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
 	AutoUpgradeOn *string `json:"autoUpgradeOn"`
+	// AutoUpgradeMinIntervalHours is the minimum interval in hours between
+	// completed automatic upgrades in release mode (0 = off).
+	AutoUpgradeMinIntervalHours *int `json:"autoUpgradeMinIntervalHours"`
 	// OwnerTrust replaces the owner-trust proposal policy
 	// (Settings.OwnerTrust); an empty list turns it off.
 	OwnerTrust *[]model.OwnerTrustRule `json:"ownerTrust"`
@@ -1952,6 +1979,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("sandboxOvercommit: %v", err)
 		}
 		cfg.SandboxOvercommit = *req.SandboxOvercommit
+	}
+	if req.SandboxShapeLimits != nil {
+		if err := req.SandboxShapeLimits.Validate(); err != nil {
+			return model.Config{}, validationErrorf("sandboxShapeLimits: %v", err)
+		}
+		cfg.SandboxShapeLimits = *req.SandboxShapeLimits
 	}
 	if req.ExternalAgentAPI != nil {
 		cfg.ExternalAgentAPI = *req.ExternalAgentAPI
@@ -2407,6 +2440,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("autoUpgradeOn: %v", err)
 		}
 		cfg.AutoUpgradeOn = on
+	}
+	if req.AutoUpgradeMinIntervalHours != nil {
+		if *req.AutoUpgradeMinIntervalHours < 0 {
+			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at least 0")
+		}
+		cfg.AutoUpgradeMinIntervalHours = *req.AutoUpgradeMinIntervalHours
 	}
 	if req.OwnerTrust != nil {
 		rules, err := model.NormalizeOwnerTrust(*req.OwnerTrust)

@@ -1170,10 +1170,31 @@ func TestUpdateSettingsRoundTripsTheAutomaticUpgrade(t *testing.T) {
 	if read.AutoUpgradeOn != model.AutoUpgradeDaily {
 		t.Errorf("a channel with no mode reads back as %q, want daily", read.AutoUpgradeOn)
 	}
+	if read.AutoUpgradeMinIntervalHours != model.DefaultAutoUpgradeMinIntervalHours ||
+		read.AutoUpgradeMinIntervalHoursDefault != model.DefaultAutoUpgradeMinIntervalHours {
+		t.Errorf("default AutoUpgradeMinIntervalHours = %d (default %d), want %d",
+			read.AutoUpgradeMinIntervalHours, read.AutoUpgradeMinIntervalHoursDefault, model.DefaultAutoUpgradeMinIntervalHours)
+	}
 	release := " Release "
-	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &release}); err != nil ||
-		got.AutoUpgradeOn != model.AutoUpgradeOnRelease {
-		t.Fatalf("turning on release upgrades: %q, %v", got.AutoUpgradeOn, err)
+	zero := 0
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeOn:               &release,
+		AutoUpgradeMinIntervalHours: &zero,
+	}); err != nil || got.AutoUpgradeOn != model.AutoUpgradeOnRelease || got.AutoUpgradeMinIntervalHours != 0 {
+		t.Fatalf("turning on release upgrades with min interval 0: on=%q min=%d err=%v",
+			got.AutoUpgradeOn, got.AutoUpgradeMinIntervalHours, err)
+	}
+	twelve := 12
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeMinIntervalHours: &twelve,
+	}); err != nil || got.AutoUpgradeMinIntervalHours != 12 {
+		t.Fatalf("setting min interval to 12h: %d, %v", got.AutoUpgradeMinIntervalHours, err)
+	}
+	neg := -1
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeMinIntervalHours: &neg,
+	}); err == nil {
+		t.Error("a negative autoUpgradeMinIntervalHours was accepted")
 	}
 	hourly := "hourly"
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &hourly}); err == nil {

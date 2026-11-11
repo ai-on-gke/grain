@@ -180,6 +180,9 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      # The reviewed-merge gate reads the commit's pull request and its
+      # reviews (scripts/release-images.sh check_reviewed_merge).
+      pull-requests: read
     concurrency:
       # An on-demand build is a group of its own, so it neither cancels nor
       # is cancelled by the branch's runs, and a second dispatch of the same
@@ -370,12 +373,14 @@ jobs:
               "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
               -o /usr/local/bin/cosign; then
               rm -f /usr/local/bin/cosign
-              cosign_image="gcr.io/projectsigstore/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca"
+              cosign_image="ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca"
               docker pull "$cosign_image"
               cid="$(docker create "$cosign_image")"
               docker cp "$cid:/ko-app/cosign" /usr/local/bin/cosign
               docker rm "$cid" >/dev/null
               echo "8d5b7d0097b61a89161ef7ac4f169879bf6de798af1be431b595bb552b235d48  /usr/local/bin/cosign" | sha256sum -c -
+            else
+              echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  /usr/local/bin/cosign" | sha256sum -c -
             fi
             chmod +x /usr/local/bin/cosign
           fi
@@ -571,6 +576,14 @@ jobs:
           retention-days: 1
 
       - name: Publish the images
+        env:
+          # Refuse a commit that did not reach the branch through a reviewed
+          # merge: one grain made (vars.GRAIN_MERGE_LOGINS, the forge logins
+          # grain merges as) or one the forge's review record covers
+          # (pkg/reviewedmerge). vars.REQUIRE_REVIEWED_MERGE=false skips it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRAIN_MERGE_LOGINS: ${{ vars.GRAIN_MERGE_LOGINS }}
+          REQUIRE_REVIEWED_MERGE: ${{ vars.REQUIRE_REVIEWED_MERGE }}
         run: |
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ]; then

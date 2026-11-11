@@ -177,6 +177,11 @@ var ErrHumanReviewRateLimited = errors.New("this review has already asked for hu
 // agent: an agent may raise the hold, never release it.
 var ErrAgentCannotReleaseHumanReview = errors.New("an agent cannot release a human-review hold: only a person's Submit or Release does")
 
+// ErrFindingsRequireRereviewOrOverride refuses releasing review findings via
+// Submit or ReleaseHumanReviewHold: findings require either a clean re-review
+// after fixes or an explicit merge:force gate override with a reason.
+var ErrFindingsRequireRereviewOrOverride = errors.New("review findings cannot be cleared by Submit or Release hold: fix the findings for a clean re-review, or override the review gate under merge:force with a reason")
+
 // NormalizeHumanReviewReason trims r, bounds its reason and checks its
 // category, filling in what is missing.
 func NormalizeHumanReviewReason(r HumanReviewReason) (HumanReviewReason, error) {
@@ -246,23 +251,29 @@ func AddHumanReviewReason(t *Task, r HumanReviewReason) (HumanReviewReason, bool
 	return r, true, nil
 }
 
-// DropHumanReviewHold ends t's human-review hold, for a person's Submit or
-// release, and returns the reasons it held. It drops what the hold
-// surfaced too: a human-only hold, and the mark a review's findings left
-// for a person (LinkAutoMergeAwaitsPerson) -- the person has now decided.
-// Whether auto-merge comes back is putTask's to say (restoreAfterHolds):
-// it does where grain would have let the change merge itself.
+// DropHumanReviewHold ends t's human-approval review hold, for a person's
+// Submit or release, and returns the reasons it released. Review findings
+// (HumanReviewSecurityFindings) are a separate review gate and are never
+// dropped here: clearing findings requires either a clean re-review after
+// fixes or an explicit merge:force gate override.
 func DropHumanReviewHold(t *Task) []HumanReviewReason {
-	reasons := HumanReviewReasons(*t)
-	if len(reasons) == 0 {
-		return nil
+	var released []HumanReviewReason
+	for _, r := range HumanReviewReasons(*t) {
+		if r.Source != HumanReviewSecurityFindings {
+			released = append(released, r)
+		}
 	}
-	findings := slices.ContainsFunc(reasons, func(r HumanReviewReason) bool { return r.Source == HumanReviewSecurityFindings })
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool {
-		return l.Kind == LinkHumanReviewHold || l.Kind == LinkHumanOnlyHold ||
-			(findings && l.Kind == LinkAutoMergeAwaitsPerson)
+		if l.Kind == LinkHumanOnlyHold {
+			return true
+		}
+		if l.Kind != LinkHumanReviewHold {
+			return false
+		}
+		r, ok := ParseHumanReviewReason(l.Target)
+		return !ok || r.Source != HumanReviewSecurityFindings
 	})
-	return reasons
+	return released
 }
 
 // normalizeHumanReviewHold is putTask's: a human-only path's reasons stand
@@ -351,8 +362,15 @@ func (s *Store) RaiseHumanReviewHold(ctx context.Context, taskID string, req Hum
 		body.WriteString(d)
 		body.WriteString("\n\n")
 	}
-	body.WriteString("This change will not merge itself while the hold stands: a clean CI run, a later clean " +
-		"review or a new push do not release it. Press Submit to merge it, or Release hold once you have decided.")
+	if reason.Source == HumanReviewSecurityFindings {
+		body.WriteString("This change will not merge until the findings are addressed and a re-review passes, " +
+			"or an operator holding merge:force overrides the review gate with a reason. Pressing Submit records " +
+			"your approval only and does not clear review findings.")
+	} else {
+		body.WriteString("This change will not merge itself while the hold stands: a clean CI run, a later clean " +
+			"review or a new push do not release it. Press Submit to approve it (merges once all review and CI " +
+			"gates pass), or Release hold once you have decided.")
+	}
 	if _, err := s.AddComment(ctx, Comment{TaskID: taskID, Author: Attribution{Actor: humanReviewCommenter},
 		Body: body.String(), CreatedAt: reason.At}); err != nil {
 		return true, err
@@ -361,12 +379,16 @@ func (s *Store) RaiseHumanReviewHold(ctx context.Context, taskID string, req Hum
 	if err != nil {
 		return true, err
 	}
+	notifAction := "until somebody presses Submit or Release hold, and all required reviews pass."
+	if reason.Source == HumanReviewSecurityFindings {
+		notifAction = "until a re-review passes after fixes, or an operator overrides the review gate with a reason."
+	}
 	n := Notification{
 		Subject:  HumanReviewNotificationSubject(taskID),
 		Severity: NotificationWarning,
 		Title:    fmt.Sprintf("Task %s needs a person's decision: %s", taskID, reason.Reason),
 		Body: fmt.Sprintf("[Task #%s](/tasks/%s) is held for a person's review (%s): %s\n\nIt will not merge "+
-			"itself until somebody presses Submit or Release hold.", taskID, taskID, reason.Category, reason.Reason),
+			"itself %s", taskID, taskID, reason.Category, reason.Reason, notifAction),
 		TaskID:     taskID,
 		RaisedBy:   PrincipalString(by),
 		RaisedAt:   reason.At,
@@ -390,11 +412,20 @@ func (s *Store) ReleaseHumanReviewHold(ctx context.Context, taskID string, by Pr
 		return nil, ErrAgentCannotReleaseHumanReview
 	}
 	var released []HumanReviewReason
+	var onlyFindings bool
 	if err := s.UpdateTask(WithAutoMergeChange(ctx, by, "human-review hold released"), taskID, func(t *Task) error {
+		onlyFindings = false
+		before := HumanReviewReasons(*t)
 		released = DropHumanReviewHold(t)
+		if len(before) > 0 && len(released) == 0 {
+			onlyFindings = true
+		}
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if onlyFindings {
+		return nil, ErrFindingsRequireRereviewOrOverride
 	}
 	if len(released) == 0 {
 		return nil, nil
