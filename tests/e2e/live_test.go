@@ -84,7 +84,7 @@ func TestLiveIssueCompletesEndToEnd(t *testing.T) {
 	t.Parallel()
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		skipUnlessLiveRequired(t, "GEMINI_API_KEY is not set")
+		skipUnlessLiveRequired(t, missingLiveSecret("GEMINI_API_KEY"))
 	}
 	agyPath, err := exec.LookPath("agy")
 	if err != nil {
@@ -177,6 +177,20 @@ func TestLiveIssueCompletesEndToEnd(t *testing.T) {
 // that could not do the one thing it exists to do says so rather than
 // printing "ok".
 const liveAgentTestEnv = "GRAIN_LIVE_AGENT_TEST"
+
+// liveSecretsEnvironment is the GitHub environment
+// .github/workflows/live-agent.yml and live-frameworks.yml read their
+// model credentials from. A missing one fails the run naming it there, so
+// the fix is in the failure: a suite that skipped quietly when its
+// credential went missing is how these went dark for two weeks.
+const liveSecretsEnvironment = "live-models"
+
+// missingLiveSecret is the reason a live test gives when secret, an
+// environment variable the workflows fill from liveSecretsEnvironment, is
+// unset.
+func missingLiveSecret(secret string) string {
+	return secret + " is not set (set secret " + secret + " in the GitHub environment " + liveSecretsEnvironment + ")"
+}
 
 func skipUnlessLiveRequired(t *testing.T, reason string) {
 	t.Helper()
