@@ -45,6 +45,9 @@ import NarrowingBar from "./NarrowingBar.jsx";
 import { formatBytes } from "./PackageCachePanel.jsx";
 import RepoField from "./RepoField.jsx";
 import SearchSelect from "./SearchSelect.jsx";
+import StaleSchedulesAlert, {
+  useStaleSchedules,
+} from "./StaleSchedulesAlert.jsx";
 import {
   CONCLUSION_LABELS,
   RUN_ATTRIBUTES,
@@ -56,6 +59,7 @@ import {
   narrowRuns,
   queuedByRun,
   queuedOf,
+  repoNarrowedTo,
   runsQuery,
   spanOf,
   useCINarrowing,
@@ -1899,6 +1903,13 @@ export default function CIPage({
   // exactly like a cache that is empty -- but it is a footnote, so it
   // does not take the runs table down with it.
   const [cache, setCache] = useState(null);
+  // staleSchedules is every schedule that has stopped running (GET
+  // /api/sandboxes?section=staleSchedules, grain/task-4344): a workflow's
+  // cron the repository's ci_mode drops comes due every night and runs
+  // nothing, and the runs table it should have filled is where its
+  // absence is looked for. A reader without deployment:read gets none,
+  // which is a pane without the banner rather than an error.
+  const staleSchedules = useStaleSchedules();
   const zone = useTimeZone();
 
   // A page of what this deployment remembers, and the pane's own
@@ -2111,6 +2122,13 @@ export default function CIPage({
           the answer to "why was that run so quick" that the rows
           themselves only hint at with "· cached". */}
       <CacheLine cache={cache} onClear={clearCache} />
+      {/* Narrowed to one repository, only that repository's: the banner
+          is about the runs this pane is showing. Not narrowed, all of
+          them, each naming its repository. */}
+      <StaleSchedulesAlert
+        schedules={staleSchedules}
+        repo={repoNarrowedTo(narrowing.filters)}
+      />
       {data?.enabled && starting && (
         <StartRunForm
           repoOptions={repoOptions}
