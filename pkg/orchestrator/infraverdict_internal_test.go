@@ -176,3 +176,37 @@ func TestGitHubInfraVerdictReadsTheLatestAttemptsFailingSteps(t *testing.T) {
 		})
 	}
 }
+
+// The 2026-11-11 outage: a trunk run whose jobs died on the runner's
+// resolver inside `apt-get install` is the deployment's, and is re-run
+// rather than filed against anyone -- on grain CI and on Actions alike.
+func TestInfraVerdictKnowsARunnerDNSOutage(t *testing.T) {
+	t.Parallel()
+	const tail = "E: Failed to fetch https://security.ubuntu.com/ubuntu/pool/universe/e/expect/expect.deb  " +
+		"Temporary failure resolving 'security.ubuntu.com'\n" +
+		"E: Unable to fetch some archives, maybe run apt update or try with --fix-missing?\n"
+	dns := ci.JobRun{JobID: "go unit", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
+		{Name: "Checkout", Conclusion: ci.ConclusionSuccess},
+		{Name: "Install system dependencies", Conclusion: ci.ConclusionFailure, Output: tail},
+	}}
+	why, infra := infraVerdict(ci.Run{Conclusion: ci.ConclusionFailure, Jobs: []ci.JobRun{dns}})
+	if !infra || !strings.Contains(why, "temporary failure resolving") {
+		t.Fatalf("infraVerdict = %v (%q), want infra on the resolver", infra, why)
+	}
+	// A package really gone from the mirror is a 404 the workflow file in
+	// the tree can fix, and is not the runner's.
+	gone := ci.JobRun{JobID: "go unit", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
+		{Name: "Checkout", Conclusion: ci.ConclusionSuccess},
+		{Name: "Install system dependencies", Conclusion: ci.ConclusionFailure,
+			Output: "E: Failed to fetch https://archive.example/pool/e/expect.deb  404  Not Found\n" +
+				"E: Unable to fetch some archives, maybe run apt update or try with --fix-missing?\n"},
+	}}
+	if why, infra := infraVerdict(ci.Run{Conclusion: ci.ConclusionFailure, Jobs: []ci.JobRun{gone}}); infra {
+		t.Fatalf("a 404 from the mirror read as infra (%q)", why)
+	}
+	jobs := []model.GitHubCIJob{{JobName: "go unit", Conclusion: "failure", RunAttempt: 1,
+		FailingStep: "Install system dependencies", FailureTail: tail}}
+	if why, infra := gitHubInfraVerdict(jobs, 1); !infra {
+		t.Fatalf("gitHubInfraVerdict = %v (%q), want infra on the resolver", infra, why)
+	}
+}

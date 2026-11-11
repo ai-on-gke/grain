@@ -454,7 +454,7 @@ export default function GrantsPicker({
   const shortAlias = (g) => {
     if (isApiGrant(g)) {
       const [, limit] = splitApiGrant(g);
-      return `api:${apiShortName(g)}${limit ? ` on ${limit}` : ""}`;
+      return `api#${apiShortName(g)}${limit ? ` on ${limit}` : ""}`;
     }
     if (isCapabilityRef(g)) {
       const { ref, with: w, raw } = parseGrant(g);
@@ -510,7 +510,7 @@ export default function GrantsPicker({
   const apiLine = (id) => {
     const [, limit] = splitApiGrant(id);
     const row = apiRowOf(id);
-    const label = `api:${apiShortName(id)}${limit ? ` on ${limit}` : ""}`;
+    const label = `api#${apiShortName(id)}${limit ? ` on ${limit}` : ""}`;
     return (
       <GrantLine
         key={id}
@@ -735,7 +735,7 @@ export default function GrantsPicker({
       const state = g ? methodState(g) : policyState(ref);
       const d = describeGrant(g || ref, { method, config });
       const sectionLabel = isApiRef
-        ? `api:${method.method}`
+        ? `api#${method.method}`
         : methodMenuLabel(ref, method.method);
       const sectionAriaLabel = isApiRef
         ? `${d.args ? `${sectionLabel} · ${d.args}` : sectionLabel}${state?.suffix || ""}`

@@ -4,10 +4,10 @@ base: main
 auto-merge: true
 nothing-needed: close
 capabilities:
-  - "api:ci-read@ai-on-gke/grain"
-  - "api:self-debug"
-  - "api:suites:read@ai-on-gke/grain"
-  - "api:releases:read@ai-on-gke/grain"
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
+  - "https://grain.dev/capabilities/api#self-debug"
+  - {capability: "https://grain.dev/capabilities/api#suites:read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#releases:read", with: {repo: ai-on-gke/grain}}
 body: |
   Inspect the release pipeline status for base branches (particularly `main`), verifying that
   the latest base-branch release succeeded and is not lagging behind `main` or stalled.
