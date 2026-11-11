@@ -34,10 +34,11 @@ import {
 } from "./inbox-classifier";
 
 export const SEEN_STORAGE_KEY = "grain.next.inbox.seen";
-// POLL_MS backs the event stream up: notifications and host-script
-// approvals have no events of their own yet (design doc, "Prototype
-// gaps"), so the queue is also read again on a timer.
-export const POLL_MS = 15000;
+// POLL_MS backs the event stream up. Tasks, notifications and
+// host-script approvals all have events (GRAIN_EVENT_TYPES), so the
+// timer only catches what the stream cannot say: a dropped connection,
+// or a host-script call that ran past its deadline unanswered.
+export const POLL_MS = 60000;
 
 function loadSeen(): Set<string> {
   try {
