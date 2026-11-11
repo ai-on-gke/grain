@@ -100,44 +100,51 @@ func TestReadToken(t *testing.T) {
 	}
 }
 
-func TestDefaultAllowlist(t *testing.T) {
-	stage := t.TempDir()
-	content := defaultAllowlist(stage, "https://grain.example.com", "/opt/agy/bin/agy")
+func renderTestAllowlist(t *testing.T, stage, server, binPath string) string {
+	t.Helper()
+	entry := hostd.CLITemplateEntry{
+		Name:       "agy",
+		Candidates: []string{binPath},
+		Env:        []string{"HOME"},
+		PassEnv:    hostd.ProxyVars,
+	}
+	content, err := hostd.RenderAgentdAllowlist(Program, server, "", stage, []hostd.ResolvedCLI{{Entry: entry, Path: binPath}}, hostd.ThisHello(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+func TestOfflineAllowlistTemplate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stage := filepath.Join(home, ".grain", "hostd-stage")
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+
+	// With nothing executable on $PATH or ~/.local/bin, offline fallback resolves nothing.
+	if got := offlineAllowlistTemplate().ResolveAll(home, lookPath, executable); len(got) != 0 {
+		t.Fatalf("ResolveAll with nothing executable = %+v, want none", got)
+	}
+
+	// Finds claude or agy on $PATH without needing a specific CLI compiled in.
+	claudeBin := filepath.Join(bin, "claude")
+	writeFile(t, claudeBin, "#!/bin/sh\n", 0o755)
+	content, err := AllowlistFromTemplate(offlineAllowlistTemplate(), hostd.ThisHello(""), home, stage, "https://grain.example.com")
+	if err != nil {
+		t.Fatalf("AllowlistFromTemplate: %v", err)
+	}
 	p := filepath.Join(t.TempDir(), "agentd.yaml")
 	writeFile(t, p, content, 0o644)
 	if err := checkAgentsOnly(p, owners()); err != nil {
-		t.Fatalf("the default allowlist does not pass checkAgentsOnly: %v\n%s", err, content)
+		t.Fatalf("rendered offline allowlist failed checkAgentsOnly: %v\n%s", err, content)
 	}
 	a, err := hostd.LoadAllowlist(p, owners())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := a.CLIs["agy"]; e == nil || e.Path != "/opt/agy/bin/agy" {
-		t.Fatalf("agy entry = %+v, want path /opt/agy/bin/agy", e)
-	}
-}
-
-func TestFindAgy(t *testing.T) {
-	home := t.TempDir()
-	bin := t.TempDir()
-	t.Setenv("PATH", bin)
-	none := func(string) bool { return false }
-	if got := findAgy(home, none); got != "" {
-		t.Fatalf("findAgy with nothing executable = %q, want none", got)
-	}
-	// On $PATH.
-	writeFile(t, filepath.Join(bin, "agy"), "#!/bin/sh\n", 0o755)
-	if got := findAgy(home, executable); got != filepath.Join(bin, "agy") {
-		t.Fatalf("findAgy = %q, want the one on $PATH", got)
-	}
-	// A registered path is tried first.
-	registered := filepath.Join(t.TempDir(), "cli")
-	writeFile(t, registered, "#!/bin/sh\n", 0o755)
-	old := agyPaths
-	t.Cleanup(func() { agyPaths = old })
-	RegisterAgyPath(registered)
-	if got := findAgy(home, executable); got != registered {
-		t.Fatalf("findAgy = %q, want the registered %s", got, registered)
+	if e := a.CLIs["claude"]; e == nil || e.Path != claudeBin {
+		t.Fatalf("claude entry = %+v, want path %s", e, claudeBin)
 	}
 }
 
@@ -182,13 +189,17 @@ func TestRefusesRoot(t *testing.T) {
 	if code := install([]string{"-server", "https://grain.example.com"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "not root") {
 		t.Errorf("install as root = %d, %q; want 2 and a refusal", code, errOut.String())
 	}
+	errOut.Reset()
+	if code := allow([]string{"-server", "https://grain.example.com", "claude"}, strings.NewReader("y\n"), &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "not root") {
+		t.Errorf("allow as root = %d, %q; want 2 and a refusal", code, errOut.String())
+	}
 }
 
 func TestRunCheckAndBuild(t *testing.T) {
 	notRoot(t)
 	dir := t.TempDir()
 	p := filepath.Join(dir, "agentd.yaml")
-	writeFile(t, p, defaultAllowlist(dir, "https://grain.example.com", "/bin/true"), 0o644)
+	writeFile(t, p, renderTestAllowlist(t, dir, "https://grain.example.com", "/bin/true"), 0o644)
 	var out, errOut bytes.Buffer
 	if code := run([]string{"-allowlist", p, "-check"}, &out, &errOut); code != 0 {
 		t.Fatalf("-check = %d: %s", code, errOut.String())
@@ -216,7 +227,7 @@ func TestRunNeedsServerAndToken(t *testing.T) {
 	notRoot(t)
 	dir := t.TempDir()
 	p := filepath.Join(dir, "agentd.yaml")
-	writeFile(t, p, defaultAllowlist(dir, "https://grain.example.com", "/bin/true"), 0o644)
+	writeFile(t, p, renderTestAllowlist(t, dir, "https://grain.example.com", "/bin/true"), 0o644)
 	t.Setenv(TokenEnv, "")
 	var out, errOut bytes.Buffer
 	if code := run([]string{"-allowlist", p}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "-server is required") {
