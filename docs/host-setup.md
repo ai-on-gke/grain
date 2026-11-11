@@ -23,6 +23,13 @@ sudo ./scripts/setup.sh --upgrade-allowed-branches 'main,latest,release/*'
 
 Patterns use comma-separated `path.Match` syntax (`*` does not cross `/`), or `**` to allow any branch. Because an upgrade runs code built from the target branch, `**` is always an explicit opt-in.
 
+### Cancelling an upgrade, grace window, and rollback
+
+- **Manual grace window:** manual upgrades started from `[Settings → Upgrade](/settings/upgrade)`, `POST /api/upgrade`, or `grain upgrade start` wait for a short countdown (`-upgrade-grace-window` / `GRAIN_UPGRADE_GRACE_WINDOW`, default `10s`, `0` to disable) before pulling, building, or checking the target build. Scheduled upgrades (`-after-tasks-finish`) skip that countdown because they can already be cancelled while draining (`DELETE /api/upgrade/scheduled` or `grain upgrade cancel -scheduled`).
+- **Cancelling an in-progress upgrade:** while an upgrade is in its grace window or running any staging step before cut-over (pull/checkout, build, signature verification, health check, sandbox image preparation, schema check/export, or cursor flush), click **Cancel upgrade** in `[Settings → Upgrade](/settings/upgrade)`, run `grain upgrade cancel [-reason <why>]`, or call `DELETE /api/upgrade/current` (`deployment:upgrade`, recorded in `config_audit`). Cancellation cleans up newly pulled or tagged images, check pods, temporary files, and prepared schema exports, re-adopts any runs flushed from run hosts or the host agent, lifts the upgrade queue hold, and finishes in the `cancelled` phase.
+- **Point of no return:** once the image reference file (`/etc/grain/image.env`), Kubernetes `Deployment`, or installed binary has been rewritten and the restart has begun, `DELETE /api/upgrade/current` returns `409 Conflict` (`restarting onto <target> — too late to cancel; upgrade back to <previous> afterwards`) and **Cancel upgrade** is disabled with the same message.
+- **One-click rollback:** each upgrade persists the digest-pinned image reference (or release/commit on source installs) that it replaced. After an upgrade completes, `[Settings → Upgrade](/settings/upgrade)` displays the replaced build with **Roll back to `<previous>`**, and `grain upgrade rollback` starts the same rollback from the CLI.
+
 ## Sandboxing and the host agent
 
 - **Sandboxes:** every task run gets an isolated sandbox—a [Granule](https://github.com/gke-labs/granule) VM on hosts with `/dev/kvm`, or a local Docker container when installed with `GRAIN_CONTAINER_SANDBOXES=1`. Container sandboxes are fenced from the host, local networks, and cloud metadata servers via `nftables` (`-container-sandbox-fence`, defaulting to `auto`). When `nft` is unavailable, tasks holding external capability grants are refused until fencing is available.

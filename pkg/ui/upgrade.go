@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -121,9 +122,19 @@ type upgradeStatusResponse struct {
 	// "running" for the twenty minutes a cold build takes. Absent on a
 	// status file an older grain wrote, which is why the pane treats it
 	// as optional.
-	Steps      []upgradeStepResponse `json:"steps,omitempty"`
-	StartedAt  *time.Time            `json:"startedAt,omitempty"`
-	FinishedAt *time.Time            `json:"finishedAt,omitempty"`
+	Steps               []upgradeStepResponse `json:"steps,omitempty"`
+	StartedAt           *time.Time            `json:"startedAt,omitempty"`
+	FinishedAt          *time.Time            `json:"finishedAt,omitempty"`
+	GraceUntil          *time.Time            `json:"graceUntil,omitempty"`
+	GraceWindowSeconds  int                   `json:"graceWindowSeconds,omitempty"`
+	Cancellable         bool                  `json:"cancellable,omitempty"`
+	CancelBlockedReason string                `json:"cancelBlockedReason,omitempty"`
+	CancelledBy         string                `json:"cancelledBy,omitempty"`
+	CancelReason        string                `json:"cancelReason,omitempty"`
+	PreviousImage       string                `json:"previousImage,omitempty"`
+	PreviousImageLabel  string                `json:"previousImageLabel,omitempty"`
+	PreviousRelease     string                `json:"previousRelease,omitempty"`
+	PreviousCommit      string                `json:"previousCommit,omitempty"`
 	// InFlightRuns is how many runs are going right now, so the pane can
 	// say what pressing the button costs before it is pressed
 	// (grain/task-213). An upgrade ends in a restart, and a restart
@@ -324,21 +335,34 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 		channel = upgrade.ChannelForRef(r.Ref)
 	}
 	resp := upgradeStatusResponse{
-		Enabled:      true,
-		Mode:         string(up.Mode()),
-		Running:      running,
-		Channel:      channel,
-		Branch:       status.Branch,
-		Phase:        string(status.Phase),
-		Detail:       status.Detail,
-		Unchanged:    status.Unchanged,
-		Steps:        steps,
-		StartedAt:    status.StartedAt,
-		FinishedAt:   status.FinishedAt,
-		InFlightRuns: inFlightRuns,
-		Scheduled:    scheduled,
+		Enabled:            true,
+		Mode:               string(up.Mode()),
+		Running:            running,
+		Channel:            channel,
+		Branch:             status.Branch,
+		Phase:              string(status.Phase),
+		Detail:             status.Detail,
+		Unchanged:          status.Unchanged,
+		Steps:              steps,
+		StartedAt:          status.StartedAt,
+		FinishedAt:         status.FinishedAt,
+		GraceUntil:         status.GraceUntil,
+		CancelledBy:        status.CancelledBy,
+		CancelReason:       status.CancelReason,
+		PreviousImage:      status.PreviousImage,
+		PreviousImageLabel: upgrade.ShortImageRef(status.PreviousImage, status.Branch),
+		PreviousRelease:    status.PreviousRelease,
+		PreviousCommit:     status.PreviousCommit,
+		InFlightRuns:       inFlightRuns,
+		Scheduled:          scheduled,
 		// The record that this upgrade crossed editions on purpose.
 		EditionSwitch: status.EditionSwitch,
+	}
+	if cu, ok := up.(cancellableUpgrader); ok {
+		resp.Cancellable, resp.CancelBlockedReason = cu.CancelState(status)
+		if gw := cu.GraceWindow(); gw > 0 {
+			resp.GraceWindowSeconds = int(gw / time.Second)
+		}
 	}
 	if iu, ok := up.(imageUpgrader); ok {
 		if target, ok := iu.ImageTarget(); ok {
@@ -378,6 +402,12 @@ type retractedReleaseReporter interface {
 type imageUpgrader interface {
 	StartImageWith(branch, image string, opts upgrade.ImageOptions) error
 	ImageTarget() (upgrade.ImageTarget, bool)
+}
+
+type cancellableUpgrader interface {
+	Cancel(by, reason string) (bool, error)
+	CancelState(status upgrade.Status) (cancellable bool, blockedReason string)
+	GraceWindow() time.Duration
 }
 
 // inFlightRuns is how many runs this deployment has going, for the
@@ -946,4 +976,89 @@ type cancelScheduledUpgradeResponse struct {
 	// Cancelled is whether this call is what called the upgrade off, as
 	// against finding none scheduled.
 	Cancelled bool `json:"cancelled"`
+}
+
+// CancelUpgradeRequest is the optional body of DELETE /api/upgrade/current.
+type CancelUpgradeRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+func flattenAuditText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.TrimSpace(s)
+}
+
+// handleCancelCurrentUpgrade answers DELETE /api/upgrade/current: stops an
+// upgrade that is currently in progress before its point of no return, records
+// who cancelled it and why in config_audit, and returns 409 Conflict once
+// cut-over or restart has begun.
+func (s *Server) handleCancelCurrentUpgrade(w http.ResponseWriter, r *http.Request) {
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
+		return
+	}
+	cu, ok := s.tasks.Config.Upgrader.(cancellableUpgrader)
+	if !ok {
+		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+		return
+	}
+	var req CancelUpgradeRequest
+	if !readOptionalJSON(w, r, &req) {
+		return
+	}
+	reason := flattenAuditText(req.Reason)
+	if reason == "" {
+		reason = flattenAuditText(r.URL.Query().Get("reason"))
+	}
+
+	by := s.tasks.requestActor(r.Context())
+	actorLabel := strings.TrimSpace(by.Actor.ID)
+	if by.Actor.Kind == model.PrincipalAgent && actorLabel != "" {
+		actorLabel = "task " + actorLabel
+	}
+	if actorLabel == "" {
+		actorLabel = model.PrincipalString(by.Actor)
+	}
+
+	cancelled, err := cu.Cancel(actorLabel, reason)
+	if err != nil {
+		if tooLate, isLate := upgrade.IsTooLate(err); isLate {
+			writeError(w, http.StatusConflict, apierror.Public(tooLate.Error()))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	status, err := s.tasks.Config.Upgrader.Status()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if cancelled && s.tasks.Store != nil {
+		target := status.Branch
+		if target == "" {
+			target = "deployment"
+		}
+		summary := fmt.Sprintf("cancelled upgrade to %s", flattenAuditText(target))
+		if reason != "" {
+			summary += fmt.Sprintf(" (%s)", reason)
+		}
+		if _, auditErr := s.tasks.Store.RecordConfigAudit(context.WithoutCancel(r.Context()), model.ConfigAuditEntry{
+			At:         s.tasks.now(),
+			By:         by.Actor,
+			OnBehalfOf: by.OnBehalfOf,
+			Surface:    "upgrade",
+			Summary:    summary,
+		}); auditErr != nil {
+			log.Printf("ui: recording cancelled upgrade in config_audit: %v", auditErr)
+		}
+	}
+	resp := s.upgradeStatusResponse(r, status)
+	writeJSON(w, http.StatusOK, cancelScheduledUpgradeResponse{
+		upgradeStatusResponse: resp,
+		Cancelled:             cancelled,
+	})
 }

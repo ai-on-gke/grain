@@ -226,7 +226,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Upgrade now / scheduled | Action — `POST /api/upgrade`, `DELETE /api/upgrade/scheduled` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
+| Upgrade now / cancel / rollback / scheduled | Action — `POST /api/upgrade`, `DELETE /api/upgrade/current`, `DELETE /api/upgrade/scheduled` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
 | `upgradeCheckMode`, `upgradeCheckPausesPipeline`, `autoUpgradeOn`, `autoUpgradeChannel`, `autoUpgradeTime`, `autoUpgradeMinIntervalHours` | Yes — General → Updates; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
 | Power (restart, reboot, shutdown) | Action — System → Power; `POST /api/host/{restart,reboot,shutdown}` | No — action | Unlocked (Action) | No | |
 

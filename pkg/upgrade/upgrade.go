@@ -133,6 +133,19 @@ type Status struct {
 	Steps      []Step     `json:"steps,omitempty"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	// GraceUntil is when a manual upgrade's initial countdown expires and work
+	// begins; nil once the countdown has finished or when GraceWindow is 0.
+	GraceUntil *time.Time `json:"graceUntil,omitempty"`
+	// CancelledBy and CancelReason record who cancelled a PhaseCancelled
+	// upgrade and why.
+	CancelledBy  string `json:"cancelledBy,omitempty"`
+	CancelReason string `json:"cancelReason,omitempty"`
+	// PreviousImage, PreviousRelease and PreviousCommit record what this
+	// deployment was running before this upgrade started, persisted across the
+	// restart so the Upgrade pane can offer one-click rollback afterwards.
+	PreviousImage   string `json:"previousImage,omitempty"`
+	PreviousRelease string `json:"previousRelease,omitempty"`
+	PreviousCommit  string `json:"previousCommit,omitempty"`
 	// Process identifies the process running this upgrade (processID),
 	// so a later one reading "running" can tell a live upgrade from one
 	// a restart cut short -- see Upgrader.Status.
@@ -382,6 +395,10 @@ type Config struct {
 	// or "" / "oss" for core). When empty, Targets uses the running
 	// image tag's edition or pkg/version's own Edition.
 	Edition string
+	// GraceWindow, when positive, adds a short countdown between confirming a
+	// manual upgrade (Start / StartImage) and starting its work, during which
+	// the Upgrade pane shows a countdown with Cancel. Zero disables it.
+	GraceWindow time.Duration
 }
 
 // defaultTimeout is Config.Timeout's fallback when left at its zero
@@ -430,7 +447,8 @@ func newCommand(ctx context.Context, dir, name string, args ...string) *exec.Cmd
 
 // Upgrader runs at most one upgrade at a time against a Config.
 type Upgrader struct {
-	cfg Config
+	cfg       Config
+	startedAt time.Time
 
 	mu sync.Mutex
 	// done is both "is an upgrade this process started still in flight"
@@ -448,7 +466,14 @@ type Upgrader struct {
 	// flight to make (StartImageWith's SwitchEdition, edition.go); nil
 	// for an upgrade that must stay in this deployment's edition, and
 	// reset with done.
-	switching *EditionSwitch
+	switching     *EditionSwitch
+	cancelFn      context.CancelFunc
+	cancelled     bool
+	cancelledBy   string
+	cancelReason  string
+	irreversible  bool
+	targetLabel   string
+	previousLabel string
 
 	// tags caches the registry's tag list for Targets.
 	tags tagCache
@@ -463,7 +488,7 @@ type Upgrader struct {
 // anything wrong the first time it is actually asked to do something,
 // the same as most of this package's callers.
 func New(cfg Config) *Upgrader {
-	u := &Upgrader{cfg: cfg}
+	u := &Upgrader{cfg: cfg, startedAt: time.Now().UTC()}
 	u.migrateLegacyImageSource()
 	return u
 }
@@ -584,6 +609,11 @@ func (u *Upgrader) checkBranch(branch string) error {
 	if err := validateBranch(branch); err != nil {
 		return err
 	}
+	// No exception for the PreviousRelease or PreviousCommit a rollback
+	// names: those are branch names here like any other, and a branch
+	// named after the commit or release this deployment used to run is
+	// one anybody who can push could create (see AllowedBranches). Only an
+	// image rollback, pinned by digest, skips this (isRecordedRollbackImage).
 	allowed := u.AllowedBranches()
 	for _, pattern := range allowed {
 		pattern = strings.TrimSpace(pattern)
@@ -707,6 +737,7 @@ const interruptedDetail = "interrupted: grain restarted before this upgrade fini
 // Steps it never reached stay pending, the same as on any other failure.
 func interrupt(status Status, now time.Time) Status {
 	status.Phase = PhaseFailed
+	status.GraceUntil = nil
 	status.Detail = interruptedDetail
 	status.FinishedAt = &now
 	steps := make([]Step, len(status.Steps))
@@ -784,6 +815,13 @@ func (u *Upgrader) release() {
 	u.done = nil
 	u.override = ""
 	u.switching = nil
+	u.cancelFn = nil
+	u.cancelled = false
+	u.cancelledBy = ""
+	u.cancelReason = ""
+	u.irreversible = false
+	u.targetLabel = ""
+	u.previousLabel = ""
 }
 
 // Mode reports which pipeline Start would run, without running it --
@@ -856,7 +894,7 @@ func (u *Upgrader) Running() (Running, error) {
 // Every step short of RestartCmd itself failing stops here and records
 // PhaseFailed with that step's error as Detail; RestartCmd, if it
 // succeeds, is expected to end this process before run ever returns.
-func (u *Upgrader) run(branch string, status Status) {
+func (u *Upgrader) run(branch string, status Status, graceWindow time.Duration) {
 	// Registered first, so it runs last: everything below it -- the
 	// progress's own stop, which waits for the flush loop to be gone --
 	// has finished by the time Done's channel closes, which is what makes
@@ -868,10 +906,13 @@ func (u *Upgrader) run(branch string, status Status) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+graceWindow)
 	defer cancel()
+	u.mu.Lock()
+	u.bindCancelLocked(cancel)
+	u.mu.Unlock()
 
-	p := newProgress(u.cfg.StatusFile, branch, status, u.plan())
+	p := newProgress(u.cfg.StatusFile, branch, status, u.planSteps(graceWindow > 0))
 	defer p.stop()
 	p.logf("starting: %s (%s to do it in)", u.description(), shortDuration(timeout))
 
@@ -880,21 +921,51 @@ func (u *Upgrader) run(branch string, status Status) {
 	// Config.Hold, and hold's own comment for why this is never nil.
 	release := u.hold(p, branch)
 
-	detail, err := u.stage(ctx, p, branch)
+	if err := u.runGraceWindow(ctx, p, status.GraceUntil, graceWindow); err != nil {
+		release()
+		if u.isCancelled() {
+			by, reason := u.cancelActor()
+			p.cancel(by, reason)
+			return
+		}
+		p.fail(err)
+		return
+	}
+
+	staged, err := u.stage(ctx, p, branch)
 	if err != nil {
 		release()
+		if u.isCancelled() {
+			by, reason := u.cancelActor()
+			p.cancel(by, reason)
+			return
+		}
 		p.fail(err)
 		return
 	}
 	if p.isUnchanged() {
 		release()
-		p.unchanged(detail)
+		p.unchanged(staged.detail)
 		return
 	}
 
 	restarting := u.restarts()
 	if len(u.cfg.RestartCmd) == 0 {
-		p.succeed(detail, restarting)
+		// On ModeSource without RestartCmd, markIrreversible has not yet run
+		// (ModeImage and ModeKube mark it before stepRecord / stepRollout).
+		if !u.markIrreversible() {
+			if staged.rollback != nil {
+				staged.rollback()
+			}
+			release()
+			by, reason := u.cancelActor()
+			p.cancel(by, reason)
+			return
+		}
+		if staged.commit != nil {
+			staged.commit()
+		}
+		p.succeed(staged.detail, restarting)
 		if !restarting {
 			// Nothing is coming up to release the hold on the far side
 			// of a restart, because there is no restart: this process
@@ -915,33 +986,26 @@ func (u *Upgrader) run(branch string, status Status) {
 		return
 	}
 
-	// Best-effort, and its result is never observed: on a real
-	// deployment this command replaces the process running this very
-	// goroutine (systemctl restart on the unit this binary runs under),
-	// so "it ran and this line never got to return" is the success case,
-	// not a bug. It is still logged before it runs, because that log
-	// line is the last thing this process writes about the upgrade and
-	// so is where an operator reading the journal sees the handover: the
-	// next lines in it come from the new build's own startup, or -- if
-	// the restart failed -- do not come at all.
-	//
-	// A deadline of its own rather than whatever is left of the upgrade's:
-	// everything this upgrade had to do is done by the time it gets here,
-	// and one that spent the whole of Config.Timeout on a cold build would
-	// otherwise have its restart killed the instant it started and be
-	// reported as "staged but the restart failed" when nothing was ever
-	// actually tried.
-	//
-	// The flush and the restart step's start come before succeed, not
-	// after it: PhaseOK is what the upgrade check reads as "a new build
-	// is up" (orchestrator.reconcileUpgradeCheck, Status.RestartPending),
-	// and written any earlier it let this outgoing process file that
-	// check itself while the flush was still waiting on in-flight work --
-	// with this build's hash, and no restart gap or adoption to report
-	// (task 1937).
-	resume := u.flush(p)
+	resume := staged.resumeFlush
+	if resume == nil {
+		resume = u.flush(ctx, p)
+	}
+	if !u.markIrreversible() {
+		resume()
+		if staged.rollback != nil {
+			staged.rollback()
+		}
+		release()
+		by, reason := u.cancelActor()
+		p.cancel(by, reason)
+		return
+	}
+	if staged.commit != nil {
+		staged.commit()
+	}
+
 	p.start(stepRestart)
-	p.succeed(detail, true)
+	p.succeed(staged.detail, true)
 	if u.cfg.BeforeRestart != nil {
 		u.cfg.BeforeRestart(branch)
 	}
@@ -1014,14 +1078,14 @@ var flushTimeout = 30 * time.Second
 
 // flush runs Config.Flush and hands back its resume, which is never nil
 // for the same reason hold's release is not.
-func (u *Upgrader) flush(p *progress) func() {
+func (u *Upgrader) flush(ctx context.Context, p *progress) func() {
 	if u.cfg.Flush == nil {
 		return func() {}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+	fctx, cancel := context.WithTimeout(ctx, flushTimeout)
 	defer cancel()
-	resume, err := u.cfg.Flush(ctx)
-	if err != nil {
+	resume, err := u.cfg.Flush(fctx)
+	if err != nil && !u.isCancelled() {
 		p.logf("could not flush every run's spool cursor before the restart: %v -- restarting anyway; "+
 			"the daemon's own stop detaches what is left", err)
 	}
@@ -1099,7 +1163,14 @@ var restartTimeout = 5 * time.Minute
 // they are reached (progress.skip), so the pane shows a health check
 // that was configured away rather than silently not showing one at all.
 func (u *Upgrader) plan() []string {
+	return u.planSteps(false)
+}
+
+func (u *Upgrader) planSteps(withGrace bool) []string {
 	var steps []string
+	if withGrace {
+		steps = append(steps, stepGrace)
+	}
 	switch u.Mode() {
 	case ModeKube:
 		// No pull step: the cluster pulls, and it does it as part of the
@@ -1109,11 +1180,11 @@ func (u *Upgrader) plan() []string {
 		// image path's own, asked of a pod rather than of a container:
 		// the args are in the Deployment spec and the image under them
 		// moves with every rollout (kube.go's checkKubeFlags).
-		steps = []string{stepVerify, stepHealthCheck, stepFlags, stepSandbox, stepPriorityClasses, stepSchema, stepRollout}
+		steps = append(steps, stepVerify, stepHealthCheck, stepFlags, stepSandbox, stepPriorityClasses, stepSchema, stepRollout)
 	case ModeImage:
-		steps = []string{stepPull, stepVerify, stepHealthCheck, stepFlags, stepSandbox, stepSchema, stepRecord}
+		steps = append(steps, stepPull, stepVerify, stepHealthCheck, stepFlags, stepSandbox, stepSchema, stepRecord)
 	default:
-		steps = []string{stepCheckout, stepBuild, stepInstall, stepHealthCheck, stepSchema}
+		steps = append(steps, stepCheckout, stepBuild, stepInstall, stepHealthCheck, stepSchema)
 	}
 	if len(u.cfg.RestartCmd) > 0 {
 		steps = append(steps, stepRestart)
@@ -1149,10 +1220,18 @@ func (u *Upgrader) description() string {
 // recorded -- since the two paths leave behind genuinely different
 // things and a status saying "built" on a host that never built
 // anything would be a lie an operator has to decode.
-func (u *Upgrader) stage(ctx context.Context, p *progress, branch string) (string, error) {
+type stagedUpgrade struct {
+	detail      string
+	resumeFlush func()
+	commit      func()
+	rollback    func()
+}
+
+func (u *Upgrader) stage(ctx context.Context, p *progress, branch string) (stagedUpgrade, error) {
 	switch u.Mode() {
 	case ModeKube:
-		return u.stageKube(ctx, p, branch)
+		detail, err := u.stageKube(ctx, p, branch)
+		return stagedUpgrade{detail: detail}, err
 	case ModeImage:
 		return u.stageImage(ctx, p, branch)
 	}
@@ -1162,7 +1241,7 @@ func (u *Upgrader) stage(ctx context.Context, p *progress, branch string) (strin
 // stageImage is the container path (image.go): pull from an OCI registry,
 // verify and health-check, and only then point the deployment's ref file at
 // the validated image.
-func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (string, error) {
+func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (stagedUpgrade, error) {
 	prevRef, _ := u.readImageRef()
 	var prevSandbox string
 	if prevRef != "" && len(u.cfg.Image.SandboxImageArgs) > 0 {
@@ -1175,26 +1254,63 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		prevSandbox, _, _ = u.sandboxImage(ctx, p, prevRef)
 	}
 
+	var (
+		tag            string
+		ref            string
+		sandbox        string
+		mirroredTarget string
+		schemaPrepared bool
+	)
+	cleanupOnCancel := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if u.cfg.Image.RefFile != "" {
+			_ = os.Remove(u.cfg.Image.RefFile + ".tmp")
+		}
+		if schemaPrepared {
+			u.discardSchemaUpgrade()
+			schemaPrepared = false
+		}
+		if mirroredTarget != "" && !imageKeptBy(mirroredTarget, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
+			u.removeImageForCancel(cleanupCtx, p, mirroredTarget)
+		}
+		if sandbox != "" && !imageKeptBy(sandbox, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) {
+			u.removeImageForCancel(cleanupCtx, p, sandbox)
+		}
+		if tag != "" && !imageKeptBy(tag, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin) &&
+			(ref == "" || !imageKeptBy(ref, prevRef, prevSandbox, u.cfg.Image.SandboxImagePin)) {
+			u.removeImageForCancel(cleanupCtx, p, tag)
+		}
+	}
+	failImage := func(err error) (stagedUpgrade, error) {
+		if u.isCancelled() {
+			cleanupOnCancel()
+		}
+		return stagedUpgrade{}, err
+	}
+
 	p.start(stepPull)
 	override := u.overrideRef()
-	tag := override
+	tag = override
 	if tag == "" {
 		var err error
 		if tag, err = u.imageRef(branch); err != nil {
-			return "", err
+			return stagedUpgrade{}, err
 		}
 	}
 
 	pullErr := u.pullImage(ctx, p, stepPull, tag)
-	var ref string
 	if pullErr == nil {
 		ref, pullErr = u.pinImage(ctx, p, stepPull, tag)
 	}
 	if pullErr != nil {
 		if hint := registryHint(tag, installtrack.DefaultRepository(u.cfg.Image.Track), pullErr); hint != "" {
-			return "", fmt.Errorf("pull: %w -- %s", pullErr, hint)
+			return failImage(fmt.Errorf("pull: %w -- %s", pullErr, hint))
 		}
-		return "", fmt.Errorf("pull: %w", pullErr)
+		return failImage(fmt.Errorf("pull: %w", pullErr))
+	}
+	if err := ctx.Err(); err != nil {
+		return failImage(err)
 	}
 
 	p.done(stepPull, "pulled "+ref)
@@ -1210,9 +1326,9 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 	}
 	if same {
 		if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" && override == "" {
-			return p.markUnchanged(msg), nil
+			return stagedUpgrade{detail: p.markUnchanged(msg)}, nil
 		}
-		return p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, ref)), nil
+		return stagedUpgrade{detail: p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, ref))}, nil
 	}
 
 	// Who published it, before the health check below runs it: the pin
@@ -1228,7 +1344,7 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		var verified []string
 		if len(u.cfg.Image.VerifyCmd) > 0 {
 			if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
-				return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+				return failImage(fmt.Errorf("%w; leaving this deployment on the image it already runs", err))
 			}
 			verified = append(verified, ref+" is signed")
 		} else if u.cfg.Image.ReviewedMerge == nil {
@@ -1240,14 +1356,14 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 		// signature verification, this refuses.
 		reviewed, err := u.checkImageReviewedMerge(ctx, p, stepVerify, ref)
 		if err != nil {
-			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
+			return failImage(fmt.Errorf("%w; leaving this deployment on the image it already runs", err))
 		}
 		if reviewed != "" {
 			verified = append(verified, reviewed)
 		}
 		note, err := u.checkImageEdition(ctx, p, ref)
 		if err != nil {
-			return "", err
+			return failImage(err)
 		}
 		if note != "" {
 			verified = append(verified, note)
@@ -1264,11 +1380,14 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 			// Nothing to roll back: the ref file below is still
 			// untouched, so this deployment goes on running exactly the
 			// image it was already running.
-			return "", fmt.Errorf("health check failed on the pulled image, leaving this deployment on the image it already runs: %w", err)
+			return failImage(fmt.Errorf("health check failed on the pulled image, leaving this deployment on the image it already runs: %w", err))
 		}
 		p.done(stepHealthCheck, "the pulled image runs")
 	} else {
 		p.skip(stepHealthCheck, "no health check configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return failImage(err)
 	}
 
 	detail := "pulled " + ref
@@ -1282,6 +1401,9 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 	if len(u.cfg.Image.FlagNamesArgs) > 0 && len(u.cfg.Image.UnitFlags) > 0 {
 		p.start(stepFlags)
 		missing, err := u.checkImageFlags(ctx, p, ref)
+		if cerr := ctx.Err(); cerr != nil {
+			return failImage(cerr)
+		}
 		if note := reportFlags(p, ref, u.cfg.Image.UnitFlags, imageFlagFix, missing, err); note != "" {
 			detail += "; " + note
 		}
@@ -1293,51 +1415,35 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 	// rather than after, for the same reason the health check comes
 	// first: everything this deployment will need has to be on the host
 	// already by the time the ref file names the new image.
-	var sandbox string
 	if len(u.cfg.Image.SandboxImageArgs) > 0 {
 		p.start(stepSandbox)
 		var why string
 		var err error
 		sandbox, why, err = u.sandboxImage(ctx, p, ref)
 		if err != nil {
-			// Not "this build runs no sandbox" -- this host could not put
-			// the question at all (sandboxImage). Cutting over on that
-			// would point the deployment at a build whose guest image
-			// nothing has pulled, and nothing needs undoing to stop: the
-			// ref file is still untouched, as it is for a failed health
-			// check.
-			return "", fmt.Errorf("asking %s which sandbox image it expects, so nothing was pulled to keep in step and this deployment stays on the image it already runs: %w", ref, err)
+			return failImage(fmt.Errorf("asking %s which sandbox image it expects, so nothing was pulled to keep in step and this deployment stays on the image it already runs: %w", ref, err))
 		}
 		if sandbox == "" {
-			// Why it names none, not just that it names none: the step is
-			// where the difference between a rollback to a build older
-			// than the question and a deployment that has quietly stopped
-			// keeping its guest in step is visible.
 			p.done(stepSandbox, ref+" names no sandbox image -- "+why)
 		} else {
 			if err := u.pullImage(ctx, p, stepSandbox, sandbox); err != nil {
-				return "", fmt.Errorf("pulling the sandbox image %s that %s expects: %w", sandbox, ref, err)
+				return failImage(fmt.Errorf("pulling the sandbox image %s that %s expects: %w", sandbox, ref, err))
 			}
-			// Signed by the same key as the grain image, and checked
-			// before the pull counts. What was pulled is what is
-			// checked, by its digest. A release build names its sandbox
-			// by digest already (scripts/release-images.sh), so that
-			// digest is both the one checked here and the one every VM
-			// is later created from; a build that names a bare tag is
-			// checked by whatever the tag pulled, and its VMs follow
-			// the tag (docs/image-signing.md).
 			if len(u.cfg.Image.VerifyCmd) > 0 {
 				pinned, err := u.pinImage(ctx, p, stepSandbox, sandbox)
 				if err == nil {
 					err = verifyPinned(ctx, p, stepSandbox, u.cfg.Image.VerifyCmd, pinned)
 				}
 				if err != nil {
-					return "", fmt.Errorf("the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, ref, err)
+					return failImage(fmt.Errorf("the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, ref, err))
 				}
+			}
+			if mirror := repositoryOf(strings.TrimSpace(u.cfg.Image.SandboxImageMirror)); mirror != "" && mirror != repositoryOf(sandbox) {
+				mirroredTarget = MirrorSandboxRef(sandbox, mirror)
 			}
 			mirroredSandbox, err := u.mirrorSandboxImage(ctx, p, stepSandbox, sandbox)
 			if err != nil {
-				return "", fmt.Errorf("mirroring the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, ref, err)
+				return failImage(fmt.Errorf("mirroring the sandbox image %s that %s expects, so this deployment stays on the image it already runs: %w", sandbox, ref, err))
 			}
 			detail += " and its sandbox image " + sandbox
 			mirrorNote := ""
@@ -1345,13 +1451,6 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 				mirrorNote = " (mirrored to " + mirroredSandbox + ")"
 				detail += mirrorNote
 			}
-			// A pin that is not what this build names means the pull
-			// above bought nothing: the daemon creates every VM from the
-			// pinned image, so the guest stays where it is while grain
-			// moves. Said on the step and again in the line the pane
-			// keeps afterwards, since "pulled X and its sandbox image Y"
-			// is otherwise read -- correctly, but wrongly -- as this
-			// deployment now running Y.
 			if unused := u.unusedSandboxNote(sandbox); unused != "" {
 				detail += unused
 				p.done(stepSandbox, "pulled "+sandbox+mirrorNote+unused)
@@ -1362,34 +1461,88 @@ func (u *Upgrader) stageImage(ctx context.Context, p *progress, branch string) (
 	} else {
 		p.skip(stepSandbox, "this deployment runs no sandbox containers")
 	}
+	if err := ctx.Err(); err != nil {
+		return failImage(err)
+	}
 
 	// Last before the cut-over, and deliberately: if this deployment's
 	// rows have to be written out for the new build to come back on
 	// them, the shorter the gap between reading them and restarting the
 	// process still writing them, the less of it is lost (schema.go, and
 	// pkg/cli/schemaupgrade.go on what that gap costs).
-	migrating, err := u.schemaStep(ctx, p, branch, imageRunner{u: u, ref: ref})
+	migrating, prepared, err := u.schemaStep(ctx, p, branch, imageRunner{u: u, ref: ref})
+	schemaPrepared = prepared
 	if err != nil {
-		return "", err
+		return failImage(err)
 	}
 	detail += migrating
 
+	var resume func()
+	if len(u.cfg.RestartCmd) > 0 {
+		resume = u.flush(ctx, p)
+	}
+	// Point of no return on the image pipeline: rewriting RefFile commits
+	// the unit's next start to the new image and prunes old images.
+	if !u.markIrreversible() {
+		if resume != nil {
+			resume()
+		}
+		cleanupOnCancel()
+		if cerr := ctx.Err(); cerr != nil {
+			return stagedUpgrade{}, cerr
+		}
+		return stagedUpgrade{}, context.Canceled
+	}
+
 	p.start(stepRecord)
 	if err := u.writeImageRef(ref); err != nil {
-		u.discardSchemaUpgrade()
-		return "", fmt.Errorf("recording %s: %w", u.cfg.Image.RefFile, err)
+		if schemaPrepared {
+			u.discardSchemaUpgrade()
+		}
+		if resume != nil {
+			resume()
+		}
+		return stagedUpgrade{}, fmt.Errorf("recording %s: %w", u.cfg.Image.RefFile, err)
 	}
-	u.cleanOldImages(ctx, p, ref, prevRef, sandbox, prevSandbox)
+	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), imageRunTimeout)
+	defer cleanCancel()
+	u.cleanOldImages(cleanCtx, p, ref, prevRef, sandbox, prevSandbox)
 	p.done(stepRecord, u.cfg.Image.RefFile+" now names "+ref)
-	return detail, nil
+	return stagedUpgrade{detail: detail, resumeFlush: resume}, nil
 }
 
 // stageBinary is the original path: fetch the branch into a checkout on
 // disk, build it, and install the result over the running binary.
-func (u *Upgrader) stageBinary(ctx context.Context, p *progress, branch string) (string, error) {
+func (u *Upgrader) stageBinary(ctx context.Context, p *progress, branch string) (stagedUpgrade, error) {
+	var (
+		hadPrevious    bool
+		installed      bool
+		schemaPrepared bool
+	)
+	cleanupOnCancel := func() {
+		if u.cfg.InstallPath != "" {
+			_ = os.Remove(u.cfg.InstallPath + ".new")
+		}
+		if schemaPrepared {
+			u.discardSchemaUpgrade()
+			schemaPrepared = false
+		}
+		if installed {
+			_ = u.rollbackInstalled(hadPrevious)
+			installed = false
+		}
+		u.removeBackup()
+	}
+	failBinary := func(err error) (stagedUpgrade, error) {
+		if u.isCancelled() {
+			cleanupOnCancel()
+		}
+		return stagedUpgrade{}, err
+	}
+
 	p.start(stepCheckout)
 	if err := u.checkout(ctx, p, branch); err != nil {
-		return "", fmt.Errorf("checkout: %w", err)
+		return failBinary(fmt.Errorf("checkout: %w", err))
 	}
 	head, err := u.headCommit(ctx)
 	if err != nil {
@@ -1397,66 +1550,81 @@ func (u *Upgrader) stageBinary(ctx context.Context, p *progress, branch string) 
 		// it just checked out is still an upgrade.
 		p.logf("%s: reading the commit just checked out: %v", stepCheckout, err)
 	}
+	if cerr := ctx.Err(); cerr != nil {
+		return failBinary(cerr)
+	}
 	p.done(stepCheckout, strings.TrimSpace(branch+" at "+head))
 	if same, ok := u.sameBinaryVersion(ctx, branch, head); ok {
-		return p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, same)), nil
+		return stagedUpgrade{detail: p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, same))}, nil
 	}
 
 	p.start(stepBuild)
 	if err := u.build(ctx, p); err != nil {
-		return "", fmt.Errorf("build: %w", err)
+		return failBinary(fmt.Errorf("build: %w", err))
 	}
 	p.done(stepBuild, u.cfg.BuiltBinary)
+	if cerr := ctx.Err(); cerr != nil {
+		return failBinary(cerr)
+	}
 
 	p.start(stepInstall)
-	hadPrevious, err := u.backupInstalled()
+	hadPrevious, err = u.backupInstalled()
 	if err != nil {
-		return "", fmt.Errorf("backing up previous binary: %w", err)
+		return failBinary(fmt.Errorf("backing up previous binary: %w", err))
 	}
 	if err := u.install(); err != nil {
-		// install writes a temp file and renames it, so a failure here
-		// leaves the binary that was already at InstallPath untouched --
-		// which makes the backup just taken a stale copy of it, and a
-		// large one, sitting beside it until some later upgrade happens
-		// to overwrite it.
 		u.removeBackup()
-		return "", fmt.Errorf("install: %w", err)
+		return failBinary(fmt.Errorf("install: %w", err))
 	}
+	installed = true
 	p.done(stepInstall, "installed to "+u.cfg.InstallPath)
+	if cerr := ctx.Err(); cerr != nil {
+		return failBinary(cerr)
+	}
 
 	if len(u.cfg.HealthCheckArgs) > 0 {
 		p.start(stepHealthCheck)
 		if err := u.healthCheck(ctx, p); err != nil {
+			if u.isCancelled() {
+				return failBinary(err)
+			}
 			if rerr := u.rollbackInstalled(hadPrevious); rerr != nil {
-				return "", fmt.Errorf("health check failed (%w) and rollback also failed: %v", err, rerr)
+				return stagedUpgrade{}, fmt.Errorf("health check failed (%w) and rollback also failed: %v", err, rerr)
 			}
+			installed = false
 			if hadPrevious {
-				return "", fmt.Errorf("health check failed on newly installed binary, rolled back to the previous one: %w", err)
+				return stagedUpgrade{}, fmt.Errorf("health check failed on newly installed binary, rolled back to the previous one: %w", err)
 			}
-			return "", fmt.Errorf("health check failed on newly installed binary, removed it (no previous binary to roll back to): %w", err)
+			return stagedUpgrade{}, fmt.Errorf("health check failed on newly installed binary, removed it (no previous binary to roll back to): %w", err)
 		}
 		p.done(stepHealthCheck, "the installed binary runs")
 	} else {
 		p.skip(stepHealthCheck, "no health check configured")
 	}
-
-	// The same question the image path asks, one step later because on
-	// this path the new build only exists once it is installed. The
-	// rollback is the same one a failed health check gets: the binary
-	// that was here comes back, and the restart that follows brings up
-	// the build whose store this still is.
-	migrating, err := u.schemaStep(ctx, p, branch, binaryRunner{u: u})
-	if err != nil {
-		if rerr := u.rollbackInstalled(hadPrevious); rerr != nil {
-			return "", fmt.Errorf("%w -- and rolling the install back also failed: %v", err, rerr)
-		}
-		if hadPrevious {
-			return "", fmt.Errorf("%w (rolled back to the binary that was here)", err)
-		}
-		return "", fmt.Errorf("%w (removed it -- there was no previous binary to roll back to)", err)
+	if cerr := ctx.Err(); cerr != nil {
+		return failBinary(cerr)
 	}
-	u.removeBackup()
-	return "built and installed" + migrating, nil
+
+	migrating, prepared, err := u.schemaStep(ctx, p, branch, binaryRunner{u: u})
+	schemaPrepared = prepared
+	if err != nil {
+		if u.isCancelled() {
+			return failBinary(err)
+		}
+		if rerr := u.rollbackInstalled(hadPrevious); rerr != nil {
+			return stagedUpgrade{}, fmt.Errorf("%w -- and rolling the install back also failed: %v", err, rerr)
+		}
+		installed = false
+		if hadPrevious {
+			return stagedUpgrade{}, fmt.Errorf("%w (rolled back to the binary that was here)", err)
+		}
+		return stagedUpgrade{}, fmt.Errorf("%w (removed it -- there was no previous binary to roll back to)", err)
+	}
+	return stagedUpgrade{
+		detail:   "built and installed" + migrating,
+		commit:   func() { u.removeBackup() },
+		rollback: cleanupOnCancel,
+	}, nil
 }
 
 // discardSchemaUpgrade calls the Discard hook, if this deployment has

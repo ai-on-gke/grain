@@ -85,6 +85,7 @@ const STEP_MARKS = {
   done: "✓",
   failed: "✗",
   skipped: "–",
+  cancelled: "⊘",
 };
 
 // MARK_SIZE is how big the brand mark is while an upgrade is running.
@@ -1321,6 +1322,153 @@ export function ExternallyManagedUpgradeNotice({
   );
 }
 
+function shortPreviousLabel(status) {
+  if (!status) return "";
+  if (status.previousImageLabel) return status.previousImageLabel;
+  if (status.previousImage) {
+    const [named, digest] = status.previousImage.split("@");
+    if (!digest) return named;
+    const shortDigest = digest.startsWith("sha256:")
+      ? `sha256:${digest.slice(7, 19)}`
+      : digest;
+    const tag = imageTagOf(status.previousImage);
+    const targetTag = (status.branch || "").replaceAll("/", "..");
+    if (!tag || (targetTag && tag === targetTag)) {
+      return `${named}@${shortDigest}`;
+    }
+    return named;
+  }
+  if (status.previousRelease) return status.previousRelease;
+  if (status.previousCommit) return status.previousCommit.slice(0, 7);
+  return "";
+}
+
+function hasRollbackTarget(status) {
+  if (!status || status.phase !== "ok" || status.unchanged) return false;
+  if (status.previousImage) {
+    return status.previousImage !== status.running?.image;
+  }
+  if (status.previousRelease) {
+    return status.previousRelease !== status.running?.release;
+  }
+  if (status.previousCommit) {
+    return status.previousCommit !== status.running?.commit;
+  }
+  return false;
+}
+
+function RollbackPreviousAlert({ status, disabled, rollingBack, onRollback }) {
+  if (disabled || !hasRollbackTarget(status)) return null;
+  const fullPrevious =
+    status.previousImage ||
+    status.previousRelease ||
+    (status.previousCommit ? status.previousCommit.slice(0, 7) : "");
+  const label = shortPreviousLabel(status);
+  if (!fullPrevious || !label) return null;
+  return (
+    <Alert
+      id="upgrade-rollback"
+      severity="info"
+      className="upgrade-rollback"
+      data-testid="upgrade-rollback"
+      sx={{ mb: 2, "& .MuiAlert-message": { width: "100%" } }}
+    >
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={1.5}
+        alignItems={{ xs: "flex-start", sm: "center" }}
+        justifyContent="space-between"
+      >
+        <Box sx={{ minWidth: 0 }}>
+          Replaced{" "}
+          <Box
+            component="code"
+            sx={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+          >
+            {fullPrevious}
+          </Box>
+          .
+        </Box>
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={onRollback}
+          disabled={rollingBack}
+          data-testid="upgrade-rollback-button"
+          sx={{ flexShrink: 0 }}
+        >
+          {rollingBack ? "Rolling back…" : `Roll back to ${label}`}
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
+function RunningUpgradeBanner({ status, now, onCancel, cancelling }) {
+  const blockedReason = status?.cancelBlockedReason || "";
+  const isRunning = status?.phase === "running";
+  if (!isRunning && !blockedReason) return null;
+
+  const graceMs = status?.graceUntil
+    ? new Date(status.graceUntil).getTime() - now
+    : 0;
+  const graceSeconds =
+    isRunning && !blockedReason && graceMs > 0 ? Math.ceil(graceMs / 1000) : 0;
+  const canCancel =
+    isRunning && status?.cancellable !== false && !blockedReason;
+
+  return (
+    <Alert
+      id="upgrade-running-banner"
+      severity={graceSeconds > 0 ? "warning" : "info"}
+      className="upgrade-running-banner"
+      data-testid="upgrade-running-banner"
+      sx={{ mt: 2, "& .MuiAlert-message": { width: "100%" } }}
+    >
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={1.5}
+        alignItems={{ xs: "flex-start", sm: "center" }}
+        justifyContent="space-between"
+      >
+        <Box sx={{ minWidth: 0 }}>
+          {blockedReason ? (
+            <span
+              className="upgrade-cancel-blocked"
+              data-testid="upgrade-cancel-blocked"
+            >
+              {blockedReason}
+            </span>
+          ) : graceSeconds > 0 ? (
+            <span
+              className="upgrade-grace-countdown"
+              data-testid="upgrade-grace-countdown"
+            >
+              {`Starting upgrade in ${graceSeconds}s \u2014 cancel now if this was started by mistake.`}
+            </span>
+          ) : (
+            <span>
+              Upgrade in progress &mdash; you can cancel until cut-over and
+              restart begin.
+            </span>
+          )}
+        </Box>
+        <Button
+          color={canCancel ? "error" : "inherit"}
+          variant="outlined"
+          size="small"
+          onClick={() => onCancel(graceSeconds > 0)}
+          disabled={!canCancel || cancelling}
+          data-testid="cancel-running-upgrade"
+          sx={{ flexShrink: 0, whiteSpace: "nowrap" }}
+        >
+          {cancelling ? "Cancelling…" : "Cancel upgrade"}
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
 export default function UpgradePanel({
   showError = defaultShowError,
   config,
@@ -1355,6 +1503,8 @@ export default function UpgradePanel({
   // still ticked from last week would be one nobody meant to tick.
   const [afterTasksFinish, setAfterTasksFinish] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [cancellingCurrent, setCancellingCurrent] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
   // Why the last status read failed, shown only while there is no status
   // at all: a read that fails mid-upgrade is the restart it ends in, and
   // the pane keeps what it last knew through that.
@@ -1369,6 +1519,7 @@ export default function UpgradePanel({
     try {
       const next = await api("/api/upgrade");
       if (next.phase === "running") sawRunning.current = true;
+      setNow(Date.now());
       setStatus(next);
       setLoadError("");
       // The channel this deployment follows (latest, candidate, main, or
@@ -1404,7 +1555,14 @@ export default function UpgradePanel({
   // to notice for itself -- nothing on this page asked for it, so
   // nothing else would.
   useEffect(() => {
-    if (!status || (status.phase !== "running" && !status.scheduled)) return;
+    if (
+      !status ||
+      (status.phase !== "running" &&
+        !status.scheduled &&
+        !status.cancelBlockedReason)
+    ) {
+      return;
+    }
     const interval = setInterval(refresh, STATUS_POLL_MS);
     return () => clearInterval(interval);
   }, [status, refresh]);
@@ -1450,7 +1608,8 @@ export default function UpgradePanel({
 
   useEffect(() => {
     if (!status || status.phase !== "running") return;
-    const tick = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    const period = status.graceUntil ? 250 : CLOCK_TICK_MS;
+    const tick = setInterval(() => setNow(Date.now()), period);
     return () => clearInterval(tick);
   }, [status]);
 
@@ -1469,6 +1628,7 @@ export default function UpgradePanel({
         body: JSON.stringify(body),
       });
       if (next.phase === "running") sawRunning.current = true;
+      setNow(Date.now());
       setStatus(next);
     } catch (err) {
       reportError(err);
@@ -1515,6 +1675,58 @@ export default function UpgradePanel({
       reportError(err);
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const cancelCurrent = async (duringGrace = false) => {
+    setCancellingCurrent(true);
+    try {
+      const next = await api("/api/upgrade/current", {
+        method: "DELETE",
+        body: JSON.stringify({
+          reason: duringGrace
+            ? "cancelled during grace window"
+            : "cancelled from Upgrade pane",
+        }),
+      });
+      setStatus(next);
+    } catch (err) {
+      reportError(err);
+      await refresh();
+    } finally {
+      setCancellingCurrent(false);
+    }
+  };
+
+  const rollbackPrevious = async () => {
+    if (!status) return;
+    setRollingBack(true);
+    setUnchangedBranch("");
+    try {
+      let payload;
+      if (status.previousImage) {
+        const tag = imageTagOf(status.previousImage);
+        payload = {
+          branch: tag ? tag.replaceAll("..", "/") : "",
+          image: status.previousImage,
+          afterTasksFinish: false,
+        };
+      } else {
+        const target = status.previousRelease || status.previousCommit || "";
+        if (!target) return;
+        payload = { branch: target, afterTasksFinish: false };
+      }
+      const next = await api("/api/upgrade", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (next.phase === "running") sawRunning.current = true;
+      setNow(Date.now());
+      setStatus(next);
+    } catch (err) {
+      reportError(err);
+    } finally {
+      setRollingBack(false);
     }
   };
 
@@ -1601,6 +1813,12 @@ export default function UpgradePanel({
               about where the deployment already was (2026-11-08
               deployment-operations walkthrough, task 3617). */}
           <RunningNow running={fallbackRunning} />
+          <RollbackPreviousAlert
+            status={status}
+            disabled={running || Boolean(status.cancelBlockedReason)}
+            rollingBack={rollingBack}
+            onRollback={rollbackPrevious}
+          />
           <DiscardedRCAlert
             discardedRc={status.discardedRc || targetsData?.discardedRc}
             disabled={running}
@@ -1736,8 +1954,12 @@ export default function UpgradePanel({
               sx={{ display: "flex", mt: 1 }}
             />
             <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>
-              <Button type="submit" variant="contained" disabled={running}>
-                {running
+              <Button
+                type="submit"
+                variant="contained"
+                disabled={running || Boolean(status.cancelBlockedReason)}
+              >
+                {running || status.cancelBlockedReason
                   ? "Upgrading…"
                   : afterTasksFinish
                     ? "Schedule upgrade"
@@ -1747,6 +1969,12 @@ export default function UpgradePanel({
               </Button>
             </Stack>
           </form>
+          <RunningUpgradeBanner
+            status={status}
+            now={now}
+            onCancel={cancelCurrent}
+            cancelling={cancellingCurrent}
+          />
           {running && <UpgradeMark branch={status.branch} />}
           {unchangedTarget && (
             <Alert severity="info" className="upgrade-unchanged" sx={{ mt: 2 }}>
@@ -1755,7 +1983,7 @@ export default function UpgradePanel({
             </Alert>
           )}
           {status.phase && (
-            <dl className="upgrade-status">
+            <dl id="upgrade-status" className="upgrade-status">
               <dt>Branch</dt>
               <dd>{status.branch}</dd>
               <dt>Status</dt>

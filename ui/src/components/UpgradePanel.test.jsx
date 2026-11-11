@@ -2214,6 +2214,156 @@ describe("External management notice on UpgradePanel", () => {
   });
 });
 
+describe("Cancel running upgrade, grace countdown, and one-click rollback", () => {
+  afterEach(() => {
+    api.mockClear();
+  });
+
+  it("shows the grace countdown and cancels a running upgrade via DELETE /api/upgrade/current", async () => {
+    const user = userEvent.setup();
+    const graceUntil = new Date(Date.now() + 9000).toISOString();
+    api.mockImplementation((path, init) => {
+      if (path === "/api/upgrade/current" && init?.method === "DELETE") {
+        return Promise.resolve({
+          enabled: true,
+          mode: "image",
+          running: { image: "docker.io/grainai/grain:v3.1.0" },
+          branch: "v3.2.0",
+          phase: "cancelled",
+          detail: "cancelled by alice: cancelled during grace window",
+          cancelled: true,
+          steps: [
+            {
+              name: "grace window",
+              state: "cancelled",
+              detail: "cancelled by alice: cancelled during grace window",
+            },
+            { name: "pull image", state: "pending" },
+          ],
+        });
+      }
+      if (String(path).includes("/api/upgrade/targets")) {
+        return Promise.resolve({ targets: [], default: "latest" });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        running: { image: "docker.io/grainai/grain:v3.1.0" },
+        branch: "v3.2.0",
+        phase: "running",
+        cancellable: true,
+        graceUntil,
+        steps: [
+          { name: "grace window", state: "running" },
+          { name: "pull image", state: "pending" },
+        ],
+      });
+    });
+
+    const { container } = render(<UpgradePanel showError={() => {}} />);
+
+    const countdown = await screen.findByTestId("upgrade-grace-countdown");
+    expect(countdown).toHaveTextContent(/Starting upgrade in \d+s/);
+
+    const cancelBtn = screen.getByRole("button", { name: "Cancel upgrade" });
+    expect(cancelBtn).toBeEnabled();
+    await user.click(cancelBtn);
+
+    expect(api).toHaveBeenCalledWith("/api/upgrade/current", {
+      method: "DELETE",
+      body: JSON.stringify({ reason: "cancelled during grace window" }),
+    });
+    await waitFor(() => {
+      expect(
+        container.querySelector(".upgrade-phase-cancelled"),
+      ).toHaveTextContent("cancelled");
+    });
+    expect(
+      container.querySelector(".upgrade-step-cancelled"),
+    ).toBeInTheDocument();
+  });
+
+  it("disables Cancel upgrade and explains why past the point of no return", async () => {
+    const blockedReason =
+      "restarting onto v3.2.0 \u2014 too late to cancel; upgrade back to docker.io/grainai/grain:v3.1.0 afterwards";
+    api.mockImplementation((path) => {
+      if (String(path).includes("/api/upgrade/targets")) {
+        return Promise.resolve({ targets: [], default: "latest" });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        running: { image: "docker.io/grainai/grain:v3.2.0" },
+        branch: "v3.2.0",
+        phase: "running",
+        cancellable: false,
+        cancelBlockedReason: blockedReason,
+      });
+    });
+
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByTestId("upgrade-cancel-blocked"),
+    ).toHaveTextContent(blockedReason);
+    expect(
+      screen.getByRole("button", { name: "Cancel upgrade" }),
+    ).toBeDisabled();
+  });
+
+  it("offers one-click Roll back to <previous> after a completed upgrade", async () => {
+    const user = userEvent.setup();
+    const prevDigest = `sha256:${"a".repeat(64)}`;
+    const newDigest = `sha256:${"b".repeat(64)}`;
+    const previousImage = `docker.io/grainai/grain:v3.1.0@${prevDigest}`;
+    const runningImage = `docker.io/grainai/grain:v3.2.0@${newDigest}`;
+
+    api.mockImplementation((path, init) => {
+      if (path === "/api/upgrade" && init?.method === "POST") {
+        return Promise.resolve({
+          enabled: true,
+          mode: "image",
+          running: { image: runningImage },
+          branch: "v3.1.0",
+          phase: "running",
+          cancellable: true,
+        });
+      }
+      if (String(path).includes("/api/upgrade/targets")) {
+        return Promise.resolve({ targets: [], default: "latest" });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        running: { image: runningImage },
+        branch: "v3.2.0",
+        phase: "ok",
+        previousImage,
+        previousImageLabel: "docker.io/grainai/grain:v3.1.0",
+      });
+    });
+
+    render(<UpgradePanel showError={() => {}} />);
+
+    const rollbackCard = await screen.findByTestId("upgrade-rollback");
+    expect(rollbackCard).toHaveTextContent(previousImage);
+
+    const btn = screen.getByRole("button", {
+      name: "Roll back to docker.io/grainai/grain:v3.1.0",
+    });
+    await user.click(btn);
+
+    expect(api).toHaveBeenCalledWith("/api/upgrade", {
+      method: "POST",
+      body: JSON.stringify({
+        branch: "v3.1.0",
+        image: previousImage,
+        afterTasksFinish: false,
+      }),
+    });
+  });
+});
+
 // grain/task-4153: another edition's repository is never one of the
 // ordinary image choices; it is offered only behind "Switch edition…",
 // and an upgrade onto it is confirmed with what it loses before the
