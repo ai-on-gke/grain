@@ -1444,6 +1444,54 @@ What that transaction does:
   is recorded against it (`repo_declaration_sync.last_error`, shown on the
   repository's own settings). Silently switching off a deployment's
   standing work over a syntax error would be much the worse failure.
+- A refusal is never only in the journal. It is the repository's
+  `refusedDeclarations` entry in `grain health` (and `deploy://health`,
+  which is the same response), the `last_error` on its row of
+  `deploy://state/tables/repo_declaration_sync` where the deployment
+  exports its full state, the error beside the repository in Settings →
+  Repos, and one Inbox notice (`declarations.refused:<owner>/<repo>:…`)
+  for each new error text. All of them name the files, lines and
+  messages and the commit whose declarations are still in force. The same
+  error read again on the next poll raises nothing new; a different error
+  clears the old notice and raises a new one; a clean read clears it. A
+  repository that cannot be *reached* is recorded the same way but raises
+  no notice, since there is no file to fix.
+
+### Declarations newer than the daemon
+
+`main` and the daemon reading it are not the same version. `grain
+declarations check` in CI validates a pull request against the code on
+its branch, so a declaration that needs a newer grain merges cleanly and
+then meets a deployment still running an older build. (That is what
+happened when `overlap:` became a mapping: a daemon that only decoded
+`overlap: skip` refused the whole repository's `.grain` with it, and the
+new schedules never loaded.)
+
+The policy is **forward-compatible parsing, one file at a time**:
+
+- A template, suite or schedule file that is well-formed YAML but that
+  this build cannot decode -- a key it does not know, or a known key in a
+  shape it has no case for -- is *held back*. Everything else in the
+  repository loads as usual.
+- A held-back file that the deployment already has a version of keeps
+  that version, exactly as it was, and its provenance row keeps the
+  commit it was read at. A held-back file that is new in this commit is
+  not loaded at all.
+- A held-back file's name still resolves for the files that name it, so a
+  suite naming a held-back template runs the version already in force. If
+  something names a held-back file that has *no* earlier version, the
+  whole set is refused instead, as any name that resolves to nothing is.
+- Everything else is still a refusal of the whole set: a file that is not
+  YAML, a key a repository may never set, a value out of range, a name
+  that resolves to nothing, a trigger, settings or merge-rules file of any
+  kind. Those are mistakes in the file whatever version reads it.
+- The held-back files are reported the way a refusal is (above), under
+  `declarations held back by this grain build:`, and they load the first
+  time the deployment upgrades to a build that reads them.
+
+`grain declarations check` is not forward-compatible: in CI a file that
+the code on the branch cannot decode is an error, as it always was. Only
+the daemon, which may be older than the tree it reads, holds files back.
 
 ## Editing one
 

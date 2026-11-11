@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -450,6 +451,13 @@ type SandboxHealthResponse struct {
 	// firing that ran anything (model.Store.StaleSchedules): a nightly
 	// that went quiet says so here rather than nowhere.
 	StaleSchedules []model.StaleSchedule `json:"staleSchedules,omitempty"`
+	// RefusedDeclarations is every repository whose `.grain`
+	// declarations this daemon last could not read in full: the files,
+	// lines and messages (Error, the sync row's LastError), and the
+	// commit whose declarations are still in force. Without it a
+	// repository merging files for a newer grain looks exactly like one
+	// whose declarations loaded (grain/task-4392).
+	RefusedDeclarations []RefusedDeclarations `json:"refusedDeclarations,omitempty"`
 	// DispatchBlocked is every condition holding this deployment's
 	// dispatch (Config.DispatchConditions): the failing checks of this
 	// response, first because nothing below them matters while one is
@@ -1068,7 +1076,8 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
 			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
 			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
-			StaleSchedules:         s.tasks.staleSchedules(r.Context())})
+			StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+			RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
@@ -1089,6 +1098,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		CapabilityServers:      s.tasks.capabilityServersDown(),
 		Hub:                    s.tasks.hubHealth(r.Context()),
 		StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+		RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context()),
 		TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
@@ -1199,6 +1209,44 @@ func (c *Client) capabilityServersDown() []CapabilityServerDown {
 // staleSchedules is model.Store.StaleSchedules as of now, nil on a store
 // that cannot answer: health is read when something is already wrong, and
 // one unreadable section must not cost the rest of the pane.
+// RefusedDeclarations is one repository's declarations not being read
+// in full (SandboxHealthResponse.RefusedDeclarations).
+type RefusedDeclarations struct {
+	Repo string `json:"repo"`
+	// InForce is the commit the repository's live declarations were
+	// read at. With HeldBack, only the files Error names are older than it.
+	InForce string `json:"inForce,omitempty"`
+	// HeldBack is a partial load: everything loaded except the files
+	// Error names, which this build could not decode and kept at their
+	// last good version (repodecl.LoadForwardCompatible). False is the
+	// whole set refused.
+	HeldBack  bool      `json:"heldBack,omitempty"`
+	Error     string    `json:"error"`
+	CheckedAt time.Time `json:"checkedAt"`
+}
+
+func (c *Client) refusedDeclarations(ctx context.Context) []RefusedDeclarations {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	syncs, err := c.Store.ListRepoDeclarationSyncs(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []RefusedDeclarations
+	for _, s := range syncs {
+		if s.LastError == "" {
+			continue
+		}
+		out = append(out, RefusedDeclarations{
+			Repo: s.Repo.String(), InForce: s.Commit, CheckedAt: s.CheckedAt,
+			HeldBack: strings.HasPrefix(s.LastError, model.HeldBackMarker),
+			Error:    strings.TrimPrefix(s.LastError, model.HeldBackMarker),
+		})
+	}
+	return out
+}
+
 func (c *Client) staleSchedules(ctx context.Context) []model.StaleSchedule {
 	if c == nil || c.Store == nil {
 		return nil
