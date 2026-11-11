@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { isApiGrant, storedApiGrant } from "./apiGrants.js";
 import { describeGrant } from "./capabilityArgs.js";
 
 // model.State's own vocabulary, in model.StateOf's precedence order.
@@ -659,12 +660,15 @@ export function runActivity(t, now = Date.now()) {
 
 // questionActivity is the status line of a task parked on a question:
 // the question's one-line summary (ui.Task.QuestionSummary), so a row in
-// the task list says what it was asked as well as that it was asked. Null
-// for any other task, and for a stopped turn, which asked nothing.
+// the task list says what it was asked as well as that it was asked. A
+// task resting on a closing note is shown by the summary its run gave the
+// note (ui.Task.NoteSummary) the same way. Null for any other task, and
+// for a stopped turn, which asked nothing.
 export function questionActivity(t) {
-  if (t.state !== "awaiting_reply" || t.turnStopped || !t.questionSummary)
-    return null;
-  return { note: t.questionSummary, byQuestion: true };
+  if (t.state !== "awaiting_reply" || t.turnStopped) return null;
+  const note = t.questionSummary || t.noteSummary;
+  if (!note) return null;
+  return { note, byQuestion: true };
 }
 
 // How old one of these phrases has to be before the row says how old it
@@ -1615,9 +1619,15 @@ export function capabilityUnavailableHint(c) {
 // union from unsaved ticks, to say what Save is about to do) cannot
 // drift into two different answers.
 export function unionCapabilities(base, extra) {
-  const ids = [...(base || [])];
-  for (const id of extra || []) {
-    if (!ids.includes(id)) ids.push(id);
+  const keyOf = (id) => (isApiGrant(id) ? storedApiGrant(id) : id);
+  const ids = [];
+  const seen = new Set();
+  for (const id of [...(base || []), ...(extra || [])]) {
+    const k = keyOf(id);
+    if (!seen.has(k)) {
+      seen.add(k);
+      ids.push(id);
+    }
   }
   return ids;
 }

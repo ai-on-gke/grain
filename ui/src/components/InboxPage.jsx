@@ -355,8 +355,10 @@ const GROUPS = [
     match: (t) => t.state === "awaiting_reply",
     // Which of "Asked"'s cases this is (state.js's askedCase): a
     // question, an answer, a stopped turn, or a conversation waiting for
-    // its next message.
-    note: (t) => askedCase(t)?.title || null,
+    // its next message. An answer whose run gave its note a summary
+    // (Task.NoteSummary) is shown by that line instead: what the note
+    // needs of the reader, not merely that there is one.
+    note: (t) => t.noteSummary || askedCase(t)?.title || null,
     // The one group whose response can be prose rather than a verb, so it
     // opens Responder below in addition to offering Acknowledge.
     reply: true,

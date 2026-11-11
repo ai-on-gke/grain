@@ -307,3 +307,17 @@ func (o *PullRequestOpener) deps() orchestrator.Deps {
 }
 
 var _ ui.PullRequestAdopter = (*PullRequestOpener)(nil)
+
+// reportCheckAdapter is the sandbox proxy's gitproxy.CLIReportChecker:
+// grain report check, answered by the check grain runs on a posted
+// steward report (orchestrator.CheckStewardReportDraft).
+type reportCheckAdapter struct {
+	store *model.Store
+}
+
+func (a reportCheckAdapter) CheckReportDraft(ctx context.Context, taskID, runID, report string) (string, bool, error) {
+	if a.store == nil {
+		return "", false, fmt.Errorf("no store to check reports against")
+	}
+	return orchestrator.CheckStewardReportDraft(ctx, a.store, taskID, runID, report)
+}

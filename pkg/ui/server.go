@@ -77,6 +77,7 @@ type Server struct {
 	// hostdImage is the image /api/hostd/install.sh suggests
 	// (hostdInstallImage), hostd_install.go's.
 	hostdImage      hostdImageCache
+	agentdRelease   agentdReleaseCache
 	hostdJoinReplay hostd.NonceReplayCache
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
@@ -553,6 +554,7 @@ func (s *Server) routes() {
 	s.route("GET /api/tasks/{id}/attempts/{number}/transcript", s.handleGetAttemptTranscript)
 	s.route("GET /api/tasks/{id}/attempts/{number}/capability-audit", s.handleGetAttemptCapabilityAudit)
 	s.route("GET /api/tasks/{id}/prompt", s.handleGetTaskPrompt)
+	s.route("GET /api/tasks/{id}/diff-preview", s.handleTaskDiffPreview)
 	s.route("GET /api/tasks/{id}/tree", s.handleGetTaskTree)
 
 	s.route("POST /api/repos", s.handleAddTargetRepo)
@@ -753,6 +755,7 @@ func (s *Server) routes() {
 	s.route("GET /api/host/top", s.handleGetHostTop)
 	s.route("GET /api/upgrade", s.handleGetUpgradeStatus)
 	s.route("POST /api/upgrade", s.handleStartUpgrade)
+	s.route("DELETE /api/upgrade/current", s.handleCancelCurrentUpgrade)
 	s.route("DELETE /api/upgrade/scheduled", s.handleCancelScheduledUpgrade)
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)
@@ -847,9 +850,13 @@ func (s *Server) routes() {
 	s.route("POST /api/hostd/join", s.handleHostdJoin)
 	s.route("POST /api/hostd/join/{id}/poll", s.handleHostdJoinPoll)
 	s.route("POST /api/hostd/renew", s.handleHostdRenew)
-	// The script that installs one there (Settings -> Hosts).
+	// The script that installs one there (Settings -> Hosts), and the
+	// per-platform grain-agentd binary and signed manifest for hosts that
+	// cannot reach the internet.
 	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
 	s.route("GET "+hostdInstallShortPath, s.handleHostdInstallScript)
+	s.route("GET "+hostdAgentdBinaryRoute, s.handleHostdAgentdBinary)
+	s.route("GET "+hostdAgentdManifestPath, s.handleHostdAgentdManifest)
 	s.route("GET "+cliInstallPath, s.handleCLIInstallScript)
 	// The host registry and join handshake (Settings -> Hosts).
 	s.route("GET /api/hostds", s.handleListHostds)

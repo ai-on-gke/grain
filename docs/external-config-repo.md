@@ -26,9 +26,12 @@ that branch exactly as you treat an unlimited role in grain:
 
 Naming or repointing the repository (`POST /api/state-repo/remote`,
 Settings → Config Repo) needs an unlimited role for the same reason
-(task 3965). That is a person's role: an agent's run reaches the same
-route with an `api:settings:write` grant, so treat that grant as an
-administrator's too.
+(task 3965). An agent is held to the same bar: its run reaches the route
+only if its task holds both `api:settings:write` and, deployment-wide,
+`api:capabilities:admin` -- `settings:write` alone, or
+`capabilities:admin` limited to a repository, is refused before the
+request reaches the config repository (task 4007). The same goes for an
+external agent credential.
 
 ## Require verified commits (`require_verified`)
 
@@ -70,8 +73,8 @@ use merge or squash merges.
 The mode's settings live in `<data-dir>/state-repo.json` on this host,
 never in the repository they guard -- a writer there must not be able to
 turn them off -- and are set through the same route as the remote, so
-they need an unlimited role (or, for an agent, `api:settings:write`, as
-above):
+they need an unlimited role (or, for an agent, `api:settings:write` and
+`api:capabilities:admin`, as above):
 
 ```json
 POST /api/state-repo/remote

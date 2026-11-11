@@ -1,0 +1,176 @@
+{
+  "repoTarget": {
+    "commit": "0b06d6b1535a079aee071983adfd2eecb2262724",
+    "cliExit": 1,
+    "cliOutput": "/var/tmp/unified-grants/item2-5/clone-widgets, read as acme/widgets (from -repo)\n\n.grain/templates/x.yml: capabilities: \"https://grain.dev/capabilities/repo#target={\\\"base\\\":\\\"main\\\",\\\"repo\\\":\\\"acme/widgets\\\"}\": a declaration's tasks always target the declaring repository (acme/widgets), and its base is `base:`\n\nNothing is declared while any of it is refused: grain keeps the declarations it already had and records the reason (repo_declaration_sync.last_error).\ngrain: 1 problem with this repository's declarations -- see above",
+    "syncStatus": {
+      "repo": "acme/widgets",
+      "ciCapabilities": null,
+      "availableCICapabilities": [
+        "https://grain.dev/capabilities/github#sandbox-repo={}",
+        "https://grain.dev/capabilities/release#registry-push={}",
+        "https://grain.dev/capabilities/release#package-publish={}",
+        "https://grain.dev/capabilities/release#image-signing={}"
+      ],
+      "defaultCapabilities": null,
+      "deploymentDefaultCapabilities": null,
+      "effectiveDefaultCapabilities": [],
+      "defaultAdmission": "",
+      "deploymentDefaultAdmission": "standard",
+      "effectiveDefaultAdmission": "standard",
+      "defaultHosting": "",
+      "deploymentDefaultHosting": "unattended",
+      "effectiveDefaultHosting": "unattended",
+      "promptExtension": "",
+      "deploymentPromptExtension": "",
+      "effectivePromptExtension": "",
+      "setupCommand": "",
+      "effectiveSkillFolders": [
+        ".claude/skills",
+        ".agents/skills",
+        ".codex/skills",
+        ".gemini/skills",
+        "skills"
+      ],
+      "declarations": true,
+      "declarationsStatus": {
+        "commit": "f3c6f4b14b64bfea45dc1ddcda18138ee5d70648",
+        "checkedAt": "2026-11-10T07:53:59.420003963Z",
+        "syncedAt": "2026-11-10T07:53:23.92712558Z",
+        "error": "reading acme/widgets's declarations: .grain/templates/x.yml: capabilities: \"https://grain.dev/capabilities/repo#target={\\\"base\\\":\\\"main\\\",\\\"repo\\\":\\\"acme/widgets\\\"}\": a declaration's tasks always target the declaring repository (acme/widgets), and its base is `base:`",
+        "templates": [
+          ".grain/templates/release.yml"
+        ],
+        "pushes": [
+          {
+            "repo": "acme/widgets",
+            "path": ".grain/templates/release.yml",
+            "commit": "f3c6f4b14b64bfea45dc1ddcda18138ee5d70648",
+            "refs": [
+              {
+                "ref": "refs/heads/candidate"
+              },
+              {
+                "ref": "refs/tags/latest",
+                "force": true
+              }
+            ]
+          }
+        ]
+      },
+      "requireBranchUpToDate": false,
+      "ignoreGitHubCI": false,
+      "ciMode": "github",
+      "watchDefaultBranch": false,
+      "mergeOnGreen": false,
+      "baseRepairBypassesHumanGates": false,
+      "mergeRecheck": "enforce",
+      "issueImport": {
+        "enabled": false,
+        "repo": "",
+        "label": "",
+        "approved": false,
+        "intervalSeconds": 0,
+        "effectiveIntervalSeconds": 600
+      },
+      "unfixableChecks": null,
+      "grainCICheckName": "grain CI",
+      "upstreamRepo": ""
+    },
+    "liveDeclaredTemplates": [
+      {
+        "id": "repo:template:acme:widgets:release",
+        "name": "release"
+      }
+    ]
+  },
+  "repoWriteWithBase": {
+    "commit": "2059b656fa8b3eb19e410137da1424f678e2d397",
+    "cliExit": 1,
+    "cliOutput": "/var/tmp/unified-grants/item2-5/clone-widgets, read as acme/widgets (from -repo)\n\n.grain/templates/x.yml: capabilities: \"https://grain.dev/capabilities/repo#write={\\\"base\\\":\\\"staging\\\",\\\"repo\\\":\\\"acme/lib\\\"}\": a declared write to another repository always lands on its default branch -- pass only `repo: <owner>/<repo>`, and set this repository's own branch with `base:`\n\nNothing is declared while any of it is refused: grain keeps the declarations it already had and records the reason (repo_declaration_sync.last_error).\ngrain: 1 problem with this repository's declarations -- see above",
+    "syncStatus": {
+      "repo": "acme/widgets",
+      "ciCapabilities": null,
+      "availableCICapabilities": [
+        "https://grain.dev/capabilities/github#sandbox-repo={}",
+        "https://grain.dev/capabilities/release#registry-push={}",
+        "https://grain.dev/capabilities/release#package-publish={}",
+        "https://grain.dev/capabilities/release#image-signing={}"
+      ],
+      "defaultCapabilities": null,
+      "deploymentDefaultCapabilities": null,
+      "effectiveDefaultCapabilities": [],
+      "defaultAdmission": "",
+      "deploymentDefaultAdmission": "standard",
+      "effectiveDefaultAdmission": "standard",
+      "defaultHosting": "",
+      "deploymentDefaultHosting": "unattended",
+      "effectiveDefaultHosting": "unattended",
+      "promptExtension": "",
+      "deploymentPromptExtension": "",
+      "effectivePromptExtension": "",
+      "setupCommand": "",
+      "effectiveSkillFolders": [
+        ".claude/skills",
+        ".agents/skills",
+        ".codex/skills",
+        ".gemini/skills",
+        "skills"
+      ],
+      "declarations": true,
+      "declarationsStatus": {
+        "commit": "f3c6f4b14b64bfea45dc1ddcda18138ee5d70648",
+        "checkedAt": "2026-11-10T07:54:01.966670582Z",
+        "syncedAt": "2026-11-10T07:53:23.92712558Z",
+        "error": "reading acme/widgets's declarations: .grain/templates/x.yml: capabilities: \"https://grain.dev/capabilities/repo#write={\\\"base\\\":\\\"staging\\\",\\\"repo\\\":\\\"acme/lib\\\"}\": a declared write to another repository always lands on its default branch -- pass only `repo: <owner>/<repo>`, and set this repository's own branch with `base:`",
+        "templates": [
+          ".grain/templates/release.yml"
+        ],
+        "pushes": [
+          {
+            "repo": "acme/widgets",
+            "path": ".grain/templates/release.yml",
+            "commit": "f3c6f4b14b64bfea45dc1ddcda18138ee5d70648",
+            "refs": [
+              {
+                "ref": "refs/heads/candidate"
+              },
+              {
+                "ref": "refs/tags/latest",
+                "force": true
+              }
+            ]
+          }
+        ]
+      },
+      "requireBranchUpToDate": false,
+      "ignoreGitHubCI": false,
+      "ciMode": "github",
+      "watchDefaultBranch": false,
+      "mergeOnGreen": false,
+      "baseRepairBypassesHumanGates": false,
+      "mergeRecheck": "enforce",
+      "issueImport": {
+        "enabled": false,
+        "repo": "",
+        "label": "",
+        "approved": false,
+        "intervalSeconds": 0,
+        "effectiveIntervalSeconds": 600
+      },
+      "unfixableChecks": null,
+      "grainCICheckName": "grain CI",
+      "upstreamRepo": ""
+    },
+    "liveDeclaredTemplates": [
+      {
+        "id": "repo:template:acme:widgets:release",
+        "name": "release"
+      }
+    ]
+  },
+  "repoReadWithBaseCli": {
+    "cliExit": 1,
+    "cliOutput": "/var/tmp/unified-grants/item2-5/clone-widgets, read as acme/widgets (from -repo)\n\n.grain/templates/x.yml: capabilities: \"https://grain.dev/capabilities/repo#read={\\\"base\\\":\\\"main\\\",\\\"repo\\\":\\\"acme/lib\\\"}\": https://grain.dev/capabilities/repo#read takes only `repo: <owner>/<repo>`, not `base`\n\nNothing is declared while any of it is refused: grain keeps the declarations it already had and records the reason (repo_declaration_sync.last_error).\ngrain: 1 problem with this repository's declarations -- see above"
+  }
+}

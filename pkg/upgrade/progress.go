@@ -271,6 +271,9 @@ func (p *progress) done(name, detail string) {
 	p.status.Steps[i].State = StepDone
 	p.status.Steps[i].FinishedAt = &now
 	p.status.Steps[i].Detail = truncate(detail, maxStepDetail)
+	if name == stepGrace {
+		p.status.GraceUntil = nil
+	}
 	p.current = -1
 	took := elapsed(p.status.Steps[i].StartedAt, now)
 	if detail != "" {
@@ -329,6 +332,7 @@ func (p *progress) succeed(detail string, restarting bool) {
 	defer p.mu.Unlock()
 	now := time.Now().UTC()
 	p.status.Phase = PhaseOK
+	p.status.GraceUntil = nil
 	p.status.Detail = detail
 	if restarting {
 		p.status.Detail = detail + "; restarting"
@@ -382,6 +386,7 @@ func (p *progress) unchanged(detail string) {
 	}
 	p.current = -1
 	p.status.Phase = PhaseOK
+	p.status.GraceUntil = nil
 	p.status.Unchanged = true
 	p.status.Detail = detail
 	p.status.FinishedAt = &now
@@ -406,9 +411,36 @@ func (p *progress) fail(err error) {
 		p.current = -1
 	}
 	p.status.Phase = PhaseFailed
+	p.status.GraceUntil = nil
 	p.status.Detail = err.Error()
 	p.status.FinishedAt = &now
 	p.logf("failed after %s: %v", shortDuration(time.Since(p.startedAt)), err)
+	p.flushLocked()
+}
+
+// cancel closes the upgrade out as PhaseCancelled, marking whichever step was
+// running as StepCancelled and recording who cancelled it and why.
+func (p *progress) cancel(by, reason string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now().UTC()
+	detail := formatCancelledDetail(by, reason)
+	if p.current >= 0 {
+		step := &p.status.Steps[p.current]
+		step.State = StepCancelled
+		step.FinishedAt = &now
+		step.Detail = truncate(detail, maxStepDetail)
+		p.logf("step %d/%d %s: cancelled after %s (%s)",
+			p.current+1, len(p.status.Steps), step.Name, elapsed(step.StartedAt, now), detail)
+		p.current = -1
+	}
+	p.status.Phase = PhaseCancelled
+	p.status.CancelledBy = by
+	p.status.CancelReason = reason
+	p.status.GraceUntil = nil
+	p.status.Detail = detail
+	p.status.FinishedAt = &now
+	p.logf("cancelled after %s: %s", shortDuration(time.Since(p.startedAt)), detail)
 	p.flushLocked()
 }
 

@@ -1130,6 +1130,7 @@ func baseRepairTemplateBody() string {
 		"merge above if that is the right answer, or repair the broken suites directly. Iterate and " +
 		"re-run CI until all required jobs in the suite pass.\n\n")
 	b.WriteString(RedCIProcedureReminder + "\n\n")
+	b.WriteString(RepairNeedsAPersonReminder + "\n\n")
 	b.WriteString("The merge queue is still merging into `{{branch}}` -- a red base branch holds nothing, because a gate whose own failure blocks the only route to fixing it is a deadlock rather than a control. So this is not a queue everyone is waiting in, it is a tree every other change for {{repo}} is landing on while it is broken, and each one that lands makes the next verdict harder to read. That is the hurry.\n")
 	return b.String()
 }

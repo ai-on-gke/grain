@@ -555,6 +555,11 @@ type Config struct {
 	// has no deadline (maxRunRuntime), so this is what catches a wedged
 	// one. Zero uses DefaultDurableIdleTimeout.
 	DurableIdleTimeout time.Duration
+	// CIWakeBackstop is how long a task deferred by resume_later on a CI
+	// verdict may wait before reconcileWake undefers it regardless, with a
+	// note and a stall notification. Zero uses DefaultCIWakeStallBound;
+	// negative disables the backstop.
+	CIWakeBackstop time.Duration
 	// durable is set by durableDispatch for the run of a durable task:
 	// maxRunRuntime is then 0, no deadline at all.
 	durable bool

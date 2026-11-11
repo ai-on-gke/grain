@@ -592,6 +592,14 @@ type GranuleSandboxes struct {
 	// reclaim that costs a dispatch. Held under the same mutex as live
 	// so "is anything using this name" is one answer rather than two.
 	building map[string]bool
+	// releasing is the VM names a Release is in the middle of deleting,
+	// for SweepOrphans for the same reason building is: Release takes a
+	// sandbox out of live before its delete, which can take as long as
+	// docker needs to drop the VM's overlay, and a sweep in that window
+	// would delete the same VM alongside it -- two `docker rm -f`s on one
+	// container, the second failing with "removal ... is already in
+	// progress". Held under mu; nil until the first Release.
+	releasing map[string]bool
 	// defaults is the deployment-wide default VM shape the next Acquire
 	// falls back to, seeded from cfg's own DefaultCPUs/DefaultMemoryMB
 	// and replaceable while the daemon runs (SetDefaultShape). It lives
@@ -1246,11 +1254,11 @@ func (k *GranuleSandboxes) unclaim(vmName string) {
 }
 
 // inUse reports whether this process is using vmName: a live sandbox
-// holding it, or an Acquire building it.
+// holding it, an Acquire building it, or a Release deleting it.
 func (k *GranuleSandboxes) inUse(vmName string) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if k.building[vmName] {
+	if k.building[vmName] || k.releasing[vmName] {
 		return true
 	}
 	for _, sb := range k.live {
@@ -1285,8 +1293,8 @@ func (k *GranuleSandboxes) ReapOrphans(ctx context.Context) (int, error) {
 }
 
 // SweepOrphans deletes the VMs under VMNamePrefix that this process is
-// not using -- neither a live sandbox nor one an Acquire is building --
-// and reports how many it removed.
+// not using -- not a live sandbox, one an Acquire is building, or one a
+// Release is already deleting -- and reports how many it removed.
 //
 // This is what stands behind the disk floor (grain/task-213). A sandbox
 // VM's writable root is a qcow2 overlay inside its own container, so
@@ -1482,7 +1490,18 @@ func (s *granuleSandbox) Rebuild(ctx context.Context) error {
 func (s *granuleSandbox) Release(ctx context.Context) error {
 	s.owner.mu.Lock()
 	delete(s.owner.live, s.name)
+	// Under the same lock as the line above, so there is no moment a
+	// sweep could see this VM as neither live nor being released.
+	if s.owner.releasing == nil {
+		s.owner.releasing = map[string]bool{}
+	}
+	s.owner.releasing[s.vmName] = true
 	s.owner.mu.Unlock()
+	defer func() {
+		s.owner.mu.Lock()
+		delete(s.owner.releasing, s.vmName)
+		s.owner.mu.Unlock()
+	}()
 	// The address goes back with the VM, together with any sandbox created
 	// beneath this one (sandboxaddr.Pool.Release walks the family): an
 	// address outliving its sandbox is a block this deployment can never

@@ -17,6 +17,7 @@ import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type {
+  DiffPreview,
   GrainConfig,
   Notification,
   Task,
@@ -39,6 +40,13 @@ class FakeApi {
     Promise.resolve(this.details[id] ?? ({ id } as TaskDetail));
   openNotifications = () => Promise.resolve(this.notes);
   localScriptApprovals = () => Promise.resolve([]);
+  diffs: Record<string, DiffPreview> = {};
+  diffReads: string[] = [];
+  diffPreview = (id: string) => {
+    this.diffReads.push(id);
+    const d = this.diffs[id];
+    return d ? Promise.resolve(d) : Promise.reject(new Error("404"));
+  };
   get = () => Promise.resolve({ publicKey: "age1example" });
   post = (route: string, params: Record<string, unknown>, body: unknown) => {
     this.posts.push({ route, params, body });
@@ -129,6 +137,73 @@ describe("InboxPageComponent", () => {
       params: { id: "9" },
     });
     expect(rows(f)).toEqual(["Investigate the merge queue stall"]);
+  });
+
+  it("shows the change's diff beside a submit decision, tinted by line kind", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      {
+        id: "12",
+        title: "Fix the parser",
+        state: "awaiting_submit",
+        repo: "acme/widgets",
+        pullRequest: { url: "https://example.com/acme/widgets/pull/3" },
+      },
+      { id: "9", title: "Bump Go", state: "proposed" },
+    ];
+    api.diffs["12"] = {
+      repo: "acme/widgets",
+      base: "main",
+      head: "grain/task-12",
+      totalFiles: 3,
+      totalHunks: 9,
+      truncated: true,
+      files: [
+        {
+          path: "pkg/parse.go",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          hunks: [
+            {
+              header: "@@ -1,2 +1,2 @@",
+              lines: [
+                { kind: "ctx", text: "package parse" },
+                { kind: "del", text: "n := 0" },
+                { kind: "add", text: "n := 1" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const f = await render(api);
+    const store = TestBed.inject(InboxStore);
+    store.select("task:12:submit");
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    await f.whenStable();
+    expect(api.diffReads).toContain("12");
+    const diff = q(f, '[data-testid="inspector-diff"]');
+    expect(diff?.textContent).toContain("3 files changed");
+    expect(diff?.textContent).toContain("pkg/parse.go");
+    const lines = [
+      ...diff!.querySelectorAll<HTMLElement>('[data-testid="diff-line"]'),
+    ];
+    expect(lines.map((l) => l.className)).toEqual([
+      "diff-line diff-line-ctx",
+      "diff-line diff-line-del",
+      "diff-line diff-line-add",
+    ]);
+    expect(q(f, '[data-testid="diff-truncated"]')?.textContent).toContain(
+      "first 1 of 9",
+    );
+
+    // A proposal is not about a change yet: no diff is read for it.
+    store.select("task:9:proposal");
+    await f.whenStable();
+    expect(api.diffReads).not.toContain("9");
+    expect(q(f, '[data-testid="inspector-diff"]')).toBeNull();
   });
 
   it("keeps a half-typed reply when a refresh brings the same row back", async () => {

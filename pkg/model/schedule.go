@@ -16,8 +16,10 @@ package model
 
 import (
 	"fmt"
-	"github.com/ai-on-gke/grain/pkg/workflows"
+	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // OverlapPolicy is what a schedule does when it comes due while its own
@@ -70,6 +72,39 @@ func (p OverlapPolicy) Validate() error {
 		return nil
 	default:
 		return fmt.Errorf("unknown overlap policy %q", string(p))
+	}
+}
+
+// ScheduleSkipWhen is a condition a schedule declares (`skip-when:`) under
+// which its firings are held rather than filed (grain/task-4393).
+//
+// It is for work that cannot do anything useful while something else is
+// broken. On 2026-11-10 ai-on-gke/grain's main published nothing for
+// seven hours while its release triage task was open, and the release
+// train, which can only cut from a commit whose release published, woke
+// 45 times in those 24 hours to find that out. A held firing is recorded
+// (ScheduleSkip) and fires once as soon as the condition clears, the way
+// an overlap skip does.
+type ScheduleSkipWhen string
+
+const (
+	// SkipWhenNever is the zero value: nothing outside the schedule
+	// holds it.
+	SkipWhenNever ScheduleSkipWhen = ""
+	// SkipWhenPublishingHeld holds a firing while publishing from the
+	// base branch it fires into is held pending a release triage task
+	// (BaseBranchPublishing.Gated) -- the "Further releases on this
+	// branch are held" finding deployment health reports.
+	SkipWhenPublishingHeld ScheduleSkipWhen = "publishing-held"
+)
+
+// ParseScheduleSkipWhen reads a declared `skip-when:` value.
+func ParseScheduleSkipWhen(v string) (ScheduleSkipWhen, error) {
+	switch w := ScheduleSkipWhen(strings.TrimSpace(v)); w {
+	case SkipWhenNever, SkipWhenPublishingHeld:
+		return w, nil
+	default:
+		return "", fmt.Errorf("unknown skip-when condition %q -- the one there is is %q", v, SkipWhenPublishingHeld)
 	}
 }
 
@@ -308,6 +343,10 @@ type Schedule struct {
 	// (the default) means the schedule checks only its own previous
 	// firing; it is meaningless, and refused, beside OverlapAllow.
 	OverlapGroup string
+	// SkipWhen is a condition outside the schedule that holds its firings
+	// the way an unfinished previous firing does (ScheduleSkipWhen,
+	// grain/task-4393). Empty, the default, holds nothing.
+	SkipWhen ScheduleSkipWhen
 	// Enabled is the pause/resume switch a UI toggles -- a disabled
 	// schedule stays around (with its own history in NextRunAt/LastRunAt)
 	// rather than being deleted, the same as closing a task keeps its row

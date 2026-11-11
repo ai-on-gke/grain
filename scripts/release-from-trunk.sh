@@ -194,6 +194,11 @@
 #   RELEASE_GITHUB_API_URL   GitHub's API ($GITHUB_API_URL, else api.github.com)
 #   RELEASE_GITHUB_PAGES     pages of 100 runs read per workflow (3)
 #   RELEASE_RUNS_JSON        a file to read the cut's CI runs from instead
+#   RELEASE_RUNS_CMD         a command that writes the cut's CI runs to the
+#                            file named by its first argument (its second is
+#                            the branch), run only when phase 2 looks for a
+#                            commit to cut; RELEASE_RUNS_JSON wins over it
+#                            (scripts/release-train-task.sh's main-runs)
 #   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON
 #                            files to read the rc's nightly.yml jobs and
 #                            check runs from instead
@@ -1425,6 +1430,11 @@ fi
 
 if [ "$ci_source" = github ]; then
   CANDIDATE_GATE_REQUIRED="$required" github_runs "$work/runs.json" "$cut_branch"
+elif [ -z "${RELEASE_RUNS_JSON:-}" ] && [ -n "${RELEASE_RUNS_CMD:-}" ]; then
+  # Read only now, once the train is looking for a commit to cut: most
+  # ticks stop in phase 1 or at the rc-hold above and never need them.
+  eval "$RELEASE_RUNS_CMD"' "$work/runs.json" "$cut_branch"' ||
+    die "RELEASE_RUNS_CMD could not read $cut_branch's CI runs"
 else
   gate_json RELEASE_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=$cut_branch&limit=500" "$work/runs.json"
 fi

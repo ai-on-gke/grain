@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TaskChat from "./TaskChat.jsx";
+import { ViewerProvider } from "../ViewerContext.jsx";
 import fileToAttachment from "../attachments.js";
 
 vi.mock("../attachments.js", () => ({ default: vi.fn() }));
@@ -690,6 +691,60 @@ describe("TaskChat", () => {
     land();
     await waitFor(() => expect(bubble).not.toHaveClass("task-chat-sending"));
     expect(bubble).not.toHaveTextContent("Sending…");
+    vi.unstubAllGlobals();
+  });
+
+  // A console session's task is grain's own, so the task's author put
+  // grain's name on the operator's message until the server's copy came
+  // back (seen as the flaky phone run of
+  // e2e/new-session-first-message-sending.spec.js). The bubble names the
+  // viewer, as the server's copy will.
+  it("names the viewer, not the task's author, on a message in flight", async () => {
+    let land;
+    const gate = new Promise((r) => {
+      land = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        await gate;
+        return {
+          ok: true,
+          headers: new Headers({ "Content-Type": "application/json" }),
+          json: async () => ({}),
+        };
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <ViewerProvider
+        whoami={{ actor: { label: "alice@example.com (access code)" } }}
+      >
+        <TaskChat
+          t={task({ author: "grain", authorKind: "grain" })}
+          act={act}
+        />
+      </ViewerProvider>,
+    );
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("from the operator");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    const bubble = screen
+      .getByText("from the operator")
+      .closest("section[aria-label]");
+    expect(bubble).toHaveAttribute(
+      "aria-label",
+      "alice@example.com (access code)",
+    );
+    land();
+    await waitFor(() =>
+      expect(screen.queryByText("Sending…")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("from the operator").closest("section[aria-label]"),
+    ).toHaveAttribute("aria-label", "alice@example.com (access code)");
     vi.unstubAllGlobals();
   });
 

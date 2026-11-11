@@ -306,24 +306,6 @@ func ModelProxyGrant(vendor string) string {
 // vendor's model-proxy grant, such as claude-proxy.
 func LegacyModelProxyCapability(vendor string) string { return vendor + "-proxy" }
 
-// ModelProxyGrantVendor is the vendor a model-proxy grant names --
-// recorded or the retired bare <vendor>-proxy -- and false for any other
-// grant.
-func ModelProxyGrantVendor(grant string) (string, bool) {
-	grant = strings.TrimSpace(grant)
-	for _, v := range ModelProxyVendors {
-		if grant == LegacyModelProxyCapability(v) {
-			return v, true
-		}
-	}
-	spec, err := CapabilityGrantSpec(grant)
-	if err != nil || spec.Capability != ModelProxyRef {
-		return "", false
-	}
-	v, _ := spec.With["vendor"].(string)
-	return v, v != ""
-}
-
 // GCPKeyServerGrant returns the recorded gcp#gcp-key grant for the named
 // permission set (with primary: true, matching protocol.Normalize).
 func GCPKeyServerGrant(permissionSet string) string {

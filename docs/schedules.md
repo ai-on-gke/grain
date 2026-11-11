@@ -60,6 +60,10 @@ implementation takes that dissolution all the way — there is no
 per-schedule opt-in to land `proposed` instead, unlike v1's own
 `needs_approval` header. A schedule whose work genuinely needs review
 each time is not what this covers today; see "Left open" below.
+(Since then, one firing does land `proposed`: a schedule or template a
+repository declared in `.grain/` whose firing carries something only a
+person may grant is held until a person accepts the declaration; see
+"Team approval" in [`docs/declarations.md`](declarations.md).)
 
 **Idempotency is a tag on the fired task, not a label matched by
 schedule name.** `firingTag(scheduleID)` produces `"schedule:<id>"`,
@@ -1784,3 +1788,29 @@ skipped, so no release candidate was cut that day, and nothing said why.
   worker. `admission: bypass` would also start the task past a full
   worker pool. It is not applied automatically, because only a person may
   grant an admission above `standard`.
+
+## Update: a schedule can be held while its base branch's publishing is held (grain/task-4393)
+
+On 2026-11-10 ai-on-gke/grain's `main` published nothing for hours while
+its release triage task (#4256) was open, and the release train
+(`.grain/schedules/release-train.yml`, every 20 minutes) woke 45 times in
+24 hours with nothing it could do. `Schedule.SkipWhen`
+(`schedule.skip_when`, schema version 141), declared
+`skip-when: publishing-held`, holds such a schedule:
+
+- **Check.** `Store.publishingHold` asks `BaseBranchPublishingFindings` --
+  the reading deployment health shows -- for a `Gated` finding with a
+  triage task on the repository the firing goes into and its base branch.
+  `fireTaskSchedule`, `fireSuiteSchedule` and `fireWorkflowSchedule` ask it
+  after their overlap checks, cadence firings only; Run now is not held.
+  The `github_workflow_run` trigger drops and records its firing
+  (`PublishingHeldSkip`).
+- **Record.** `SuppressedByPublishingHeld` (`publishingHeld`), with the
+  triage task in `TaskID`: `skipped at <time>: publishing held by task N
+  (<repo> <branch> has published nothing since <time>)`. One row per
+  occurrence, as for an overlap skip; it is never escalated as starved and
+  never noted on the triage task.
+- **Resume.** Held, not dropped: `NextRunAt` stays, and the first cycle
+  after the triage task closes fires once and records the occurrence as
+  fired late.
+

@@ -1020,6 +1020,48 @@ describe("RepoPage", () => {
     vi.unstubAllGlobals();
   });
 
+  // grain/task-4287: an empty allowlist means unrestricted, so removing
+  // the only entry widens what new tasks may target rather than
+  // narrowing it. The confirmation says that, and does not promise that
+  // new tasks "won't be able to target it", which would be false.
+  it("warns that removing the only allowed repo allows any repo again", async () => {
+    routeApi();
+    const confirmed = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirmed);
+    const user = userEvent.setup();
+    renderPage({ tab: "advanced", config: { targetRepos: ["acme/widgets"] } });
+
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+
+    const msg = confirmed.mock.calls[0][0];
+    expect(msg).toContain("the only repo this deployment allows");
+    expect(msg).toContain("allows any repo again");
+    expect(msg).not.toContain("won't be able to target it");
+    // Declined: nothing is removed.
+    expect(api).not.toHaveBeenCalledWith("/api/repos/acme/widgets", {
+      method: "DELETE",
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the narrowing wording while other repos stay allowed", async () => {
+    routeApi();
+    const confirmed = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirmed);
+    const user = userEvent.setup();
+    renderPage({
+      tab: "advanced",
+      config: { targetRepos: ["acme/widgets", "acme/gadgets"] },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+
+    const msg = confirmed.mock.calls[0][0];
+    expect(msg).toContain("won't be able to target it");
+    expect(msg).not.toContain("allows any repo again");
+    vi.unstubAllGlobals();
+  });
+
   // grain/task-411: removing a repo with work in it is allowed -- the
   // daemon parks that work rather than running it into a repo the list
   // no longer names -- so the confirmation is where an operator finds

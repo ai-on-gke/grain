@@ -311,6 +311,26 @@ PY
 	if !strings.Contains(pkgSection, "FAIL\tgithub.com/ai-on-gke/grain/cmd/grain\t0.080s") {
 		t.Errorf("=== per-package results === section missing package failure line:\n%s", pkgSection)
 	}
+
+	// A job's log tail is often all anybody sees of it, and the raw tail
+	// is whatever passing tests printed last, so the run ends on a recap
+	// naming what failed.
+	_, recap, ok := strings.Cut(out, "=== failed (recap; details under === failing tests === above) ===\n")
+	if !ok {
+		t.Fatalf("output does not end on a recap of failures:\n%s", out)
+	}
+	if strings.Contains(recap, "=== ") {
+		t.Errorf("recap is not the last section:\n%s", recap)
+	}
+	for _, want := range []string{
+		"--- FAIL: TestBrokenFeature (0.03s) [cmd/grain]",
+		"panic: unexpected nil pointer in handler",
+		"FAIL\tgithub.com/ai-on-gke/grain/cmd/grain\t0.080s",
+	} {
+		if !strings.Contains(recap, want) {
+			t.Errorf("recap missing %q:\n%s", want, recap)
+		}
+	}
 }
 
 // Pre-compiled test binaries (such as /var/tmp/grain-intercept.test in the
