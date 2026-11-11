@@ -204,24 +204,6 @@ body {
   z-index: 20;
 }
 
-.brand-mark-btn {
-  width: 44px;
-  height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: var(--md-sys-shape-corner-medium);
-  color: var(--md-sys-color-primary);
-  cursor: pointer;
-  margin-bottom: 4px;
-}
-
-.brand-mark-btn:hover {
-  background: var(--md-sys-color-surface-container-high);
-}
-
 .rail-item {
   position: relative;
   width: 64px;
@@ -319,6 +301,19 @@ body {
   font-weight: 500;
   color: var(--md-sys-color-on-surface);
   white-space: nowrap;
+  text-decoration: none;
+  border-radius: var(--md-sys-shape-corner-small);
+}
+
+.app-wordmark:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.bottom-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .top-actions {
@@ -1752,7 +1747,6 @@ a {
 }
 
 a.rail-item,
-a.brand-mark-btn,
 a.compact-nav-btn {
   text-decoration: none;
 }
@@ -2107,6 +2101,12 @@ g-inbox-page {
   background: var(--md-sys-color-surface-container-high);
 }
 
+.create-menu,
+.more-sheet-list {
+  list-style: none;
+  margin: 0;
+}
+
 .create-menu {
   position: fixed;
   z-index: 60;
@@ -2120,6 +2120,7 @@ g-inbox-page {
 }
 
 .create-menu-item {
+  display: block;
   padding: 10px 16px;
   color: var(--md-sys-color-on-surface);
   font-size: 14px;
@@ -2170,11 +2171,25 @@ g-inbox-page {
     box-shadow: var(--md-sys-elevation-dialog);
   }
 
+  .more-sheet-list {
+    padding: 0;
+  }
+
   .more-sheet-item {
+    display: block;
     padding: 14px 24px;
     color: var(--md-sys-color-on-surface);
     font-size: 15px;
     text-decoration: none;
+  }
+
+  .more-sheet-item:hover {
+    background: var(--md-sys-color-surface-container-high);
+  }
+
+  .more-sheet-item:focus-visible {
+    outline: 2px solid var(--md-sys-color-primary);
+    outline-offset: -2px;
   }
 }
 
@@ -2236,8 +2251,9 @@ g-inbox-page {
 }
 
 @media (max-width: 599.95px) {
+  /* Above the floating New task button, never over it. */
   .snackbar-region {
-    bottom: calc(56px + 36px + 16px);
+    bottom: calc(56px + 36px + 16px + 56px + 12px);
   }
 }
 
@@ -2252,7 +2268,6 @@ g-inbox-page {
   color: var(--md-sys-color-inverse-on-surface);
   font-size: 12px;
   line-height: 16px;
-  pointer-events: none;
 }
 
 .g-tip[hidden] {

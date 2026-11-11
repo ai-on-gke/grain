@@ -24,10 +24,12 @@ import {
 
 export const TIP_ID = "g-tip";
 export const TIP_DELAY_MS = 400;
+// How long the tip waits after the pointer leaves its control, so the
+// pointer can move onto the tip itself (WCAG 1.4.13: hoverable).
+export const TIP_LEAVE_MS = 120;
 
 // One tooltip element for the whole app (spec D-16): created on first
-// use, reused by every [gTip], role="tooltip", referenced from the
-// control with aria-describedby only while it is showing.
+// use, reused by every [gTip], role="tooltip".
 function tipElement(doc: Document): HTMLElement {
   let el = doc.getElementById(TIP_ID);
   if (!el) {
@@ -41,17 +43,37 @@ function tipElement(doc: Document): HTMLElement {
   return el;
 }
 
+// The directive whose text the shared element is showing, if any: one
+// owner at a time, so a hovered control never leaves a focused one's
+// aria-describedby pointing at someone else's sentence.
+let owner: TipDirective | null = null;
+
+function addToken(el: HTMLElement, attr: string, token: string): void {
+  const tokens = (el.getAttribute(attr) ?? "").split(/\s+/).filter(Boolean);
+  if (!tokens.includes(token)) tokens.push(token);
+  el.setAttribute(attr, tokens.join(" "));
+}
+
+function removeToken(el: HTMLElement, attr: string, token: string): void {
+  const tokens = (el.getAttribute(attr) ?? "")
+    .split(/\s+/)
+    .filter((t) => t && t !== token);
+  if (tokens.length) el.setAttribute(attr, tokens.join(" "));
+  else el.removeAttribute(attr);
+}
+
 // gTip shows a one-sentence description after 400 ms of hover, or at
-// once on keyboard focus; Escape, blur, scrolling or leaving hides it.
-// It never sets a native title, so there is no second tooltip.
+// once on keyboard focus. The pointer can move onto it; Escape anywhere,
+// blur, scrolling or leaving both control and tip hides it. It is
+// referenced with aria-describedby only while showing, and never sets a
+// native title, so there is no second tooltip.
 @Directive({
   selector: "[gTip]",
   host: {
     "(mouseenter)": "hoverIn()",
-    "(mouseleave)": "hide()",
+    "(mouseleave)": "hoverOut()",
     "(focusin)": "focusIn()",
     "(focusout)": "hide()",
-    "(keydown.escape)": "hide()",
   },
 })
 export class TipDirective implements OnDestroy {
@@ -62,44 +84,82 @@ export class TipDirective implements OnDestroy {
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private showing = false;
+  private showTimer: ReturnType<typeof setTimeout> | null = null;
+  private leaveTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly onScroll = (): void => this.hide();
+  private readonly onDocKey = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape") this.hide();
+  };
+  private readonly onTipEnter = (): void => this.clearLeave();
+  private readonly onTipLeave = (): void => this.hoverOut();
 
   hoverIn(): void {
-    if (!this.gTip()) return;
-    this.clear();
+    this.clearLeave();
+    if (!this.gTip() || owner === this) return;
+    this.clearShow();
     this.zone.runOutsideAngular(() => {
-      this.timer = setTimeout(() => this.show(), TIP_DELAY_MS);
+      this.showTimer = setTimeout(() => this.show(), TIP_DELAY_MS);
+    });
+  }
+
+  hoverOut(): void {
+    this.clearShow();
+    if (owner !== this) return;
+    this.clearLeave();
+    this.zone.runOutsideAngular(() => {
+      this.leaveTimer = setTimeout(() => this.hide(), TIP_LEAVE_MS);
     });
   }
 
   focusIn(): void {
     if (!this.gTip()) return;
-    this.clear();
+    // Keyboard focus only: a mouse click focuses buttons too, and a tip
+    // pinned until blur after every click is noise.
+    const el = this.host.nativeElement;
+    try {
+      if (!el.matches(":focus-visible")) return;
+    } catch {
+      // A browser without :focus-visible: show it.
+    }
+    this.clearShow();
     this.show();
   }
 
   show(): void {
     const text = this.gTip();
     if (!text) return;
+    if (owner && owner !== this) owner.hide();
     const el = tipElement(this.doc);
     el.textContent = text;
     el.hidden = false;
     this.position(el);
-    this.host.nativeElement.setAttribute("aria-describedby", TIP_ID);
-    this.showing = true;
-    this.doc.addEventListener("scroll", this.onScroll, true);
+    addToken(this.host.nativeElement, "aria-describedby", TIP_ID);
+    if (owner !== this) {
+      // The tip element is shared page-wide, so the owning directive is
+      // module state by design.
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
+      owner = this;
+      this.doc.addEventListener("scroll", this.onScroll, true);
+      this.doc.addEventListener("keydown", this.onDocKey, true);
+      el.addEventListener("mouseenter", this.onTipEnter);
+      el.addEventListener("mouseleave", this.onTipLeave);
+    }
   }
 
   hide(): void {
-    this.clear();
-    if (!this.showing) return;
-    this.showing = false;
+    this.clearShow();
+    this.clearLeave();
+    if (owner !== this) return;
+    owner = null;
     const el = this.doc.getElementById(TIP_ID);
-    if (el) el.hidden = true;
-    this.host.nativeElement.removeAttribute("aria-describedby");
+    if (el) {
+      el.hidden = true;
+      el.removeEventListener("mouseenter", this.onTipEnter);
+      el.removeEventListener("mouseleave", this.onTipLeave);
+    }
+    removeToken(this.host.nativeElement, "aria-describedby", TIP_ID);
     this.doc.removeEventListener("scroll", this.onScroll, true);
+    this.doc.removeEventListener("keydown", this.onDocKey, true);
   }
 
   private position(el: HTMLElement): void {
@@ -126,9 +186,14 @@ export class TipDirective implements OnDestroy {
     el.style.top = `${Math.round(top)}px`;
   }
 
-  private clear(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
+  private clearShow(): void {
+    if (this.showTimer) clearTimeout(this.showTimer);
+    this.showTimer = null;
+  }
+
+  private clearLeave(): void {
+    if (this.leaveTimer) clearTimeout(this.leaveTimer);
+    this.leaveTimer = null;
   }
 
   ngOnDestroy(): void {

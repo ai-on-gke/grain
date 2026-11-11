@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, inject, signal } from "@angular/core";
+import { Injectable, NgZone, OnDestroy, inject, signal } from "@angular/core";
 
 export interface SnackbarAction {
   label: string;
@@ -27,47 +27,72 @@ export interface Snack {
   durationMs: number;
 }
 
-// The spec's undo window: every reversible action offers Undo for five
-// seconds.
+// A plain message stays five seconds. One with an action (Undo, Open)
+// stays ten, so a keyboard or screen-reader user has time to reach it;
+// either pauses while hovered or focused (WCAG 2.2.1).
 export const DEFAULT_SNACK_MS = 5000;
+export const ACTION_SNACK_MS = 10000;
+
+function errorText(err: unknown): string {
+  const e = err as { error?: { error?: string } | string; message?: string };
+  if (typeof e?.error === "string" && e.error) return e.error;
+  if (e?.error && typeof e.error === "object" && e.error.error) {
+    return e.error.error;
+  }
+  return e?.message || "it did not go through";
+}
 
 // SnackbarService shows one short message at a time at the bottom of the
-// page, optionally with one action (Undo, Open). A new message replaces
-// the one showing, as Material's snackbar does; the component reads
-// `current` and announces it through a polite live region.
+// page, optionally with one action. A new message replaces the one
+// showing, as Material's snackbar does; the component reads `current`
+// and announces it through a polite live region.
 @Injectable({ providedIn: "root" })
-export class SnackbarService {
+export class SnackbarService implements OnDestroy {
   private readonly zone = inject(NgZone);
   private nextId = 1;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private remaining = 0;
+  private startedAt = 0;
   readonly current = signal<Snack | null>(null);
 
-  show(
-    message: string,
-    action?: SnackbarAction,
-    durationMs = DEFAULT_SNACK_MS,
-  ): Snack {
-    const snack: Snack = { id: this.nextId++, message, action, durationMs };
+  show(message: string, action?: SnackbarAction, durationMs?: number): Snack {
+    const ms = durationMs ?? (action ? ACTION_SNACK_MS : DEFAULT_SNACK_MS);
+    const snack: Snack = { id: this.nextId++, message, action, durationMs: ms };
     this.clearTimer();
     this.current.set(snack);
-    if (durationMs > 0) {
-      this.zone.runOutsideAngular(() => {
-        this.timer = setTimeout(
-          () => this.zone.run(() => this.dismiss(snack.id)),
-          durationMs,
-        );
-      });
-    }
+    this.remaining = ms;
+    if (ms > 0) this.startTimer(snack.id);
     return snack;
   }
 
+  // pause stops the clock while the person is on the snack; resume
+  // starts it again with whatever time was left.
+  pause(): void {
+    if (!this.timer) return;
+    this.clearTimer();
+    this.remaining = Math.max(
+      0,
+      this.remaining - (Date.now() - this.startedAt),
+    );
+  }
+
+  resume(): void {
+    const snack = this.current();
+    if (!snack || snack.durationMs === 0 || this.timer) return;
+    this.startTimer(snack.id);
+  }
+
   // runAction performs the showing snack's action once and dismisses it,
-  // so a double click cannot undo twice.
+  // so a double click cannot undo twice. A failed action says so.
   async runAction(id: number): Promise<void> {
     const snack = this.current();
     if (!snack || snack.id !== id || !snack.action) return;
     this.dismiss(id);
-    await snack.action.run();
+    try {
+      await snack.action.run();
+    } catch (err) {
+      this.show(`${snack.action.label} failed: ${errorText(err)}`);
+    }
   }
 
   dismiss(id?: number): void {
@@ -77,8 +102,20 @@ export class SnackbarService {
     this.current.set(null);
   }
 
+  private startTimer(id: number): void {
+    this.startedAt = Date.now();
+    const ms = this.remaining;
+    this.zone.runOutsideAngular(() => {
+      this.timer = setTimeout(() => this.zone.run(() => this.dismiss(id)), ms);
+    });
+  }
+
   private clearTimer(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  ngOnDestroy(): void {
+    this.clearTimer();
   }
 }

@@ -14,7 +14,11 @@
 
 import { TestBed } from "@angular/core/testing";
 import { SnackbarComponent } from "../shell/snackbar.component";
-import { DEFAULT_SNACK_MS, SnackbarService } from "./snackbar.service";
+import {
+  ACTION_SNACK_MS,
+  DEFAULT_SNACK_MS,
+  SnackbarService,
+} from "./snackbar.service";
 
 describe("SnackbarService", () => {
   afterEach(() => {
@@ -42,6 +46,30 @@ describe("SnackbarService", () => {
     await s.runAction(snack.id);
     expect(undo).toHaveBeenCalledTimes(1);
     expect(s.current()).toBeNull();
+  });
+
+  it("keeps a snack with an action for ten seconds, paused while hovered", () => {
+    vi.useFakeTimers();
+    const s = TestBed.inject(SnackbarService);
+    s.show("Moved", { label: "Undo", run: () => undefined });
+    vi.advanceTimersByTime(ACTION_SNACK_MS - 1000);
+    s.pause();
+    vi.advanceTimersByTime(ACTION_SNACK_MS * 3);
+    expect(s.current()?.message).toBe("Moved");
+    s.resume();
+    vi.advanceTimersByTime(ACTION_SNACK_MS);
+    expect(s.current()).toBeNull();
+  });
+
+  it("says so when the action fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const s = TestBed.inject(SnackbarService);
+    const snack = s.show("Moved", {
+      label: "Undo",
+      run: () => Promise.reject(new Error("409 stale")),
+    });
+    await s.runAction(snack.id);
+    expect(s.current()?.message).toBe("Undo failed: 409 stale");
   });
 
   it("does not dismiss a newer snack when an older one's id is passed", () => {

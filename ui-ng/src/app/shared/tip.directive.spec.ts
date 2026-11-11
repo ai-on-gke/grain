@@ -14,11 +14,17 @@
 
 import { Component } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
-import { TIP_DELAY_MS, TIP_ID, TipDirective } from "./tip.directive";
+import {
+  TIP_DELAY_MS,
+  TIP_ID,
+  TIP_LEAVE_MS,
+  TipDirective,
+} from "./tip.directive";
 
 @Component({
   imports: [TipDirective],
-  template: `<button type="button" gTip="Opens the backlog.">Tasks</button>`,
+  template: `<button type="button" gTip="Opens the backlog.">Tasks</button>
+    <button type="button" id="b2" gTip="Opens CI.">CI</button>`,
 })
 class HostComponent {}
 
@@ -28,12 +34,14 @@ function tip(): HTMLElement | null {
 
 describe("TipDirective", () => {
   let button: HTMLButtonElement;
+  let second: HTMLButtonElement;
   beforeEach(() => {
     document.getElementById(TIP_ID)?.remove();
     TestBed.configureTestingModule({ imports: [HostComponent] });
     const fixture = TestBed.createComponent(HostComponent);
     fixture.detectChanges();
     button = (fixture.nativeElement as HTMLElement).querySelector("button")!;
+    second = (fixture.nativeElement as HTMLElement).querySelector("#b2")!;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -41,13 +49,13 @@ describe("TipDirective", () => {
   });
 
   it("shows at once on focus, describes the control, and hides on blur", () => {
-    button.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    button.focus();
     expect(tip()?.hidden).toBe(false);
     expect(tip()?.getAttribute("role")).toBe("tooltip");
     expect(tip()?.textContent).toBe("Opens the backlog.");
     expect(button.getAttribute("aria-describedby")).toBe(TIP_ID);
     expect(button.hasAttribute("title")).toBe(false);
-    button.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    button.blur();
     expect(tip()?.hidden).toBe(true);
     expect(button.hasAttribute("aria-describedby")).toBe(false);
   });
@@ -71,5 +79,40 @@ describe("TipDirective", () => {
     button.dispatchEvent(new MouseEvent("mouseleave"));
     vi.advanceTimersByTime(TIP_DELAY_MS * 2);
     expect(tip()?.hidden ?? true).toBe(true);
+  });
+
+  it("hides on Escape pressed anywhere while hover-shown", () => {
+    vi.useFakeTimers();
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_DELAY_MS);
+    expect(tip()?.hidden).toBe(false);
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(tip()?.hidden).toBe(true);
+  });
+
+  it("stays up while the pointer moves onto the tip itself", () => {
+    vi.useFakeTimers();
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_DELAY_MS);
+    button.dispatchEvent(new MouseEvent("mouseleave"));
+    tip()!.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_LEAVE_MS * 2);
+    expect(tip()?.hidden).toBe(false);
+    tip()!.dispatchEvent(new MouseEvent("mouseleave"));
+    vi.advanceTimersByTime(TIP_LEAVE_MS);
+    expect(tip()?.hidden).toBe(true);
+  });
+
+  it("hands the shared tip to the next control and keeps other describedby ids", () => {
+    second.setAttribute("aria-describedby", "help-ci");
+    button.focus();
+    second.focus();
+    expect(tip()?.textContent).toBe("Opens CI.");
+    expect(button.hasAttribute("aria-describedby")).toBe(false);
+    expect(second.getAttribute("aria-describedby")).toBe(`help-ci ${TIP_ID}`);
+    second.blur();
+    expect(second.getAttribute("aria-describedby")).toBe("help-ci");
   });
 });

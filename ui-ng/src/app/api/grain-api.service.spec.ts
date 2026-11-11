@@ -61,4 +61,24 @@ describe("GrainApi.getIfChanged", () => {
     req.flush("boom", { status: 500, statusText: "Server Error" });
     await expect(b).rejects.toMatchObject({ status: 500 });
   });
+
+  it("names the problem when a 304 arrives with no cached copy", async () => {
+    const p = api.getIfChanged("GET /api/tasks");
+    http
+      .expectOne("/api/tasks")
+      .flush(null, { status: 304, statusText: "Not Modified" });
+    await expect(p).rejects.toThrow(/304 Not Modified with no cached copy/);
+  });
+
+  it("forgets cached tags after clearConditionalCache", async () => {
+    const a = api.getIfChanged("GET /api/tasks");
+    http.expectOne("/api/tasks").flush([], { headers: { ETag: '"v1"' } });
+    await a;
+    api.clearConditionalCache();
+    const b = api.getIfChanged("GET /api/tasks");
+    const req = http.expectOne("/api/tasks");
+    expect(req.request.headers.has("If-None-Match")).toBe(false);
+    req.flush([]);
+    await b;
+  });
 });

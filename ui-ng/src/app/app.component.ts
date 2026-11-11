@@ -16,13 +16,17 @@ import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
+  NgZone,
   OnDestroy,
   OnInit,
   computed,
   inject,
   signal,
+  viewChild,
 } from "@angular/core";
 import {
+  NavigationStart,
   Router,
   RouterLink,
   RouterLinkActive,
@@ -87,7 +91,10 @@ interface CreateItem {
     SnackbarComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { "(document:click)": "onDocumentClick($event)" },
+  host: {
+    "(document:click)": "onDocumentClick($event)",
+    "(document:keydown.escape)": "onEscape($event)",
+  },
   template: `
     <div class="app-shell">
       <nav class="nav-rail" aria-label="Primary destinations">
@@ -103,12 +110,12 @@ interface CreateItem {
             <path [attr.d]="icons['add']" fill="currentColor" />
           </svg>
         </a>
-        <div class="rail-create">
+        <div class="rail-create" (focusout)="onCreateFocusOut($event)">
           <button
+            #createBtn
             type="button"
             class="rail-new-btn"
             data-testid="rail-create-menu"
-            aria-haspopup="menu"
             [attr.aria-expanded]="createOpen()"
             aria-controls="create-menu"
             (click)="toggleCreate($event)"
@@ -119,28 +126,26 @@ interface CreateItem {
             </svg>
           </button>
           @if (createOpen()) {
-            <div
+            <ul
               class="create-menu"
               id="create-menu"
-              role="menu"
               aria-label="Create"
               data-testid="create-menu"
-              tabindex="-1"
               [style.top.px]="createPos().top"
               [style.left.px]="createPos().left"
-              (keydown.escape)="createOpen.set(false)"
             >
               @for (item of createItems; track item.href) {
-                <a
-                  class="create-menu-item"
-                  role="menuitem"
-                  [href]="item.href"
-                  [gTip]="item.tip"
-                  gTipPlacement="right"
-                  >{{ item.label }}</a
-                >
+                <li>
+                  <a
+                    class="create-menu-item"
+                    [href]="item.href"
+                    [gTip]="item.tip"
+                    gTipPlacement="right"
+                    >{{ item.label }}</a
+                  >
+                </li>
               }
-            </div>
+            </ul>
           }
         </div>
         <span class="rail-divider" aria-hidden="true"></span>
@@ -221,11 +226,15 @@ interface CreateItem {
           >
             <path [attr.d]="icons['mark']" fill="currentColor" />
           </svg>
-          <span class="app-wordmark">Grain</span>
+          <a
+            class="app-wordmark"
+            routerLink="/inbox"
+            aria-label="Grain home: Inbox"
+            >Grain</a
+          >
           <span
             class="next-chip"
             gTip="The new UI, built beside the classic one."
-            tabindex="0"
             >Next</span
           >
         </div>
@@ -271,7 +280,6 @@ interface CreateItem {
             <span
               class="role-chip"
               data-testid="role-chip"
-              tabindex="0"
               [gTip]="'Signed in with role ' + access.roleLabel() + '.'"
             >
               {{ access.roleLabel() }}
@@ -288,7 +296,19 @@ interface CreateItem {
         <span class="muted"
           >grain{{ store.version() ? " " + store.version() : "" }}</span
         >
-        <a class="btn-text bottom-link" href="/">Classic UI</a>
+        <span class="bottom-actions">
+          <button
+            type="button"
+            class="btn-text bottom-link"
+            data-testid="shortcuts-toggle"
+            [attr.aria-pressed]="keyboard.enabled()"
+            gTip="Single-key shortcuts (c, 1-9, comma, t, and j/k/x in the Inbox). Turn them off if they get in the way of speech input or a screen reader."
+            (click)="keyboard.setEnabled(!keyboard.enabled())"
+          >
+            Shortcuts {{ keyboard.enabled() ? "on" : "off" }}
+          </button>
+          <a class="btn-text bottom-link" href="/">Classic UI</a>
+        </span>
       </footer>
 
       <a
@@ -341,11 +361,12 @@ interface CreateItem {
           }
         }
         <button
+          #moreBtn
           type="button"
           class="compact-nav-btn"
           data-testid="compact-more"
-          aria-haspopup="dialog"
           [attr.aria-expanded]="moreOpen()"
+          aria-controls="more-sheet"
           (click)="toggleMore($event)"
         >
           <span class="compact-nav-pill">
@@ -358,18 +379,28 @@ interface CreateItem {
       </nav>
 
       @if (moreOpen()) {
-        <div
+        <nav
           class="more-sheet"
-          role="dialog"
+          id="more-sheet"
           aria-label="More destinations"
           data-testid="more-sheet"
-          tabindex="-1"
-          (keydown.escape)="moreOpen.set(false)"
+          (focusout)="onMoreFocusOut($event)"
         >
-          @for (d of moreDestinations; track d.id) {
-            <a class="more-sheet-item" [href]="hrefOf(d)">{{ d.label }}</a>
-          }
-        </div>
+          <ul class="more-sheet-list">
+            @for (d of moreDestinations; track d.id) {
+              <li>
+                <a class="more-sheet-item" [href]="hrefOf(d)">{{ d.label }}</a>
+              </li>
+            }
+            @for (item of createItems; track item.href) {
+              <li>
+                <a class="more-sheet-item" [href]="item.href">{{
+                  item.label
+                }}</a>
+              </li>
+            }
+          </ul>
+        </nav>
       }
 
       <g-snackbar />
@@ -381,9 +412,10 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly access = inject(AccessService);
   protected readonly filter = inject(ViewFilter);
   protected readonly store = inject(InboxStore);
-  private readonly keyboard = inject(KeyboardService);
+  protected readonly keyboard = inject(KeyboardService);
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
+  private readonly zone = inject(NgZone);
 
   protected readonly icons = ICONS;
   protected readonly destinations = DESTINATIONS;
@@ -412,7 +444,15 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly moreOpen = signal(false);
   protected readonly hrefOf = hrefFor;
 
+  private readonly createBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("createBtn");
+  private readonly moreBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("moreBtn");
   private unregister: (() => void)[] = [];
+  private navSub: { unsubscribe(): void } | null = null;
+  private readonly onViewportChange = (): void => {
+    if (this.createOpen()) this.zone.run(() => this.createOpen.set(false));
+  };
 
   ngOnInit(): void {
     const r = (key: string, description: string, run: () => void) =>
@@ -423,10 +463,30 @@ export class AppComponent implements OnInit, OnDestroy {
     );
     r(",", "Open Settings", () => this.open(SETTINGS));
     r("t", "Switch light and dark", () => this.theme.toggle());
+    // Menus belong to the page they were opened on.
+    this.navSub = this.router.events.subscribe((e) => {
+      if (e instanceof NavigationStart) {
+        this.createOpen.set(false);
+        this.moreOpen.set(false);
+      }
+    });
+    // The create menu is placed from its button once; a scrolled rail or
+    // a resized window would leave it floating, so either closes it.
+    this.zone.runOutsideAngular(() => {
+      this.doc.defaultView?.addEventListener("resize", this.onViewportChange);
+      this.doc
+        .querySelector(".nav-rail")
+        ?.addEventListener("scroll", this.onViewportChange);
+    });
   }
 
   ngOnDestroy(): void {
     this.unregister.forEach((u) => u());
+    this.navSub?.unsubscribe();
+    this.doc.defaultView?.removeEventListener("resize", this.onViewportChange);
+    this.doc
+      .querySelector(".nav-rail")
+      ?.removeEventListener("scroll", this.onViewportChange);
   }
 
   // open goes to a destination: a route inside this app, or the classic
@@ -463,12 +523,60 @@ export class AppComponent implements OnInit, OnDestroy {
     this.moreOpen.update((v) => !v);
   }
 
+  // closeCreate and closeMore handle Escape: close, put focus back on
+  // the button that opened it, and mark the key handled so the page's
+  // own Escape (the Inbox closing its inspector) does not also fire.
+  protected onEscape(ev: Event): void {
+    if (this.createOpen()) this.closeCreate(ev, true);
+    else if (this.moreOpen()) this.closeMore(ev, true);
+  }
+
+  protected closeCreate(ev: Event, refocus: boolean): void {
+    if (!this.createOpen()) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.createOpen.set(false);
+    if (refocus) this.createBtn()?.nativeElement.focus();
+  }
+
+  protected closeMore(ev: Event, refocus: boolean): void {
+    if (!this.moreOpen()) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.moreOpen.set(false);
+    if (refocus) this.moreBtn()?.nativeElement.focus();
+  }
+
+  // Tabbing out of an open menu closes it rather than leaving it open
+  // behind the focus.
+  protected onCreateFocusOut(ev: FocusEvent): void {
+    const next = ev.relatedTarget as HTMLElement | null;
+    if (next && !next.closest(".rail-create")) this.createOpen.set(false);
+  }
+
+  protected onMoreFocusOut(ev: FocusEvent): void {
+    const next = ev.relatedTarget as HTMLElement | null;
+    if (
+      next &&
+      !next.closest(".more-sheet") &&
+      next !== this.moreBtn()?.nativeElement
+    ) {
+      this.moreOpen.set(false);
+    }
+  }
+
   // A click anywhere outside an open menu closes it.
   protected onDocumentClick(ev: Event): void {
     const t = ev.target as HTMLElement | null;
     if (this.createOpen() && !t?.closest(".rail-create")) {
       this.createOpen.set(false);
     }
-    if (this.moreOpen() && !t?.closest(".more-sheet")) this.moreOpen.set(false);
+    if (
+      this.moreOpen() &&
+      !t?.closest(".more-sheet") &&
+      !t?.closest('[data-testid="compact-more"]')
+    ) {
+      this.moreOpen.set(false);
+    }
   }
 }

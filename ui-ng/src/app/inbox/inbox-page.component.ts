@@ -30,6 +30,7 @@ import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type { DiffPreview, TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ThemeService } from "../services/theme.service";
 import {
   type FilterId,
@@ -802,6 +803,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly theme = inject(ThemeService);
   private readonly api = inject(GrainApi);
   private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly keyboard = inject(KeyboardService);
 
   protected readonly filters = FILTERS;
   protected readonly ago = ago;
@@ -1055,12 +1057,16 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   @HostListener("document:keydown", ["$event"])
   onKey(ev: KeyboardEvent): void {
-    const t = ev.target as HTMLElement | null;
-    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+    // The shell's menus and sheets handle their own Escape first and
+    // mark it handled; typing and widgets keep their keys.
+    if (ev.defaultPrevented || isTypingTarget(ev.target)) return;
     if (ev.metaKey || ev.ctrlKey || ev.altKey || this.confirming()) return;
-    if (ev.key === "j") this.store.step(1);
-    else if (ev.key === "k") this.store.step(-1);
-    else if (ev.key === "x") {
+    // j, k and x are character-key shortcuts: off when the person has
+    // turned shortcuts off (WCAG 2.1.4). Escape always works.
+    const letters = this.keyboard.enabled() && !ev.repeat;
+    if (letters && ev.key === "j") this.store.step(1);
+    else if (letters && ev.key === "k") this.store.step(-1);
+    else if (letters && ev.key === "x") {
       const key = this.store.selected()?.key;
       if (key) this.store.toggleChecked(key);
     } else if (ev.key === "Escape") this.store.closeSheet();

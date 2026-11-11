@@ -107,11 +107,22 @@ export class GrainApi {
       else this.etags.delete(url);
       return { body, changed: true };
     } catch (err) {
-      if (cached && (err as HttpErrorResponse)?.status === 304) {
-        return { body: cached.body as T, changed: false };
+      if ((err as HttpErrorResponse)?.status === 304) {
+        if (cached) return { body: cached.body as T, changed: false };
+        // A 304 to a request that sent no tag means a cache in between
+        // answered for us; nothing here can stand in for the body.
+        throw new Error(`${url}: 304 Not Modified with no cached copy`);
       }
       throw err;
     }
+  }
+
+  // clearConditionalCache forgets every cached body, for a sign-in or a
+  // role change after which the same URL may answer differently. The
+  // bodies getIfChanged returns are shared between readers: treat them
+  // as read-only.
+  clearConditionalCache(): void {
+    this.etags.clear();
   }
 
   patch<T = unknown>(

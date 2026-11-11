@@ -13,7 +13,11 @@
 // limitations under the License.
 
 import { TestBed } from "@angular/core/testing";
-import { KeyboardService, isTypingTarget } from "./keyboard.service";
+import {
+  KeyboardService,
+  SHORTCUTS_STORAGE_KEY,
+  isTypingTarget,
+} from "./keyboard.service";
 
 function press(key: string, target: EventTarget = document.body, init = {}) {
   const ev = new KeyboardEvent("keydown", {
@@ -30,6 +34,7 @@ describe("KeyboardService", () => {
   let kb: KeyboardService;
   beforeEach(() => {
     document.body.innerHTML = "";
+    localStorage.clear();
     kb = TestBed.inject(KeyboardService);
   });
   afterEach(() => TestBed.resetTestingModule());
@@ -86,5 +91,32 @@ describe("KeyboardService", () => {
     Object.defineProperty(div, "isContentEditable", { value: true });
     expect(isTypingTarget(div)).toBe(true);
     expect(isTypingTarget(null)).toBe(false);
+  });
+
+  it("ignores held-down repeats", () => {
+    const run = vi.fn();
+    kb.register({ key: "j", description: "Next", run });
+    press("j", document.body, { repeat: true });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("can be switched off, and remembers the choice", () => {
+    const run = vi.fn();
+    kb.register({ key: "c", description: "New task", run });
+    kb.setEnabled(false);
+    press("c");
+    expect(run).not.toHaveBeenCalled();
+    expect(localStorage.getItem(SHORTCUTS_STORAGE_KEY)).toBe("off");
+    kb.setEnabled(true);
+    press("c");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats ARIA text and composite widgets as typing", () => {
+    for (const role of ["textbox", "combobox", "listbox", "grid", "slider"]) {
+      const div = document.createElement("div");
+      div.setAttribute("role", role);
+      expect(isTypingTarget(div)).toBe(true);
+    }
   });
 });

@@ -23,7 +23,14 @@ import { SnackbarService } from "../services/snackbar.service";
   template: `
     <div class="snackbar-region" role="status" aria-live="polite">
       @if (snacks.current(); as s) {
-        <div class="snackbar" data-testid="snackbar">
+        <div
+          class="snackbar"
+          data-testid="snackbar"
+          (mouseenter)="snacks.pause()"
+          (mouseleave)="snacks.resume()"
+          (focusin)="snacks.pause()"
+          (focusout)="snacks.resume()"
+        >
           <span class="snackbar-text">{{ s.message }}</span>
           @if (s.action) {
             <button
