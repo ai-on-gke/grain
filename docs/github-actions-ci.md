@@ -235,15 +235,15 @@ The cost is that a superseded commit has no `docker.io/grainai/*:sha-<short>` im
 
 On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the bare names are one-release aliases, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
 
-1. **`package-publish`**:
+1. **`release#package-publish`**:
    - Mapped via `scripts/configure-dockerhub-auth.sh` to `PACKAGE_PUBLISH_REGISTRY` (default `docker.io`), `PACKAGE_PUBLISH_USERNAME` (from `vars.DOCKERHUB_USERNAME`, default `grainai`), and `PACKAGE_PUBLISH_TOKEN` (from `secrets.DOCKER_PAT`). Missing `DOCKER_PAT` or a failed `docker login` fails fast before any build or push step runs.
    - In `release-train.yml`, `scripts/configure-dockerhub-auth.sh --write-files` also writes `/home/debian/.package-publish-{registry,username,token}` (`chmod 600`) so the pre-flight `Require the publishing credential` check fails fast before tagging any git ref if no registry token is configured.
    - In `release.yml`'s `Prune old package versions` step, `cmd/ghcr-prune` authenticates against the Docker Hub v2 API with `DOCKER_PAT` and `DOCKERHUB_USERNAME` (default `grainai`), while retaining `-registry=ghcr.io` compatibility when overridden.
-2. **`image-signing` (optional capability)**:
+2. **`release#image-signing` (optional capability)**:
    - Mapped to `secrets.IMAGE_SIGNING_KEY` (and optional `secrets.IMAGE_SIGNING_PASSWORD`).
    - When `secrets.IMAGE_SIGNING_KEY` is set, the workflow installs `cosign` (if not already present), writes the key to `$RUNNER_TEMP/image-signing.key` (`chmod 600`), and exports `IMAGE_SIGNING_KEY` and `IMAGE_SIGNING_PASSWORD_FILE` for `scripts/release-images.sh`.
    - When `secrets.IMAGE_SIGNING_KEY` is unset, `scripts/release-images.sh` logs `WARNING: IMAGE_SIGNING_KEY is not set; publishing ... UNSIGNED` and continues, matching `.grain/workflows`.
-3. **`repo-write:ai-on-gke/grain` and `release-gate-read`**:
+3. **`repo#write` `{repo: ai-on-gke/grain}` and `api#release-gate-read`** (formerly `repo-write:ai-on-gke/grain` and `release-gate-read`):
    - In `release-train.yml` (always dry since the grain-task train took over) mapped to `permissions: contents: write`, `actions/checkout` with `persist-credentials: true` and `token: ${{ secrets.REPO_WRITE_TOKEN || secrets.GITHUB_TOKEN }}`, plus the optional `GRAIN_API_URL` (`vars.GRAIN_API_URL`) and `GRAIN_API_TOKEN` (`secrets.GRAIN_API_TOKEN`). The live train is the grain task from `.grain/templates/release-train.yml`, which pushes with its template's `push:` grant.
    - **What `scripts/release-from-trunk.sh` reads and writes**:
      - **Git repository (`origin`)**:
