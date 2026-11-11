@@ -406,7 +406,7 @@ func Schema() map[string]any {
 			"permission_sets": map[string]any{
 				"type":        "array",
 				"title":       "Permission sets",
-				"description": "What a gcp-key grant's with: {permission_set} chooses among; the first is the default.",
+				"description": "What a gcp#gcp-key grant's with: {permission_set} chooses among; the first is the default.",
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,

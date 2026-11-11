@@ -43,7 +43,8 @@ body: |
     than every `Design-Item:` means the item was taken out; otherwise the
     newest `Design-Item:` commit's `Design-Rev:` is the revision it was
     built from.
-  - The open tasks for this doc. If you hold `self-debug`, use
+  - The open tasks for this doc. If you hold
+    `https://grain.dev/capabilities/api#self-debug`, use
     `list_grain_tasks` (and read the tasks) to find open tasks whose title
     or body names `<doc>#<ID>`, and read the `Design-Rev:` line in each
     body: the revision it was filed against. If you cannot search, say so
