@@ -95,7 +95,7 @@ func TestCIPromptNamesOnlyUsableCommands(t *testing.T) {
 			t.Errorf("GitHub-CI bullet with ci:read = %q, want %s", read, want)
 		}
 	}
-	for _, unwanted := range []string{"`grain ci run-job <job>`", "`grain ci retrigger`,", "--jobs"} {
+	for _, unwanted := range []string{"--jobs"} {
 		if strings.Contains(read, unwanted) {
 			t.Errorf("GitHub-CI bullet with ci:read = %q offers %s", read, unwanted)
 		}
@@ -107,13 +107,27 @@ func TestCIPromptNamesOnlyUsableCommands(t *testing.T) {
 			t.Errorf("GitHub-CI bullet without ci:read = %q, want %s", none, want)
 		}
 	}
-	for _, unwanted := range []string{"`grain ci list`", "`grain ci log", "test-history", "`grain pr status`", "`grain pr base-status`", "run-job", "retrigger"} {
+	for _, unwanted := range []string{"`grain ci list`", "`grain ci log", "test-history", "`grain pr status`", "`grain pr base-status`"} {
 		if strings.Contains(none, unwanted) {
 			t.Errorf("GitHub-CI bullet without ci:read = %q offers %s, which answers forbidden", none, unwanted)
 		}
 	}
 	if n := strings.Count(none, "api#ci-read"); n != 1 {
 		t.Errorf("GitHub-CI bullet without ci:read names api#ci-read %d times, want once", n)
+	}
+
+	// A run on a repository GitHub Actions gates re-runs its own checks
+	// with grain ci retrigger, whatever it may read, rather than pushing
+	// an empty commit that moves the pull request's head.
+	for _, line := range []string{read, none} {
+		for _, want := range []string{"`grain ci retrigger`", "`grain ci run-job <job>`", "never an empty commit", "at most 3 times"} {
+			if !strings.Contains(line, want) {
+				t.Errorf("GitHub-CI bullet = %q, want %s", line, want)
+			}
+		}
+		if strings.Contains(line, "push a commit for that") {
+			t.Errorf("GitHub-CI bullet = %q still sends the run to push a commit to re-run its checks", line)
+		}
 	}
 
 	// No variant offers grain#ci as something to ask for.

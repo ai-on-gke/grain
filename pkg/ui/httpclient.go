@@ -2382,6 +2382,16 @@ func (c *HTTPClient) DownloadCIArtifact(ctx context.Context, ref ci.ArtifactRef,
 // branch it was judging -- is told rather than left to guess. Empty
 // sends no body at all, which is the request this route has always
 // answered.
+// RerunCIRun re-runs a GitHub Actions run (a gha: id) as its next
+// attempt: POST /api/ci/runs/{id}/rerun.
+func (c *HTTPClient) RerunCIRun(ctx context.Context, id string, req ActionsRerunRequest) (ActionsRerunResult, error) {
+	var res ActionsRerunResult
+	if err := c.do(ctx, http.MethodPost, "/api/ci/runs/"+url.PathEscape(id)+"/rerun", req, &res); err != nil {
+		return ActionsRerunResult{}, err
+	}
+	return res, nil
+}
+
 func (c *HTTPClient) CancelCIRun(ctx context.Context, id, reason string) (ci.Run, error) {
 	var body any
 	if reason = strings.TrimSpace(reason); reason != "" {

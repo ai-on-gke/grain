@@ -1689,11 +1689,22 @@ func runCIAccessOf(task model.Task) runCIAccess {
 	return runCIAccess{read: read}
 }
 
+// githubRerunHint is what a run on a repository GitHub Actions gates is
+// told about re-running its checks: grain ci retrigger and run-job, in
+// place of the empty commits that moved a pull request's head and threw
+// away its approvals (ui.MaxActionsRerunsPerHead is the bound it names).
+const githubRerunHint = "`grain ci retrigger` re-runs the failed jobs of the GitHub Actions runs at your pull request's head " +
+	"(`--all` every job; `grain ci run-job <job>` one job) without a commit, so the head, its approvals and " +
+	"its reviews stay put -- use it for a flake or a runner fault, never an empty commit. Each run at one " +
+	"commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included."
+
 // grainCLICIBullet is the CI & pull request bullet of grainCLISection,
 // naming only the commands this run can use (task 4364). Every command
 // it lists for a GitHub-CI run answers for GitHub Actions runs
-// (gha:<owner>:<name>:<run>); run-job and retrigger drive grain CI alone
-// and are not offered there. A run that cannot
+// (gha:<owner>:<name>:<run>); there, run-job and retrigger re-run the
+// Actions runs at the head of the run's own pull request, with no commit
+// pushed and at most ui.MaxActionsRerunsPerHead times per head, which is
+// what agents used to push empty commits for. A run that cannot
 // read its CI is told the one grant that would let it, once -- never
 // grain#ci, which no repository GitHub Actions gates can grant and which
 // is what agents told only "forbidden" kept asking a person for.
@@ -1715,12 +1726,12 @@ func grainCLICIBullet(repo string, access runCIAccess) string {
 			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
 			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
 			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
-			"`grain ci log <run-id>`. `grain ci run-job` and `grain ci retrigger` drive grain CI only " +
-			"and cannot rerun GitHub's checks: push a commit for that.\n"
+			"`grain ci log <run-id>`. " + githubRerunHint + "\n"
 	}
 	return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
 		"which reports each failing job's log tail, `grain pr open` (your pull request, its checks and " +
-		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. This run does " +
+		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. " +
+		githubRerunHint + " This run does " +
 		"not hold read access to the CI of " + repo + ": to read CI logs, `request_access` for " +
 		"`https://grain.dev/capabilities/api#ci-read` on " + repo + "; never `grain#ci`, which a " +
 		"repository GitHub Actions gates cannot grant.\n"

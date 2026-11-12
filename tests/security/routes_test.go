@@ -480,6 +480,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/ci/faults":                           trusted,
 	"GET /api/ci/runs/{id}":                        trusted,
 	"DELETE /api/ci/runs/{id}":                     trusted,
+	"POST /api/ci/runs/{id}/rerun":                 trusted,
 	"GET /api/ci/runs/{id}/log":                    trusted,
 	"GET /api/ci/runs/{id}/artifacts":              trusted,
 	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": trusted,

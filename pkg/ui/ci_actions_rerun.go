@@ -42,6 +42,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"slices"
 	"strconv"
@@ -429,10 +430,13 @@ func (s *Server) handleRerunCIRun(w http.ResponseWriter, r *http.Request) {
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	res, err := s.tasks.RerunActionsRun(r.Context(), r.PathValue("id"), req)
+	id := r.PathValue("id")
+	res, err := s.tasks.RerunActionsRun(r.Context(), id, req)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
+	log.Printf("ui: %s re-ran GitHub Actions run %s at %s (%d run(s))",
+		s.tasks.requestActor(r.Context()).Actor.ID, id, shortHead(res.Head), len(res.Runs))
 	writeJSON(w, http.StatusAccepted, res)
 }
