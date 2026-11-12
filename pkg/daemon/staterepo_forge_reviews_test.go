@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -71,7 +72,7 @@ func TestRequireVerifiedReadsReviewsFromTheDeploymentsForge(t *testing.T) {
 	}
 
 	// Nothing is asked of a host the operator did not name, nor over
-	// plain HTTP the operator did not allow.
+	// plain HTTP off loopback or when the operator did not allow it.
 	for _, c := range []struct {
 		name, forge string
 		insecure    bool
@@ -80,14 +81,19 @@ func TestRequireVerifiedReadsReviewsFromTheDeploymentsForge(t *testing.T) {
 		{"default forge", "github.com", false, settings.Remote},
 		{"another host", "forge.example.com", true, settings.Remote},
 		{"plain http not allowed", host, false, settings.Remote},
+		{"plain http off loopback", "forge.example.com", true, "http://forge.example.com/acme/grain-config.git"},
 		{"credentials in the URL", host, true, "http://x:y@" + host + "/acme/grain-config.git"},
 		{"ssh remote", host, true, "ssh://git@" + host + "/acme/grain-config.git"},
+		{"no owner/repo in path", host, true, "http://" + host + "/not-a-repo"},
 	} {
 		setStateRepoForge(c.forge, c.insecure)
 		s := settings
 		s.Remote = c.remote
 		if v := stateRepoVerifier(dir, s); v == nil || v.Reviews != nil {
 			t.Errorf("%s: stateRepoVerifier = %+v, want one without Reviews", c.name, v)
+		}
+		if status := verificationStatus(s, nil); status == nil || status.ForgeReviews {
+			t.Errorf("%s: verificationStatus.ForgeReviews = %+v, want false", c.name, status)
 		}
 	}
 	// github.com itself is unchanged, and an https:// remote on the forge
@@ -98,5 +104,42 @@ func TestRequireVerifiedReadsReviewsFromTheDeploymentsForge(t *testing.T) {
 	}
 	if v := stateRepoVerifier(dir, staterepo.Settings{Remote: "https://github.com/acme/grain-config.git", RequireVerified: true}); v == nil || v.Reviews == nil {
 		t.Errorf("github.com remote: stateRepoVerifier = %+v, want Reviews", v)
+	}
+}
+
+// -github-host and -github-insecure-http are seed-only flags: on a restart
+// without them, loadStateRepo pulls the external config repository before
+// LoadConfig runs, so initialStateRepoForge must read the already-stored
+// grain_config row rather than falling back to the "github.com" flag default.
+func TestInitialStateRepoForgeUsesStoredConfigOnRestart(t *testing.T) {
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	defer closeStore()
+
+	flags := Config{GithubHost: "127.0.0.1:4291", GithubInsecureHTTP: true}
+	if host, insecure := initialStateRepoForge(ctx, store, flags); host != "127.0.0.1:4291" || !insecure {
+		t.Fatalf("empty store: initialStateRepoForge = (%q, %t), want flags (127.0.0.1:4291, true)", host, insecure)
+	}
+
+	// A connections-only row (`grain connections import` before first start)
+	// still uses the CLI flags.
+	if err := store.PutConfig(ctx, model.Config{
+		GitConnections: []model.TeamGitConnection{{Credential: "bot"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if host, insecure := initialStateRepoForge(ctx, store, flags); host != "127.0.0.1:4291" || !insecure {
+		t.Fatalf("connections-only store: initialStateRepoForge = (%q, %t), want flags (127.0.0.1:4291, true)", host, insecure)
+	}
+
+	// Once seeded, a restart with default CLI flags uses the stored forge.
+	seeded := flags.ToModelConfig()
+	seeded.PollInterval = 10
+	if err := store.PutConfig(ctx, seeded); err != nil {
+		t.Fatal(err)
+	}
+	restartFlags := Config{GithubHost: "github.com", GithubInsecureHTTP: false}
+	if host, insecure := initialStateRepoForge(ctx, store, restartFlags); host != "127.0.0.1:4291" || !insecure {
+		t.Fatalf("seeded store on restart: initialStateRepoForge = (%q, %t), want stored (127.0.0.1:4291, true)", host, insecure)
 	}
 }

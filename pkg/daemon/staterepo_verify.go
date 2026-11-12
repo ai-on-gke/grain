@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -80,18 +82,36 @@ func setStateRepoForge(host string, insecureHTTP bool) {
 	stateRepoForge.Store(&forgeHost{host: strings.TrimSpace(host), insecureHTTP: insecureHTTP})
 }
 
+// initialStateRepoForge is the forge host in effect before loadStateRepo pulls
+// an external config repository: the stored grain_config row's when one
+// already exists (the same precedence LoadConfig applies once a deployment has
+// been seeded, since -github-host and -github-insecure-http are seed-only
+// flags), and flagCfg's otherwise.
+func initialStateRepoForge(ctx context.Context, store *model.Store, flagCfg Config) (string, bool) {
+	if store != nil {
+		if stored, err := store.GetConfig(ctx); err == nil && stored != nil && !stored.ConnectionsOnly() {
+			return stored.GitHubHost, stored.GitHubInsecureHTTP
+		}
+	}
+	return flagCfg.GithubHost, flagCfg.GithubInsecureHTTP
+}
+
 // forgeReviewTransport is what require_verified reads a remote's pull
 // requests over, or nil when grain cannot ask anybody about them: GitHub's
 // API for an https://github.com remote, and the deployment's own
-// -github-host (a GitHub Enterprise host, or a local forge double) for a
-// remote on exactly that host -- spoken over plain HTTP only when
-// -github-insecure-http says so. Before this, every remote off github.com
-// was nil, so a deployment pointed at its own forge could never verify an
-// approved or grain-merged pull request, only signatures and acceptances
-// (docs/test-runs/2026-11-11-external-config-verify.md, F1). A remote on
-// any other host is still nil: nothing is asked of a host the operator
-// did not name.
+// -github-host (when its REST API is served at the host root, as github.APIHost
+// assumes) for a remote on exactly that host -- spoken over plain HTTP only
+// on loopback when -github-insecure-http says so (ValidateForwardTarget), and
+// never downgrading an https:// remote to plain HTTP. Before this, every
+// remote off github.com was nil, so a deployment pointed at its own forge
+// could never verify an approved or grain-merged pull request, only signatures
+// and acceptances (docs/test-runs/2026-11-11-external-config-verify.md, F1).
+// A remote on any other host is still nil: nothing is asked of a host the
+// operator did not name.
 func forgeReviewTransport(remote string) *github.RealTransport {
+	if _, _, ok := repoFromRemote(remote); !ok {
+		return nil
+	}
 	if ladderMaySendTo(remote) {
 		return github.NewRealTransport("github.com")
 	}
@@ -112,6 +132,9 @@ func forgeReviewTransport(remote string) *github.RealTransport {
 			return nil
 		}
 	default:
+		return nil
+	}
+	if gitproxy.ValidateForwardTarget(f.host, useTLS) != nil {
 		return nil
 	}
 	t := github.NewRealTransport(f.host)
@@ -231,8 +254,10 @@ func verificationStatus(settings staterepo.Settings, repo *staterepo.Repo) *ui.S
 			}
 		}
 	}
-	if h := repo.Held(); h != nil && settings.RequireVerified {
-		out.Held = &ui.StateRepoHeldCommit{SHA: h.SHA, Subject: h.Subject, Reason: h.Reason, Since: h.Since}
+	if repo != nil && settings.RequireVerified {
+		if h := repo.Held(); h != nil {
+			out.Held = &ui.StateRepoHeldCommit{SHA: h.SHA, Subject: h.Subject, Reason: h.Reason, Since: h.Since}
+		}
 	}
 	return out
 }

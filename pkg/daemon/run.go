@@ -312,9 +312,11 @@ func Run(ctx context.Context, cfg Config) error {
 	// it finds, but nothing else replaces task and run rows once there
 	// are runs live to hold them.
 	// require_verified reads pull requests from the forge -github-host
-	// names (forgeReviewTransport); the flag's value until the stored
-	// configuration is loaded below.
-	setStateRepoForge(cfg.GithubHost, cfg.GithubInsecureHTTP)
+	// names (forgeReviewTransport): the stored grain_config row's when one
+	// already exists (so a restart without -github-host still verifies pull
+	// requests merged while the daemon was down), and the flag's value on a
+	// fresh store until LoadConfig runs below.
+	setStateRepoForge(initialStateRepoForge(ctx, store, cfg))
 	stateRepo, err := OpenStateRepo(ctx, cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("opening the state repository: %w", err)
