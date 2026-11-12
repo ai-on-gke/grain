@@ -88,7 +88,7 @@ func TestParkedRunResumesWithItsTargetsOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	history := orchestrator.History{Attempt: 2, Attempts: runs,
-		Resumed: orchestrator.ResumedFrom(ctx, store, runs)}
+		Resumed: orchestrator.ResumedFrom(ctx, store, task, runs)}
 	prompt := orchestrator.BuildPrompt(task, "work", "", true, 0, history, nil)
 	for _, want := range []string{"resumes from a park", "Task " + target.ID, "outcome merged"} {
 		if !strings.Contains(prompt, want) {
@@ -242,7 +242,7 @@ func TestResumeLaterPreservesReasonOnTaskAndTimedParks(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	resumedTargets := orchestrator.ResumedFrom(ctx, store, runsTask)
+	resumedTargets := orchestrator.ResumedFrom(ctx, store, onTask, runsTask)
 	if len(resumedTargets) != 1 || resumedTargets[0].ID != target.ID {
 		t.Fatalf("ResumedFrom = %+v, want [%s]", resumedTargets, target.ID)
 	}
