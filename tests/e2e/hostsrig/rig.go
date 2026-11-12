@@ -47,7 +47,6 @@ func init() {
 	if filepath.Base(os.Args[0]) == gitproxytest.Command && os.Getenv(FakeForgeCLIUpstreamEnv) != "" {
 		os.Exit(FakeForgeCLI(os.Args[1:]))
 	}
-	gitproxytest.Install()
 }
 
 const (
@@ -270,7 +269,7 @@ func (u *HostUpstream) NewRepo() {
 	bare := initBareRepo(t, u.Bare(), "main")
 	runCmd(t, u.Dir, "git", "-C", bare, "config", "http.receivepack", "true")
 	seed := filepath.Join(t.TempDir(), "seed")
-	runCmd(t, u.Dir, "git", "clone", "-q", bare, seed)
+	runCmd(t, u.Dir, "git", "clone", "-q", "--", bare, seed)
 	mustWriteFile(t, filepath.Join(seed, "README.md"), owner+"/"+u.Repo+" on "+u.Label()+"\n")
 	runCmd(t, seed, "git", "add", "README.md")
 	runCmd(t, seed, "git", "-c", "user.email=s@e", "-c", "user.name=s", "commit", "-q", "-m", "initial commit")
@@ -410,6 +409,7 @@ func New(t testing.TB, cfg Config) *Rig {
 		depotUp     *HostUpstream
 	)
 	if !realForge {
+		gitproxytest.Install()
 		self, err := os.Executable()
 		if err != nil {
 			t.Fatal(err)
@@ -619,7 +619,7 @@ func (r *Rig) dispatchOne(t testing.TB, task model.Task) dispatch.Dispatch {
 func (r *Rig) runPush(t testing.TB, d dispatch.Dispatch, h *rigHost, task model.Task) *agent.Result {
 	t.Helper()
 	r.clock = r.clock.Add(time.Minute)
-	result := r.w.runDispatch(d, pushScript(r.remote(h), task.BranchName(), task.ID), r.clock)
+	result := r.w.runDispatch(t, d, pushScript(r.remote(h), task.BranchName(), task.ID), r.clock)
 	closed := r.clock
 	if err := r.w.store.Observe(r.w.ctx, model.Observation{TaskID: task.ID, CompletedAt: &closed, ClosedAt: &closed}); err != nil {
 		t.Fatalf("closing %s: %v", task.ID, err)
@@ -682,11 +682,12 @@ func (r *Rig) assertOnlyOwnCredential(t testing.TB, target *rigHost) {
 	}
 }
 
-func (r *Rig) branchExistsOrMatches(h *rigHost, branch string) string {
+func (r *Rig) branchExistsOrMatches(t testing.TB, h *rigHost, branch string) string {
+	t.Helper()
 	if h.upstream != nil {
 		return h.upstream.BranchTip(branch)
 	}
-	return r.w.lsRemoteSHA(r.remote(h), h.ref(), branch)
+	return r.w.lsRemoteSHA(t, r.remote(h), h.ref(), branch)
 }
 
 func runSubtest(t testing.TB, name string, fn func(testing.TB)) {
@@ -755,13 +756,13 @@ func Lifecycle(t testing.TB, cfg Config) {
 					sub.Fatalf("%s's branch on %s = %q, want the agent's commit", task.BranchName(), h.label(), got)
 				}
 			} else {
-				wantSHA := r.w.workHeadSHA(d.RunID)
-				if gotSHA := r.w.lsRemoteSHA(r.remote(h), h.ref(), task.BranchName()); gotSHA != wantSHA {
+				wantSHA := r.w.workHeadSHA(sub, d.RunID)
+				if gotSHA := r.w.lsRemoteSHA(sub, r.remote(h), h.ref(), task.BranchName()); gotSHA != wantSHA {
 					sub.Fatalf("%s's branch SHA on %s via ls-remote = %q, want %q", task.BranchName(), h.label(), gotSHA, wantSHA)
 				}
 			}
 			for _, other := range r.hosts {
-				if other != h && r.branchExistsOrMatches(other, task.BranchName()) != "" {
+				if other != h && r.branchExistsOrMatches(sub, other, task.BranchName()) != "" {
 					sub.Errorf("%s's branch landed on %s too", task.BranchName(), other.label())
 				}
 			}

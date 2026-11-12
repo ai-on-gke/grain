@@ -164,8 +164,8 @@ func newWorld(t testing.TB, namedSecrets map[string]string, wrapUpstream func(ht
 	}
 }
 
-func (w *world) sandboxRoot(sandbox string) string {
-	w.t.Helper()
+func (w *world) sandboxRoot(t testing.TB, sandbox string) string {
+	t.Helper()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if root, ok := w.roots[sandbox]; ok {
@@ -173,28 +173,30 @@ func (w *world) sandboxRoot(sandbox string) string {
 	}
 	token, err := w.tokens.EnsureToken(sandbox)
 	if err != nil {
-		w.t.Fatalf("minting a token for %s: %v", sandbox, err)
+		t.Fatalf("minting a token for %s: %v", sandbox, err)
 	}
+	// Allocate from w.t so shared sandboxes (such as probeSandbox) outlive
+	// individual subtests.
 	root := w.t.TempDir()
 	if err := mcp.ConfigureGitCredentials(root, w.proxyURL+"/placeholder/placeholder.git", token, mcp.GitIdentity{}); err != nil {
-		w.t.Fatalf("configuring git credentials for %s: %v", sandbox, err)
+		t.Fatalf("configuring git credentials for %s: %v", sandbox, err)
 	}
 	w.roots[sandbox] = root
 	return root
 }
 
-func (w *world) prepareSandbox(d dispatch.Dispatch) string {
-	w.t.Helper()
-	root := w.sandboxRoot(d.RunID)
+func (w *world) prepareSandbox(t testing.TB, d dispatch.Dispatch) string {
+	t.Helper()
+	root := w.sandboxRoot(t, d.RunID)
 	task, err := w.store.GetTask(w.ctx, d.TaskID)
 	if err != nil {
-		w.t.Fatalf("reading task %s to record its run's target: %v", d.TaskID, err)
+		t.Fatalf("reading task %s to record its run's target: %v", d.TaskID, err)
 	}
 	if task == nil {
-		w.t.Fatalf("dispatch %s names task %s, which is not in the store", d.RunID, d.TaskID)
+		t.Fatalf("dispatch %s names task %s, which is not in the store", d.RunID, d.TaskID)
 	}
 	if err := w.store.SetRunSandbox(w.ctx, d.RunID, d.RunID, task.Target); err != nil {
-		w.t.Fatalf("recording run %s's sandbox: %v", d.RunID, err)
+		t.Fatalf("recording run %s's sandbox: %v", d.RunID, err)
 	}
 	return root
 }
@@ -203,13 +205,13 @@ func (w *world) remote(owner, name string) string {
 	return w.proxyURL + "/" + owner + "/" + name + ".git"
 }
 
-func (w *world) runDispatch(d dispatch.Dispatch, script []antigravity.Step, at time.Time) *agent.Result {
-	w.t.Helper()
-	root := w.prepareSandbox(d)
+func (w *world) runDispatch(t testing.TB, d dispatch.Dispatch, script []antigravity.Step, at time.Time) *agent.Result {
+	t.Helper()
+	root := w.prepareSandbox(t, d)
 	fw := antigravity.NewForTest(antigravity.Steps(script...))
 	result, err := fw.Run(w.ctx, agent.RunConfig{Prompt: "work the task", SandboxRoot: root})
 	if err != nil {
-		w.t.Fatalf("agent run for %s failed outright: %v", d.RunID, err)
+		t.Fatalf("agent run for %s failed outright: %v", d.RunID, err)
 	}
 	outcome := "succeeded"
 	for _, c := range result.ToolCalls {
@@ -218,23 +220,23 @@ func (w *world) runDispatch(d dispatch.Dispatch, script []antigravity.Step, at t
 		}
 	}
 	if err := w.store.FinishRun(w.ctx, d.RunID, at, outcome, ""); err != nil {
-		w.t.Fatalf("FinishRun(%s): %v", d.RunID, err)
+		t.Fatalf("FinishRun(%s): %v", d.RunID, err)
 	}
 	return result
 }
 
 // workHeadSHA returns HEAD's commit SHA inside runID's cloned work directory.
-func (w *world) workHeadSHA(runID string) string {
-	w.t.Helper()
-	root := w.sandboxRoot(runID)
-	return strings.TrimSpace(runOutput(w.t, filepath.Join(root, "work"), "git", "rev-parse", "HEAD"))
+func (w *world) workHeadSHA(t testing.TB, runID string) string {
+	t.Helper()
+	root := w.sandboxRoot(t, runID)
+	return strings.TrimSpace(runOutput(t, filepath.Join(root, "work"), "git", "rev-parse", "HEAD"))
 }
 
 // lsRemoteSHA reads refs/heads/branch on repo through the git proxy via `git
 // ls-remote`, returning "" when the branch does not exist on the remote.
-func (w *world) lsRemoteSHA(remote string, repo model.RepoRef, branch string) string {
-	w.t.Helper()
-	probeRoot := w.sandboxRoot(probeSandbox)
+func (w *world) lsRemoteSHA(t testing.TB, remote string, repo model.RepoRef, branch string) string {
+	t.Helper()
+	probeRoot := w.sandboxRoot(t, probeSandbox)
 	w.readScopes.Grant(probeSandbox, repo)
 	defer w.readScopes.Drop(probeSandbox)
 
@@ -250,7 +252,7 @@ func (w *world) lsRemoteSHA(remote string, repo model.RepoRef, branch string) st
 	cmd.Env = append(env, "HOME="+probeRoot, "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		w.t.Fatalf("git ls-remote %s %s: %v\n%s", remote, ref, err, out)
+		t.Fatalf("git ls-remote %s %s: %v\n%s", remote, ref, err, out)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
@@ -332,6 +334,10 @@ func GitHTTPBackend(projectRoot string) http.HandlerFunc {
 			sep = []byte("\n\n")
 			headEnd = bytes.Index(out, sep)
 		}
+		if headEnd == -1 {
+			http.Error(w, "git http-backend: missing CGI header separator", http.StatusInternalServerError)
+			return
+		}
 		headerBlock := string(out[:headEnd])
 		respBody := out[headEnd+len(sep):]
 
@@ -380,7 +386,11 @@ func initBareRepo(t testing.TB, path, defaultBranch string) string {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runCmd(t, filepath.Dir(path), "git", "init", "--bare", "--initial-branch="+defaultBranch, path)
+	runCmd(t, filepath.Dir(path), "git", "init", "--bare", "-q", "--initial-branch="+defaultBranch, "--", path)
+	// Keep post-receive maintenance in the foreground so git >= 2.47 does not
+	// write repack files into t.TempDir() while cleanup removes it.
+	runCmd(t, path, "git", "config", "maintenance.autoDetach", "false")
+	runCmd(t, path, "git", "config", "gc.autoDetach", "false")
 	return path
 }
 
