@@ -129,6 +129,26 @@ async function shoot(page, name) {
   return file;
 }
 
+// closePopovers presses Escape only while a menu or listbox is open,
+// waiting after each press for the one it closed to go: an Escape with
+// nothing open is the surface's own, and closes the task pane (or the New
+// task form) the next cell needs -- which is how one cell left every
+// later one timing out on an "Add grant…" that was no longer there.
+async function closePopovers(page) {
+  const open = page.locator(
+    ".MuiPopover-root, .MuiPopper-root, [role=listbox]",
+  );
+  for (let i = 0; i < 3; i++) {
+    const before = await open.count().catch(() => 0);
+    if (before === 0) return;
+    await page.keyboard.press("Escape").catch(() => {});
+    await expect
+      .poll(() => open.count().catch(() => 0), { timeout: 2_000 })
+      .toBeLessThan(before)
+      .catch(() => {});
+  }
+}
+
 // walkCell gives method on the grants region of one surface and takes it
 // away again, returning {outcome, detail}. onSaved runs once the grant
 // is held, for the surface's own save-and-reload.
@@ -158,6 +178,10 @@ async function walkCell(page, request, grants, method, surface, onSaved) {
     return { outcome: "fail", variant, detail: "not offered in Add grant…" };
   }
   await item.first().click();
+  // An api preset or scope is a checkbox in the menu, which stays open
+  // for the next pick; left open it is a modal, and the form behind it is
+  // aria-hidden and out of reach.
+  await closePopovers(page);
   if (refusal) {
     await expect(grants.getByText(refusal).first()).toBeVisible();
     await expect(heldLocator(grants, ref)).toHaveCount(0);
@@ -235,20 +259,6 @@ const results = [];
 test.afterAll(() => {
   if (OUT) fs.writeFileSync(OUT, JSON.stringify({ results }, null, 2));
 });
-
-// closePopovers presses Escape only while a menu or listbox is open. An
-// Escape with nothing open is the surface's own: it closes the task pane
-// (or the New task form) the next cell needs, which is how one cell left
-// every later one timing out on an "Add grant…" that was no longer there.
-async function closePopovers(page) {
-  const open = page.locator(
-    ".MuiPopover-root, .MuiPopper-root, [role=listbox]",
-  );
-  for (let i = 0; i < 3; i++) {
-    if ((await open.count().catch(() => 0)) === 0) return;
-    await page.keyboard.press("Escape").catch(() => {});
-  }
-}
 
 async function runCell(page, request, method, surface, run) {
   const cell = { ref: method.ref, surface: surface.id };
