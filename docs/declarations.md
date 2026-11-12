@@ -504,7 +504,14 @@ declarations**. Accepting takes `capabilities:admin` for a capability
 server's grant, and the scope itself for an `api:` grant. From then on
 its firings land approved again, while it asks for nothing beyond the
 accepted set. A declaration that widens past that set is held again, and
-shows as awaiting acceptance, until a person accepts the new set. Schedules
+shows as awaiting acceptance, until a person accepts the new set. A
+person can also take an acceptance back with **Revoke** on the same card
+(`POST /api/declarations/revoke`). Revoking takes what accepting did: a
+person acting directly, never an agent or a delegated caller, holding
+every scope the accepted set needs. It is recorded in the config audit
+log. The declaration's next firing is held again with the "Nobody has
+accepted that set yet" note. Work already filed approved on the
+acceptance is held before it dispatches. Schedules
 and templates an operator wrote are a person's standing approval already
 and are never held this way. CI jobs are accepted the same way; see
 [`docs/ci-capabilities.md`](ci-capabilities.md).

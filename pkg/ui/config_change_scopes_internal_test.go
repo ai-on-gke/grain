@@ -202,3 +202,77 @@ func TestAcceptingADeclarationChecksTheScopesOfTheSetSeen(t *testing.T) {
 		t.Fatalf("accepting the set as it stands: %v", err)
 	}
 }
+
+// Revoking a declaration's acceptance (task 4604) takes what accepting
+// does: an agent, a delegated request and a role lacking a scope the
+// accepted set needs are refused and leave the acceptance standing; a
+// person acting directly with the scopes revokes it, and the config audit
+// log names them.
+func TestRevokingADeclarationTakesAPersonActingDirectly(t *testing.T) {
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const id = "ci:acme/widgets:publish"
+	items := []string{`gcp#gcp-key={"permission_set":"publisher"}`, "api:secrets:write"}
+	if _, _, err := store.NoteCIJobDeclaration(ctx, model.RepoRef{Owner: "acme", Name: "widgets"},
+		"publish", "abc123", items, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	acc, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || acc == nil {
+		t.Fatalf("the declaration's record: %+v, %v", acc, err)
+	}
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", []string{"capabilities:admin", "secrets:write"},
+		acc.Requested, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Config{Actor: DefaultActor("alice")}, store)
+	person := func(role *accessRole) context.Context {
+		return withAccessRole(WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: role.Who}), role)
+	}
+	delegated := roleHolding("alice@example.com", "capabilities:admin", "secrets:write")
+	delegated.Delegated = true
+
+	for _, tc := range []struct {
+		name   string
+		ctx    context.Context
+		refuse string
+	}{
+		{"agent", WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "task-12"}), "only a person acting directly"},
+		{"delegated person", person(delegated), "only a person acting directly"},
+		{"role without secrets:write", person(roleHolding("caps@example.com", "capabilities:admin")), "secrets:write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := srv.tasks.RevokeDeclarationAcceptance(tc.ctx, id)
+			var forbidden *ForbiddenError
+			if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), tc.refuse) {
+				t.Fatalf("err = %v, want a forbidden error naming %q", err, tc.refuse)
+			}
+			if got, _ := store.GetDeclarationAcceptance(ctx, id); got == nil || got.AcceptedAt == nil {
+				t.Fatalf("a refused revocation cleared the acceptance: %+v", got)
+			}
+		})
+	}
+
+	got, err := srv.tasks.RevokeDeclarationAcceptance(person(roleHolding("caps@example.com", "capabilities:admin", "secrets:write")), id)
+	if err != nil {
+		t.Fatalf("revoking as a person holding the scopes: %v", err)
+	}
+	if !got.Awaiting || got.AcceptedBy != "" || got.AcceptedAt != nil {
+		t.Fatalf("after revoking the view is %+v, want it awaiting acceptance with nobody's", got)
+	}
+	audit, err := store.ConfigAudit(ctx, 1)
+	if err != nil || len(audit) == 0 || audit[0].By.ID != "caps@example.com" || !strings.Contains(audit[0].Summary, "revoked") {
+		t.Fatalf("the config audit log after revoking: %+v, %v; want caps@example.com's revocation", audit, err)
+	}
+	if _, err := srv.tasks.RevokeDeclarationAcceptance(person(roleHolding("caps@example.com", "capabilities:admin", "secrets:write")), id); err == nil {
+		t.Fatal("revoking a declaration nobody has accepted succeeded; want it refused as nothing to revoke")
+	}
+}
