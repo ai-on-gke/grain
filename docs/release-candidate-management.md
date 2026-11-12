@@ -673,6 +673,13 @@ schedules are gone.
   minutes, `overlap: skip`, one tick of `.grain/templates/release-train.yml`
   (`scripts/release-train-task.sh`): judge the rc, release or drop it, or cut
   the next. A tick with nothing to do closes as `nothing_needed`.
+- **Release manager** (`.grain/templates/release-manager.yml`): one task
+  per version, which checks in every hour from the first rc to published
+  core and Google edition images. It is started by
+  `.grain/schedules/release-manager.yml` when `release-train-assets.yml`
+  concludes on an rc tag, and by `.grain/schedules/release-manager-patch.yml`
+  when `release.yml` concludes on a `release/vX.Y.Z` branch (a patch,
+  section 9). See section 12 and the playbook's section 16.
 - **Release watchdog** (`.grain/templates/release-watchdog.yml`, every 6
   hours): see section 12.
 - **Release process review** (`.grain/templates/release-process-review.yml`,
@@ -696,6 +703,18 @@ after any change to the installers or the git-host code.
 A continuous train is healthy when rcs qualify quickly, flakes stay rare and
 no release has to be taken back. Two schedules watch for that and report; red
 rcs themselves are the pipeline steward's (`docs/pipeline-steward.md`).
+
+- **Release manager** (one per version, hourly) is the one of these that
+  acts, not only reports. It owns its release until both core and the
+  edition are published. It files one fix for each red check nobody owns,
+  and unsticks stuck tasks: it reprioritises, undefers, retries, answers
+  and rewrites them. It notifies a person (`release-manager:vX.Y.Z`) for
+  what only a person can do, and drives or files the edition's release
+  task. Its first check-in pins the version (a `Release manager pin:
+  vX.Y.Z` comment) and ends in `nothing_needed` if another manager already
+  has that version or the version is already out. v3.6.0's was filed by
+  hand (#4747). It never force-merges, bypasses a gate, pushes or deletes
+  a ref. Its full brief is `design/playbook/releases.playbook.md` section 16.
 
 - **Release watchdog** (every 6 hours) reports the newest release, the rc in
   qualification, which stage it is in and how long it has been there, and
