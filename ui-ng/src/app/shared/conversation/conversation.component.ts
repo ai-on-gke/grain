@@ -1,16 +1,19 @@
-import { effect, untracked,
+import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
-  afterNextRender,
+  HostListener,
+  OnDestroy,
+  ViewEncapsulation,
+  afterRenderEffect,
+  effect,
+  inject,
   input,
   model,
   output,
   signal,
+  untracked,
   viewChild,
-  ViewEncapsulation,
-  OnDestroy,
-  HostListener,
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
 import { MarkdownDirective } from "../code-highlight";
@@ -25,6 +28,13 @@ import {
 } from "../attachments";
 import type { Comment, AttachmentUpload } from "../../api/models";
 import { TipDirective } from "../tip.directive";
+import { isTypingTarget } from "../../services/keyboard.service";
+
+export type ConversationMode = "inline" | "expanded" | "fullscreen";
+
+// Pixels from the bottom within which the thread counts as "following" new
+// messages; further up, new messages raise the jump pill instead.
+const FOLLOW_SLACK_PX = 48;
 
 export interface ComposerConfig {
   placeholder?: string;
@@ -51,10 +61,19 @@ export interface ComposerConfig {
     TipDirective,
   ],
   styleUrls: ["./conversation.css", "../conversation.css"],
+  host: {
+    class: "g-conversation",
+    "[class.is-expanded]": 'mode() === "expanded"',
+  },
   template: `
     <ng-template #contentTemplate>
       <div class="convo-header" [class.is-fullscreen]="mode() === 'fullscreen'">
-        <span class="convo-title">Conversation</span>
+        <span class="convo-title"
+          >Conversation
+          @if (comments().length) {
+            <span class="convo-count tabular">{{ comments().length }}</span>
+          }
+        </span>
         <span class="convo-tools">
           @if (mode() !== "fullscreen") {
             <button
@@ -65,15 +84,18 @@ export interface ComposerConfig {
                   ? 'Collapse conversation'
                   : 'Expand conversation'
               "
+              [attr.aria-pressed]="mode() === 'expanded'"
+              data-testid="convo-expand"
               [gTip]="mode() === 'expanded' ? 'Collapse' : 'Expand'"
-              (click)="mode.set(mode() === 'expanded' ? 'inline' : 'expanded')"
+              (click)="setMode(mode() === 'expanded' ? 'inline' : 'expanded')"
             >
-              {{ mode() === "expanded" ? "⤓" : "⤓" }}
+              {{ mode() === "expanded" ? "⇱" : "⇲" }}
             </button>
             <button
               type="button"
               class="icon-btn"
               aria-label="Open full screen"
+              data-testid="convo-fullscreen"
               gTip="Full screen (Shift+F)"
               (click)="setMode('fullscreen')"
             >
@@ -84,6 +106,7 @@ export interface ComposerConfig {
               type="button"
               class="icon-btn"
               aria-label="Close full screen"
+              data-testid="convo-close"
               gTip="Close (Esc)"
               (click)="setMode('inline')"
             >
@@ -97,13 +120,14 @@ export interface ComposerConfig {
         class="convo-thread chat-log task-log"
         role="log"
         aria-label="Conversation thread"
-        #threadScroll
+        tabindex="0"
+        #thread
+        (scroll)="onThreadScroll()"
       >
         @if (olderCount() > 0) {
           <button
             type="button"
-            class="btn-outlined"
-            style="align-self: flex-start"
+            class="btn-outlined convo-older"
             data-testid="load-older-comments"
             [disabled]="loadingOlder()"
             (click)="loadEarlier.emit()"
@@ -158,9 +182,19 @@ export interface ComposerConfig {
             >{{ transcript() }}</pre>
         }
       </div>
+      @if (unseen() > 0) {
+        <button
+          type="button"
+          class="convo-jump"
+          data-testid="convo-jump"
+          (click)="jumpToLatest()"
+        >
+          New messages ↓
+        </button>
+      }
 
       @if (config()?.deniedReason) {
-        <div data-testid="reply-blocked" class="error-text" style="padding: 12px; color: var(--error-color, #d32f2f); border-top: 1px solid var(--border-color, #e0e0e0);">
+        <div data-testid="reply-blocked" class="convo-denied" role="note">
           {{ config()?.deniedReason }}
         </div>
       }
@@ -174,7 +208,7 @@ export interface ComposerConfig {
           <textarea
             #composer
             class="reply-textarea"
-            style="box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; max-height: 40vh;"
+            rows="2"
             data-testid="task-composer"
             [attr.aria-label]="config()?.placeholder || 'Comment on this task'"
             [placeholder]="config()?.placeholder || 'Comment on this task'"
@@ -191,8 +225,10 @@ export interface ComposerConfig {
             [disabled]="config()?.disabled || false"
             (stagedChange)="stagedAttachments.set($event)"
           />
-          <div class="action-bar" style="margin-top: 8px;">
-            <span class="muted composer-hint" style="flex: 1; font-size: 12px; margin-right: auto;">Enter sends &middot; Shift+Enter adds a line &middot; paste or drop files</span>
+          <div class="action-bar convo-actions">
+            <span class="muted composer-hint"
+              >Ctrl+Enter sends &middot; paste or drop files</span
+            >
             @if (config()?.secondaryLabel) {
               <button
                 type="button"
@@ -213,7 +249,8 @@ export interface ComposerConfig {
               data-testid="act-send"
               [title]="config()?.deniedReason || config()?.submitTitle || ''"
               [disabled]="
-                config()?.disabled || config()?.submitDisabled ||
+                config()?.disabled ||
+                config()?.submitDisabled ||
                 (!draft().trim() && !stagedAttachments().length)
               "
             >
@@ -230,7 +267,13 @@ export interface ComposerConfig {
       </div>
     }
 
-    <dialog #modal class="convo-modal" (close)="onDialogClose()">
+    <dialog
+      #modal
+      class="convo-modal"
+      aria-label="Conversation"
+      data-testid="convo-modal"
+      (close)="onDialogClose()"
+    >
       @if (mode() === "fullscreen") {
         <ng-container *ngTemplateOutlet="contentTemplate" />
       }
@@ -248,7 +291,7 @@ export class ConversationComponent implements OnDestroy {
   readonly olderCount = input<number>(0);
   readonly loadingOlder = input<boolean>(false);
 
-  readonly mode = model<"inline" | "expanded" | "fullscreen">("inline");
+  readonly mode = model<ConversationMode>("inline");
 
   readonly send = output<{
     body: string;
@@ -260,57 +303,116 @@ export class ConversationComponent implements OnDestroy {
   readonly draft = model("");
   readonly stagedAttachments = model<AttachmentUpload[]>([]);
 
+  /** Messages that arrived while the reader was scrolled up. */
+  protected readonly unseen = signal(0);
+
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
+  private readonly thread = viewChild<ElementRef<HTMLElement>>("thread");
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
 
   protected readonly human = isHuman;
 
+  private following = true;
+  private lastCount = 0;
+  private lastTask = "";
+
   constructor() {
     effect(() => {
       this.taskId();
-      untracked(() => { this.stagedAttachments.set([]); });
+      untracked(() => {
+        this.stagedAttachments.set([]);
+        this.unseen.set(0);
+      });
     });
-    afterNextRender(() => {
-      if (this.modal()) {
-        document.body.appendChild(this.modal()!.nativeElement);
+
+    // Keep the dialog's open state in step with mode(), whichever side
+    // changed it (a parent binding, the buttons, Shift+F).
+    afterRenderEffect(() => {
+      const m = this.mode();
+      const el = this.modal()?.nativeElement;
+      if (!el) return;
+      if (m === "fullscreen" && !el.open) {
+        if (typeof el.showModal === "function") el.showModal();
+        else el.setAttribute("open", "");
+        this.composer()?.nativeElement.focus();
+        this.scrollToEnd();
+      } else if (m !== "fullscreen" && el.open) {
+        el.close();
       }
+    });
+
+    // Follow new messages when the reader is at the bottom; otherwise count
+    // them for the "New messages" pill. A task switch always jumps to the end.
+    afterRenderEffect(() => {
+      const n = this.comments().length;
+      const task = this.taskId();
+      this.transcript();
+      this.mode();
+      const switched = task !== this.lastTask;
+      const grew = n > this.lastCount;
+      if (switched || this.following) {
+        this.scrollToEnd();
+        this.following = true;
+        if (this.unseen()) this.unseen.set(0);
+      } else if (grew) {
+        this.unseen.update((u) => u + (n - this.lastCount));
+      }
+      this.lastTask = task;
+      this.lastCount = n;
     });
   }
 
+  // The full-screen view is a native <dialog> opened with showModal(): the
+  // browser lifts it into the top layer and makes the rest of the document
+  // inert, so it stays where Angular rendered it (no manual DOM moves).
   ngOnDestroy() {
-    if (this.modal()) {
-      this.modal()!.nativeElement.remove();
-    }
+    const el = this.modal()?.nativeElement;
+    if (el?.open) el.close();
   }
 
-  @HostListener("document:keydown.shift.f", ["$event"])
-  onShiftF(ev: KeyboardEvent) {
-    if (
-      ev.target &&
-      (ev.target as HTMLElement).closest("g-conversation, .convo-modal")
-    ) {
-      ev.preventDefault();
-      this.setMode(this.mode() === "fullscreen" ? "inline" : "fullscreen");
-    }
+  @HostListener("document:keydown", ["$event"])
+  onKey(ev: KeyboardEvent) {
+    if (!ev.shiftKey || ev.key.toLowerCase() !== "f") return;
+    if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.defaultPrevented) return;
+    // A capital F typed into the composer is text, not a shortcut.
+    if (isTypingTarget(ev.target)) return;
+    const t = ev.target as Node | null;
+    const inside =
+      !!t &&
+      (this.host.nativeElement.contains(t) ||
+        !!this.modal()?.nativeElement.contains(t));
+    if (!inside) return;
+    ev.preventDefault();
+    this.setMode(this.mode() === "fullscreen" ? "inline" : "fullscreen");
   }
 
-  protected setMode(m: "inline" | "expanded" | "fullscreen") {
-    if (m === "fullscreen") {
-      this.mode.set(m);
-      this.modal()?.nativeElement.showModal();
-    } else {
-      if (this.mode() === "fullscreen") {
-        this.modal()?.nativeElement.close();
-      }
-      this.mode.set(m);
-    }
+  protected setMode(m: ConversationMode) {
+    this.mode.set(m);
   }
 
   protected onDialogClose() {
-    if (this.mode() === "fullscreen") {
-      this.mode.set("inline");
-    }
+    if (this.mode() === "fullscreen") this.mode.set("inline");
+  }
+
+  protected onThreadScroll() {
+    const el = this.thread()?.nativeElement;
+    if (!el) return;
+    this.following =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_SLACK_PX;
+    if (this.following && this.unseen()) this.unseen.set(0);
+  }
+
+  protected jumpToLatest() {
+    this.following = true;
+    this.unseen.set(0);
+    this.scrollToEnd();
+  }
+
+  private scrollToEnd() {
+    const el = this.thread()?.nativeElement;
+    if (el) el.scrollTop = el.scrollHeight;
   }
 
   protected actorLabel(c: Comment): string {
@@ -325,30 +427,20 @@ export class ConversationComponent implements OnDestroy {
     const files = filesFromTransfer(ev.clipboardData);
     if (!files.length) return;
     ev.preventDefault();
-    const cur = this.stagedAttachments();
-    const { uploads, error } = await readFilesAsUploads(files, cur.length);
-    if (error) {
-      // TODO handle error
-      return;
-    }
-    if (uploads.length) {
-      this.stagedAttachments.set([...cur, ...uploads]);
-    }
+    await this.stage(files);
   }
 
   protected async onDrop(ev: DragEvent): Promise<void> {
     ev.preventDefault();
     const files = filesFromTransfer(ev.dataTransfer);
     if (!files.length) return;
+    await this.stage(files);
+  }
+
+  private async stage(files: File[]): Promise<void> {
     const cur = this.stagedAttachments();
-    const { uploads, error } = await readFilesAsUploads(files, cur.length);
-    if (error) {
-      // TODO handle error
-      return;
-    }
-    if (uploads.length) {
-      this.stagedAttachments.set([...cur, ...uploads]);
-    }
+    const { uploads } = await readFilesAsUploads(files, cur.length);
+    if (uploads.length) this.stagedAttachments.set([...cur, ...uploads]);
   }
 
   protected onEnter(ev: Event): void {
@@ -363,11 +455,13 @@ export class ConversationComponent implements OnDestroy {
   }
 
   protected submit(action?: string) {
-    if (this.config()?.disabled) return;
+    const c = this.config();
+    if (c?.disabled) return;
+    if (!action && c?.submitDisabled) return;
     const b = this.draft();
     const a = this.stagedAttachments();
     if (!b.trim() && !a.length) return;
+    this.following = true;
     this.send.emit({ body: b, attachments: a, action });
-    
   }
 }

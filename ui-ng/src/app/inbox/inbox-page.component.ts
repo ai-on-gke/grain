@@ -42,14 +42,19 @@ import {
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
-import type { DiffPreview, Task, TaskDetail, AttachmentUpload } from "../api/models";
+import type {
+  DiffPreview,
+  Task,
+  TaskDetail,
+  AttachmentUpload,
+} from "../api/models";
 import { AccessService } from "../services/access.service";
 import { HelpService } from "../services/help.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ThemeService } from "../services/theme.service";
 import { isHuman } from "../sessions/session-view";
 import { ActorChipComponent } from "../shared/actor-chip.component";
-import {  annotateDiffHunk } from "../shared/code-highlight";
+import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 
@@ -940,12 +945,16 @@ const ONE_KEY = new Set(["approve"]);
                     isTaskRunning(sel) ? store.selectedTranscript() : null
                   "
                   [questionCommentId]="
-                    sel.kind === 'reply' ? sel.task?.questionCommentId : undefined
+                    sel.kind === 'reply'
+                      ? sel.task?.questionCommentId
+                      : undefined
                   "
                   [draft]="sel.kind === 'reply' ? draft() : talkDraft()"
-                  (draftChange)="sel.kind === 'reply' ? onDraft(sel, $event) : onTalkDraft(sel, $event)"
-                  [draft]="sel.kind === 'reply' ? draft() : talkDraft()"
-                  (draftChange)="sel.kind === 'reply' ? draft.set($event) : talkDraft.set($event)"
+                  (draftChange)="
+                    sel.kind === 'reply'
+                      ? onDraft(sel, $event)
+                      : onTalkDraft(sel, $event)
+                  "
                   [config]="{
                     placeholder:
                       sel.kind === 'reply'
@@ -964,15 +973,26 @@ const ONE_KEY = new Set(["approve"]);
                         ? 'Comment only'
                         : undefined,
                     submitDisabled: sel.kind !== 'reply' && !this.canWake(sel),
-                    submitTitle: sel.kind !== 'reply' && !this.canWake(sel) ? this.wakeDeniedReason(sel) : '',
+                    submitTitle:
+                      sel.kind !== 'reply' && !this.canWake(sel)
+                        ? this.wakeDeniedReason(sel)
+                        : '',
                     disabled:
                       !can(commentsRoute, sel) ||
                       !!sel.gone ||
                       (sel.kind !== 'reply' && !!talkBlock(sel)) ||
                       (sel.kind === 'reply' && !!replyBlock(sel)),
                     deniedReason:
-                      sel.kind === 'reply' ? replyBlock(sel) : (talkBlock(sel) || (!this.canWake(sel) ? this.wakeDeniedReason(sel) : '')),
-                    hidden: !!(sel.task?.turnStopped || store.selectedDetail()?.turnStopped),
+                      sel.kind === 'reply'
+                        ? replyBlock(sel)
+                        : talkBlock(sel) ||
+                          (!this.canWake(sel)
+                            ? this.wakeDeniedReason(sel)
+                            : ''),
+                    hidden: !!(
+                      sel.task?.turnStopped ||
+                      store.selectedDetail()?.turnStopped
+                    ),
                   }"
                   (send)="onConversationSend(sel, $event)"
                 />
@@ -1165,7 +1185,7 @@ const ONE_KEY = new Set(["approve"]);
     ConfirmDialogComponent,
     TipDirective,
     StatusIconComponent,
-            ConversationComponent,
+    ConversationComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {

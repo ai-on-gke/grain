@@ -230,7 +230,6 @@ describe("InboxPageComponent", () => {
       "#4",
     );
     const input = q(f, '[data-testid="task-composer"]') as HTMLTextAreaElement;
-    console.log("DOM:", f.nativeElement.innerHTML);
     input.value = "Keep both";
     input.dispatchEvent(new Event("input"));
     await f.whenStable();
@@ -1552,7 +1551,6 @@ describe("inbox page helpers", () => {
         f,
         '[data-testid="task-composer"]',
       )!;
-      
 
       // Comment only posts comment without waking run-now
       talkBox.value = "Looks close, checking CI logs first";

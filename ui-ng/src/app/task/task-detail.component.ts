@@ -31,7 +31,13 @@ import {
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
-import type { AttachmentUpload, Attempt, CapabilityOption, Comment, GrainConfig } from "../api/models";
+import type {
+  AttachmentUpload,
+  Attempt,
+  CapabilityOption,
+  Comment,
+  GrainConfig,
+} from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
@@ -43,7 +49,7 @@ import { ConversationComponent } from "../shared/conversation/conversation.compo
 
 import {
   AttachmentListComponent,
-    filesFromTransfer,
+  filesFromTransfer,
   readFilesAsUploads,
 } from "../shared/attachments";
 import { ciChip } from "../shared/chips";
@@ -116,8 +122,8 @@ export function duration(from?: string, to?: string): string {
     ConfirmDialogComponent,
     MarkdownDirective,
     PriorityChipComponent,
-        AttachmentListComponent,
-        GrantsPickerComponent,
+    AttachmentListComponent,
+    GrantsPickerComponent,
     TaskGatesBarComponent,
     TaskChangesTabComponent,
     ForceMergeDialogComponent,
@@ -586,7 +592,7 @@ export function duration(from?: string, to?: string): string {
         }
 
         <!-- Inline Pending Approval / Gate Panels -->
-        
+
         @if (store.actionError(); as err) {
           <p
             class="banner banner-error"
@@ -705,11 +711,9 @@ export function duration(from?: string, to?: string): string {
                     [draft]="store.draft()"
                     (draftChange)="store.draft.set($event)"
                     [stagedAttachments]="store.stagedAttachments()"
-                    (stagedAttachmentsChange)="store.stagedAttachments.set($event)"
-                    [draft]="store.draft()"
-                    (draftChange)="store.draft.set($event)"
-                    [stagedAttachments]="store.stagedAttachments()"
-                    (stagedAttachmentsChange)="store.stagedAttachments.set($event)"
+                    (stagedAttachmentsChange)="
+                      store.stagedAttachments.set($event)
+                    "
                     [config]="{
                       placeholder:
                         t.state === 'awaiting_reply'
