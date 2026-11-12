@@ -205,7 +205,8 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 			return err
 		}
 	}
-	if c.Config.CI != nil && obs != nil && obs.CI != nil && !obs.CI.Done() && obs.CI.RunID != "" {
+	overridesCI := model.GateOverriddenBy(model.GateCI, effectiveGates)
+	if overridesCI && c.Config.CI != nil && obs != nil && obs.CI != nil && !obs.CI.Done() && obs.CI.RunID != "" {
 		c.Config.CI.Cancel(obs.CI.RunID, "the merge of "+ref+" was forced", ci.CancelBySystem)
 	}
 
@@ -233,7 +234,12 @@ func (c *Client) ForceMergeWithGates(ctx context.Context, id, reason, head strin
 	}
 	if finish {
 		body += "\n\nThe task's own run was stopped and the task marked done, so the merge " +
-			"queue takes it up; any grain CI still running on it was cancelled."
+			"queue takes it up"
+		if overridesCI {
+			body += "; any grain CI still running on it was cancelled."
+		} else {
+			body += " once its checks pass."
+		}
 	}
 	body += "\n\nAny running review tasks continue post-merge against the merged commit on the base " +
 		"branch, and any findings they report will be filed as follow-up fix tasks. " +
