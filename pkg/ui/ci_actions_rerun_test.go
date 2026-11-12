@@ -197,3 +197,32 @@ func TestRetriggerOnGitHubActionsIgnoresAForksBranchOfTheSameName(t *testing.T) 
 		t.Fatalf("re-ran %v, want only 710 (the branch's own head), not the fork's 730", sim.RerunFailedJobs)
 	}
 }
+
+// The bound is each run's own: a run at the head that has spent its
+// re-runs is skipped, and the other red runs at that head are still
+// re-run.
+func TestRetriggerOnGitHubActionsBoundsEachRunOnItsOwn(t *testing.T) {
+	sim, _, client := rerunSim(t, ui.MaxActionsRerunsPerHead+1, githubsim.WorkflowRun{ID: 740, Name: "E2E",
+		Path: ".github/workflows/e2e.yml", HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request",
+		Conclusion: "failure", CreatedAt: time.Now().UTC(), Jobs: []githubsim.WorkflowJob{{Name: "e2e", Conclusion: "failure"}}})
+
+	res, err := ui.SandboxCLIActions{Client: client}.RerunGitHubChecks(context.Background(), "mine",
+		gitproxy.CIStartRequest{FailedOnly: true})
+	if err != nil {
+		t.Fatalf("retrigger with one run past the bound: %v", err)
+	}
+	if !slices.Equal(sim.RerunFailedJobs, []int64{740}) {
+		t.Fatalf("re-ran %v, want only 740 (710 has spent its re-runs)", sim.RerunFailedJobs)
+	}
+	if !strings.Contains(res.Text, "skipped gha:acme:widgets:710") {
+		t.Fatalf("retrigger said %q, want it to say 710 was skipped", res.Text)
+	}
+
+	if _, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(context.Background(), "mine",
+		gitproxy.CIStartRequest{Jobs: []string{"go"}}); err == nil || !strings.Contains(err.Error(), "re-run 3 times already") {
+		t.Fatalf("run-job go of the spent run: %v, want the bound's refusal", err)
+	}
+	if len(sim.RerunJobs) != 0 {
+		t.Fatalf("re-ran jobs %v of a spent run", sim.RerunJobs)
+	}
+}
