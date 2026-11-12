@@ -473,7 +473,7 @@ func seedWatchedBaseBranch(ctx context.Context, deps Deps, repo model.RepoRef,
 			repo, policy.Refusal)
 		return false, nil
 	}
-	branch, err := deps.Client.DefaultBranch(repo.Owner, repo.Name)
+	branch, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's default branch: %w", repo, err)
 	}

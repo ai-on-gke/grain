@@ -144,7 +144,7 @@ func readStage1(forge ReleaseQualificationForge, repo model.RepoRef, sha string,
 	if !ok || cfg.Stage1Workflow == "" {
 		return stage1Verdict{}, nil
 	}
-	runs, err := reader.WorkflowRunsOnCommit(repo.Owner, repo.Name, sha)
+	runs, err := reader.WorkflowRunsOnCommit(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
 		return stage1Verdict{}, err
 	}
@@ -157,7 +157,7 @@ func readStage1(forge ReleaseQualificationForge, repo model.RepoRef, sha string,
 		if run.Name != cfg.Stage1Workflow {
 			continue
 		}
-		jobs, err := reader.ListActionsJobAttempts(repo.Owner, repo.Name, run.ID)
+		jobs, err := reader.ListActionsJobAttempts(repo.StoredOwner(), repo.Name, run.ID)
 		if err != nil {
 			return stage1Verdict{}, fmt.Errorf("reading the jobs of %s run %d: %w", cfg.Stage1Workflow, run.ID, err)
 		}
@@ -440,7 +440,7 @@ func stage1Failed(forge ReleaseQualificationForge, repo model.RepoRef, sha strin
 		if !ok {
 			return false, nil
 		}
-		statuses, err := reader.CommitStatuses(repo.Owner, repo.Name, sha)
+		statuses, err := reader.CommitStatuses(repo.StoredOwner(), repo.Name, sha)
 		if err != nil {
 			return false, err
 		}
@@ -451,7 +451,7 @@ func stage1Failed(forge ReleaseQualificationForge, repo model.RepoRef, sha strin
 		}
 		return false, nil
 	}
-	runs, err := forge.ListWorkflowRuns(repo.Owner, repo.Name, sha)
+	runs, err := forge.ListWorkflowRuns(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
 		return false, err
 	}

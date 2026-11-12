@@ -53,6 +53,16 @@
   gap: 12px;
 }
 
+.s-grid.s-grid-qa {
+  grid-template-columns: minmax(240px, 1fr) 180px;
+}
+
+@media (max-width: 599px) {
+  .s-grid.s-grid-qa {
+    grid-template-columns: 1fr;
+  }
+}
+
 .s-field {
   display: flex;
   flex-direction: column;
@@ -84,6 +94,63 @@
   padding: 0 12px;
 }
 
+.s-input[aria-invalid="true"] {
+  border-color: var(--md-sys-color-error);
+}
+
+.s-field-error {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-error);
+}
+
+.s-field > g-pill-select .pill-select-wrap {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.s-field > g-pill-select .pill-select-btn {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  justify-content: space-between;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--grain-font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.s-field > g-pill-select .pill-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.s-field > g-pill-select .pill-select-btn:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  background: var(--md-sys-color-surface-container-low);
+  border-color: var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.s-field > g-pill-select .pop-menu.pill-select-menu {
+  min-width: 100%;
+  max-width: min(560px, calc(100vw - 32px));
+  box-sizing: border-box;
+}
+
+.s-field > g-pill-select .pop-menu.pill-select-menu li > button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .s-input-inline {
   flex: 1 1 200px;
   max-width: 260px;
@@ -99,9 +166,11 @@
 
 .s-input:disabled,
 .s-textarea:disabled {
-  opacity: 0.6;
+  opacity: 1;
   cursor: not-allowed;
   background: var(--md-sys-color-surface-container-low);
+  border-color: var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .s-hint {
@@ -134,7 +203,8 @@
   border-top: 1px solid var(--md-sys-color-outline-variant);
 }
 
-.s-toggle-row:first-of-type {
+.s-toggle-row:first-of-type,
+.s-card-head + .s-toggle-row {
   border-top: none;
 }
 
