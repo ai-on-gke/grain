@@ -48,14 +48,17 @@ type Server struct {
 	mu sync.Mutex
 	// tokens is, by access token issued, who it was issued to.
 	tokens map[string]string
-	n      int
+	// federated are STS access tokens issued before service-account
+	// impersonation exchanges them at iamcredentials.
+	federated map[string]bool
+	n         int
 	// requests are the API requests served, "METHOD /path".
 	requests []string
 }
 
 // NewServer serves c.
 func NewServer(c *Cloud) *Server {
-	return &Server{Cloud: c, tokens: map[string]string{}}
+	return &Server{Cloud: c, tokens: map[string]string{}, federated: map[string]bool{}}
 }
 
 // Endpoints are the gcpsets.Endpoints for s served at base (its root
@@ -98,9 +101,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.sts(w, r, path)
 		return
 	}
+	bearer, hasBearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	s.mu.Lock()
 	s.requests = append(s.requests, r.Method+" "+r.URL.Path)
-	_, authed := s.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	_, authed := s.tokens[bearer]
+	authed = hasBearer && (authed || s.federated[bearer])
 	s.mu.Unlock()
 	if !authed {
 		writeError(w, http.StatusUnauthorized, "Request had invalid authentication credentials: no access token this stub issued")
@@ -212,9 +217,17 @@ func (s *Server) sts(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	r.ParseForm()
-	out := s.issue("")
-	out["issued_token_type"] = "urn:ietf:params:oauth:token-type:access_token"
-	writeJSON(w, out)
+	s.mu.Lock()
+	s.n++
+	tok := fmt.Sprintf("stub-sts-%d", s.n)
+	s.federated[tok] = true
+	s.mu.Unlock()
+	writeJSON(w, map[string]any{
+		"access_token":      tok,
+		"token_type":        "Bearer",
+		"expires_in":        3600,
+		"issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+	})
 }
 
 // assertionIssuer is the iss of a JWT bearer assertion -- the key's
@@ -459,6 +472,13 @@ func (s *Server) iamcredentials(ctx context.Context, r *http.Request, path strin
 		tok, exp, err := s.Cloud.GenerateAccessToken(ctx, email, req.Scope, lifetime)
 		if err != nil {
 			return nil, err
+		}
+		if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			s.mu.Lock()
+			if s.federated[bearer] {
+				s.tokens[tok] = email
+			}
+			s.mu.Unlock()
 		}
 		return map[string]string{"accessToken": tok, "expireTime": exp.UTC().Format(time.RFC3339)}, nil
 	case "generateIdToken":

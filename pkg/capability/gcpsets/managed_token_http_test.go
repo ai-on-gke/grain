@@ -21,7 +21,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -222,6 +225,7 @@ func TestParseEndpointsRefusesAnythingButLoopbackStubsForEveryService(t *testing
 		"private address":   {with("sts", "http://10.0.0.1:80/"), "not on a loopback address"},
 		"not http":          {with("storage", "file:///tmp/x"), "not an http(s) URL"},
 		"credentials in it": {with("iam", "http://u:p@127.0.0.1:1/"), "more than a scheme"},
+		"bare query mark":   {with("iam", "http://127.0.0.1:1/?"), "more than a scheme"},
 		"unknown service":   {full.String() + ",compute=http://127.0.0.1:1/", `unknown service "compute"`},
 		"missing service":   {"iam=http://127.0.0.1:1/", "names no base URL for cloudresourcemanager"},
 		"not a pair":        {"iam", "not service=base-url"},
@@ -249,5 +253,80 @@ func TestTestEndpointsRefuseMetadataServerCredentials(t *testing.T) {
 	_, err := conn.Connect(ctx, gcpsets.Admin{Name: "vm", CredentialSource: gcpsets.SourceAmbient})
 	if err == nil || !strings.Contains(err.Error(), "metadata server") {
 		t.Fatalf("Connect = %v, want the metadata server refused", err)
+	}
+	if _, err := conn.Identity(ctx, gcpsets.Admin{Name: "vm", CredentialSource: gcpsets.SourceAmbient}); err == nil || !strings.Contains(err.Error(), "metadata server") {
+		t.Fatalf("Identity = %v, want the metadata server refused", err)
+	}
+}
+
+// A workload-identity (external_account) admin exchanges its subject token at
+// STS and impersonates its service account through IAM Credentials -- both
+// routed through Endpoints to the loopback stub -- then reconciles and mints a
+// managed token set.
+func TestManagedTokenReconcileWithWorkloadIdentityAdminOverHTTPStub(t *testing.T) {
+	ctx := context.Background()
+	cloud := gcpfake.New()
+	cloud.RequireTokenCreator = true
+	adminEmail := "wi-admin@" + proj + ".iam.gserviceaccount.com"
+	cloud.AccountGranted = map[string][]string{
+		adminEmail: {"iam.serviceAccounts.getAccessToken"},
+	}
+	stub := gcpfake.NewServer(cloud)
+	ts := httptest.NewServer(stub)
+	defer ts.Close()
+	endpoints, err := gcpsets.ParseEndpoints(gcpfake.Endpoints(ts.URL).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := gcpsets.GoogleConnector{Endpoints: endpoints}
+
+	subjectFile := filepath.Join(t.TempDir(), "oidc-token")
+	if err := os.WriteFile(subjectFile, []byte("stub-oidc-jwt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wiCred, _ := json.Marshal(map[string]any{
+		"type":                              "external_account",
+		"audience":                          "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/p/providers/oidc",
+		"subject_token_type":                "urn:ietf:params:oauth:token-type:jwt",
+		"token_url":                         "https://sts.googleapis.com/v1/token",
+		"credential_source":                 map[string]any{"file": subjectFile},
+		"service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/" + adminEmail + ":generateAccessToken",
+	})
+	set := map[string]any{
+		"name": "ar-writer", "admin": "minter", "project": proj, "credential": "token",
+		"roles": []any{"roles/storage.objectViewer"},
+	}
+	m := gcpsets.NewManager(httpManagedTokenConfig(t, string(wiCred), []any{set}, nil), conn)
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile with external_account admin: %v", err)
+	}
+	wantEmail := "grain-" + dep + "-ar-writer@" + proj + ".iam.gserviceaccount.com"
+	saRes := "projects/" + proj + "/serviceAccounts/" + wantEmail
+	if got := cloud.Members(saRes, "roles/iam.serviceAccountTokenCreator"); !slices.Equal(got, []string{"serviceAccount:" + adminEmail}) {
+		t.Fatalf("tokenCreator on managed account = %v", got)
+	}
+	tok, _, err := m.AccessToken(ctx, "ar-writer", wantEmail, time.Now().Add(time.Hour))
+	if err != nil || !strings.HasSuffix(tok, wantEmail) {
+		t.Fatalf("AccessToken = %q, %v", tok, err)
+	}
+	issued := stub.Issued()
+	if len(issued) == 0 {
+		t.Fatal("impersonated admin token was not recorded")
+	}
+	for issuedTok, who := range issued {
+		if who != adminEmail {
+			t.Errorf("stub issued %s to %q, want %s", issuedTok, who, adminEmail)
+		}
+		// A bare token without "Bearer " is rejected by the stub.
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/iam/v1/projects/"+proj+"/serviceAccounts", nil)
+		req.Header.Set("Authorization", issuedTok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("bare Authorization without Bearer = %d, want 401", resp.StatusCode)
+		}
 	}
 }

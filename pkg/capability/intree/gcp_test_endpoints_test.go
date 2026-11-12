@@ -23,8 +23,11 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets/gcpfake"
@@ -166,6 +169,62 @@ func TestGCPTestEndpointsAreRefusedWithoutTheFlag(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: Build = %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+// Neither -test-endpoints nor -fake-cloud stands in for apikeys.googleapis.com,
+// so gemini_key refuses rather than reaching Google behind a flag that promised
+// nothing reaches Google.
+func TestGCPTestEndpointsAndFakeCloudRefuseGeminiKey(t *testing.T) {
+	ts := httptest.NewServer(gcpfake.NewServer(gcpfake.New()))
+	defer ts.Close()
+	spec := gcpfake.Endpoints(ts.URL).String()
+	fixture := filepath.Join(t.TempDir(), "gcpfake.json")
+	if err := os.WriteFile(fixture, []byte(`{"default_identity":"walk@grain-test-proj.iam.gserviceaccount.com"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, _ := x509.MarshalPKCS8PrivateKey(k)
+	key, _ := json.Marshal(map[string]string{
+		"type": "service_account", "client_email": "walk@grain-test-proj.iam.gserviceaccount.com", "private_key_id": "k1",
+		"private_key": string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
+		"token_uri":   "https://oauth2.googleapis.com/token",
+	})
+	creds, _ := json.Marshal(map[string]json.RawMessage{"walk": key})
+	cfg := map[string]any{
+		"admins":            []any{map[string]any{"name": "walk", "credential_source": "configured", "projects": []any{"grain-test-proj"}}},
+		"admin_credentials": "$secret:walk-admin",
+		"gemini_key":        map[string]any{"project": "grain-test-proj", "admin": "walk"},
+	}
+
+	for name, tc := range map[string]struct {
+		args []string
+		env  Env
+	}{
+		"-test-endpoints": {[]string{"-test-endpoints", "-listen", "127.0.0.1:0"}, func(k string) string {
+			if k == gcpsets.TestEndpointsEnv {
+				return spec
+			}
+			return ""
+		}},
+		"-fake-cloud": {[]string{"-fake-cloud", fixture, "-listen", "127.0.0.1:0"}, func(string) string { return "" }},
+	} {
+		s, err := builders["gcp"].Build(context.Background(), tc.args, tc.env, nil)
+		if err != nil {
+			t.Fatalf("%s: Build: %v", name, err)
+		}
+		t.Cleanup(func() { s.Close(context.Background()) })
+		ps, err := attachConfigured(t, s, cfg, map[string]string{"walk-admin": string(creds)})
+		if err != nil {
+			t.Fatalf("%s: attach: %v", name, err)
+		}
+		_, err = ps.Mint(context.Background(), GeminiKeyMethod, "g1-1-0", time.Now().Add(time.Hour), nil)
+		if err == nil || !strings.Contains(err.Error(), "stands in for permission sets only") {
+			t.Errorf("%s: Mint(gemini-key) = %v, want refused before reaching Google", name, err)
 		}
 	}
 }

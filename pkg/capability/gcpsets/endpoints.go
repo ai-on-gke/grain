@@ -131,7 +131,7 @@ func loopbackBase(raw string) (string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("%q is not an http(s) URL", raw)
 	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return "", fmt.Errorf("%q carries more than a scheme, host and path", raw)
 	}
 	host := u.Hostname()
@@ -156,9 +156,10 @@ func (e Endpoints) clientOption(service string) []option.ClientOption {
 	return nil
 }
 
-// transport is base with requests to the OAuth2 and STS hosts sent to
-// e's stubs instead -- the token fetches an admin's credentials make and
-// the tokeninfo lookup Identity does. Nil e is base unchanged.
+// transport is base with requests to the OAuth2, STS and IAM Credentials
+// hosts sent to e's stubs instead -- the token fetches and service-account
+// impersonation calls an admin's credentials make, and the tokeninfo lookup
+// Identity does. Nil e is base unchanged.
 func (e Endpoints) transport(base http.RoundTripper) http.RoundTripper {
 	if len(e) == 0 {
 		return base
@@ -176,7 +177,7 @@ type endpointTransport struct {
 
 func (t *endpointTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	service, ok := strings.CutSuffix(r.URL.Hostname(), testEndpointHostSuffix)
-	if !ok || (service != EndpointOAuth2 && service != EndpointSTS) || t.e[service] == "" {
+	if !ok || (service != EndpointOAuth2 && service != EndpointSTS && service != EndpointIAMCredentials) || t.e[service] == "" {
 		return nil, fmt.Errorf("%s: %s is not a service the test endpoints stand in for; refusing to reach it", TestEndpointsEnv, r.URL.Host)
 	}
 	to, err := url.Parse(t.e[service])

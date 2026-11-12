@@ -26,6 +26,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
@@ -644,6 +645,7 @@ func init() {
 			}
 			if endpoints != nil {
 				cfg.Connector = gcpsets.GoogleConnector{Endpoints: endpoints}
+				cfg.GeminiMinter = refuseGeminiUnderFake("-test-endpoints")
 				if logger != nil {
 					logger.Printf("gcp: -test-endpoints: every Google call goes to the stubs at %s; nothing reaches Google", endpoints)
 				}
@@ -654,6 +656,7 @@ func init() {
 					return nil, err
 				}
 				cfg.Connector, cfg.Now = cloud, now
+				cfg.GeminiMinter = refuseGeminiUnderFake("-fake-cloud")
 				if logger != nil {
 					logger.Printf("gcp: -fake-cloud %s: every admin connects to an in-memory fake GCP; nothing reaches Google", *fake)
 				}
@@ -705,6 +708,12 @@ func gcpTestEndpoints(flag, fake bool, env Env) (gcpsets.Endpoints, error) {
 		return nil, fmt.Errorf("gcp: -test-endpoints needs %s to name the stubs", gcpsets.TestEndpointsEnv)
 	}
 	return gcpsets.ParseEndpoints(spec)
+}
+
+func refuseGeminiUnderFake(flag string) GeminiMinterFunc {
+	return func(context.Context, string, string) (geminikey.KeyMinter, error) {
+		return nil, fmt.Errorf("gcp: %s stands in for permission sets only, not gemini_key (apikeys.googleapis.com); nothing reaches Google", flag)
+	}
 }
 
 // parseGCPAccount reads -account [name=]email[*count].
