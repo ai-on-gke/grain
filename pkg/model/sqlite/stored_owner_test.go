@@ -299,6 +299,54 @@ func TestMigration145HostQualifiesReleaseOwners(t *testing.T) {
 	verify("second run")
 }
 
+// Migration 145 leaves a repository's bare-owner releases on the default
+// host when its destination already holds releases of its own, rather
+// than putting two current releases of one name side by side there --
+// and moves none of their candidates or qualification runs either.
+func TestMigration145LeavesReleasesWhoseDestinationIsTaken(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	if err := store.PutConfig(ctx, testConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTargetRepos(ctx, []string{"ghe.example.com/acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	for i, owner := range []string{"acme", "ghe.example.com/acme"} {
+		id := int64(i + 1)
+		for _, stmt := range []struct {
+			query string
+			args  []any
+		}{
+			{"INSERT INTO `release` (`id`,`owner`,`repo`,`name`,`status`,`created_at`) VALUES (?,?,'widgets','myfeat','active',?)",
+				[]any{id, owner, now}},
+			{"INSERT INTO `release_candidate` (`id`,`release_id`,`owner`,`repo`,`number`,`branch`,`status`,`created_at`) " +
+				"VALUES (?,?,?,'widgets',1,'release/myfeat-rc.1','active',?)", []any{id, id, owner, now}},
+			{"INSERT INTO `qualification_run` (`id`,`owner`,`name`,`candidate_id`,`created_at`) VALUES (?,?,'widgets',?,?)",
+				[]any{id, owner, id, now}},
+		} {
+			if _, err := db.ExecContext(ctx, stmt.query, stmt.args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 144 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"acme", "ghe.example.com/acme"}
+	for _, q := range []struct{ table, name string }{
+		{"release", "repo"}, {"release_candidate", "repo"}, {"qualification_run", "name"},
+	} {
+		got := ownersOf(t, ctx, db, "SELECT `owner` FROM `"+q.table+"` WHERE `"+q.name+"` = 'widgets' ORDER BY `id`")
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("`%s` owners for widgets = %v, want %v: neither repository's rows move", q.table, got, want)
+		}
+	}
+}
+
 func ownersOf(t *testing.T, ctx context.Context, db *sql.DB, query string, args ...any) []string {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, query, args...)
