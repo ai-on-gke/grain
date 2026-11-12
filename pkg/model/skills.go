@@ -196,12 +196,12 @@ func DecodeSkillsConfig(raw string) *SkillsConfig {
 	return norm
 }
 
-// ComposeRepoSkills folds a repository's operator layer (operator) and its
-// declared .grain/settings.yml layer (declared) into the effective per-repo
-// SkillsConfig. An operator setting always wins where specified so an operator
-// disabling discovery or choosing specific folders cannot be overridden by the
-// repository's own file; when the operator leaves a field unset, the declared
-// layer supplies it.
+// ComposeRepoSkills folds an upper layer (operator, or a task's override) over
+// a lower layer (declared .grain/settings.yml, or a template's setting). The
+// upper setting always wins where specified; when it leaves a field unset, the
+// lower layer supplies it, except where carrying a disabling value across would
+// undo an upper setting that re-enables discovery (non-empty folders over
+// enabled:false, or enabled:true over folders:[]).
 func ComposeRepoSkills(operator, declared *SkillsConfig) *SkillsConfig {
 	op, _ := NormalizeSkillsConfig(operator)
 	dec, _ := NormalizeSkillsConfig(declared)
@@ -212,11 +212,11 @@ func ComposeRepoSkills(operator, declared *SkillsConfig) *SkillsConfig {
 		return op.Clone()
 	}
 	out := op.Clone()
-	if out.Enabled == nil && dec.Enabled != nil {
+	if out.Enabled == nil && dec.Enabled != nil && (*dec.Enabled || out.Folders == nil || len(*out.Folders) == 0) {
 		b := *dec.Enabled
 		out.Enabled = &b
 	}
-	if out.Folders == nil && dec.Folders != nil {
+	if out.Folders == nil && dec.Folders != nil && (len(*dec.Folders) > 0 || out.Enabled == nil || !*out.Enabled) {
 		s := slices.Clone(*dec.Folders)
 		out.Folders = &s
 	}
