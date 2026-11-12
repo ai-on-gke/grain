@@ -226,6 +226,25 @@ func (a *actionsCache) put(key string, value any, ttl time.Duration, now time.Ti
 	a.entries[key] = actionsCacheEntry{value: value, expires: now.Add(ttl)}
 }
 
+// invalidateRun drops cached entries for runID (and any jobIDs) and repo's
+// run listings so reads after a re-run fetch the new attempt rather than
+// serving the finished attempt for actionsFinishedTTL.
+func (a *actionsCache) invalidateRun(repo model.RepoRef, runID int64, jobIDs ...int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.entries, fmt.Sprintf("run|%s|%d", repo, runID))
+	delete(a.entries, fmt.Sprintf("artifacts|%s|%d", repo, runID))
+	for _, jid := range jobIDs {
+		delete(a.entries, fmt.Sprintf("log|%s|%d", repo, jid))
+	}
+	prefix := fmt.Sprintf("runs|%s|", repo)
+	for k := range a.entries {
+		if strings.HasPrefix(k, prefix) {
+			delete(a.entries, k)
+		}
+	}
+}
+
 // errActionsBudgetLow is a forge read declined because the hour's
 // budget is low (github.BudgetLow): what is left goes to the merge queue.
 var errActionsBudgetLow = errors.New("the GitHub API budget is low, so grain is not spending it on reading Actions for an agent " +

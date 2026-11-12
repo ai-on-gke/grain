@@ -744,6 +744,19 @@ func (p *printer) ciRetriggered(from, run ci.Run, jobs []string) {
 	fmt.Printf("\nwait for it with \"grain ci wait %s\"\n", run.ID)
 }
 
+// actionsRerun is `grain ci retrigger gha:...`: what GitHub was asked to
+// re-run.
+func (p *printer) actionsRerun(res ui.ActionsRerunResult) {
+	if p.json {
+		p.encode(res)
+		return
+	}
+	fmt.Print(res.Text())
+	for _, run := range res.Runs {
+		fmt.Printf("wait for it with \"grain ci wait %s\"\n", run.ID)
+	}
+}
+
 // ciTestHistory is `grain ci test-history`: the report as the in-sandbox
 // command renders it (ci.TestHistoryReport.Render), or it as JSON.
 func (p *printer) ciTestHistory(report ci.TestHistoryReport) {

@@ -4104,6 +4104,52 @@ func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
 	return nil
 }
 
+// ActionsRerunner is the optional Client capability behind grain ci
+// retrigger and run-job on a repository gated by GitHub Actions
+// (pkg/ui's RerunActions): a concluded run's failed jobs re-run, the
+// whole run re-run, or one job of it re-run, each as the run's next
+// attempt. Like WorkflowRunRerunner, the credential needs `actions:
+// write`.
+type ActionsRerunner interface {
+	WorkflowRunRerunner
+	// RerunWorkflowRun is POST .../actions/runs/{run_id}/rerun.
+	RerunWorkflowRun(owner, repo string, runID int64) error
+	// RerunWorkflowJob is POST .../actions/jobs/{job_id}/rerun: the job
+	// and the jobs that depend on it.
+	RerunWorkflowJob(owner, repo string, jobID int64) error
+}
+
+var _ ActionsRerunner = (*RESTClient)(nil)
+
+// RerunWorkflowRun asks GitHub to re-run every job of runID as the run's
+// next attempt.
+func (c *RESTClient) RerunWorkflowRun(owner, repo string, runID int64) error {
+	if runID <= 0 {
+		return fmt.Errorf("re-running a run of %s/%s: no run id", owner, repo)
+	}
+	return c.postRerun(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/rerun", owner, repo, runID))
+}
+
+// RerunWorkflowJob asks GitHub to re-run jobID (and the jobs that depend
+// on it) as its run's next attempt.
+func (c *RESTClient) RerunWorkflowJob(owner, repo string, jobID int64) error {
+	if jobID <= 0 {
+		return fmt.Errorf("re-running a job of %s/%s: no job id", owner, repo)
+	}
+	return c.postRerun(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/rerun", owner, repo, jobID))
+}
+
+func (c *RESTClient) postRerun(owner, repo, path string) error {
+	resp, err := c.request("POST", path, c.headers(owner, repo, true), []byte("{}"))
+	if err != nil {
+		return err
+	}
+	if resp.Status != http.StatusCreated && resp.Status != http.StatusOK && resp.Status != http.StatusNoContent {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
 // CompletedWorkflowRuns returns the most recent completed workflow runs in
 // owner/repo (up to limit), sending If-None-Match when an ETag was previously
 // observed and returning (nil, nil) on 304 Not Modified or 404.

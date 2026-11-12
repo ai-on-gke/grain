@@ -48,6 +48,7 @@ var agentSteeringRoutes = map[string]string{
 	"POST /api/tasks/{id}/comments": "comment on",
 	"POST /api/tasks/{id}/reply":    "reply to",
 	"PUT /api/tasks/{id}/goal":      "set the goal of",
+	"DELETE /api/tasks/{id}/goal":   "clear the goal of",
 	"POST /api/tasks/{id}/brief":    "rebrief",
 	"POST /api/tasks/{id}/compact":  "compact",
 	"POST /api/tasks/{id}/rollover": "roll over",
