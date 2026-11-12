@@ -86,6 +86,15 @@ func TestWaitTargetsKeepToTheWaitersRepositories(t *testing.T) {
 		Writes: []model.WriteTarget{{Repo: vault}}})
 	insider := put(model.Task{ID: "814", Title: "vault work", Target: &vault})
 
+	// A task on a non-git workspace has no repository at all, but its note
+	// is about that workspace's code: only a task on the same kind of
+	// workspace may read it.
+	workspace := &model.ChangeTarget{Kind: "changelist"}
+	cl := put(model.Task{ID: "803", Title: "Review the workspace's token check", ChangeTarget: workspace})
+	closeWithNote(cl.ID)
+	clWorker := put(model.Task{ID: "815", Title: "workspace work", ChangeTarget: workspace})
+	noRepo := put(model.Task{ID: "816", Title: "repository-less work"})
+
 	client := ui.NewClient(ui.Config{Actor: ui.DefaultActor("operator")}, store)
 
 	withheld := func(how string, targets []model.WaitTarget) {
@@ -141,6 +150,18 @@ func TestWaitTargetsKeepToTheWaitersRepositories(t *testing.T) {
 		}
 		shown("wait_for_task from "+in.Title, got)
 	}
+	for _, out := range []model.Task{outsider, noRepo} {
+		got, err := client.WaitOn(ctx, out.ID, []string{cl.ID}, false)
+		if err != nil {
+			t.Fatalf("WaitOn %s from %s: %v", cl.ID, out.ID, err)
+		}
+		withheld("wait_for_task on a workspace task from "+out.Title, got)
+	}
+	got, err := client.WaitOn(ctx, clWorker.ID, []string{cl.ID}, false)
+	if err != nil {
+		t.Fatalf("WaitOn %s from %s: %v", cl.ID, clWorker.ID, err)
+	}
+	shown("wait_for_task on a workspace task from "+clWorker.Title, got)
 
 	// A dependent's prompt.
 	waiter, err := store.GetTask(ctx, outsider.ID)
