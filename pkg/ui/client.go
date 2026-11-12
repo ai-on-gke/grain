@@ -6979,6 +6979,15 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 	if err != nil {
 		return err
 	}
+	if state == model.StateClosed {
+		// Refused before the comment is written, so it is not left on a
+		// task that will never be reopened to read it.
+		if task, err := c.Store.GetTask(ctx, id); err == nil && task != nil {
+			if err := rolledOverRefusal(*task); err != nil {
+				return err
+			}
+		}
+	}
 	if err := c.AddCommentWithAuthor(ctx, id, body, uploads, author); err != nil {
 		return err
 	}
@@ -6986,6 +6995,18 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 		return nil
 	}
 	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
+// rolledOverRefusal refuses to reopen a task that was rolled over: it has
+// handed its pull request, goal, dependents and parks to its successor,
+// and reopening it would put a second copy of the same durable work back
+// in the queue with none of them.
+func rolledOverRefusal(task model.Task) error {
+	if to := model.RolledOverTo(task); to != "" {
+		return validationErrorf("task %s was rolled over to task %s, which carries its work on; "+
+			"reopen or comment on task %s instead", task.ID, to, to)
+	}
+	return nil
 }
 
 // AddRelayedComment is a person's answer that a console session carries
@@ -8128,6 +8149,14 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if task == nil {
 		return &NotFoundError{ID: id}
+	}
+	// A task rolled over has handed its pull request, goal, dependents
+	// and parks to its successor: reopening it would put a second copy
+	// of the same durable work back in the queue with none of them.
+	if !closed {
+		if err := rolledOverRefusal(*task); err != nil {
+			return err
+		}
 	}
 	now := c.now()
 	who := c.requestActor(ctx)
