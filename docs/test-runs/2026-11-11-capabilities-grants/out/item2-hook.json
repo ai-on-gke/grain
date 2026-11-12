@@ -1,0 +1,37 @@
+{
+  "tools": [
+    "run_command",
+    "read_file",
+    "edit_file",
+    "write_file",
+    "ask_question",
+    "request_secret",
+    "request_access",
+    "comment_on_issue",
+    "nothing_needed",
+    "propose_task",
+    "recreate_sandbox",
+    "wait_for_task",
+    "resume_later"
+  ],
+  "ci_list_own": {
+    "isError": false,
+    "text": "exit=0\nstdout:\n0 of 0 matching run(s) in acme/widgets, newest first:\n(GitHub Actions: the forge listed no Actions runs of acme/widgets matching this; grain has recorded none of its Actions jobs in this window)\nexit=0\n\nstderr:\n"
+  },
+  "pr_status_own": {
+    "isError": false,
+    "text": "exit=0\nstdout:\ngrain/8aa237ed/task-2-ci-read-default (this task's branch) in acme/widgets has no CI run recorded yet.\nexit=0\n\nstderr:\n"
+  },
+  "ci_list_other": {
+    "isError": false,
+    "text": "exit=0\nstdout:\ngrain: forbidden: acme/lib is outside this sandbox's CI read scope\nexit=1\n\nstderr:\n"
+  },
+  "pr_status_other": {
+    "isError": false,
+    "text": "exit=0\nstdout:\ngrain: forbidden: acme/lib is outside this sandbox's CI read scope\nexit=1\n\nstderr:\n"
+  },
+  "request_access_grain_ci": {
+    "isError": true,
+    "text": "This request cannot be relayed as it stands: requests[0] (grant https://grain.dev/capabilities/grain#ci): https://grain.dev/capabilities/grain#ci (formerly grain-ci) cannot be attached by hand: grain grants it to every task on a repository whose CI Mode is \"Use Grain CI\" (the repo's page, Settings -> Repos), and to no task on any other. acme/widgets's CI Mode is \"Use GitHub CI\": `grain ci wait` and `grain pr open` need no grant there, and to read its CI runs and logs (grain ci list/show/log, grain pr status, ci://) grant https://grain.dev/capabilities/api#ci-read with {repo: \"acme/widgets\"} instead (https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}). This task holds https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"} already. Fix it and call request_access again."
+  }
+}
