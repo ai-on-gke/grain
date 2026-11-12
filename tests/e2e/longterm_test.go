@@ -271,8 +271,8 @@ type longTermScriptGenerator struct {
 	taskPlans     map[string]longTermTaskPlan
 	initialPushed map[string]bool
 	// branchPushed is every task a script has pushed its branch for. A
-	// question or proposal task's first run pushes nothing, and one whose
-	// closing note is acknowledged closes without a branch to merge.
+	// question or proposal task's runs push nothing, and one whose closing
+	// note is acknowledged closes without a branch to merge.
 	branchPushed map[string]bool
 }
 
@@ -366,7 +366,10 @@ func (g *longTermScriptGenerator) Generate(prompt string) ([]antigravity.Step, e
 		g.taskPlans[taskID] = plan
 	}
 
-	if isRepair || (plan.kind != "question" && plan.kind != "proposal") {
+	// A repair script checks out origin/<branch>, so it pushes only where
+	// the initial script already did: a question or proposal task's repair
+	// fails that checkout and still leaves no branch to merge.
+	if plan.kind != "question" && plan.kind != "proposal" {
 		g.branchPushed[taskID] = true
 	}
 	if !isRepair {
