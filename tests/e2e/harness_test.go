@@ -67,7 +67,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
-	"github.com/ai-on-gke/grain/pkg/testing/hostsrig"
+	"github.com/ai-on-gke/grain/tests/e2e/hostsrig"
 )
 
 var baseTime = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)

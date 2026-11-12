@@ -23,7 +23,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
-	"github.com/ai-on-gke/grain/pkg/testing/hostsrig"
+	"github.com/ai-on-gke/grain/tests/e2e/hostsrig"
 )
 
 func TestDefaultFakeLifecycle(t *testing.T) {

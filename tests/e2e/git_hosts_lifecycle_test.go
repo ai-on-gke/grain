@@ -26,13 +26,13 @@ package e2e
 //     one run of `forgecli api`, and a lapsed login answers with the
 //     login page rather than a refusal.
 //
-// Editions import pkg/testing/hostsrig directly to run the same scenarios
+// Editions import tests/e2e/hostsrig directly to run the same scenarios
 // against a real command-backed source and scratch repository.
 
 import (
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/testing/hostsrig"
+	"github.com/ai-on-gke/grain/tests/e2e/hostsrig"
 )
 
 func TestTaskLifecycleOnEveryKindOfGitHost(t *testing.T) {

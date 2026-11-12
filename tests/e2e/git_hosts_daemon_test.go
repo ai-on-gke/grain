@@ -57,8 +57,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/testing/hostsrig"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/tests/e2e/hostsrig"
 )
 
 // forgeUpstream is a HostUpstream with a forge API beside its git: a

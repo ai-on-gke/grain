@@ -239,7 +239,7 @@ func (w *world) lsRemoteSHA(remote string, repo model.RepoRef, branch string) st
 	defer w.readScopes.Drop(probeSandbox)
 
 	ref := "refs/heads/" + branch
-	cmd := exec.Command("git", "ls-remote", remote, ref)
+	cmd := exec.Command("git", "ls-remote", "--", remote, ref)
 	cmd.Dir = probeRoot
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
@@ -393,6 +393,7 @@ func runOutput(t testing.TB, dir, name string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)

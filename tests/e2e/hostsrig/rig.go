@@ -279,7 +279,9 @@ func (u *HostUpstream) NewRepo() {
 
 // BranchTip returns the commit subject at refs/heads/branch, or "" if absent.
 func (u *HostUpstream) BranchTip(branch string) string {
-	out, err := exec.Command("git", "--git-dir", u.Bare(), "log", "-1", "--format=%s", "refs/heads/"+branch).Output()
+	cmd := exec.Command("git", "--git-dir", u.Bare(), "log", "-1", "--format=%s", "refs/heads/"+branch)
+	cmd.Env = os.Environ()
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
@@ -288,7 +290,9 @@ func (u *HostUpstream) BranchTip(branch string) string {
 
 // HeadSHA returns the commit SHA at refs/heads/branch on u.
 func (u *HostUpstream) HeadSHA(branch string) string {
-	out, err := exec.Command("git", "--git-dir", u.Bare(), "rev-parse", "refs/heads/"+branch).Output()
+	cmd := exec.Command("git", "--git-dir", u.Bare(), "rev-parse", "--verify", "refs/heads/"+branch)
+	cmd.Env = os.Environ()
+	out, err := cmd.Output()
 	if err != nil {
 		u.t.Fatalf("reading %s on %s: %v", branch, u.Label(), err)
 	}
