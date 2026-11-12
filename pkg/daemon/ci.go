@@ -2954,7 +2954,9 @@ func WithDaemonCIWiring(sandboxImage func() string,
 	ports *portforward.Relay, portsURL string) func(*ci.Service) {
 
 	return func(service *ci.Service) {
-		service.SandboxImage = sandboxImage
+		if sandboxImage != nil {
+			service.SandboxImage = sandboxImage
+		}
 		service.ReleaseRefRefusal = releaseRefRefusal
 		if pkgCache != nil {
 			WithCIGoCacheWriters(service, pkgCache.GoCacheJobs, releaseRefRefusal)
