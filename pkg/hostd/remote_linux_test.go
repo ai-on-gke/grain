@@ -19,6 +19,7 @@ package hostd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -378,6 +379,7 @@ func TestAHostdServesWithNoSocket(t *testing.T) {
 func TestADrainedHostdDeliversTheLastRunsExitBeforeExiting(t *testing.T) {
 	ctl := startController(t, "s3cret")
 	ts := startRemoteServer(t, ctl, "s3cret", "")
+	release := filepath.Join(ts.dir, "release")
 	started := make(chan Started, 1)
 	c := ctl.client()
 	c.Detach = func(context.Context) bool { return true }
@@ -391,12 +393,18 @@ func TestADrainedHostdDeliversTheLastRunsExitBeforeExiting(t *testing.T) {
 	done := make(chan result, 1)
 	var out bytes.Buffer
 	go func() {
-		exit, err := c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 0.5; echo done; exit 4"},
-			Detach: true, Run: "run-1", Task: "7"}, nil, &out, nil)
+		exit, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo done; exit 4`, "sh", ts.dir, filepath.Base(release)},
+			Detach: true, Run: "run-1", Task: "7",
+		}, nil, &out, nil)
 		done <- result{exit, err}
 	}()
 	<-started
 	if err := ts.client.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r := <-done
@@ -408,5 +416,128 @@ func TestADrainedHostdDeliversTheLastRunsExitBeforeExiting(t *testing.T) {
 		ts.done <- err
 	case <-time.After(15 * time.Second):
 		t.Fatal("hostd did not exit once its run ended and its Exit was read")
+	}
+}
+
+// Dropping the remote mux session while frameExit is in flight (before the
+// controller cleanly closes its stream) must not mistake the broken session
+// for the controller having read the Exit and delete the spool.
+func TestARemoteSessionDropWhileExitIsInFlightKeepsTheSpool(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startServer(t, "", func(s *Server) {
+		s.drainExitGrace = 2 * time.Second
+		s.Remote = Dialer{Server: ctl.http.URL, Token: "s3cret", Host: "workstation", Build: "test-build"}.Dial
+		s.RemoteMinBackoff = 20 * time.Millisecond
+		s.RemoteMaxBackoff = 200 * time.Millisecond
+	})
+	waitConnected(t, ctl.remote, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	stConn, err := ctl.remote.Dial(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stConn.Close()
+
+	req := Request{
+		Op: OpStart, Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo drop-ok; exit 5"},
+		Detach: true, Run: "run-drop", Task: "9",
+	}
+	if err := writeJSON(stConn, frameRequest, req); err != nil {
+		t.Fatal(err)
+	}
+	typ, payload, err := readFrame(stConn)
+	if err != nil || typ != frameStarted {
+		t.Fatalf("first frame = %q, %v; want frameStarted", typ, err)
+	}
+	var started Started
+	if err := json.Unmarshal(payload, &started); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); !listed(t, ts, started.ID).Exited; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("child never exited")
+		}
+	}
+	// Give attach one poll cycle to write frameExit and enter the grace wait,
+	// send a late signal (which control must ignore on a reaped process), and
+	// drop the session before the stream is closed cleanly.
+	time.Sleep(150 * time.Millisecond)
+	_ = writeJSON(stConn, frameSignal, SignalMsg{Signal: "TERM"})
+	ctl.drop()
+
+	waitConnected(t, ctl.remote, 2)
+	var out bytes.Buffer
+	exit, _, err := ctl.client().Attach(ctx, started.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 5 || out.String() != "drop-ok\n" {
+		t.Fatalf("Attach after session drop = %+v, %q, %v; want Exit code 5 and kept spool output", exit, out.String(), err)
+	}
+}
+
+// Stopping Serve while attach is inside DrainExitGrace waiting for the
+// controller to hang up must not mistake the local mux close for the
+// controller having read the Exit and remove the spool.
+func TestAServeCancelWhileExitIsHeldKeepsTheSpool(t *testing.T) {
+	state, err := os.MkdirTemp("", "hostd-cancel-grace-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(state) })
+
+	ctl := startController(t, "s3cret")
+	ts := startServer(t, "", func(s *Server) {
+		s.StateDir = state
+		s.drainExitGrace = 5 * time.Second
+		s.Remote = Dialer{Server: ctl.http.URL, Token: "s3cret", Host: "workstation", Build: "test-build"}.Dial
+		s.RemoteMinBackoff = 20 * time.Millisecond
+		s.RemoteMaxBackoff = 200 * time.Millisecond
+	})
+	waitConnected(t, ctl.remote, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	stConn, err := ctl.remote.Dial(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stConn.Close()
+
+	req := Request{
+		Op: OpStart, Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo cancel-ok; exit 6"},
+		Detach: true, Run: "run-cancel", Task: "10",
+	}
+	if err := writeJSON(stConn, frameRequest, req); err != nil {
+		t.Fatal(err)
+	}
+	typ, payload, err := readFrame(stConn)
+	if err != nil || typ != frameStarted {
+		t.Fatalf("first frame = %q, %v; want frameStarted", typ, err)
+	}
+	var started Started
+	if err := json.Unmarshal(payload, &started); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); !listed(t, ts, started.ID).Exited; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("child never exited")
+		}
+	}
+	time.Sleep(150 * time.Millisecond)
+	ts.cancel()
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not exit promptly when cancelled during DrainExitGrace")
+	}
+
+	ts2 := startServer(t, "", func(s *Server) { s.StateDir = state })
+	var out bytes.Buffer
+	exit, _, err := ts2.client.Attach(ctx, started.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 6 || out.String() != "cancel-ok\n" {
+		t.Fatalf("Attach on restarted hostd = %+v, %q, %v; want Exit code 6 and kept spool output", exit, out.String(), err)
 	}
 }

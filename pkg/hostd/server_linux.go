@@ -126,6 +126,9 @@ type Server struct {
 	// the replacement Server in the same process.
 	AllowHandover bool
 
+	// drainExitGrace overrides DrainExitGrace in tests when positive.
+	drainExitGrace time.Duration
+
 	uid uint32
 	wg  sync.WaitGroup
 
@@ -691,21 +694,28 @@ func (s *Server) waitDrained(ctx context.Context) {
 // that has not by then leaves the process and its spool kept.
 const DrainExitGrace = 5 * time.Second
 
+func (s *Server) exitGrace() time.Duration {
+	if s.drainExitGrace > 0 {
+		return s.drainExitGrace
+	}
+	return DrainExitGrace
+}
+
 // waitExitsDelivered waits until no detached process that has ended still
 // has a stream attached whose daemon has not read its Exit (attach
-// releases the process once the daemon hangs up after the Exit, lets go
-// when its connection fails, and keeps the spool when DrainExitGrace
-// passes first). It waits twice DrainExitGrace at most, so attach's own
-// grace -- which starts a poll after the process ended -- runs out first:
-// a session closed on a stream still inside its grace looks to attach
-// like the daemon hanging up, and the spool would go with it. Without it
+// releases the process once the daemon cleanly hangs up after the Exit,
+// lets go keeping the spool when its session or stream breaks, and keeps
+// the spool when DrainExitGrace passes first). It waits twice
+// DrainExitGrace at most, so attach's own grace -- which starts after any
+// final output is pumped -- ordinarily runs out first. Without it
 // the last run to end races hostd's exit:
 // Serve closes the remote session and the sockets the moment nothing
 // runs, so the daemon streaming that run sees its stream drop rather than
 // the Exit, and waits for a host to come back before the run can finish
 // from the spool it kept.
 func (s *Server) waitExitsDelivered(ctx context.Context) {
-	timeout := time.NewTimer(2 * DrainExitGrace)
+	wait := 2 * s.exitGrace()
+	timeout := time.NewTimer(wait)
 	defer timeout.Stop()
 	for {
 		s.mu.Lock()
@@ -723,7 +733,7 @@ func (s *Server) waitExitsDelivered(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timeout.C:
-			s.logf("hostd: drained, but %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, 2*DrainExitGrace)
+			s.logf("hostd: drained, but %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, wait)
 			return
 		case <-s.changed:
 		case <-time.After(s.poll()):
@@ -872,7 +882,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			s.refuse(conn, fmt.Sprintf("no detached process %q", req.ID))
 			return
 		}
-		s.attach(conn, p, req.Cursor, nil)
+		s.attach(ctx, conn, p, req.Cursor, nil)
 		return
 	case OpCancel:
 		s.release(req.ID, "cancelled by the daemon")

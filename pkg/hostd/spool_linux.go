@@ -193,7 +193,7 @@ func (s *Server) newDetachedProc(info Process, stdinOpen bool) *proc {
 // or reaches its deadline; only its stdin is closed. Across a handover
 // re-exec (StartHandover) the process keeps running and is adopted from
 // its spool by the replacement hostd (loadSpools).
-func (s *Server) startDetached(_ context.Context, conn net.Conn, req *Request, spec *Spec, onAdded func()) {
+func (s *Server) startDetached(ctx context.Context, conn net.Conn, req *Request, spec *Spec, onAdded func()) {
 	deadline := time.Now().Add(spec.MaxDuration)
 	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
 		deadline = req.Deadline
@@ -272,7 +272,7 @@ func (s *Server) startDetached(_ context.Context, conn net.Conn, req *Request, s
 	s.logf("hostd: started %s %q detached as pid %d (id %s, run %s, deadline %s, spool %s)",
 		req.Kind, req.Name, pid, id, req.Run, deadline.Format(time.RFC3339), dir)
 	go s.watchDetached(p)
-	s.attach(conn, p, Cursor{}, stdinW)
+	s.attach(ctx, conn, p, Cursor{}, stdinW)
 }
 
 func (s *Server) watchDetached(p *proc) {
@@ -446,7 +446,7 @@ func writeExitFile(dir string, e Exit) error {
 // The connection going away, a newer attach superseding this one, or
 // hostd detaching streams for a handover ends the stream and leaves the
 // process running.
-func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser) {
+func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser) {
 	s.mu.Lock()
 	p.attachGen++
 	gen := p.attachGen
@@ -472,10 +472,11 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 		}
 		return
 	}
+	var readErr error
 	gone := make(chan struct{})
 	go func() {
-		defer close(gone)
-		s.control(conn, p, stdin)
+		readErr = s.control(conn, p, stdin)
+		close(gone)
 	}()
 	pump := func(name string, typ byte, at *int64) error {
 		f, err := os.Open(filepath.Join(info.Spool, name))
@@ -522,6 +523,14 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			return
 		}
 		if ended {
+			// On a mux stream, a daemon that detached before the process
+			// ended half-closed its write side only, so writeJSON below
+			// would still succeed even though nobody is reading anymore.
+			select {
+			case <-gone:
+				return
+			default:
+			}
 			s.mu.Lock()
 			exit := *p.info.Exit
 			current := p.attachGen == gen
@@ -535,15 +544,35 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			// Written is not yet read: a session closed now drops the
 			// frames the daemon's end has not read yet, Exit included. The
 			// daemon hangs up once it has the Exit, so until then -- or
-			// DrainExitGrace -- the process stays attached, which holds a
-			// drained hostd's exit (waitExitsDelivered) back for it.
+			// DrainExitGrace, or Serve stopping -- the process stays
+			// attached, which holds a drained hostd's exit
+			// (waitExitsDelivered) back for it. Any end other than the
+			// stream closing cleanly on a live session keeps the spool.
+			graceDur := s.exitGrace()
+			grace := time.NewTimer(graceDur)
+			var hungUp bool
 			select {
 			case <-gone:
-			case <-time.After(DrainExitGrace):
+				hungUp = true
+			case <-ctx.Done():
+			case <-grace.C:
 				// Not known to have been read: keep the spool for the
 				// daemon to attach again, or for the retention sweep.
 				s.logf("hostd: the daemon did not hang up within %s of %s %q's exit (pid %d, id %s); keeping its spool",
-					DrainExitGrace, info.Kind, info.Name, info.PID, info.ID)
+					graceDur, info.Kind, info.Name, info.PID, info.ID)
+			}
+			grace.Stop()
+			if !hungUp || ctx.Err() != nil {
+				return
+			}
+			if m := sessionMux(ctx); m != nil {
+				select {
+				case <-m.Done():
+					return
+				default:
+				}
+			}
+			if readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
 				return
 			}
 			// A daemon that lost this stream before reading the Exit may
@@ -585,7 +614,7 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 // control reads a detached process's connection: stdin, its close, and
 // signals, until the connection ends. stdin is closed then -- input that
 // arrives while no daemon is attached is not kept.
-func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
+func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) error {
 	s.mu.Lock()
 	info := p.info
 	s.mu.Unlock()
@@ -621,7 +650,7 @@ func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
 	for {
 		typ, payload, err := readFrame(conn)
 		if err != nil {
-			return
+			return err
 		}
 		switch typ {
 		case frameStdin:
