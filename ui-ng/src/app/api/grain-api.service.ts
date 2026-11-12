@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { HttpClient, HttpHeaders } from "@angular/common/http";
+import {
+  HttpClient,
+  HttpErrorResponse,
+  HttpHeaders,
+} from "@angular/common/http";
 import { Injectable, inject } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
@@ -20,9 +24,11 @@ import type {
   DiffPreview,
   GrainConfig,
   LocalScriptApproval,
+  LogoutResponse,
   Notification,
   Task,
   TaskDetail,
+  WhoamiResponse,
 } from "./models";
 
 // Path parameters a route key names, e.g. {id} or {owner}.
@@ -34,9 +40,19 @@ export type RouteParams = Record<string, string | number>;
 export function routePath(key: RouteKey, params: RouteParams = {}): string {
   const path = key.slice(key.indexOf(" ") + 1);
   return path.replace(/\{([^}]+)\}/g, (_, name: string) => {
+    if (name.endsWith("...")) {
+      const bare = name.slice(0, -3);
+      const v = params[name] ?? params[bare] ?? "";
+      return String(v)
+        .split("/")
+        .filter(Boolean)
+        .map((seg) => encodeURIComponent(seg))
+        .join("/");
+    }
     const v = params[name];
     if (v === undefined) throw new Error(`${key}: missing {${name}}`);
-    return encodeURIComponent(String(v));
+    const s = String(v);
+    return encodeURIComponent(s);
   });
 }
 
@@ -56,6 +72,14 @@ export function splitRepo(repo: string): { owner: string; name: string } {
 
 const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 
+// Fresh is one conditional read: the body (the cached copy when the
+// server answered 304 Not Modified) and whether it changed since the
+// last read of the same URL.
+export interface Fresh<T> {
+  body: T;
+  changed: boolean;
+}
+
 // GrainApi is the typed REST client: same origin, the daemon's own
 // session cookie, and nothing of its own for CSRF -- the browser's
 // Sec-Fetch-Site: same-origin is what pkg/ui/csrf.go checks, exactly as
@@ -63,22 +87,120 @@ const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 @Injectable({ providedIn: "root" })
 export class GrainApi {
   private readonly http = inject(HttpClient);
+  // The last ETag and body per URL, for getIfChanged. Unlike the classic
+  // UI's per-path ETag map, a 304 hands back the cached body, so any
+  // number of readers can poll the same URL safely.
+  private readonly etags = new Map<string, { etag: string; body: unknown }>();
 
   get<T>(key: RouteKey, params?: RouteParams, query?: string): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
     return firstValueFrom(this.http.get<T>(url, { headers: JSON_HEADERS }));
   }
 
+  getText(
+    key: RouteKey,
+    params?: RouteParams,
+    query?: string,
+  ): Promise<string> {
+    const url = routePath(key, params) + (query ? `?${query}` : "");
+    return firstValueFrom(this.http.get(url, { responseType: "text" }));
+  }
+
+  // getIfChanged reads a URL with If-None-Match, the way the server's
+  // polled lists expect (pkg/ui tasks.go answers 304 when nothing moved),
+  // so a page can poll every few seconds for the price of a header.
+  async getIfChanged<T>(
+    key: RouteKey,
+    params?: RouteParams,
+    query?: string,
+  ): Promise<Fresh<T>> {
+    const url = routePath(key, params) + (query ? `?${query}` : "");
+    const cached = this.etags.get(url);
+    let headers = JSON_HEADERS;
+    if (cached) headers = headers.set("If-None-Match", cached.etag);
+    try {
+      const res = await firstValueFrom(
+        this.http.get<T>(url, { headers, observe: "response" }),
+      );
+      const body = res.body as T;
+      const etag = res.headers.get("ETag");
+      if (etag) this.etags.set(url, { etag, body });
+      else this.etags.delete(url);
+      return { body, changed: true };
+    } catch (err) {
+      if ((err as HttpErrorResponse)?.status === 304) {
+        if (cached) return { body: cached.body as T, changed: false };
+        // A 304 to a request that sent no tag means a cache in between
+        // answered for us; nothing here can stand in for the body.
+        throw new Error(`${url}: 304 Not Modified with no cached copy`);
+      }
+      throw err;
+    }
+  }
+
+  // clearConditionalCache forgets every cached body, for a sign-in or a
+  // role change after which the same URL may answer differently. The
+  // bodies getIfChanged returns are shared between readers: treat them
+  // as read-only.
+  clearConditionalCache(): void {
+    this.etags.clear();
+  }
+
+  private send<T>(
+    method: "patch" | "put" | "post" | "delete",
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+    query?: string,
+  ): Promise<T> {
+    const url = routePath(key, params) + (query ? `?${query}` : "");
+    return firstValueFrom(
+      this.http.request<T>(method, url, {
+        headers: JSON_HEADERS,
+        body:
+          method === "delete"
+            ? body === undefined
+              ? undefined
+              : body
+            : (body ?? null),
+      }),
+    );
+  }
+
+  patch<T = unknown>(
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+    query?: string,
+  ): Promise<T> {
+    return this.send<T>("patch", key, params, body, query);
+  }
+
+  put<T = unknown>(
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+    query?: string,
+  ): Promise<T> {
+    return this.send<T>("put", key, params, body, query);
+  }
+
   post<T = unknown>(
     key: RouteKey,
     params?: RouteParams,
     body?: unknown,
+    query?: string,
   ): Promise<T> {
-    return firstValueFrom(
-      this.http.post<T>(routePath(key, params), body ?? null, {
-        headers: JSON_HEADERS,
-      }),
-    );
+    return this.send<T>("post", key, params, body, query);
+  }
+
+  delete<T = unknown>(
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+    query?: string,
+  ): Promise<T> {
+    return this.send<T>("delete", key, params, body, query);
   }
 
   config(): Promise<GrainConfig> {
@@ -116,5 +238,13 @@ export class GrainApi {
     >("GET /api/local-script-approvals").then((r) =>
       Array.isArray(r) ? r : (r?.approvals ?? []),
     );
+  }
+
+  whoami(): Promise<WhoamiResponse> {
+    return this.get<WhoamiResponse>("GET /api/whoami");
+  }
+
+  logout(): Promise<LogoutResponse> {
+    return this.post<LogoutResponse>("POST /api/auth/logout");
   }
 }
