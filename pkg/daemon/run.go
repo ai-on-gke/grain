@@ -1498,22 +1498,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			ciProviders := func() *model.CapabilityRegistry {
 				return newCapabilityRegistryWithStore(store, CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 			}
-			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
-			ciService.SandboxImage = live.CurrentSandboxImage
-			// A trusted release runs only from a branch the repository has
-			// reviewed into, whoever asked for it (grain/task-949).
-			ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
-			// And the same branches are the only ones whose jobs write the
-			// shared Go build cache every sandbox reads.
-			if pkgCache != nil {
-				WithCIGoCacheWriters(ciService, pkgCache.GoCacheJobs, CiReleaseRefRefusal(store, githubClient))
-			}
-			// The attached capability servers a job's capability references
-			// are minted through, the same ones a task's are.
-			WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
-			// And the relay their ports and mcp_endpoints reach a job's
-			// sandbox through, the same one a task's do.
-			WithCICapabilityPorts(ciService, capabilityPorts, capabilityPortsURL)
+			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live),
+				WithDaemonCIWiring(live.CurrentSandboxImage, CiReleaseRefRefusal(store, githubClient), pkgCache,
+					func() orchestrator.CapabilityServers { return capabilityServerLookup(live) }, capabilityPorts, capabilityPortsURL))
 			LiveCI.Store(ciService)
 			defer ciService.Detach()
 			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+

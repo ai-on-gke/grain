@@ -2706,6 +2706,12 @@ func ciJobStuck(store *model.Store, limits func() model.Limits, jobs *ciStuckJob
 // on the data disk (liveConfig.ciStorageBounds). Funcs for the same
 // reason, and nil is allowed for either -- a test wiring an engine gets
 // grain's own defaults rather than having to know them.
+//
+// beforeAdopt functions run after the service and its engine are wired
+// and before AdoptCIRuns resumes any unconcluded run in the store, so
+// post-construction wiring (Go build-cache writers, capability servers
+// and ports, SandboxImage, ReleaseRefRefusal) is in place before an
+// adopted run's goroutine reads it.
 func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits, retention func() ci.StoredRunRetention,
 	bounds func() ci.StorageBounds, store *model.Store,
 	sandboxes orchestrator.Sandboxes,
@@ -2715,7 +2721,8 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	packageCache func(context.Context) string,
 	packageCacheCA func(context.Context) []byte,
 	packageCacheDNS func(context.Context) string,
-	actionsCache func(actionscache.Scope) (string, func(), error)) *ci.Service {
+	actionsCache func(actionscache.Scope) (string, func(), error),
+	beforeAdopt ...func(*ci.Service)) *ci.Service {
 
 	var teamGitCredential func(context.Context, string, string, string) (string, error)
 	var teamGitCredentialOn func(context.Context, string, string, string, string) (string, error)
@@ -2924,11 +2931,37 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	if attachments, ok := service.Runs.(ci.StepAttachments); ok {
 		service.Engine.Attachments = attachments
 	}
+	for _, fn := range beforeAdopt {
+		if fn != nil {
+			fn(service)
+		}
+	}
 	adopted, lost := AdoptCIRuns(ctx, service)
 	if cfg.runHostUpgrade != nil && (len(adopted) > 0 || len(lost) > 0) {
 		cfg.runHostUpgrade.setCIAdoption(adopted, lost)
 	}
 	return service
+}
+
+// WithDaemonCIWiring returns a BuildCIService beforeAdopt hook that attaches
+// the daemon's live sandbox image, reviewed-branch release and Go build-cache
+// rules, and capability server and port relays before AdoptCIRuns resumes any
+// in-flight run.
+func WithDaemonCIWiring(sandboxImage func() string,
+	releaseRefRefusal func(ctx context.Context, repo, ref string) (string, error),
+	pkgCache *PackageCache,
+	servers func() orchestrator.CapabilityServers,
+	ports *portforward.Relay, portsURL string) func(*ci.Service) {
+
+	return func(service *ci.Service) {
+		service.SandboxImage = sandboxImage
+		service.ReleaseRefRefusal = releaseRefRefusal
+		if pkgCache != nil {
+			WithCIGoCacheWriters(service, pkgCache.GoCacheJobs, releaseRefRefusal)
+		}
+		WithCICapabilityServers(service, servers)
+		WithCICapabilityPorts(service, ports, portsURL)
+	}
 }
 
 // AdoptCIRuns inspects unconcluded CI runs in service.Runs before ReapOrphans

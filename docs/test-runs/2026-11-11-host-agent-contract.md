@@ -249,3 +249,18 @@ go build -o /var/tmp/hac/envprobe $D/envprobe.go && sudo -u walkhost /var/tmp/ha
 go build -o /var/tmp/hac/drainprobe $D/drainprobe.go   # with a run in flight on walk
 bash $D/setup.sh restart               # mid-run daemon restart
 ```
+
+## Inherited base-branch CI repair
+
+On `main` (`326434d93`), `go e2e` failed under `-race` in
+`TestACIWaitAcrossADaemonRestartResumesToTheVerdict` with a data race between
+`daemon.WithCIGoCacheWriters` writing `service.Engine.Sandboxes` and an
+adopted CI run's goroutine (`Engine.Resume`, spawned inside `BuildCIService`'s
+`AdoptCIRuns`) reading `service.Engine.Sandboxes`. `BuildCIService` now takes
+`beforeAdopt` hooks (`WithDaemonCIWiring`) so `SandboxImage`,
+`ReleaseRefRefusal`, `WithCIGoCacheWriters`, `WithCICapabilityServers` and
+`WithCICapabilityPorts` are wired before `AdoptCIRuns` resumes any run
+(`pkg/daemon/{ci,ci_gocache,run}.go`, regression test
+`TestBuildCIServiceWiresBeforeAdoptingInFlightRuns` in
+`pkg/daemon/ci_gocache_test.go`).
+

@@ -23,13 +23,18 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
 
@@ -277,5 +282,78 @@ func TestATaskBranchCIJobIsNotATrustedGoCacheWriter(t *testing.T) {
 	// And with nothing registered, nothing but a trusted job writes.
 	if code := putGoCacheAction(t, pc.Url, "", strings.Repeat("23", 32)); code != http.StatusForbidden {
 		t.Errorf("an unregistered PUT of an action = %d, want 403", code)
+	}
+}
+
+// TestBuildCIServiceWiresBeforeAdoptingInFlightRuns guards against the
+// startup race where BuildCIService resumed unconcluded CI runs before
+// WithCIGoCacheWriters and the capability hooks finished wiring
+// service.Engine.Sandboxes and Admission.
+func TestBuildCIServiceWiresBeforeAdoptingInFlightRuns(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	sandboxDir := t.TempDir()
+	release := filepath.Join(t.TempDir(), "release")
+	workflowYAML := `name: tests
+on: push
+jobs:
+  slow:
+    steps:
+      - run: while [ ! -e "` + release + `" ]; do sleep 0.02; done
+`
+	bareRepoRoot, commitSHA, source := setupTestCIRepo(t, workflowYAML)
+
+	store1, closeStore1 := openTestStore(t, dataDir)
+	sb1 := orchestrator.NewHostSandboxes(sandboxDir)
+	svc1 := &ci.Service{
+		Source:  source,
+		Engine:  &ci.Engine{Sandboxes: newTestCiSandboxes(sb1, bareRepoRoot)},
+		Runs:    ci.NewStoredRunStore(store1, ci.StoredRunStoreOptions{}),
+		PlanDir: filepath.Join(dataDir, "state", "ci-plans"),
+	}
+	started, err := svc1.Start(ctx, ci.Request{Repo: "acme/widgets", Ref: "main", Commit: commitSHA, Event: ci.EventPush})
+	if err != nil {
+		t.Fatalf("starting CI run: %v", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		r, _ := svc1.Get(started.ID)
+		if len(r.Jobs) == 1 && r.Jobs[0].Sandbox != "" && len(r.Jobs[0].Steps) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for job step to start; run=%+v", r)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	svc1.Detach()
+	closeStore1()
+
+	store2, closeStore2 := openTestStore(t, dataDir)
+	defer closeStore2()
+	sb2 := orchestrator.NewHostSandboxes(sandboxDir)
+	tokens := gitproxy.NewSandboxTokenStore(filepath.Join(dataDir, "sandbox-tokens.json"))
+	jobs := pkgcache.NewJobTokenSet(false)
+	cfg := Config{DataDir: dataDir, SandboxDir: sandboxDir, HostSandboxes: true, Ci: true}
+	svc2 := BuildCIService(ctx, cfg, cfg.Limits, nil, nil, store2, sb2,
+		&gitproxy.CredentialSet{}, "http://127.0.0.1:9", tokens, nil, nil, nil, nil,
+		func(context.Context) string { return "http://127.0.0.1:9" }, nil, nil, nil,
+		func(svc *ci.Service) { svc.Source = source },
+		WithDaemonCIWiring(func() string { return "" },
+			CiReleaseRefRefusal(store2, defaultBranchClient{branch: "main"}),
+			&PackageCache{GoCacheJobs: jobs},
+			func() orchestrator.CapabilityServers { return nil }, nil, ""))
+	defer svc2.Detach()
+
+	ciSb := svc2.Engine.Sandboxes.(StateCheckSandboxes).Sandboxes.(CiSandboxes)
+	if ciSb.GoCacheJobs != jobs || ciSb.GoCacheRefRefusal == nil {
+		t.Fatalf("CiSandboxes GoCache wiring = (jobs=%v, refusalNil=%v), want (%v, false)", ciSb.GoCacheJobs, ciSb.GoCacheRefRefusal == nil, jobs)
+	}
+	if err := os.WriteFile(release, []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := waitConcluded(t, svc2, started.ID)
+	if run.Conclusion != ci.ConclusionSuccess || run.Interrupted {
+		t.Fatalf("adopted run = %s (interrupted %v), want success: %+v", run.Conclusion, run.Interrupted, run)
 	}
 }
