@@ -23,17 +23,30 @@
 /* Inline: a readable pane, not a peephole. */
 .convo-host .convo-thread {
   min-height: 240px;
-  max-height: min(60vh, 640px);
+  max-height: min(42vh, 480px);
 }
 
-/* Expanded: the thread takes the pane and the sibling cards step aside. */
-.convo-host.is-expanded .convo-thread {
-  min-height: calc(100dvh - 300px);
-  max-height: none;
+/* Expanded: the sibling cards step aside and the conversation fills the
+   pane, composer included. */
+:has(> .g-conversation.is-expanded) {
+  display: flex;
+  flex-direction: column;
 }
 
 :has(> .g-conversation.is-expanded) > :not(.g-conversation, h2, .sr-only) {
   display: none;
+}
+
+.g-conversation.is-expanded,
+.convo-host.is-expanded {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Never shorter than inline; grows to fill taller panes. */
+.convo-host.is-expanded .convo-thread {
+  min-height: max(240px, min(56vh, 640px));
+  max-height: none;
 }
 
 .convo-header {
@@ -112,10 +125,12 @@
   font-size: 13px;
 }
 
+/* Composer: the field on its own row, then attach, hint and actions on one. */
 .convo-composer {
   flex-shrink: 0;
   display: flex;
-  flex-direction: column;
+  flex-flow: row wrap;
+  align-items: center;
   gap: 8px;
   box-sizing: border-box;
   width: 100%;
@@ -125,6 +140,7 @@
 }
 
 .convo-composer .reply-textarea {
+  flex: 1 0 100%;
   box-sizing: border-box;
   display: block;
   width: 100%;
@@ -136,6 +152,7 @@
 }
 
 .convo-actions {
+  flex: 1 1 auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
