@@ -1122,13 +1122,14 @@ It is refused on the caller's own task.
 
 ### Steering a task with wider grants
 
-An agent may edit, re-queue or speak in another task only when that
-task is within its own task's envelope. `PATCH /api/tasks/{id}`,
+An agent may edit, re-queue, speak in, halt or close another task only
+when that task is within its own task's envelope. `PATCH /api/tasks/{id}`,
 `retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
 `PUT` and `DELETE /api/tasks/{id}/goal`, `agent-messages`, `notes`, and the
 context routes `brief`, `compact` and `rollover` (a brief or handover
 becomes the target's next prompt, and a rollover files a successor
-carrying its grants) are refused
+carrying its grants), and the halting routes `close`, `stop`, `pause`,
+`defer`, `resume-later` and `withdraw-approval` are refused
 with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
 capability's arguments bind), writes to or reads a repository the
@@ -1136,15 +1137,23 @@ calling task cannot, has wider network access, or has `autoMerge` the
 calling task lacks. A repository default grant the calling task lacks
 counts only when it is dangerous (only a person may grant it). Holding `api:tasks:write` on the repository is not
 enough: otherwise a less-privileged run could have a more-privileged
-one act on its behalf. Ask a person to act on that task instead.
+one act on its behalf. The halting routes lend the caller none of the
+target's grants, but they would let a less-privileged run close or stall
+more-privileged work a person approved, so they are held to the same
+envelope. Ask a person to act on that task instead.
 `run-now` is not refused this way: on an approved task it only moves
 when the task runs (`api:dispatch-control`'s job), and on an unapproved
 one the approval rail already applies.
 
-Two kinds of target are exempt: the calling task's own proposals
-(directly or down its proposal chain), which were held to its ceilings
-when filed, and -- for `agent-messages` and `notes` only -- its parent
-or child. A message from a narrower parent or child reaches the
+Three kinds of target are exempt:
+
+- the calling task's own proposals (directly or down its proposal
+  chain), which were held to its ceilings when filed;
+- for `agent-messages` and `notes` only, its parent or child;
+- for the halting routes only, its own children: a director can stop
+  the children it runs, but a child cannot halt its wider parent.
+
+A message from a narrower parent or child reaches the
 recipient prefixed with an `[Untrusted agent input: ...]` notice, so the
 receiving run weighs it as information rather than instructions.
 
