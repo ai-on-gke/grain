@@ -616,10 +616,13 @@ func TestCapabilityMethodsMarkWhatThePolicyDenies(t *testing.T) {
 	}
 }
 
-// POST /api/capability-grants/check refuses the same repository, CI-only, and
-// scope-set grants that POST /api/tasks/{id}/capabilities and PATCH /api/tasks/{id}
+// POST /api/capability-grants/check refuses the same repository and scope-set
+// grants that POST /api/tasks/{id}/capabilities and PATCH /api/tasks/{id}
 // refuse, and capabilityRefusal explains a task's own repository access rather
 // than calling repo#target or repo#write {repo, base} an unknown capability.
+// CI-only repo#write {repo} is what the repos page's CI capabilities list
+// grants through the same check, so the check records it and refuses it only
+// for a task subject (CatalogueRefusal), as the task writes do.
 func TestCheckAndWritesAgreeOnRepoAndScopeSetRefusals(t *testing.T) {
 	ts, client := grantTestServer(t)
 	ctx := context.Background()
@@ -648,6 +651,7 @@ func TestCheckAndWritesAgreeOnRepoAndScopeSetRefusals(t *testing.T) {
 		wantSubstr     string
 		wantField      string
 		wantCatalogRef bool
+		checkRecords   bool
 	}{
 		{
 			name:           "repo#target",
@@ -669,6 +673,7 @@ func TestCheckAndWritesAgreeOnRepoAndScopeSetRefusals(t *testing.T) {
 			with:           map[string]any{"repo": "acme/widgets"},
 			wantSubstr:     "CI capability",
 			wantCatalogRef: true,
+			checkRecords:   true,
 		},
 		{
 			name:       "grain#ci",
@@ -695,7 +700,11 @@ func TestCheckAndWritesAgreeOnRepoAndScopeSetRefusals(t *testing.T) {
 				t.Fatalf("check: %d %+v", code, checks)
 			}
 			c := checks[0]
-			if c.Recorded != "" || !strings.Contains(c.Error, tc.wantSubstr) || strings.Contains(c.Error, "unknown capability") {
+			if tc.checkRecords {
+				if c.Error != "" || c.Recorded == "" {
+					t.Errorf("check = %+v, want it recorded (the repos page's CI capabilities list grants it)", c)
+				}
+			} else if c.Recorded != "" || !strings.Contains(c.Error, tc.wantSubstr) || strings.Contains(c.Error, "unknown capability") {
 				t.Errorf("check = %+v, want error containing %q and no Recorded", c, tc.wantSubstr)
 			}
 			if tc.wantField != "" && !strings.Contains(c.Fields[tc.wantField], tc.wantSubstr) {
