@@ -325,7 +325,7 @@ same person; chat bubbles for long agent reports.
 WCAG 2.1 AA is the floor.
 
 - axe reports no serious or critical violation on any page, in either theme,
-  at desktop or phone size (`ui/e2e/next-full-system.spec.js`).
+  at desktop or phone size (`ui-ng/e2e/next-full-system.spec.js`).
 - Text contrast is at least 4.5:1 (3:1 for large text and UI shapes).
 - Focus is always visible (2px primary outline).
 - Hit targets are at least 24×24.
@@ -355,7 +355,8 @@ Passing unit tests is not the same as the page looking right.
    applies no component CSS, so layout is not tested here.
 2. **Lint and build:** `npm run lint`, `npm run build` (0 warnings, budgets
    above).
-3. **Real browser over `grain demo` (Playwright, `ui/e2e/`):**
+3. **Real browser over `grain demo` (Playwright, `ui-ng/e2e/`, `make
+   test-e2e-ng`, CI job `ui-ng e2e`):**
    - `next-full-system.spec.js` visits every `/next/` destination in light and
      dark, at 1440×900 and 390×844. It asserts no sideways scroll, no page
      error and no serious or critical axe violation, plus contrast on the
@@ -364,7 +365,20 @@ Passing unit tests is not the same as the page looking right.
    - Scenario specs cover the interactions people rely on: selecting and
      resizing the split, changing priority with Undo, reordering the backlog,
      replying to and waking an Inbox item, expanding and full-screening a
-     conversation, editing a task in place, filing a new task.
+     conversation, editing a task in place, filing a new task. A new
+     scenario spec goes in `ui-ng/e2e/` as a `*.spec.ts`, never in the
+     classic `ui/e2e/`.
+   - Specs import `test` and `expect` from `ui-ng/e2e/fixtures.ts`: one
+     signed-in `grain demo` per worker (shared with the classic suite
+     through `ui-shared/e2e/`), `baseURL` at its `/next/`, an `axe()`
+     fixture returning serious and critical violations, and a
+     `pageErrors` fixture that fails a test on any uncaught error.
+   - Projects: `desktop` (1440×900) runs every test; `phone` (390×844,
+     touch) and `dark` run the tests tagged `@phone` or `@dark`.
+   - Select by role and accessible name (`getByRole`, `getByLabel`), as a
+     person or screen reader finds things. Never select by a CSS class,
+     and never by a classic UI class name. A `data-testid` is a last
+     resort for something with no role or name of its own.
    - Where a layout rule matters (a badge centred on its label, a composer
      inside its card), assert it with bounding boxes.
 4. **Screenshots:** `make ui-screenshots PAGES=... OUT=screenshots/after`

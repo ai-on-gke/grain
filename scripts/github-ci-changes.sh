@@ -57,6 +57,7 @@ job_postgres=false
 job_run_host=false
 job_host_script_container=false
 job_ui_e2e=false
+job_ui_ng_e2e=false
 job_installer_e2e=false
 job_installer=false
 job_package_cache=false
@@ -81,6 +82,7 @@ enable_all() {
   job_run_host=true
   job_host_script_container=true
   job_ui_e2e=true
+  job_ui_ng_e2e=true
   job_installer_e2e=true
   job_installer=true
   job_package_cache=true
@@ -166,6 +168,13 @@ classify_file() {
     granule=true
   fi
 
+  # ui-ng e2e drives the Angular UI over `grain demo`, so it follows what
+  # that reads: the UI itself, the e2e harness it shares, the server that
+  # serves it and the demo that seeds it.
+  if [[ "$file" == ui-ng/* || "$file" == ui-shared/* || "$file" == pkg/ui/* || "$file" == pkg/demo/* || "$file" == ".github/workflows/tests.yml" ]]; then
+    job_ui_ng_e2e=true
+  fi
+
   if [[ "$file" == ui/* || "$file" == ui-ng/* || "$file" == ui-hub/* || "$file" == ui-shared/* || "$file" == "Makefile" || "$file" == "scripts/warm-npm-cache.sh" || "$file" == ".github/workflows/tests.yml" ]]; then
     frontend=true
   fi
@@ -210,6 +219,9 @@ evaluate_workflow_dispatch() {
       ui-e2e)
         job_ui_e2e=true
         go_program=true
+        ;;
+      ui-ng-e2e)
+        job_ui_ng_e2e=true
         ;;
       installer|installer-e2e)
         job_installer_e2e=true
@@ -285,7 +297,7 @@ evaluate_workflow_dispatch() {
         ;;
       *)
         echo "github-ci-changes.sh: unknown job ID in inputs.jobs: '${token}'" >&2
-        echo "Valid job IDs: go, go-e2e, go-orchestrator, go-model, go-unit, granule, postgres, run-host, host-script-container, frontend, ui-e2e, lint, terraform, installer-e2e (or installer), package-cache, real-vm, real-kubernetes" >&2
+        echo "Valid job IDs: go, go-e2e, go-orchestrator, go-model, go-unit, granule, postgres, run-host, host-script-container, frontend, ui-e2e, ui-ng-e2e, lint, terraform, installer-e2e (or installer), package-cache, real-vm, real-kubernetes" >&2
         exit 1
         ;;
     esac
@@ -379,6 +391,7 @@ postgres=${job_postgres}
 run-host=${job_run_host}
 host-script-container=${job_host_script_container}
 ui-e2e=${job_ui_e2e}
+ui-ng-e2e=${job_ui_ng_e2e}
 installer-e2e=${job_installer_e2e}
 installer=${job_installer}
 package-cache=${job_package_cache}
