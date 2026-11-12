@@ -355,7 +355,7 @@ and about 25 classic tests' worth of interaction per ui-ng run.
 | # | Batch | Tests (server half / ui-ng half / 3) | Estimate | Depends on |
 |---|---|---|---|---|
 | H1 | Go demo harness (`demotest`) + first port of 10 tests as proof | – | 1–2 runs | this plan |
-| H2 | ui-ng Playwright suite + `ui-ng e2e` job + move `next-*` | 15 / 15 / 0 | 1–2 runs | this plan |
+| H2 | ui-ng Playwright suite + `ui-ng e2e` job + move `next-*` | 0 / 15 / 0 | 1–2 runs | this plan |
 | H3 | Freeze mechanics: `QUARANTINE`, `NONGATING`, non-gating lane, hygiene allowlist | – | 1 run | this plan |
 | B1 | Sessions & Director | 28 / 75 / 5 | 1 + 2 runs | H1, H2, H3 |
 | B2 | Settings sections (General, Models, Sandboxes, Agents, Upgrade, Memory, Hosts, …) | 42 / 117 / 47 | 2 + 3 runs | H1, H2, H3 |
