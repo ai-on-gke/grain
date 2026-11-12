@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -489,4 +490,55 @@ func (s *Store) WakeOnMessage(ctx context.Context, taskID string, now time.Time)
 		}
 	}
 	return false, nil
+}
+
+// DueMessageResumes is every task a resume_later with message: true still
+// holds although somebody has posted to it since it stopped: a comment
+// after its deferral that is neither grain's own (automation, which is
+// also how a run's own words are relayed) nor its own agent's, and that
+// no run of the task has already been given (Observation.DeliveredCommentID).
+//
+// WakeOnMessage, called as a comment is written, is the fast path, and
+// it cannot see every post. A comment written while the run that called
+// resume_later is still ending finds no finished suspension to release
+// (heldResumes), and a person's words relayed from a pull request
+// (orchestrator.deliverReplyAndWakeTask) or posted straight to the store
+// never call it at all. Either way the post would otherwise be lost and
+// the task left deferred with no wake time until somebody posted again.
+// This is the level-triggered half orchestrator.reconcileWake reads every
+// cycle, so a post is acted on whenever it was written.
+func (s *Store) DueMessageResumes(ctx context.Context) ([]string, error) {
+	held, err := s.heldResumes(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, h := range held {
+		if !h.resumeOn.Message || seen[h.taskID] {
+			continue
+		}
+		seen[h.taskID] = true
+		var one int
+		err := s.db.QueryRowContext(ctx,
+			"SELECT 1 FROM `task_comment` AS `c` "+
+				"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `c`.`task_id` "+
+				"WHERE `c`.`task_id` = ? AND `c`.`created_at` > ? "+
+				"AND `c`.`id` > COALESCE(`o`.`delivered_comment_id`, 0) "+
+				"AND `c`.`author_kind` <> ? "+
+				"AND NOT (`c`.`author_kind` = ? AND `c`.`author_id` = ?) "+
+				"AND NOT (COALESCE(`c`.`author_behalf_kind`, '') = ? AND COALESCE(`c`.`author_behalf_id`, '') = ?) "+
+				"LIMIT 1",
+			h.taskID, h.since.UTC(), string(PrincipalAutomation),
+			string(PrincipalAgent), h.taskID, string(PrincipalAgent), h.taskID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading task %s's posts since its resume_later: %w", h.taskID, err)
+		}
+		out = append(out, h.taskID)
+	}
+	sort.Strings(out)
+	return out, nil
 }
