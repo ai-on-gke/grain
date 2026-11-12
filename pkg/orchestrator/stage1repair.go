@@ -165,7 +165,7 @@ func handleStage1Verdict(ctx context.Context, deps Deps, run ConcludedGitHubWork
 		return nil
 	}
 	if stage1JobsGreen(run.Conclusion, jobs) {
-		return checkNightlyGreenGoals(ctx, deps, run.Repo, now)
+		return checkNightlyGreenGoals(ctx, deps, run.Repo, run.WorkflowName, stage1Subject(run.Repo), stage1Repairer, now)
 	}
 	if !model.GitHubCIFailed(run.Conclusion) {
 		// Cancelled, or a job neither red nor green: the train re-runs it
@@ -179,7 +179,12 @@ func handleStage1Verdict(ctx context.Context, deps Deps, run ConcludedGitHubWork
 // openStage1Repair is repo's open Stage 1 repair, the oldest if a person
 // has tagged more than one, or nil.
 func openStage1Repair(ctx context.Context, store *model.Store, repo model.RepoRef) (*model.Task, error) {
-	ids, err := store.OpenTasksWithTag(ctx, Stage1RepairTag(repo))
+	return openTaggedRepair(ctx, store, Stage1RepairTag(repo))
+}
+
+// openTaggedRepair is the oldest open task carrying tag, or nil.
+func openTaggedRepair(ctx context.Context, store *model.Store, tag string) (*model.Task, error) {
+	ids, err := store.OpenTasksWithTag(ctx, tag)
 	if err != nil || len(ids) == 0 {
 		return nil, err
 	}
@@ -190,6 +195,11 @@ func openStage1Repair(ctx context.Context, store *model.Store, repo model.RepoRe
 // stage1Failures is a red run's failing jobs in words: each job, its
 // failing step and the end of its log.
 func stage1Failures(run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob) string {
+	return runFailures("Stage 1", run, jobs)
+}
+
+// runFailures is stage1Failures for a run the reader knows as label.
+func runFailures(label string, run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob) string {
 	var b strings.Builder
 	what := run.Ref
 	if rcTagPattern.MatchString(what) {
@@ -197,8 +207,8 @@ func stage1Failures(run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob) st
 	} else {
 		what = "`" + what + "`"
 	}
-	fmt.Fprintf(&b, "Stage 1 (`%s`, run %d attempt %d, %s) concluded **%s** on %s at commit `%s`.\n\nRun: %s\n",
-		run.WorkflowName, run.RunID, max(1, run.Attempt), run.Event, run.Conclusion, what, run.HeadSHA, run.HTMLURL)
+	fmt.Fprintf(&b, "%s (`%s`, run %d attempt %d, %s) concluded **%s** on %s at commit `%s`.\n\nRun: %s\n",
+		label, run.WorkflowName, run.RunID, max(1, run.Attempt), run.Event, run.Conclusion, what, run.HeadSHA, run.HTMLURL)
 	failed := 0
 	for _, j := range jobs {
 		if !j.Failed() {
@@ -231,88 +241,138 @@ func stage1Failures(run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob) st
 func fileOrUpdateStage1Repair(ctx context.Context, store *model.Store, run ConcludedGitHubWorkflowRun,
 	jobs []model.GitHubCIJob, now time.Time) (string, error) {
 
-	failures := stage1Failures(run, jobs)
-	open, err := openStage1Repair(ctx, store, run.Repo)
+	short := run.HeadSHA
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	return fileOrUpdateRepair(ctx, store, repairKind{
+		what: "Stage 1", tag: Stage1RepairTag(run.Repo), by: stage1Repairer, priority: Stage1RepairPriority,
+		title: fmt.Sprintf("Fix the red Stage 1 (%s) at %s", run.WorkflowName, short),
+		intro: "Stage 1 of the release train (`" + run.WorkflowName + "`) is red, and every release waits on it " +
+			"(design/playbook/releases.playbook.md, section 15). Find why and fix it on the default branch: a " +
+			"regression, a flaky test, or the workflow itself. Leave anything you cannot fix as a precise report.\n\n" +
+			"This task closes itself when the next Stage 1 run (an rc's or the default branch's) is fully green " +
+			"(goal `nightly-green`). Further red runs are appended to it as comments while it is open.",
+	}, run, jobs, now)
+}
+
+// repairKind is what one kind of red-run repair is filed as.
+type repairKind struct {
+	// what names the red thing in comments and logs ("Stage 1").
+	what     string
+	tag      string
+	by       model.Principal
+	priority int
+	title    string
+	// intro is the body's opening paragraphs, before the run's failures.
+	intro string
+}
+
+// fileOrUpdateRepair files kind's repair of run's repository, or, while
+// one carrying kind.tag is open, appends run's failures to it and keeps
+// its priority at kind.priority. It returns the repair's id.
+func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind, run ConcludedGitHubWorkflowRun,
+	jobs []model.GitHubCIJob, now time.Time) (string, error) {
+
+	failures := runFailures(kind.what, run, jobs)
+	open, err := openTaggedRepair(ctx, store, kind.tag)
 	if err != nil {
 		return "", err
 	}
 	if open != nil {
 		if err := store.UpdateTask(ctx, open.ID, func(t *model.Task) error {
-			if t.Priority < Stage1RepairPriority {
-				t.Priority = Stage1RepairPriority
+			if t.Priority < kind.priority {
+				t.Priority = kind.priority
 			}
 			return nil
 		}); err != nil {
-			return "", fmt.Errorf("orchestrator: keeping Stage 1 repair %s's priority: %w", open.ID, err)
+			return "", fmt.Errorf("orchestrator: keeping %s repair %s's priority: %w", kind.what, open.ID, err)
 		}
 		if _, err := store.AddComment(ctx, model.Comment{
-			TaskID: open.ID, Author: model.Attribution{Actor: stage1Repairer}, CreatedAt: now,
-			Body: "Stage 1 is still red. Another failing run:\n\n" + failures,
+			TaskID: open.ID, Author: model.Attribution{Actor: kind.by}, CreatedAt: now,
+			Body: kind.what + " is still red. Another failing run:\n\n" + failures,
 		}); err != nil {
-			return "", fmt.Errorf("orchestrator: appending run %d to Stage 1 repair %s: %w", run.RunID, open.ID, err)
+			return "", fmt.Errorf("orchestrator: appending run %d to %s repair %s: %w", run.RunID, kind.what, open.ID, err)
 		}
-		log.Printf("orchestrator: Stage 1 run %d on %s is red; appended it to the open repair %s", run.RunID, run.Repo, open.ID)
+		log.Printf("orchestrator: %s run %d on %s is red; appended it to the open repair %s", kind.what, run.RunID, run.Repo, open.ID)
 		return open.ID, nil
 	}
 	id, err := store.NewTaskID(ctx)
 	if err != nil {
-		return "", fmt.Errorf("orchestrator: allocating a Stage 1 repair task ID: %w", err)
+		return "", fmt.Errorf("orchestrator: allocating a %s repair task ID: %w", kind.what, err)
 	}
 	orderKey, err := store.OrderKeyForNewTask(ctx, true)
 	if err != nil {
-		return "", fmt.Errorf("orchestrator: ordering the Stage 1 repair: %w", err)
+		return "", fmt.Errorf("orchestrator: ordering the %s repair: %w", kind.what, err)
 	}
 	repo := run.Repo
-	short := run.HeadSHA
-	if len(short) > 12 {
-		short = short[:12]
-	}
-	body := "Stage 1 of the release train (`" + run.WorkflowName + "`) is red, and every release waits on it " +
-		"(design/playbook/releases.playbook.md, section 15). Find why and fix it on the default branch: a " +
-		"regression, a flaky test, or the workflow itself. Leave anything you cannot fix as a precise report.\n\n" +
-		"This task closes itself when the next Stage 1 run (an rc's or the default branch's) is fully green " +
-		"(goal `nightly-green`). Further red runs are appended to it as comments while it is open.\n\n" + failures
 	task := model.Task{
 		ID:     id,
 		Intent: model.IntentImplement,
-		Title:  fmt.Sprintf("Fix the red Stage 1 (%s) at %s", run.WorkflowName, short),
-		Body:   body,
+		Title:  kind.title,
+		Body:   kind.intro + "\n\n" + failures,
 		Origin: model.Origin{
-			Attribution: model.Attribution{Actor: stage1Repairer},
+			Attribution: model.Attribution{Actor: kind.by},
 			Reason:      model.ReasonProposal,
 		},
-		Approval:   &model.Attribution{Actor: stage1Repairer},
+		Approval:   &model.Attribution{Actor: kind.by},
 		ApprovedAt: &now,
 		Target:     &repo,
 		Binding:    model.BindingDirective,
-		Priority:   Stage1RepairPriority,
-		Tags:       []string{Stage1RepairTag(repo)},
+		Priority:   kind.priority,
+		Tags:       []string{kind.tag},
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
 	}
 	if err := store.PutTask(ctx, task); err != nil {
-		return "", fmt.Errorf("orchestrator: filing the Stage 1 repair of %s: %w", repo, err)
+		return "", fmt.Errorf("orchestrator: filing the %s repair of %s: %w", kind.what, repo, err)
 	}
 	if err := store.SetTaskGoal(ctx, id, model.GoalDecl{
 		Kind: model.GoalNightlyGreen, Spec: model.GoalSpec{Repo: repo.String(), Workflow: run.WorkflowName},
 		OnMet: model.GoalCloseOnMet,
-	}, model.PrincipalString(stage1Repairer), now); err != nil {
-		return "", fmt.Errorf("orchestrator: declaring Stage 1 repair %s's goal: %w", id, err)
+	}, model.PrincipalString(kind.by), now); err != nil {
+		return "", fmt.Errorf("orchestrator: declaring %s repair %s's goal: %w", kind.what, id, err)
 	}
-	log.Printf("orchestrator: Stage 1 run %d on %s is red; filed repair %s at priority %d", run.RunID, repo, id, Stage1RepairPriority)
+	log.Printf("orchestrator: %s run %d on %s is red; filed repair %s at priority %d", kind.what, run.RunID, repo, id, kind.priority)
 	return id, nil
+}
+
+func isGitHubBaseRepairGoal(g model.TaskGoal) bool {
+	return g.DeclaredBy == model.PrincipalString(githubBaseRepairer) || isGitHubGatingWorkflow(g.Spec.Workflow, "")
 }
 
 // nightlyGreenReading is a nightly-green goal's check: the newest Stage 1
 // run of the workflow recorded since the goal was declared, met when every
 // job of it passed.
 func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGoal) (goalReading, error) {
+	if isGitHubBaseRepairGoal(g) {
+		// A gating workflow runs on pull requests too, and a fork's pull
+		// request opened from its own main records job rows on "main" that
+		// github_ci_job cannot tell from the default branch's. Only a run
+		// handleGitHubBaseVerdict saw pushed to the default branch moves or
+		// meets this goal (meetGitHubBaseGoals / noteRedGitHubBaseGoals):
+		// unverified job rows never reset g.Measure's progress limit and never
+		// clear g.MetAt while a running repair finishes its pause grace.
+		if g.MetAt != nil {
+			return goalReading{met: true, measure: "green", evidence: g.Evidence}, nil
+		}
+		measure := g.Measure
+		if measure == "" {
+			measure = "awaiting-push"
+		}
+		evidence := g.Evidence
+		if evidence == "" {
+			evidence = fmt.Sprintf("awaiting a green `%s` push on %s's default branch", g.Spec.Workflow, g.Spec.Repo)
+		}
+		return goalReading{measure: measure, evidence: evidence}, nil
+	}
 	jobs, err := store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: g.Spec.Repo, Since: g.DeclaredAt, Limit: 500})
 	if err != nil {
 		return goalReading{}, err
 	}
 	// Jobs come newest first; the first matching run that idle-gate did not
-	// turn off is the newest verdict.
+	// turn off, and that was not cancelled before its verdict, is the
+	// newest verdict.
 	var order []int64
 	byRun := map[int64][]model.GitHubCIJob{}
 	for _, j := range jobs {
@@ -327,7 +387,7 @@ func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGo
 	var runID int64
 	var run []model.GitHubCIJob
 	for _, id := range order {
-		if !stage1RunSkipped(byRun[id]) {
+		if !stage1RunSkipped(byRun[id]) && !runCancelledUnjudged(byRun[id]) {
 			runID, run = id, byRun[id]
 			break
 		}
@@ -353,6 +413,20 @@ func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGo
 	return goalReading{met: true, measure: "green", evidence: what + " is green"}, nil
 }
 
+// runCancelledUnjudged reports whether a run's jobs reached no verdict: none
+// failed, and at least one was cancelled -- a run cancel-in-progress
+// stopped when the next push arrived.
+func runCancelledUnjudged(jobs []model.GitHubCIJob) bool {
+	cancelled := false
+	for _, j := range jobs {
+		if j.Failed() {
+			return false
+		}
+		cancelled = cancelled || strings.EqualFold(j.Conclusion, "cancelled")
+	}
+	return cancelled
+}
+
 // isDefaultLike is a branch a nightly-green goal counts beside rc tags:
 // the default branch, which a goal row does not name, so "main" or
 // "master".
@@ -361,23 +435,24 @@ func isDefaultLike(ref string) bool {
 	return ref == "main" || ref == "master"
 }
 
-// checkNightlyGreenGoals checks every open nightly-green goal of repo now,
-// on the green verdict that has just landed, rather than on the next
-// reconcile.
-func checkNightlyGreenGoals(ctx context.Context, deps Deps, repo model.RepoRef, now time.Time) error {
+// checkNightlyGreenGoals checks every open nightly-green goal of repo's
+// workflow now, on the green verdict that has just landed, rather than on
+// the next reconcile, and clears the notification subject raised about it.
+func checkNightlyGreenGoals(ctx context.Context, deps Deps, repo model.RepoRef, workflow, subject string,
+	by model.Principal, now time.Time) error {
 	goals, err := deps.Store.OpenTaskGoals(ctx)
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, g := range goals {
-		if g.Kind != model.GoalNightlyGreen || !strings.EqualFold(g.Spec.Repo, repo.String()) {
+		if g.Kind != model.GoalNightlyGreen || !strings.EqualFold(g.Spec.Repo, repo.String()) ||
+			!strings.EqualFold(g.Spec.Workflow, workflow) {
 			continue
 		}
 		errs = append(errs, reconcileTaskGoal(ctx, deps, g, now))
 	}
-	errs = append(errs, clearPipelineNotification(ctx, deps.Store, stage1Subject(repo),
-		model.PrincipalString(stage1Repairer)))
+	errs = append(errs, clearPipelineNotification(ctx, deps.Store, subject, model.PrincipalString(by)))
 	return errors.Join(errs...)
 }
 
