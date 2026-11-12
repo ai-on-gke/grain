@@ -194,7 +194,7 @@ func contextUpkeepSection(task model.Task, history History, promptBytes int) str
 	}
 	if age := history.HandoverAge; age.Stale() {
 		fmt.Fprintf(&b, "[grain] This task's handover is stale: %d run(s) and %d comment(s) since it was "+
-			"written or last confirmed. Before you finish, replace it (write_handover) or, if it is "+
+			"written or last confirmed. Before you finish, replace it (`grain handover write --file <path>`) or, if it is "+
 			"still true, write it again unchanged to confirm it.\n", age.Runs, age.Comments)
 	}
 	return b.String()
