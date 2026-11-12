@@ -105,8 +105,10 @@ export interface CIActionsMeta {
 }
 
 export interface CIFaultRun {
-  id: string;
+  runId: string;
   ref?: string;
+  sha?: string;
+  taskId?: string;
   commit?: string;
   at?: string;
 }
@@ -125,10 +127,7 @@ export interface CIFault {
   jobName?: string;
   step?: string;
   kind: string;
-  summary?: string;
-  detail?: string;
   digest?: string;
-  count?: number;
   refs?: string[];
   runs?: CIFaultRun[];
   paths?: string[];
@@ -138,9 +137,9 @@ export interface CIFault {
   runCount?: number;
   refCount?: number;
   pathCount?: number;
-  firstSeen?: string;
-  lastSeen?: string;
   trimmed?: boolean;
+  summary?: string;
+  detail?: string;
 }
 
 export interface CIRun {
@@ -326,23 +325,36 @@ export function runTitle(run: CIRun): string {
   return "CI checks";
 }
 
+export function faultSourceOf(source: string | undefined): "grain" | "github" {
+  const s = (source || "grain").trim().toLowerCase();
+  if (s === "github" || s.startsWith("github")) return "github";
+  return "grain";
+}
+
 export function faultsForRun(
   run: CIRun,
   faults: readonly CIFault[],
 ): CIFault[] {
   const matched: CIFault[] = [];
   if (run.fault) matched.push(run.fault);
-  const branch = runBranch(run);
+  const runProvider = providerOfRun(run);
   for (const f of faults) {
-    if (matched.some((m) => m.digest && m.digest === f.digest)) continue;
-    const hitRun = f.runs?.some((r) => r.id === run.id);
-    const hitRef =
-      !hitRun &&
-      !!branch &&
-      (!f.repo || f.repo.toLowerCase() === run.repo.toLowerCase()) &&
-      f.refs?.some((r) => cleanRef(r) === branch) &&
-      (run.conclusion === "failure" || run.conclusion === "errored");
-    if (hitRun || hitRef) matched.push(f);
+    if (faultSourceOf(f.source) !== runProvider) continue;
+    if (f.repo && run.repo && f.repo.toLowerCase() !== run.repo.toLowerCase()) {
+      continue;
+    }
+    if (
+      matched.some(
+        (m) =>
+          (m.digest && m.digest === f.digest) ||
+          (!m.digest && !f.digest && m === f),
+      )
+    ) {
+      continue;
+    }
+    if (f.runs?.some((r) => r.runId === run.id)) {
+      matched.push(f);
+    }
   }
   return matched;
 }
@@ -484,7 +496,21 @@ export function faultTitle(f: CIFault): string {
 }
 
 export function faultRunCount(f: CIFault): number {
-  return f.runCount ?? f.runs?.length ?? f.count ?? 0;
+  return f.runCount ?? f.runs?.length ?? 0;
+}
+
+export function safeExternalUrl(raw: string | undefined | null): string | null {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return trimmed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 export function faultRefCount(f: CIFault): number {

@@ -37,7 +37,6 @@ import {
   type UpdateScheduleRequest,
   type UpdateSuiteRequest,
   type UpdateTemplateRequest,
-  isOpenTaskState,
 } from "./processes.models";
 
 const POLL_MS = 10000;
@@ -102,6 +101,7 @@ export class ProcessesStore {
   private activeCount = 0;
 
   start(): void {
+    this.actionError.set(null);
     this.activeCount++;
     if (this.activeCount > 1) return;
     void this.loadConfigAndRepos();
@@ -130,6 +130,7 @@ export class ProcessesStore {
   private async loadConfigAndRepos(): Promise<void> {
     try {
       const cfg = await this.api.config();
+      if (this.activeCount === 0) return;
       if (cfg) {
         this.access.setConfig(cfg);
         this.approvedByDefault.set(!!cfg["approvedByDefault"]);
@@ -146,11 +147,13 @@ export class ProcessesStore {
       // Non-fatal.
     }
 
+    if (this.activeCount === 0) return;
     if (this.access.can("GET /api/deployment/reachable-repos")) {
       try {
         const raw = await this.api.get<unknown>(
           "GET /api/deployment/reachable-repos",
         );
+        if (this.activeCount === 0) return;
         const list = unwrapList<string | { repo?: string; name?: string }>(
           raw,
           "repos",
@@ -171,6 +174,7 @@ export class ProcessesStore {
   }
 
   async refresh(): Promise<void> {
+    if (this.activeCount === 0) return;
     try {
       const [schedRes, tmplRes, suiteRes, runsRes, accRes] = await Promise.all([
         this.access.can("GET /api/schedules")
@@ -191,6 +195,7 @@ export class ProcessesStore {
               .catch(() => ({ body: [], changed: false }))
           : Promise.resolve({ body: [], changed: false }),
       ]);
+      if (this.activeCount === 0) return;
 
       if (schedRes.body !== null) {
         this.schedules.set(unwrapList<Schedule>(schedRes.body, "schedules"));
@@ -213,6 +218,7 @@ export class ProcessesStore {
       this.loadError.set(null);
       this.loaded.set(true);
     } catch (err) {
+      if (this.activeCount === 0) return;
       this.loaded.set(true);
       this.loadError.set(errorText(err));
     }
@@ -455,9 +461,11 @@ export class ProcessesStore {
     const detail = await this.api.get<SuiteRun>("GET /api/suite-runs/{id}", {
       id,
     });
-    this.suiteRuns.update((list) =>
-      list.map((r) => (r.id === id ? detail : r)),
-    );
+    if (this.activeCount > 0) {
+      this.suiteRuns.update((list) =>
+        list.map((r) => (r.id === id ? detail : r)),
+      );
+    }
     return detail;
   }
 
@@ -485,20 +493,16 @@ export class ProcessesStore {
   async cancelSuiteRunTasks(run: SuiteRun): Promise<number> {
     this.actionError.set(null);
     const byId = new Map(this.taskFeed.tasks().map((t) => [t.id, t]));
-    const openTasks = (run.tasks ?? []).filter((rt) =>
-      isOpenTaskState(byId.get(rt.taskId)?.state || rt.state),
-    );
-    for (const rt of openTasks) {
+    const openTasks = (run.tasks ?? []).filter((rt) => {
       const st = (byId.get(rt.taskId)?.state || rt.state || "").toLowerCase();
-      if (st === "running") {
-        await this.api.post("POST /api/tasks/{id}/stop", { id: rt.taskId }, {});
-      } else {
-        await this.api.post(
-          "POST /api/tasks/{id}/close",
-          { id: rt.taskId },
-          { reason: `Cancelled from suite run #${run.id}` },
-        );
-      }
+      return Boolean(rt.taskId) && st !== "closed" && st !== "merged";
+    });
+    for (const rt of openTasks) {
+      await this.api.post(
+        "POST /api/tasks/{id}/close",
+        { id: rt.taskId },
+        { reason: `Cancelled from suite run #${run.id}` },
+      );
     }
     this.api.clearConditionalCache();
     await this.refresh();
@@ -533,6 +537,7 @@ export class ProcessesStore {
               .catch(() => null)
           : Promise.resolve(null),
       ]);
+      if (this.activeCount === 0) return;
       if (decl) {
         this.repoDefaults.update((m) => ({ ...m, [clean]: decl }));
       }
@@ -540,7 +545,9 @@ export class ProcessesStore {
         this.repoWorkflows.update((m) => ({ ...m, [clean]: wf }));
       }
     } finally {
-      if (this.repoLoading() === clean) this.repoLoading.set(null);
+      if (this.activeCount > 0 && this.repoLoading() === clean) {
+        this.repoLoading.set(null);
+      }
     }
   }
 
@@ -555,7 +562,9 @@ export class ProcessesStore {
       { owner, name },
       { declarations },
     );
-    this.repoDefaults.update((m) => ({ ...m, [repo]: updated }));
+    if (this.activeCount > 0) {
+      this.repoDefaults.update((m) => ({ ...m, [repo]: updated }));
+    }
     this.api.clearConditionalCache();
     await this.refresh();
     return updated;
@@ -572,7 +581,9 @@ export class ProcessesStore {
       { owner, name },
       { workflows },
     );
-    this.repoWorkflows.update((m) => ({ ...m, [repo]: updated }));
+    if (this.activeCount > 0) {
+      this.repoWorkflows.update((m) => ({ ...m, [repo]: updated }));
+    }
     return updated;
   }
 

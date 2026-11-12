@@ -98,6 +98,16 @@ export class AccessService {
     this.whoami.set(who);
   }
 
+  canGlobalScope(scope: string | null): boolean {
+    const access = this.config()?.access;
+    if (!access || access.full) return true;
+    if (scope === "signed-in") return true;
+    if (scope === null) return false;
+    if (!access.scopes?.includes(scope)) return false;
+    const limit = access.repoLimits?.[scope];
+    return !limit || limit.length === 0;
+  }
+
   canScope(scope: string | null, repo?: string | string[]): boolean {
     const access = this.config()?.access;
     if (!access || access.full) return true;

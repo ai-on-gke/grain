@@ -18,6 +18,7 @@ import {
   Component,
   ElementRef,
   HostListener,
+  NgZone,
   type OnDestroy,
   type OnInit,
   ViewEncapsulation,
@@ -41,6 +42,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { DialogTrapDirective } from "../shared/dialog-trap.directive";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
@@ -57,6 +59,7 @@ import {
   extractFailedTests,
   faultRefCount,
   faultRunCount,
+  faultSourceOf,
   faultTitle,
   faultsForRun,
   formatBytes,
@@ -68,6 +71,7 @@ import {
   runBucket,
   runTaskId,
   runTitle,
+  safeExternalUrl,
   stepBadge,
 } from "./ci.models";
 import { CIStore } from "./ci.store";
@@ -107,6 +111,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
     StatusIconComponent,
     ActorChipComponent,
     ConfirmDialogComponent,
+    DialogTrapDirective,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -156,6 +161,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                   type="button"
                   class="btn-tonal"
                   data-testid="ci-caches-menu-btn"
+                  aria-haspopup="menu"
                   [attr.aria-expanded]="openMenu() === 'caches'"
                   (click)="toggleMenu('caches', $event)"
                 >
@@ -168,7 +174,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                     data-testid="ci-caches-menu"
                   >
                     @if (access.can("DELETE /api/ci/cache")) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -180,7 +186,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                       </li>
                     }
                     @if (access.can("POST /api/actions-cache/flush")) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -194,7 +200,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                       </li>
                     }
                     @if (access.can("POST /api/package-cache/flush")) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitem"
@@ -244,6 +250,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
               class="pill-trigger"
               [class.is-filtered]="!!repoFilter()"
               data-testid="ci-repo-pill"
+              aria-haspopup="listbox"
               [attr.aria-expanded]="openMenu() === 'repo'"
               (click)="toggleMenu('repo', $event)"
             >
@@ -251,21 +258,28 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
               <span aria-hidden="true">▾</span>
             </button>
             @if (openMenu() === "repo") {
-              <ul class="pop-menu" role="listbox" data-testid="ci-repo-menu">
-                <li>
+              <ul
+                class="pop-menu"
+                role="listbox"
+                aria-label="Repository filter"
+                data-testid="ci-repo-menu"
+              >
+                <li role="none">
                   <button
                     type="button"
-                    [attr.aria-current]="!repoFilter() ? 'true' : null"
+                    role="option"
+                    [attr.aria-selected]="!repoFilter()"
                     (click)="pickRepo('')"
                   >
                     All repositories
                   </button>
                 </li>
                 @for (r of availableRepos(); track r) {
-                  <li>
+                  <li role="none">
                     <button
                       type="button"
-                      [attr.aria-current]="repoFilter() === r ? 'true' : null"
+                      role="option"
+                      [attr.aria-selected]="repoFilter() === r"
                       (click)="pickRepo(r)"
                     >
                       {{ r }}
@@ -282,6 +296,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
               class="pill-trigger"
               [class.is-filtered]="!!branchFilter()"
               data-testid="ci-branch-pill"
+              aria-haspopup="listbox"
               [attr.aria-expanded]="openMenu() === 'branch'"
               (click)="toggleMenu('branch', $event)"
             >
@@ -289,21 +304,28 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
               <span aria-hidden="true">▾</span>
             </button>
             @if (openMenu() === "branch") {
-              <ul class="pop-menu" role="listbox" data-testid="ci-branch-menu">
-                <li>
+              <ul
+                class="pop-menu"
+                role="listbox"
+                aria-label="Branch filter"
+                data-testid="ci-branch-menu"
+              >
+                <li role="none">
                   <button
                     type="button"
-                    [attr.aria-current]="!branchFilter() ? 'true' : null"
+                    role="option"
+                    [attr.aria-selected]="!branchFilter()"
                     (click)="pickBranch('')"
                   >
                     All branches
                   </button>
                 </li>
                 @for (b of availableBranches(); track b) {
-                  <li>
+                  <li role="none">
                     <button
                       type="button"
-                      [attr.aria-current]="branchFilter() === b ? 'true' : null"
+                      role="option"
+                      [attr.aria-selected]="branchFilter() === b"
                       (click)="pickBranch(b)"
                     >
                       {{ b }}
@@ -320,7 +342,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                 type="button"
                 [attr.aria-pressed]="providerFilter() === p.id"
                 [attr.data-testid]="'ci-provider-' + p.id"
-                (click)="providerFilter.set(p.id)"
+                (click)="setProviderFilter(p.id)"
               >
                 {{ p.label }}
               </button>
@@ -545,7 +567,10 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                         >&#64; {{ r.commit.slice(0, 7) }}</span
                       >
                     }
-                    @if (durationOf(r.startedAt, r.finishedAt); as dur) {
+                    @if (
+                      durationOf(r.startedAt, r.finishedAt, nowMs());
+                      as dur
+                    ) {
                       <span class="tabular">· {{ dur }}</span>
                     }
                     @if (taskIdOf(r); as tid) {
@@ -704,11 +729,20 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                     >Task #{{ tid }}</a
                   >
                 }
-                @if (durationOf(run.startedAt, run.finishedAt); as dur) {
-                  <span class="tabular">Duration {{ dur }}</span>
+                @if (
+                  durationOf(run.startedAt, run.finishedAt, nowMs());
+                  as dur
+                ) {
+                  <span class="tabular" data-testid="ci-detail-duration"
+                    >Duration {{ dur }}</span
+                  >
                 }
-                @if (run.actions?.url || run.url; as extUrl) {
-                  <a [href]="extUrl" target="_blank" rel="noopener"
+                @if (safeUrl(run.actions?.url || run.url); as extUrl) {
+                  <a
+                    [href]="extUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="ci-external-link"
                     >Open on GitHub ↗</a
                   >
                 }
@@ -807,7 +841,10 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                     @if (job.flake || job.retried) {
                       <span class="ci-provider-tag">Retried</span>
                     }
-                    @if (durationOf(job.startedAt, job.finishedAt); as jDur) {
+                    @if (
+                      durationOf(job.startedAt, job.finishedAt, nowMs());
+                      as jDur
+                    ) {
                       <span class="tabular muted">{{ jDur }}</span>
                     }
                     <span aria-hidden="true">{{ jOpen ? "▾" : "▸" }}</span>
@@ -915,7 +952,11 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                               >
                             }
                             @if (
-                              durationOf(step.startedAt, step.finishedAt);
+                              durationOf(
+                                step.startedAt,
+                                step.finishedAt,
+                                nowMs()
+                              );
                               as sDur
                             ) {
                               <span class="tabular muted">{{ sDur }}</span>
@@ -1024,7 +1065,14 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                           <span class="muted"> — {{ art.note }}</span>
                         }
                       </div>
-                      @if (art.stored !== false) {
+                      @if (
+                        art.stored === true &&
+                        providerOf(run) !== "github" &&
+                        access.can(
+                          "GET /api/ci/runs/{id}/artifacts/{job}/{name}",
+                          run.repo
+                        )
+                      ) {
                         <a
                           class="btn-tonal"
                           [href]="artifactHref(run.id, art)"
@@ -1048,227 +1096,247 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
           }
         </section>
       </div>
+    </section>
 
-      @if (runDialogOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="runDialogOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="ci-run-dialog-title"
-          data-testid="ci-run-dialog"
-          (keydown.escape)="runDialogOpen.set(false)"
-        >
-          <h2 id="ci-run-dialog-title">Run workflow</h2>
-          <label class="field">
-            <span>Repository (owner/name)</span>
-            <input
-              type="text"
-              data-testid="ci-run-repo-input"
-              placeholder="acme/widgets"
-              [value]="draftRepo()"
-              (input)="onDraftRepoInput($any($event.target).value)"
-            />
-          </label>
-          <label class="field">
-            <span>Branch / ref</span>
-            <input
-              type="text"
-              data-testid="ci-run-ref-input"
-              placeholder="main"
-              [value]="draftRef()"
-              (input)="onDraftRefInput($any($event.target).value)"
-            />
-          </label>
-          <div class="field">
-            <span>Workflow</span>
-            <div class="segmented" role="group" aria-label="Workflow selection">
+    @if (runDialogOpen()) {
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="runDialogOpen.set(false)"
+      ></div>
+      <div
+        class="g-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ci-run-dialog-title"
+        data-testid="ci-run-dialog"
+        gDialogTrap
+        (gDialogClose)="runDialogOpen.set(false)"
+      >
+        <h2 id="ci-run-dialog-title">Run workflow</h2>
+        <label class="field">
+          <span>Repository (owner/name)</span>
+          <input
+            type="text"
+            data-testid="ci-run-repo-input"
+            placeholder="acme/widgets"
+            [value]="draftRepo()"
+            (input)="onDraftRepoInput($any($event.target).value)"
+          />
+        </label>
+        <label class="field">
+          <span>Branch / ref</span>
+          <input
+            type="text"
+            data-testid="ci-run-ref-input"
+            placeholder="main"
+            [value]="draftRef()"
+            (input)="onDraftRefInput($any($event.target).value)"
+          />
+        </label>
+        <div class="field">
+          <span>Workflow</span>
+          <div
+            class="segmented ci-workflow-segmented"
+            role="group"
+            aria-label="Workflow selection"
+          >
+            <button
+              type="button"
+              [attr.aria-pressed]="!draftWorkflow()"
+              (click)="draftWorkflow.set('')"
+            >
+              All matching workflows
+            </button>
+            @for (wf of discoveredWorkflows(); track wf.path) {
               <button
                 type="button"
-                [attr.aria-pressed]="!draftWorkflow()"
-                (click)="draftWorkflow.set('')"
+                [attr.aria-pressed]="draftWorkflow() === wf.path"
+                [attr.data-testid]="'ci-wf-opt-' + wf.path"
+                (click)="draftWorkflow.set(wf.path)"
               >
-                All matching workflows
-              </button>
-              @for (wf of discoveredWorkflows(); track wf.path) {
-                <button
-                  type="button"
-                  [attr.aria-pressed]="draftWorkflow() === wf.path"
-                  [attr.data-testid]="'ci-wf-opt-' + wf.path"
-                  (click)="draftWorkflow.set(wf.path)"
-                >
-                  {{ wf.name || wf.path }}
-                </button>
-              }
-            </div>
-          </div>
-          <div class="switch-row" style="margin-top: 14px">
-            <button
-              type="button"
-              role="switch"
-              class="g-switch"
-              aria-label="Bypass job cache (fresh recheck)"
-              data-testid="ci-run-recheck-switch"
-              [attr.aria-checked]="draftRecheck()"
-              (click)="draftRecheck.set(!draftRecheck())"
-            ></button>
-            <span>Bypass job cache (fresh recheck)</span>
-          </div>
-          <div class="dialog-actions">
-            <button
-              type="button"
-              class="btn-text"
-              (click)="runDialogOpen.set(false)"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="ci-run-submit"
-              [disabled]="
-                submitting() || !draftRepo().trim() || !draftRef().trim()
-              "
-              (click)="submitRunWorkflow()"
-            >
-              {{ submitting() ? "Starting…" : "Start CI run" }}
-            </button>
-          </div>
-        </div>
-      }
-
-      @if (quarantineDialogOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="quarantineDialogOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="ci-quarantine-title"
-          data-testid="ci-quarantine-dialog"
-          (keydown.escape)="quarantineDialogOpen.set(false)"
-        >
-          <h2 id="ci-quarantine-title">Quarantine flaky test</h2>
-          @if (detectedFailedTests().length > 0) {
-            <div class="field">
-              <span>Detected failing tests</span>
-              <div class="filter-strip" style="margin-top: 4px">
-                @for (t of detectedFailedTests(); track t) {
-                  <button
-                    type="button"
-                    class="filter-chip"
-                    [attr.aria-pressed]="qTestName() === t"
-                    (click)="qTestName.set(t)"
-                  >
-                    {{ t }}
-                  </button>
-                }
-              </div>
-            </div>
-          }
-          <label class="field">
-            <span>Test name</span>
-            <input
-              type="text"
-              data-testid="ci-quarantine-test-input"
-              placeholder="TestFlakySuite/Subcase"
-              [value]="qTestName()"
-              (input)="qTestName.set($any($event.target).value)"
-            />
-          </label>
-          <label class="field">
-            <span>Reason</span>
-            <textarea
-              rows="2"
-              data-testid="ci-quarantine-reason-input"
-              placeholder="Intermittent port bind race on CI runners"
-              [value]="qReason()"
-              (input)="qReason.set($any($event.target).value)"
-            ></textarea>
-          </label>
-          <div class="field">
-            <span>Expiration TTL</span>
-            <div class="segmented" role="group" aria-label="Quarantine TTL">
-              @for (ttl of ttlOptions; track ttl) {
-                <button
-                  type="button"
-                  [attr.aria-pressed]="qTtl() === ttl"
-                  (click)="qTtl.set(ttl)"
-                >
-                  {{ ttl }}
-                </button>
-              }
-            </div>
-          </div>
-          <div class="switch-row" style="margin-top: 14px">
-            <button
-              type="button"
-              role="switch"
-              class="g-switch"
-              aria-label="File a held follow-up task to fix and unquarantine"
-              [attr.aria-checked]="qFollowUp()"
-              (click)="qFollowUp.set(!qFollowUp())"
-            ></button>
-            <span>File a held follow-up task to fix and unquarantine</span>
-          </div>
-
-          @if (quarantineResult(); as qr) {
-            <div
-              class="banner banner-info"
-              style="margin: 12px 0 0"
-              data-testid="ci-quarantine-result"
-            >
-              <span>
-                Quarantined <strong>{{ qr.testName }}</strong> ({{ qr.ttl }}).
-                @if (qr.followUpTaskId) {
-                  Follow-up task:
-                  <a
-                    [routerLink]="['/task', qr.followUpTaskId]"
-                    (click)="quarantineDialogOpen.set(false)"
-                    >#{{ qr.followUpTaskId }}</a
-                  >
-                }
-              </span>
-            </div>
-            <pre class="ci-yaml-preview">{{ qr.quarantineYaml }}</pre>
-          }
-
-          <div class="dialog-actions">
-            <button
-              type="button"
-              class="btn-text"
-              (click)="quarantineDialogOpen.set(false)"
-            >
-              {{ quarantineResult() ? "Done" : "Cancel" }}
-            </button>
-            @if (!quarantineResult()) {
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="ci-quarantine-submit"
-                [disabled]="
-                  submitting() || !qTestName().trim() || !qReason().trim()
-                "
-                (click)="submitQuarantine()"
-              >
-                {{ submitting() ? "Saving…" : "Quarantine test" }}
+                {{ wf.name || wf.path }}
               </button>
             }
           </div>
         </div>
-      }
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Bypass job cache (fresh recheck)"
+            data-testid="ci-run-recheck-switch"
+            [attr.aria-checked]="draftRecheck()"
+            (click)="draftRecheck.set(!draftRecheck())"
+          ></button>
+          <span>Bypass job cache (fresh recheck)</span>
+        </div>
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="btn-text"
+            (click)="runDialogOpen.set(false)"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="ci-run-submit"
+            [disabled]="
+              submitting() ||
+              !draftRepo().trim() ||
+              !draftRef().trim() ||
+              !access.can('POST /api/ci/runs', draftRepo().trim())
+            "
+            [gTip]="
+              draftRepo().trim()
+                ? access.deniedReason('POST /api/ci/runs', draftRepo().trim())
+                : ''
+            "
+            (click)="submitRunWorkflow()"
+          >
+            {{ submitting() ? "Starting…" : "Start CI run" }}
+          </button>
+        </div>
+      </div>
+    }
 
-      @if (confirming(); as req) {
-        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
-      }
-    </section>
+    @if (quarantineDialogOpen()) {
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="quarantineDialogOpen.set(false)"
+      ></div>
+      <div
+        class="g-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ci-quarantine-title"
+        data-testid="ci-quarantine-dialog"
+        gDialogTrap
+        (gDialogClose)="quarantineDialogOpen.set(false)"
+      >
+        <h2 id="ci-quarantine-title">Quarantine flaky test</h2>
+        @if (detectedFailedTests().length > 0) {
+          <div class="field">
+            <span>Detected failing tests</span>
+            <div class="filter-strip" style="margin-top: 4px">
+              @for (t of detectedFailedTests(); track t) {
+                <button
+                  type="button"
+                  class="filter-chip"
+                  [attr.aria-pressed]="qTestName() === t"
+                  (click)="qTestName.set(t)"
+                >
+                  {{ t }}
+                </button>
+              }
+            </div>
+          </div>
+        }
+        <label class="field">
+          <span>Test name</span>
+          <input
+            type="text"
+            data-testid="ci-quarantine-test-input"
+            placeholder="TestFlakySuite/Subcase"
+            [value]="qTestName()"
+            (input)="qTestName.set($any($event.target).value)"
+          />
+        </label>
+        <label class="field">
+          <span>Reason</span>
+          <textarea
+            rows="2"
+            data-testid="ci-quarantine-reason-input"
+            placeholder="Intermittent port bind race on CI runners"
+            [value]="qReason()"
+            (input)="qReason.set($any($event.target).value)"
+          ></textarea>
+        </label>
+        <div class="field">
+          <span>Expiration TTL</span>
+          <div class="segmented" role="group" aria-label="Quarantine TTL">
+            @for (ttl of ttlOptions; track ttl) {
+              <button
+                type="button"
+                [attr.aria-pressed]="qTtl() === ttl"
+                (click)="qTtl.set(ttl)"
+              >
+                {{ ttl }}
+              </button>
+            }
+          </div>
+        </div>
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="File a held follow-up task to fix and unquarantine"
+            [attr.aria-checked]="qFollowUp()"
+            (click)="qFollowUp.set(!qFollowUp())"
+          ></button>
+          <span>File a held follow-up task to fix and unquarantine</span>
+        </div>
+
+        @if (quarantineResult(); as qr) {
+          <div
+            class="banner banner-info"
+            style="margin: 12px 0 0"
+            data-testid="ci-quarantine-result"
+          >
+            <span>
+              Quarantined <strong>{{ qr.testName }}</strong> ({{ qr.ttl }}).
+              @if (qr.followUpTaskId) {
+                Follow-up task:
+                <a
+                  [routerLink]="['/task', qr.followUpTaskId]"
+                  (click)="quarantineDialogOpen.set(false)"
+                  >#{{ qr.followUpTaskId }}</a
+                >
+              }
+            </span>
+          </div>
+          <pre class="ci-yaml-preview">{{ qr.quarantineYaml }}</pre>
+        }
+
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="btn-text"
+            (click)="quarantineDialogOpen.set(false)"
+          >
+            {{ quarantineResult() ? "Done" : "Cancel" }}
+          </button>
+          @if (!quarantineResult()) {
+            <button
+              type="button"
+              class="btn-primary"
+              data-testid="ci-quarantine-submit"
+              [disabled]="
+                submitting() ||
+                !qTestName().trim() ||
+                !qReason().trim() ||
+                !access.can(
+                  'POST /api/tests/quarantine',
+                  store.activeRun()?.repo
+                )
+              "
+              (click)="submitQuarantine()"
+            >
+              {{ submitting() ? "Saving…" : "Quarantine test" }}
+            </button>
+          }
+        </div>
+      </div>
+    }
+
+    @if (confirming(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class CIPageComponent implements OnInit, OnDestroy {
@@ -1280,10 +1348,22 @@ export class CIPageComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
+  private readonly zone = inject(NgZone);
 
   protected readonly filters = FILTERS;
   protected readonly providers = PROVIDERS;
   protected readonly ttlOptions = ["72h", "7d", "14d", "30d"] as const;
+
+  protected readonly nowMs = signal(Date.now());
+  private clockTimer: ReturnType<typeof setInterval> | null = null;
+
+  private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape" && this.openMenu()) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.zone.run(() => this.openMenu.set(null));
+    }
+  };
 
   protected readonly bucketFilter = signal<CIFilterId>("all");
   protected readonly repoFilter = signal("");
@@ -1397,8 +1477,39 @@ export class CIPageComponent implements OnInit, OnDestroy {
       this.access.can("POST /api/package-cache/flush"),
   );
 
+  protected readonly hasInFlight = computed(() => {
+    if (this.filteredRuns().some((r) => isRunActive(r))) return true;
+    const active = this.store.activeRun();
+    if (!active) return false;
+    if (isRunActive(active)) return true;
+    return (active.jobs ?? []).some((j) => !!j.startedAt && !j.finishedAt);
+  });
+
   constructor() {
     afterNextRender(() => this.sp.attach());
+
+    // Keep CIStore's GitHub Actions query scope synced with repo & provider filters.
+    effect(() => {
+      const repo = this.repoFilter();
+      const prov = this.providerFilter();
+      untracked(() => this.store.setQueryScope(repo, prov));
+    });
+
+    // Tick nowMs() every second while any visible run/job is in-flight so durations advance across 304 responses.
+    effect(() => {
+      const active = this.hasInFlight();
+      if (active && !this.clockTimer) {
+        this.nowMs.set(Date.now());
+        this.zone.runOutsideAngular(() => {
+          this.clockTimer = setInterval(() => {
+            this.zone.run(() => this.nowMs.set(Date.now()));
+          }, 1000);
+        });
+      } else if (!active && this.clockTimer) {
+        clearInterval(this.clockTimer);
+        this.clockTimer = null;
+      }
+    });
 
     // Sync deep-linked /ci/runs/:id route parameter or auto-select top run on desktop.
     effect(() => {
@@ -1439,10 +1550,18 @@ export class CIPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    this.zone.runOutsideAngular(() => {
+      this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
+    });
     this.store.start();
   }
 
   ngOnDestroy(): void {
+    this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
+    if (this.clockTimer) {
+      clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
     this.sp.detach();
     this.store.stop();
   }
@@ -1494,6 +1613,10 @@ export class CIPageComponent implements OnInit, OnDestroy {
     this.bucketFilter.set(id);
   }
 
+  protected setProviderFilter(id: CIProviderFilter): void {
+    this.providerFilter.set(id);
+  }
+
   protected pickRepo(repo: string): void {
     this.repoFilter.set(repo);
     this.branchFilter.set("");
@@ -1516,8 +1639,12 @@ export class CIPageComponent implements OnInit, OnDestroy {
 
   protected inspectFault(f: CIFault): void {
     this.bucketFilter.set("errored");
+    const src = faultSourceOf(f.source);
+    if (this.providerFilter() !== "all" && this.providerFilter() !== src) {
+      this.providerFilter.set("all");
+    }
     this.faultDigestFilter.set(f.digest || faultTitle(f));
-    const firstRunId = f.runs?.[0]?.id;
+    const firstRunId = f.runs?.[0]?.runId;
     if (firstRunId) {
       this.openRun(firstRunId, true);
     }
@@ -1561,6 +1688,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected isActive = isRunActive;
   protected durationOf = formatDuration;
   protected bytesOf = formatBytes;
+  protected safeUrl = safeExternalUrl;
   protected faultLabel = faultTitle;
   protected faultRuns = faultRunCount;
   protected faultRefs = faultRefCount;
@@ -1696,7 +1824,14 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected async submitRunWorkflow(): Promise<void> {
     const repo = this.draftRepo().trim();
     const ref = this.draftRef().trim();
-    if (!repo || !ref || this.submitting()) return;
+    if (
+      !repo ||
+      !ref ||
+      this.submitting() ||
+      !this.access.can("POST /api/ci/runs", repo)
+    ) {
+      return;
+    }
     this.submitting.set(true);
     try {
       const created = await this.store.triggerRun({
@@ -1819,7 +1954,13 @@ export class CIPageComponent implements OnInit, OnDestroy {
 
   protected async submitQuarantine(): Promise<void> {
     const run = this.store.activeRun();
-    if (!run || this.submitting()) return;
+    if (
+      !run ||
+      this.submitting() ||
+      !this.access.can("POST /api/tests/quarantine", run.repo)
+    ) {
+      return;
+    }
     this.submitting.set(true);
     try {
       const res = await this.store.quarantineTest({

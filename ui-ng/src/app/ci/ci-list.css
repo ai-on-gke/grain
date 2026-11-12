@@ -159,7 +159,8 @@ g-ci-page {
 }
 
 .pill-dropdown .pop-menu button:hover,
-.pill-dropdown .pop-menu button[aria-current="true"] {
+.pill-dropdown .pop-menu button[aria-current="true"],
+.pill-dropdown .pop-menu button[aria-selected="true"] {
   background: var(--md-sys-color-surface-container-high);
 }
 

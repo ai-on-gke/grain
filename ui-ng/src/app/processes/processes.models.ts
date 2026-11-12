@@ -31,18 +31,14 @@ export interface DeclarationRef {
 }
 
 export interface GitHubWorkflowRunTrigger {
-  repo?: string;
   workflow?: string;
-  conclusion?: string;
-  branch?: string;
-  [key: string]: unknown;
+  conclusions?: string[];
+  branches?: string[];
 }
 
 export interface GitRefTrigger {
   repo: string;
-  ref?: string;
-  pattern?: string;
-  [key: string]: unknown;
+  ref: string;
 }
 
 export interface Recurrence {
@@ -176,7 +172,7 @@ export interface UpdateScheduleRequest {
 export interface ScheduleRun {
   taskId?: string;
   suiteRunId?: number;
-  workflowRun?: string;
+  workflowRun?: boolean;
   schedule: Schedule;
 }
 
@@ -438,21 +434,27 @@ export function formatCadence(
     case "monthly":
       return `Monthly · day ${rec.dayOfMonth || 1} at ${rec.timeOfDay || "09:00"} (${zone})`;
     case "github_workflow_run": {
-      const wf = rec.githubWorkflowRun?.workflow || "workflow";
-      const concl = rec.githubWorkflowRun?.conclusion
-        ? ` (${rec.githubWorkflowRun.conclusion})`
-        : "";
-      return `On GitHub workflow: ${wf}${concl}`;
+      const gha = rec.githubWorkflowRun;
+      const wf = gha?.workflow || "workflow";
+      const concls = (gha?.conclusions ?? []).filter(Boolean);
+      const branches = (gha?.branches ?? []).filter(Boolean);
+      const parts: string[] = [];
+      if (concls.length) parts.push(concls.join(", "));
+      if (branches.length) parts.push(`on ${branches.join(", ")}`);
+      const suffix = parts.length ? ` (${parts.join(" · ")})` : "";
+      return `On GitHub workflow: ${wf}${suffix}`;
     }
     case "git_ref": {
       const r = rec.gitRef?.repo || "repo";
-      const ref = rec.gitRef?.ref || rec.gitRef?.pattern || "push";
+      const ref = rec.gitRef?.ref || "push";
       return `On git ref: ${r} @ ${ref}`;
     }
     default:
       return rec.kind || "Scheduled";
   }
 }
+
+export const formatRecurrence = formatCadence;
 
 export function scheduleStatusBadge(s: Schedule): {
   label: string;

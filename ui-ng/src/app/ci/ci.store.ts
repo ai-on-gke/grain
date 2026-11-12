@@ -23,6 +23,7 @@ import {
   type CICacheResponse,
   type CIFault,
   type CIFaultsResponse,
+  type CIProviderFilter,
   type CIRun,
   type CIRunArtifact,
   type CIRunArtifactsResponse,
@@ -34,6 +35,7 @@ import {
   type PackageCacheFlush,
   type QuarantineTestRequest,
   type QuarantineTestResponse,
+  faultSourceOf,
   isRunActive,
 } from "./ci.models";
 
@@ -57,6 +59,9 @@ export class CIStore {
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
 
+  readonly queryRepo = signal("");
+  readonly queryProvider = signal<CIProviderFilter>("all");
+
   readonly selectedId = signal<string | null>(null);
   readonly detail = signal<CIRun | null>(null);
   readonly detailLoading = signal(false);
@@ -76,10 +81,11 @@ export class CIStore {
   readonly combinedFaults = computed(() => {
     const map = new Map<string, CIFault>();
     for (const f of this.faults()) {
-      const key =
+      const src = faultSourceOf(f.source);
+      const idPart =
         f.digest ||
-        `${f.repo ?? ""}:${f.jobId ?? f.jobName ?? ""}:${f.kind}:${f.summary ?? ""}`;
-      map.set(key, f);
+        `${f.repo ?? ""}:${f.jobId ?? f.jobName ?? ""}:${f.kind}:${f.step ?? ""}:${f.summary ?? ""}`;
+      map.set(`${src}:${idPart}`, f);
     }
     return [...map.values()];
   });
@@ -89,16 +95,12 @@ export class CIStore {
   private activeCount = 0;
 
   start(): void {
+    this.actionError.set(null);
     this.activeCount++;
     if (this.activeCount > 1) return;
-    void this.loadConfig();
-    void this.refresh();
+    void this.bootstrap();
     this.eventSub = this.events.events().subscribe((ev) => {
-      if (
-        ev.type === "task.ci" ||
-        ev.type === "task.state" ||
-        ev.type.startsWith("ci.")
-      ) {
+      if (ev.type === "task.ci" || ev.type === "task.state") {
         void this.refresh();
       }
     });
@@ -118,9 +120,28 @@ export class CIStore {
     this.pollTimer = null;
   }
 
+  setQueryScope(repo: string, provider: CIProviderFilter): void {
+    const cleanRepo = repo.trim();
+    if (this.queryRepo() === cleanRepo && this.queryProvider() === provider) {
+      return;
+    }
+    this.queryRepo.set(cleanRepo);
+    this.queryProvider.set(provider);
+    if (this.activeCount > 0) {
+      void this.refresh();
+    }
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.loadConfig();
+    if (this.activeCount === 0) return;
+    await this.refresh();
+  }
+
   private async loadConfig(): Promise<void> {
     try {
       const cfg = await this.api.config();
+      if (this.activeCount === 0) return;
       if (cfg) {
         this.access.setConfig(cfg);
         const repos = Array.isArray(cfg["targetRepos"])
@@ -133,38 +154,118 @@ export class CIStore {
     }
   }
 
+  private knownActionsRepos(
+    extraRuns: readonly CIRun[],
+    extraFaults: readonly CIFault[],
+  ): string[] {
+    const set = new Set<string>(this.targetRepos());
+    for (const r of this.runs()) if (r.repo) set.add(r.repo);
+    for (const r of extraRuns) if (r.repo) set.add(r.repo);
+    for (const f of this.faults()) if (f.repo) set.add(f.repo);
+    for (const f of extraFaults) if (f.repo) set.add(f.repo);
+    return [...set].filter(Boolean).sort();
+  }
+
+  private fetchActionsForRepo(repo: string) {
+    const q = new URLSearchParams({
+      repo,
+      provider: "github-actions",
+    }).toString();
+    return this.api
+      .getIfChanged<CIRunsResponse>("GET /api/ci/runs", undefined, q)
+      .catch(() => ({ body: null as CIRunsResponse | null, changed: false }));
+  }
+
   async refresh(forceDetail = false): Promise<void> {
+    if (this.activeCount === 0) return;
     if (!this.access.can("GET /api/ci/runs")) {
       this.loaded.set(true);
       this.loadError.set(this.access.deniedReason("GET /api/ci/runs"));
       return;
     }
     try {
-      const [runsRes, faultsRes] = await Promise.all([
+      const repo = this.queryRepo();
+      const prov = this.queryProvider();
+      let ghaRepos: string[] = [];
+      if (repo && (prov === "all" || prov === "github")) {
+        ghaRepos = [repo];
+      } else if (!repo && prov === "github") {
+        ghaRepos = this.knownActionsRepos([], []);
+      }
+
+      const [runsRes, faultsRes, initialGha] = await Promise.all([
         this.api.getIfChanged<CIRunsResponse>("GET /api/ci/runs"),
         this.access.can("GET /api/ci/faults")
           ? this.api
               .getIfChanged<CIFaultsResponse>("GET /api/ci/faults")
-              .catch(() => ({ body: null, changed: false }))
-          : Promise.resolve({ body: null, changed: false }),
+              .catch(() => ({
+                body: null as CIFaultsResponse | null,
+                changed: false,
+              }))
+          : Promise.resolve({
+              body: null as CIFaultsResponse | null,
+              changed: false,
+            }),
+        Promise.all(ghaRepos.map((r) => this.fetchActionsForRepo(r))),
       ]);
+      if (this.activeCount === 0) return;
 
-      if (runsRes.body) {
+      let ghaResults = initialGha;
+      if (!repo && prov === "github" && ghaRepos.length === 0) {
+        const discovered = this.knownActionsRepos(runsRes.body?.runs ?? [], [
+          ...(faultsRes.body?.faults ?? []),
+          ...(runsRes.body?.faults ?? []),
+        ]);
+        if (discovered.length > 0) {
+          ghaResults = await Promise.all(
+            discovered.map((r) => this.fetchActionsForRepo(r)),
+          );
+          if (this.activeCount === 0) return;
+        }
+      }
+
+      const ghaBodies = ghaResults
+        .map((res) => res.body)
+        .filter((b): b is CIRunsResponse => b !== null);
+
+      if (runsRes.body || ghaBodies.length > 0) {
         const body = runsRes.body;
-        this.enabled.set(body.enabled !== false);
-        this.runs.set(Array.isArray(body.runs) ? body.runs : []);
-        this.matched.set(body.matched ?? body.runs?.length ?? 0);
-        this.stored.set(body.stored ?? body.runs?.length ?? 0);
-        this.actionsNote.set(body.actionsNote ?? "");
+        if (body) {
+          this.enabled.set(
+            body.enabled !== false ||
+              ghaBodies.some((b) => b.enabled !== false),
+          );
+        }
+        const byId = new Map<string, CIRun>();
+        for (const r of body?.runs ?? []) {
+          byId.set(r.id, r);
+        }
+        for (const gb of ghaBodies) {
+          for (const r of gb.runs ?? []) {
+            byId.set(r.id, r);
+          }
+        }
+        const mergedRuns = [...byId.values()];
+        this.runs.set(mergedRuns);
+        this.matched.set(Math.max(body?.matched ?? 0, mergedRuns.length));
+        this.stored.set(Math.max(body?.stored ?? 0, mergedRuns.length));
+
+        const ghaNote = ghaBodies.map((b) => b.actionsNote ?? "").find(Boolean);
+        this.actionsNote.set(ghaNote || body?.actionsNote || "");
+
         const dedicated = faultsRes.body?.faults;
-        const merged = [
+        const mergedFaults = [
           ...(Array.isArray(dedicated) ? dedicated : []),
-          ...(Array.isArray(body.faults) ? body.faults : []),
+          ...(Array.isArray(body?.faults) ? body.faults : []),
+          ...ghaBodies.flatMap((b) =>
+            Array.isArray(b.faults) ? b.faults : [],
+          ),
         ];
-        this.faults.set(merged);
+        this.faults.set(mergedFaults);
       } else if (faultsRes.body?.faults) {
         this.faults.set(faultsRes.body.faults);
       }
+
       this.loadError.set(null);
       this.loaded.set(true);
 
@@ -176,6 +277,7 @@ export class CIStore {
         }
       }
     } catch (err) {
+      if (this.activeCount === 0) return;
       this.loaded.set(true);
       this.loadError.set(errorText(err));
     }
@@ -207,6 +309,7 @@ export class CIStore {
               .catch(() => null)
           : Promise.resolve(null),
       ]);
+      if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
         this.detail.set(run);
         if (artRes) {
@@ -221,11 +324,14 @@ export class CIStore {
         }
       }
     } catch (err) {
+      if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
         this.actionError.set(errorText(err));
       }
     } finally {
-      if (showSpinner) this.detailLoading.set(false);
+      if (showSpinner && this.activeCount > 0) {
+        this.detailLoading.set(false);
+      }
     }
   }
 
@@ -245,11 +351,15 @@ export class CIStore {
         { id: runId },
         params.toString(),
       );
+      if (this.activeCount === 0) return;
       this.jobLogs.update((prev) => ({ ...prev, [key]: res }));
     } catch (err) {
+      if (this.activeCount === 0) return;
       this.actionError.set(errorText(err));
     } finally {
-      if (this.jobLogLoading() === key) this.jobLogLoading.set(null);
+      if (this.activeCount > 0 && this.jobLogLoading() === key) {
+        this.jobLogLoading.set(null);
+      }
     }
   }
 
@@ -275,9 +385,11 @@ export class CIStore {
       req,
     );
     this.api.clearConditionalCache();
-    await this.refresh(true);
-    if (created?.id) {
-      await this.selectRun(created.id);
+    if (this.activeCount > 0) {
+      await this.refresh(true);
+      if (created?.id && this.activeCount > 0) {
+        await this.selectRun(created.id);
+      }
     }
     return created;
   }
@@ -287,7 +399,9 @@ export class CIStore {
     const body = reason?.trim() ? { reason: reason.trim() } : undefined;
     await this.api.delete("DELETE /api/ci/runs/{id}", { id }, body);
     this.api.clearConditionalCache();
-    await this.refresh(true);
+    if (this.activeCount > 0) {
+      await this.refresh(true);
+    }
   }
 
   async flushCICache(): Promise<CICacheResponse> {
@@ -331,7 +445,9 @@ export class CIStore {
       req,
     );
     this.api.clearConditionalCache();
-    await this.refresh(true);
+    if (this.activeCount > 0) {
+      await this.refresh(true);
+    }
     return res;
   }
 }

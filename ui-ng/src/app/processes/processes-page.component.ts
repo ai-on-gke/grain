@@ -18,6 +18,7 @@ import {
   Component,
   ElementRef,
   HostListener,
+  NgZone,
   type OnDestroy,
   type OnInit,
   ViewEncapsulation,
@@ -41,6 +42,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { DialogTrapDirective } from "../shared/dialog-trap.directive";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
@@ -58,11 +60,11 @@ import {
   type SuiteRun,
   type Template,
   type TemplateField,
+  type UpdateScheduleRequest,
   buildSuiteRunPasses,
   describeSuiteMode,
   formatCadence,
   isEventTrigger,
-  isOpenTaskState,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
@@ -125,6 +127,7 @@ type SuitesPaneView = "suites" | "runs";
     ActorChipComponent,
     ConfirmDialogComponent,
     CompositionViewComponent,
+    DialogTrapDirective,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -165,7 +168,9 @@ type SuitesPaneView = "suites" | "runs";
                 }
               }
               @case ("templates") {
-                @if (store.templates().length > 0) {
+                @if (
+                  store.templates().length > 0 && canOpenLaunchTemplateDialog()
+                ) {
                   <button
                     type="button"
                     class="btn-tonal"
@@ -312,11 +317,17 @@ type SuitesPaneView = "suites" | "runs";
                     <li
                       class="proc-row"
                       [class.is-selected]="selectedScheduleId() === s.id"
+                      [attr.aria-current]="
+                        selectedScheduleId() === s.id ? 'true' : null
+                      "
                       [attr.data-testid]="'sched-row-' + s.id"
                       tabindex="0"
                       role="button"
                       (click)="selectSchedule(s.id, true)"
                       (keydown.enter)="selectSchedule(s.id, true)"
+                      (keydown.space)="
+                        selectSchedule(s.id, true); $event.preventDefault()
+                      "
                     >
                       <div class="proc-row-top">
                         <span [class]="'status-pill ' + badge.tone">
@@ -378,11 +389,17 @@ type SuitesPaneView = "suites" | "runs";
                     <li
                       class="proc-row"
                       [class.is-selected]="selectedTemplateId() === t.id"
+                      [attr.aria-current]="
+                        selectedTemplateId() === t.id ? 'true' : null
+                      "
                       [attr.data-testid]="'tmpl-row-' + t.id"
                       tabindex="0"
                       role="button"
                       (click)="selectTemplate(t.id, true)"
                       (keydown.enter)="selectTemplate(t.id, true)"
+                      (keydown.space)="
+                        selectTemplate(t.id, true); $event.preventDefault()
+                      "
                     >
                       <div class="proc-row-top">
                         <span [class]="'status-pill ' + badge.tone">
@@ -455,11 +472,20 @@ type SuitesPaneView = "suites" | "runs";
                           selectedSuiteRunId() === null &&
                           selectedSuiteId() === st.id
                         "
+                        [attr.aria-current]="
+                          selectedSuiteRunId() === null &&
+                          selectedSuiteId() === st.id
+                            ? 'true'
+                            : null
+                        "
                         [attr.data-testid]="'suite-row-' + st.id"
                         tabindex="0"
                         role="button"
                         (click)="selectSuite(st.id, true)"
                         (keydown.enter)="selectSuite(st.id, true)"
+                        (keydown.space)="
+                          selectSuite(st.id, true); $event.preventDefault()
+                        "
                       >
                         <div class="proc-row-top">
                           <span class="status-pill proposal">
@@ -498,11 +524,17 @@ type SuitesPaneView = "suites" | "runs";
                       <li
                         class="proc-row"
                         [class.is-selected]="selectedSuiteRunId() === sr.id"
+                        [attr.aria-current]="
+                          selectedSuiteRunId() === sr.id ? 'true' : null
+                        "
                         [attr.data-testid]="'suite-run-row-' + sr.id"
                         tabindex="0"
                         role="button"
                         (click)="selectSuiteRun(sr.id, true)"
                         (keydown.enter)="selectSuiteRun(sr.id, true)"
+                        (keydown.space)="
+                          selectSuiteRun(sr.id, true); $event.preventDefault()
+                        "
                       >
                         <div class="proc-row-top">
                           <span [class]="'status-pill ' + rBadge.tone">
@@ -552,11 +584,17 @@ type SuitesPaneView = "suites" | "runs";
                     <li
                       class="proc-row"
                       [class.is-selected]="selectedDeclRepo() === repo"
+                      [attr.aria-current]="
+                        selectedDeclRepo() === repo ? 'true' : null
+                      "
                       [attr.data-testid]="'decl-repo-row-' + repo"
                       tabindex="0"
                       role="button"
                       (click)="selectDeclRepo(repo, true)"
                       (keydown.enter)="selectDeclRepo(repo, true)"
+                      (keydown.space)="
+                        selectDeclRepo(repo, true); $event.preventDefault()
+                      "
                     >
                       <div class="proc-row-top">
                         <span
@@ -1337,9 +1375,8 @@ type SuitesPaneView = "suites" | "runs";
                             type="button"
                             class="btn-primary"
                             [attr.data-testid]="'decl-accept-btn-' + acc.id"
-                            [disabled]="
-                              !access.can('POST /api/declarations/accept')
-                            "
+                            [disabled]="!canAcceptDeclaration(acc)"
+                            [gTip]="acceptDeniedReason(acc)"
                             (click)="acceptRepoDeclaration(acc)"
                           >
                             Accept declaration
@@ -1444,9 +1481,17 @@ type SuitesPaneView = "suites" | "runs";
                           <button
                             type="button"
                             class="btn-text"
+                            [attr.data-testid]="'decl-inspect-wf-' + wf.path"
                             (click)="openWorkflowEditor(repo, wf)"
                           >
-                            Inspect / Edit
+                            {{
+                              access.can(
+                                "PUT /api/repos/{owner}/{name}/workflows",
+                                repo
+                              )
+                                ? "Inspect / Edit"
+                                : "Inspect"
+                            }}
                           </button>
                         </li>
                       }
@@ -1465,28 +1510,38 @@ type SuitesPaneView = "suites" | "runs";
           }
         </section>
       </div>
+    </section>
 
-      <!-- NEW / EDIT SCHEDULE DIALOG -->
-      @if (schedDialogOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="schedDialogOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog is-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="sched-dialog-title"
-          data-testid="schedule-dialog"
-          (keydown.escape)="schedDialogOpen.set(false)"
-        >
-          <h2 id="sched-dialog-title">
-            {{
-              editingSchedule() ? "Edit schedule" : "New schedule or trigger"
-            }}
-          </h2>
+    <!-- NEW / EDIT SCHEDULE DIALOG -->
+    @if (schedDialogOpen()) {
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="closeScheduleDialog()"
+      ></div>
+      <div
+        class="g-dialog is-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sched-dialog-title"
+        data-testid="schedule-dialog"
+        gDialogTrap
+        (gDialogClose)="closeScheduleDialog()"
+      >
+        <h2 id="sched-dialog-title">
+          {{ editingSchedule() ? "Edit schedule" : "New schedule or trigger" }}
+        </h2>
 
+        @if (editingSchedule()?.system) {
+          <p
+            class="banner banner-info"
+            style="margin: 8px 0 0"
+            data-testid="sched-system-banner"
+          >
+            Built-in Grain schedule — target and prompt are managed by Grain;
+            cadence and overlap policy can be customized.
+          </p>
+        } @else {
           <div class="field">
             <span>Firing target</span>
             <div
@@ -1496,6 +1551,8 @@ type SuitesPaneView = "suites" | "runs";
             >
               <button
                 type="button"
+                data-testid="sched-target-prompt"
+                [disabled]="!!editingSchedule()?.suiteId"
                 [attr.aria-pressed]="schedTargetKind() === 'prompt'"
                 (click)="setSchedTargetKind('prompt')"
               >
@@ -1504,6 +1561,7 @@ type SuitesPaneView = "suites" | "runs";
               <button
                 type="button"
                 data-testid="sched-target-template"
+                [disabled]="!!editingSchedule()?.suiteId"
                 [attr.aria-pressed]="schedTargetKind() === 'template'"
                 (click)="setSchedTargetKind('template')"
               >
@@ -1512,6 +1570,9 @@ type SuitesPaneView = "suites" | "runs";
               <button
                 type="button"
                 data-testid="sched-target-suite"
+                [disabled]="
+                  editingSchedule() !== null && !editingSchedule()?.suiteId
+                "
                 [attr.aria-pressed]="schedTargetKind() === 'suite'"
                 (click)="setSchedTargetKind('suite')"
               >
@@ -1528,6 +1589,8 @@ type SuitesPaneView = "suites" | "runs";
                   type="button"
                   class="pill-trigger"
                   data-testid="sched-template-picker"
+                  aria-haspopup="listbox"
+                  [attr.aria-expanded]="openPicker() === 'schedTmpl'"
                   (click)="togglePicker('schedTmpl', $event)"
                 >
                   <span>{{
@@ -1536,11 +1599,13 @@ type SuitesPaneView = "suites" | "runs";
                   <span aria-hidden="true">▾</span>
                 </button>
                 @if (openPicker() === "schedTmpl") {
-                  <ul class="pop-menu" role="listbox">
+                  <ul class="pop-menu" role="listbox" aria-label="Templates">
                     @for (t of schedulableTemplates(); track t.id) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
+                          role="option"
+                          [attr.aria-selected]="sDraftTemplateId() === t.id"
                           (click)="
                             sDraftTemplateId.set(t.id); openPicker.set(null)
                           "
@@ -1561,6 +1626,8 @@ type SuitesPaneView = "suites" | "runs";
                   type="button"
                   class="pill-trigger"
                   data-testid="sched-suite-picker"
+                  aria-haspopup="listbox"
+                  [attr.aria-expanded]="openPicker() === 'schedSuite'"
                   (click)="togglePicker('schedSuite', $event)"
                 >
                   <span>{{
@@ -1569,11 +1636,13 @@ type SuitesPaneView = "suites" | "runs";
                   <span aria-hidden="true">▾</span>
                 </button>
                 @if (openPicker() === "schedSuite") {
-                  <ul class="pop-menu" role="listbox">
+                  <ul class="pop-menu" role="listbox" aria-label="Suites">
                     @for (st of store.suites(); track st.id) {
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
+                          role="option"
+                          [attr.aria-selected]="sDraftSuiteId() === st.id"
                           (click)="
                             sDraftSuiteId.set(st.id); openPicker.set(null)
                           "
@@ -1625,173 +1694,200 @@ type SuitesPaneView = "suites" | "runs";
               <input
                 type="text"
                 data-testid="sched-base-input"
-                placeholder="main"
+                placeholder="Default branch"
                 [value]="sDraftBase()"
                 (input)="sDraftBase.set($any($event.target).value)"
               />
             </label>
           </div>
+        }
 
-          <div class="field">
-            <span>Cadence / Event trigger</span>
-            <div class="filter-strip" style="margin-top: 4px">
-              @for (ck of cadenceKinds; track ck.id) {
-                <button
-                  type="button"
-                  class="filter-chip"
-                  [attr.aria-pressed]="sDraftKind() === ck.id"
-                  [attr.data-testid]="'sched-kind-' + ck.id"
-                  (click)="sDraftKind.set(ck.id)"
-                >
-                  {{ ck.label }}
-                </button>
-              }
-            </div>
+        <div class="field">
+          <span>Cadence / Event trigger</span>
+          <div class="filter-strip" style="margin-top: 4px">
+            @for (ck of cadenceKinds; track ck.id) {
+              <button
+                type="button"
+                class="filter-chip"
+                [attr.aria-pressed]="sDraftKind() === ck.id"
+                [attr.data-testid]="'sched-kind-' + ck.id"
+                (click)="sDraftKind.set(ck.id)"
+              >
+                {{ ck.label }}
+              </button>
+            }
           </div>
+        </div>
 
-          <div class="proc-field-grid">
-            @if (sDraftKind() === "everyNMinutes") {
+        <div class="proc-field-grid">
+          @if (sDraftKind() === "everyNMinutes") {
+            <label class="field">
+              <span>Every N minutes</span>
+              <input
+                type="number"
+                min="5"
+                [value]="sDraftEveryMin()"
+                (input)="sDraftEveryMin.set(+$any($event.target).value || 15)"
+              />
+            </label>
+          } @else if (sDraftKind() === "everyNHours") {
+            <label class="field">
+              <span>Every N hours</span>
+              <input
+                type="number"
+                min="1"
+                [value]="sDraftEveryHr()"
+                (input)="sDraftEveryHr.set(+$any($event.target).value || 1)"
+              />
+            </label>
+          } @else if (
+            sDraftKind() === "daily" ||
+            sDraftKind() === "weekly" ||
+            sDraftKind() === "monthly"
+          ) {
+            <label class="field">
+              <span>Time of day (HH:MM)</span>
+              <input
+                type="text"
+                placeholder="09:00"
+                [value]="sDraftTime()"
+                (input)="sDraftTime.set($any($event.target).value)"
+              />
+            </label>
+            <label class="field">
+              <span>Time zone (IANA)</span>
+              <input
+                type="text"
+                placeholder="UTC"
+                [value]="sDraftTz()"
+                (input)="sDraftTz.set($any($event.target).value)"
+              />
+            </label>
+            @if (sDraftKind() === "weekly") {
+              <div class="field">
+                <span>Weekday</span>
+                <div class="pill-dropdown">
+                  <button
+                    type="button"
+                    class="pill-trigger"
+                    aria-haspopup="listbox"
+                    [attr.aria-expanded]="openPicker() === 'weekday'"
+                    (click)="togglePicker('weekday', $event)"
+                  >
+                    <span>{{ sDraftWeekday() }}</span>
+                    <span aria-hidden="true">▾</span>
+                  </button>
+                  @if (openPicker() === "weekday") {
+                    <ul class="pop-menu" role="listbox" aria-label="Weekday">
+                      @for (wd of weekdays; track wd) {
+                        <li role="none">
+                          <button
+                            type="button"
+                            role="option"
+                            [attr.aria-selected]="sDraftWeekday() === wd"
+                            (click)="
+                              sDraftWeekday.set(wd); openPicker.set(null)
+                            "
+                          >
+                            {{ wd }}
+                          </button>
+                        </li>
+                      }
+                    </ul>
+                  }
+                </div>
+              </div>
+            }
+            @if (sDraftKind() === "monthly") {
               <label class="field">
-                <span>Every N minutes</span>
-                <input
-                  type="number"
-                  min="5"
-                  [value]="sDraftEveryMin()"
-                  (input)="sDraftEveryMin.set(+$any($event.target).value || 15)"
-                />
-              </label>
-            } @else if (sDraftKind() === "everyNHours") {
-              <label class="field">
-                <span>Every N hours</span>
+                <span>Day of month (1–28)</span>
                 <input
                   type="number"
                   min="1"
-                  [value]="sDraftEveryHr()"
-                  (input)="sDraftEveryHr.set(+$any($event.target).value || 1)"
-                />
-              </label>
-            } @else if (
-              sDraftKind() === "daily" ||
-              sDraftKind() === "weekly" ||
-              sDraftKind() === "monthly"
-            ) {
-              <label class="field">
-                <span>Time of day (HH:MM)</span>
-                <input
-                  type="text"
-                  placeholder="09:00"
-                  [value]="sDraftTime()"
-                  (input)="sDraftTime.set($any($event.target).value)"
-                />
-              </label>
-              <label class="field">
-                <span>Time zone (IANA)</span>
-                <input
-                  type="text"
-                  placeholder="UTC"
-                  [value]="sDraftTz()"
-                  (input)="sDraftTz.set($any($event.target).value)"
-                />
-              </label>
-              @if (sDraftKind() === "weekly") {
-                <div class="field">
-                  <span>Weekday</span>
-                  <div class="pill-dropdown">
-                    <button
-                      type="button"
-                      class="pill-trigger"
-                      (click)="togglePicker('weekday', $event)"
-                    >
-                      <span>{{ sDraftWeekday() }}</span>
-                      <span aria-hidden="true">▾</span>
-                    </button>
-                    @if (openPicker() === "weekday") {
-                      <ul class="pop-menu" role="listbox">
-                        @for (wd of weekdays; track wd) {
-                          <li>
-                            <button
-                              type="button"
-                              (click)="
-                                sDraftWeekday.set(wd); openPicker.set(null)
-                              "
-                            >
-                              {{ wd }}
-                            </button>
-                          </li>
-                        }
-                      </ul>
-                    }
-                  </div>
-                </div>
-              }
-              @if (sDraftKind() === "monthly") {
-                <label class="field">
-                  <span>Day of month (1–28)</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="28"
-                    [value]="sDraftDayOfMonth()"
-                    (input)="
-                      sDraftDayOfMonth.set(+$any($event.target).value || 1)
-                    "
-                  />
-                </label>
-              }
-            } @else if (sDraftKind() === "github_workflow_run") {
-              <label class="field">
-                <span>Workflow name or file</span>
-                <input
-                  type="text"
-                  placeholder="CI"
-                  [value]="sDraftTriggerWorkflow()"
-                  (input)="sDraftTriggerWorkflow.set($any($event.target).value)"
-                />
-              </label>
-              <label class="field">
-                <span>Conclusion filter</span>
-                <input
-                  type="text"
-                  placeholder="failure"
-                  [value]="sDraftTriggerConclusion()"
+                  max="28"
+                  [value]="sDraftDayOfMonth()"
                   (input)="
-                    sDraftTriggerConclusion.set($any($event.target).value)
+                    sDraftDayOfMonth.set(+$any($event.target).value || 1)
                   "
                 />
               </label>
-            } @else if (sDraftKind() === "git_ref") {
-              <label class="field">
-                <span>Watched git ref / branch</span>
-                <input
-                  type="text"
-                  placeholder="refs/heads/main"
-                  [value]="sDraftGitRef()"
-                  (input)="sDraftGitRef.set($any($event.target).value)"
-                />
-              </label>
             }
-          </div>
+          } @else if (sDraftKind() === "github_workflow_run") {
+            <label class="field">
+              <span>Workflow name or file</span>
+              <input
+                type="text"
+                data-testid="sched-trigger-workflow-input"
+                placeholder="CI"
+                [value]="sDraftTriggerWorkflow()"
+                (input)="sDraftTriggerWorkflow.set($any($event.target).value)"
+              />
+            </label>
+            <label class="field">
+              <span>Conclusion filter</span>
+              <input
+                type="text"
+                data-testid="sched-trigger-conclusion-input"
+                placeholder="failure"
+                [value]="sDraftTriggerConclusion()"
+                (input)="sDraftTriggerConclusion.set($any($event.target).value)"
+              />
+            </label>
+            <label class="field">
+              <span>Branch filter (optional)</span>
+              <input
+                type="text"
+                data-testid="sched-trigger-branch-input"
+                placeholder="main"
+                [value]="sDraftTriggerBranch()"
+                (input)="sDraftTriggerBranch.set($any($event.target).value)"
+              />
+            </label>
+          } @else if (sDraftKind() === "git_ref") {
+            <label class="field">
+              <span>Watched git repository</span>
+              <input
+                type="text"
+                data-testid="sched-git-ref-repo-input"
+                [placeholder]="sDraftRepo() || 'acme/widgets'"
+                [value]="sDraftGitRefRepo()"
+                (input)="sDraftGitRefRepo.set($any($event.target).value)"
+              />
+            </label>
+            <label class="field">
+              <span>Watched git ref / branch</span>
+              <input
+                type="text"
+                data-testid="sched-git-ref-input"
+                placeholder="refs/heads/main"
+                [value]="sDraftGitRef()"
+                (input)="sDraftGitRef.set($any($event.target).value)"
+              />
+            </label>
+          }
+        </div>
 
-          <div class="field">
-            <span>Overlap policy</span>
-            <div class="segmented" role="group" aria-label="Overlap policy">
-              <button
-                type="button"
-                [attr.aria-pressed]="sDraftOverlap() === 'skip'"
-                (click)="sDraftOverlap.set('skip')"
-              >
-                Skip while open
-              </button>
-              <button
-                type="button"
-                [attr.aria-pressed]="sDraftOverlap() === 'allow'"
-                (click)="sDraftOverlap.set('allow')"
-              >
-                Allow overlap
-              </button>
-            </div>
+        <div class="field">
+          <span>Overlap policy</span>
+          <div class="segmented" role="group" aria-label="Overlap policy">
+            <button
+              type="button"
+              [attr.aria-pressed]="sDraftOverlap() === 'skip'"
+              (click)="sDraftOverlap.set('skip')"
+            >
+              Skip while open
+            </button>
+            <button
+              type="button"
+              [attr.aria-pressed]="sDraftOverlap() === 'allow'"
+              (click)="sDraftOverlap.set('allow')"
+            >
+              Allow overlap
+            </button>
           </div>
+        </div>
 
+        @if (!editingSchedule()?.system) {
           <div style="margin-top: 12px">
             <button
               type="button"
@@ -1810,543 +1906,637 @@ type SuitesPaneView = "suites" | "runs";
               />
             </div>
           }
+        }
 
-          <div class="dialog-actions">
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="btn-text"
+            (click)="closeScheduleDialog()"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="sched-save-btn"
+            [disabled]="submitting() || !canSaveSchedule()"
+            (click)="saveScheduleDialog()"
+          >
+            {{ submitting() ? "Saving…" : "Save schedule" }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- LAUNCH TASK FROM TEMPLATE DIALOG -->
+    @if (launchDialogOpen()) {
+      <div class="scrim" aria-hidden="true" (click)="closeLaunchDialog()"></div>
+      <div
+        class="g-dialog is-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="launch-tmpl-title"
+        data-testid="launch-template-dialog"
+        gDialogTrap
+        (gDialogClose)="closeLaunchDialog()"
+      >
+        <h2 id="launch-tmpl-title">Launch task from template</h2>
+
+        <div class="field">
+          <span>Template</span>
+          <div class="pill-dropdown">
             <button
               type="button"
-              class="btn-text"
-              (click)="schedDialogOpen.set(false)"
+              class="pill-trigger"
+              data-testid="launch-template-picker"
+              aria-haspopup="listbox"
+              [attr.aria-expanded]="openPicker() === 'launchTmpl'"
+              (click)="togglePicker('launchTmpl', $event)"
             >
-              Cancel
+              <span>{{ launchTemplateLabel() }}</span>
+              <span aria-hidden="true">▾</span>
             </button>
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="sched-save-btn"
-              [disabled]="submitting()"
-              (click)="saveScheduleDialog()"
-            >
-              {{ submitting() ? "Saving…" : "Save schedule" }}
-            </button>
+            @if (openPicker() === "launchTmpl") {
+              <ul class="pop-menu" role="listbox" aria-label="Template">
+                @for (t of store.templates(); track t.id) {
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="option"
+                      [attr.aria-selected]="
+                        launchSelectedTemplate()?.id === t.id
+                      "
+                      (click)="pickLaunchTemplate(t.id)"
+                    >
+                      {{ t.name || t.title }}
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
           </div>
         </div>
-      }
 
-      <!-- LAUNCH TASK FROM TEMPLATE DIALOG -->
-      @if (launchDialogOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="launchDialogOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog is-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="launch-tmpl-title"
-          data-testid="launch-template-dialog"
-          (keydown.escape)="launchDialogOpen.set(false)"
-        >
-          <h2 id="launch-tmpl-title">Launch task from template</h2>
-
-          <div class="field">
-            <span>Template</span>
-            <div class="pill-dropdown">
-              <button
-                type="button"
-                class="pill-trigger"
-                data-testid="launch-template-picker"
-                (click)="togglePicker('launchTmpl', $event)"
-              >
-                <span>{{ launchTemplateLabel() }}</span>
-                <span aria-hidden="true">▾</span>
-              </button>
-              @if (openPicker() === "launchTmpl") {
-                <ul class="pop-menu" role="listbox">
-                  @for (t of store.templates(); track t.id) {
-                    <li>
-                      <button type="button" (click)="pickLaunchTemplate(t.id)">
-                        {{ t.name || t.title }}
-                      </button>
-                    </li>
+        @if (launchSelectedTemplate(); as lt) {
+          @for (f of lt.fields ?? []; track f.name) {
+            @if ((f.options ?? []).length > 0) {
+              <div class="field">
+                <span>{{ f.label || f.name }}</span>
+                <div class="filter-strip" style="margin-top: 4px">
+                  @for (opt of f.options ?? []; track opt) {
+                    <button
+                      type="button"
+                      class="filter-chip"
+                      [attr.aria-pressed]="launchFields()[f.name] === opt"
+                      (click)="setLaunchField(f.name, opt)"
+                    >
+                      {{ opt }}
+                    </button>
                   }
-                </ul>
-              }
-            </div>
-          </div>
-
-          @if (launchSelectedTemplate(); as lt) {
-            @for (f of lt.fields ?? []; track f.name) {
-              @if ((f.options ?? []).length > 0) {
-                <div class="field">
-                  <span>{{ f.label || f.name }}</span>
-                  <div class="filter-strip" style="margin-top: 4px">
-                    @for (opt of f.options ?? []; track opt) {
-                      <button
-                        type="button"
-                        class="filter-chip"
-                        [attr.aria-pressed]="launchFields()[f.name] === opt"
-                        (click)="setLaunchField(f.name, opt)"
-                      >
-                        {{ opt }}
-                      </button>
-                    }
-                  </div>
                 </div>
-              } @else {
-                <label class="field">
-                  <span
-                    >{{ f.label || f.name
-                    }}{{ f.required ? " (required)" : "" }}</span
-                  >
-                  <input
-                    type="text"
-                    [attr.data-testid]="'launch-field-' + f.name"
-                    [value]="launchFields()[f.name] || ''"
-                    (input)="setLaunchField(f.name, $any($event.target).value)"
-                  />
-                </label>
-              }
-            }
-
-            @if (!lt.repo && !lt.declaredIn && !lt.system) {
-              <div class="proc-field-grid">
-                <label class="field">
-                  <span>Target repository (owner/name)</span>
-                  <input
-                    type="text"
-                    data-testid="launch-repo-input"
-                    placeholder="acme/widgets"
-                    [value]="launchRepo()"
-                    (input)="launchRepo.set($any($event.target).value)"
-                  />
-                </label>
-                <label class="field">
-                  <span>Base branch</span>
-                  <input
-                    type="text"
-                    data-testid="launch-base-input"
-                    placeholder="main"
-                    [value]="launchBase()"
-                    (input)="launchBase.set($any($event.target).value)"
-                  />
-                </label>
               </div>
-            }
-
-            @if (!lt.interactive) {
-              <div class="switch-row" style="margin-top: 14px">
-                <button
-                  type="button"
-                  role="switch"
-                  class="g-switch"
-                  aria-label="Approved (queue immediately without proposal hold)"
-                  [attr.aria-checked]="launchApproved()"
-                  (click)="launchApproved.set(!launchApproved())"
-                ></button>
-                <span>Approved (queue immediately without proposal hold)</span>
-              </div>
+            } @else {
+              <label class="field">
+                <span
+                  >{{ f.label || f.name
+                  }}{{ f.required ? " (required)" : "" }}</span
+                >
+                <input
+                  type="text"
+                  [attr.data-testid]="'launch-field-' + f.name"
+                  [value]="launchFields()[f.name] || ''"
+                  (input)="setLaunchField(f.name, $any($event.target).value)"
+                />
+              </label>
             }
           }
 
-          <div class="dialog-actions">
+          @if (!lt.repo && !lt.declaredIn && !lt.system) {
+            <div class="proc-field-grid">
+              <label class="field">
+                <span>Target repository (owner/name)</span>
+                <input
+                  type="text"
+                  data-testid="launch-repo-input"
+                  placeholder="acme/widgets"
+                  [value]="launchRepo()"
+                  (input)="launchRepo.set($any($event.target).value)"
+                />
+              </label>
+              <label class="field">
+                <span>Base branch</span>
+                <input
+                  type="text"
+                  data-testid="launch-base-input"
+                  placeholder="main"
+                  [value]="launchBase()"
+                  (input)="launchBase.set($any($event.target).value)"
+                />
+              </label>
+            </div>
+          }
+
+          @if (!lt.interactive) {
+            <div class="switch-row" style="margin-top: 14px">
+              <button
+                type="button"
+                role="switch"
+                class="g-switch"
+                aria-label="Approved (queue immediately without proposal hold)"
+                [attr.aria-checked]="launchApproved()"
+                (click)="launchApproved.set(!launchApproved())"
+              ></button>
+              <span>Approved (queue immediately without proposal hold)</span>
+            </div>
+          }
+        }
+
+        <div class="dialog-actions">
+          <button type="button" class="btn-text" (click)="closeLaunchDialog()">
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="launch-template-submit"
+            [disabled]="submitting() || !canSubmitLaunchTemplate()"
+            (click)="submitLaunchTemplate()"
+          >
+            {{ submitting() ? "Launching…" : "Create task" }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- CREATE / EDIT TEMPLATE DIALOG -->
+    @if (tmplDialogOpen()) {
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="tmplDialogOpen.set(false)"
+      ></div>
+      <div
+        class="g-dialog is-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tmpl-dialog-title"
+        data-testid="template-dialog"
+        gDialogTrap
+        (gDialogClose)="tmplDialogOpen.set(false)"
+      >
+        <h2 id="tmpl-dialog-title">
+          {{ editingTemplate() ? "Edit template" : "New task template" }}
+        </h2>
+        <div class="proc-field-grid">
+          <label class="field">
+            <span>Template name</span>
+            <input
+              type="text"
+              data-testid="tmpl-name-input"
+              placeholder="Upgrade Go service"
+              [value]="tDraftName()"
+              (input)="tDraftName.set($any($event.target).value)"
+            />
+          </label>
+          <label class="field">
+            <span>Filed task title (supports {{ "{{param}}" }})</span>
+            <input
+              type="text"
+              data-testid="tmpl-title-input"
+              placeholder="chore: upgrade {{ '{{pkg}}' }}"
+              [value]="tDraftTitle()"
+              (input)="tDraftTitle.set($any($event.target).value)"
+            />
+          </label>
+        </div>
+        <label class="field">
+          <span>Prompt body</span>
+          <textarea
+            rows="4"
+            data-testid="tmpl-desc-input"
+            placeholder="Upgrade {{ '{{pkg}}' }} and run tests."
+            [value]="tDraftDesc()"
+            (input)="tDraftDesc.set($any($event.target).value)"
+          ></textarea>
+        </label>
+        <div class="proc-field-grid">
+          <label class="field">
+            <span>Optional bound repository</span>
+            <input
+              type="text"
+              data-testid="tmpl-repo-input"
+              placeholder="Leave blank for any repo"
+              [value]="tDraftRepo()"
+              (input)="tDraftRepo.set($any($event.target).value)"
+            />
+          </label>
+          <label class="field">
+            <span>Parameters (comma-separated names)</span>
+            <input
+              type="text"
+              data-testid="tmpl-params-input"
+              placeholder="pkg, target_version"
+              [value]="tDraftParamsCsv()"
+              (input)="onTemplateParamsCsvInput($any($event.target).value)"
+            />
+          </label>
+        </div>
+
+        @if (tDraftFields().length > 0) {
+          <div class="field" data-testid="tmpl-draft-fields">
+            <span>Parameter metadata</span>
+            <div class="tmpl-field-editor-list">
+              @for (f of tDraftFields(); track f.name) {
+                <div class="tmpl-field-editor-row">
+                  <code class="tabular">{{ "{{" + f.name + "}}" }}</code>
+                  <input
+                    type="text"
+                    placeholder="Label (optional)"
+                    [attr.aria-label]="'Label for ' + f.name"
+                    [attr.data-testid]="'tmpl-field-label-' + f.name"
+                    [value]="f.label || ''"
+                    (input)="
+                      updateTemplateFieldMeta(
+                        f.name,
+                        'label',
+                        $any($event.target).value
+                      )
+                    "
+                  />
+                  <input
+                    type="text"
+                    placeholder="Default value"
+                    [attr.aria-label]="'Default value for ' + f.name"
+                    [attr.data-testid]="'tmpl-field-default-' + f.name"
+                    [value]="f.default || ''"
+                    (input)="
+                      updateTemplateFieldMeta(
+                        f.name,
+                        'default',
+                        $any($event.target).value
+                      )
+                    "
+                  />
+                  <div class="switch-row">
+                    <button
+                      type="button"
+                      role="switch"
+                      class="g-switch"
+                      [attr.aria-label]="'Required parameter ' + f.name"
+                      [attr.data-testid]="'tmpl-field-required-' + f.name"
+                      [attr.aria-checked]="!!f.required"
+                      (click)="toggleTemplateFieldRequired(f.name)"
+                    ></button>
+                    <span>Required</span>
+                  </div>
+                </div>
+              }
+            </div>
+          </div>
+        }
+
+        <div class="switch-row" style="margin-top: 14px">
+          <button
+            type="button"
+            role="switch"
+            class="g-switch"
+            aria-label="Auto-merge passing pull requests"
+            [attr.aria-checked]="tDraftAutoMerge()"
+            (click)="tDraftAutoMerge.set(!tDraftAutoMerge())"
+          ></button>
+          <span>Auto-merge passing pull requests</span>
+        </div>
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="btn-text"
+            (click)="tmplDialogOpen.set(false)"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="tmpl-save-btn"
+            [disabled]="submitting() || !canSaveTemplate()"
+            (click)="saveTemplateDialog()"
+          >
+            {{ submitting() ? "Saving…" : "Save template" }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- CREATE / EDIT SUITE DIALOG -->
+    @if (suiteDialogOpen()) {
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="suiteDialogOpen.set(false)"
+      ></div>
+      <div
+        class="g-dialog is-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="suite-dialog-title"
+        data-testid="suite-dialog"
+        gDialogTrap
+        (gDialogClose)="suiteDialogOpen.set(false)"
+      >
+        <h2 id="suite-dialog-title">
+          {{ editingSuite() ? "Edit suite" : "New suite" }}
+        </h2>
+        <label class="field">
+          <span>Suite name</span>
+          <input
+            type="text"
+            data-testid="suite-name-input"
+            placeholder="Release hardening sweep"
+            [value]="stDraftName()"
+            (input)="stDraftName.set($any($event.target).value)"
+          />
+        </label>
+
+        <div class="field">
+          <span>Stopping mode</span>
+          <div class="segmented" role="group" aria-label="Suite mode">
             <button
               type="button"
-              class="btn-text"
-              (click)="launchDialogOpen.set(false)"
+              data-testid="suite-mode-count"
+              [attr.aria-pressed]="stDraftMode() === 'count'"
+              (click)="stDraftMode.set('count')"
             >
-              Cancel
+              Fixed pass count
             </button>
             <button
               type="button"
-              class="btn-primary"
-              data-testid="launch-template-submit"
-              [disabled]="submitting() || !launchSelectedTemplate()"
-              (click)="submitLaunchTemplate()"
+              data-testid="suite-mode-until-clean"
+              [attr.aria-pressed]="stDraftMode() === 'until_clean'"
+              (click)="stDraftMode.set('until_clean')"
             >
-              {{ submitting() ? "Launching…" : "Create task" }}
+              Until clean
             </button>
           </div>
         </div>
-      }
 
-      <!-- CREATE / EDIT TEMPLATE DIALOG -->
-      @if (tmplDialogOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="tmplDialogOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog is-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="tmpl-dialog-title"
-          data-testid="template-dialog"
-          (keydown.escape)="tmplDialogOpen.set(false)"
-        >
-          <h2 id="tmpl-dialog-title">
-            {{ editingTemplate() ? "Edit template" : "New task template" }}
-          </h2>
-          <div class="proc-field-grid">
-            <label class="field">
-              <span>Template name</span>
-              <input
-                type="text"
-                data-testid="tmpl-name-input"
-                placeholder="Upgrade Go service"
-                [value]="tDraftName()"
-                (input)="tDraftName.set($any($event.target).value)"
-              />
-            </label>
-            <label class="field">
-              <span>Filed task title (supports {{ "{{param}}" }})</span>
-              <input
-                type="text"
-                data-testid="tmpl-title-input"
-                placeholder="chore: upgrade {{ '{{pkg}}' }}"
-                [value]="tDraftTitle()"
-                (input)="tDraftTitle.set($any($event.target).value)"
-              />
-            </label>
-          </div>
+        @if (stDraftMode() === "count") {
           <label class="field">
-            <span>Prompt body</span>
-            <textarea
-              rows="4"
-              data-testid="tmpl-desc-input"
-              placeholder="Upgrade {{ '{{pkg}}' }} and run tests."
-              [value]="tDraftDesc()"
-              (input)="tDraftDesc.set($any($event.target).value)"
-            ></textarea>
+            <span>Number of passes</span>
+            <input
+              type="number"
+              min="1"
+              data-testid="suite-count-input"
+              [value]="stDraftCount()"
+              (input)="stDraftCount.set(+$any($event.target).value || 1)"
+            />
           </label>
-          <div class="proc-field-grid">
-            <label class="field">
-              <span>Optional bound repository</span>
-              <input
-                type="text"
-                data-testid="tmpl-repo-input"
-                placeholder="Leave blank for any repo"
-                [value]="tDraftRepo()"
-                (input)="tDraftRepo.set($any($event.target).value)"
-              />
-            </label>
-            <label class="field">
-              <span>Parameters (comma-separated names)</span>
-              <input
-                type="text"
-                data-testid="tmpl-params-input"
-                placeholder="pkg, target_version"
-                [value]="tDraftParamsCsv()"
-                (input)="tDraftParamsCsv.set($any($event.target).value)"
-              />
-            </label>
+        } @else {
+          <label class="field">
+            <span>Maximum passes</span>
+            <input
+              type="number"
+              min="1"
+              data-testid="suite-max-passes-input"
+              [value]="stDraftMaxPasses()"
+              (input)="stDraftMaxPasses.set(+$any($event.target).value || 3)"
+            />
+          </label>
+        }
+
+        <div class="field">
+          <span>Member templates (toggle to include)</span>
+          <div class="filter-strip" style="margin-top: 6px; flex-wrap: wrap">
+            @for (t of schedulableTemplates(); track t.id) {
+              <button
+                type="button"
+                class="filter-chip"
+                [attr.aria-pressed]="stDraftTemplateIds().includes(t.id)"
+                [attr.data-testid]="'suite-tmpl-chip-' + t.id"
+                (click)="toggleSuiteTemplateId(t.id)"
+              >
+                {{ t.name || t.title }}
+              </button>
+            }
           </div>
-          <div class="switch-row" style="margin-top: 14px">
+        </div>
+
+        <div class="proc-field-grid" style="margin-top: 14px">
+          <div class="switch-row">
+            <button
+              type="button"
+              role="switch"
+              class="g-switch"
+              aria-label="Require approval before each pass"
+              data-testid="suite-require-approval-switch"
+              [attr.aria-checked]="stDraftRequireApproval()"
+              (click)="stDraftRequireApproval.set(!stDraftRequireApproval())"
+            ></button>
+            <span>Require approval before each pass</span>
+          </div>
+          <div class="switch-row">
             <button
               type="button"
               role="switch"
               class="g-switch"
               aria-label="Auto-merge passing pull requests"
-              [attr.aria-checked]="tDraftAutoMerge()"
-              (click)="tDraftAutoMerge.set(!tDraftAutoMerge())"
+              data-testid="suite-auto-merge-switch"
+              [attr.aria-checked]="stDraftAutoMerge()"
+              (click)="stDraftAutoMerge.set(!stDraftAutoMerge())"
             ></button>
             <span>Auto-merge passing pull requests</span>
           </div>
-          <div class="dialog-actions">
+        </div>
+
+        <div style="margin-top: 12px">
+          <button
+            type="button"
+            class="btn-tonal"
+            data-testid="suite-preview-composition-btn"
+            (click)="previewSuiteDraft()"
+          >
+            Preview composition
+          </button>
+        </div>
+        @if (draftSuiteComposition(); as dsc) {
+          <div style="margin-top: 10px">
+            <g-composition-view
+              [composition]="dsc"
+              heading="Draft suite composition"
+            />
+          </div>
+        }
+
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="btn-text"
+            (click)="suiteDialogOpen.set(false)"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="suite-save-btn"
+            [disabled]="submitting() || !canSaveSuite()"
+            (click)="saveSuiteDialog()"
+          >
+            {{ submitting() ? "Saving…" : "Save suite" }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- RUN SUITE DIALOG -->
+    @if (runSuiteDialogOpen()) {
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="closeRunSuiteDialog()"
+      ></div>
+      <div
+        class="g-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="run-suite-title"
+        data-testid="run-suite-dialog"
+        gDialogTrap
+        (gDialogClose)="closeRunSuiteDialog()"
+      >
+        <h2 id="run-suite-title">Run suite</h2>
+        <div class="field">
+          <span>Suite</span>
+          <div class="pill-dropdown">
             <button
               type="button"
-              class="btn-text"
-              (click)="tmplDialogOpen.set(false)"
+              class="pill-trigger"
+              data-testid="run-suite-picker"
+              aria-haspopup="listbox"
+              [attr.aria-expanded]="openPicker() === 'runSuite'"
+              (click)="togglePicker('runSuite', $event)"
             >
-              Cancel
+              <span>{{ suiteNameById(runSuiteId()) || "Choose suite…" }}</span>
+              <span aria-hidden="true">▾</span>
             </button>
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="tmpl-save-btn"
-              [disabled]="
-                submitting() || !tDraftName().trim() || !tDraftTitle().trim()
-              "
-              (click)="saveTemplateDialog()"
-            >
-              {{ submitting() ? "Saving…" : "Save template" }}
-            </button>
+            @if (openPicker() === "runSuite") {
+              <ul class="pop-menu" role="listbox" aria-label="Suite">
+                @for (st of store.suites(); track st.id) {
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="option"
+                      [attr.aria-selected]="runSuiteId() === st.id"
+                      (click)="runSuiteId.set(st.id); openPicker.set(null)"
+                    >
+                      {{ st.name }}
+                    </button>
+                  </li>
+                }
+              </ul>
+            }
           </div>
         </div>
-      }
+        <label class="field">
+          <span>Repository (owner/name)</span>
+          <input
+            type="text"
+            data-testid="run-suite-repo-input"
+            placeholder="acme/widgets"
+            [value]="runSuiteRepo()"
+            (input)="runSuiteRepo.set($any($event.target).value)"
+          />
+        </label>
+        <label class="field">
+          <span>Base branch</span>
+          <input
+            type="text"
+            data-testid="run-suite-base-input"
+            placeholder="main"
+            [value]="runSuiteBase()"
+            (input)="runSuiteBase.set($any($event.target).value)"
+          />
+        </label>
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="btn-text"
+            (click)="closeRunSuiteDialog()"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-testid="run-suite-submit"
+            [disabled]="submitting() || !canSubmitRunSuite()"
+            (click)="submitRunSuite()"
+          >
+            {{ submitting() ? "Starting…" : "Start suite run" }}
+          </button>
+        </div>
+      </div>
+    }
 
-      <!-- CREATE / EDIT SUITE DIALOG -->
-      @if (suiteDialogOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="suiteDialogOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog is-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="suite-dialog-title"
-          data-testid="suite-dialog"
-          (keydown.escape)="suiteDialogOpen.set(false)"
-        >
-          <h2 id="suite-dialog-title">
-            {{ editingSuite() ? "Edit suite" : "New suite" }}
-          </h2>
-          <label class="field">
-            <span>Suite name</span>
-            <input
-              type="text"
-              data-testid="suite-name-input"
-              placeholder="Release hardening sweep"
-              [value]="stDraftName()"
-              (input)="stDraftName.set($any($event.target).value)"
-            />
-          </label>
-
-          <div class="field">
-            <span>Stopping mode</span>
-            <div class="segmented" role="group" aria-label="Suite mode">
-              <button
-                type="button"
-                data-testid="suite-mode-count"
-                [attr.aria-pressed]="stDraftMode() === 'count'"
-                (click)="stDraftMode.set('count')"
-              >
-                Fixed pass count
-              </button>
-              <button
-                type="button"
-                data-testid="suite-mode-until-clean"
-                [attr.aria-pressed]="stDraftMode() === 'until_clean'"
-                (click)="stDraftMode.set('until_clean')"
-              >
-                Until clean
-              </button>
-            </div>
-          </div>
-
-          @if (stDraftMode() === "count") {
-            <label class="field">
-              <span>Number of passes</span>
-              <input
-                type="number"
-                min="1"
-                data-testid="suite-count-input"
-                [value]="stDraftCount()"
-                (input)="stDraftCount.set(+$any($event.target).value || 1)"
-              />
-            </label>
-          } @else {
-            <label class="field">
-              <span>Maximum passes</span>
-              <input
-                type="number"
-                min="1"
-                data-testid="suite-max-passes-input"
-                [value]="stDraftMaxPasses()"
-                (input)="stDraftMaxPasses.set(+$any($event.target).value || 3)"
-              />
-            </label>
+    <!-- REPO WORKFLOW YAML EDITOR DIALOG -->
+    @if (wfEditorOpen()) {
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="wfEditorOpen.set(false)"
+      ></div>
+      <div
+        class="g-dialog is-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="wf-editor-title"
+        data-testid="repo-workflow-dialog"
+        gDialogTrap
+        (gDialogClose)="wfEditorOpen.set(false)"
+      >
+        <h2 id="wf-editor-title">Workflow YAML for {{ wfEditorRepo() }}</h2>
+        <label class="field">
+          <span>Workflow file path</span>
+          <input
+            type="text"
+            data-testid="wf-path-input"
+            placeholder=".grain/workflows/ci.yml"
+            [readOnly]="!canEditWorkflow()"
+            [value]="wfEditorPath()"
+            (input)="wfEditorPath.set($any($event.target).value)"
+          />
+        </label>
+        <label class="field">
+          <span>YAML definition</span>
+          <textarea
+            class="proc-yaml-editor"
+            data-testid="wf-yaml-input"
+            [readOnly]="!canEditWorkflow()"
+            [value]="wfEditorText()"
+            (input)="wfEditorText.set($any($event.target).value)"
+          ></textarea>
+        </label>
+        <div class="dialog-actions">
+          @if (wfEditorOriginalPath() && canEditWorkflow()) {
+            <button
+              type="button"
+              class="btn-tonal danger"
+              style="margin-right: auto"
+              data-testid="wf-delete-btn"
+              [disabled]="submitting()"
+              (click)="deleteWorkflowOverride()"
+            >
+              Delete override
+            </button>
           }
-
-          <div class="field">
-            <span>Member templates (toggle to include)</span>
-            <div class="filter-strip" style="margin-top: 6px; flex-wrap: wrap">
-              @for (t of schedulableTemplates(); track t.id) {
-                <button
-                  type="button"
-                  class="filter-chip"
-                  [attr.aria-pressed]="stDraftTemplateIds().includes(t.id)"
-                  [attr.data-testid]="'suite-tmpl-chip-' + t.id"
-                  (click)="toggleSuiteTemplateId(t.id)"
-                >
-                  {{ t.name || t.title }}
-                </button>
-              }
-            </div>
-          </div>
-
-          <div style="margin-top: 12px">
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="suite-preview-composition-btn"
-              (click)="previewSuiteDraft()"
-            >
-              Preview composition
-            </button>
-          </div>
-          @if (draftSuiteComposition(); as dsc) {
-            <div style="margin-top: 10px">
-              <g-composition-view
-                [composition]="dsc"
-                heading="Draft suite composition"
-              />
-            </div>
-          }
-
-          <div class="dialog-actions">
-            <button
-              type="button"
-              class="btn-text"
-              (click)="suiteDialogOpen.set(false)"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="suite-save-btn"
-              [disabled]="
-                submitting() ||
-                !stDraftName().trim() ||
-                stDraftTemplateIds().length === 0
-              "
-              (click)="saveSuiteDialog()"
-            >
-              {{ submitting() ? "Saving…" : "Save suite" }}
-            </button>
-          </div>
-        </div>
-      }
-
-      <!-- RUN SUITE DIALOG -->
-      @if (runSuiteDialogOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="runSuiteDialogOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="run-suite-title"
-          data-testid="run-suite-dialog"
-          (keydown.escape)="runSuiteDialogOpen.set(false)"
-        >
-          <h2 id="run-suite-title">Run suite</h2>
-          <div class="field">
-            <span>Suite</span>
-            <div class="pill-dropdown">
-              <button
-                type="button"
-                class="pill-trigger"
-                data-testid="run-suite-picker"
-                (click)="togglePicker('runSuite', $event)"
-              >
-                <span>{{
-                  suiteNameById(runSuiteId()) || "Choose suite…"
-                }}</span>
-                <span aria-hidden="true">▾</span>
-              </button>
-              @if (openPicker() === "runSuite") {
-                <ul class="pop-menu" role="listbox">
-                  @for (st of store.suites(); track st.id) {
-                    <li>
-                      <button
-                        type="button"
-                        (click)="runSuiteId.set(st.id); openPicker.set(null)"
-                      >
-                        {{ st.name }}
-                      </button>
-                    </li>
-                  }
-                </ul>
-              }
-            </div>
-          </div>
-          <label class="field">
-            <span>Repository (owner/name)</span>
-            <input
-              type="text"
-              data-testid="run-suite-repo-input"
-              placeholder="acme/widgets"
-              [value]="runSuiteRepo()"
-              (input)="runSuiteRepo.set($any($event.target).value)"
-            />
-          </label>
-          <label class="field">
-            <span>Base branch</span>
-            <input
-              type="text"
-              data-testid="run-suite-base-input"
-              placeholder="main"
-              [value]="runSuiteBase()"
-              (input)="runSuiteBase.set($any($event.target).value)"
-            />
-          </label>
-          <div class="dialog-actions">
-            <button
-              type="button"
-              class="btn-text"
-              (click)="runSuiteDialogOpen.set(false)"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="run-suite-submit"
-              [disabled]="
-                submitting() ||
-                !runSuiteId() ||
-                !runSuiteRepo().trim() ||
-                !runSuiteBase().trim()
-              "
-              (click)="submitRunSuite()"
-            >
-              {{ submitting() ? "Starting…" : "Start suite run" }}
-            </button>
-          </div>
-        </div>
-      }
-
-      <!-- REPO WORKFLOW YAML EDITOR DIALOG -->
-      @if (wfEditorOpen()) {
-        <div
-          class="scrim"
-          aria-hidden="true"
-          (click)="wfEditorOpen.set(false)"
-        ></div>
-        <div
-          class="g-dialog is-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="wf-editor-title"
-          data-testid="repo-workflow-dialog"
-          (keydown.escape)="wfEditorOpen.set(false)"
-        >
-          <h2 id="wf-editor-title">Workflow YAML for {{ wfEditorRepo() }}</h2>
-          <label class="field">
-            <span>Workflow file path</span>
-            <input
-              type="text"
-              data-testid="wf-path-input"
-              placeholder=".grain/workflows/ci.yml"
-              [value]="wfEditorPath()"
-              (input)="wfEditorPath.set($any($event.target).value)"
-            />
-          </label>
-          <label class="field">
-            <span>YAML definition</span>
-            <textarea
-              class="proc-yaml-editor"
-              data-testid="wf-yaml-input"
-              [value]="wfEditorText()"
-              (input)="wfEditorText.set($any($event.target).value)"
-            ></textarea>
-          </label>
-          <div class="dialog-actions">
-            <button
-              type="button"
-              class="btn-text"
-              (click)="wfEditorOpen.set(false)"
-            >
-              Cancel
-            </button>
+          <button
+            type="button"
+            class="btn-text"
+            (click)="wfEditorOpen.set(false)"
+          >
+            {{ canEditWorkflow() ? "Cancel" : "Close" }}
+          </button>
+          @if (canEditWorkflow()) {
             <button
               type="button"
               class="btn-primary"
@@ -2358,14 +2548,14 @@ type SuitesPaneView = "suites" | "runs";
             >
               {{ submitting() ? "Saving…" : "Save workflow" }}
             </button>
-          </div>
+          }
         </div>
-      }
+      </div>
+    }
 
-      @if (confirming(); as req) {
-        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
-      }
-    </section>
+    @if (confirming(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class ProcessesPageComponent implements OnInit, OnDestroy {
@@ -2383,6 +2573,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
+  private readonly zone = inject(NgZone);
+
+  private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape" && this.openPicker()) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.zone.run(() => this.openPicker.set(null));
+    }
+  };
 
   protected readonly tabs = TABS;
   protected readonly weekdays = WEEKDAYS;
@@ -2443,6 +2642,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftTz = signal("UTC");
   protected readonly sDraftTriggerWorkflow = signal("");
   protected readonly sDraftTriggerConclusion = signal("failure");
+  protected readonly sDraftTriggerBranch = signal("");
+  protected readonly sDraftGitRefRepo = signal("");
   protected readonly sDraftGitRef = signal("refs/heads/main");
   protected readonly sDraftOverlap = signal("skip");
   protected readonly draftSchedComposition = signal<Composition | null>(null);
@@ -2463,6 +2664,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly tDraftDesc = signal("");
   protected readonly tDraftRepo = signal("");
   protected readonly tDraftParamsCsv = signal("");
+  protected readonly tDraftFields = signal<TemplateField[]>([]);
   protected readonly tDraftAutoMerge = signal(false);
 
   // Create/Edit suite dialog state
@@ -2473,6 +2675,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly stDraftCount = signal(1);
   protected readonly stDraftMaxPasses = signal(3);
   protected readonly stDraftTemplateIds = signal<string[]>([]);
+  protected readonly stDraftRequireApproval = signal(false);
+  protected readonly stDraftAutoMerge = signal(true);
   protected readonly draftSuiteComposition = signal<Composition | null>(null);
 
   // Run suite dialog state
@@ -2689,27 +2893,37 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         if (!loaded || key === this.handledDeepLinkKey) return;
         if (newParam === "1" || newParam === "schedule") {
           this.handledDeepLinkKey = key;
-          this.openScheduleDialog(null);
+          if (this.access.can("POST /api/schedules")) {
+            this.openScheduleDialog(null);
+          }
         } else if (launchParam === "1") {
           this.handledDeepLinkKey = key;
-          this.openLaunchTemplateDialog(
-            this.selectedTemplate() ?? this.store.templates()[0] ?? null,
-          );
+          if (this.canOpenLaunchTemplateDialog()) {
+            this.openLaunchTemplateDialog(
+              this.selectedTemplate() ?? this.store.templates()[0] ?? null,
+            );
+          }
         } else if (runParam === "1") {
           this.handledDeepLinkKey = key;
-          this.openRunSuiteDialog(
-            this.selectedSuite() ?? this.store.suites()[0] ?? null,
-          );
+          if (this.access.can("POST /api/suite-runs")) {
+            this.openRunSuiteDialog(
+              this.selectedSuite() ?? this.store.suites()[0] ?? null,
+            );
+          }
         }
       });
     });
   }
 
   ngOnInit(): void {
+    this.zone.runOutsideAngular(() => {
+      this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
+    });
     this.store.start();
   }
 
   ngOnDestroy(): void {
+    this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
     this.sp.detach();
     this.store.stop();
   }
@@ -2850,9 +3064,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected hasOpenSuiteTasks(run: SuiteRun): boolean {
     const byId = new Map(this.taskFeed.tasks().map((t) => [t.id, t]));
-    return (run.tasks ?? []).some((rt) =>
-      isOpenTaskState(byId.get(rt.taskId)?.state || rt.state),
-    );
+    return (run.tasks ?? []).some((rt) => {
+      const st = (byId.get(rt.taskId)?.state || rt.state || "").toLowerCase();
+      return Boolean(rt.taskId) && st !== "closed" && st !== "merged";
+    });
   }
 
   protected repoPendingAcceptances(repo: string): number {
@@ -2864,7 +3079,74 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return this.store.acceptances().filter((a) => !a.repo || a.repo === repo);
   }
 
+  protected canAcceptDeclaration(acc: DeclarationAcceptanceView): boolean {
+    if (!this.access.can("POST /api/declarations/accept")) return false;
+    return (acc.needsScopes ?? []).every((sc) =>
+      this.access.canGlobalScope(sc),
+    );
+  }
+
+  protected acceptDeniedReason(acc: DeclarationAcceptanceView): string {
+    if (!this.access.can("POST /api/declarations/accept")) {
+      return this.access.deniedReason("POST /api/declarations/accept");
+    }
+    const missing = (acc.needsScopes ?? []).filter(
+      (sc) => !this.access.canGlobalScope(sc),
+    );
+    if (missing.length === 0) return "";
+    return `Accepting this declaration requires global scope(s): ${missing.join(", ")}.`;
+  }
+
+  protected canOpenLaunchTemplateDialog(): boolean {
+    if (this.access.can("POST /api/tasks")) return true;
+    return (
+      this.store.templates().some((t) => !!t.declaredIn) &&
+      this.access.can("POST /api/tasks/from-template")
+    );
+  }
+
+  protected canSubmitLaunchTemplate(): boolean {
+    const lt = this.launchSelectedTemplate();
+    if (!lt) return false;
+    if (lt.declaredIn?.repo) {
+      return (
+        this.access.can("POST /api/tasks/from-template", lt.declaredIn.repo) ||
+        this.access.can("POST /api/tasks", lt.declaredIn.repo)
+      );
+    }
+    if (lt.system) {
+      return this.access.can("POST /api/tasks");
+    }
+    const targetRepo = (lt.repo || this.launchRepo()).trim();
+    if (!targetRepo) return false;
+    return this.access.can("POST /api/tasks", targetRepo);
+  }
+
+  protected readonly canEditWorkflow = computed(
+    () =>
+      !!this.wfEditorRepo() &&
+      this.access.can(
+        "PUT /api/repos/{owner}/{name}/workflows",
+        this.wfEditorRepo(),
+      ),
+  );
+
   // --- Schedule actions & dialog ---
+
+  protected closeScheduleDialog(): void {
+    this.openPicker.set(null);
+    this.schedDialogOpen.set(false);
+  }
+
+  protected closeLaunchDialog(): void {
+    this.openPicker.set(null);
+    this.launchDialogOpen.set(false);
+  }
+
+  protected closeRunSuiteDialog(): void {
+    this.openPicker.set(null);
+    this.runSuiteDialogOpen.set(false);
+  }
 
   protected async runScheduleNow(s: Schedule): Promise<void> {
     try {
@@ -2877,6 +3159,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       } else if (res.suiteRunId) {
         this.snackbar.show(
           `Triggered schedule — started suite run #${res.suiteRunId}.`,
+        );
+      } else if (res.workflowRun && !res.taskId && !res.suiteRunId) {
+        this.snackbar.show(
+          "No concluded GitHub workflow run matched this trigger yet.",
         );
       } else {
         this.snackbar.show("Schedule triggered.");
@@ -2917,6 +3203,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected setSchedTargetKind(k: "prompt" | "template" | "suite"): void {
+    const editing = this.editingSchedule();
+    if (editing) {
+      if (editing.system) return;
+      if (editing.suiteId && k !== "suite") return;
+      if (!editing.suiteId && k === "suite") return;
+    }
     this.schedTargetKind.set(k);
     if (k === "template" && !this.sDraftTemplateId()) {
       this.sDraftTemplateId.set(this.schedulableTemplates()[0]?.id ?? "");
@@ -2927,6 +3219,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openScheduleDialog(existing: Schedule | null): void {
+    this.openPicker.set(null);
     this.editingSchedule.set(existing);
     this.draftSchedComposition.set(null);
     if (existing) {
@@ -2942,7 +3235,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftTemplateId.set(existing.templateId || "");
       this.sDraftSuiteId.set(existing.suiteId || "");
       this.sDraftRepo.set(existing.repo || "");
-      this.sDraftBase.set(existing.base || "main");
+      this.sDraftBase.set(existing.base ?? "");
       this.sDraftKind.set(existing.recurrence?.kind || "daily");
       this.sDraftEveryMin.set(existing.recurrence?.everyNMinutes || 15);
       this.sDraftEveryHr.set(existing.recurrence?.everyNHours || 6);
@@ -2951,6 +3244,19 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftDayOfMonth.set(existing.recurrence?.dayOfMonth || 1);
       this.sDraftTz.set(
         existing.timeZone || existing.recurrence?.timeZone || "UTC",
+      );
+      this.sDraftTriggerWorkflow.set(
+        existing.recurrence?.githubWorkflowRun?.workflow ?? "",
+      );
+      this.sDraftTriggerConclusion.set(
+        (existing.recurrence?.githubWorkflowRun?.conclusions ?? []).join(", "),
+      );
+      this.sDraftTriggerBranch.set(
+        (existing.recurrence?.githubWorkflowRun?.branches ?? []).join(", "),
+      );
+      this.sDraftGitRefRepo.set(existing.recurrence?.gitRef?.repo ?? "");
+      this.sDraftGitRef.set(
+        existing.recurrence?.gitRef?.ref ?? "refs/heads/main",
       );
       this.sDraftOverlap.set(existing.overlap || "skip");
     } else {
@@ -2962,11 +3268,47 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.sDraftRepo.set(this.store.knownRepos()[0] || "");
       this.sDraftBase.set("main");
       this.sDraftKind.set("daily");
+      this.sDraftEveryMin.set(15);
+      this.sDraftEveryHr.set(6);
       this.sDraftTime.set("09:00");
+      this.sDraftWeekday.set("monday");
+      this.sDraftDayOfMonth.set(1);
       this.sDraftTz.set("UTC");
+      this.sDraftTriggerWorkflow.set("");
+      this.sDraftTriggerConclusion.set("failure");
+      this.sDraftTriggerBranch.set("");
+      this.sDraftGitRefRepo.set("");
+      this.sDraftGitRef.set("refs/heads/main");
       this.sDraftOverlap.set("skip");
     }
     this.schedDialogOpen.set(true);
+  }
+
+  protected canSaveSchedule(): boolean {
+    const editing = this.editingSchedule();
+    const route = editing ? "PATCH /api/schedules/{id}" : "POST /api/schedules";
+    if (editing?.system) {
+      return this.access.can(route, editing.repo || undefined);
+    }
+    const tk = this.schedTargetKind();
+    const chosenTmpl =
+      tk === "template"
+        ? this.store.templates().find((t) => t.id === this.sDraftTemplateId())
+        : null;
+    const targetRepo =
+      this.sDraftRepo().trim() || chosenTmpl?.repo || editing?.repo || "";
+    if (!this.access.can(route, targetRepo || undefined)) return false;
+    if (tk === "suite") {
+      return Boolean(
+        this.sDraftSuiteId() &&
+        this.sDraftRepo().trim() &&
+        this.sDraftBase().trim(),
+      );
+    }
+    if (tk === "template") {
+      return Boolean(this.sDraftTemplateId() && targetRepo);
+    }
+    return Boolean(this.sDraftTitle().trim() && this.sDraftRepo().trim());
   }
 
   private buildRecurrenceDraft(): Recurrence {
@@ -2993,20 +3335,29 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           dayOfMonth: this.sDraftDayOfMonth(),
           timeZone: tz,
         };
-      case "github_workflow_run":
+      case "github_workflow_run": {
+        const concls = this.sDraftTriggerConclusion()
+          .split(",")
+          .map((c) => c.trim())
+          .filter(Boolean);
+        const branches = this.sDraftTriggerBranch()
+          .split(",")
+          .map((b) => b.trim())
+          .filter(Boolean);
         return {
           kind,
           githubWorkflowRun: {
-            repo: this.sDraftRepo().trim(),
             workflow: this.sDraftTriggerWorkflow().trim() || undefined,
-            conclusion: this.sDraftTriggerConclusion().trim() || undefined,
+            conclusions: concls.length ? concls : undefined,
+            branches: branches.length ? branches : undefined,
           },
         };
+      }
       case "git_ref":
         return {
           kind,
           gitRef: {
-            repo: this.sDraftRepo().trim(),
+            repo: this.sDraftGitRefRepo().trim() || this.sDraftRepo().trim(),
             ref: this.sDraftGitRef().trim(),
           },
         };
@@ -3038,6 +3389,38 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     return baseReq;
   }
 
+  private buildScheduleUpdatePayload(editing: Schedule): UpdateScheduleRequest {
+    if (editing.system) {
+      return {
+        recurrence: this.buildRecurrenceDraft(),
+        timeZone: this.sDraftTz().trim() || undefined,
+        overlap: this.sDraftOverlap(),
+        revision: editing.revision,
+      };
+    }
+    const tk = this.schedTargetKind();
+    const patchReq: UpdateScheduleRequest = {
+      repo: this.sDraftRepo().trim(),
+      base: this.sDraftBase().trim(),
+      recurrence: this.buildRecurrenceDraft(),
+      timeZone: this.sDraftTz().trim() || undefined,
+      overlap: this.sDraftOverlap(),
+      revision: editing.revision,
+    };
+    if (tk === "template") {
+      patchReq.templateId = this.sDraftTemplateId();
+    } else if (tk === "suite") {
+      patchReq.suiteId = this.sDraftSuiteId();
+    } else {
+      patchReq.title = this.sDraftTitle().trim();
+      patchReq.description = this.sDraftDesc().trim();
+      if (editing.templateId) {
+        patchReq.templateId = "";
+      }
+    }
+    return patchReq;
+  }
+
   protected async previewScheduleDraft(): Promise<void> {
     try {
       const comp = await this.store.previewDraftSchedule(
@@ -3050,24 +3433,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveScheduleDialog(): Promise<void> {
-    if (this.submitting()) return;
+    if (this.submitting() || !this.canSaveSchedule()) return;
     this.submitting.set(true);
     try {
       const editing = this.editingSchedule();
-      const payload = this.buildScheduleCreatePayload();
       if (editing) {
-        const saved = await this.store.updateSchedule(editing.id, {
-          ...payload,
-          revision: editing.revision,
-        });
+        const saved = await this.store.updateSchedule(
+          editing.id,
+          this.buildScheduleUpdatePayload(editing),
+        );
         this.selectSchedule(saved.id, false);
         this.snackbar.show("Schedule updated.");
       } else {
-        const created = await this.store.createSchedule(payload);
+        const created = await this.store.createSchedule(
+          this.buildScheduleCreatePayload(),
+        );
         this.selectSchedule(created.id, false);
         this.snackbar.show("Schedule created.");
       }
-      this.schedDialogOpen.set(false);
+      this.closeScheduleDialog();
     } catch (err) {
       this.store.actionError.set(errorText(err));
     } finally {
@@ -3078,6 +3462,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   // --- Template actions & dialogs ---
 
   protected openLaunchTemplateDialog(t: Template | null): void {
+    this.openPicker.set(null);
     const chosen = t ?? this.store.templates()[0] ?? null;
     this.launchTemplateId.set(chosen?.id ?? "");
     this.initLaunchFields(chosen);
@@ -3108,7 +3493,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected async submitLaunchTemplate(): Promise<void> {
     const tmpl = this.launchSelectedTemplate();
-    if (!tmpl || this.submitting()) return;
+    if (!tmpl || this.submitting() || !this.canSubmitLaunchTemplate()) return;
     this.submitting.set(true);
     try {
       const task = await this.store.launchTaskFromTemplate(tmpl, {
@@ -3117,7 +3502,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         approved: this.launchApproved(),
         fields: this.launchFields(),
       });
-      this.launchDialogOpen.set(false);
+      this.closeLaunchDialog();
       if (task?.id) {
         this.snackbar.show(`Created task #${task.id} from template.`);
         await this.router.navigate(["/task", task.id]);
@@ -3138,29 +3523,75 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.tDraftTitle.set(existing.title);
       this.tDraftDesc.set(existing.description);
       this.tDraftRepo.set(existing.repo || "");
-      this.tDraftParamsCsv.set(
-        (existing.fields ?? []).map((f) => f.name).join(", "),
-      );
+      const clonedFields = structuredClone(existing.fields ?? []);
+      this.tDraftFields.set(clonedFields);
+      this.tDraftParamsCsv.set(clonedFields.map((f) => f.name).join(", "));
       this.tDraftAutoMerge.set(existing.autoMerge);
     } else {
       this.tDraftName.set("");
       this.tDraftTitle.set("");
       this.tDraftDesc.set("");
       this.tDraftRepo.set("");
+      this.tDraftFields.set([]);
       this.tDraftParamsCsv.set("");
       this.tDraftAutoMerge.set(false);
     }
     this.tmplDialogOpen.set(true);
   }
 
+  protected onTemplateParamsCsvInput(csv: string): void {
+    this.tDraftParamsCsv.set(csv);
+    const prevByName = new Map<string, TemplateField>();
+    for (const f of this.editingTemplate()?.fields ?? []) {
+      prevByName.set(f.name, f);
+    }
+    for (const f of this.tDraftFields()) {
+      prevByName.set(f.name, f);
+    }
+    const seen = new Set<string>();
+    const next: TemplateField[] = [];
+    for (const raw of csv.split(",")) {
+      const name = raw.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const existing = prevByName.get(name);
+      next.push(
+        existing ? structuredClone(existing) : { name, required: true },
+      );
+    }
+    this.tDraftFields.set(next);
+  }
+
+  protected updateTemplateFieldMeta(
+    name: string,
+    key: "label" | "default",
+    val: string,
+  ): void {
+    this.tDraftFields.update((list) =>
+      list.map((f) =>
+        f.name === name ? { ...f, [key]: val || undefined } : f,
+      ),
+    );
+  }
+
+  protected toggleTemplateFieldRequired(name: string): void {
+    this.tDraftFields.update((list) =>
+      list.map((f) => (f.name === name ? { ...f, required: !f.required } : f)),
+    );
+  }
+
+  protected canSaveTemplate(): boolean {
+    if (!this.tDraftName().trim() || !this.tDraftTitle().trim()) return false;
+    const editing = this.editingTemplate();
+    const route = editing ? "PATCH /api/templates/{id}" : "POST /api/templates";
+    const targetRepo = this.tDraftRepo().trim() || editing?.repo || undefined;
+    return this.access.can(route, targetRepo);
+  }
+
   protected async saveTemplateDialog(): Promise<void> {
-    if (this.submitting()) return;
+    if (this.submitting() || !this.canSaveTemplate()) return;
     this.submitting.set(true);
-    const fields: TemplateField[] = this.tDraftParamsCsv()
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((name) => ({ name, required: true }));
+    const fields = structuredClone(this.tDraftFields());
     try {
       const editing = this.editingTemplate();
       if (editing) {
@@ -3228,6 +3659,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.stDraftTemplateIds.set(
         (existing.items ?? []).map((i) => i.templateId),
       );
+      this.stDraftRequireApproval.set(!!existing.requireApproval);
+      this.stDraftAutoMerge.set(!!existing.autoMerge);
     } else {
       this.stDraftName.set("");
       this.stDraftMode.set("count");
@@ -3235,6 +3668,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.stDraftMaxPasses.set(3);
       const firstId = this.schedulableTemplates()[0]?.id;
       this.stDraftTemplateIds.set(firstId ? [firstId] : []);
+      this.stDraftRequireApproval.set(false);
+      this.stDraftAutoMerge.set(true);
     }
     this.suiteDialogOpen.set(true);
   }
@@ -3245,6 +3680,22 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     );
   }
 
+  protected canSaveSuite(): boolean {
+    if (!this.stDraftName().trim() || this.stDraftTemplateIds().length === 0) {
+      return false;
+    }
+    const editing = this.editingSuite();
+    const route = editing ? "PATCH /api/suites/{id}" : "POST /api/suites";
+    const boundRepos = this.stDraftTemplateIds()
+      .map((id) => this.store.templates().find((t) => t.id === id))
+      .map((t) => t?.repo || t?.declaredIn?.repo || "")
+      .filter(Boolean);
+    return this.access.can(
+      route,
+      boundRepos.length > 0 ? boundRepos : undefined,
+    );
+  }
+
   private buildSuiteCreatePayload(): CreateSuiteRequest {
     return {
       name: this.stDraftName().trim(),
@@ -3252,8 +3703,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       mode: this.stDraftMode(),
       count: this.stDraftCount(),
       maxPasses: this.stDraftMaxPasses(),
-      requireApproval: false,
-      autoMerge: true,
+      requireApproval: this.stDraftRequireApproval(),
+      autoMerge: this.stDraftAutoMerge(),
     };
   }
 
@@ -3269,7 +3720,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveSuiteDialog(): Promise<void> {
-    if (this.submitting()) return;
+    if (this.submitting() || !this.canSaveSuite()) return;
     this.submitting.set(true);
     try {
       const editing = this.editingSuite();
@@ -3309,6 +3760,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openRunSuiteDialog(st: Suite | null): void {
+    this.openPicker.set(null);
     const chosen = st ?? this.store.suites()[0] ?? null;
     this.runSuiteId.set(chosen?.id ?? "");
     this.runSuiteRepo.set(
@@ -3318,8 +3770,16 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.runSuiteDialogOpen.set(true);
   }
 
+  protected canSubmitRunSuite(): boolean {
+    const repo = this.runSuiteRepo().trim();
+    if (!this.runSuiteId() || !repo || !this.runSuiteBase().trim()) {
+      return false;
+    }
+    return this.access.can("POST /api/suite-runs", repo);
+  }
+
   protected async submitRunSuite(): Promise<void> {
-    if (this.submitting()) return;
+    if (this.submitting() || !this.canSubmitRunSuite()) return;
     this.submitting.set(true);
     try {
       const run = await this.store.startSuiteRun(
@@ -3327,7 +3787,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         this.runSuiteRepo(),
         this.runSuiteBase(),
       );
-      this.runSuiteDialogOpen.set(false);
+      this.closeRunSuiteDialog();
       this.suitesView.set("runs");
       this.selectSuiteRun(run.id, true);
       this.snackbar.show(`Started suite run #${run.id}.`);
@@ -3346,7 +3806,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         const stopped = await this.store.cancelSuiteRunTasks(sr);
-        this.snackbar.show(`Stopped ${stopped} active suite task(s).`);
+        this.snackbar.show(`Closed ${stopped} active suite task(s).`);
       },
     });
   }
@@ -3372,6 +3832,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected async acceptRepoDeclaration(
     acc: DeclarationAcceptanceView,
   ): Promise<void> {
+    if (!this.canAcceptDeclaration(acc)) return;
     try {
       await this.store.acceptDeclaration(acc.id, acc.requested ?? []);
       this.snackbar.show(`Accepted declaration ${acc.id}.`);
@@ -3392,7 +3853,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveWorkflowEditor(): Promise<void> {
-    if (this.submitting()) return;
+    if (this.submitting() || !this.canEditWorkflow()) return;
     this.submitting.set(true);
     const repo = this.wfEditorRepo();
     const existing = this.store.repoWorkflows()[repo]?.workflows ?? [];
@@ -3408,6 +3869,24 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       await this.store.saveRepoWorkflows(repo, updatedList);
       this.wfEditorOpen.set(false);
       this.snackbar.show(`Saved workflow ${this.wfEditorPath().trim()}.`);
+    } catch (err) {
+      this.store.actionError.set(errorText(err));
+    } finally {
+      this.submitting.set(false);
+    }
+  }
+
+  protected async deleteWorkflowOverride(): Promise<void> {
+    const orig = this.wfEditorOriginalPath();
+    if (!orig || this.submitting() || !this.canEditWorkflow()) return;
+    this.submitting.set(true);
+    const repo = this.wfEditorRepo();
+    const existing = this.store.repoWorkflows()[repo]?.workflows ?? [];
+    const remaining = existing.filter((w) => w.path !== orig);
+    try {
+      await this.store.saveRepoWorkflows(repo, remaining);
+      this.wfEditorOpen.set(false);
+      this.snackbar.show(`Removed workflow override ${orig}.`);
     } catch (err) {
       this.store.actionError.set(errorText(err));
     } finally {

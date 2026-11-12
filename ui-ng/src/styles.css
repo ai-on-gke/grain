@@ -1811,6 +1811,16 @@ g-sessions-page {
   color: var(--md-sys-color-error);
 }
 
+.btn-tonal.danger {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  border-color: transparent;
+}
+
+.btn-tonal.danger:hover {
+  filter: brightness(0.96);
+}
+
 .btn-primary.danger {
   background: var(--md-sys-color-error);
   color: var(--md-sys-color-on-error);

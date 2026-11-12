@@ -168,6 +168,14 @@
   font-size: 12px;
 }
 
+.ci-log-bar .btn-text {
+  color: #a8c7fa;
+}
+
+.ci-log-bar .btn-text:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .ci-log-search {
   height: 28px;
   padding: 0 10px;
@@ -241,4 +249,32 @@
   font-size: 12px;
   overflow-x: auto;
   white-space: pre;
+}
+
+.ci-workflow-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  border-radius: var(--md-sys-shape-corner-medium);
+  max-width: 100%;
+}
+
+.ci-workflow-segmented button {
+  flex: 1 1 auto;
+  border-left: none;
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+@media (max-width: 599.95px) {
+  .ci-inspector {
+    padding: 14px 12px 24px;
+  }
+
+  .ci-step-btn {
+    padding-left: 14px;
+  }
+
+  .ci-log-well {
+    margin: 0 8px 10px 8px;
+  }
 }

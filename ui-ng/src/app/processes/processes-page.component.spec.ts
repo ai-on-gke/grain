@@ -19,6 +19,7 @@ import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig, Task } from "../api/models";
+import { SnackbarService } from "../services/snackbar.service";
 import { ProcessesPageComponent } from "./processes-page.component";
 import type {
   Composition,
@@ -26,9 +27,11 @@ import type {
   RepoDefaultsView,
   RepoWorkflowsResponse,
   Schedule,
+  ScheduleRun,
   Suite,
   SuiteRun,
   Template,
+  TemplateField,
 } from "./processes.models";
 
 class FakeProcessesApi {
@@ -58,6 +61,13 @@ class FakeProcessesApi {
       repo: "acme/widgets",
       suiteRun: true,
     },
+    {
+      id: "402",
+      title: "Security pass",
+      state: "running",
+      repo: "acme/widgets",
+      suiteRun: true,
+    },
   ];
 
   schedules: Schedule[] = [
@@ -66,10 +76,17 @@ class FakeProcessesApi {
       title: "Audit deps",
       description: "Check outdated dependencies.",
       repo: "acme/widgets",
-      base: "main",
+      base: "",
       autoMerge: true,
       capabilities: [],
-      recurrence: { kind: "daily", timeOfDay: "09:00", timeZone: "UTC" },
+      recurrence: {
+        kind: "github_workflow_run",
+        githubWorkflowRun: {
+          workflow: "Nightly E2E",
+          conclusions: ["failure"],
+          branches: ["release"],
+        },
+      },
       timeZone: "UTC",
       overlap: "skip",
       source: "deployment",
@@ -78,6 +95,48 @@ class FakeProcessesApi {
       nextRunAt: "2026-11-13T09:00:00Z",
       createdAt: "2026-11-01T00:00:00Z",
       revision: "rev-s1",
+    },
+    {
+      id: "sched-gitref",
+      title: "Sync upstream tag",
+      description: "Rebase onto latest upstream tag.",
+      repo: "acme/widgets",
+      base: "main",
+      autoMerge: false,
+      capabilities: [],
+      recurrence: {
+        kind: "git_ref",
+        gitRef: {
+          repo: "upstream/core",
+          ref: "refs/tags/latest",
+        },
+      },
+      overlap: "skip",
+      source: "deployment",
+      type: "task",
+      enabled: true,
+      nextRunAt: "2026-11-13T10:00:00Z",
+      createdAt: "2026-11-01T00:00:00Z",
+      revision: "rev-s2",
+    },
+    {
+      id: "sched-sys",
+      title: "Memory consolidation",
+      description: "System memory job.",
+      repo: "",
+      autoMerge: false,
+      templateId: "system:memory",
+      system: true,
+      capabilities: [],
+      recurrence: { kind: "daily", timeOfDay: "03:00", timeZone: "UTC" },
+      timeZone: "UTC",
+      overlap: "skip",
+      source: "system",
+      type: "system",
+      enabled: true,
+      nextRunAt: "2026-11-13T03:00:00Z",
+      createdAt: "2026-11-01T00:00:00Z",
+      revision: "rev-sys",
     },
   ];
 
@@ -105,8 +164,17 @@ class FakeProcessesApi {
     {
       id: "tmpl-deploy-1",
       name: "Go upgrade",
-      title: "chore: bump Go toolchain",
-      description: "Bump Go version in go.mod.",
+      title: "chore: bump {{pkg}}",
+      description: "Bump {{pkg}} version in go.mod.",
+      fields: [
+        {
+          name: "pkg",
+          label: "Go package",
+          default: "golang.org/x/net",
+          options: ["golang.org/x/net", "golang.org/x/sys"],
+          required: false,
+        },
+      ],
       autoMerge: true,
       capabilities: [],
       revision: "rev-t1",
@@ -120,8 +188,8 @@ class FakeProcessesApi {
       items: [{ templateId: "tmpl-deploy-1", templateName: "Go upgrade" }],
       mode: "until_clean",
       maxPasses: 3,
-      requireApproval: false,
-      autoMerge: true,
+      requireApproval: true,
+      autoMerge: false,
       autoApproveProposals: false,
       revision: "rev-st1",
     },
@@ -136,8 +204,8 @@ class FakeProcessesApi {
       base: "main",
       mode: "until_clean",
       maxPasses: 3,
-      requireApproval: false,
-      autoMerge: true,
+      requireApproval: true,
+      autoMerge: false,
       status: "active",
       pass: 1,
       createdAt: "2026-11-12T00:00:00Z",
@@ -148,6 +216,16 @@ class FakeProcessesApi {
           templateName: "Go upgrade",
           pass: 1,
           state: "queued",
+          approved: true,
+          openedPullRequest: false,
+          proposed: false,
+        },
+        {
+          taskId: "402",
+          templateId: "tmpl-deploy-1",
+          templateName: "Go upgrade",
+          pass: 1,
+          state: "running",
           approved: true,
           openedPullRequest: false,
           proposed: false,
@@ -206,6 +284,11 @@ class FakeProcessesApi {
         ],
       },
     ],
+  };
+
+  scheduleRunResult: ScheduleRun = {
+    taskId: "601",
+    schedule: this.schedules[0],
   };
 
   calls: { method: string; route: string; params?: unknown; body?: unknown }[] =
@@ -287,14 +370,14 @@ class FakeProcessesApi {
     if (route === "POST /api/schedules") {
       const created: Schedule = {
         ...this.schedules[0],
-        id: "sched-2",
+        id: "sched-new",
         title: String(body?.["title"] || "New sched"),
       };
       this.schedules.push(created);
       return Promise.resolve(created);
     }
     if (route === "POST /api/schedules/{id}/run") {
-      return Promise.resolve({ taskId: "601", schedule: this.schedules[0] });
+      return Promise.resolve(structuredClone(this.scheduleRunResult));
     }
     if (route === "POST /api/templates") {
       const created: Template = {
@@ -322,8 +405,8 @@ class FakeProcessesApi {
         items: [{ templateId: "tmpl-deploy-1", templateName: "Go upgrade" }],
         mode: String(body?.["mode"] ?? "count"),
         count: Number(body?.["count"] ?? 1),
-        requireApproval: false,
-        autoMerge: true,
+        requireApproval: Boolean(body?.["requireApproval"]),
+        autoMerge: body?.["autoMerge"] !== false,
         autoApproveProposals: false,
       };
       this.suites.push(created);
@@ -354,10 +437,13 @@ class FakeProcessesApi {
   ) => {
     this.calls.push({ method: "PATCH", route, params, body });
     if (route === "PATCH /api/schedules/{id}") {
+      const id = String(params?.["id"] ?? "");
+      const found =
+        this.schedules.find((s) => s.id === id) ?? this.schedules[0];
       if (typeof body?.["enabled"] === "boolean") {
-        this.schedules[0].enabled = body["enabled"];
+        found.enabled = body["enabled"];
       }
-      return Promise.resolve(structuredClone(this.schedules[0]));
+      return Promise.resolve(structuredClone(found));
     }
     if (route === "PATCH /api/templates/{id}") {
       return Promise.resolve(structuredClone(this.templates[1]));
@@ -375,6 +461,8 @@ class FakeProcessesApi {
       return Promise.resolve(structuredClone(this.repoDecl));
     }
     if (route === "PUT /api/repos/{owner}/{name}/workflows") {
+      this.repoWfs.workflows =
+        (body?.["workflows"] as RepoWorkflowsResponse["workflows"]) ?? [];
       return Promise.resolve(structuredClone(this.repoWfs));
     }
     return Promise.resolve({});
@@ -430,7 +518,7 @@ describe("ProcessesPageComponent (D-9)", () => {
     TestBed.resetTestingModule();
   });
 
-  it("manages Schedules: composition preview, Run now, Pause/Resume, and ?new=1 creation with draft preview", async () => {
+  it("manages Schedules: outside-[inert] dialog, github_workflow_run conclusions/branches, empty base, git_ref.repo, system-schedule guard, and workflowRun Run now notice", async () => {
     const harness = await RouterTestingHarness.create(
       "/processes/schedules?new=1",
     );
@@ -439,17 +527,19 @@ describe("ProcessesPageComponent (D-9)", () => {
 
     expect(root.querySelectorAll("select").length).toBe(0);
 
-    // ?new=1 opens New Schedule dialog automatically
+    // ?new=1 opens New Schedule dialog outside [inert]
     const dialog = root.querySelector('[data-testid="schedule-dialog"]')!;
     expect(dialog).not.toBeNull();
+    expect(dialog.closest("[inert]")).toBeNull();
+    expect(root.querySelector(".view-panel")?.hasAttribute("inert")).toBe(true);
 
     const titleIn = root.querySelector<HTMLInputElement>(
       '[data-testid="sched-title-input"]',
     )!;
     titleIn.value = "Nightly security scan";
     titleIn.dispatchEvent(new Event("input"));
+    await flush(harness);
 
-    // Preview draft composition (POST /api/schedules/composition)
     root
       .querySelector<HTMLButtonElement>(
         '[data-testid="sched-preview-composition-btn"]',
@@ -460,57 +550,149 @@ describe("ProcessesPageComponent (D-9)", () => {
       api.calls.some((c) => c.route === "POST /api/schedules/composition"),
     ).toBe(true);
 
-    // Save schedule (POST /api/schedules)
     root
       .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
       .click();
     await flush(harness);
     expect(api.calls.some((c) => c.route === "POST /api/schedules")).toBe(true);
 
-    // Select sched-1, pause it, and trigger Run now
-    root
-      .querySelector<HTMLElement>('[data-testid="sched-row-sched-1"]')!
-      .click();
+    // 1. Edit github_workflow_run schedule (sched-1): preserves base: "", conclusions: ["failure"], branches: ["release"], locks Suite target
+    const sched1Row = root.querySelector<HTMLElement>(
+      '[data-testid="sched-row-sched-1"]',
+    )!;
+    expect(sched1Row.textContent).toContain(
+      "On GitHub workflow: Nightly E2E (failure · on release)",
+    );
+    sched1Row.click();
     await flush(harness);
-    expect(
-      root.querySelector('[data-testid="composition-preview"]'),
-    ).not.toBeNull();
 
     root
-      .querySelector<HTMLButtonElement>(
-        '[data-testid="sched-toggle-enabled-btn"]',
-      )!
+      .querySelector<HTMLButtonElement>('[data-testid="sched-edit-btn"]')!
       .click();
     await flush(harness);
+
     expect(
-      api.calls.some(
-        (c) =>
-          c.route === "PATCH /api/schedules/{id}" &&
-          (c.body as Record<string, unknown>)?.["enabled"] === false,
-      ),
+      root.querySelector<HTMLInputElement>('[data-testid="sched-base-input"]')!
+        .value,
+    ).toBe("");
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        '[data-testid="sched-target-suite"]',
+      )!.disabled,
     ).toBe(true);
+    expect(
+      root.querySelector<HTMLInputElement>(
+        '[data-testid="sched-trigger-conclusion-input"]',
+      )!.value,
+    ).toBe("failure");
+    expect(
+      root.querySelector<HTMLInputElement>(
+        '[data-testid="sched-trigger-branch-input"]',
+      )!.value,
+    ).toBe("release");
 
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const ghaPatch = api.calls.find(
+      (c) =>
+        c.route === "PATCH /api/schedules/{id}" &&
+        (c.params as Record<string, unknown>)?.["id"] === "sched-1",
+    )!;
+    const ghaBody = ghaPatch.body as Record<string, unknown>;
+    expect(ghaBody["base"]).toBe("");
+    expect(ghaBody["capabilities"]).toBeUndefined();
+    expect(ghaBody["recurrence"]).toEqual({
+      kind: "github_workflow_run",
+      githubWorkflowRun: {
+        workflow: "Nightly E2E",
+        conclusions: ["failure"],
+        branches: ["release"],
+      },
+    });
+
+    // 2. Edit git_ref schedule (sched-gitref): preserves gitRef.repo = "upstream/core"
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-gitref"]')!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-edit-btn"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+    const gitRefPatch = api.calls.find(
+      (c) =>
+        c.route === "PATCH /api/schedules/{id}" &&
+        (c.params as Record<string, unknown>)?.["id"] === "sched-gitref",
+    )!;
+    expect(
+      (gitRefPatch.body as { recurrence: { gitRef: { repo: string } } })
+        .recurrence.gitRef.repo,
+    ).toBe("upstream/core");
+
+    // 3. Edit system schedule (sched-sys): hides content inputs & sends only cadence/overlap/revision
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-sys"]')!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-edit-btn"]')!
+      .click();
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="sched-system-banner"]'),
+    ).not.toBeNull();
+    expect(root.querySelector('[data-testid="sched-title-input"]')).toBeNull();
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+    const sysPatch = api.calls.find(
+      (c) =>
+        c.route === "PATCH /api/schedules/{id}" &&
+        (c.params as Record<string, unknown>)?.["id"] === "sched-sys",
+    )!;
+    expect(Object.keys(sysPatch.body as object).sort()).toEqual([
+      "overlap",
+      "recurrence",
+      "revision",
+      "timeZone",
+    ]);
+
+    // 4. Run now with workflowRun: true and no taskId/suiteRunId shows honest trigger notice
+    const snackbar = TestBed.inject(SnackbarService);
+    api.scheduleRunResult = {
+      workflowRun: true,
+      schedule: api.schedules[0],
+    };
     root
       .querySelector<HTMLButtonElement>('[data-testid="sched-run-now-btn"]')!
       .click();
     await flush(harness);
-    expect(
-      api.calls.some((c) => c.route === "POST /api/schedules/{id}/run"),
-    ).toBe(true);
+    expect(snackbar.current()?.message).toBe(
+      "No concluded GitHub workflow run matched this trigger yet.",
+    );
   });
 
-  it("browses repo-declared vs deployment Templates, creates templates, and launches via POST /api/tasks/from-template", async () => {
+  it("preserves TemplateField metadata (label, default, options, required) across PATCH and launches via POST /api/tasks/from-template", async () => {
     const harness = await RouterTestingHarness.create(
       "/processes/templates?launch=1",
     );
     await flush(harness);
     const root = harness.routeNativeElement!;
 
-    // ?launch=1 opens Launch from template dialog pre-populated with repo-declared template
     const launchDialog = root.querySelector(
       '[data-testid="launch-template-dialog"]',
     )!;
     expect(launchDialog).not.toBeNull();
+    expect(launchDialog.closest("[inert]")).toBeNull();
+
     const versionInput = root.querySelector<HTMLInputElement>(
       '[data-testid="launch-field-version"]',
     )!;
@@ -526,53 +708,102 @@ describe("ProcessesPageComponent (D-9)", () => {
       api.calls.some((c) => c.route === "POST /api/tasks/from-template"),
     ).toBe(true);
 
-    // Navigate back to templates tab to create a new deployment template
+    // Navigate back to templates tab and edit deployment template tmpl-deploy-1
     await harness.navigateByUrl("/processes/templates");
     await flush(harness);
-    expect(
-      harness.routeNativeElement!.querySelector(
-        '[data-testid="tmpl-declared-banner"]',
-      ),
-    ).not.toBeNull();
+    const tplRoot = harness.routeNativeElement!;
 
-    harness
-      .routeNativeElement!.querySelector<HTMLButtonElement>(
-        '[data-testid="proc-new-template-btn"]',
-      )!
+    tplRoot
+      .querySelector<HTMLElement>('[data-testid="tmpl-row-tmpl-deploy-1"]')!
       .click();
     await flush(harness);
-    const nIn = harness.routeNativeElement!.querySelector<HTMLInputElement>(
-      '[data-testid="tmpl-name-input"]',
-    )!;
-    nIn.value = "Lint autofix";
-    nIn.dispatchEvent(new Event("input"));
-    const tIn = harness.routeNativeElement!.querySelector<HTMLInputElement>(
-      '[data-testid="tmpl-title-input"]',
-    )!;
-    tIn.value = "chore: run lint autofix";
-    tIn.dispatchEvent(new Event("input"));
-    await flush(harness);
-
-    harness
-      .routeNativeElement!.querySelector<HTMLButtonElement>(
-        '[data-testid="tmpl-save-btn"]',
-      )!
+    tplRoot
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-edit-btn"]')!
       .click();
     await flush(harness);
-    expect(api.calls.some((c) => c.route === "POST /api/templates")).toBe(true);
+
+    const tmplDlg = tplRoot.querySelector('[data-testid="template-dialog"]')!;
+    expect(tmplDlg.closest("[inert]")).toBeNull();
+
+    // Append a second parameter while keeping existing "pkg" metadata intact
+    const paramsInput = tplRoot.querySelector<HTMLInputElement>(
+      '[data-testid="tmpl-params-input"]',
+    )!;
+    expect(paramsInput.value).toBe("pkg");
+    paramsInput.value = "pkg, target_go";
+    paramsInput.dispatchEvent(new Event("input"));
+    await flush(harness);
+
+    tplRoot
+      .querySelector<HTMLButtonElement>('[data-testid="tmpl-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const tmplPatch = api.calls.find(
+      (c) => c.route === "PATCH /api/templates/{id}",
+    )!;
+    const savedFields = (tmplPatch.body as { fields: TemplateField[] }).fields;
+    expect(savedFields).toEqual([
+      {
+        name: "pkg",
+        label: "Go package",
+        default: "golang.org/x/net",
+        options: ["golang.org/x/net", "golang.org/x/sys"],
+        required: false,
+      },
+      {
+        name: "target_go",
+        required: true,
+      },
+    ]);
   });
 
-  it("creates Suites, launches Suite Runs via ?run=1, inspects live pass tasks, and cancels active suite runs", async () => {
-    const harness = await RouterTestingHarness.create(
-      "/processes/suites?run=1",
-    );
+  it("preserves Suite requireApproval/autoMerge on PATCH, launches Suite Runs via ?run=1, and closes all non-closed pass tasks (including running)", async () => {
+    const harness = await RouterTestingHarness.create("/processes/suites");
     await flush(harness);
     const root = harness.routeNativeElement!;
 
-    // ?run=1 opens Run Suite dialog
+    // Edit existing suite-1 (requireApproval: true, autoMerge: false) and verify PATCH preserves both!
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-edit-btn"]')!
+      .click();
+    await flush(harness);
+    const suiteDialog = root.querySelector('[data-testid="suite-dialog"]')!;
+    expect(suiteDialog.closest("[inert]")).toBeNull();
     expect(
-      root.querySelector('[data-testid="run-suite-dialog"]'),
-    ).not.toBeNull();
+      root
+        .querySelector('[data-testid="suite-require-approval-switch"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      root
+        .querySelector('[data-testid="suite-auto-merge-switch"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("false");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suite-save-btn"]')!
+      .click();
+    await flush(harness);
+    const suitePatch = api.calls.find(
+      (c) => c.route === "PATCH /api/suites/{id}",
+    )!;
+    expect(suitePatch.body).toMatchObject({
+      requireApproval: true,
+      autoMerge: false,
+      revision: "rev-st1",
+    });
+
+    // Launch Suite Run via Run suite dialog
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="proc-run-suite-btn"]')!
+      .click();
+    await flush(harness);
+    expect(
+      root
+        .querySelector('[data-testid="run-suite-dialog"]')
+        ?.closest("[inert]"),
+    ).toBeNull();
     root
       .querySelector<HTMLButtonElement>('[data-testid="run-suite-submit"]')!
       .click();
@@ -581,17 +812,7 @@ describe("ProcessesPageComponent (D-9)", () => {
       true,
     );
 
-    // Automatically switches to live Suite Run inspector showing Pass 1 and child task #401 link
-    expect(
-      root.querySelector('[data-testid="suite-run-inspector"]'),
-    ).not.toBeNull();
-    expect(
-      root
-        .querySelector('[data-testid="suite-task-link-401"]')
-        ?.getAttribute("href"),
-    ).toBe("/task/401");
-
-    // Cancel active suite run tasks via confirm dialog
+    // Cancel active suite run tasks (401 queued + 402 running) -> BOTH must call POST /api/tasks/{id}/close, NEVER /stop!
     root
       .querySelector<HTMLButtonElement>('[data-testid="suite-run-cancel-btn"]')!
       .click();
@@ -600,51 +821,100 @@ describe("ProcessesPageComponent (D-9)", () => {
       .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
       .click();
     await flush(harness);
+
+    const closeCalls = api.calls.filter(
+      (c) => c.route === "POST /api/tasks/{id}/close",
+    );
     expect(
-      api.calls.some((c) => c.route === "POST /api/tasks/{id}/close"),
-    ).toBe(true);
+      closeCalls.map((c) => (c.params as { id: string }).id).sort(),
+    ).toEqual(["401", "402"]);
+    expect(api.calls.some((c) => c.route === "POST /api/tasks/{id}/stop")).toBe(
+      false,
+    );
   });
 
-  it("inspects Repo .grain/ declarations, accepts widened capabilities, and saves workflow YAML", async () => {
+  it("enforces global scope on Accept declaration and supports saving & deleting Repo workflow overrides", async () => {
+    // 1. Repo-limited repos:write cannot accept declaration requiring global repos:write
+    api.configBody = {
+      access: {
+        role: "grain/repo-dev",
+        roles: ["grain/repo-dev"],
+        full: false,
+        scopes: ["capabilities:read", "repos:write", "settings:write"],
+        repoLimits: {
+          "repos:write": ["acme/widgets"],
+        },
+      },
+      targetRepos: ["acme/widgets"],
+      approvedByDefault: true,
+    };
+
     const harness = await RouterTestingHarness.create(
       "/processes/declarations",
     );
     await flush(harness);
     const root = harness.routeNativeElement!;
 
-    expect(
-      root.querySelector('[data-testid="decl-discovered-files"]')?.textContent,
-    ).toContain(".grain/templates/release-notes.yml");
-    expect(
-      root.querySelector('[data-testid="decl-discovered-files"]')?.textContent,
-    ).toContain(".grain/merge-rules.yml");
+    const acceptBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="decl-accept-btn-repo:template:acme/widgets:release-notes"]',
+    )!;
+    expect(acceptBtn.disabled).toBe(true);
 
-    // Accept declaration (POST /api/declarations/accept)
-    root
+    // 2. Grant global repos:write and reload -> Accept declaration succeeds, plus edit & delete workflow override
+    api.configBody = {
+      access: {
+        role: "grain/operator",
+        roles: ["grain/operator"],
+        full: true,
+        scopes: [],
+      },
+      targetRepos: ["acme/widgets"],
+      approvedByDefault: true,
+    };
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(
+          [{ path: "processes/:tab", component: ProcessesPageComponent }],
+          withComponentInputBinding(),
+        ),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const harness2 = await RouterTestingHarness.create(
+      "/processes/declarations",
+    );
+    await flush(harness2);
+    const root2 = harness2.routeNativeElement!;
+
+    root2
       .querySelector<HTMLButtonElement>(
         '[data-testid="decl-accept-btn-repo:template:acme/widgets:release-notes"]',
       )!
       .click();
-    await flush(harness);
+    await flush(harness2);
     expect(
       api.calls.some((c) => c.route === "POST /api/declarations/accept"),
     ).toBe(true);
 
-    // Add / save repo workflow YAML (PUT /api/repos/{owner}/{name}/workflows)
-    root
+    // Inspect existing workflow override and delete it via Delete override button
+    root2
       .querySelector<HTMLButtonElement>(
-        '[data-testid="decl-add-workflow-btn"]',
+        '[data-testid="decl-inspect-wf-.grain/workflows/ci.yml"]',
       )!
       .click();
-    await flush(harness);
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="wf-save-btn"]')!
+    await flush(harness2);
+    const wfDlg = root2.querySelector('[data-testid="repo-workflow-dialog"]')!;
+    expect(wfDlg.closest("[inert]")).toBeNull();
+
+    root2
+      .querySelector<HTMLButtonElement>('[data-testid="wf-delete-btn"]')!
       .click();
-    await flush(harness);
-    expect(
-      api.calls.some(
-        (c) => c.route === "PUT /api/repos/{owner}/{name}/workflows",
-      ),
-    ).toBe(true);
+    await flush(harness2);
+    const putCall = api.calls.find(
+      (c) => c.route === "PUT /api/repos/{owner}/{name}/workflows",
+    )!;
+    expect(putCall.body).toEqual({ workflows: [] });
   });
 });

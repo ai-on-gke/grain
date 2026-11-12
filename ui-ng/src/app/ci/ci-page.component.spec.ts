@@ -20,12 +20,14 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents, type GrainEvent } from "../api/grain-events.service";
 import type { GrainConfig } from "../api/models";
 import { CIPageComponent } from "./ci-page.component";
-import type {
-  CIFault,
-  CIRun,
-  CIRunArtifact,
-  CIRunLogResponse,
-  CIWorkflowOption,
+import {
+  type CIFault,
+  type CIRun,
+  type CIRunArtifact,
+  type CIRunLogResponse,
+  type CIWorkflowOption,
+  faultsForRun,
+  safeExternalUrl,
 } from "./ci.models";
 
 class FakeCIApi {
@@ -145,16 +147,25 @@ class FakeCIApi {
 
   faults: CIFault[] = [
     {
+      source: "grain",
       digest: "fault-granule-pull",
       repo: "acme/widgets",
       jobId: "test",
       jobName: "Unit tests",
+      step: "Setup sandbox",
       kind: "errored",
       summary: "Granule image registry 503 across branches",
       runCount: 4,
       refCount: 3,
       ownerTaskId: "88",
-      runs: [{ id: "run-errored-1", ref: "grain/task-101" }],
+      runs: [
+        {
+          runId: "run-errored-1",
+          ref: "grain/task-101",
+          taskId: "101",
+          sha: "aaa111122223333",
+        },
+      ],
       refs: ["grain/task-101", "grain/task-99", "main"],
     },
   ];
@@ -167,6 +178,13 @@ class FakeCIApi {
         name: "coverage-report",
         stored: true,
         bytes: 24576,
+      },
+      {
+        run: "run-failed-2",
+        job: "unit",
+        name: "expired-trace",
+        stored: false,
+        bytes: 1024,
       },
     ],
   };
@@ -184,6 +202,7 @@ class FakeCIApi {
     log: "Step 1: Launching browser\nError: Timed out waiting for selector #app",
   };
 
+  runListQueries: string[] = [];
   postCalls: {
     route: string;
     params?: unknown;
@@ -196,14 +215,42 @@ class FakeCIApi {
   config = () => Promise.resolve(this.configBody);
   clearConditionalCache = () => undefined;
 
-  getIfChanged = (route: string) => {
+  getIfChanged = (
+    route: string,
+    _params?: Record<string, unknown>,
+    query?: string,
+  ) => {
     if (route === "GET /api/ci/runs") {
+      this.runListQueries.push(query ?? "");
+      const qp = new URLSearchParams(query ?? "");
+      const prov = qp.get("provider");
+      const repo = qp.get("repo");
+      // Mirror pkg/ui/ci_actions.go wantsActions: human sessions only receive
+      // GitHub Actions runs when both repo and provider=github-actions are sent.
+      if (prov === "github-actions" && repo) {
+        const gha = this.runs.filter(
+          (r) => r.provider === "github-actions" && r.repo === repo,
+        );
+        return Promise.resolve({
+          body: {
+            enabled: true,
+            runs: structuredClone(gha),
+            matched: gha.length,
+            stored: gha.length,
+            repoProvider: "github-actions",
+          },
+          changed: true,
+        });
+      }
+      const grainOnly = this.runs.filter(
+        (r) => r.provider !== "github-actions",
+      );
       return Promise.resolve({
         body: {
           enabled: true,
-          runs: structuredClone(this.runs),
-          matched: this.runs.length,
-          stored: this.runs.length,
+          runs: structuredClone(grainOnly),
+          matched: grainOnly.length,
+          stored: grainOnly.length,
           faults: structuredClone(this.faults),
         },
         changed: true,
@@ -356,7 +403,16 @@ describe("CIPageComponent (D-26)", () => {
     TestBed.resetTestingModule();
   });
 
-  it("separates shared infrastructure faults (Errored) from isolated code failures (Failed) with zero native <select> elements", async () => {
+  it("separates shared infrastructure faults (Errored) from isolated code failures (Failed) using FaultRun.runId without cross-source leakage", async () => {
+    // Verify pure model guard: grain fault on "main" never taints a GitHub Actions run on "main",
+    // nor an unrelated Grain run on "main" whose runId is not in fault.runs.
+    const ghaRun = api.runs.find((r) => r.id === "gha:acme:widgets:9001")!;
+    expect(faultsForRun(ghaRun, api.faults)).toEqual([]);
+    expect(safeExternalUrl("javascript:alert(1)")).toBeNull();
+    expect(
+      safeExternalUrl("https://github.com/acme/widgets/actions/runs/9001"),
+    ).toBe("https://github.com/acme/widgets/actions/runs/9001");
+
     const harness = await RouterTestingHarness.create("/ci");
     await flush(harness);
     const root = harness.routeNativeElement!;
@@ -369,17 +425,7 @@ describe("CIPageComponent (D-26)", () => {
     expect(banner.textContent).toContain("Granule image registry 503");
     expect(banner.textContent).toContain("Assigned fix #88");
 
-    // Top run is auto-selected on desktop and shows the infrastructure fault callout.
-    expect(
-      root.querySelector('[data-testid="ci-errored-callout"]')?.textContent,
-    ).toContain("Shared deployment / infrastructure fault");
-    expect(
-      root
-        .querySelector('[data-testid="ci-detail-task-link"]')
-        ?.getAttribute("href"),
-    ).toBe("/task/101");
-
-    // Select the isolated branch failure run and verify Failed callout + auto-expanded step log + artifact download.
+    // Select isolated failure run first, then click "Inspect affected runs" on fault card to verify f.runs[0].runId navigation.
     root
       .querySelector<HTMLElement>('[data-testid="ci-run-row-run-failed-2"]')!
       .click();
@@ -391,24 +437,49 @@ describe("CIPageComponent (D-26)", () => {
     const logWell = root.querySelector('[data-testid="ci-log-viewer"]')!;
     expect(logWell.textContent).toContain("FAIL: TestCheckoutRace");
 
-    const dl = root.querySelector<HTMLAnchorElement>(
+    // Only stored === true artifacts render download links.
+    const dls = root.querySelectorAll<HTMLAnchorElement>(
       '[data-testid="ci-artifact-download"]',
-    )!;
-    expect(dl.getAttribute("href")).toBe(
+    );
+    expect(dls.length).toBe(1);
+    expect(dls[0].getAttribute("href")).toBe(
       "/api/ci/runs/run-failed-2/artifacts/unit/coverage-report",
     );
+
+    // Click Inspect affected runs -> opens run-errored-1 via f.runs[0].runId.
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="ci-fault-inspect-runs"]',
+      )!
+      .click();
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="ci-errored-callout"]')?.textContent,
+    ).toContain("Shared deployment / infrastructure fault");
+    expect(
+      root
+        .querySelector('[data-testid="ci-detail-task-link"]')
+        ?.getAttribute("href"),
+    ).toBe("/task/101");
   });
 
-  it("filters runs by conclusion chip, GM3 repo pill menu, and provider segmented buttons, and loads GitHub job logs", async () => {
+  it("queries provider=github-actions when switching provider or selecting a repo, renders safe external links, and loads GitHub logs", async () => {
     const harness = await RouterTestingHarness.create("/ci");
     await flush(harness);
     const root = harness.routeNativeElement!;
 
-    // Filter to GitHub Actions provider
+    // Filter to GitHub Actions provider -> queries GET /api/ci/runs?repo=...&provider=github-actions
     root
       .querySelector<HTMLButtonElement>('[data-testid="ci-provider-github"]')!
       .click();
     await flush(harness);
+    expect(
+      api.runListQueries.some(
+        (q) =>
+          q.includes("provider=github-actions") &&
+          q.includes("repo=acme%2Fwidgets"),
+      ),
+    ).toBe(true);
     expect(root.querySelectorAll(".ci-run-row").length).toBe(1);
 
     root
@@ -417,6 +488,11 @@ describe("CIPageComponent (D-26)", () => {
       )!
       .click();
     await flush(harness);
+
+    const extLink = root.querySelector<HTMLAnchorElement>(
+      '[data-testid="ci-external-link"]',
+    )!;
+    expect(extLink.getAttribute("rel")).toBe("noopener noreferrer");
 
     // Fetch external GitHub Actions job log
     root
@@ -428,7 +504,7 @@ describe("CIPageComponent (D-26)", () => {
       root.querySelector('[data-testid="ci-log-viewer"]')?.textContent,
     ).toContain("Timed out waiting for selector #app");
 
-    // Filter by Repo pill menu
+    // Switch to All providers and pick Repo: acme/widgets via WAI-ARIA listbox -> merges Grain + GitHub runs!
     root
       .querySelector<HTMLButtonElement>('[data-testid="ci-provider-all"]')!
       .click();
@@ -436,29 +512,59 @@ describe("CIPageComponent (D-26)", () => {
       .querySelector<HTMLButtonElement>('[data-testid="ci-repo-pill"]')!
       .click();
     await flush(harness);
-    const menuButtons = [
+
+    const repoOptions = [
       ...root.querySelectorAll<HTMLButtonElement>(
-        '[data-testid="ci-repo-menu"] button',
+        '[data-testid="ci-repo-menu"] [role="option"]',
       ),
     ];
-    menuButtons.find((b) => b.textContent?.includes("acme/infra"))!.click();
+    expect(repoOptions.length).toBeGreaterThanOrEqual(3);
+    repoOptions.find((b) => b.textContent?.includes("acme/widgets"))!.click();
     await flush(harness);
-    expect(root.querySelectorAll(".ci-run-row").length).toBe(1);
-    expect(root.querySelector(".ci-run-row")?.textContent).toContain(
-      "acme/infra",
+    // 2 Grain runs on acme/widgets + 1 GitHub Actions run on acme/widgets = 3 merged runs
+    expect(root.querySelectorAll(".ci-run-row").length).toBe(3);
+
+    // Escape closes open pop-menu
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="ci-repo-pill"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="ci-repo-menu"]')).not.toBeNull();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
     );
+    await flush(harness);
+    expect(root.querySelector('[data-testid="ci-repo-menu"]')).toBeNull();
   });
 
-  it("triggers manual workflow runs, cancels active runs, flushes caches, and quarantines flaky tests", async () => {
+  it("keeps modals outside [inert], enforces repo-scoped RBAC inside dialogs, cancels runs, flushes caches, and quarantines flaky tests", async () => {
+    api.configBody = {
+      access: {
+        role: "grain/repo-ci",
+        roles: ["grain/repo-ci"],
+        full: false,
+        scopes: ["ci:read", "ci:write", "tests:write", "caches:write"],
+        repoLimits: {
+          "ci:write": ["acme/infra"],
+        },
+      },
+      targetRepos: ["acme/widgets", "acme/infra"],
+    };
+
     const harness = await RouterTestingHarness.create("/ci/runs/run-running-3");
     await flush(harness);
     const root = harness.routeNativeElement!;
 
-    // 1. Cancel active run via confirm dialog
+    // 1. Cancel active run via confirm dialog — verify confirm-dialog is NOT inside [inert]
     root
       .querySelector<HTMLButtonElement>('[data-testid="ci-cancel-run-btn"]')!
       .click();
     await flush(harness);
+    const confirmDlg = root.querySelector('[data-testid="confirm-dialog"]')!;
+    expect(confirmDlg).not.toBeNull();
+    expect(confirmDlg.closest("[inert]")).toBeNull();
+    expect(root.querySelector(".view-panel")?.hasAttribute("inert")).toBe(true);
+
     root
       .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
       .click();
@@ -467,19 +573,41 @@ describe("CIPageComponent (D-26)", () => {
       api.deleteCalls.some((c) => c.route === "DELETE /api/ci/runs/{id}"),
     ).toBe(true);
 
-    // 2. Trigger manual workflow dialog (discovers workflows via GET /api/ci/workflows, posts POST /api/ci/runs)
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="ci-open-run-dialog"]')!
-      .click();
+    // 2. Trigger manual workflow dialog — verify outside [inert], RBAC repo limit, and Escape dismissal
+    const openRunBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="ci-open-run-dialog"]',
+    )!;
+    openRunBtn.focus();
+    openRunBtn.click();
     await flush(harness);
+    const runDialog = root.querySelector('[data-testid="ci-run-dialog"]')!;
+    expect(runDialog).not.toBeNull();
+    expect(runDialog.closest("[inert]")).toBeNull();
+
+    const repoInput = root.querySelector<HTMLInputElement>(
+      '[data-testid="ci-run-repo-input"]',
+    )!;
+    const submitBtn = root.querySelector<HTMLButtonElement>(
+      '[data-testid="ci-run-submit"]',
+    )!;
+    // Unauthorized repo acme/widgets disables ci-run-submit
+    repoInput.value = "acme/widgets";
+    repoInput.dispatchEvent(new Event("input"));
+    await flush(harness);
+    expect(submitBtn.disabled).toBe(true);
+
+    // Authorized repo acme/infra enables ci-run-submit
+    repoInput.value = "acme/infra";
+    repoInput.dispatchEvent(new Event("input"));
+    await flush(harness);
+    expect(submitBtn.disabled).toBe(false);
+
     const wfOpt = root.querySelector<HTMLButtonElement>(
       '[data-testid="ci-wf-opt-.grain/workflows/ci.yml"]',
     )!;
     expect(wfOpt).not.toBeNull();
     wfOpt.click();
-    root
-      .querySelector<HTMLButtonElement>('[data-testid="ci-run-submit"]')!
-      .click();
+    submitBtn.click();
     await flush(harness);
     expect(
       api.postCalls.some(
@@ -509,7 +637,7 @@ describe("CIPageComponent (D-26)", () => {
       api.postCalls.some((c) => c.route === "POST /api/actions-cache/flush"),
     ).toBe(true);
 
-    // 4. Quarantine flaky test on failed run
+    // 4. Quarantine flaky test on failed run — verify outside [inert]
     root
       .querySelector<HTMLElement>('[data-testid="ci-run-row-run-failed-2"]')!
       .click();
@@ -520,6 +648,10 @@ describe("CIPageComponent (D-26)", () => {
       )!
       .click();
     await flush(harness);
+    const qDialog = root.querySelector('[data-testid="ci-quarantine-dialog"]')!;
+    expect(qDialog).not.toBeNull();
+    expect(qDialog.closest("[inert]")).toBeNull();
+
     const testInput = root.querySelector<HTMLInputElement>(
       '[data-testid="ci-quarantine-test-input"]',
     )!;
@@ -540,5 +672,14 @@ describe("CIPageComponent (D-26)", () => {
     expect(
       root.querySelector('[data-testid="ci-quarantine-result"]')?.textContent,
     ).toContain("#501");
+
+    // Capture-phase Escape dismisses quarantine dialog
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="ci-quarantine-dialog"]'),
+    ).toBeNull();
   });
 });
