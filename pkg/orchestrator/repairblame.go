@@ -108,6 +108,14 @@ func repairCulprits(ctx context.Context, store *model.Store, client github.Clien
 				log.Printf("orchestrator: %s names task %s in a Blames: trailer, and there is no such task", task.ID, id)
 				continue
 			}
+			// The trailer is agent-written, so it may only name a merge into
+			// the repository the repair itself merged into -- the same reach
+			// a Fixes-commit: trailer has -- rather than write a blamed-by
+			// link on any task in the deployment.
+			if found.Target == nil || !found.Target.Same(ref.Repo) {
+				log.Printf("orchestrator: %s names task %s in a Blames: trailer, which is not a task of %s", task.ID, id, ref.Repo)
+				continue
+			}
 			culprits = append(culprits, id)
 		}
 		for _, sha := range shas {

@@ -208,6 +208,27 @@ func TestRCBlockerBlamesTheTaskItsBlamesTrailerNames(t *testing.T) {
 	wantBlame(t, store, "20", "10")
 }
 
+// A Blames: trailer is agent-written, so a task of another repository is
+// not blamed by it: a repair reaches only merges into its own repository.
+func TestRepairBlamesTrailerCannotNameAnotherRepositorysTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	other := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	if err := store.PutTask(ctx, model.Task{ID: "11", Title: "Change the gadget", Target: &other}); err != nil {
+		t.Fatal(err)
+	}
+	repair := model.Task{ID: "20", Title: model.RCBlockerMarker("v1.4.0-rc.2") + " widget test fails"}
+	ref := putBlameFixture(t, store, repair)
+	client := blameClient{
+		prCommits: []github.Commit{{SHA: "f1", Message: "fix: repair the widget test\n\nBlames: task 11"}},
+	}
+	if err := recordRepairBlame(ctx, store, client, repair, ref, "main"); err != nil {
+		t.Fatal(err)
+	}
+	wantNoBlame(t, store, "20", "11")
+}
+
 // A trailer is the whole answer: a base-branch repair whose Fixes-commit
 // names a commit no task merged blames nobody, even with a one-commit red
 // range that would otherwise name task 10.
