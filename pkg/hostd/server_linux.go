@@ -860,7 +860,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			s.refuse(conn, fmt.Sprintf("no detached process %q", req.ID))
 			return
 		}
-		s.attach(conn, p, req.Cursor, nil)
+		s.attach(conn, p, req.Cursor, nil, req.AckExit)
 		return
 	case OpCancel:
 		s.release(req.ID, "cancelled by the daemon")

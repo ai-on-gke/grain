@@ -41,6 +41,7 @@ const (
 	frameStdin      byte = 'I' // bytes for the process's stdin
 	frameStdinClose byte = 'C' // stdin is done
 	frameSignal     byte = 'S' // JSON SignalMsg
+	frameExitAck    byte = 'A' // empty: the Exit frame was read (Started.AckExit)
 
 	// hostd -> daemon
 	frameStarted byte = 'P' // JSON Started: the process is running
@@ -307,6 +308,12 @@ type Request struct {
 	Stage *StageOp `json:"stage,omitempty"`
 	// Renew is OpRenew's Ed25519 proof-of-possession payload.
 	Renew *RenewProof `json:"renew,omitempty"`
+	// AckExit, on a detached OpStart or an OpAttach, says this daemon
+	// acknowledges the Exit frame (FeatureExitAck): a hostd that agrees
+	// says so in Started.AckExit and keeps the process's final spool
+	// until that acknowledgement arrives. A hostd that predates it
+	// ignores it, and drops the spool once the Exit frame is written.
+	AckExit bool `json:"ack_exit,omitempty"`
 }
 
 // SocketOwner is the answer to OpSocketOwner: the pid holding Request.Inode
@@ -360,6 +367,11 @@ type Started struct {
 	PID int `json:"pid"`
 	// ID is the process's hostd id, for a detached start or an attach.
 	ID string `json:"id,omitempty"`
+	// AckExit answers Request.AckExit (FeatureExitAck): the daemon is to
+	// send frameExitAck once it has read the Exit frame, and until it
+	// does -- the connection dropping with the frame written but unread
+	// -- the exit stays on the host for the next OpAttach.
+	AckExit bool `json:"ack_exit,omitempty"`
 }
 
 // Exit is how a started process ended.

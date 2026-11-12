@@ -93,6 +93,13 @@ const (
 	// detached CLI processes over across hostd's own in-place re-exec, and
 	// Exit.Draining marks processes ended by hostd's own drain or stop.
 	FeatureHandover Feature = "handover"
+	// FeatureExitAck: a detached start or attach with Request.AckExit is
+	// answered with Started.AckExit, and hostd keeps the process's final
+	// spool until the daemon sends frameExitAck for its Exit frame (or
+	// cancels it, or ExitedRetention passes), rather than dropping it as
+	// soon as the frame is written: an exit written into a connection
+	// that then drops is read again by the next attach.
+	FeatureExitAck Feature = "exit_ack"
 )
 
 // Features is every feature this build implements, in the order they
@@ -112,6 +119,7 @@ var Features = []Feature{
 	FeatureLoginsMap,
 	FeatureHookPolicy,
 	FeatureHandover,
+	FeatureExitAck,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited

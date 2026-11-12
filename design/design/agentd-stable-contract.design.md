@@ -244,6 +244,7 @@ that predates the list is credited from its protocol version
 | `logins_map` | contract v1+ | top-level `logins:` map in the allowlist; `Hello.login_targets` and `stage symlink` accept any regular file it names (`Hello.codex_auth` deprecated) | falls back to `Hello.codex_auth` for codex's login |
 | `hook_policy` | contract v1+ | `agy-tool-hook` and `claude-stop-hook` accept `-policy` and evaluate a staged per-run hook policy file (`pkg/agent/hookpolicy`) | stages no policy file and omits `-policy`; hooks fall back to the roster and stop rule compiled into the host binary |
 | `handover` | contract v1+ | `Request.handover` on `drain` (`idle`) hands live detached CLI runs over across an in-place re-exec and adopts them in `loadSpools`; `Exit.draining` marks processes ended by hostd's own drain or stop | cuts over only when idle, and cannot distinguish drain-cap kills on `Exit` |
+| `exit_ack` | contract v1+ | a detached `start` or an `attach` with `Request.ack_exit` is answered with `Started.ack_exit`, and the host keeps the process's final spool until the daemon sends `frameExitAck` (`'A'`) for its `Exit` frame, a `cancel`, or exited-spool retention, so an exit written into a connection that drops before the daemon reads it is read by the next `attach`. Checked per connection: the daemon always asks (a host without it ignores the field) and acknowledges only when `Started.ack_exit` says the host is waiting | the spool goes as soon as the `Exit` frame is written; an exit lost with the connection leaves nothing to re-attach to, and the run ends as `ErrHostdLost` |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -521,6 +522,7 @@ feature env_open
 feature logins_map
 feature hook_policy
 feature handover
+feature exit_ack
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]
@@ -539,6 +541,7 @@ json Request.handover bool [handover]
 json Request.inode uint64 [socket_owner]
 json Request.stage *hostd.StageOp [stage]
 json Request.renew *hostd.RenewProof [renew]
+json Request.ack_exit bool [exit_ack]
 json Hello.protocol_version int [start]
 json Hello.min_compatible int [start]
 json Hello.build string [start]
@@ -576,6 +579,7 @@ json Cursor.stderr int64 [detach]
 json SignalMsg.signal string [start]
 json Started.pid int [start]
 json Started.id string [detach]
+json Started.ack_exit bool [exit_ack]
 json Exit.code int [start]
 json Exit.signal string [start]
 json Exit.deadline bool [start]
@@ -662,6 +666,7 @@ const StageWriteFile = "write_file" [stage]
 const TimestampHeader = "X-Grain-Hostd-Timestamp" [renew]
 const TokenHeader = "X-Grain-Hostd-Token" [start]
 const frameExit = 'X' [start]
+const frameExitAck = 'A' [exit_ack]
 const frameHello = 'H' [start]
 const frameListening = 'N' [listen]
 const frameOK = 'K' [detach]

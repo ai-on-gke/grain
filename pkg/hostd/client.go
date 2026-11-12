@@ -339,6 +339,9 @@ var ErrNoExit = errors.New("hostd: the connection closed before the process's ex
 // so hostd enforces it even if this side goes away.
 func (c Client) Run(ctx context.Context, req Request, stdin io.Reader, stdout, stderr io.Writer) (Exit, error) {
 	req.Op = OpStart
+	// Ignored by a hostd without FeatureExitAck, which then says nothing
+	// of it in Started: asking is safe whatever hostd this is.
+	req.AckExit = req.Detach
 	if dl, ok := ctx.Deadline(); ok && (req.Deadline.IsZero() || dl.Before(req.Deadline)) {
 		req.Deadline = dl
 	}
@@ -385,7 +388,7 @@ func (c Client) Run(ctx context.Context, req Request, stdin io.Reader, stdout, s
 		}
 		_ = send(frameStdinClose, nil)
 	}()
-	exit, _, err := c.stream(ctx, conn, send, req.Detach, Cursor{}, stdout, stderr)
+	exit, _, err := c.stream(ctx, conn, send, req.Detach, st.AckExit, Cursor{}, stdout, stderr)
 	return exit, err
 }
 
@@ -406,7 +409,7 @@ func (c Client) Attach(ctx context.Context, id string, cur Cursor, stdout, stder
 		defer sendMu.Unlock()
 		return writeFrame(conn, typ, p)
 	}
-	b, _ := json.Marshal(Request{Op: OpAttach, ID: id, Cursor: cur})
+	b, _ := json.Marshal(Request{Op: OpAttach, ID: id, Cursor: cur, AckExit: true})
 	if err := send(frameRequest, b); err != nil {
 		return Exit{Code: -1}, cur, err
 	}
@@ -421,12 +424,16 @@ func (c Client) Attach(ctx context.Context, id string, cur Cursor, stdout, stder
 	default:
 		return Exit{Code: -1}, cur, fmt.Errorf("hostd: unexpected frame %q", typ)
 	}
-	return c.stream(ctx, conn, send, true, cur, stdout, stderr)
+	var st Started
+	_ = json.Unmarshal(payload, &st)
+	return c.stream(ctx, conn, send, true, st.AckExit, cur, stdout, stderr)
 }
 
 // stream reads a started or attached process's frames until its exit,
-// advancing cur by what it writes to stdout and stderr.
-func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byte) error, detachable bool,
+// advancing cur by what it writes to stdout and stderr. With ack (hostd's
+// Started.AckExit) the exit is acknowledged once read, which is what lets
+// hostd drop the process's spool.
+func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byte) error, detachable, ack bool,
 	cur Cursor, stdout, stderr io.Writer) (Exit, Cursor, error) {
 	finished := make(chan struct{})
 	defer close(finished)
@@ -478,6 +485,11 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 			var e Exit
 			if err := json.Unmarshal(payload, &e); err != nil {
 				return Exit{Code: -1}, cur, err
+			}
+			if ack {
+				// Unanswered, hostd keeps the spool for the next attach or
+				// ExitedRetention; the exit is had either way.
+				_ = send(frameExitAck, nil)
 			}
 			return e, cur, nil
 		}

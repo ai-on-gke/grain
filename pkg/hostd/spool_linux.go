@@ -57,8 +57,12 @@ import (
 // A connection attached to the process -- the one that started it, or a
 // later OpAttach -- is sent what the spool holds past its cursor as it
 // arrives, then the exit. Once the exit has gone to a daemon, the spool
-// is removed: the daemon has all of it. A spool whose exit no daemon came
-// back for is kept for ExitedRetention, across a hostd restart too.
+// is removed: the daemon has all of it. A daemon that asks to
+// (Request.AckExit, FeatureExitAck) acknowledges the exit, and the spool
+// is removed only then: an Exit frame written into a connection that
+// drops before the daemon reads it is not an exit the daemon has. A
+// spool whose exit no daemon came back for, or acknowledged, is kept for
+// ExitedRetention, across a hostd restart too.
 const (
 	spoolProcess = "process.json"
 	spoolStdout  = "stdout"
@@ -272,7 +276,7 @@ func (s *Server) startDetached(_ context.Context, conn net.Conn, req *Request, s
 	s.logf("hostd: started %s %q detached as pid %d (id %s, run %s, deadline %s, spool %s)",
 		req.Kind, req.Name, pid, id, req.Run, deadline.Format(time.RFC3339), dir)
 	go s.watchDetached(p)
-	s.attach(conn, p, Cursor{}, stdinW)
+	s.attach(conn, p, Cursor{}, stdinW, req.AckExit)
 }
 
 func (s *Server) watchDetached(p *proc) {
@@ -437,14 +441,18 @@ func writeExitFile(dir string, e Exit) error {
 }
 
 // attach streams p's spool to conn from cur until p has ended, then its
-// exit, after which p is released: the daemon has all of it. stdin, when
+// exit, after which p is released: the daemon has all of it. With
+// ackExit, p is released only once the daemon acknowledges the exit
+// (frameExitAck); the connection ending first leaves the final spool
+// for the next attach, as it would have been had it ended a moment
+// sooner. stdin, when
 // not nil, is the process's, fed from the connection's stdin frames and
 // closed when the connection ends. Signals act on the process's group.
 //
 // The connection going away, a newer attach superseding this one, or
 // hostd detaching streams for a handover ends the stream and leaves the
 // process running.
-func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser) {
+func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser, ackExit bool) {
 	s.mu.Lock()
 	p.attachGen++
 	gen := p.attachGen
@@ -458,7 +466,7 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 		}
 		s.mu.Unlock()
 	}()
-	if err := writeJSON(conn, frameStarted, Started{PID: info.PID, ID: info.ID}); err != nil {
+	if err := writeJSON(conn, frameStarted, Started{PID: info.PID, ID: info.ID, AckExit: ackExit}); err != nil {
 		if stdin != nil {
 			stdin.Close()
 			s.mu.Lock()
@@ -469,9 +477,10 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 		return
 	}
 	gone := make(chan struct{})
+	acked := make(chan struct{})
 	go func() {
 		defer close(gone)
-		s.control(conn, p, stdin)
+		s.control(conn, p, stdin, acked)
 	}()
 	pump := func(name string, typ byte, at *int64) error {
 		f, err := os.Open(filepath.Join(info.Spool, name))
@@ -528,7 +537,24 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			if err := writeJSON(conn, frameExit, exit); err != nil {
 				return
 			}
-			s.release(info.ID, "its exit was read")
+			if !ackExit {
+				s.release(info.ID, "its exit was read")
+				return
+			}
+			// Written is not read: the frame may sit in a socket buffer or
+			// a mux stream that drops with the daemon or its session.
+			timer := time.NewTimer(exitAckWait)
+			defer timer.Stop()
+			select {
+			case <-acked:
+				s.release(info.ID, "the daemon acknowledged its exit")
+			case <-gone:
+				s.logf("hostd: the daemon went away from %s %q (id %s) before acknowledging its exit; its spool is kept for the next attach",
+					info.Kind, info.Name, info.ID)
+			case <-timer.C:
+				s.logf("hostd: the daemon did not acknowledge the exit of %s %q (id %s) within %s; its spool is kept for the next attach",
+					info.Kind, info.Name, info.ID, exitAckWait)
+			}
 			return
 		}
 		if s.handedOverNow() {
@@ -554,10 +580,16 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 	}
 }
 
-// control reads a detached process's connection: stdin, its close, and
-// signals, until the connection ends. stdin is closed then -- input that
-// arrives while no daemon is attached is not kept.
-func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
+// exitAckWait bounds how long attach waits for a daemon that asked to
+// acknowledge an exit (Request.AckExit) to do so, with the connection
+// still open, before leaving the spool for the next attach.
+var exitAckWait = 30 * time.Second
+
+// control reads a detached process's connection: stdin, its close,
+// signals, and the acknowledgement of its exit (closing acked), until the
+// connection ends. stdin is closed then -- input that arrives while no
+// daemon is attached is not kept.
+func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser, acked chan<- struct{}) {
 	s.mu.Lock()
 	info := p.info
 	s.mu.Unlock()
@@ -590,6 +622,7 @@ func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
 	}
 	defer closeStdin()
 	open := stdin != nil
+	var ackOnce sync.Once
 	for {
 		typ, payload, err := readFrame(conn)
 		if err != nil {
@@ -610,6 +643,8 @@ func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
 		case frameStdinClose:
 			open = false
 			closeStdin()
+		case frameExitAck:
+			ackOnce.Do(func() { close(acked) })
 		case frameSignal:
 			var m SignalMsg
 			if json.Unmarshal(payload, &m) != nil {

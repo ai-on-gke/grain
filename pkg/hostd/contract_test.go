@@ -94,6 +94,7 @@ var contractFields = map[string]Feature{
 	"Request.id": FeatureDetach, "Request.cursor": FeatureDetach,
 	"Request.idle": FeatureDrain, "Request.handover": FeatureHandover, "Request.inode": FeatureSocketOwner,
 	"Request.stage": FeatureStage, "Request.renew": FeatureRenew,
+	"Request.ack_exit": FeatureExitAck,
 
 	"Hello.protocol_version": FeatureStart, "Hello.min_compatible": FeatureStart, "Hello.build": FeatureStart,
 	"Hello.draining": FeatureDrain, "Hello.cutover": FeatureDrain,
@@ -113,6 +114,8 @@ var contractFields = map[string]Feature{
 	"Cursor.stdout": FeatureDetach, "Cursor.stderr": FeatureDetach,
 
 	"SignalMsg.signal": FeatureStart, "Started.pid": FeatureStart, "Started.id": FeatureDetach,
+	"Started.ack_exit": FeatureExitAck,
+
 	"Exit.code": FeatureStart, "Exit.signal": FeatureStart, "Exit.deadline": FeatureStart,
 	"Exit.draining":   FeatureHandover,
 	"Exit.wait_delay": FeatureStart, "Exit.error": FeatureStart, "Exit.finished_at": FeatureStart,
@@ -158,6 +161,7 @@ var contractConsts = map[string]Feature{
 	"frameProcesses": FeatureDetach, "frameOK": FeatureDetach,
 	"frameSocketOwner": FeatureSocketOwner, "frameStaged": FeatureStage,
 	"frameListening": FeatureListen, "frameRenewed": FeatureRenew,
+	"frameExitAck": FeatureExitAck,
 
 	"StageMkdirTemp": FeatureStage, "StageMkdirAll": FeatureStage, "StageWriteFile": FeatureStage,
 	"StageCreateTemp": FeatureStage, "StageSymlink": FeatureStage, "StageReadTail": FeatureStage,
