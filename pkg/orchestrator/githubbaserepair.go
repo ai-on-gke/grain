@@ -43,8 +43,9 @@ import (
 // run's link and its commit, and a nightly-green goal (on_met close) on
 // that workflow: the next fully green run pushed to the default branch
 // closes it (meetGitHubBaseGoals; the goal's own reading of job rows
-// cannot tell those from a fork's pull request opened from its main). While it is open every further red run is appended to it as a
-// comment, never filed twice, and its priority kept.
+// cannot tell those from a fork's pull request opened from its main).
+// While it is open every further red run is appended to it as a comment,
+// never filed twice, and its priority kept.
 // reconcileGitHubBaseRepairs raises pipeline.base-red-unattended when
 // nobody is working on it, and pipeline.base-no-verdict when the gating
 // workflows have run on the default branch but every run was cancelled
