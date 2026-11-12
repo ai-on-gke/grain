@@ -323,10 +323,13 @@ func (s *Server) reapDetached(info Process, ws syscall.WaitStatus, reaped bool, 
 		exit.Error = err.Error()
 	}
 	switch {
-	case killed == killDraining:
+	case killed == killDraining || killed == killStopping:
 		exit.Draining = true
 	case killed == killDeadline:
 		exit.Deadline = true
+	}
+	if killed == killStopping && exit.Error == "" {
+		exit.Error = stoppingError
 	}
 	exit.FinishedAt = time.Now().UTC()
 	if info.PID > 1 {

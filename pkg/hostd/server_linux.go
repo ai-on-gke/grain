@@ -174,8 +174,16 @@ const (
 	killNone killKind = iota
 	killCanceled
 	killDeadline
+	// killDraining is a drain reaching drain_cap.
 	killDraining
+	// killStopping is hostd itself stopping: SIGTERM, systemd's stop or
+	// restart, or a handover whose exec failed.
+	killStopping
 )
+
+// stoppingError is Exit.Error for a process killStopping ended, so its
+// message says hostd stopped rather than drained for an upgrade.
+const stoppingError = "stopped because the host agent stopped or restarted"
 
 // proc is one process hostd started.
 type proc struct {
@@ -279,10 +287,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	// hostd stopping -- systemd's stop or restart, SIGTERM, a drain's end
 	// -- kills what still runs for the host's reasons, not the run's: its
 	// exit says Draining, as loadSpools says of a run a crash left without
-	// one, so the daemon re-queues the run rather than failing it.
+	// one, so the daemon re-queues the run rather than failing it, and its
+	// Error says hostd stopped rather than drained (stoppingError).
 	stopOnCancel := context.AfterFunc(ctx, func() {
 		if !s.handedOverNow() {
-			s.cancelRunning(killDraining)
+			s.cancelRunning(killStopping)
 		}
 	})
 	defer stopOnCancel()
@@ -351,14 +360,14 @@ func (s *Server) Serve(ctx context.Context) error {
 			if err := s.Reexec(); err != nil {
 				s.logf("hostd: exec onto the new build failed (%v); stopping so systemd restarts it", err)
 				s.rewatchHandedOver()
-				s.cancelRunning(killDraining)
+				s.cancelRunning(killStopping)
 				s.waitRunningDone()
 				return err
 			}
 		}
 		return nil
 	}
-	s.cancelRunning(killDraining)
+	s.cancelRunning(killStopping)
 	s.waitRunningDone()
 	return nil
 }
@@ -1139,7 +1148,7 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	// the run's (Serve's stopOnCancel).
 	if killed == killNone && ctx.Err() != nil && !errors.Is(runCtx.Err(), context.DeadlineExceeded) &&
 		cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
-		killed = killDraining
+		killed = killStopping
 	}
 	exit := s.reap(cmd, err, runCtx, req, killed)
 	sendJSON(frameExit, exit)
@@ -1162,13 +1171,15 @@ func (s *Server) reap(cmd *exec.Cmd, err error, runCtx context.Context, req *Req
 		}
 	}
 	switch {
-	case killed == killDraining:
+	case killed == killDraining || killed == killStopping:
 		exit.Draining = true
 	case killed == killDeadline || (killed == killNone && errors.Is(runCtx.Err(), context.DeadlineExceeded)):
 		exit.Deadline = true
 	}
 	if err != nil && cmd.ProcessState == nil {
 		exit.Error = err.Error()
+	} else if killed == killStopping {
+		exit.Error = stoppingError
 	}
 	exit.FinishedAt = time.Now().UTC()
 	// Whatever the CLI left in its group goes with it.

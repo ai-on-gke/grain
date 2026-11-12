@@ -349,6 +349,10 @@ func TestAStoppingHostdEndsADetachedRunAsDraining(t *testing.T) {
 	if !p.Exited || p.Exit == nil || !p.Exit.Draining {
 		t.Fatalf("a run hostd's own stop killed, as the next hostd lists it = %+v (exit %+v), want it ended Draining", p, p.Exit)
 	}
+	// Its message says hostd stopped, not that it drained for an upgrade.
+	if got := p.Exit.String(); got != stoppingError {
+		t.Errorf("Exit.String() of a run hostd's own stop killed = %q, want %q", got, stoppingError)
+	}
 }
 
 // The same for a protocol-1 start, whose exit goes down the connection
@@ -372,6 +376,9 @@ func TestAStoppingHostdEndsAnAttachedStartAsDraining(t *testing.T) {
 	r := <-done
 	if r.err != nil || !r.exit.Draining {
 		t.Fatalf("a start hostd's own stop killed = %+v, %v; want it ended Draining", r.exit, r.err)
+	}
+	if got := r.exit.String(); got != stoppingError {
+		t.Errorf("Exit.String() of a start hostd's own stop killed = %q, want %q", got, stoppingError)
 	}
 }
 
