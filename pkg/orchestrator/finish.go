@@ -2184,6 +2184,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			return fmt.Errorf("orchestrator: resolving review template for proposed task %q: %w", title, err)
 		}
 		body += reviewTemplateNote
+		// The release this proposal is filed against (model.LinkFoundIn).
+		// A value that is no release version is dropped with a note
+		// rather than refusing the proposal, the way network_access is.
+		statedFoundIn, _ := p["found_in"].(string)
+		foundIn, foundInErr := model.NormalizeFoundIn(statedFoundIn)
+		if foundInErr != nil {
+			body += fmt.Sprintf("\n\n_grain could not record the release this proposal is found in (%q): want a tag such as v2.5.0 or v2.5.0-rc.2._", strings.TrimSpace(statedFoundIn))
+		}
 		proposal := model.Task{
 			ID:     id,
 			Intent: model.IntentImplement,
@@ -2228,6 +2236,8 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			CreatedAt:        &now,
 			OrderKey:         orderKey,
 		}
+		model.SetFoundIn(&proposal, foundIn)
+		model.ApplyDerivedFoundIn(&proposal)
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
