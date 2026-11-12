@@ -7,7 +7,7 @@
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(520px, 100vw);
+  width: min(740px, 94vw);
   display: flex;
   flex-direction: column;
   background: var(--md-sys-color-surface);
@@ -203,13 +203,22 @@
 
 .sheet-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
 
+.sheet-actions > button {
+  white-space: nowrap;
+}
+
+.sheet-actions > .btn-text:first-child {
+  margin-right: auto;
+}
+
 .side-sheet.has-shaper {
-  width: min(1040px, 96vw);
+  width: min(1200px, 96vw);
 }
 
 .sheet-split {
@@ -225,7 +234,7 @@
 }
 
 .sheet-split g-director-shaper {
-  width: clamp(340px, 42%, 460px);
+  width: clamp(340px, 38%, 460px);
   flex: none;
   min-height: 0;
   display: flex;
@@ -249,5 +258,8 @@
     width: 100vw;
     height: 100dvh;
     border-radius: 0;
+  }
+  .sheet-actions {
+    flex-wrap: wrap;
   }
 }

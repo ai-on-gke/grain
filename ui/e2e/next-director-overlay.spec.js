@@ -66,12 +66,33 @@ test("M16 Director overlay: top-bar toggle, d/Alt+D/Escape, coplanar selection c
   await page.keyboard.press("Alt+d");
   await expect(drawer).toHaveCount(0);
 
-  // Coplanar Shape with Director inside New Task sheet.
+  // Coplanar Shape with Director inside New Task sheet; wider sheet + single-row footer buttons.
   await page.getByTestId("rail-new-task").click();
   const sheet = page.getByTestId("new-task-sheet");
   await expect(sheet).toBeVisible();
+  const sheetLayout = await sheet.evaluate((el) => {
+    const btns = [...el.querySelectorAll(".sheet-actions > button")].filter(
+      (b) => b.getBoundingClientRect().height > 0,
+    );
+    const tops = btns.map((b) => Math.round(b.getBoundingClientRect().top));
+    return {
+      width: Math.round(el.getBoundingClientRect().width),
+      rowSpread: tops.length ? Math.max(...tops) - Math.min(...tops) : 0,
+      count: btns.length,
+    };
+  });
+  expect(sheetLayout.width).toBeGreaterThanOrEqual(700);
+  expect(sheetLayout.count).toBeGreaterThanOrEqual(3);
+  expect(sheetLayout.rowSpread).toBeLessThanOrEqual(4);
   await page.getByTestId("shape-director-btn").click();
   await expect(sheet.getByTestId("director-shaper-pane")).toBeVisible();
+  const shaperRowSpread = await sheet.evaluate((el) => {
+    const tops = [...el.querySelectorAll(".sheet-actions > button")]
+      .filter((b) => b.getBoundingClientRect().height > 0)
+      .map((b) => Math.round(b.getBoundingClientRect().top));
+    return tops.length ? Math.max(...tops) - Math.min(...tops) : 0;
+  });
+  expect(shaperRowSpread).toBeLessThanOrEqual(4);
   await page.getByTestId("new-task-close").click();
   await expect(sheet).toHaveCount(0);
 
