@@ -807,6 +807,7 @@ func (s *Server) routes() {
 	s.route("GET /api/ci/faults", s.handleListCIFaults)
 	s.route("GET /api/ci/runs/{id}", s.handleGetCIRun)
 	s.route("DELETE /api/ci/runs/{id}", s.handleCancelCIRun)
+	s.route("POST /api/ci/runs/{id}/rerun", s.handleRerunCIRun)
 	s.route("GET /api/ci/runs/{id}/log", s.handleGetCIRunLog)
 	s.route("GET /api/ci/runs/{id}/artifacts", s.handleListCIRunArtifacts)
 	s.route("GET /api/ci/runs/{id}/artifacts/{job}/{name}", s.handleGetCIArtifact)

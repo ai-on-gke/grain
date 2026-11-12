@@ -54,6 +54,14 @@ type fakeCLIActions struct {
 	githubChecks          bool
 	githubWaitResult      mcp.GitHubCheckWaitResult
 	githubWaits           int
+	githubReruns          []gitproxy.CIStartRequest
+}
+
+func (f *fakeCLIActions) RerunGitHubChecks(_ context.Context, _ string, req gitproxy.CIStartRequest) (gitproxy.CLIActionResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.githubReruns = append(f.githubReruns, req)
+	return gitproxy.CLIActionResult{Text: "Re-ran GitHub Actions on bwsalmon/grain at abcdef012345."}, nil
 }
 
 func (f *fakeCLIActions) UsesGitHubChecks(_ context.Context, _ string) (bool, error) {
@@ -1072,5 +1080,56 @@ func TestCIWaitPollsGitHubChecksWhenRepoUsesGitHubCIMode(t *testing.T) {
 	}
 	if resp.Status != "passed" || resp.RunID != "github" || resp.Commit != "abcdef0123456789" {
 		t.Fatalf("response = %+v, want status=passed run_id=github commit=abcdef0123456789", resp)
+	}
+}
+
+// On a ci_mode: github repository grain ci retrigger and run-job re-run
+// the pull request's own Actions runs (CLIGitHubRerunActions) rather than
+// starting grain CI -- and need no grain-ci grant to, since there is no
+// grain CI run in it. Neither request names a repository or a run.
+func TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode(t *testing.T) {
+	gitproxy.LogToTest(t)
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-gh": "tok-gh"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, githubChecks: true}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-gh": {TaskID: "7", RunID: "run-a", TaskRepo: "bwsalmon/grain", TaskBranch: "grain/task-7", TaskBase: "main",
+				AllowedRepos: map[string]bool{"bwsalmon/grain": true}},
+		}},
+		CLIActions: actions,
+	}
+	h := gitproxy.NewHandler(proxy)
+
+	rec := send(h, http.MethodPost, "tok-gh", "/cli/ci/retrigger", `{}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Re-ran GitHub Actions") {
+		t.Fatalf("POST /cli/ci/retrigger: %d %s", rec.Code, rec.Body)
+	}
+	rec = send(h, http.MethodPost, "tok-gh", "/cli/ci/run-job", `{"job":"go"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /cli/ci/run-job: %d %s", rec.Code, rec.Body)
+	}
+	var resp gitproxy.CLIWaitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != "running" || resp.ResumeRunID != model.ResumeOnMyBranch || !strings.Contains(resp.Report, "Re-ran") {
+		t.Fatalf("run-job answer = %+v, want a running wait to resume on my-branch with the re-run's report", resp)
+	}
+	if len(actions.started) != 0 {
+		t.Fatalf("StartTaskCI called %d times on a ci_mode: github repo, want 0", len(actions.started))
+	}
+	if len(actions.githubReruns) != 2 || !actions.githubReruns[0].FailedOnly ||
+		len(actions.githubReruns[1].Jobs) != 1 || actions.githubReruns[1].Jobs[0] != "go" {
+		t.Fatalf("re-runs asked for = %+v, want the failed jobs, then job go", actions.githubReruns)
 	}
 }
