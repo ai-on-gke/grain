@@ -362,6 +362,10 @@ func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTag
 		if comp.Target == nil || !comp.Target.Same(repo) {
 			continue
 		}
+		if err := deps.Store.RefuseCompositionSandboxAboveMax(ctx, comp); err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: release-notes task for %s %s: %w", repo, version, err))
+			continue
+		}
 		comp = filterReleaseNotesDefaultGrants(comp, tmpl, cat)
 		if !releaseNotesCompositionMayAutoApprove(comp, tmpl, decl, cat, repo, targets) {
 			comp.Approved = false

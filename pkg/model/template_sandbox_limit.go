@@ -55,3 +55,10 @@ func refuseCompositionSandboxAboveMax(ctx context.Context, q querier, comp Compo
 	}
 	return nil
 }
+
+// RefuseCompositionSandboxAboveMax is refuseCompositionSandboxAboveMax for
+// a caller outside the store that files a composition it got from
+// TemplateComposition straight in, as the release-notes filer does.
+func (s *Store) RefuseCompositionSandboxAboveMax(ctx context.Context, comp Composition) error {
+	return refuseCompositionSandboxAboveMax(ctx, s.db, comp)
+}
