@@ -170,3 +170,15 @@ merges it. The description links each image by that commit's sha, so the
 images are visible to the same people who can read the pull request. Only
 PNG, JPEG, GIF and WebP files are published; other attachments stay in
 grain's conversation. A description a human has rewritten is left alone.
+
+## The new Angular UI (`/next/`)
+
+All `/next/` routes (`ui-ng/src/app/app.routes.ts`) are covered by one Playwright + axe suite over `grain demo`:
+
+```sh
+npm --prefix ui run test:e2e:next
+```
+
+Set `GRAIN_UI_SHOTS=/tmp/next-shots` to also save desktop (`1440×900`) and phone (`390×844`) light and dark PNGs for every `/next/` destination. `make ui-screenshots PAGES=/next/inbox,/next/tasks OUT=screenshots/after` works for `/next/` routes too when producing `contact-sheet.png`.
+
+For `ui-ng/` design rules, component reuse, and the three-review mandate, read [`design/design/ui-design-book.design.md`](../design/design/ui-design-book.design.md).

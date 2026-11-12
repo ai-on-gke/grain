@@ -79,6 +79,22 @@ func reconcileWake(ctx context.Context, deps Deps, now time.Time) error {
 		log.Printf("orchestrator: task %s has reached its wake time and is picked back up", id)
 	}
 
+	// A resume_later that waits on a message is released as the message
+	// is written (model.Store.WakeOnMessage), but not every post reaches
+	// that call -- one written while the run was still ending, or relayed
+	// from a pull request -- so the posts already there are read too.
+	posted, err := deps.Store.DueMessageResumes(ctx)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("orchestrator: listing tasks posted to since their resume_later: %w", err))
+	}
+	for _, id := range posted {
+		if err := deps.Store.SetDeferred(ctx, id, nil, nil, now); err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: waking task %s on the message it waited for: %w", id, err))
+			continue
+		}
+		log.Printf("orchestrator: task %s has been posted to since its resume_later and is picked back up", id)
+	}
+
 	// A resume_later that waits on CI is a deferral too, released when its
 	// gating CI verdict arrives (GitHub Actions / check runs on ci_mode:
 	// github, grain CI on ci_mode: grain) -- success, failure or

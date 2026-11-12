@@ -722,6 +722,10 @@ const suspendedCLINote = "\n\nYour tools may have changed since this session las
 func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	history History, setup *SetupResult, newComments []model.Comment, extraSections ...string) string {
 	branch := task.BranchName()
+	// The current brief stands in for the description here as in
+	// BuildPrompt: a durable task resumes its session on most runs, so
+	// leaving it out would brief those runs on the original description.
+	task, _ = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if line := model.ChangeTargetSuspendedPromptLine(task); line != "" {
 		prompt += fmt.Sprintf("Task: %s (task %s). %s", task.Title, task.ID, line)
@@ -780,8 +784,18 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
+	// The compaction note says the handover is below, so it goes in only
+	// with the comments that carry it; a session that already read both
+	// needs neither again.
+	if summarised := summarisedSection(history); summarised != "" &&
+		slices.ContainsFunc(newComments, func(c model.Comment) bool { return c.Handover }) {
+		prompt += "\n\n" + strings.TrimRight(summarised, "\n")
+	}
 	if thread := commentThreadSection(newComments); thread != "" {
 		prompt += "\n\n" + strings.TrimRight(thread, "\n")
+	}
+	if upkeep := contextUpkeepSection(task, history, len(prompt)); upkeep != "" {
+		prompt += "\n\n" + strings.TrimRight(upkeep, "\n")
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
@@ -2661,8 +2675,10 @@ func dependenciesSection(h History) string {
 }
 
 // DependenciesOf is the tasks task depends on (model.LinkDependsOn), as
-// they stand now, leaving out any already in resumed (a park's own
-// depends-on links, which parkedResumeSection describes). Advisory, like
+// they stand now and as task may be told them (model.Store.WaitTargetFor:
+// a dependency in a repository task cannot read keeps its closing note to
+// itself), leaving out any already in resumed (a park's own depends-on
+// links, which parkedResumeSection describes). Advisory, like
 // ResumedFrom: a target grain cannot read is left out rather than
 // failing the dispatch.
 func DependenciesOf(ctx context.Context, store *model.Store, task model.Task, resumed []model.WaitTarget) []model.WaitTarget {
@@ -2676,7 +2692,7 @@ func DependenciesOf(ctx context.Context, store *model.Store, task model.Task, re
 			continue
 		}
 		told[l.Target] = true
-		target, err := store.WaitTargetOf(ctx, l.Target)
+		target, err := store.WaitTargetFor(ctx, task, l.Target, time.Now())
 		if err != nil || target == nil {
 			continue
 		}
@@ -3426,7 +3442,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		CommittedContext: prepared.Context,
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
-	history.Resumed = ResumedFrom(ctx, store, previous)
+	history.Resumed = ResumedFrom(ctx, store, task, previous)
 	history.Dependencies = DependenciesOf(ctx, store, task, history.Resumed)
 	loadTaskContext(ctx, store, task, &history)
 	history.AutoCompactBytes = cfg.autoCompactBytes()
@@ -5594,10 +5610,11 @@ func ResumedUntil(previous []model.Run) time.Time {
 	return until
 }
 
-// ResumedFrom is the tasks the last of previous parked on, as they stand
-// now, or nil when it did not end parked. Advisory, like BaseIncident: a
+// ResumedFrom is the tasks the last of task's previous runs parked on, as
+// they stand now and as task may be told them (model.Store.WaitTargetFor),
+// or nil when it did not end parked. Advisory, like BaseIncident: a
 // target grain cannot read is left out rather than failing the dispatch.
-func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) []model.WaitTarget {
+func ResumedFrom(ctx context.Context, store *model.Store, task model.Task, previous []model.Run) []model.WaitTarget {
 	if len(previous) == 0 {
 		return nil
 	}
@@ -5607,7 +5624,7 @@ func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) 
 	}
 	var out []model.WaitTarget
 	for _, id := range model.ParkedTargets(last.Detail) {
-		target, err := store.WaitTargetOf(ctx, id)
+		target, err := store.WaitTargetFor(ctx, task, id, time.Now())
 		if err != nil || target == nil {
 			continue
 		}

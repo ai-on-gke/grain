@@ -1909,8 +1909,11 @@ jobs:
   # cannot qualify an RC. A scheduled run idle-gate turned off skips this
   # job too, so the no-op run concludes green and grain files no Stage 1
   # repair for it. A dispatch naming `jobs` (a flake retry) is
-  # judged on the jobs it named. The KVM and real-kubernetes jobs are not
-  # required yet and are left out.
+  # judged on the jobs it named. The KVM and real-kubernetes jobs
+  # (kvm-sandboxes, kvm-route-stress, real-kubernetes) are required like
+  # the rest; scripts/candidate-gate.sh's CHECK_QUALIFICATION_JOBS lists
+  # the same jobs, and tests/deploy/nightly_rc_qualification_test.go
+  # keeps the two in step.
   stage-1:
     name: stage 1 qualification verdict
     if: always() && needs.idle-gate.outputs.run == 'true'

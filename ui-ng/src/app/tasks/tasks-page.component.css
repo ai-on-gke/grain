@@ -1,0 +1,296 @@
+/* Tasks and Backlog page layout (spec D-6, D-28). */
+
+g-tasks-page {
+  display: contents;
+}
+
+.tasks-header {
+  padding-bottom: 0;
+}
+
+.tasks-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 72px;
+}
+
+.list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 38px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 13px;
+}
+
+.toolbar-title {
+  font-weight: 500;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.toolbar-rule {
+  font-size: 12px;
+}
+
+/* The Backlog's approval intake: one amber line on the toolbar, constant
+   height, gone at zero. Not .gate-card -- Task Detail's gates bar owns that
+   name globally. */
+.intake-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px 0 10px;
+  border: 1px solid
+    color-mix(in srgb, var(--md-sys-color-warning) 35%, transparent);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.list-toolbar .intake-card {
+  order: 10;
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  max-width: 100%;
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+
+.intake-card:hover {
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-warning-container) 85%,
+    var(--md-sys-color-warning)
+  );
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+}
+
+.intake-card:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.intake-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--md-sys-color-warning);
+  flex-shrink: 0;
+}
+
+.intake-card strong {
+  font-weight: 600;
+}
+
+.intake-sub {
+  opacity: 0.85;
+}
+
+.intake-cta {
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+@media (max-width: 1279.95px) {
+  .intake-sub {
+    display: none;
+  }
+}
+
+.list-hint {
+  margin: 0;
+  padding: 6px 20px;
+  font-size: 12px;
+}
+
+.task-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 6px 20px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 13px;
+}
+
+.task-row:hover {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.task-row.is-picked {
+  background: var(--md-sys-color-secondary-container);
+  outline: 2px dashed var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.task-row.drop-before {
+  box-shadow: inset 0 3px 0 var(--md-sys-color-primary);
+}
+
+.row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.row-sub.activity {
+  color: var(--md-sys-color-primary);
+}
+
+.row-pos {
+  width: 24px;
+  text-align: right;
+  font-size: 12px;
+}
+
+.row-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.waits {
+  margin-left: 6px;
+  height: 20px;
+  font-size: 11px;
+}
+
+.drag-handle {
+  width: 28px;
+  height: 32px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 16px;
+  cursor: grab;
+}
+
+.drag-handle[aria-pressed="true"] {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.drag-handle:focus-visible,
+.row-menu-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.row-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.row-menu-wrap .pop-menu,
+.boards-menu.pop-menu {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 180px;
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container);
+  box-shadow: var(--md-sys-elevation-dialog);
+}
+
+.row-menu-wrap .pop-menu button,
+.boards-menu.pop-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-menu-wrap .pop-menu button:hover,
+.row-menu-wrap .pop-menu button[aria-current="true"],
+.boards-menu.pop-menu button:hover,
+.boards-menu.pop-menu button[aria-current="true"] {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.row-menu-wrap .pop-menu button:focus-visible,
+.boards-menu.pop-menu button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.pickup-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 20px;
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  font-size: 13px;
+}
+
+.pickup-bar .btn-text {
+  color: var(--md-sys-color-inverse-primary);
+}
+
+.load-more {
+  margin: 12px 20px;
+}
+
+@media (max-width: 599.95px) {
+  .task-row {
+    gap: 6px;
+    padding: 6px 12px;
+  }
+  .task-row .status-pill {
+    max-width: 124px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .approval-row {
+    flex-wrap: wrap;
+  }
+  .approval-row .row-main {
+    flex-basis: calc(100% - 40px);
+  }
+  .approval-row .row-actions {
+    margin-left: auto;
+  }
+  .row-pos,
+  .task-row .row-age,
+  .toolbar-rule {
+    display: none;
+  }
+  .list-toolbar {
+    padding: 8px 12px;
+  }
+}

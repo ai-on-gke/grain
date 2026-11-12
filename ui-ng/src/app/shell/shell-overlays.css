@@ -1,0 +1,359 @@
+/* Lazy shell overlays (Help/Glossary/Shortcuts, Account popover, and
+ * Customize Navigation). Attached via styleUrl + ViewEncapsulation.None
+ * on @defer components so zero bytes load in the initial shell bundle. */
+
+.shell-modal {
+  position: fixed;
+  z-index: 95;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--md-sys-shape-corner-large);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--md-sys-elevation-dialog);
+  overflow: hidden;
+}
+
+:root[data-theme="dark"] .shell-modal {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.shell-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.shell-modal-title-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.shell-modal-title {
+  margin: 0;
+  font-family: var(--grain-font-display);
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 500;
+}
+
+.shell-modal-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.shell-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.help-tabs {
+  align-self: flex-start;
+  flex: none;
+}
+
+.help-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.help-summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.help-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.help-glossary {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) 1fr;
+  gap: 10px 16px;
+  font-size: 13px;
+  line-height: 19px;
+}
+
+.help-glossary dt {
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface);
+}
+
+.help-glossary dd {
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.shortcut-switch-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 13px;
+}
+
+.shortcut-row:last-child {
+  border-bottom: none;
+}
+
+.kbd-key {
+  padding: 2px 8px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container);
+  font-family: var(--grain-font-mono);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* Customize navigation rows */
+.nav-custom-list {
+  flex: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  overflow: hidden;
+}
+
+.nav-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+}
+
+:root[data-theme="dark"] .nav-custom-row {
+  background: var(--md-sys-color-surface-container);
+}
+
+.nav-custom-row:last-child {
+  border-bottom: none;
+}
+
+.nav-custom-row.is-hidden,
+:root[data-theme="dark"] .nav-custom-row.is-hidden {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.nav-custom-row.is-hidden .nav-custom-name {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.nav-custom-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-custom-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.nav-custom-desc {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-custom-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav-custom-move .icon-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.nav-custom-lock {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Account popover */
+.account-popover {
+  position: fixed;
+  top: calc(var(--grain-topbar-height) - 4px);
+  right: 16px;
+  z-index: 85;
+  width: min(340px, calc(100vw - 24px));
+  border-radius: var(--md-sys-shape-corner-large);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--md-sys-elevation-dialog);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:root[data-theme="dark"] .account-popover {
+  background: var(--md-sys-color-surface-container);
+}
+
+.account-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.account-avatar-lg {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+  display: inline-grid;
+  place-items: center;
+  font: 500 15px/1 var(--grain-font-display);
+  flex: none;
+}
+
+.account-identity {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-id {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.account-role-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.account-actions {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-menu-btn {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font: 500 13px/18px var(--grain-font-body);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-menu-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.account-menu-btn.is-danger {
+  color: var(--md-sys-color-error);
+}
+
+@media (max-width: 599.95px) {
+  .help-glossary {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .help-glossary dd {
+    margin-bottom: 8px;
+  }
+}
