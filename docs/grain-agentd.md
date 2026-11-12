@@ -56,7 +56,7 @@ With `-join`:
 3. files a join request naming you and the host, and waits for the deployment owner to click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
 4. writes the issued 30-day key-bound credential to `~/.config/grain/agentd-token` (`0600`), installs `~/.config/grain/agentd.yaml` and `~/.config/systemd/user/grain-agentd.service`, and starts `grain-agentd`, which signs every `/api/hostd/connect` upgrade with its Ed25519 key and renews its 30-day credential silently while connected.
 
-The unit restarts `grain-agentd` whenever it exits (`Restart=always`): a drain ends with a clean exit once the last agent CLI finishes, so the binary `~/.local/bin/grain-agentd` names takes over. A unit written by an older `grain-agentd install` said `Restart=on-failure`, which left a drained host offline; re-run `grain-agentd install` to rewrite it.
+The unit restarts `grain-agentd` whenever it exits (`Restart=always`): a drain ends with a clean exit once the last agent CLI finishes, so the binary `~/.local/bin/grain-agentd` names takes over. A unit written by an older `grain-agentd install` said `Restart=on-failure`, which left a drained host offline; re-run `grain-agentd install -server <url>` to rewrite it.
 
 Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
 

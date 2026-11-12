@@ -269,6 +269,25 @@ func TestInstallJoinHandshake(t *testing.T) {
 	if !strings.Contains(string(unit), "-key-file "+p.Key) {
 		t.Fatalf("unit missing -key-file %s:\n%s", p.Key, unit)
 	}
+
+	// Re-running `grain-agentd install -server <url>` (without -join) to
+	// upgrade an older Restart=on-failure unit rewrites the unit with
+	// Restart=always while preserving -key-file for the existing key-bound
+	// credential.
+	oldUnit := strings.ReplaceAll(string(unit), "Restart=always", "Restart=on-failure")
+	writeFile(t, filepath.Join(p.UnitDir, UnitName), oldUnit, 0o644)
+	out.Reset()
+	errOut.Reset()
+	if code := install([]string{"-server", ts.URL}, &out, &errOut); code != 0 {
+		t.Fatalf("re-run install = %d: %s", code, errOut.String())
+	}
+	rewritten, err := os.ReadFile(filepath.Join(p.UnitDir, UnitName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rewritten), "\nRestart=always\n") || !strings.Contains(string(rewritten), "-key-file "+p.Key) {
+		t.Fatalf("rewritten unit dropped Restart=always or -key-file %s:\n%s", p.Key, rewritten)
+	}
 }
 
 func TestAllowlistFromTemplateGatesEnvOpenOnHostFeature(t *testing.T) {

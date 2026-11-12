@@ -327,6 +327,9 @@ func install(args []string, stdout, stderr io.Writer) int {
 		if token == "" {
 			if have, _ := readTokenFile(p.Token); have != "" {
 				step("keeping the token in %s (set %s to replace it)", p.Token, TokenEnv)
+				if st, err := os.Stat(p.Key); err == nil && st.Mode().IsRegular() {
+					unit.Key = p.Key
+				}
 			} else if token, err = promptToken(); err != nil {
 				fmt.Fprintln(stderr, Program+" install: "+err.Error())
 				return 2

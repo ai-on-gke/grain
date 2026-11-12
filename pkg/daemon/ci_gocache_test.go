@@ -34,6 +34,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
@@ -293,13 +294,21 @@ func TestBuildCIServiceWiresBeforeAdoptingInFlightRuns(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 	sandboxDir := t.TempDir()
-	release := filepath.Join(t.TempDir(), "release")
+	gateDir := t.TempDir()
+	release := filepath.Join(gateDir, "release")
+	t.Cleanup(func() { _ = os.WriteFile(release, []byte("ok\n"), 0o644) })
 	workflowYAML := `name: tests
 on: push
 jobs:
   slow:
     steps:
-      - run: while [ ! -e "` + release + `" ]; do sleep 0.02; done
+      - run: |
+          echo step-started
+          until [ -e "` + release + `" ] || [ ! -d "` + gateDir + `" ]; do sleep 0.02; done
+  after:
+    needs: [slow]
+    steps:
+      - run: echo after-done
 `
 	bareRepoRoot, commitSHA, source := setupTestCIRepo(t, workflowYAML)
 
@@ -318,11 +327,19 @@ jobs:
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		r, _ := svc1.Get(started.ID)
-		if len(r.Jobs) == 1 && r.Jobs[0].Sandbox != "" && len(r.Jobs[0].Steps) > 0 {
+		var slowStarted bool
+		for _, j := range r.Jobs {
+			if j.JobID == "slow" && !j.Conclusion.Done() && j.StartedAt != nil && j.Sandbox != "" {
+				if stepRunnerStarted(filepath.Join(sandboxDir, j.Sandbox), "step-started") {
+					slowStarted = true
+				}
+			}
+		}
+		if slowStarted {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for job step to start; run=%+v", r)
+			t.Fatalf("timed out waiting for job step runner to start; run=%+v", r)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -331,12 +348,13 @@ jobs:
 
 	store2, closeStore2 := openTestStore(t, dataDir)
 	defer closeStore2()
+	store2.SingleTenant = true
 	sb2 := orchestrator.NewHostSandboxes(sandboxDir)
 	tokens := gitproxy.NewSandboxTokenStore(filepath.Join(dataDir, "sandbox-tokens.json"))
 	jobs := pkgcache.NewJobTokenSet(false)
 	cfg := Config{DataDir: dataDir, SandboxDir: sandboxDir, HostSandboxes: true, Ci: true}
-	svc2 := BuildCIService(ctx, cfg, cfg.Limits, nil, nil, store2, sb2,
-		&gitproxy.CredentialSet{}, "http://127.0.0.1:9", tokens, nil, nil, nil, nil,
+	svc2 := BuildCIService(ctx, cfg, func() model.Limits { return model.Limits{} }, nil, nil, store2, sb2,
+		&gitproxy.CredentialSet{}, "file://localhost"+bareRepoRoot, tokens, nil, nil, nil, nil,
 		func(context.Context) string { return "http://127.0.0.1:9" }, nil, nil, nil,
 		func(svc *ci.Service) { svc.Source = source },
 		WithDaemonCIWiring(func() string { return "" },
@@ -348,6 +366,9 @@ jobs:
 	ciSb := svc2.Engine.Sandboxes.(StateCheckSandboxes).Sandboxes.(CiSandboxes)
 	if ciSb.GoCacheJobs != jobs || ciSb.GoCacheRefRefusal == nil {
 		t.Fatalf("CiSandboxes GoCache wiring = (jobs=%v, refusalNil=%v), want (%v, false)", ciSb.GoCacheJobs, ciSb.GoCacheRefRefusal == nil, jobs)
+	}
+	if adm, ok := svc2.Engine.Admission.(*CiGrantReservations); !ok || adm.Servers == nil {
+		t.Fatalf("Engine.Admission capability servers not wired before adopt: %+v", svc2.Engine.Admission)
 	}
 	if err := os.WriteFile(release, []byte("ok\n"), 0o644); err != nil {
 		t.Fatal(err)
