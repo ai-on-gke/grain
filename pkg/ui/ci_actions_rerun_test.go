@@ -33,10 +33,21 @@ import (
 // rerunSim is acme/widgets on GitHub Actions with two tasks' branches:
 // grain/mine has an older red commit and, at its head bbb222, a red
 // Tests run and a green Lint run; grain/theirs has a red run of its own.
-func rerunSim(t *testing.T, headAttempt int, lintAttempt ...int) (*githubsim.Sim, *ui.Server, *ui.Client) {
+// newer are seeded ahead of them all, as the newest runs.
+func rerunSim(t *testing.T, headAttempt int, newer ...githubsim.WorkflowRun) (*githubsim.Sim, *ui.Server, *ui.Client) {
+	t.Helper()
+	return rerunSimWithLint(t, headAttempt, 1, newer...)
+}
+
+// rerunSimWithLint is rerunSim with the green Lint run at bbb222 on its
+// lintAttempt'th attempt.
+func rerunSimWithLint(t *testing.T, headAttempt, lintAttempt int, newer ...githubsim.WorkflowRun) (*githubsim.Sim, *ui.Server, *ui.Client) {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	sim := githubsim.New("acme", "widgets", filepath.Join(t.TempDir(), "none.git"), "main")
+	for _, run := range newer {
+		sim.AddWorkflowRun(run)
+	}
 	sim.AddWorkflowRun(githubsim.WorkflowRun{ID: 720, Name: "Tests", Path: ".github/workflows/tests.yml",
 		HeadBranch: "grain/theirs", HeadSHA: "ccc111", Event: "pull_request", Conclusion: "failure",
 		CreatedAt: now.Add(-time.Minute), Jobs: []githubsim.WorkflowJob{{Name: "go", Conclusion: "failure"}}})
@@ -45,7 +56,7 @@ func rerunSim(t *testing.T, headAttempt int, lintAttempt ...int) (*githubsim.Sim
 		CreatedAt: now.Add(-2 * time.Minute), Jobs: []githubsim.WorkflowJob{
 			{Name: "go", Conclusion: "failure"}, {Name: "lint", Conclusion: "success"}}})
 	sim.AddWorkflowRun(githubsim.WorkflowRun{ID: 711, Name: "Lint", Path: ".github/workflows/lint.yml",
-		HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request", Conclusion: "success", RunAttempt: append(lintAttempt, 1)[0],
+		HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request", Conclusion: "success", RunAttempt: lintAttempt,
 		CreatedAt: now.Add(-2 * time.Minute), Jobs: []githubsim.WorkflowJob{{Name: "vet", Conclusion: "success"}}})
 	sim.AddWorkflowRun(githubsim.WorkflowRun{ID: 700, Name: "Tests", Path: ".github/workflows/tests.yml",
 		HeadBranch: "grain/mine", HeadSHA: "aaa333", Event: "pull_request", Conclusion: "failure",
@@ -181,7 +192,7 @@ func TestRetriggerOnGitHubActionsIsBoundedPerHead(t *testing.T) {
 // a green run re-run to the bound does not stop the red one beside it
 // being re-run, by its failed jobs or by a job of its own.
 func TestRetriggerOnGitHubActionsBoundsOnlyTheRunsItReRuns(t *testing.T) {
-	sim, _, client := rerunSim(t, 1, ui.MaxActionsRerunsPerHead+1)
+	sim, _, client := rerunSimWithLint(t, 1, ui.MaxActionsRerunsPerHead+1)
 	actions := ui.SandboxCLIActions{Client: client}
 	ctx := context.Background()
 
@@ -205,5 +216,22 @@ func TestRetriggerOnGitHubActionsBoundsOnlyTheRunsItReRuns(t *testing.T) {
 	}
 	if len(sim.RerunRuns) != 0 || !slices.Equal(sim.RerunJobs, []int64{710000}) {
 		t.Fatalf("re-ran runs %v and jobs %v, want no run and job 710000 alone", sim.RerunRuns, sim.RerunJobs)
+	}
+}
+
+// With no pull request to pin the head, the branch's newest run is its
+// own repository's: a fork's newer run on a branch of the same name is
+// left alone.
+func TestRetriggerOnGitHubActionsIgnoresAForksBranchOfTheSameName(t *testing.T) {
+	sim, _, client := rerunSim(t, 1, githubsim.WorkflowRun{ID: 730, Name: "Tests", Path: ".github/workflows/tests.yml",
+		HeadBranch: "grain/mine", HeadSHA: "ddd444", HeadRepo: "stranger/widgets", Event: "pull_request", Conclusion: "failure",
+		CreatedAt: time.Now().UTC(), Jobs: []githubsim.WorkflowJob{{Name: "go", Conclusion: "failure"}}})
+
+	if _, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(context.Background(), "mine",
+		gitproxy.CIStartRequest{FailedOnly: true}); err != nil {
+		t.Fatalf("retrigger: %v", err)
+	}
+	if !slices.Equal(sim.RerunFailedJobs, []int64{710}) {
+		t.Fatalf("re-ran %v, want only 710 (the branch's own head), not the fork's 730", sim.RerunFailedJobs)
 	}
 }
