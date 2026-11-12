@@ -21,6 +21,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -87,6 +88,39 @@ func isGitHubGatingWorkflow(name, wfPath string) bool {
 		}
 	}
 	return false
+}
+
+// gitHubBasePollDefaultsFor is how long pollConcludedGitHubWorkflowRuns
+// remembers a ci_mode: github repository's default branch before reading
+// it again: an unchanged poll is meant to be all 304s, and the branch
+// almost never moves. A stale answer only picks which branch is paged;
+// handleGitHubBaseVerdict asks isGitHubBaseBranch afresh for every run.
+const gitHubBasePollDefaultsFor = time.Hour
+
+// gitHubBasePollDefaults holds a gitHubBasePollDefault per store and
+// repository.
+var gitHubBasePollDefaults sync.Map
+
+type gitHubBasePollDefault struct {
+	branch string
+	at     time.Time
+}
+
+// gitHubBasePollDefaultBranch is repo's default branch for the workflow
+// run poll, read from GitHub at most once per gitHubBasePollDefaultsFor.
+func gitHubBasePollDefaultBranch(deps Deps, repo model.RepoRef, now time.Time) (string, error) {
+	key := storeScope(deps.Store) + ":" + strings.ToLower(repo.String())
+	if v, ok := gitHubBasePollDefaults.Load(key); ok {
+		if c := v.(gitHubBasePollDefault); now.Sub(c.at) < gitHubBasePollDefaultsFor && !now.Before(c.at) {
+			return c.branch, nil
+		}
+	}
+	def, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name)
+	if err != nil {
+		return "", err
+	}
+	gitHubBasePollDefaults.Store(key, gitHubBasePollDefault{branch: def, at: now})
+	return def, nil
 }
 
 // gitHubBaseRepairSubject is repo's pipeline.base-red-unattended subject.

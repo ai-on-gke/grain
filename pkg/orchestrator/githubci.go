@@ -589,7 +589,7 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 			}
 		}
 		if ok, err := gitHubActionsJudges(ctx, deps.Store, repo); err == nil && ok {
-			if def, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && def != "" {
+			if def, err := gitHubBasePollDefaultBranch(deps, repo, now); err == nil && def != "" {
 				branches = appendUniquePollBranch(branches, def)
 			}
 		}
