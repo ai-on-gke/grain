@@ -90,6 +90,23 @@
   scroll-behavior: smooth;
 }
 
+/* Messages use the width they are given: the Sessions chat keeps its
+   72ch bubbles, a task conversation reads closer to a document. */
+.g-conversation .msg {
+  max-width: min(100%, 120ch);
+}
+
+.convo-host.is-expanded .msg,
+.convo-modal .msg {
+  max-width: 100%;
+}
+
+.g-conversation .msg-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .convo-older {
   align-self: flex-start;
 }
@@ -198,7 +215,7 @@
 }
 
 .convo-modal .convo-thread {
-  padding-inline: max(20px, calc((100% - 72ch) / 2));
+  padding-inline: 24px;
 }
 
 .convo-modal .convo-jump {
