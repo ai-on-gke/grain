@@ -134,9 +134,12 @@ async function shoot(page, name) {
 // nothing open is the surface's own, and closes the task pane (or the New
 // task form) the next cell needs -- which is how one cell left every
 // later one timing out on an "Add grant…" that was no longer there.
+// "Open" is what Overlay's own Escape guard reads: the grants menu's
+// [data-open-popover] goes the moment it closes, where its .MuiPopover-root
+// outlives it for a tick, and an Escape in that tick is the surface's.
 async function closePopovers(page) {
   const open = page.locator(
-    ".MuiPopover-root, .MuiPopper-root, [role=listbox]",
+    "[data-open-popover], .MuiPopper-root, [role=listbox]",
   );
   for (let i = 0; i < 3; i++) {
     const before = await open.count().catch(() => 0);
