@@ -169,6 +169,9 @@ var tablePrimaryKeys = map[string][]string{
 	"allowed_principal_migration":    {"id"},
 	"integration_event":              {"id"},
 	"secret_entries":                 {"secret_name", "key"},
+	"task_qa_assignment":             {"root_origin", "epoch"},
+	"task_qa_check_run":              {"id"},
+	"task_qa_finding":                {"id"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.
@@ -209,6 +212,8 @@ var autoIncrementTables = map[string]string{
 	"credential_access_audit":       "id",
 	"notification":                  "id",
 	"integration_event":             "id",
+	"task_qa_check_run":             "id",
+	"task_qa_finding":               "id",
 }
 
 type adaptedConnector struct {
