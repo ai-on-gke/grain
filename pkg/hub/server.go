@@ -260,13 +260,6 @@ func (s *Server) SetOrphanProvider(op OrphanProvider) {
 	s.orphans = op
 }
 
-// SetInstanceProviders attaches Compute, InstanceResources, and ConfigRepos providers to the Server.
-func (s *Server) SetInstanceProviders(compute Compute, resources InstanceResources, configRepos ConfigRepos) {
-	s.compute = compute
-	s.resources = resources
-	s.configRepos = configRepos
-}
-
 // Router returns the underlying subdomain/tunnel/peer Router.
 func (s *Server) Router() *server.Router {
 	return s.router

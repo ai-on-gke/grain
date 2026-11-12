@@ -12,7 +12,9 @@ prompt-extension: |
 
   ## UI changes
 
-  A change touching `ui/` (components, CSS, layout) is not done until the page has been rendered and looked at. Unit tests and DOM assertions passing is not the same as the page looking right.
+  A change touching `ui/` or `ui-ng/` (components, CSS, layout) is not done until the page has been rendered and looked at. Unit tests and DOM assertions passing is not the same as the page looking right.
+  - For `ui-ng/` (the Angular UI under `/next/`), read `design/design/ui-design-book.design.md` first. It holds the brand, tokens, layout rules, components, testing steps and the review mandate. Follow it, and update it in the same change when you set a new rule.
+  - A `ui-ng/` change also needs `ui/e2e/next-full-system.spec.js` to pass, plus a scenario spec for any interaction you changed. It then gets three independent reviews (Design, Functional, Adversarial) as the book's "review mandate" section describes. Fix every P0/P1 finding before asking for merge.
   - Render every affected page in a real browser over `grain demo`, at desktop and phone widths, in light and dark: `make ui-screenshots PAGES=/,/inbox OUT=screenshots/after` (`ui/e2e/screenshot.mjs`; `docs/ui-screenshots.md`). For a fix, take `OUT=screenshots/before` on the base first.
   - Look at the screenshots, not just their file names. Check alignment, overflow, spacing, and anything floating or wrapping unexpectedly. If your file reader shows a PNG as bytes, add `LOOK=1` to have Gemini describe them, then check what it reports yourself.
   - Where a layout rule matters, such as a badge centred on its label or an action in the right-hand slot, assert it with bounding boxes in a Playwright spec under `ui/e2e/`.

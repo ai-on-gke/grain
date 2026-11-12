@@ -204,9 +204,25 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	// A port of a change already cleared, or a head that changed none of
 	// the trust-boundary patches a clearance was given for, keeps that
 	// clearance rather than being reviewed again (securityhold_inherit.go).
+	//
+	// Failing that, a head whose whole change is the one its security
+	// review read -- an empty commit, a clean merge of the base -- keeps
+	// that review's result as it stands, pending, passed or findings,
+	// rather than being filed another (samechange.go).
 	if known {
 		if carried, ok := carryClearance(ctx, store, client, *current, ref, headSHA, matches, rules); ok {
-			return keepClearance(ctx, store, client, *current, ref, headSHA, cleared, carried, matches, now)
+			from := classifiedHead(*current)
+			if err := keepClearance(ctx, store, client, *current, ref, headSHA, cleared, carried, matches, now); err != nil {
+				return err
+			}
+			if carried.source == nil && from != "" && !strings.EqualFold(from, headSHA) &&
+				linkTarget(*current, model.LinkSecurityReviewTask) != "" && sameChange(client, *current, ref, from, headSHA) {
+				return noteReviewsCarried(ctx, store, current.ID, from, headSHA, now)
+			}
+			return nil
+		}
+		if from, ok := securityReviewUnchanged(ctx, store, client, *current, ref, headSHA, rules); ok {
+			return carrySecurityReview(ctx, store, *current, ref, from, headSHA, cleared, matches, now)
 		}
 	}
 	// A clean review may release the security-review gate, while a change
@@ -415,7 +431,11 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 				Gate:       model.GateSecurityReview,
 				ReviewTask: review.ID,
 				Summary:    summary,
-				At:         now,
+				// The head the review read, which a head moved on
+				// without changing the change carries them to
+				// (securityReviewUnchanged).
+				HeadSHA: classifiedHead(*t),
+				At:      now,
 			})
 		}
 		dropped = true

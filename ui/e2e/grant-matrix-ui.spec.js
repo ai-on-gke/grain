@@ -129,6 +129,29 @@ async function shoot(page, name) {
   return file;
 }
 
+// closePopovers presses Escape only while a menu or listbox is open,
+// waiting after each press for the one it closed to go: an Escape with
+// nothing open is the surface's own, and closes the task pane (or the New
+// task form) the next cell needs -- which is how one cell left every
+// later one timing out on an "Add grant…" that was no longer there.
+// "Open" is what Overlay's own Escape guard reads: the grants menu's
+// [data-open-popover] goes the moment it closes, where its .MuiPopover-root
+// outlives it for a tick, and an Escape in that tick is the surface's.
+async function closePopovers(page) {
+  const open = page.locator(
+    "[data-open-popover], .MuiPopper-root, [role=listbox]",
+  );
+  for (let i = 0; i < 3; i++) {
+    const before = await open.count().catch(() => 0);
+    if (before === 0) return;
+    await page.keyboard.press("Escape").catch(() => {});
+    await expect
+      .poll(() => open.count().catch(() => 0), { timeout: 2_000 })
+      .toBeLessThan(before)
+      .catch(() => {});
+  }
+}
+
 // walkCell gives method on the grants region of one surface and takes it
 // away again, returning {outcome, detail}. onSaved runs once the grant
 // is held, for the surface's own save-and-reload.
@@ -158,6 +181,12 @@ async function walkCell(page, request, grants, method, surface, onSaved) {
     return { outcome: "fail", variant, detail: "not offered in Add grant…" };
   }
   await item.first().click();
+  // An api row is a checkbox (menuitemcheckbox): the menu stays open
+  // after a pick, for the next one, and left open it is a modal, the form
+  // behind it aria-hidden and out of reach. A method row closes it itself.
+  if (ref.startsWith(API_REF))
+    await expect(item.first()).toHaveAttribute("aria-checked", "true");
+  await closePopovers(page);
   if (refusal) {
     await expect(grants.getByText(refusal).first()).toBeVisible();
     await expect(heldLocator(grants, ref)).toHaveCount(0);
@@ -247,7 +276,7 @@ async function runCell(page, request, method, surface, run) {
   }
   if (cell.outcome === "fail") {
     cell.shot = await shoot(page, `${surface.id}-${method.ref}`);
-    await page.keyboard.press("Escape").catch(() => {});
+    await closePopovers(page);
     if (gap) {
       cell.outcome = "known";
       cell.knownGap = gap;
@@ -291,15 +320,19 @@ test("every method is given and removed through the task pane's Add grant…", a
         return grantsOf();
       }),
     );
-    if (cell.outcome === "fail") {
-      failures.push(`${method.ref}: ${cell.detail}`);
-      await page.goto(`/tasks/${task.id}`);
-    }
-    // Whatever the cell did, the next starts from a task holding nothing.
-    await request.patch(`/api/tasks/${task.id}`, {
+    if (cell.outcome === "fail") failures.push(`${method.ref}: ${cell.detail}`);
+    // Whatever the cell did, the next starts from a task holding nothing,
+    // on a freshly loaded task pane: a cell that did not pass may have
+    // left a menu, a draft or a closed pane behind, and reloading
+    // whatever page that left is not the same as opening the task again.
+    const reset = await request.patch(`/api/tasks/${task.id}`, {
       data: { capabilities: [] },
     });
-    if (cell.outcome !== "pass") await page.reload();
+    expect(reset.ok(), await reset.text()).toBe(true);
+    if (cell.outcome !== "pass") {
+      await page.goto(`/tasks/${task.id}`);
+      await expect(grantsOf()).toBeVisible();
+    }
   }
   expect(failures, failures.join("\n")).toEqual([]);
 });

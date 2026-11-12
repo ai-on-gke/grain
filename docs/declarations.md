@@ -330,6 +330,10 @@ hosting: unattended                # optional; "unattended" or "console" -- what
                                    #   console capability gave (capabilities.md); a bare console
                                    #   under capabilities: is read as this, with a warning
 priority: 10                       # optional; positive integer (unset/0 files tasks at default 5)
+sandbox:                           # optional; the sandbox every task it files gets -- see below
+  cpus: 4                          #   each key optional; left out, that dimension is the
+  memory-mb: 16384                 #   deployment's default (2 vCPU / 8192 MiB / 30 GiB unless
+  disk-gb: 100                     #   an operator changed it). Needs grain v3.6.0 or later
 custom-fields:                     # optional; this deployment's declared fields
   team: infra
   reviewers: [ana, bo]
@@ -358,6 +362,71 @@ grants:                            # optional; the unified spelling of capabilit
 string or a `{capability, with}` mapping, the two keys are read as one list,
 and an entry both name (in either spelling) is held once. Everything this
 section says about `capabilities:` holds for `grants:` as well.
+
+#### Sizing the sandbox: `sandbox:` on a template
+
+A template can say how big a machine its work needs, with the same three
+keys a `.grain/workflows` job's own `sandbox:` uses:
+
+```yaml
+# .grain/templates/publish-images.yml
+title: Publish the release images
+sandbox:
+  disk-gb: 100      # the image build needs ~100 GB; the default disk is 30 GB
+```
+
+- `cpus` (vCPUs), `memory-mb` (MiB) and `disk-gb` (GiB) are each optional.
+  A key left out leaves that dimension on the deployment's default.
+- Each is a positive integer, at most the ceiling a task's own sandbox
+  shape is held to: 32 vCPUs, 131072 MiB and 1024 GiB. `memory-mb` is at
+  least 128. `0`, a negative number, or anything above the ceiling refuses
+  the repository's declarations, as any value out of range does. Any other
+  key under `sandbox:` is refused by name.
+- Every task filed from the template carries the shape: a schedule
+  firing it, a suite or qualification pass, `propose_task` or
+  `POST /api/tasks` naming its id, and the New Task form. A filing that
+  states a dimension of its own (`sandbox_disk_gb` on `propose_task`,
+  `sandboxDiskGb` on the API, the form's own boxes) keeps its value for
+  that dimension, and the template fills the rest.
+- A filing through the API or the form is also held to the deployment's
+  own `sandboxShapeLimits` (Settings → Sandboxes), exactly as a task sized
+  by hand is: the deployment's maximum, and a limited role's own ceiling
+  for whoever files, writes or schedules it. An agent can't file from, or
+  write, a template larger than its own task's sandbox. A schedule, suite,
+  path trigger, qualification run or release-notes filing firing a template above the
+  deployment's maximum files nothing, and the firing fails saying so. On a deployment whose sandboxes are host directories, which
+  have no shape, the form and the API leave the template's shape off. A
+  schedule firing there files the shape anyway, and the run fails at
+  sandbox setup, so don't declare `sandbox:` for such a deployment.
+- The template's shape shows on its page (opened from its row on the
+  Processes page), in
+  `GET /api/templates` (`sandbox: {cpus, memoryMb, diskGb}`), and in the
+  preview beside the New Task form.
+
+**Which grain accepts it.** `sandbox:` on a template is new in schema 143.
+The first release that accepts it is the first one cut from a `main` that
+has this change: **v3.6.0** if v3.6.0 is cut after it lands, otherwise the
+release after. v3.5.1 and every v3.6.0 release candidate up to rc.6 don't
+know the key. Check the reading daemon's version before you declare
+`sandbox:`. If a daemon doesn't know the key, it refuses the file loudly:
+
+- A daemon from before forward-compatible parsing (v3.5.1, and
+  v3.6.0-rc.6 and earlier) refuses the repository's **whole** declaration
+  set at that commit. It keeps the declarations of the last commit it
+  could read, and records the refusal (the file, the line and `field
+  sandbox not found`) as the repository's declaration-sync error
+  (`repo_declaration_sync.last_error`).
+- A daemon with forward-compatible parsing but without this change
+  *holds back* just that template file: it keeps the version it already
+  had (still without the shape), and raises an Inbox notice under
+  `declarations held back by this grain build:`. See [Declarations newer
+  than the daemon](#declarations-newer-than-the-daemon).
+
+Neither daemon files a task without the shape while saying nothing
+about it. `grain declarations check` in CI runs the code on the pull
+request's own branch, so it accepts `sandbox:` once this change is on
+`main`, whatever the deployment runs. That check alone does not show the
+deployment can read the key.
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
@@ -435,7 +504,14 @@ declarations**. Accepting takes `capabilities:admin` for a capability
 server's grant, and the scope itself for an `api:` grant. From then on
 its firings land approved again, while it asks for nothing beyond the
 accepted set. A declaration that widens past that set is held again, and
-shows as awaiting acceptance, until a person accepts the new set. Schedules
+shows as awaiting acceptance, until a person accepts the new set. A
+person can also take an acceptance back with **Revoke** on the same card
+(`POST /api/declarations/revoke`). Revoking takes what accepting did: a
+person acting directly, never an agent or a delegated caller, holding
+every scope the accepted set needs. It is recorded in the config audit
+log. The declaration's next firing is held again with the "Nobody has
+accepted that set yet" note. Work already filed approved on the
+acceptance is held before it dispatches. Schedules
 and templates an operator wrote are a person's standing approval already
 and are never held this way. CI jobs are accepted the same way; see
 [`docs/ci-capabilities.md`](ci-capabilities.md).
@@ -814,8 +890,40 @@ The floor is grain's, not a person's: a review only it raised may still
 file follow-ups at no more than the default priority without a person's
 approval.
 
-**Incremental, debounced re-review.** When the head moves, the review of
-each kind is filed again for the new head:
+**A head that moves without changing the change is not reviewed again**
+(grain/task-4808). The change is the pull request's diff against where its
+head forked from its base, `git diff $(git merge-base <base> <head>) <head>`.
+An empty "rerun CI" commit doesn't change it, and nor does a merge of the
+base that resolved no conflict, whether the task's agent or grain's merge
+queue made it. Before a head move files anything, grain compares that diff
+file by file with the diff at the head the reviews last read. It compares
+patches the way `git patch-id` does, ignoring line numbers and blob ids.
+When the two are identical:
+
+- every gating review's result carries to the new head as it stands:
+  still running, passed, findings or questions. Carried findings block
+  exactly as they did. Grain's security review carries the same way, and
+  so does its trust-boundary clearance;
+- no review is filed, and no ungated trigger fires again either;
+- the task says once per head: "Head moved to `<sha>` without changing the
+  change; reviews carried from `<sha>`."
+
+A person's approval is not carried. It was given at the head they read, and
+a head move consumes it as before. So a `human: required` trigger, or a
+path only a human may release, asks for their Submit again at the new head,
+and owner approvals are asked for again. One exception predates this
+change: a base merge that leaves a cleared change's trust-boundary patches
+unchanged keeps a Submit given at the cleared head.
+
+A merge that resolved a conflict changes the patch of the file it
+resolved, and a commit of the change's own changes its diff. Both are
+reviewed again, as below. So is any head grain can't compare: a diff
+GitHub won't serve, a binary file, a file list too long to read, repository
+rules that changed under it, or a gating trigger that the base's rules added
+or dropped.
+
+**Incremental, debounced re-review.** When the head moves and the change
+did change, the review of each kind is filed again for the new head:
 
 - If the last review of that kind finished -- clean, or with findings the
   push may have addressed -- or is still running, the new one is

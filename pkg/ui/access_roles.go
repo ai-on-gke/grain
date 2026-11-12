@@ -81,10 +81,12 @@ var humanRouteScopes = map[string]APIScope{
 	"GET /api/local-script-approvals":                               "capabilities:read",
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer": "capabilities:admin",
 	// Accepting a declaration takes the scopes its set needs, which
-	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal):
+	// AcceptDeclaration asks for itself (declarationAcceptanceRefusal),
+	// as revoking what was accepted does:
 	// a dangerous api grant needs its own scope, not capabilities:admin.
 	"GET /api/declarations":         "capabilities:read",
 	"POST /api/declarations/accept": scopeSignedIn,
+	"POST /api/declarations/revoke": scopeSignedIn,
 }
 
 // operatorOnlyRoutes are the internal routes no limited role reaches: a
