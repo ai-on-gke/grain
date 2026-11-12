@@ -305,21 +305,23 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 // list happens to hold today.
 func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	t.Parallel()
-	c, _, ctx := testClient(t)
-	c.Config.Capabilities = []ui.Capability{
-		{ID: "github-sandbox", Name: "GitHub sandbox"},
-	}
+	for _, pickerID := range []string{"github-sandbox", model.GitHubSandboxRepoGrant} {
+		c, _, ctx := testClient(t)
+		c.Config.Capabilities = []ui.Capability{
+			{ID: pickerID, Name: "GitHub sandbox"},
+		}
 
-	got, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for id, want := range map[string]bool{
-		"github-sandbox": true,
-		"registry-push":  false,
-	} {
-		if status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id)); status.Grantable != want {
-			t.Errorf("%s: Grantable = %t, want %t (status: %+v)", id, status.Grantable, want, status)
+		got, err := c.GetSettings(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for id, want := range map[string]bool{
+			"github-sandbox": true,
+			"registry-push":  false,
+		} {
+			if status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id)); status.Grantable != want {
+				t.Errorf("picker %q, %s: Grantable = %t, want %t (status: %+v)", pickerID, id, status.Grantable, want, status)
+			}
 		}
 	}
 }

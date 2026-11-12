@@ -224,6 +224,9 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 		model.ConfigMapRef + "={}",
 		model.ConfigMapRef + `={"secrets":["prod"]}`,
 		model.ConfigMapRef + `={"config_maps":["bootstrap","tools"]}`,
+		model.GrainSourceRef + `={"extra":1}`,
+		model.GrainJournalRef + `={"extra":1}`,
+		model.GrainHealthRef + `={"extra":1}`,
 	} {
 		if err := p.Check(model.Task{Target: widgets, Creator: "me@example.com", Grants: []model.Grant{{Capability: c}}}, model.NetworkNone); err == nil {
 			t.Errorf("the Director's grants let %s through", c)

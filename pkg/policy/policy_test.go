@@ -196,6 +196,77 @@ func TestCanonicalPolicyBindsARetiredGrantThatBecameSeveral(t *testing.T) {
 	if err := check("  deny: ["+strconvQuote(model.GrainHealthGrant)+"]", "deployment-health"); err == nil {
 		t.Error("deny: [grain#health] admitted deployment-health, which became it")
 	}
+	// 1-to-1 retired API bare names answer to legacy api: deny/allow rules too.
+	for _, d := range []string{"api:self-upgrade", "api:*", model.APIRef("self-upgrade")} {
+		if err := check("  deny: ["+strconvQuote(d)+"]", "self-upgrade"); err == nil || !strings.Contains(err.Error(), "forbids capability") {
+			t.Errorf("deny: [%s] = %v for self-upgrade, want it refused", d, err)
+		}
+	}
+	if err := check("  allow: [memory]", "api:memory"); err != nil {
+		t.Errorf("allow: [memory] refused api:memory: %v", err)
+	}
+	if err := check("  allow: [memory]", "api:memory@acme/widgets"); err == nil {
+		t.Error("allow: [memory] admitted repo-scoped api:memory@acme/widgets")
+	}
+}
+
+func TestRuntimeGrantExpansionsBindSingleAndMultiScriptRetirements(t *testing.T) {
+	const hostScriptRef = "https://grain.dev/capabilities/host-script#host-script"
+	opsDeploy := hostScriptRef + `={"script":"ops-deploy"}`
+	opsStatus := hostScriptRef + `={"script":"ops-status"}`
+	guardedWipe := hostScriptRef + `={"script":"guarded-wipe"}`
+	t.Cleanup(model.SetRuntimeGrantExpansions(map[string][]string{
+		"local-scripts:ops":     {opsDeploy, opsStatus},
+		"local-scripts:guarded": {guardedWipe},
+	}))
+
+	task := model.Task{Target: &model.RepoRef{Owner: "acme", Name: "widgets"}}
+	check := func(rules, grant string) error {
+		t.Helper()
+		task.Grants = []model.Grant{{Capability: grant}}
+		return mustParse(t, "repos: [acme/widgets]\ncapabilities:\n"+rules+"\n").Check(task, "")
+	}
+
+	// Single-script and multi-script runtime expansions are both refused when
+	// any canonical script grant (or the method itself) is denied.
+	for _, d := range []string{hostScriptRef, guardedWipe} {
+		if err := check("  deny: ["+strconvQuote(d)+"]", "local-scripts:guarded"); err == nil || !strings.Contains(err.Error(), "forbids capability") {
+			t.Errorf("deny: [%s] = %v for 1-script local-scripts:guarded, want it refused", d, err)
+		}
+	}
+	if err := check("  deny: ["+strconvQuote(opsStatus)+"]", "local-scripts:ops"); err == nil || !strings.Contains(err.Error(), "forbids capability") {
+		t.Errorf("deny: [%s] = %v for local-scripts:ops, want it refused", opsStatus, err)
+	}
+	if err := check("  deny: ["+strconvQuote(opsStatus)+"]", "local-scripts:guarded"); err != nil {
+		t.Errorf("deny of unrelated script refused local-scripts:guarded: %v", err)
+	}
+
+	// Canonical allow lists admit retired runtime names only when all of their
+	// scripts are allowed.
+	if err := check("  allow: ["+strconvQuote(guardedWipe)+"]", "local-scripts:guarded"); err != nil {
+		t.Errorf("allow: [%s] refused 1-script local-scripts:guarded: %v", guardedWipe, err)
+	}
+	if err := check("  allow: ["+strconvQuote(opsDeploy)+"]", "local-scripts:ops"); err == nil {
+		t.Error("allowing only one script admitted 2-script local-scripts:ops")
+	}
+	if err := check("  allow: ["+strconvQuote(opsDeploy)+", "+strconvQuote(opsStatus)+"]", "local-scripts:ops"); err != nil {
+		t.Errorf("allowing both scripts refused local-scripts:ops: %v", err)
+	}
+
+	// Allowing a retired runtime name admits its exact script grants and keeps
+	// JSON argument values case-sensitive.
+	if err := check("  allow: [local-scripts:guarded]", guardedWipe); err != nil {
+		t.Errorf("allow: [local-scripts:guarded] refused %s: %v", guardedWipe, err)
+	}
+	if err := check("  allow: [local-scripts:guarded]", hostScriptRef+`={"script":"GUARDED-WIPE"}`); err == nil {
+		t.Error("allow: [local-scripts:guarded] folded JSON script value case")
+	}
+	if err := check("  allow: [local-scripts:ops]", opsDeploy); err != nil {
+		t.Errorf("allow: [local-scripts:ops] refused %s: %v", opsDeploy, err)
+	}
+	if err := check("  allow: [local-scripts:ops]", hostScriptRef+`={"script":"OPS-DEPLOY"}`); err == nil {
+		t.Error("allow: [local-scripts:ops] folded JSON script value case")
+	}
 }
 
 // The starter policy `grain init workstation` writes moved off the
@@ -203,17 +274,19 @@ func TestCanonicalPolicyBindsARetiredGrantThatBecameSeveral(t *testing.T) {
 // api:deployment:read, api:ci-read) onto the grants they became
 // (model.DirectorPolicyCapabilities). Each replacement admits every grant
 // the retired name did, in every spelling a task may hold it in. The only
-// thing it admits beyond that is the same grant narrowed to one
+// thing it admits beyond that is the same api grant narrowed to one
 // repository: grain files tasks api#ci-read={"repo":...} itself, so a
-// policy that refused it would hold them. grain-ci is written as
-// grain#ci={}, which is exactly what grain-ci admitted.
+// policy that refused it would hold them. Non-api grants (grain#ci={},
+// grain#source={}, ...) keep ={} so non-empty arguments stay refused.
 func TestStarterPolicyCanonicalNamesAdmitWhatTheRetiredNamesDid(t *testing.T) {
 	repoScoped := func(ref string) string { return ref + `={"repo":"acme/widgets"}` }
 	grants := []string{
 		"grain-ci", "GRAIN-CI", model.GrainCIGrant, model.GrainCIRef, repoScoped(model.GrainCIRef),
 		"self-debug", "api:self-debug", "api:self-debug@acme/widgets",
 		model.APIRef("self-debug"), model.APIRef("self-debug") + "={}", repoScoped(model.APIRef("self-debug")),
-		model.GrainSourceGrant, model.GrainSourceRef, model.GrainHealthGrant, model.GrainJournalGrant,
+		model.GrainSourceGrant, model.GrainSourceRef, repoScoped(model.GrainSourceRef),
+		model.GrainHealthGrant, repoScoped(model.GrainHealthRef),
+		model.GrainJournalGrant, repoScoped(model.GrainJournalRef),
 		"deployment-health", "api:deployment:read", "api:deployment:read@acme/widgets", "api:deployment:write",
 		model.APIRef("deployment:read"), repoScoped(model.APIRef("deployment:read")),
 		"api:ci-read", "api:ci-read@acme/widgets", model.APIRef("ci-read"), repoScoped(model.APIRef("ci-read")),
@@ -229,7 +302,8 @@ func TestStarterPolicyCanonicalNamesAdmitWhatTheRetiredNamesDid(t *testing.T) {
 		canonical []string
 	}{
 		{"grain-ci", []string{model.GrainCIGrant}},
-		{"self-debug", []string{model.APIRef("self-debug"), model.GrainSourceRef}},
+		{"self-debug", []string{model.APIRef("self-debug"), model.GrainSourceGrant}},
+		{"deployment-health", []string{model.APIRef("deployment:read"), model.GrainHealthGrant}},
 		{"api:deployment:read", []string{model.APIRef("deployment:read")}},
 		{"api:ci-read", []string{model.APIRef("ci-read")}},
 	} {

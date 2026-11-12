@@ -645,6 +645,12 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 	for _, spec := range catalog {
 		canonical := model.CanonicalLegacyGrant(spec.Name)
 		_, grantable := c.capabilityByID(spec.Name)
+		if !grantable && !spec.CIOnly {
+			key := capabilityStatusKey(canonical)
+			grantable = slices.ContainsFunc(c.pickerCapabilities(), func(row Capability) bool {
+				return capabilityStatusKey(row.ID) == key
+			})
+		}
 		defaultRepos := slices.Clone(reposByCapability[spec.Name])
 		if canonical != spec.Name {
 			for _, r := range reposByCapability[canonical] {
@@ -665,7 +671,7 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 			CIOnly:        spec.CIOnly,
 			Default:       slices.Contains(cfg.DefaultCapabilities, spec.Name) || slices.Contains(cfg.DefaultCapabilities, canonical),
 			DefaultRepos:  defaultRepos,
-			BuildDefault:  slices.Contains(buildDefaults, spec.Name),
+			BuildDefault:  slices.Contains(buildDefaults, spec.Name) || slices.Contains(buildDefaults, canonical),
 			MissingConfig: missingConfigFor(spec.Name, cfg),
 		}
 		if haveRunning {

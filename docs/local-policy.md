@@ -173,10 +173,10 @@ all of these holds it, and the Director never runs:
   writes.
 - Every grant the Director is given in `capabilities.allow`:
   `https://grain.dev/capabilities/api#self-debug`,
-  `https://grain.dev/capabilities/grain#source`,
-  `https://grain.dev/capabilities/grain#journal`,
+  `https://grain.dev/capabilities/grain#source={}`,
+  `https://grain.dev/capabilities/grain#journal={}`,
   `https://grain.dev/capabilities/api#deployment:read`,
-  `https://grain.dev/capabilities/grain#health`,
+  `https://grain.dev/capabilities/grain#health={}`,
   `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`,
   its read-only api grants (`https://grain.dev/capabilities/api#task-admin`,
   `...#settings:read` and the like) and
