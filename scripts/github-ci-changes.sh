@@ -162,6 +162,13 @@ classify_file() {
     go_unit=true
   fi
 
+  # tests/hygiene's classic e2e freeze checks (TestNoNewClassicE2ESpecs,
+  # TestClassicE2EFreezeLists) read ui/e2e/, so a change there has to run
+  # the job they live in.
+  if [[ "$file" == ui/e2e/* ]]; then
+    go_unit=true
+  fi
+
   if [[ "$file" == third_party/granule/* || "$file" == "scripts/run-go-tests.sh" || "$file" == ".github/workflows/tests.yml" ]]; then
     granule=true
   fi

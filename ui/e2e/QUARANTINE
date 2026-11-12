@@ -1,0 +1,6 @@
+# Classic ui e2e tests taken out of the gating `ui e2e` job because they
+# flaked. They run in the non-gating `ui e2e (quarantined)` job instead.
+# The rule and the format are in README.md beside this file: one
+# `<file>.spec.js` or `<file>.spec.js:<line of its test( call>` per line,
+# with why after a `#`. A quarantined test is not fixed; it is deleted
+# when its classic page retires.
