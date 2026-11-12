@@ -44,6 +44,9 @@ fields:
 # channel this body's `grain api` calls go through refuses
 # (model.IsSandboxDeniedAPIScope), so it would widen what the run holds
 # without giving it anything it can use. Undefer is tasks:write.
+# templates:read: the template list, where section 4 finds the edition's
+# sync-oss-release template id. Not limited to this repository: that
+# template is the edition's.
 # self-debug: tasks:read on every repository, which is how it reads the
 # edition's release tasks. The read of the edition's own repository is
 # granted to this template in grain's settings, not here: this repository
@@ -54,6 +57,7 @@ capabilities:
   - {capability: "https://grain.dev/capabilities/api#repos:read", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#task-admin", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
+  - "https://grain.dev/capabilities/api#templates:read"
   - "https://grain.dev/capabilities/api#self-debug"
 body: |
   You are the **release manager** for grain core **{{version}}** and for
