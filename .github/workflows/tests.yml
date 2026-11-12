@@ -1008,9 +1008,9 @@ jobs:
   # The Angular UI at /next/ in a real browser over `grain demo`:
   # ui-ng/e2e (ui-ng/playwright.config.ts), projects desktop, phone and
   # dark, sharing ui/e2e's one-demo-per-worker harness (ui-shared/e2e/).
-  # Path-filtered on what it exercises -- ui-ng/**, ui-shared/**,
-  # pkg/ui/** and pkg/demo/** (scripts/github-ci-changes.sh) -- rather
-  # than on the whole Go program as `ui e2e` is.
+  # Path-filtered on what it exercises -- ui-ng/**, ui-shared/** and the
+  # whole Go backend that serves /next/ (scripts/github-ci-changes.sh) --
+  # so only a change to the classic ui/ or ui-hub/ alone skips it.
   #
   # Not a required check for its first week (from 2026-11-12): it becomes
   # one in branch protection once it has gone 7 days on main without a
