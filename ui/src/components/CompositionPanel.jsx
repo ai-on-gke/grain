@@ -74,6 +74,7 @@ const LABELS = {
   hosting: "Hosting",
   approval: "Approval",
   priority: "Task priority",
+  sandbox: "Sandbox",
 };
 
 // EMPTY is what an empty value *means*, per field -- the whole reason

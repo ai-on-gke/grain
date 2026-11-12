@@ -599,6 +599,14 @@ func templateSchema() Schema {
 			{Model: "Admission", Keys: carried("admission"), Columns: []string{"admission"}},
 			{Model: "Hosting", Keys: carried("hosting"), Columns: []string{"hosting"}},
 			{Model: "Skills", Keys: carried("skills"), Columns: []string{"skills"}},
+			// The sandbox shape every task it files asks for
+			// (model.Template.Sandbox, grain/task-4591): `cpus`,
+			// `memory-mb` and `disk-gb`, a workflow job's own `sandbox:`
+			// keys. Carried: it decides how big a machine the work runs
+			// on, not what that work may touch, and every dimension is
+			// held to the same ceiling a task's own shape is
+			// (model.ValidateTemplateSandbox).
+			{Model: "Sandbox", Keys: carried("sandbox"), Columns: []string{"sandbox"}},
 			// `hostd`, which a template once carried (schema 94 to 110):
 			// which grain hostd host work runs on is a model connection's
 			// or a capability server's, never what a template files, so
