@@ -27,6 +27,10 @@ takes fixes. This plan sorts every test into one of three buckets:
   layout, mocked-network, cli/real-daemon), the `api_paths` the test
   touches, and `go_candidates` (Go test files that name the same API
   path).
+  `ported_to` is filled in as tests are ported: the Go test (or ui-ng
+  spec) that now holds the test, prefixed `server half:` for a 1+x row
+  whose UI half still runs classic. `classify.py` carries it over when it
+  regenerates the file.
 - [`overrides.csv`](overrides.csv): the 80 hand-checked tests, with the
   bucket I gave each one and why. The script applies these last.
 - [`classify.py`](classify.py): the script. To regenerate:
@@ -271,6 +275,15 @@ No Go test boots `grain demo` the way `fixtures.js` does:
 The classic specs lean on the seeded rows: task 2, task 9, the parked
 question, `acme/widgets`, the boards. They also use the `/api/e2e/*`
 test hooks (18 calls) and the GitHub sim.
+
+**Landed (task 5097, H1):** `pkg/demo/demotest` and `tests/uiapi/`, as
+described below, with the first 11 rows ported (`ported_to` in the CSV).
+`demotest.Start` runs `demo.Start`, the same code `grain demo` runs.
+`Restart` gives a freshly seeded store, because a demo's store is
+throwaway. The CLI runner is `demotest.CLI`/`RunCLI`. It builds `grain`
+the first time a test uses it, in the directory `demotest.Main` (the
+package's `TestMain`) owns. `./tests/uiapi/...` runs in the `go e2e`
+job.
 
 What bucket 1 needs, as one harness task:
 

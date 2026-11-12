@@ -321,7 +321,7 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 40m ./tests/e2e/... ./tests/deploy/... | tee /tmp/go-e2e.out
+          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 40m ./tests/e2e/... ./tests/deploy/... ./tests/uiapi/... | tee /tmp/go-e2e.out
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             python3 - /tmp/go-e2e.out go-e2e <<'PY'

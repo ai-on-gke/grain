@@ -58,6 +58,13 @@ func cmdDemo(args []string) {
 	log.Fatal(demo.Run(opts))
 }
 
+// ParseDemoArgs parses `grain demo`'s arguments into the Options demo.Run
+// takes, checked exactly as the command checks them: what
+// pkg/demo/demotest starts the same demo from in-process.
+func ParseDemoArgs(args []string) (demo.Options, error) {
+	return parseDemoFlags(args)
+}
+
 func parseDemoFlags(args []string) (demo.Options, error) {
 	fs := flag.NewFlagSet("grain demo", flag.ContinueOnError)
 	addr := fs.String("addr", net.JoinHostPort("127.0.0.1", strconv.Itoa(ports.Demo)), "address to serve the demo UI on")
