@@ -15,3 +15,6 @@ every:
 overlap:
   skip: true
   group: release-train
+# Hold ticks while a release triage task holds main's publishing
+# (docs/declarations.md, "Holding while publishing is held").
+skip-when: publishing-held

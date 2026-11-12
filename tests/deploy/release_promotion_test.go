@@ -249,6 +249,23 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if sched.Overlap != model.OverlapSkip {
 		t.Errorf("the release-train schedule's overlap is %q, want skip: two ticks would race for the same tags", sched.Overlap)
 	}
+	if sched.SkipWhen != model.SkipWhenPublishingHeld {
+		t.Errorf("the release-train schedule's skip-when is %q, want %q so ticks are held while main's publishing is held",
+			sched.SkipWhen, model.SkipWhenPublishingHeld)
+	}
+	var stage1Sched *model.Schedule
+	for i := range decl.Schedules {
+		if decl.Schedules[i].Path == ".grain/schedules/release-train-on-stage1.yml" {
+			stage1Sched = &decl.Schedules[i].Schedule
+		}
+	}
+	if stage1Sched == nil {
+		t.Fatal(".grain/schedules/release-train-on-stage1.yml is not declared")
+	}
+	if stage1Sched.SkipWhen != model.SkipWhenPublishingHeld {
+		t.Errorf("the release-train-on-stage1 schedule's skip-when is %q, want %q so Stage 1 ticks do not wake while main's publishing is held",
+			stage1Sched.SkipWhen, model.SkipWhenPublishingHeld)
+	}
 	var trainTmpl *model.Template
 	for i := range decl.Templates {
 		if decl.Templates[i].Path == ".grain/templates/release-train.yml" {
