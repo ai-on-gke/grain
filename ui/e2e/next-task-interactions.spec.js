@@ -151,6 +151,61 @@ test("Tasks split presets, GM3 priority pill + Undo, backlog reorder, New task a
   }
 });
 
+test("New task sheet files the release a bug is found in, its field aligned with its neighbours", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  test.setTimeout(90_000);
+  const ids = [];
+  try {
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/next/tasks");
+      // "c" opens the sheet at every width; the rail's button is hidden
+      // on a phone.
+      await page.locator("body").press("c");
+      await expect(page.getByTestId("new-task-sheet")).toBeVisible();
+      await page
+        .getByTestId("nt-title")
+        .fill(`Found-in scenario ${viewport.width} ${Date.now()}`);
+      await page.getByTestId("more-options").click();
+      const foundIn = page.getByTestId("nt-found-in");
+      await foundIn.scrollIntoViewIfNeeded();
+      await foundIn.fill("v2.5.0-rc.2");
+
+      // A text field of the More options column like Extra instructions:
+      // same left edge and width, and inside the sheet.
+      const box = await foundIn.boundingBox();
+      const extra = await page.getByTestId("nt-extra").boundingBox();
+      const sheet = await page.getByTestId("new-task-sheet").boundingBox();
+      expect(Math.abs(box.x - extra.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box.width - extra.width)).toBeLessThanOrEqual(1);
+      expect(box.x).toBeGreaterThanOrEqual(sheet.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(
+        sheet.x + sheet.width + 0.5,
+      );
+
+      const createReq = page.waitForResponse(
+        (res) =>
+          res.url().endsWith("/api/tasks") &&
+          res.request().method() === "POST" &&
+          res.status() < 300,
+      );
+      await page.getByTestId("new-task-submit").click();
+      const created = await (await createReq).json();
+      if (created?.id) ids.push(created.id);
+      expect(created.foundIn).toBe("v2.5.0-rc.2");
+      await expect(page.getByTestId("new-task-sheet")).toHaveCount(0);
+    }
+  } finally {
+    for (const id of ids) await closeQuietly(demoServer, accessCode, id);
+  }
+});
+
 test("Inbox conversation: Expand, Full screen + Escape draft round trip, composer containment, merge-item wake", async ({
   page,
   demoServer,

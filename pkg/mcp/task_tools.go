@@ -287,8 +287,11 @@ type TaskRecord struct {
 	AuthorLabel string
 	// Provenance is ui.Task.Provenance: "filed from <filed_via> by <owner>"
 	// when filed_via was recorded (#XC-15).
-	Provenance   string
-	Base         string
+	Provenance string
+	Base       string
+	// FoundIn is ui.Task.FoundIn: the release this task is filed
+	// against (vX.Y.Z or vX.Y.Z-rc.N), "" when none is recorded.
+	FoundIn      string
 	Capabilities []string
 	PullRequest  string
 	// PullRequestMergedAt and PullRequestClosedAt are when grain saw that
@@ -882,6 +885,9 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 			fmt.Fprintf(&b, " (base %s)", t.Base)
 		}
 		b.WriteByte('\n')
+	}
+	if t.FoundIn != "" {
+		fmt.Fprintf(&b, "Found in: %s\n", t.FoundIn)
 	}
 	if t.Configuration {
 		b.WriteString("Kind: configuration agent\n")

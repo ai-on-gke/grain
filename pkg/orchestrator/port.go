@@ -776,6 +776,13 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	// approval of its own.
 	model.InheritRequester(&port, source)
 	model.InheritContext(&port, source)
+	// A backport onto release/vX.Y.Z fixes a defect vX.Y.Z shipped,
+	// whatever release the source was filed against on its own branch.
+	if v, ok := model.ReleaseBranchVersion(target); ok {
+		model.SetFoundIn(&port, v)
+	} else if v := model.FoundIn(source); v != "" {
+		model.SetFoundIn(&port, v)
+	}
 	return port, nil
 }
 

@@ -840,3 +840,18 @@ func TestTaskRecordAndNamespaceRecordShowDependencies(t *testing.T) {
 		t.Errorf("task://3144/record.md with no dependencies printed Depends on:\n%s", view3144.Record)
 	}
 }
+
+// TestTaskRecordSaysWhichReleaseItIsFoundIn: grain task read names the
+// release a task is filed against right under its repository, and says
+// nothing of one for a task that records none.
+func TestTaskRecordSaysWhichReleaseItIsFoundIn(t *testing.T) {
+	now := time.Date(2026, 11, 2, 19, 0, 0, 0, time.UTC)
+	record := TaskRecord{TaskSummary: TaskSummary{ID: "48", Title: "Fix the crash", State: "queued", Repo: "acme/widgets"}, FoundIn: "v2.5.0-rc.2"}
+	if got, want := renderTaskRecord(record, now), "Repo: acme/widgets\nFound in: v2.5.0-rc.2\n"; !strings.Contains(got, want) {
+		t.Errorf("record = %q, want it to contain %q", got, want)
+	}
+	record.FoundIn = ""
+	if got := renderTaskRecord(record, now); strings.Contains(got, "Found in") {
+		t.Errorf("record of a task found in no release says one:\n%s", got)
+	}
+}

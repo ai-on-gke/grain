@@ -185,7 +185,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Blames: detail.Blames, BlamedBy: detail.BlamedBy, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, FoundIn: detail.Task.FoundIn, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Blames: detail.Blames, BlamedBy: detail.BlamedBy, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -1898,6 +1898,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
 		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
 		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
+		FoundIn:   p.FoundIn,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Designs: p.Designs, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
