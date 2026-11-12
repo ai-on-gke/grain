@@ -4297,7 +4297,8 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 		if reason = strings.TrimSpace(reason); reason != "" {
 			susp.Detail += ": " + reason
 		}
-		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result)}.JSON()
+		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result),
+			Links: parkLinks(result, targets)}.JSON()
 		return susp, true, nil
 	}
 	if until, ok := parkedUntil(result); ok {
@@ -4386,6 +4387,34 @@ func parkedUntilMerged(result *agent.Result) bool {
 		merged = mcp.WaitForTaskUntilMerged(c.Arguments)
 	}
 	return merged
+}
+
+// parkLinks is the targets, of those a run parked on, whose depends-on
+// links its parks wrote rather than found already declared
+// (model.ResumeOn.Links), as each park's result says the daemon took it
+// (mcp.ResumeLaterTaken). A run may park more than once, and only the
+// first park on a target writes its link, so these are gathered over
+// every park the run made.
+func parkLinks(result *agent.Result, targets []string) []string {
+	if result == nil {
+		return nil
+	}
+	var links []string
+	for _, c := range result.ToolCalls {
+		if c.IsError || (c.Name != "resume_later" && c.Name != "wait_for_task") {
+			continue
+		}
+		taken, ok := mcp.ResumeLaterTaken(c.Text)
+		if !ok {
+			continue
+		}
+		for _, id := range taken.Links {
+			if slices.Contains(targets, id) && !slices.Contains(links, id) {
+				links = append(links, id)
+			}
+		}
+	}
+	return links
 }
 
 // parkedOn is the tasks a run parked its task on through wait_for_task,
