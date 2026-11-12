@@ -1010,7 +1010,7 @@ This is grain's own CI, from the operator's side.
 - `faults [-repo r] [-source s]` calls `GET /api/ci/faults`.
 - `artifact` (`artifacts`) downloads from `/api/ci/runs/{id}/artifacts/{job}/{name}`.
 - `wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]` ([external-cli #XC-26](../external-cli/external-cli.spec.md#XC-26)) polls `GET /api/ci/runs/{id}` until the run, or every job `-jobs` names, has a verdict. `-pr` and `-ref` attach to the newest run on that branch still in flight, else the newest; `-pr` finds the branch from the grain task tracking the pull request (`GET /api/tasks`). It waits the global `-timeout` (default `30m`) as a whole and accrues no wait credit. It prints the sandbox's wait answer (`gitproxy.CLIWaitResponse`, as [`grain ci wait` in a sandbox](sandbox.spec.md#CLI-91) reads it) plus `repo`, `ref` and `failing` (each failing job's step, failing tests and any shared fault from `GET /api/ci/faults`). It exits `0` green, `1` on `failure`/`cancelled`/`timed_out`, and `5` when `-timeout` runs out while the run is still going.
-- `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. GitHub Actions runs are refused. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
+- `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. A GitHub Actions run (`gha:<owner>:<name>:<run>`) is re-run on GitHub instead, as its next attempt: `POST /api/ci/runs/{id}/rerun` (`ci:write` on its repository) -- its failed and cancelled jobs, or the `-jobs` named -- bound to 3 re-runs per run at one commit. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
 - `test-history <test-name> [-repo r] [-limit N] [-provider grain|github-actions]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report). For a `-repo` whose CI mode is `github` (`GET /api/repos/{owner}/{name}/capabilities`) and no `-provider`, it reads that repository's GitHub Actions runs alone -- each read in full carries the failing log tails grain recorded of its jobs -- and notes how many grain CI runs it left out; the report names each provider's runs and their window, and says that Actions runs count failures only.
 
 <!-- BEGIN GENERATED FLAGS: grain ci -->
@@ -2043,7 +2043,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 
 ### 5.2 `grain demo [flags]` {#CLI-44}
 
-Serves the task UI on localhost over a throwaway store of fake tasks. Every caller signs in with the demo's access code, kept in `-access-code-file` when given.
+Serves the task UI on localhost over a throwaway store of fake tasks (SQLite by default, or PostgreSQL under `-db-driver=postgres`, using `-db-dsn` when given or an embedded server in the throwaway directory). Every caller signs in with the demo's access code, kept in `-access-code-file` when given.
 
 <!-- BEGIN GENERATED FLAGS: grain demo -->
 | Flag | Type | Default | Env | Description |
@@ -2054,6 +2054,8 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-as` | string |  |  | principal to attribute the fake tasks to (defaults to the OS user) |
 | `-base-branch-ci` | bool |  |  | with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {"branch": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing |
 | `-config-change` | bool |  |  | serve a real, throwaway grain/config exported from the demo's store, and seed two tasks parked on proposal branches of it (propose_config_change), so the config-change card's Approve & Apply merges into its main and Reject deletes the branch |
+| `-db-driver` | string | `"sqlite"` |  | database backend driver for the throwaway store ("sqlite" or "postgres") |
+| `-db-dsn` | string |  |  | PostgreSQL connection URL under -db-driver=postgres; empty starts an embedded server in the throwaway directory |
 | `-default-target-repo` | string | `"acme/widgets"` |  | owner/name the fake tasks target |
 | `-disable-self-upgrade` | bool |  |  | as on grain daemon: disable in-VM self-upgrade actions and hide in-VM upgrade controls in the UI |
 | `-external-config-branch` | string | `"main"` |  | with -external-config-repo, the branch of that repository configuration is read from |
