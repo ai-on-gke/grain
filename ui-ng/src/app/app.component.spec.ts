@@ -48,7 +48,7 @@ class FakeShellApi {
     authenticated: true,
     source: "oidc",
     verified: true,
-    actor: { kind: "human", id: "alice@example.com", label: "Roman Arcea" },
+    actor: { kind: "human", id: "alice@example.com", label: "Alice Example" },
   };
   logoutRedirect = "/signed-out";
   logoutCalls = 0;
@@ -359,7 +359,7 @@ describe("AppComponent shell", () => {
     const avatar = el(f).querySelector<HTMLButtonElement>(
       '[data-testid="avatar-btn"]',
     )!;
-    expect(avatar.textContent?.trim()).toBe("RA");
+    expect(avatar.textContent?.trim()).toBe("AE");
 
     avatar.click();
     await f.whenStable();
@@ -372,7 +372,7 @@ describe("AppComponent shell", () => {
       pop
         .querySelector('[data-testid="account-identity"]')
         ?.textContent?.trim(),
-    ).toBe("Roman Arcea");
+    ).toBe("Alice Example");
     expect(
       pop.querySelector('[data-testid="account-role"]')?.textContent?.trim(),
     ).toBe("grain/operator");

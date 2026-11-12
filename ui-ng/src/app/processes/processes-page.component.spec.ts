@@ -424,7 +424,7 @@ class FakeProcessesApi {
     }
     if (route === "POST /api/declarations/accept") {
       this.acceptances[0].awaiting = false;
-      this.acceptances[0].acceptedBy = "rarcea@google.com";
+      this.acceptances[0].acceptedBy = "alice@example.com";
       return Promise.resolve(structuredClone(this.acceptances[0]));
     }
     return Promise.resolve({});
