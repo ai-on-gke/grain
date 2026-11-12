@@ -314,6 +314,67 @@ func TestARestartedHostdKeepsAFinishedSpoolForTheDaemon(t *testing.T) {
 	}
 }
 
+// hostd stopping -- systemd's stop or restart, SIGTERM -- kills a run's
+// detached CLI for the host's reasons, not the run's: its exit says
+// Draining, as one a crash left without an exit does (loadSpools), so the
+// daemon re-queues the run as interrupted rather than failing it with a
+// SIGKILL that nothing about the task earned.
+func TestAStoppingHostdEndsADetachedRunAsDraining(t *testing.T) {
+	state, err := os.MkdirTemp("", "hostd-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(state) })
+	ts := startServer(t, "", func(s *Server) { s.StateDir = state })
+	started := make(chan Started, 1)
+	c := detachedClient(ts, started)
+	ctx, cancel := context.WithCancel(context.Background())
+	ran := make(chan struct{})
+	go func() {
+		defer close(ran)
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 60"}, Detach: true, Run: "r"}, nil, nil, nil)
+	}()
+	st := <-started
+	cancel()
+	<-ran
+	ts.cancel()
+	if err := <-ts.done; err != nil {
+		t.Fatal(err)
+	}
+	ts.done <- nil // for the first server's cleanup
+	waitGone(t, st.PID, 10*time.Second)
+
+	ts2 := startServer(t, "", func(s *Server) { s.StateDir = state })
+	p := listed(t, ts2, st.ID)
+	if !p.Exited || p.Exit == nil || !p.Exit.Draining {
+		t.Fatalf("a run hostd's own stop killed, as the next hostd lists it = %+v (exit %+v), want it ended Draining", p, p.Exit)
+	}
+}
+
+// The same for a protocol-1 start, whose exit goes down the connection
+// that started it.
+func TestAStoppingHostdEndsAnAttachedStartAsDraining(t *testing.T) {
+	ts := startServer(t, "", nil)
+	started := make(chan Started, 1)
+	c := ts.client
+	c.OnStarted = func(s Started) { started <- s }
+	type result struct {
+		exit Exit
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		exit, err := c.Run(context.Background(), Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 60"}}, nil, nil, nil)
+		done <- result{exit, err}
+	}()
+	<-started
+	ts.cancel()
+	r := <-done
+	if r.err != nil || !r.exit.Draining {
+		t.Fatalf("a start hostd's own stop killed = %+v, %v; want it ended Draining", r.exit, r.err)
+	}
+}
+
 func TestHelloAndCompatibility(t *testing.T) {
 	ts := startServer(t, "", func(s *Server) { s.Build = "v9.9.9" })
 	h, err := ts.client.Hello(context.Background())

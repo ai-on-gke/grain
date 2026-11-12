@@ -276,9 +276,13 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// hostd stopping -- systemd's stop or restart, SIGTERM, a drain's end
+	// -- kills what still runs for the host's reasons, not the run's: its
+	// exit says Draining, as loadSpools says of a run a crash left without
+	// one, so the daemon re-queues the run rather than failing it.
 	stopOnCancel := context.AfterFunc(ctx, func() {
 		if !s.handedOverNow() {
-			s.cancelRunning(killCanceled)
+			s.cancelRunning(killDraining)
 		}
 	})
 	defer stopOnCancel()
@@ -345,7 +349,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		return nil
 	}
-	s.cancelRunning(killCanceled)
+	s.cancelRunning(killDraining)
 	s.waitRunningDone()
 	return nil
 }
@@ -1100,6 +1104,13 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	s.mu.Lock()
 	killed := entry.killKind
 	s.mu.Unlock()
+	// runCtx is Serve's: hostd stopping can kill the process through it
+	// before stopOnCancel has said why, and that kill is the host's, not
+	// the run's (Serve's stopOnCancel).
+	if killed == killNone && ctx.Err() != nil && !errors.Is(runCtx.Err(), context.DeadlineExceeded) &&
+		cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
+		killed = killDraining
+	}
 	exit := s.reap(cmd, err, runCtx, req, killed)
 	sendJSON(frameExit, exit)
 }
