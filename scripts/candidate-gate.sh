@@ -498,7 +498,7 @@ check_qualification() {
       in_jobs && /^[^ #]/ { in_jobs = 0 }
       in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
         id = $1; sub(/:$/, "", id)
-        if (id != "idle-gate" && id != "stage-1") print id
+        if (id != "stage-1") print id
       }
     ' "$nightly_workflow")"
   fi
