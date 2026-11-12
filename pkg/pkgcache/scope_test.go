@@ -223,6 +223,47 @@ func TestGHCRPrivateManifestServedOnlyToSandboxInScope(t *testing.T) {
 	}
 }
 
+// A private manifest this cache stored before RepoScope existed sits under
+// the old shared "blob:<digest>" key, fetched with the deployment's
+// credential. It must never be served again -- not through GHCR's route,
+// nor through any other registry's, since that namespace named none.
+func TestGHCRPrivateManifestCachedBeforeRepoScopeIsNotServed(t *testing.T) {
+	f := newFakePrivateGHCR(t, deploymentBasic)
+	s, cache := newTestServer(t, Config{
+		Client:         f.client(),
+		GHCRRegistry:   "http://ghcr.io",
+		DockerRegistry: "http://ghcr.io",
+		Credentials:    staticCreds{"acme/private-service": "ghp_deployment_pat"},
+		RepoScope:      scopeByAddr(nil),
+	})
+	w, err := cache.NewWriter(KindDocker, "blob:"+f.digest)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Write(f.manifest); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !w.Commit(Meta{URL: "http://ghcr.io/v2/acme/private-service/manifests/" + f.digest}) {
+		t.Fatal("Commit stored nothing")
+	}
+
+	dockerHub := ghcrRequest(http.MethodGet, "/v2/library/anything/manifests/"+f.digest, unscopedSandboxAddr)
+	dockerHub.Host = "registry-1.docker.io"
+	for _, req := range []*http.Request{
+		ghcrRequest(http.MethodGet, "/v2/acme/private-service/manifests/"+f.digest, unscopedSandboxAddr),
+		ghcrRequest(http.MethodGet, "/v2/acme/private-service/blobs/"+f.digest, unscopedSandboxAddr),
+		ghcrRequest(http.MethodGet, "/v2/ghcr/acme/private-service/manifests/"+f.digest, unscopedSandboxAddr),
+		dockerHub,
+	} {
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if bytes.Contains(rec.Body.Bytes(), f.manifest) || rec.Header().Get(cacheStatusHeader) == "hit" {
+			t.Errorf("%s (host %s): served the private manifest cached under the pre-RepoScope key: %d %q",
+				req.URL.Path, req.Host, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestClientNamesReleaseLeavesAReusedAddressAlone(t *testing.T) {
 	var c ClientNames
 	ip := net.ParseIP("10.20.0.5")
