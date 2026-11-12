@@ -270,6 +270,18 @@ type longTermScriptGenerator struct {
 	metrics       *longTermMetrics
 	taskPlans     map[string]longTermTaskPlan
 	initialPushed map[string]bool
+	// branchPushed is every task a script has pushed its branch for. A
+	// question or proposal task's runs push nothing, and one whose closing
+	// note is acknowledged closes without a branch to merge.
+	branchPushed map[string]bool
+}
+
+// pushedBranch reports whether any script played for taskID pushed its
+// branch.
+func (g *longTermScriptGenerator) pushedBranch(taskID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.branchPushed[taskID]
 }
 
 func newLongTermScriptGenerator(
@@ -287,6 +299,7 @@ func newLongTermScriptGenerator(
 		metrics:       metrics,
 		taskPlans:     make(map[string]longTermTaskPlan),
 		initialPushed: make(map[string]bool),
+		branchPushed:  make(map[string]bool),
 	}
 }
 
@@ -353,6 +366,12 @@ func (g *longTermScriptGenerator) Generate(prompt string) ([]antigravity.Step, e
 		g.taskPlans[taskID] = plan
 	}
 
+	// A repair script checks out origin/<branch>, so it pushes only where
+	// the initial script already did: a question or proposal task's repair
+	// fails that checkout and still leaves no branch to merge.
+	if plan.kind != "question" && plan.kind != "proposal" {
+		g.branchPushed[taskID] = true
+	}
 	if !isRepair {
 		g.initialPushed[taskID] = true
 		g.metrics.recordInitial(plan.kind)
@@ -881,10 +900,7 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 			closedMerged++
 			metrics.recordTaskDone(model.DefaultTeamID)
 			branch := model.BranchName(tk.ID)
-			// A report-only sub-task closes on its closing note alone, with
-			// no pull request (orchestrator finishAnswered), so there is no
-			// branch of its to find in main.
-			if tk.Target != nil && !model.ClosesOnAnswer(tk) {
+			if tk.Target != nil && generator.pushedBranch(tk.ID) {
 				bare := barePaths[tk.Target.Owner+"/"+tk.Target.Name]
 				if !branchIsAncestor(t, bare, "main", branch) {
 					t.Errorf("task %s was closed/merged but main in %s does not contain %s", tk.ID, tk.Target, branch)
