@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/k8s"
 )
 
 func kubeUpgrader(t *testing.T, kubectl string, healthCheck []string) *Upgrader {
@@ -469,6 +470,70 @@ func TestTheFlagCheckAsksFromAPodShapedLikeTheRolloutsOwn(t *testing.T) {
 	}
 	if asked != 1 {
 		t.Errorf("%d pods asked the flag question, want one", asked)
+	}
+}
+
+// sweptKubectl wraps inner with the daemon's own orphan sweep
+// (orchestrator's sweepOrphanPods, every reconcile tick): a pod applied
+// with the sandbox component label is one the sweep deletes, so by the
+// time anything reads its logs it is gone -- kubectl's NotFound, word
+// for word.
+func sweptKubectl(t *testing.T, inner string) string {
+	t.Helper()
+	dir := t.TempDir()
+	sandboxLabel := `"` + k8s.SandboxLabel + `":"` + k8s.SandboxValue + `"`
+	script := "#!/bin/sh\n" +
+		"case \"$3 $4\" in\n" +
+		"  'apply '*)\n" +
+		"    cat > " + dir + "/manifest\n" +
+		"    if grep -qF '" + sandboxLabel + "' " + dir + "/manifest; then\n" +
+		"      for pod in " + kubeHealthCheckPod + " " + kubeAskPod + "; do\n" +
+		"        grep -qF '\"name\":\"'$pod'\"' " + dir + "/manifest && touch " + dir + "/swept-$pod\n" +
+		"      done\n" +
+		"    fi\n" +
+		"    exec " + inner + " \"$@\" < " + dir + "/manifest ;;\n" +
+		"  'logs '*)\n" +
+		"    if [ -e " + dir + "/swept-$4 ]; then\n" +
+		"      echo \"error: error from server (NotFound): pods \\\"$4\\\" not found in namespace \\\"grain\\\"\" >&2\n" +
+		"      exit 1\n" +
+		"    fi ;;\n" +
+		"esac\n" +
+		"exec " + inner + " \"$@\"\n"
+	path := filepath.Join(dir, "kubectl")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the sweeping kubectl: %v", err)
+	}
+	return path
+}
+
+func TestTheFlagCheckSurvivesTheDaemonsOwnSandboxSweep(t *testing.T) {
+	// task 4618: on kind, the unit-flags step reported `pods
+	// "grain-upgrade-ask" not found` every time. The ask pod was labelled
+	// as a sandbox, and the daemon running the upgrade sweeps every
+	// sandbox pod it is not holding -- so it deleted the pod between the
+	// pod finishing and its answer being read.
+	inner, _, manifests := fakeKubectlAnswering(t, kubeSucceeded, "", "data-dir value\n")
+	u := kubeFlagsUpgrader(t, sweptKubectl(t, inner), []string{"-data-dir"})
+
+	_, status := stageKubeStatus(t, u, "main")
+
+	if got := stepDetail(t, status, stepFlags); !strings.Contains(got, "accepts all 1 flag") {
+		t.Errorf("%s step = %q, want the flags checked, not lost to the sandbox sweep", stepFlags, got)
+	}
+	for _, manifest := range manifests() {
+		var pod struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal([]byte(manifest), &pod); err != nil {
+			t.Fatalf("unmarshalling an applied manifest: %v", err)
+		}
+		if got := pod.Metadata.Labels[k8s.SandboxLabel]; got != kubeUpgradeComponent {
+			t.Errorf("pod %s has %s=%q, want %q: anything labelled %s is the sandbox sweep's to delete",
+				pod.Metadata.Name, k8s.SandboxLabel, got, kubeUpgradeComponent, k8s.SandboxValue)
+		}
 	}
 }
 

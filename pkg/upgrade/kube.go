@@ -185,6 +185,17 @@ const kubeHealthCheckPod = "grain-upgrade-check"
 // disk, not the work.
 var kubeHealthCheckShape = k8s.PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10}
 
+// kubeUpgradeComponent is the component label every throwaway pod an
+// upgrade creates carries -- the check pod, the ask pod, a release notes
+// preview's -- in place of k8s.SandboxValue. It is not cosmetic: a daemon
+// running with -k8s-sandboxes sweeps every SandboxValue pod in its
+// namespace that it is not holding as a run's sandbox, on every
+// reconcile tick, and these share that namespace. Labelled as sandboxes
+// they were deleted mid-upgrade: a check pod killed while it ran ("the
+// check pod is Failed"), an ask pod gone between finishing and having
+// its logs read (pods "grain-upgrade-ask" not found).
+const kubeUpgradeComponent = "upgrade"
+
 // stepRollout is the Kubernetes path's own last step, in place of the
 // image path's "record image": the Deployment is repointed and the
 // cluster begins replacing this very pod.
@@ -643,8 +654,9 @@ func (u *Upgrader) healthCheckInCluster(ctx context.Context, p *progress, client
 		// The image's own ENTRYPOINT is `grain` (Dockerfile), so this is
 		// the same subcommand the other two paths run -- "schema-version"
 		// on a real deployment.
-		Command:  command,
-		Security: security,
+		Command:   command,
+		Security:  security,
+		Component: kubeUpgradeComponent,
 	}); err != nil {
 		return "", err
 	}
@@ -781,9 +793,10 @@ func (r kubeRunner) ask(ctx context.Context, p *progress, args []string) (string
 		return "", fmt.Errorf("%w: %w", errCouldNotAsk, err)
 	}
 	if err := client.Create(ctx, pod, kubeHealthCheckShape, k8s.PodOptions{
-		Image:    r.ref,
-		Command:  append([]string{"grain"}, args...),
-		Security: r.security,
+		Image:     r.ref,
+		Command:   append([]string{"grain"}, args...),
+		Security:  r.security,
+		Component: kubeUpgradeComponent,
 	}); err != nil {
 		return "", fmt.Errorf("%w: %w", errCouldNotAsk, err)
 	}
