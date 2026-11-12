@@ -24,8 +24,12 @@ import {
   effect,
   inject,
   signal,
+  input,
+  viewChild,
+  untracked,
+  ElementRef,
 } from "@angular/core";
-import { RouterLink } from "@angular/router";
+import { RouterLink, Router } from "@angular/router";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
@@ -51,6 +55,8 @@ import {
   spark,
   tokens,
 } from "./agent-view";
+import { SplitController } from "../shared/split-controller";
+import { TaskDetailComponent } from "../task/task-detail.component";
 import { AgentsStore } from "./agents.store";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 
@@ -93,13 +99,20 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
     StatusIconComponent,
     ActorChipComponent,
     PillSelectComponent,
+    TaskDetailComponent,
   ],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./agents-page.component.css"],
+  styleUrls: [
+    "../shared/work-surface.css",
+    "../inbox/inbox-queue.css",
+    "../inbox/inbox-inspector.css",
+    "./agents-page.component.css",
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "[class.is-wall]": "wall()",
     "(document:keydown.escape)": "onEscape($event)",
+    "(document:keydown)": "onKey($event)",
     "(document:keydown.tab)": "onTab($event)",
     "(document:keydown.shift.tab)": "onTab($event)",
   },
@@ -109,234 +122,357 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
       aria-labelledby="agents-headline"
       [attr.inert]="contactOpen() ? '' : null"
     >
-      <div class="stage-header agents-header">
-        <div class="view-headline-row">
-          <h1 class="view-headline" id="agents-headline" tabindex="-1">
-            Agents
-          </h1>
-          <div class="headline-actions">
-            @if (canContact() && store.agents().length) {
-              <button
-                type="button"
-                class="btn-outlined"
-                data-testid="contact-open"
-                (click)="openContact()"
-              >
-                Contact running
-              </button>
-            }
-            <button
-              type="button"
-              class="btn-text"
-              data-testid="wall-toggle"
-              [attr.aria-pressed]="wall()"
-              gTip="Full screen for a team display (f)"
-              (click)="toggleWall()"
-            >
-              {{ wall() ? "Leave wall view" : "Wall view" }}
-            </button>
-          </div>
-        </div>
-
-        <div
-          class="agents-summary aurora-surface"
-          [class.is-processing]="store.agents().length > 0"
-          [attr.data-aurora-state]="auroraState()"
-          [attr.aria-busy]="!store.loaded()"
-          data-testid="agents-summary"
-        >
-          @if (!store.loaded() && store.loadError()) {
-            <span data-testid="agents-load-failed"
-              >Running agents could not be loaded.</span
-            >
-          } @else if (!store.loaded()) {
-            <!-- Before the first read there is nothing to count; "0 working"
-                 would contradict the Tasks page's Running tab. -->
-            <span data-testid="agents-loading"
-              >Reading what the agents are doing…</span
-            >
-          } @else {
-            <span
-              ><strong class="tabular">{{ counts().working }}</strong>
-              working</span
-            >
-            <span
-              ><strong class="tabular">{{ counts().setup }}</strong> setting
-              up</span
-            >
-            <span [class.warn]="counts().quiet"
-              ><strong class="tabular">{{ counts().quiet }}</strong> quiet</span
-            >
-            <span
-              gTip="Estimated size of the prompts the current runs were handed, not what they have spent"
-            >
-              <strong class="tabular">≈{{ tokenTotal() }}</strong> prompt tokens
-              (est.)
-            </span>
-            @if (cpuSummary(); as c) {
-              <span>{{ c }}</span>
-            }
-          }
-        </div>
-        <p class="sr-only" aria-live="polite" data-testid="agents-live">
-          {{ liveText() }}
-        </p>
-
-        <div class="agents-controls">
-          <div class="filter-strip" role="group" aria-label="Show">
-            @for (f of filters; track f.id) {
-              <button
-                type="button"
-                class="filter-chip"
-                [attr.aria-pressed]="filter() === f.id"
-                [attr.data-testid]="'agents-filter-' + f.id"
-                (click)="filter.set(f.id)"
-              >
-                {{ f.label }}
-                <span class="tabular">{{
-                  f.id === "all" ? store.agents().length : counts()[f.id]
-                }}</span>
-              </button>
-            }
-          </div>
-          <g-pill-select
-            testid="agents-group"
-            prefix="Group by"
-            ariaLabel="Group by"
-            align="left"
-            [options]="groupOptions"
-            [value]="groupBy()"
-            (valueChange)="setGroupBy($event)"
-          />
-          <div class="segmented" role="group" aria-label="Layout">
-            <button
-              type="button"
-              [attr.aria-pressed]="layout() === 'cards'"
-              data-testid="layout-cards"
-              (click)="layout.set('cards')"
-            >
-              Cards
-            </button>
-            <button
-              type="button"
-              [attr.aria-pressed]="layout() === 'list'"
-              data-testid="layout-list"
-              (click)="layout.set('list')"
-            >
-              List
-            </button>
-          </div>
-          @if (wall() && viewFilter.query().trim()) {
-            <span class="status-pill neutral" data-testid="wall-filter-note"
-              >Search ignored in wall view</span
-            >
-          }
-        </div>
-      </div>
-
-      @if (store.loadError(); as err) {
-        <p class="banner banner-error" role="alert">{{ err }}</p>
-      }
-
-      <div class="agents-body">
-        @if (
-          store.loaded() && !store.loadError() && store.agents().length === 0
-        ) {
-          <p class="empty-state" data-testid="agents-empty">
-            No agent is running right now.
-            <a routerLink="/tasks" [queryParams]="{ tab: 'backlog' }"
-              >See what is next in the Backlog</a
-            >
-          </p>
-        } @else if (
-          store.loaded() && store.agents().length && shown().length === 0
-        ) {
-          <p class="empty-state">No running agent matches this filter.</p>
-        }
-        @for (g of grouped(); track g.key) {
-          <section
-            class="agent-group"
-            [attr.aria-labelledby]="g.key ? 'ag-' + $index : null"
-          >
-            @if (g.key) {
-              <h2 class="band-header" [id]="'ag-' + $index">
-                {{ g.key }}
-                <span class="muted tabular">{{ g.agents.length }}</span>
-              </h2>
-            }
-            @if (layout() === "cards") {
-              <ul class="agent-grid">
-                @for (a of g.agents; track a.task.id) {
-                  <li>
-                    <ng-container
-                      [ngTemplateOutlet]="card"
-                      [ngTemplateOutletContext]="{ $implicit: a }"
-                    />
-                  </li>
+      <div
+        class="inbox-split agents-split"
+        #split
+        [class.has-pane]="!isPhone()"
+        [class.is-collapsed]="sp.collapsed() && !isPhone()"
+        [class.is-dragging]="sp.dragging()"
+        [style.--queue-w.%]="sp.ratioExact()"
+      >
+        <div class="queue-pane agents-list-pane" id="agents-list">
+          <div class="stage-header agents-header">
+            <div class="view-headline-row">
+              <h1 class="view-headline" id="agents-headline" tabindex="-1">
+                Agents
+              </h1>
+              <div class="headline-actions">
+                @if (canContact() && store.agents().length) {
+                  <button
+                    type="button"
+                    class="btn-outlined"
+                    data-testid="contact-open"
+                    (click)="openContact()"
+                  >
+                    Contact running
+                  </button>
                 }
-              </ul>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="wall-toggle"
+                  [attr.aria-pressed]="wall()"
+                  gTip="Full screen for a team display (f)"
+                  (click)="toggleWall()"
+                >
+                  {{ wall() ? "Leave wall view" : "Wall view" }}
+                </button>
+              </div>
+            </div>
+
+            <div
+              class="agents-summary aurora-surface"
+              [class.is-processing]="store.agents().length > 0"
+              [attr.data-aurora-state]="auroraState()"
+              [attr.aria-busy]="!store.loaded()"
+              data-testid="agents-summary"
+            >
+              @if (!store.loaded() && store.loadError()) {
+                <span data-testid="agents-load-failed"
+                  >Running agents could not be loaded.</span
+                >
+              } @else if (!store.loaded()) {
+                <!-- Before the first read there is nothing to count; "0 working"
+                 would contradict the Tasks page's Running tab. -->
+                <span data-testid="agents-loading"
+                  >Reading what the agents are doing…</span
+                >
+              } @else {
+                <span
+                  ><strong class="tabular">{{ counts().working }}</strong>
+                  working</span
+                >
+                <span
+                  ><strong class="tabular">{{ counts().setup }}</strong> setting
+                  up</span
+                >
+                <span [class.warn]="counts().quiet"
+                  ><strong class="tabular">{{ counts().quiet }}</strong>
+                  quiet</span
+                >
+                <span
+                  gTip="Estimated size of the prompts the current runs were handed, not what they have spent"
+                >
+                  <strong class="tabular">≈{{ tokenTotal() }}</strong> prompt
+                  tokens (est.)
+                </span>
+                @if (cpuSummary(); as c) {
+                  <span>{{ c }}</span>
+                }
+              }
+            </div>
+            <p class="sr-only" aria-live="polite" data-testid="agents-live">
+              {{ liveText() }}
+            </p>
+
+            <div class="agents-controls">
+              <div class="filter-strip" role="group" aria-label="Show">
+                @for (f of filters; track f.id) {
+                  <button
+                    type="button"
+                    class="filter-chip"
+                    [attr.aria-pressed]="filter() === f.id"
+                    [attr.data-testid]="'agents-filter-' + f.id"
+                    (click)="filter.set(f.id)"
+                  >
+                    {{ f.label }}
+                    <span class="tabular">{{
+                      f.id === "all" ? store.agents().length : counts()[f.id]
+                    }}</span>
+                  </button>
+                }
+              </div>
+              <g-pill-select
+                testid="agents-group"
+                prefix="Group by"
+                ariaLabel="Group by"
+                align="left"
+                [options]="groupOptions"
+                [value]="groupBy()"
+                (valueChange)="setGroupBy($event)"
+              />
+              <div class="segmented" role="group" aria-label="Layout">
+                <button
+                  type="button"
+                  [attr.aria-pressed]="layout() === 'cards'"
+                  data-testid="layout-cards"
+                  (click)="layout.set('cards')"
+                >
+                  Cards
+                </button>
+                <button
+                  type="button"
+                  [attr.aria-pressed]="layout() === 'list'"
+                  data-testid="layout-list"
+                  (click)="layout.set('list')"
+                >
+                  List
+                </button>
+              </div>
+              @if (wall() && viewFilter.query().trim()) {
+                <span class="status-pill neutral" data-testid="wall-filter-note"
+                  >Search ignored in wall view</span
+                >
+              }
+            </div>
+          </div>
+
+          @if (store.loadError(); as err) {
+            <p class="banner banner-error" role="alert">{{ err }}</p>
+          }
+
+          <div class="agents-body">
+            @if (
+              store.loaded() &&
+              !store.loadError() &&
+              store.agents().length === 0
+            ) {
+              <p class="empty-state" data-testid="agents-empty">
+                No agent is running right now.
+                <a routerLink="/tasks" [queryParams]="{ tab: 'backlog' }"
+                  >See what is next in the Backlog</a
+                >
+              </p>
+            } @else if (
+              store.loaded() && store.agents().length && shown().length === 0
+            ) {
+              <p class="empty-state">No running agent matches this filter.</p>
+            }
+            @for (g of grouped(); track g.key) {
+              <section
+                class="agent-group"
+                [attr.aria-labelledby]="g.key ? 'ag-' + $index : null"
+              >
+                @if (g.key) {
+                  <h2 class="band-header" [id]="'ag-' + $index">
+                    {{ g.key }}
+                    <span class="muted tabular">{{ g.agents.length }}</span>
+                  </h2>
+                }
+                @if (layout() === "cards") {
+                  <ul class="agent-grid">
+                    @for (a of g.agents; track a.task.id) {
+                      <li>
+                        <ng-container
+                          [ngTemplateOutlet]="card"
+                          [ngTemplateOutletContext]="{ $implicit: a }"
+                        />
+                      </li>
+                    }
+                  </ul>
+                } @else {
+                  <table class="agent-table" data-testid="agent-table">
+                    <caption class="sr-only">
+                      Running agents
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Task</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Doing</th>
+                        <th scope="col">Model</th>
+                        <th scope="col">Elapsed</th>
+                        <th scope="col">Prompt (est.)</th>
+                        <th scope="col">CPU</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (a of g.agents; track a.task.id) {
+                        <tr
+                          [class.is-quiet]="a.status === 'quiet'"
+                          [attr.data-testid]="'agent-row-' + a.task.id"
+                        >
+                          <td>
+                            <a [routerLink]="['/task', a.task.id]"
+                              >#{{ a.task.id }} {{ a.task.title }}</a
+                            >
+                            @if (partOf(a.task.id); as ps) {
+                              <a
+                                class="part-of-link"
+                                style="margin-left:6px"
+                                [routerLink]="['/workstreams', ps.key]"
+                                [queryParams]="{ node: a.task.id }"
+                                data-testid="agent-row-part-of"
+                                >Part of {{ ps.title }}</a
+                              >
+                            }
+                          </td>
+                          <td>
+                            <span [class]="'status-pill ' + statusTone(a)"
+                              ><g-status-icon
+                                [tone]="statusTone(a)"
+                                [kind]="a.status"
+                              />{{ statusText(a) }}</span
+                            >
+                          </td>
+                          <td>
+                            @if (a.status === "quiet") {
+                              <strong class="quiet-line">{{
+                                quiet(a).text
+                              }}</strong>
+                            } @else {
+                              {{ a.task.activity || "Working" }}
+                            }
+                          </td>
+                          <td>{{ a.attempt?.model || "—" }}</td>
+                          <td class="tabular">{{ elapsed(a) }}</td>
+                          <td class="tabular">{{ tokensOf(a) }}</td>
+                          <td class="tabular">{{ cpuText(a) }}</td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                }
+              </section>
+            }
+          </div>
+        </div>
+        @if (!isPhone()) {
+          <div
+            class="inbox-resizer"
+            role="separator"
+            tabindex="0"
+            aria-orientation="vertical"
+            aria-controls="agents-list"
+            aria-label="Resize the list"
+            [attr.aria-valuemin]="sp.collapsed() ? 0 : sp.minPct()"
+            [attr.aria-valuemax]="sp.maxPct()"
+            [attr.aria-valuenow]="sp.collapsed() ? 0 : sp.ratioPct()"
+            [attr.aria-valuetext]="
+              sp.collapsed()
+                ? 'List hidden'
+                : 'List ' + sp.ratioPct() + ' percent of the width'
+            "
+            data-testid="agents-resizer"
+            (pointerdown)="sp.onResizeStart($event)"
+            (pointermove)="sp.onResizeMove($event)"
+            (pointerup)="sp.onResizeEnd($event)"
+            (pointercancel)="sp.onResizeEnd($event)"
+            (lostpointercapture)="sp.onResizeEnd($event)"
+            (dblclick)="sp.reset()"
+            (keydown)="sp.onKey($event)"
+          >
+            <span class="inbox-resizer-pill" aria-hidden="true"></span>
+            @if (sp.dragging()) {
+              <span class="inbox-resizer-badge" aria-hidden="true"
+                >{{ sp.ratioPct() }} / {{ 100 - sp.ratioPct() }}</span
+              >
+            }
+          </div>
+          <section
+            class="inspector-pane tasks-detail-pane"
+            [class.is-sheet-open]="!!selectedId()"
+            aria-label="Selected task"
+            data-testid="agents-pane"
+          >
+            <div class="tasks-pane-bar">
+              <span class="tasks-pane-bar-label tabular">
+                @if (selectedId(); as activeId) {
+                  Inspecting #{{ activeId }}
+                } @else {
+                  Task inspector
+                }
+              </span>
+              <div class="split-controls" role="group" aria-label="List width">
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="agents-split-toggle"
+                  [attr.aria-expanded]="!sp.collapsed()"
+                  aria-controls="agents-list"
+                  (click)="sp.toggleCollapsed()"
+                >
+                  {{
+                    sp.collapsed()
+                      ? "Show list (" + store.agents().length + ")"
+                      : "Hide list"
+                  }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="agents-split-30"
+                  [attr.aria-pressed]="!sp.collapsed() && sp.ratioPct() === 30"
+                  (click)="sp.setPreset(0.3)"
+                >
+                  30 / 70
+                </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="agents-split-42"
+                  [attr.aria-pressed]="!sp.collapsed() && sp.ratioPct() === 42"
+                  (click)="sp.setPreset(0.42)"
+                >
+                  42 / 58
+                </button>
+              </div>
+            </div>
+            @if (pinnedAway(); as away) {
+              <div
+                class="banner banner-info left-banner"
+                role="status"
+                data-testid="pane-moved"
+              >
+                <span>{{ away }}</span>
+                @if (store.agents().length) {
+                  <button
+                    type="button"
+                    class="btn-tonal"
+                    data-testid="pane-next"
+                    (click)="step(1)"
+                  >
+                    Next agent
+                  </button>
+                }
+              </div>
+            }
+            @if (selectedId(); as activeId) {
+              <g-task-detail [pane]="true" [id]="activeId" />
             } @else {
-              <table class="agent-table" data-testid="agent-table">
-                <caption class="sr-only">
-                  Running agents
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Task</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Doing</th>
-                    <th scope="col">Model</th>
-                    <th scope="col">Elapsed</th>
-                    <th scope="col">Prompt (est.)</th>
-                    <th scope="col">CPU</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (a of g.agents; track a.task.id) {
-                    <tr
-                      [class.is-quiet]="a.status === 'quiet'"
-                      [attr.data-testid]="'agent-row-' + a.task.id"
-                    >
-                      <td>
-                        <a [routerLink]="['/task', a.task.id]"
-                          >#{{ a.task.id }} {{ a.task.title }}</a
-                        >
-                        @if (partOf(a.task.id); as ps) {
-                          <a
-                            class="part-of-link"
-                            style="margin-left:6px"
-                            [routerLink]="['/workstreams', ps.key]"
-                            [queryParams]="{ node: a.task.id }"
-                            data-testid="agent-row-part-of"
-                            >Part of {{ ps.title }}</a
-                          >
-                        }
-                      </td>
-                      <td>
-                        <span [class]="'status-pill ' + statusTone(a)"
-                          ><g-status-icon
-                            [tone]="statusTone(a)"
-                            [kind]="a.status"
-                          />{{ statusText(a) }}</span
-                        >
-                      </td>
-                      <td>
-                        @if (a.status === "quiet") {
-                          <strong class="quiet-line">{{
-                            quiet(a).text
-                          }}</strong>
-                        } @else {
-                          {{ a.task.activity || "Working" }}
-                        }
-                      </td>
-                      <td>{{ a.attempt?.model || "—" }}</td>
-                      <td class="tabular">{{ elapsed(a) }}</td>
-                      <td class="tabular">{{ tokensOf(a) }}</td>
-                      <td class="tabular">{{ cpuText(a) }}</td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
+              <div class="pane-empty">
+                <p>No agents running.</p>
+              </div>
             }
           </section>
         }
@@ -346,6 +482,10 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
     <ng-template #card let-a>
       <article
         class="agent-card"
+        [class.is-selected]="a.task.id === selectedId()"
+        (click)="selectTask(a.task.id)"
+        (keydown.enter)="selectTask(a.task.id)"
+        tabindex="0"
         [class.is-quiet]="a.status === 'quiet'"
         [class.is-fresh]="isFresh(a)"
         [attr.data-testid]="'agent-' + a.task.id"
@@ -527,6 +667,64 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
   `,
 })
 export class AgentsPageComponent implements OnInit, OnDestroy {
+  readonly task = input<string>();
+  readonly pane = input<string>();
+  private readonly router = inject(Router);
+
+  private readonly splitEl = viewChild<ElementRef<HTMLElement>>("split");
+  protected readonly sp = new SplitController({
+    ratioKey: "grain.agents.splitRatio",
+    collapsedKey: "grain.agents.collapsed",
+    defaultRatio: 0.42,
+    element: () => this.splitEl()?.nativeElement,
+  });
+
+  protected readonly selectedId = computed(() => {
+    const fromUrl = this.task();
+    if (fromUrl) return fromUrl;
+    if (this.isPhone() || !this.store.loaded()) return null;
+    const all = this.store.agents();
+    return all.length > 0 ? all[0].task.id : null;
+  });
+
+  protected isPhone(): boolean {
+    return (
+      typeof matchMedia === "function" &&
+      matchMedia("(max-width: 720px)").matches
+    );
+  }
+
+  protected readonly pinnedAway = computed(() => {
+    const sel = this.selectedId();
+    if (!sel || !this.store.loaded()) return null;
+    const found = this.store.agents().some((a) => a.task.id === sel);
+    if (found) return null;
+    return "This task is no longer running.";
+  });
+
+  private lastIndex = 0;
+
+  protected selectTask(id: string): void {
+    if (this.isPhone()) {
+      void this.router.navigate(["/task", id], {
+        queryParams: { from: "agents", tab: this.pane() },
+      });
+      return;
+    }
+    void this.router.navigate([], {
+      queryParams: { task: id },
+      queryParamsHandling: "merge",
+      replaceUrl: false,
+    });
+  }
+
+  protected step(dir: number): void {
+    const all = this.store.agents();
+    if (!all.length) return;
+    const nextIdx = Math.max(0, Math.min(all.length - 1, this.lastIndex + dir));
+    this.selectTask(all[nextIdx].task.id);
+  }
+
   protected readonly store = inject(AgentsStore);
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly access = inject(AccessService);
@@ -564,6 +762,18 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   });
 
   constructor() {
+    effect(() => {
+      const all = this.store.agents();
+      const sel = this.selectedId();
+      if (sel) {
+        const idx = all.findIndex((a) => a.task.id === sel);
+        if (idx >= 0) {
+          untracked(() => {
+            this.lastIndex = idx;
+          });
+        }
+      }
+    });
     effect(() => {
       const n = this.store.agents().length;
       if (this.hadRunning && n === 0) {
@@ -755,9 +965,6 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     this.doc.body.classList.toggle("agents-wall", on);
   }
 
-  // Escape is not a character key, so it works from any field: it closes
-  // the dialog first, then leaves the wall view. A modal outside this page
-  // (the New task sheet) owns the key.
   protected onEscape(ev: Event): void {
     if (ev.defaultPrevented) return;
     if (this.contactOpen()) {
@@ -766,9 +973,47 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
       return;
     }
     if (this.doc.querySelector('[aria-modal="true"]')) return;
+    const task = this.task();
+    if (task) {
+      ev.preventDefault();
+      void this.router.navigate([], {
+        queryParams: { task: null, pane: null },
+        queryParamsHandling: "merge",
+      });
+      return;
+    }
     if (this.wall()) {
       ev.preventDefault();
       this.setWall(false);
+    }
+  }
+
+  protected onKey(ev: KeyboardEvent): void {
+    if (ev.defaultPrevented) return;
+    if (this.contactOpen() || this.doc.querySelector('[aria-modal="true"]'))
+      return;
+    const target = ev.target as HTMLElement;
+    if (
+      target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable
+    ) {
+      return;
+    }
+    if (ev.key === "j") {
+      ev.preventDefault();
+      this.step(1);
+    } else if (ev.key === "k") {
+      ev.preventDefault();
+      this.step(-1);
+    } else if (ev.key === "Enter") {
+      const sel = this.selectedId();
+      if (sel) {
+        ev.preventDefault();
+        void this.router.navigate(["/task", sel], {
+          queryParams: { from: "agents", tab: this.pane() },
+        });
+      }
     }
   }
 
