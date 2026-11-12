@@ -59,12 +59,13 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	client.Config.Secrets = secrets.New(t.TempDir())
 	// github-sandbox is retired from OfferedCapabilities() onto
 	// github#sandbox-repo (schema migration 124), while capabilityStatuses
-	// keeps its readiness row; attach a legacy row here to exercise the
-	// join on capabilitiesWithReadiness as well as ciCapabilitiesWithReadiness.
-	client.Config.Capabilities = append(ui.OfferedCapabilities(), ui.Capability{
-		ID:   "github-sandbox",
-		Name: "GitHub sandbox",
-	})
+	// keeps its readiness row; attach both a legacy row and the bare
+	// capability reference (without ={}) to exercise capabilityStatusKey on
+	// capabilitiesWithReadiness as well as ciCapabilitiesWithReadiness.
+	client.Config.Capabilities = append(ui.OfferedCapabilities(),
+		ui.Capability{ID: "github-sandbox", Name: "GitHub sandbox"},
+		ui.Capability{ID: model.GitHubSandboxRepoRef, Name: "GitHub sandbox repo"},
+	)
 
 	rec := do(t, srv, http.MethodGet, "/api/config", "")
 	if rec.Code != http.StatusOK {
@@ -75,15 +76,17 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 		CICapabilities []ui.Capability `json:"ciCapabilities"`
 	}](t, rec)
 
-	sandbox := pickerRow(t, cfg.Capabilities, "github-sandbox")
-	if sandbox.Ready == nil {
-		t.Fatal("github-sandbox: Ready is nil -- the picker was told nothing about readiness")
-	}
-	if *sandbox.Ready {
-		t.Error("github-sandbox: Ready = true with no App secrets stored on this deployment")
-	}
-	if want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}; !reflect.DeepEqual(sandbox.Needs, want) {
-		t.Errorf("github-sandbox: Needs = %v, want %v", sandbox.Needs, want)
+	for _, id := range []string{"github-sandbox", model.GitHubSandboxRepoRef} {
+		sandbox := pickerRow(t, cfg.Capabilities, id)
+		if sandbox.Ready == nil {
+			t.Fatalf("%s: Ready is nil -- the picker was told nothing about readiness", id)
+		}
+		if *sandbox.Ready {
+			t.Errorf("%s: Ready = true with no App secrets stored on this deployment", id)
+		}
+		if want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}; !reflect.DeepEqual(sandbox.Needs, want) {
+			t.Errorf("%s: Needs = %v, want %v", id, sandbox.Needs, want)
+		}
 	}
 
 	ciSandbox := pickerRow(t, cfg.CICapabilities, model.GitHubSandboxRepoGrant)
@@ -115,12 +118,14 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	if readyCISandbox.Ready == nil || !*readyCISandbox.Ready || len(readyCISandbox.Needs) != 0 {
 		t.Errorf("%s after secrets set: Ready = %v, Needs = %v, want ready with none", model.GitHubSandboxRepoGrant, readyCISandbox.Ready, readyCISandbox.Needs)
 	}
-	readySandbox := pickerRow(t, cfg.Capabilities, "github-sandbox")
-	if readySandbox.Ready == nil || !*readySandbox.Ready {
-		t.Errorf("github-sandbox after secrets set: Ready = %v, want true", readySandbox.Ready)
-	}
-	if len(readySandbox.Needs) != 0 {
-		t.Errorf("github-sandbox after secrets set: Needs = %v, want none", readySandbox.Needs)
+	for _, id := range []string{"github-sandbox", model.GitHubSandboxRepoRef} {
+		readySandbox := pickerRow(t, cfg.Capabilities, id)
+		if readySandbox.Ready == nil || !*readySandbox.Ready {
+			t.Errorf("%s after secrets set: Ready = %v, want true", id, readySandbox.Ready)
+		}
+		if len(readySandbox.Needs) != 0 {
+			t.Errorf("%s after secrets set: Needs = %v, want none", id, readySandbox.Needs)
+		}
 	}
 }
 
@@ -305,21 +310,23 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 // list happens to hold today.
 func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	t.Parallel()
-	c, _, ctx := testClient(t)
-	c.Config.Capabilities = []ui.Capability{
-		{ID: "github-sandbox", Name: "GitHub sandbox"},
-	}
+	for _, rowID := range []string{"github-sandbox", model.GitHubSandboxRepoRef, model.GitHubSandboxRepoGrant} {
+		c, _, ctx := testClient(t)
+		c.Config.Capabilities = []ui.Capability{
+			{ID: rowID, Name: "GitHub sandbox"},
+		}
 
-	got, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for id, want := range map[string]bool{
-		"github-sandbox": true,
-		"registry-push":  false,
-	} {
-		if status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id)); status.Grantable != want {
-			t.Errorf("%s: Grantable = %t, want %t (status: %+v)", id, status.Grantable, want, status)
+		got, err := c.GetSettings(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for id, want := range map[string]bool{
+			"github-sandbox": true,
+			"registry-push":  false,
+		} {
+			if status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id)); status.Grantable != want {
+				t.Errorf("picker row %q, %s: Grantable = %t, want %t (status: %+v)", rowID, id, status.Grantable, want, status)
+			}
 		}
 	}
 }

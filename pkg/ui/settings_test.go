@@ -464,7 +464,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &empty}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GitHubSandboxRepoRef}); err != nil {
 		t.Fatal(err)
 	}
 	read, err = c.GetSettings(ctx)

@@ -536,13 +536,29 @@ func (p *Policy) checkApproval(task model.Task, requester Requester) error {
 	return nil
 }
 
-// retiredAs is the grant the retired bare capability name became
-// (model.CanonicalLegacyGrant), compared without regard to case like
-// every other pattern, and false for any other name.
-func retiredAs(name string) (string, bool) {
+// retiredGrants is what a retired capability name became
+// (model.CanonicalLegacyGrants), compared without regard to case like
+// every other pattern, and nil for any name that is not retired.
+func retiredGrants(name string) []string {
 	name = strings.ToLower(strings.TrimSpace(name))
-	to := strings.TrimSpace(model.CanonicalLegacyGrant(name))
-	return to, to != name
+	tos := model.CanonicalLegacyGrants(name)
+	if len(tos) == 1 && strings.TrimSpace(tos[0]) == name {
+		return nil
+	}
+	out := make([]string, len(tos))
+	for i, to := range tos {
+		out[i] = strings.TrimSpace(to)
+	}
+	return out
+}
+
+// retiredAs is the single grant a 1-to-1 retired capability name became,
+// compared without regard to case, and false for any other name.
+func retiredAs(name string) (string, bool) {
+	if tos := retiredGrants(name); len(tos) == 1 {
+		return tos[0], true
+	}
+	return "", false
 }
 
 // retiredAsSeveral is the grants a retired bare name that became more
@@ -550,11 +566,10 @@ func retiredAs(name string) (string, bool) {
 // deployment-health), compared without regard to case, and nil for any
 // other name.
 func retiredAsSeveral(name string) []string {
-	tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(name)))
-	if len(tos) < 2 {
-		return nil
+	if tos := retiredGrants(name); len(tos) > 1 {
+		return tos
 	}
-	return tos
+	return nil
 }
 
 // capabilityRefAliasVariants returns capability along with its built-in
@@ -788,20 +803,30 @@ func allowsCapability(patterns []string, capability string) bool {
 		return true
 	}
 	for _, pattern := range patterns {
-		if to, ok := retiredAs(pattern); ok {
-			if to == want || (model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want)) {
+		// A retired name in allow (1-to-1 such as memory -> api#memory, or
+		// 1-to-many such as self-debug -> api#self-debug + grain#source)
+		// admits each grant it became across both .../api# and legacy api:
+		// spellings, with or without empty {}, while keeping JSON argument
+		// value case exact.
+		for _, to := range retiredGrants(pattern) {
+			if sameAllowedGrant(to, want) {
 				return true
 			}
 		}
-		// A name retired into several grants (self-debug became
-		// api#self-debug and grain#source; deployment-health
-		// api#deployment:read and grain#health) admits each of them,
-		// in either the canonical .../api# or legacy api: spelling.
-		if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(pattern))); len(tos) > 1 &&
-			slices.ContainsFunc(tos, func(to string) bool {
-				return strings.EqualFold(to, want) || strings.EqualFold(model.CanonicalGrantKey(to), model.CanonicalGrantKey(capability)) ||
-					(model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want))
-			}) {
+	}
+	return false
+}
+
+func sameAllowedGrant(to, capability string) bool {
+	for _, s := range grantSpellings(capability) {
+		w := lowerCapabilityRefPrefix(s)
+		if model.IsCapabilityRef(to) {
+			if model.IsCapabilityRef(w) && sameCapabilityRefGrant(to, w) {
+				return true
+			}
+			continue
+		}
+		if strings.EqualFold(to, w) {
 			return true
 		}
 	}

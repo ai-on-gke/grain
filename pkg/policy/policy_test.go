@@ -196,6 +196,44 @@ func TestCanonicalPolicyBindsARetiredGrantThatBecameSeveral(t *testing.T) {
 	if err := check("  deny: ["+strconvQuote(model.GrainHealthGrant)+"]", "deployment-health"); err == nil {
 		t.Error("deny: [grain#health] admitted deployment-health, which became it")
 	}
+
+	// A 1-to-1 retired name whose replacement is an api reference (memory ->
+	// api#memory) admits the stored legacy api:memory spelling too, without
+	// opening a narrowed repo-scoped grant.
+	for _, g := range []string{"api:memory", model.APIRef("memory"), model.APIRef("memory") + "={}"} {
+		if err := check("  allow: [memory]", g); err != nil {
+			t.Errorf("allow: [memory] refused %s: %v", g, err)
+		}
+	}
+	if err := check("  allow: [memory]", "api:memory@acme/widgets"); err == nil {
+		t.Error("allow: [memory] admitted repo-scoped api:memory@acme/widgets")
+	}
+
+	// Runtime expansions (local-scripts:<name>, 1-to-1 or 1-to-many) bind in
+	// both directions while keeping JSON argument values case-sensitive.
+	const hostScriptRef = "https://grain.dev/capabilities/host-script#host-script"
+	scriptA := hostScriptRef + `={"script":"ops-a"}`
+	scriptB := hostScriptRef + `={"script":"ops-b"}`
+	scriptUpper := hostScriptRef + `={"script":"OPS-A"}`
+	t.Cleanup(model.SetRuntimeGrantExpansions(map[string][]string{
+		"local-scripts:one": {scriptA},
+		"local-scripts:two": {scriptA, scriptB},
+	}))
+	if err := check("  allow: ["+strconvQuote(scriptA)+"]", "local-scripts:one"); err != nil {
+		t.Errorf("allowing the single expanded script refused local-scripts:one: %v", err)
+	}
+	if err := check("  deny: ["+strconvQuote(scriptA)+"]", "local-scripts:one"); err == nil {
+		t.Error("denying the single expanded script admitted local-scripts:one")
+	}
+	if err := check("  allow: [\"local-scripts:one\"]", scriptA); err != nil {
+		t.Errorf("allow: [local-scripts:one] refused %s: %v", scriptA, err)
+	}
+	if err := check("  allow: [\"local-scripts:one\"]", scriptUpper); err == nil {
+		t.Errorf("allow: [local-scripts:one] admitted uppercase script %s", scriptUpper)
+	}
+	if err := check("  allow: [\"local-scripts:two\"]", scriptUpper); err == nil {
+		t.Errorf("allow: [local-scripts:two] admitted uppercase script %s", scriptUpper)
+	}
 }
 
 // The starter policy `grain init workstation` writes moved off the
