@@ -1546,8 +1546,8 @@ const (
 	// written on the culprit (-> the repair's ID). LinkReverts' shape for
 	// a repair that fixed forward rather than reverting: it is what lets a
 	// report count a change failure against the merge that caused it
-	// rather than leave it unattributed. Written once the repair's own
-	// evidence names exactly one merge (orchestrator's repairblame.go).
+	// rather than leave it unattributed. Written when the repair merges and
+	// its own evidence names the merge (orchestrator's repairblame.go).
 	// Provenance only, never blocks dispatch; a repair may blame more
 	// than one merge when its commits name more than one.
 	LinkBlames   LinkKind = "blames"
