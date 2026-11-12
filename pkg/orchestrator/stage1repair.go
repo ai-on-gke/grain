@@ -270,6 +270,9 @@ func fileOrUpdateStage1Repair(ctx context.Context, store *model.Store, run Concl
 	body := "Stage 1 of the release train (`" + run.WorkflowName + "`) is red, and every release waits on it " +
 		"(design/playbook/releases.playbook.md, section 15). Find why and fix it on the default branch: a " +
 		"regression, a flaky test, or the workflow itself. Leave anything you cannot fix as a precise report.\n\n" +
+		"When you find the merge that broke it, name it on your fix's commit message with a `Fixes-commit: <sha>` " +
+		"trailer (the commit on the default branch that broke it) or a `Blames: task <id>` trailer (the task " +
+		"that merged it), so grain records which change failed.\n\n" +
 		"This task closes itself when the next Stage 1 run (an rc's or the default branch's) is fully green " +
 		"(goal `nightly-green`). Further red runs are appended to it as comments while it is open.\n\n" + failures
 	task := model.Task{
