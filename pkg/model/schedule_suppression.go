@@ -363,7 +363,8 @@ func (s *Store) OverlapGroupInFlight(ctx context.Context, sched Schedule, repo R
 		}
 	}
 
-	ids, err := s.OpenTasksWithTag(ctx, ScheduleOverlapGroupTag(repo, group))
+	groupTag := ScheduleOverlapGroupTag(repo, group)
+	ids, err := s.OpenTasksWithTag(ctx, groupTag)
 	if err != nil {
 		return nil, fmt.Errorf("checking open tasks in overlap group %q: %w", group, err)
 	}
@@ -398,6 +399,23 @@ func (s *Store) OverlapGroupInFlight(ctx context.Context, sched Schedule, repo R
 		}
 		return &ScheduleSuppression{Reason: SuppressedByOpenTask, TaskID: id, HeldByScheduleID: holder,
 			Detail: overlapGroupDetail(group, holder, title, SuppressedByOpenTask)}, nil
+	}
+	holders, err := s.ActiveSuiteRunSchedulesWithGroupTag(ctx, groupTag)
+	if err != nil {
+		return nil, fmt.Errorf("checking active suite runs in overlap group %q: %w", group, err)
+	}
+	for _, holder := range holders {
+		if holder == sched.ID {
+			continue
+		}
+		var title string
+		if holder != "" {
+			if h, err := s.GetSchedule(ctx, holder); err == nil && h != nil {
+				title = h.Title
+			}
+		}
+		return &ScheduleSuppression{Reason: SuppressedBySuiteRun, HeldByScheduleID: holder,
+			Detail: overlapGroupDetail(group, holder, title, SuppressedBySuiteRun)}, nil
 	}
 	return nil, nil
 }

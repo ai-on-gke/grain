@@ -96,6 +96,15 @@ func TestAWithdrawnSuiteSchedulesRunStillHoldsItsGroup(t *testing.T) {
 
 	// A later pass of the run carries the tag too, with the schedule gone.
 	closeGroupedTask(t, store, ctx, task.ID, groupStart.Add(2*time.Minute))
+	// In RunCycle, reconcileSchedule runs ahead of reconcileSuites: once
+	// pass 1's task closes and before FireNextPass files pass 2, the
+	// still-active suite run keeps holding the group.
+	between := fireGrouped(t, store, ctx, "tick", groupStart.Add(2*time.Minute+30*time.Second))
+	if !between.Skipped || between.TaskID != "" || between.Skip == nil ||
+		between.Skip.Reason != model.SuppressedBySuiteRun || between.Skip.HeldByScheduleID != "sweep" {
+		t.Fatalf("firing between passes of the withdrawn suite run = %+v (skip %+v), want it held by sweep's active suite run",
+			between, between.Skip)
+	}
 	run, _ = store.GetSuiteRun(ctx, fired.SuiteRunID)
 	next, err := store.FireNextPass(ctx, *run, groupStart.Add(3*time.Minute))
 	if err != nil {
@@ -113,6 +122,13 @@ func TestAWithdrawnSuiteSchedulesRunStillHoldsItsGroup(t *testing.T) {
 	}
 	if again := fireGrouped(t, store, ctx, "tick", groupStart.Add(4*time.Minute)); !again.Skipped {
 		t.Errorf("firing during the second pass = %+v, want it held", again)
+	}
+	closeGroupedTask(t, store, ctx, second, groupStart.Add(5*time.Minute))
+	if err := store.CompleteSuiteRun(ctx, fired.SuiteRunID, model.SuiteRunSucceeded, "", groupStart.Add(5*time.Minute)); err != nil {
+		t.Fatalf("completing the suite run: %v", err)
+	}
+	if freed := fireGrouped(t, store, ctx, "tick", groupStart.Add(6*time.Minute)); freed.Skipped || freed.TaskID == "" {
+		t.Errorf("firing once the withdrawn suite run completed = %+v, want it to fire", freed)
 	}
 
 	// An ungrouped suite schedule's tasks carry no group tag.

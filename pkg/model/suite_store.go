@@ -771,3 +771,39 @@ func (s *Store) ScheduleOfSuiteRunTask(ctx context.Context, id string) (string, 
 	}
 	return sched.String, nil
 }
+
+// ActiveSuiteRunSchedulesWithGroupTag lists the schedule_id (empty when
+// started without one) of every active suite run whose tasks carry
+// groupTag (ScheduleOverlapGroupTag), oldest run first.
+//
+// In orchestrator.RunCycle, reconcileSchedule runs ahead of
+// reconcileSuites, so between one pass's tasks closing and FireNextPass
+// filing the next -- or while a finished pass waits on RequireApproval --
+// an active run whose schedule was renamed, withdrawn, or moved out of
+// the group has no open tasks yet still holds the group.
+func (s *Store) ActiveSuiteRunSchedulesWithGroupTag(ctx context.Context, groupTag string) ([]string, error) {
+	if groupTag == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT `r`.`schedule_id` FROM `suite_run` AS `r` "+
+			"WHERE `r`.`status` = ? AND EXISTS ("+
+			"SELECT 1 FROM `suite_run_task` AS `rt` "+
+			"JOIN `task_tag` AS `g` ON `g`.`task_id` = `rt`.`task_id` "+
+			"WHERE `rt`.`run_id` = `r`.`id` AND `g`.`tag` = ?) "+
+			"ORDER BY `r`.`id`",
+		string(SuiteRunActive), groupTag)
+	if err != nil {
+		return nil, fmt.Errorf("reading active suite runs with tag %q: %w", groupTag, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sched sql.NullString
+		if err := rows.Scan(&sched); err != nil {
+			return nil, err
+		}
+		out = append(out, sched.String)
+	}
+	return out, rows.Err()
+}
