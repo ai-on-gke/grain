@@ -463,12 +463,13 @@ jobs:
 A job has no agent to serve tools to, so its api grants are worth one
 bearer token instead (`pkg/capability/ciapi`). It is minted when the
 job's sandbox is acquired, revoked when the sandbox is released, and
+exported in every step as `GRAIN_API_TOKEN`, beside the listener's
+address as `GRAIN_API_URL`. In a VM or container sandbox both are also
 placed in `/home/debian/.grain-api/`: `url`, `token`, and `env`, which
-exports `GRAIN_API_URL` and `GRAIN_API_TOKEN`. However many api grants
-the job declares, it holds one token worth all of them.
+exports them; a host sandbox has only the environment. However many api
+grants the job declares, it holds one token worth all of them.
 
 ```sh
-. /home/debian/.grain-api/env
 curl -fsS -H "Authorization: Bearer $GRAIN_API_TOKEN" "$GRAIN_API_URL/api/ci/runs?ref=main&limit=100"
 ```
 
