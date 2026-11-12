@@ -35,6 +35,7 @@ import {
 // POLL_MS is the classic UI's refresh: every 3 s with ETags, so a reply
 // shows up without the reader doing anything, events or not.
 export const POLL_MS = 3000;
+export const TRANSCRIPT_POLL_MS = 1500;
 export const COMMENTS_QUERY = "comments_limit=50&attempts_limit=20";
 
 function rowKey(t: Task | undefined): string {
@@ -139,6 +140,21 @@ export class SessionsStore {
     return tid ? (this.details()[tid] ?? null) : null;
   });
 
+  readonly directorRow = computed<SessionRow | null>(() => {
+    return this.rows().find((r) => r.session.id === DIRECTOR_ID) ?? null;
+  });
+
+  readonly directorDetail = computed<TaskDetail | null>(() => {
+    const tid = this.directorRow()?.session.taskId;
+    return tid ? (this.details()[tid] ?? null) : null;
+  });
+
+  readonly directorLiveStatus = computed(() =>
+    sessionStatus(this.directorRow()?.task),
+  );
+
+  readonly directorTranscript = signal<string | null>(null);
+
   readonly status = computed(() => sessionStatus(this.selected()?.task));
 
   readonly currentLiveKey = computed(() =>
@@ -159,9 +175,39 @@ export class SessionsStore {
   private configLoaded = false;
 
   private timer: ReturnType<typeof setInterval> | null = null;
+  private transcriptTimer: ReturnType<typeof setInterval> | null = null;
+  private transcriptKey = "";
+  private readonly retainers = new Set<string>();
+  private readonly directorWatchers = new Set<string>();
   private eventSub: { unsubscribe(): void } | null = null;
   private refreshing: Promise<void> | null = null;
   private pending = false;
+
+  retain(token: string): void {
+    this.retainers.add(token);
+    this.start();
+  }
+
+  release(token: string): void {
+    this.retainers.delete(token);
+    if (this.retainers.size === 0) {
+      this.stopTimers();
+    }
+  }
+
+  setDirectorWatch(token: string, on: boolean): void {
+    if (on) {
+      this.directorWatchers.add(token);
+      this.retain(`watch:${token}`);
+      this.syncDirectorTranscript();
+    } else {
+      this.directorWatchers.delete(token);
+      if (this.directorWatchers.size === 0) {
+        this.stopDirectorTranscript();
+      }
+      this.release(`watch:${token}`);
+    }
+  }
 
   start(): void {
     void this.refresh();
@@ -197,8 +243,14 @@ export class SessionsStore {
   }
 
   stop(): void {
+    if (this.retainers.size > 0) return;
+    this.stopTimers();
+  }
+
+  private stopTimers(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.stopDirectorTranscript();
     this.eventSub?.unsubscribe();
     this.eventSub = null;
   }
@@ -226,6 +278,13 @@ export class SessionsStore {
   }
 
   private async load(): Promise<void> {
+    if (
+      typeof this.api.get !== "function" ||
+      typeof this.api.getIfChanged !== "function"
+    ) {
+      this.loaded.set(true);
+      return;
+    }
     const [list, tasks] = await Promise.allSettled([
       this.api.get<ConsoleSessionList>("GET /api/console-sessions"),
       this.api.getIfChanged<Task[]>("GET /api/tasks"),
@@ -249,6 +308,7 @@ export class SessionsStore {
     this.loaded.set(true);
     await this.loadDetails();
     this.pruneFinishedStaleRuns();
+    this.syncDirectorTranscript();
   }
 
   private pruneFinishedStaleRuns(): void {
@@ -295,12 +355,19 @@ export class SessionsStore {
 
   private async loadDetails(): Promise<void> {
     const sel = this.selected()?.session.taskId;
+    const dir =
+      this.directorWatchers.size > 0
+        ? this.directorRow()?.session.taskId
+        : undefined;
     const tasks = this.tasks();
     const ids = this.sessions()
       .map((s) => s.taskId)
       .filter(
         (t): t is string =>
-          !!t && (t === sel || this.fetchedFor.get(t) !== rowKey(tasks[t])),
+          !!t &&
+          (t === sel ||
+            t === dir ||
+            this.fetchedFor.get(t) !== rowKey(tasks[t])),
       );
     await Promise.all(
       ids.map(async (id) => {
@@ -351,11 +418,21 @@ export class SessionsStore {
   }
 
   async send(): Promise<boolean> {
-    const row = this.selected();
+    const id = this.selectedId();
+    const typed = this.draftFor(id);
+    const attachments = this.attachmentsFor(id);
+    return this.sendTo(id, typed, attachments, true);
+  }
+
+  async sendTo(
+    sessionId: string,
+    rawBody: string,
+    attachments: AttachmentUpload[] = [],
+    clearSessionDraft = false,
+  ): Promise<boolean> {
+    const row = this.rows().find((r) => r.session.id === sessionId);
     const taskId = row?.session.taskId;
-    const typed = row ? this.draftFor(row.session.id) : "";
-    const body = typed.trim();
-    const attachments = row ? this.attachmentsFor(row.session.id) : [];
+    const body = rawBody.trim();
     if (
       !row ||
       !taskId ||
@@ -370,17 +447,22 @@ export class SessionsStore {
         { id: taskId },
         { body, attachments },
       );
-      if (this.draftFor(row.session.id) === typed) {
-        this.setDraft(row.session.id, "");
-      }
-      if (this.attachmentsFor(row.session.id) === attachments) {
-        this.setAttachments(row.session.id, []);
+      if (clearSessionDraft) {
+        if (this.draftFor(sessionId) === rawBody) {
+          this.setDraft(sessionId, "");
+        }
+        if (this.attachmentsFor(sessionId) === attachments) {
+          this.setAttachments(sessionId, []);
+        }
       }
     });
   }
 
   async stopTurn(): Promise<boolean> {
-    const id = this.selectedId();
+    return this.stopTurnFor(this.selectedId());
+  }
+
+  async stopTurnFor(id: string): Promise<boolean> {
     const ok = await this.run("stop", () =>
       this.api.post("POST /api/console-sessions/{id}/cancel", { id }),
     );
@@ -392,6 +474,68 @@ export class SessionsStore {
       });
     }
     return ok;
+  }
+
+  private syncDirectorTranscript(): void {
+    const row = this.directorRow();
+    const detail = this.directorDetail();
+    if (
+      this.directorWatchers.size === 0 ||
+      !row?.session.taskId ||
+      row.task?.state !== "running" ||
+      row.task?.activityBySetup
+    ) {
+      this.stopDirectorTranscript();
+      return;
+    }
+    const open = (detail?.attempts ?? []).find((a) => !a.finishedAt);
+    if (!open) {
+      this.stopDirectorTranscript();
+      return;
+    }
+    const taskId = row.session.taskId;
+    const attemptNo = open.number;
+    const key = `${taskId}:${attemptNo}`;
+    if (this.transcriptKey === key && this.transcriptTimer) return;
+    this.stopDirectorTranscript();
+    this.transcriptKey = key;
+    void this.pollDirectorTranscript(taskId, attemptNo, key);
+    this.zone.runOutsideAngular(() => {
+      this.transcriptTimer = setInterval(
+        () =>
+          this.zone.run(
+            () => void this.pollDirectorTranscript(taskId, attemptNo, key),
+          ),
+        TRANSCRIPT_POLL_MS,
+      );
+    });
+  }
+
+  private stopDirectorTranscript(): void {
+    if (this.transcriptTimer) {
+      clearInterval(this.transcriptTimer);
+      this.transcriptTimer = null;
+    }
+    this.transcriptKey = "";
+    this.directorTranscript.set(null);
+  }
+
+  private async pollDirectorTranscript(
+    taskId: string,
+    attemptNo: number,
+    key: string,
+  ): Promise<void> {
+    try {
+      const r = await this.api.get<{ transcript?: string }>(
+        "GET /api/tasks/{id}/attempts/{number}/transcript",
+        { id: taskId, number: attemptNo },
+      );
+      if (this.transcriptKey === key) {
+        this.directorTranscript.set(r?.transcript ?? "");
+      }
+    } catch {
+      // Transient transcript polling errors preserve existing partial output.
+    }
   }
 
   // Apply now stops the in-flight turn (POST /api/console-sessions/{id}/cancel)

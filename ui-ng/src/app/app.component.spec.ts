@@ -21,6 +21,7 @@ import { GrainEvents } from "./api/grain-events.service";
 import type { GrainConfig, Task, WhoamiResponse } from "./api/models";
 import { AppComponent } from "./app.component";
 import { CreateTaskService } from "./create/create-task.service";
+import { DirectorContextService } from "./director/director-context.service";
 import {
   SIDEBAR_HIDDEN_KEY,
   SIDEBAR_ORDER_KEY,
@@ -55,6 +56,7 @@ class FakeShellApi {
 
   config = () => Promise.resolve(this.configBody);
   tasks = () => Promise.resolve(this.tasksList);
+  get = () => Promise.resolve({ sessions: [] });
   getIfChanged = (route: string) => {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
@@ -608,5 +610,39 @@ describe("AppComponent shell", () => {
     await f.whenStable();
     expect(el(f).querySelector('[data-testid="new-task-sheet"]')).toBeTruthy();
     TestBed.inject(CreateTaskService).close();
+  });
+
+  it("toggles the coplanar Director drawer from top bar, d, Alt+D, and Escape", async () => {
+    const { fixture: f } = await render();
+    const ctx = TestBed.inject(DirectorContextService);
+    const btn = el(f).querySelector(
+      '[data-testid="director-trigger"]',
+    ) as HTMLButtonElement;
+    expect(btn).toBeTruthy();
+    expect(ctx.isOpen()).toBe(false);
+
+    btn.click();
+    await f.whenStable();
+    expect(ctx.isOpen()).toBe(true);
+    expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(false);
+
+    press("Escape");
+    await f.whenStable();
+    expect(ctx.isOpen()).toBe(false);
+
+    press("d");
+    await f.whenStable();
+    expect(ctx.isOpen()).toBe(true);
+
+    // Alt+D works even when focus sits inside an input field.
+    const search = el(f).querySelector(
+      '[data-testid="view-filter"]',
+    ) as HTMLInputElement;
+    search.focus();
+    search.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "d", altKey: true, bubbles: true }),
+    );
+    await f.whenStable();
+    expect(ctx.isOpen()).toBe(false);
   });
 });
