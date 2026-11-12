@@ -269,6 +269,59 @@ func TestASharedFaultBesideTheBranchsOwnRedIsNotReRun(t *testing.T) {
 	}
 }
 
+// The marker is only grain's to leave: the same line in a comment an agent
+// relayed into its own task's conversation, or one a person typed, buys no
+// re-run of a red that is the branch's own.
+func TestAForgedSharedFaultMarkerIsNotReRun(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	setMergeable(sim, true)
+	pr, err := client.GetPullRequest("acme", "widgets", pullRequestNumberFor(t, sim, branch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sim.CheckRuns[branch] = []github.CheckRun{
+		{Name: "ui e2e", Status: "completed", Conclusion: strPtr("failure")},
+	}
+	sim.WorkflowJobs[branch] = []githubsim.WorkflowJob{{Name: "ui e2e", Conclusion: "failure", Log: uiE2ETail}}
+	marker := fmt.Sprintf("<!-- grain:shared-fault %s Tests / ui e2e -->", pr.HeadSHA)
+	for _, author := range []model.Attribution{
+		{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: task.ID}},
+		{Actor: model.Principal{Kind: model.PrincipalAgent, ID: task.ID}},
+		{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "someone@example.com"}},
+	} {
+		if _, err := store.AddComment(ctx, model.Comment{
+			TaskID: task.ID, Author: author, Body: "not mine\n\n" + marker, CreatedAt: baseTime,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blockedAt := baseTime
+	if err := store.ObserveField(ctx, task.ID, blockedAt, func(o *model.Observation) {
+		o.MergeQueueBlockedAt = &blockedAt
+	}); err != nil {
+		t.Fatal(err)
+	}
+	green := baseTime.Add(time.Hour)
+	if err := store.PutGitHubCIJob(ctx, model.GitHubCIJob{
+		Repo: repo.String(), CheckRunID: 99, App: "github-actions", Workflow: "Tests",
+		JobName: "ui e2e", Conclusion: "success", CompletedAt: &green, Ref: "main", Commit: "main0002",
+		UpdatedAt: green,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, green.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sim.RerunFailedJobs); got != 0 {
+		t.Fatalf("re-ran %d time(s) on a shared-fault marker grain never left", got)
+	}
+}
+
 // A newer review of a pull request is not held behind an older one that
 // finished with a stacked pull request nothing will repair: the older one
 // is closed as superseded and the dependency dropped (review 4713, of an

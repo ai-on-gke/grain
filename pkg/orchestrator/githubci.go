@@ -393,7 +393,7 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 		taskBody := fmt.Sprintf("GitHub CI failure at `%s`.\n\n%s\n\n%s", commit, shared, marker)
 		if _, err := deps.Store.AddComment(ctx, model.Comment{
 			TaskID:    task.ID,
-			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+			Author:    model.Attribution{Actor: sharedFaultAnnotator},
 			Body:      taskBody,
 			CreatedAt: now,
 		}); err != nil {

@@ -78,11 +78,20 @@ func sharedFaultRerunMarker(head, baseCommit string) string {
 	return fmt.Sprintf("<!-- grain:shared-fault-rerun %s %s -->", head, baseCommit)
 }
 
+// sharedFaultAnnotator is who annotateGitHubSharedFaults comments as.
+// Only its comments carry a marker attributedSharedFault believes: the
+// marker buys a re-run of a red head, so one an agent relayed into its
+// own task's conversation, or a person typed, must not.
+var sharedFaultAnnotator = model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}
+
 // attributedSharedFault is what the task's comments say grain attributed
 // to a shared fault at head: the jobs, and when it said so. ok is false
 // when it never did.
 func attributedSharedFault(comments []model.Comment, head string) (jobs []string, at time.Time, ok bool) {
 	for _, c := range comments {
+		if a := c.Author.Actor; a.Kind != sharedFaultAnnotator.Kind || a.ID != sharedFaultAnnotator.ID || c.Author.OnBehalfOf != nil {
+			continue
+		}
 		body := c.Body
 		for {
 			i := strings.Index(body, "<!-- grain:shared-fault ")
