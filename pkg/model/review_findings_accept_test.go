@@ -258,3 +258,37 @@ func TestMergeGatesMarkAcceptableFindings(t *testing.T) {
 		t.Error("a review that could not be filed is offered for acceptance")
 	}
 }
+
+// The security gate names the latest security review, which need not be
+// the one whose findings stand: once that review's findings are accepted
+// (or while it re-runs), the gate offers the earlier review's findings
+// still holding it, rather than no way to accept them at all.
+func TestMergeGatesOfferAnEarlierReviewsStandingFindings(t *testing.T) {
+	gate := func(task model.Task) model.MergeGate {
+		for _, g := range model.ComputeMergeGates(task, nil, nil) {
+			if g.ID == model.GateSecurityReview {
+				return g
+			}
+		}
+		t.Fatalf("no security-review gate on %+v", task.Links)
+		return model.MergeGate{}
+	}
+	task := model.Task{ID: "70", Links: []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#70"},
+		{Kind: model.LinkSecurityReviewTask, Target: "72"}}}
+	model.AddReviewFindings(&task, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "71",
+		Summary: "first security review left findings", HeadSHA: "aaa111", At: acceptAt})
+	if g := gate(task); !g.Acceptable || g.ReviewTask != "71" {
+		t.Fatalf("re-review 72 running over 71's findings: gate %+v, want 71's offered", g)
+	}
+	model.AddReviewFindings(&task, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "72",
+		Summary: "second security review left findings", HeadSHA: "bbb222", At: acceptAt})
+	if g := gate(task); !g.Acceptable || g.ReviewTask != "72" {
+		t.Fatalf("both reviews left findings: gate %+v, want the latest (72) offered", g)
+	}
+	if !model.AcceptReviewFindings(&task, accept(model.GateSecurityReview, "72", "bbb222")) {
+		t.Fatal("accepting 72's findings cleared nothing")
+	}
+	if g := gate(task); g.State != model.GateStateFindings || !g.Acceptable || g.ReviewTask != "71" {
+		t.Fatalf("after accepting 72's findings: gate %+v, want 71's findings still holding and offered", g)
+	}
+}
