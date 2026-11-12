@@ -77,4 +77,46 @@ func TestTaskSkillsComposeWithTheTemplatesFieldByField(t *testing.T) {
 	}); err == nil {
 		t.Error("a task skills folder escaping the repository was accepted when filed from a template")
 	}
+
+	// When a template turns discovery off (via enabled:false or folders:[]),
+	// a task override that re-enables discovery via non-empty folders or
+	// enabled:true must actually re-enable it rather than inherit the
+	// template's disabling field.
+	repoFolders := []string{"layer/repo"}
+	repoLayer := model.NewSkillsConfig(nil, &repoFolders)
+	offTmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name: "skills-off", Title: "Skills Off", Repo: "acme/widgets",
+		Skills: &model.SkillsConfig{Enabled: &no},
+	})
+	if err != nil {
+		t.Fatalf("creating enabled:false template: %v", err)
+	}
+	reEnabledByFolders, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		TemplateID: offTmpl.ID, Title: "task folders over template off", Description: "x",
+		Skills: &model.SkillsConfig{Folders: &taskFolders},
+	})
+	if err != nil {
+		t.Fatalf("filing with folders over enabled:false template: %v", err)
+	}
+	if got := model.ResolveSkillFolders(nil, repoLayer, reEnabledByFolders.Skills); !slices.Equal(got, taskFolders) {
+		t.Errorf("task folders over enabled:false template resolved to %v, want %v", got, taskFolders)
+	}
+
+	emptyTmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name: "skills-empty", Title: "Skills Empty", Repo: "acme/widgets",
+		Skills: &model.SkillsConfig{Folders: &empty},
+	})
+	if err != nil {
+		t.Fatalf("creating folders:[] template: %v", err)
+	}
+	reEnabledByFlag, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		TemplateID: emptyTmpl.ID, Title: "task enabled over template empty", Description: "x",
+		Skills: &model.SkillsConfig{Enabled: &yes},
+	})
+	if err != nil {
+		t.Fatalf("filing with enabled:true over folders:[] template: %v", err)
+	}
+	if got := model.ResolveSkillFolders(nil, repoLayer, reEnabledByFlag.Skills); !slices.Equal(got, repoFolders) {
+		t.Errorf("task enabled:true over folders:[] template resolved to %v, want %v", got, repoFolders)
+	}
 }

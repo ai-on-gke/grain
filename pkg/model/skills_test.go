@@ -120,4 +120,20 @@ func TestResolveSkillFoldersLayerPrecedence(t *testing.T) {
 	if got := model.ResolveSkillFolders(nil, composed, nil); len(got) != 0 {
 		t.Fatalf("operator disabled over declared = %v, want empty", got)
 	}
+
+	// Upper layer re-enabling with non-empty folders is not defeated by lower enabled:false.
+	declaredOff := model.NewSkillsConfig(boolPtr(false), nil)
+	operatorFolders := model.NewSkillsConfig(nil, slicePtr(".claude/skills"))
+	composedFolders := model.ComposeRepoSkills(operatorFolders, declaredOff)
+	if got := model.ResolveSkillFolders(nil, composedFolders, nil); !slices.Equal(got, []string{".claude/skills"}) {
+		t.Fatalf("operator folders over declared enabled:false = %v, want [.claude/skills]", got)
+	}
+
+	// Upper layer re-enabling with enabled:true is not defeated by lower folders:[].
+	declaredEmpty := model.NewSkillsConfig(nil, slicePtr())
+	operatorEnabled := model.NewSkillsConfig(boolPtr(true), nil)
+	composedEnabled := model.ComposeRepoSkills(operatorEnabled, declaredEmpty)
+	if got := model.ResolveSkillFolders(dep, composedEnabled, nil); !slices.Equal(got, []string{".claude/skills", ".codex/skills"}) {
+		t.Fatalf("operator enabled:true over declared folders:[] = %v, want deployment folders", got)
+	}
 }
