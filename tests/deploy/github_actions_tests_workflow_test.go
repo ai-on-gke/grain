@@ -15,6 +15,7 @@
 package deploy
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -242,6 +243,9 @@ func TestGitHubCIChangesUINGE2EPaths(t *testing.T) {
 		"pkg/ui/server.go":               "true",
 		"pkg/demo/demo.go":               "true",
 		".github/workflows/tests.yml":    "true",
+		"Makefile":                       "true",
+		"scripts/warm-npm-cache.sh":      "true",
+		"ui/package-lock.json":           "true",
 		"ui/src/App.jsx":                 "false",
 		"ui-hub/src/App.jsx":             "false",
 		"pkg/orchestrator/foo.go":        "true",
@@ -269,6 +273,35 @@ func TestGitHubCIChangesUINGE2EPaths(t *testing.T) {
 	}
 	if outputs["ui-ng-e2e"] != "true" || outputs["ui-e2e"] != "false" {
 		t.Errorf("workflow_dispatch ui-ng-e2e: ui-ng-e2e = %q, ui-e2e = %q; want true, false", outputs["ui-ng-e2e"], outputs["ui-e2e"])
+	}
+}
+
+// `make playwright-browsers` installs browsers out of ui/ for both suites,
+// so ui-ng/'s Playwright has to be the same release as ui/'s, or the
+// browser it looks for is not the one that was installed.
+func TestUIAndUINGPinOnePlaywright(t *testing.T) {
+	locked := func(dir string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(repoRoot(t), dir, "package-lock.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lock struct {
+			Packages map[string]struct {
+				Version string `json:"version"`
+			} `json:"packages"`
+		}
+		if err := json.Unmarshal(raw, &lock); err != nil {
+			t.Fatalf("%s/package-lock.json: %v", dir, err)
+		}
+		v := lock.Packages["node_modules/@playwright/test"].Version
+		if v == "" {
+			t.Fatalf("%s/package-lock.json locks no @playwright/test", dir)
+		}
+		return v
+	}
+	if ui, ng := locked("ui"), locked("ui-ng"); ui != ng {
+		t.Errorf("@playwright/test is %s in ui/ but %s in ui-ng/; `make playwright-browsers` installs ui/'s browsers for both, so bump them together", ui, ng)
 	}
 }
 
