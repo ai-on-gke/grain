@@ -190,6 +190,21 @@ func TestADaemonThatDoesNotAskToAcknowledgeHasTheSpoolDroppedOnceTheExitIsWritte
 	conn.Close()
 }
 
+func TestAnAcknowledgementFollowedAtOnceByCloseReleasesTheSpool(t *testing.T) {
+	// The client acknowledges and closes its end straight away, so hostd
+	// can see the acknowledgement and the connection's end together.
+	ts := startServer(t, "", nil)
+	for i := 0; i < 5; i++ {
+		p := finishedDetached(t, ts)
+		conn, _ := rawAttach(t, ts, p.ID, true)
+		if err := writeFrame(conn, frameExitAck, nil); err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+		waitReleased(t, ts, p.ID, p.Spool)
+	}
+}
+
 func TestAnUnacknowledgedExitIsKeptWhileTheConnectionStaysOpen(t *testing.T) {
 	ts := startServer(t, "", nil)
 	old := exitAckWait
