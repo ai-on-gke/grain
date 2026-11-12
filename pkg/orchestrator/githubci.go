@@ -390,7 +390,7 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 			continue
 		}
 		commit := shortSHA(run.Commit)
-		taskBody := fmt.Sprintf("GitHub CI failure at `%s`.\n\n%s\n\n%s", commit, shared, marker)
+		taskBody := fmt.Sprintf(sharedFaultCommentLead+"%s`.\n\n%s\n\n%s", commit, shared, marker)
 		if _, err := deps.Store.AddComment(ctx, model.Comment{
 			TaskID:    task.ID,
 			Author:    model.Attribution{Actor: sharedFaultAnnotator},

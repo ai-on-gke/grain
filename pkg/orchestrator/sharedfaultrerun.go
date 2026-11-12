@@ -82,43 +82,58 @@ func sharedFaultRerunMarker(head, baseCommit string) string {
 // Only its comments carry a marker attributedSharedFault believes: the
 // marker buys a re-run of a red head, so one an agent relayed into its
 // own task's conversation, or a person typed, must not.
+//
+// The author alone is not enough: grain comments as this same principal
+// in many places, and some of those comments quote text an agent chose
+// (a refused proposal's title, for one). So a marker counts only in a
+// comment shaped the way annotateGitHubSharedFaults writes it -- opening
+// with sharedFaultCommentLead and ending with the marker as its last line.
 var sharedFaultAnnotator = model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}
+
+// sharedFaultCommentLead opens every comment annotateGitHubSharedFaults
+// leaves; nothing else grain writes starts this way.
+const sharedFaultCommentLead = "GitHub CI failure at `"
 
 // attributedSharedFault is what the task's comments say grain attributed
 // to a shared fault at head: the jobs, and when it said so. ok is false
 // when it never did.
 func attributedSharedFault(comments []model.Comment, head string) (jobs []string, at time.Time, ok bool) {
+	const open = "<!-- grain:shared-fault "
 	for _, c := range comments {
 		if a := c.Author.Actor; a.Kind != sharedFaultAnnotator.Kind || a.ID != sharedFaultAnnotator.ID || c.Author.OnBehalfOf != nil {
 			continue
 		}
-		body := c.Body
-		for {
-			i := strings.Index(body, "<!-- grain:shared-fault ")
-			if i < 0 {
-				break
-			}
-			body = body[i+len("<!-- grain:shared-fault "):]
-			end := strings.Index(body, " -->")
-			if end < 0 {
-				break
-			}
-			line := body[:end]
-			body = body[end:]
-			commit, list, _ := strings.Cut(line, " ")
-			if commit == "" || !sameCommit(commit, head) {
-				continue
-			}
-			for _, j := range strings.Split(list, "|") {
-				if j = strings.TrimSpace(j); j != "" && !slices.Contains(jobs, j) {
+		if !strings.HasPrefix(c.Body, sharedFaultCommentLead) {
+			continue
+		}
+		// Only the comment's last line, which is where the annotator puts
+		// its marker; a marker anywhere earlier is quoted text.
+		body := strings.TrimRight(c.Body, "\n")
+		last := body[strings.LastIndex(body, "\n")+1:]
+		if !strings.HasPrefix(last, open) || !strings.HasSuffix(last, " -->") {
+			continue
+		}
+		line := strings.TrimSuffix(strings.TrimPrefix(last, open), " -->")
+		commit, list, _ := strings.Cut(line, " ")
+		if commit == "" || !sameCommit(commit, head) {
+			continue
+		}
+		found := false
+		for _, j := range strings.Split(list, "|") {
+			if j = strings.TrimSpace(j); j != "" {
+				found = true
+				if !slices.Contains(jobs, j) {
 					jobs = append(jobs, j)
 				}
 			}
-			if c.CreatedAt.After(at) {
-				at = c.CreatedAt
-			}
-			ok = true
 		}
+		if !found {
+			continue
+		}
+		if c.CreatedAt.After(at) {
+			at = c.CreatedAt
+		}
+		ok = true
 	}
 	return jobs, at, ok && len(jobs) > 0
 }

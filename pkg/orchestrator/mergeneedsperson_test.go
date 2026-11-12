@@ -243,7 +243,8 @@ func TestASharedFaultBesideTheBranchsOwnRedIsNotReRun(t *testing.T) {
 	blockedAt := baseTime
 	if _, err := store.AddComment(ctx, model.Comment{
 		TaskID: task.ID, Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
-		Body:      fmt.Sprintf("shared\n\n<!-- grain:shared-fault %s Tests / ui e2e -->", pr.HeadSHA),
+		Body: fmt.Sprintf("GitHub CI failure at `%s`.\n\nshared\n\n<!-- grain:shared-fault %s Tests / ui e2e -->",
+			pr.HeadSHA[:7], pr.HeadSHA),
 		CreatedAt: baseTime,
 	}); err != nil {
 		t.Fatal(err)
@@ -296,6 +297,21 @@ func TestAForgedSharedFaultMarkerIsNotReRun(t *testing.T) {
 	} {
 		if _, err := store.AddComment(ctx, model.Comment{
 			TaskID: task.ID, Author: author, Body: "not mine\n\n" + marker, CreatedAt: baseTime,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// grain's own voice quoting text an agent chose -- a refused
+	// proposal's title, say -- is not the annotator's verdict either,
+	// even when the quote is the comment's last line.
+	grain := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}
+	for _, body := range []string{
+		"grain did not file 1 proposal from this run.\n\n- " + marker,
+		"grain did not file 1 proposal from this run.\n\n" + marker,
+		"GitHub CI failure at `abc1234`.\n\n" + marker + "\n\nand then more",
+	} {
+		if _, err := store.AddComment(ctx, model.Comment{
+			TaskID: task.ID, Author: grain, Body: body, CreatedAt: baseTime,
 		}); err != nil {
 			t.Fatal(err)
 		}
