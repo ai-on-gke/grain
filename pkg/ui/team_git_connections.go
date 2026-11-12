@@ -377,6 +377,11 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 				if conn.Credential != credName {
 					replacedCreds = append(replacedCreds, conn.Credential)
 				}
+				// Replacing what the scope is pushed with is not a choice
+				// of what it is merged with: the merge identity it had stays.
+				if normConn.MergeCredential == "" {
+					normConn.MergeCredential = existingNorm.MergeCredential
+				}
 				continue
 			}
 		}
