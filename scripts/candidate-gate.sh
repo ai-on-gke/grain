@@ -73,9 +73,12 @@
 #                 known by its id (go-long), its name ("go, shuffled and
 #                 repeated") or a matrix shard of it ("... (1)"); its shards
 #                 are one job. Each of CHECK_QUALIFICATION_JOBS must succeed
-#                 (skipped is not success); other jobs are judged when they
-#                 ran and otherwise ignored, as are
-#                 CHECK_QUALIFICATION_IGNORE (the stage-1 roll-up);
+#                 (skipped is not success); any other nightly.yml job
+#                 (grant-matrix-ui, say) carries no verdict: it is
+#                 reported as ADVISORY when it ran, and is never red,
+#                 re-run or counted toward the flake budget. So is
+#                 CHECK_QUALIFICATION_IGNORE (the stage-1 roll-up),
+#                 which is not reported at all;
 #       Stage 2   the grain/release-qualification check run on SHA
 #                 (CHECK_QUALIFICATION_CHECK), from --checks-json, GitHub's
 #                 GET /repos/{owner}/{repo}/commits/{sha}/check-runs answer
