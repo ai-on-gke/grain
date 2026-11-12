@@ -623,6 +623,12 @@ func deniesCapability(patterns []string, capability string) bool {
 	if matchesCapability(patterns, capability) {
 		return true
 	}
+	// A grant still spelled by a name retired into several grants
+	// (self-debug) is each of them, so denying any one denies it.
+	if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(capability))); len(tos) > 1 &&
+		slices.ContainsFunc(tos, func(to string) bool { return deniesCapability(patterns, to) }) {
+		return true
+	}
 	if set, ok := model.ParseGCPKeyServerGrant(capability); ok {
 		legacy := "gcp-key:" + set
 		if matchesCapability(patterns, legacy) {
@@ -772,10 +778,19 @@ func allowsCapability(patterns []string, capability string) bool {
 		// in either the canonical .../api# or legacy api: spelling.
 		if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(pattern))); len(tos) > 1 &&
 			slices.ContainsFunc(tos, func(to string) bool {
-				return strings.EqualFold(to, want) || strings.EqualFold(model.CanonicalGrantKey(to), model.CanonicalGrantKey(capability))
+				return strings.EqualFold(to, want) || strings.EqualFold(model.CanonicalGrantKey(to), model.CanonicalGrantKey(capability)) ||
+					(model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want))
 			}) {
 			return true
 		}
+	}
+	// And a grant still spelled by such a name is each of the grants it
+	// became, so it is admitted by patterns that admit every one of them:
+	// the canonical patterns written in its place
+	// (TestRetiredAndCanonicalPatternsAdmitTheSameGrants).
+	if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(capability))); len(tos) > 1 &&
+		!slices.ContainsFunc(tos, func(to string) bool { return !allowsCapability(patterns, to) }) {
+		return true
 	}
 	return false
 }

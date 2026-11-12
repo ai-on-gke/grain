@@ -217,10 +217,10 @@ func renderWorkstationPolicy(o workstationOptions) string {
 	// it is the run's own wait_for_checks against that repository's
 	// .grain/workflows. Denied, every such task was held at dispatch
 	// forever, and a standalone node could not test its own change. It
-	// is written by its retired bare name, which local policy reads as
-	// the grain#ci grant it became (pkg/policy's allowsCapability), and
-	// which needs no quoting in YAML.
-	allow := []string{grainci.LegacyName}
+	// is written as the grant itself, arguments and all, so it admits
+	// exactly what the retired bare name an older init wrote admits
+	// (pkg/policy's allowsCapability) and nothing wider.
+	allow := []string{grainci.Grant}
 	for _, c := range o.Capabilities {
 		if !strings.EqualFold(c, grainci.LegacyName) && !grainci.IsGrant(c) {
 			allow = append(allow, c)
