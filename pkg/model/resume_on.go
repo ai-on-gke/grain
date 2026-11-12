@@ -494,9 +494,12 @@ func (s *Store) WakeOnMessage(ctx context.Context, taskID string, now time.Time)
 
 // DueMessageResumes is every task a resume_later with message: true still
 // holds although somebody has posted to it since it stopped: a comment
-// after its deferral that is neither grain's own (automation, which is
-// also how a run's own words are relayed) nor its own agent's, and that
-// no run of the task has already been given (Observation.DeliveredCommentID).
+// after its deferral that is neither grain's own (automation on nobody's
+// behalf, such as resume_later's own note) nor its own agent's (directly,
+// or relayed by grain on its behalf), and that no run of the task has
+// already been given (Observation.DeliveredCommentID). Grain relaying
+// somebody else's words -- another task's team broadcast -- counts, as it
+// does for WakeOnMessage.
 //
 // WakeOnMessage, called as a comment is written, is the fast path, and
 // it cannot see every post. A comment written while the run that called
@@ -525,7 +528,7 @@ func (s *Store) DueMessageResumes(ctx context.Context) ([]string, error) {
 				"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `c`.`task_id` "+
 				"WHERE `c`.`task_id` = ? AND `c`.`created_at` > ? "+
 				"AND `c`.`id` > COALESCE(`o`.`delivered_comment_id`, 0) "+
-				"AND `c`.`author_kind` <> ? "+
+				"AND NOT (`c`.`author_kind` = ? AND COALESCE(`c`.`author_behalf_kind`, '') = '') "+
 				"AND NOT (`c`.`author_kind` = ? AND `c`.`author_id` = ?) "+
 				"AND NOT (COALESCE(`c`.`author_behalf_kind`, '') = ? AND COALESCE(`c`.`author_behalf_id`, '') = ?) "+
 				"LIMIT 1",
