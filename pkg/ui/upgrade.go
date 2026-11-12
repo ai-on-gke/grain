@@ -404,6 +404,12 @@ type imageUpgrader interface {
 	ImageTarget() (upgrade.ImageTarget, bool)
 }
 
+// rollbackUpgrader is the optional half of Upgrader that starts the
+// one-click rollback (upgrade.Upgrader.StartRollback).
+type rollbackUpgrader interface {
+	StartRollback() error
+}
+
 type cancellableUpgrader interface {
 	Cancel(by, reason string) (bool, error)
 	CancelState(status upgrade.Status) (cancellable bool, blockedReason string)
@@ -774,6 +780,14 @@ type startUpgradeRequest struct {
 	// is recorded on the upgrade's status as who switched from what to
 	// what (upgrade.Status.EditionSwitch).
 	SwitchEdition bool `json:"switchEdition,omitempty"`
+	// Rollback is the one-click rollback: an upgrade back onto the build
+	// the last upgrade replaced (upgrade.Upgrader.StartRollback). It
+	// names no target -- the daemon reads PreviousImage or PreviousCommit
+	// from its own status -- so Branch and Image must be left empty, and
+	// it cannot be scheduled. It is the only request that may go back to
+	// a previous commit outside -upgrade-allowed-branches, and only to
+	// that one commit, checked out by object id.
+	Rollback bool `json:"rollback,omitempty"`
 	// AfterTasksFinish asks for the upgrade to be scheduled rather than
 	// started: the queue shuts now, the work already under way is left to
 	// finish, and the cut-over happens once this deployment is idle
@@ -837,6 +851,10 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Image = strings.TrimSpace(req.Image)
+	if req.Rollback {
+		s.startRollback(w, r, req)
+		return
+	}
 	if strings.TrimSpace(req.Branch) == "" {
 		// No branch means "a newer build of what this deployment already
 		// follows": the Upgrade button, a scheduled upgrade and an
@@ -892,6 +910,36 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+	}
+	status, err := s.tasks.Config.Upgrader.Status()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, s.upgradeStatusResponse(r, status))
+}
+
+// startRollback is handleStartUpgrade for a request with rollback set. The
+// target is never the caller's: StartRollback reads it from the status
+// the last upgrade recorded, so a request naming a branch or an image as
+// well is refused rather than half-honoured.
+func (s *Server) startRollback(w http.ResponseWriter, r *http.Request, req startUpgradeRequest) {
+	ru, ok := s.tasks.Config.Upgrader.(rollbackUpgrader)
+	switch {
+	case !ok:
+		writeError(w, http.StatusBadRequest, errors.New("this deployment cannot roll back"))
+		return
+	case strings.TrimSpace(req.Branch) != "" || req.Image != "" || req.SwitchEdition:
+		writeError(w, http.StatusBadRequest, errors.New("a rollback goes back to the build the last upgrade replaced: "+
+			"leave branch, image and switchEdition unset"))
+		return
+	case req.AfterTasksFinish:
+		writeError(w, http.StatusBadRequest, errors.New("a rollback cannot be scheduled for after tasks finish: start it now"))
+		return
+	}
+	if err := ru.StartRollback(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
 	status, err := s.tasks.Config.Upgrader.Status()
 	if err != nil {

@@ -449,7 +449,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
-	prompt += sandboxToolingSectionFor(task.Target != nil, grainci.Granted(task.Grants), isReviewTask(task))
+	prompt += sandboxToolingSectionFor(task.Target != nil, runCIAccessOf(task), isReviewTask(task))
 	prompt += grainCLISection(task)
 	prompt += customFieldsSection(task)
 	prompt += timezoneSection(task)
@@ -470,6 +470,9 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	// blank line every other pair of paragraphs here is.
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
+	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
 	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
@@ -583,8 +586,8 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		} else {
 			prompt += fmt.Sprintf(
 				"\n\nPush as often as you like: %q is your branch, and each push reruns CI "+
-					"against the new commit. After a push, call `wait_for_checks` and fix "+
-					"any failure before finishing.", branch)
+					"against the new commit. After a push, run `grain ci wait` (give `run_command` "+
+					"`timeout: 600000`) and fix any failure before finishing.", branch)
 		}
 		// The other half of reading a failure, and the one a run has no
 		// way to work out from inside its sandbox: whether the failure is
@@ -605,11 +608,10 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 			// so base_branch_status is a GitHub-check comparison with no role
 			// in this CI loop.
 		} else if history.Repair || model.FixesBaseBranch(task) {
-			prompt += repairCISection()
+			prompt += repairCISection(runCIAccessOf(task))
 		} else {
 			prompt += "\n\nIf a check fails, find out whether it was already failing before you " +
-				"started: `base_branch_status` reports CI on the branch your work merges " +
-				"into. A failure that is red there too is not yours to fix -- leave it " +
+				"started: " + baseStatusPhrase(runCIAccessOf(task)) + ". A failure that is red there too is not yours to fix -- leave it " +
 				"alone, do not weaken the test to get past it, and say in what you report " +
 				"that it was already failing. A failure with no counterpart there is yours."
 		}
@@ -661,6 +663,7 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	}
 	prompt += nothingNeededSection(task)
 	prompt += questionSummarySection
+	prompt += personActionSection
 	prompt += statusSection(canOpenPullRequest)
 	prompt += chatSection(task, canOpenPullRequest)
 	prompt += runtimeSection(task, maxRuntime)
@@ -674,6 +677,19 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	prompt += proposalSection(task)
 	prompt += writeTargetsSection(task)
 	return prompt
+}
+
+// baseStatusPhrase names how this run reads CI on the branch its work
+// merges into: `grain pr base-status` with read access to its repository's
+// CI, and otherwise the pull request page `grain pr open` prints -- the
+// MCP base_branch_status is not on a host sandbox's roster, so it is not
+// named (sandboxToolingSection).
+func baseStatusPhrase(access runCIAccess) string {
+	if access.read || access.grainCI {
+		return "`grain pr base-status` reports CI on the branch your work merges into"
+	}
+	return "this run cannot read the base branch's CI logs itself, so compare against the " +
+		"checks `grain pr open` lists and say which failures you could not attribute"
 }
 
 // suspendedCLINote leads the grain CLI reference in a resumed session's
@@ -706,6 +722,10 @@ const suspendedCLINote = "\n\nYour tools may have changed since this session las
 func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	history History, setup *SetupResult, newComments []model.Comment, extraSections ...string) string {
 	branch := task.BranchName()
+	// The current brief stands in for the description here as in
+	// BuildPrompt: a durable task resumes its session on most runs, so
+	// leaving it out would brief those runs on the original description.
+	task, _ = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if line := model.ChangeTargetSuspendedPromptLine(task); line != "" {
 		prompt += fmt.Sprintf("Task: %s (task %s). %s", task.Title, task.ID, line)
@@ -758,11 +778,24 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
 	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
+	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
+	// The compaction note says the handover is below, so it goes in only
+	// with the comments that carry it; a session that already read both
+	// needs neither again.
+	if summarised := summarisedSection(history); summarised != "" &&
+		slices.ContainsFunc(newComments, func(c model.Comment) bool { return c.Handover }) {
+		prompt += "\n\n" + strings.TrimRight(summarised, "\n")
+	}
 	if thread := commentThreadSection(newComments); thread != "" {
 		prompt += "\n\n" + strings.TrimRight(thread, "\n")
+	}
+	if upkeep := contextUpkeepSection(task, history, len(prompt)); upkeep != "" {
+		prompt += "\n\n" + strings.TrimRight(upkeep, "\n")
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
@@ -771,7 +804,7 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 		prompt += relayedReviewThreadsSection(task)
 	}
 	if task.Target != nil && !grainci.Granted(task.Grants) && (history.Repair || model.FixesBaseBranch(task)) {
-		prompt += repairCISection()
+		prompt += repairCISection(runCIAccessOf(task))
 	}
 	prompt += suspendedCLINote + grainCLISection(task)
 	for _, section := range extraSections {
@@ -881,11 +914,11 @@ func redCIProcedureSection() string {
 // that -- a failure that reproduces on the base is a different kind of
 // diagnosis than one that appeared with this branch, and the person
 // reading the pull request afterward wants to know which they got.
-func repairCISection() string {
+func repairCISection(access runCIAccess) string {
 	return "\n\nThis run is the merge queue's repair of a branch that is already stopping " +
 		"the queue, so fix every failing check on it, whether or not your own commits " +
-		"caused the failure. If a check fails, `base_branch_status` still tells you " +
-		"where it came from -- it reports CI on the branch your work merges into -- " +
+		"caused the failure. If a check fails, " + baseStatusPhrase(access) + ", which still tells you " +
+		"where it came from, " +
 		"but a failure that is red there too is yours to fix here all the same: this " +
 		"pull request cannot merge until it is green, and leaving inherited breakage " +
 		"alone leaves the queue stopped. Fix the code the check is failing on rather " +
@@ -1101,13 +1134,19 @@ func nothingNeededSection(task model.Task) string {
 	if task.NothingNeededAction.Resolved() == model.NothingNeededAck {
 		what = "leaves this task for a human to acknowledge"
 	}
-	return "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
+	s := "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
 		"reason: " + mcp.NothingNeededDescription + ". It ends your run the way " +
 		"comment_on_issue does, posts the reason as the closing comment and " + what +
 		". A finding, an answer or a recommendation somebody should read is still a " +
 		"comment_on_issue note, and anything you pushed or asked in the same run still " +
 		"wins: the pull request is opened, or the question is asked, with the reason " +
 		"posted beside it."
+	if model.ClosesOnAnswer(task) {
+		s += " Task " + task.Proposer.TaskID + " filed this task as a report-only sub-task, so a " +
+			"comment_on_issue closing note with no pull request closes it too: that task, and any " +
+			"task depending on this one, reads your note, so put the whole answer in it."
+	}
+	return s
 }
 
 // questionSummarySection is what every run is told about the one-line
@@ -1120,6 +1159,16 @@ const questionSummarySection = "\n\nWhenever you ask a person something -- ask_q
 	"it?\"). The inbox, the task list and notifications show only that line, with your " +
 	"full question behind an expander, so never write \"I have a question\" or " +
 	"\"Need input\"."
+
+// personActionSection is what every run is told about an outcome that
+// needs a person to act (model.PersonActionInstruction): that it is a
+// question, not a closing note. Task #4256 ended a repair that only a
+// repository admin could finish with a note whose inbox line was its
+// opening sentence, and the action halfway down it, hedged as a choice.
+// A task body that says how it must finish (a qualification run's
+// verdict footer, say) still decides, which the last sentence leaves to it.
+const personActionSection = "\n\n" + model.PersonActionInstruction + " Where the task " +
+	"itself names the tool to finish with, do as it says, and still give that tool's `summary`."
 
 // statusSection is the paragraph about update_status: that a run can put
 // one line on its own task's row saying what it is doing, and when doing
@@ -1546,24 +1595,33 @@ func sandboxDirsSection(checkoutDir, sandboxRoot string) string {
 // is no branch, no pull request and no CI for those tools to report on,
 // so it would be three tool names of noise. The other two hold for every
 // run in every sandbox.
-func sandboxToolingSection(hasTarget, grainCI bool) string {
-	return sandboxToolingSectionFor(hasTarget, grainCI, false)
+//
+// The commands it names are the ones this run can use (runCIAccessOf): the
+// MCP wait_for_checks / pull_request_status / base_branch_status are not
+// named at all, because a host's sandbox has no GitHub reader for them
+// (daemon.pullRequestToolsWithUpstream drops them there), while
+// `grain ci wait` and `grain pr open` answer on every sandbox.
+func sandboxToolingSection(hasTarget bool, access runCIAccess) string {
+	return sandboxToolingSectionFor(hasTarget, access, false)
 }
 
-func sandboxToolingSectionFor(hasTarget, grainCI, review bool) string {
+// sandboxToolingSectionFor is sandboxToolingSection for a review too: a
+// review reads the reviewed change's CI rather than waiting on its own, and
+// always holds a read of it (ensureReviewCIReadGrant).
+func sandboxToolingSectionFor(hasTarget bool, access runCIAccess, review bool) string {
 	s := "\n\n"
-	if hasTarget && review {
+	switch {
+	case hasTarget && review:
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
-			"`grain ci checks <sha>`, `grain ci list`, `grain ci log`, `grain pr status` and " +
-			"`pull_request_status` rather than reaching for `gh`, which the stock sandbox image " +
-			"does not carry. "
-	} else if hasTarget && grainCI {
+			"`grain ci checks <sha>`, `grain ci list`, `grain ci log` and `grain pr status` " +
+			"rather than reaching for `gh`, which the stock sandbox image does not carry. "
+	case hasTarget && (access.grainCI || access.read):
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
 			"`grain ci wait`, `grain pr status` and `grain pr base-status` rather than " +
 			"reaching for `gh`, which the stock sandbox image does not carry. "
-	} else if hasTarget {
+	case hasTarget:
 		s += "A sandbox has no GitHub API access and no credential for one, so read CI with " +
-			"`wait_for_checks`, `pull_request_status` and `base_branch_status` rather than " +
+			"`grain ci wait` and `grain pr open` rather than " +
 			"reaching for `gh`, which the stock sandbox image does not carry. "
 	}
 	s += "Anything else you find missing is usually a Debian package away -- the image keeps no " +
@@ -1587,6 +1645,13 @@ func grainCLISection(task model.Task) string {
 	if task.Target != nil && task.Target.Owner != "" && task.Target.Name != "" {
 		repo = task.Target.Owner + "/" + task.Target.Name
 	}
+	// The namespace example is one this run can read: ci://<repo> answers
+	// "forbidden" to a run with no CI read, which then asks for the
+	// grant the example implied it held.
+	example := "ci://" + repo
+	if task.Target != nil && !runCIAccessOf(task).read && task.ID != "" {
+		example = "task://" + task.ID
+	}
 	s := "\n\n### Grain CLI (`grain`)\n\n" +
 		"Inside your sandbox, the `grain` CLI (run it with `run_command`) reaches this deployment's " +
 		"namespace, CI, pull request, merge queue and the capabilities granted to this task, with no " +
@@ -1595,16 +1660,9 @@ func grainCLISection(task model.Task) string {
 		"`grep`, `jq` or `head` it rather than printing it all:\n\n" +
 		"- **Namespace** (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`): " +
 		"`grain ls <uri>`, `grain read <uri> [--tail N]`, `grain grep <re> <uri>`. For example " +
-		"`grain ls ci://" + repo + "`.\n"
+		"`grain ls " + example + "`.\n"
 	if task.Target != nil {
-		s += "- **CI & pull request** (this task's branch): `grain ci wait [--jobs j1,j2]` (give " +
-			"`run_command` `timeout: 600000`; time blocked is credited back to your deadline), " +
-			"`grain ci run-job <job>`, `grain ci retrigger`, `grain ci list`, `grain ci log [<run-id>] " +
-			"[--job <j>] [--step <s>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
-			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
-			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
-			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
-			"`grain ci log <run-id>`.\n"
+		s += grainCLICIBullet(repo, runCIAccessOf(task))
 	}
 	s += "- **Task & collaboration:** `grain status \"<note>\"`, `grain handover write --file <path>`, " +
 		"`grain task wait <id>`, `grain task message <id> \"<body>\"`, `grain notify --subject <s> " +
@@ -1617,23 +1675,100 @@ func grainCLISection(task model.Task) string {
 	return s
 }
 
+// runCIAccess is what a run can do with its own repository's CI, read from
+// the grants it holds: grain#ci is only ever attached on a repository grain
+// CI gates (model.adjustGrainCIGrant strips it everywhere else), so holding
+// it is the grain-CI case; any other run is on a repository GitHub Actions
+// gates, and reads that repository's runs and logs only with ci:read on it
+// -- the api:ci-read@<target> it is filed with by default
+// (model.DefaultCIReadGrant), unless the capability policy turned that off.
+type runCIAccess struct {
+	grainCI bool
+	read    bool
+}
+
+func runCIAccessOf(task model.Task) runCIAccess {
+	if grainci.Granted(task.Grants) {
+		return runCIAccess{grainCI: true, read: true}
+	}
+	names := make([]string, len(task.Grants))
+	for i, g := range task.Grants {
+		names[i] = g.Capability
+	}
+	repo := ""
+	if task.Target != nil {
+		repo = task.Target.String()
+	}
+	read := grainserver.HasSource(names) || (repo != "" && model.APIGrantsOf(names).Allows("ci:read", repo))
+	return runCIAccess{read: read}
+}
+
+// githubRerunHint is what a run on a repository GitHub Actions gates is
+// told about re-running its checks: grain ci retrigger and run-job, in
+// place of the empty commits that moved a pull request's head and threw
+// away its approvals (ui.MaxActionsRerunsPerHead is the bound it names).
+const githubRerunHint = "`grain ci retrigger` re-runs the failed jobs of the GitHub Actions runs at your pull request's head " +
+	"(`--all` every job; `grain ci run-job <job>` one job) without a commit, so the head, its approvals and " +
+	"its reviews stay put -- use it for a flake or a runner fault, never an empty commit. Each run at one " +
+	"commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included."
+
+// grainCLICIBullet is the CI & pull request bullet of grainCLISection,
+// naming only the commands this run can use (task 4364). Every command
+// it lists for a GitHub-CI run answers for GitHub Actions runs
+// (gha:<owner>:<name>:<run>); there, run-job and retrigger re-run the
+// Actions runs at the head of the run's own pull request, with no commit
+// pushed and at most ui.MaxActionsRerunsPerHead times per head, which is
+// what agents used to push empty commits for. A run that cannot
+// read its CI is told the one grant that would let it, once -- never
+// grain#ci, which no repository GitHub Actions gates can grant and which
+// is what agents told only "forbidden" kept asking a person for.
+func grainCLICIBullet(repo string, access runCIAccess) string {
+	wait := "(give `run_command` `timeout: 600000`; time blocked is credited back to your deadline)"
+	if access.grainCI {
+		return "- **CI & pull request** (this task's branch): `grain ci wait [--jobs j1,j2]` " + wait + ", " +
+			"`grain ci run-job <job>`, `grain ci retrigger`, `grain ci list`, `grain ci log [<run-id>] " +
+			"[--job <j>] [--step <s>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
+			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
+			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
+			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
+			"`grain ci log <run-id>`.\n"
+	}
+	gated := "GitHub Actions gates this repository's pull requests"
+	if access.read {
+		return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
+			"`grain ci list`, `grain ci log [<run-id>] [--job <j>] [--tail N]`, `grain ci test-history <test>`, `grain pr status`, " +
+			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
+			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
+			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
+			"`grain ci log <run-id>`. " + githubRerunHint + "\n"
+	}
+	return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
+		"which reports each failing job's log tail, `grain pr open` (your pull request, its checks and " +
+		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. " +
+		githubRerunHint + " This run does " +
+		"not hold read access to the CI of " + repo + ": to read CI logs, `request_access` for " +
+		"`https://grain.dev/capabilities/api#ci-read` on " + repo + "; never `grain#ci`, which a " +
+		"repository GitHub Actions gates cannot grant.\n"
+}
+
 // grainCLIGrants is the `grain` commands each of grain's own capability
-// grants unlocks, in the order grainCLIGrantBullets lists them. A grant
-// whose tools stay model tools (db-write) is not here: the
+// grants unlocks, in the order grainCLIGrantBullets lists them, each under
+// the canonical reference a person grants it by. A grant whose tools stay
+// model tools (grain#sql {write: true}) is not here: the
 // tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.GrainSourceRef, "`grain ls/read/grep src://...` (and `src://core/...`)"},
-	{"api:self-debug", "`grain task list`, `grain task read <id>`, " +
+	{model.APIRef("self-debug"), "`grain task list`, `grain task read <id>`, " +
 		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes [--cursor <c>] [--page N]`"},
-	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
-	{"deployment-health", "`grain health`, `grain read deploy://state`"},
-	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
-	{"memory", "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
+	{model.GrainJournalRef, "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
+	{model.GrainHealthRef, "`grain health`, `grain read deploy://state`"},
+	{model.BootstrapPlaybooksGrant, "`grain playbooks [<name>]`"},
+	{model.APIRef("memory"), "`grain memory list`, `grain memory read <key>`, `grain memory write [--repo owner/name] --file <f>`, " +
 		"`grain memory doc-write <name> --summary <s> --file <f> [--repo owner/name]`"},
-	{"release-notes", "`grain release-notes stats [--period <p>]`, `grain release-notes publish --title <t> --file <f> [--period <p>]`"},
-	{"read-issues", "`grain issue list`, `grain issue read <n>`"},
-	{"test-quarantine", "`grain quarantine <pkg> <test> --reason <why>`"},
-	{"db-read", "`grain db query <sql>`"},
+	{model.APIRef("release-notes"), "`grain release-notes stats [--period <p>]`, `grain release-notes publish --title <t> --file <f> [--period <p>]`"},
+	{model.GitHubReadIssuesRef, "`grain issue list`, `grain issue read <n>`"},
+	{model.APIRef("test-quarantine"), "`grain quarantine <pkg> <test> --reason <why>`"},
+	{model.GrainSQLRef, "`grain db query <sql>`"},
 }
 
 // grainCLIGrantBullets is one bullet per grant the task holds naming the
@@ -1651,34 +1786,34 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	}
 	apiSet := model.APIGrantsOf(names)
 	if apiSet.Has("memory:write") {
-		held["memory"] = true
+		held[model.APIRef("memory")] = true
 	}
 	if apiSet.Has("release-notes:read") || apiSet.Has("release-notes:write") {
-		held["release-notes"] = true
+		held[model.APIRef("release-notes")] = true
 	}
 	if grainserver.HasSource(names) {
 		held[model.GrainSourceRef] = true
 	}
 	if apiSet.Allows("tasks:read", "") && apiSet.Allows("deployment:read", "") {
-		held["api:self-debug"] = true
+		held[model.APIRef("self-debug")] = true
 	}
 	if grainserver.HasJournal(names) {
-		held["grain-log"] = true
+		held[model.GrainJournalRef] = true
 	}
 	if grainserver.HasHealth(names) || apiSet.Has("deployment:read") {
-		held["deployment-health"] = true
+		held[model.GrainHealthRef] = true
 	}
 	if model.HasBootstrapPlaybooks(names) {
-		held["bootstrap-playbooks"] = true
+		held[model.BootstrapPlaybooksGrant] = true
 	}
 	if grainserver.HasSQL(names) {
-		held["db-read"] = true
+		held[model.GrainSQLRef] = true
 	}
 	if grainserver.HasReadIssues(names) {
-		held["read-issues"] = true
+		held[model.GitHubReadIssuesRef] = true
 	}
 	if apiSet.Has("tests:write") {
-		held["test-quarantine"] = true
+		held[model.APIRef("test-quarantine")] = true
 	}
 	var b strings.Builder
 	for _, c := range grainCLIGrants {
@@ -1935,7 +2070,7 @@ func stateRepoSection(prepared checkout, image string) string {
 		"at all: those rows stay in grain's database on the server, so there is no " +
 		"`tables/task.json` or `tables/task_run.json` here to read, and a file you write " +
 		"for one is deleted by grain's next export rather than imported. If you need to " +
-		"know what this deployment has actually run, that is the self-debug capability's " +
+		"know what this deployment has actually run, that is the `https://grain.dev/capabilities/api#self-debug` grant's " +
 		"task tools (`list_grain_tasks`, `read_grain_task`); without them, say the " +
 		"history is not available to you rather than inferring it from the settings.\n\n" +
 		"Check what you propose before it merges. There is no `grain` binary in your " +
@@ -2001,9 +2136,9 @@ func directorStateSection(prepared checkout, task model.Task) string {
 	switch prepared.DirectorState {
 	case directorStateReady:
 		if prepared.DirectorStateWritable {
-			return fmt.Sprintf("\n\nGrain checked out this deployment's state repository, %[3]s, at `%[1]s`, and this session may propose changes to it. Read the files there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. To change the configuration, edit the files in `%[1]s` (`settings/*.yml`, `tables/*.json`, `memory/**`), check them with `grain state check %[1]s` where that command is available, and then call `propose_config_change` with a one-line summary: it commits and pushes your edits to a branch of %[3]s, validates them, and shows the person in this chat the diff with Approve and Reject buttons. That ends your turn; you are woken with their decision. Do not commit to or push `main` yourself -- grain's Git proxy refuses it -- and nothing you push takes effect until the person approves it. For any other repository listed in this task's read scope, clone `%[2]s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase, prepared.DirectorStateRepo)
+			return fmt.Sprintf("\n\nGrain checked out this deployment's state repository, %[3]s, at `%[1]s`, and this session may propose changes to it. Read the files there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the `api#self-debug` task tools if you hold them, and reported as unavailable if you do not. To change the configuration, edit the files in `%[1]s` (`settings/*.yml`, `tables/*.json`, `memory/**`), check them with `grain state check %[1]s` where that command is available, and then call `propose_config_change` with a one-line summary: it commits and pushes your edits to a branch of %[3]s, validates them, and shows the person in this chat the diff with Approve and Reject buttons. That ends your turn; you are woken with their decision. Do not commit to or push `main` yourself -- grain's Git proxy refuses it -- and nothing you push takes effect until the person approves it. For any other repository listed in this task's read scope, clone `%[2]s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase, prepared.DirectorStateRepo)
 		}
-		return fmt.Sprintf("\n\nGrain checked out this deployment's state repository read-only at `%s`. Read the JSON files under `tables/` there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the self-debug task tools if you hold them, and reported as unavailable if you do not. Its `origin` uses grain's scoped Git proxy, and pushing is disabled. For any other repository listed in this task's read scope, clone `%s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase)
+		return fmt.Sprintf("\n\nGrain checked out this deployment's state repository read-only at `%s`. Read the JSON files under `tables/` there to inspect this deployment's configuration and memory -- that export holds no tasks, runs or comments, so what this deployment has actually run is read with the `api#self-debug` task tools if you hold them, and reported as unavailable if you do not. Its `origin` uses grain's scoped Git proxy, and pushing is disabled. For any other repository listed in this task's read scope, clone `%s/OWNER/REPO.git`; credentials are supplied by the sandbox and must not be copied into commands or output.", path, prepared.ProxyBase)
 	case directorStateAbsent:
 		return "\n\nThis deployment has no configured state repository, so no state checkout is available. Start normally and say that plainly when this deployment's own configuration is needed."
 	case directorStateUnauthorized:
@@ -2454,6 +2589,10 @@ type History struct {
 	// through wait_for_task, as they stand now -- set only when that
 	// attempt ended model.ParkedOutcome. See parkedResumeSection.
 	Resumed []model.WaitTarget
+	// Dependencies is the tasks this one depends on (model.LinkDependsOn)
+	// that are not already in Resumed, as they stand now, with each one's
+	// closing note. See dependenciesSection.
+	Dependencies []model.WaitTarget
 	// ResumedUntil is the time the previous attempt parked this task
 	// until through wait_for_task's resume_at -- zero unless that attempt
 	// ended model.ParkedOutcome that way. See parkedResumeSection.
@@ -2522,6 +2661,55 @@ func parkedResumeSection(h History) string {
 		b.WriteString(t.Describe())
 	}
 	return b.String()
+}
+
+// dependenciesSection tells a run what the tasks it depends on found:
+// each one's id, where it stands and its closing note. A task filed with
+// depends_on on a report-only sub-task (model.ClosesOnAnswer) is
+// dispatched when that sub-task closes on its answer, and the answer is
+// what it was waiting for; without this it would have neither the note
+// nor the sub-task's id (a proposal names an earlier one by its local id,
+// before any id exists), and an ordinary run cannot read another task's
+// record (grain/task-4384). A park's own targets are told by
+// parkedResumeSection instead, so none is said twice.
+func dependenciesSection(h History) string {
+	if len(h.Dependencies) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("This task depends on the task(s) below (depends_on). Here is where each stands and " +
+		"what it said when it finished; build on its findings rather than redoing them:\n")
+	for _, t := range h.Dependencies {
+		b.WriteString(t.Describe())
+	}
+	return b.String()
+}
+
+// DependenciesOf is the tasks task depends on (model.LinkDependsOn), as
+// they stand now and as task may be told them (model.Store.WaitTargetFor:
+// a dependency in a repository task cannot read keeps its closing note to
+// itself), leaving out any already in resumed (a park's own depends-on
+// links, which parkedResumeSection describes). Advisory, like
+// ResumedFrom: a target grain cannot read is left out rather than
+// failing the dispatch.
+func DependenciesOf(ctx context.Context, store *model.Store, task model.Task, resumed []model.WaitTarget) []model.WaitTarget {
+	told := map[string]bool{}
+	for _, r := range resumed {
+		told[r.ID] = true
+	}
+	var out []model.WaitTarget
+	for _, l := range task.Links {
+		if l.Kind != model.LinkDependsOn || told[l.Target] {
+			continue
+		}
+		told[l.Target] = true
+		target, err := store.WaitTargetFor(ctx, task, l.Target, time.Now())
+		if err != nil || target == nil {
+			continue
+		}
+		out = append(out, *target)
+	}
+	return out
 }
 
 // pairedBranchesSection tells a run in a repository that pairs branches
@@ -3141,6 +3329,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	if _, err := resolveTaskQAAssignment(ctx, store, cfg, task, d.RunID, cfg.now()); err != nil {
+		return unprepared(err)
+	}
 
 	// Before the agent's first turn: a run whose sandbox never got its repo
 	// has nothing to do. Capability placements are applied just below before
@@ -3265,7 +3456,8 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		CommittedContext: prepared.Context,
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
-	history.Resumed = ResumedFrom(ctx, store, previous)
+	history.Resumed = ResumedFrom(ctx, store, task, previous)
+	history.Dependencies = DependenciesOf(ctx, store, task, history.Resumed)
 	loadTaskContext(ctx, store, task, &history)
 	history.AutoCompactBytes = cfg.autoCompactBytes()
 	history.ResumedUntil = ResumedUntil(previous)
@@ -4026,8 +4218,14 @@ func capacityDetail(capacity *agent.CapacityError) string {
 // the clone's credential, say -- which is the host's doing and is recorded
 // as model.EnvironmentOutcome, in the words that say how to renew them. A setup
 // step's error may have crossed a process (the git proxy answering a
-// clone), so the refusal is also recognised by its text.
+// clone), so the refusal is also recognised by its text. A clone the git
+// proxy refused because the host's own login for a git host has lapsed
+// (hostLoginLapsedError) is the same finding about a different login.
 func setupEnding(err error, outcome, detail string) (string, string) {
+	var lapsed *hostLoginLapsedError
+	if errors.As(err, &lapsed) {
+		return model.EnvironmentOutcome, lapsed.detail()
+	}
 	if expired, ok := authfix.As(authfix.Wrap(err, "", "")); ok {
 		return model.EnvironmentOutcome, expired.Error()
 	}
@@ -4607,11 +4805,6 @@ func runGitCredential(ctx context.Context, store *model.Store, task model.Task) 
 	return name
 }
 
-// hasGrant reports whether task carries a grant for capability, by name
-// alone: model.Grant.Via records how the grant was come by, never what it
-// lets a task do, so a self-debug grant a human ticked and one a repo's
-// defaults attached are the same grant here (model.GrantsSubsetOf draws
-// the same line for the same reason).
 // selfDebugAPIGrant is the api preset the retired self-debug became the
 // REST half of (model.SelfDebugGrants).
 const selfDebugAPIGrant = model.APICapabilityServerID + "#self-debug"
@@ -4622,16 +4815,6 @@ const selfDebugAPIGrant = model.APICapabilityServerID + "#self-debug"
 func hasGrainSource(task model.Task) bool {
 	for _, g := range task.Grants {
 		if model.IsGrainSourceGrant(g.Capability) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasGrant(task model.Task, capability string) bool {
-	want := model.CanonicalGrantKey(capability)
-	for _, g := range task.Grants {
-		if g.Capability == capability || model.CanonicalGrantKey(g.Capability) == want {
 			return true
 		}
 	}
@@ -5051,12 +5234,13 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		runErr = fmt.Errorf("orchestrator: run %s: %w", runID, errDaemonStopped)
 	case runErr != nil && errors.Is(runErr, agent.ErrHostdDraining):
 		// grain hostd refused to start the CLI because it is draining
-		// for its own upgrade: nothing ran, and nothing about the task
-		// earned a strike. Interrupted, as a daemon restart is, so the
-		// task is queued again and its next attempt starts on the hostd
-		// that replaces this one.
+		// for its own upgrade, or ended a running CLI at drain_cap so
+		// the upgrade could finish: nothing about the task earned a
+		// strike. Interrupted, as a daemon restart is, so the task is
+		// queued again and its next attempt runs on the hostd that
+		// replaces this one.
 		outcome = model.InterruptedOutcome
-		detail = runErr.Error()
+		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case runErr != nil && errors.Is(runErr, agent.ErrHostdLost):
 		// The hostd the CLI ran on dropped and was not back within
@@ -5440,10 +5624,11 @@ func ResumedUntil(previous []model.Run) time.Time {
 	return until
 }
 
-// ResumedFrom is the tasks the last of previous parked on, as they stand
-// now, or nil when it did not end parked. Advisory, like BaseIncident: a
+// ResumedFrom is the tasks the last of task's previous runs parked on, as
+// they stand now and as task may be told them (model.Store.WaitTargetFor),
+// or nil when it did not end parked. Advisory, like BaseIncident: a
 // target grain cannot read is left out rather than failing the dispatch.
-func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) []model.WaitTarget {
+func ResumedFrom(ctx context.Context, store *model.Store, task model.Task, previous []model.Run) []model.WaitTarget {
 	if len(previous) == 0 {
 		return nil
 	}
@@ -5453,7 +5638,7 @@ func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) 
 	}
 	var out []model.WaitTarget
 	for _, id := range model.ParkedTargets(last.Detail) {
-		target, err := store.WaitTargetOf(ctx, id)
+		target, err := store.WaitTargetFor(ctx, task, id, time.Now())
 		if err != nil || target == nil {
 			continue
 		}

@@ -26,6 +26,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
@@ -633,16 +634,29 @@ func init() {
 			fs.Var(&accounts, "account", "deprecated: an old fixed pool, [name=]email[*count] (repeatable)")
 			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGCPTokenPort), "the loopback address of the data-plane listener token-mode permission sets' grants fetch access tokens from")
 			fake := fs.String("fake-cloud", "", "test only: connect to an in-memory GCP (gcpfake) built from this JSON fixture instead of Google")
+			testEndpoints := fs.Bool("test-endpoints", false, "test only: send every Google call to the loopback stubs "+gcpsets.TestEndpointsEnv+" names (service=base-url pairs) instead of Google")
 			if err := fs.Parse(args); err != nil {
 				return nil, err
 			}
 			cfg := GCPConfig{Log: logger, Env: env, Listen: listenAddr(env, *listen)}
+			endpoints, err := gcpTestEndpoints(*testEndpoints, *fake != "", env)
+			if err != nil {
+				return nil, err
+			}
+			if endpoints != nil {
+				cfg.Connector = gcpsets.GoogleConnector{Endpoints: endpoints}
+				cfg.GeminiMinter = refuseGeminiUnderFake("-test-endpoints")
+				if logger != nil {
+					logger.Printf("gcp: -test-endpoints: every Google call goes to the stubs at %s; nothing reaches Google", endpoints)
+				}
+			}
 			if *fake != "" {
 				cloud, now, err := loadGCPFake(*fake)
 				if err != nil {
 					return nil, err
 				}
 				cfg.Connector, cfg.Now = cloud, now
+				cfg.GeminiMinter = refuseGeminiUnderFake("-fake-cloud")
 				if logger != nil {
 					logger.Printf("gcp: -fake-cloud %s: every admin connects to an in-memory fake GCP; nothing reaches Google", *fake)
 				}
@@ -671,6 +685,35 @@ func init() {
 			return newConfigurableGCP(cfg)
 		},
 	})
+}
+
+// gcpTestEndpoints are the stubs -test-endpoints points the server at,
+// nil without it. The environment variable alone is refused rather than
+// ignored or obeyed: a server's env reaching it some other way never
+// sends an admin's token to a stub nobody asked for, and the operator who
+// set it hears why it did nothing.
+func gcpTestEndpoints(flag, fake bool, env Env) (gcpsets.Endpoints, error) {
+	spec := ""
+	if env != nil {
+		spec = strings.TrimSpace(env(gcpsets.TestEndpointsEnv))
+	}
+	switch {
+	case !flag && spec == "":
+		return nil, nil
+	case !flag:
+		return nil, fmt.Errorf("gcp: %s is set but the server was not started with -test-endpoints; refusing to point admins at test endpoints without it", gcpsets.TestEndpointsEnv)
+	case fake:
+		return nil, fmt.Errorf("gcp: -test-endpoints and -fake-cloud are two different fakes; give one")
+	case spec == "":
+		return nil, fmt.Errorf("gcp: -test-endpoints needs %s to name the stubs", gcpsets.TestEndpointsEnv)
+	}
+	return gcpsets.ParseEndpoints(spec)
+}
+
+func refuseGeminiUnderFake(flag string) GeminiMinterFunc {
+	return func(context.Context, string, string) (geminikey.KeyMinter, error) {
+		return nil, fmt.Errorf("gcp: %s stands in for permission sets only, not gemini_key (apikeys.googleapis.com); nothing reaches Google", flag)
+	}
 }
 
 // parseGCPAccount reads -account [name=]email[*count].

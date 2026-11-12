@@ -90,7 +90,7 @@ export default function CapabilityArgsForm({
         <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
           {secrets
             ? "Configuration is exported to grain/config as plain text, except write-only fields: what is typed into one goes only to the encrypted secrets store."
-            : "Arguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers."}
+            : "Arguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capabilities."}
         </Typography>
         {canToggle && (
           <Button

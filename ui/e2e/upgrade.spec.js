@@ -371,13 +371,5 @@ test("rolls back in one click to the replaced image after a completed upgrade", 
   expect(btnBox.x).toBeGreaterThan(alertBox.x + alertBox.width / 3);
 
   await rollbackBtn.click();
-  await expect
-    .poll(() => posted)
-    .toEqual([
-      {
-        branch: "v3.1.0",
-        image: previousImage,
-        afterTasksFinish: false,
-      },
-    ]);
+  await expect.poll(() => posted).toEqual([{ rollback: true }]);
 });

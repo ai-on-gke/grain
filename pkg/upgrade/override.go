@@ -297,7 +297,7 @@ func (u *Upgrader) StartImageWith(branch, image string, opts ImageOptions) error
 		log.Printf("upgrade: refusing an upgrade to image %q: %v", image, err)
 		return err
 	}
-	return u.startWithOptions(branch, ref, sw, true)
+	return u.startWithOptions(branch, ref, sw, true, "")
 }
 
 // editionSwitchFor is the edition switch an upgrade onto repo records,
@@ -338,10 +338,14 @@ func (u *Upgrader) overrideRef() string {
 // to pull instead of the branch's tag ("" for none) and sw the edition
 // switch the operator asked for (nil for none).
 func (u *Upgrader) start(branch, ref string, sw *EditionSwitch) error {
-	return u.startWithOptions(branch, ref, sw, true)
+	return u.startWithOptions(branch, ref, sw, true, "")
 }
 
-func (u *Upgrader) startWithOptions(branch, ref string, sw *EditionSwitch, manual bool) error {
+// startWithOptions is start, with manual false for an upgrade that already
+// drained through a schedule (no grace window), and commit the object id
+// to check out instead of branch on the source pipeline ("" for none; only
+// StartRollback passes one).
+func (u *Upgrader) startWithOptions(branch, ref string, sw *EditionSwitch, manual bool, commit string) error {
 	prevImg, prevRel, prevCommit := u.snapshotPrevious()
 
 	u.mu.Lock()
@@ -352,6 +356,7 @@ func (u *Upgrader) startWithOptions(branch, ref string, sw *EditionSwitch, manua
 	}
 	u.done = make(chan struct{})
 	u.override = ref
+	u.commit = commit
 	u.switching = sw
 	u.cancelled = false
 	u.cancelledBy = ""
@@ -411,6 +416,8 @@ func (u *Upgrader) startWithOptions(branch, ref string, sw *EditionSwitch, manua
 			branch, sw.From, to, who, ref)
 	case ref != "":
 		log.Printf("upgrade: %s: requested, pulling %s", branch, ref)
+	case commit != "":
+		log.Printf("upgrade: %s: requested, rolling back to commit %s", branch, commit)
 	default:
 		log.Printf("upgrade: %s: requested", branch)
 	}

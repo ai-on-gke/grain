@@ -2355,12 +2355,53 @@ describe("Cancel running upgrade, grace countdown, and one-click rollback", () =
 
     expect(api).toHaveBeenCalledWith("/api/upgrade", {
       method: "POST",
-      body: JSON.stringify({
-        branch: "v3.1.0",
-        image: previousImage,
-        afterTasksFinish: false,
-      }),
+      body: JSON.stringify({ rollback: true }),
     });
+  });
+
+  // grain/task-4336: a source deployment rolls back to the previous
+  // commit by object id, which only the daemon's rollback does -- the
+  // pane never posts the commit as a branch for origin to resolve.
+  it("rolls a source deployment back by asking for the rollback, not a branch named after the commit", async () => {
+    const user = userEvent.setup();
+    const previousCommit = "c".repeat(40);
+    api.mockImplementation((path, init) => {
+      if (path === "/api/upgrade" && init?.method === "POST") {
+        return Promise.resolve({
+          enabled: true,
+          mode: "source",
+          branch: previousCommit,
+          phase: "running",
+        });
+      }
+      if (String(path).includes("/api/upgrade/targets")) {
+        return Promise.resolve({ targets: [], default: "main" });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "source",
+        running: { commit: "d".repeat(40) },
+        branch: "main",
+        phase: "ok",
+        previousCommit,
+      });
+    });
+
+    render(<UpgradePanel showError={() => {}} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Roll back to ccccccc" }),
+    );
+
+    const posts = api.mock.calls.filter(
+      ([path, init]) => path === "/api/upgrade" && init?.method === "POST",
+    );
+    expect(posts).toEqual([
+      [
+        "/api/upgrade",
+        { method: "POST", body: JSON.stringify({ rollback: true }) },
+      ],
+    ]);
   });
 });
 

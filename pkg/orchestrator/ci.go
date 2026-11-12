@@ -373,7 +373,7 @@ func reconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 		return nil
 	}
 	branch := task.BranchName()
-	head, err := deps.Client.GetBranchHead(task.Target.Owner, task.Target.Name, branch)
+	head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, branch)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's head on %s: %w", branch, task.Target, err)
 	}
@@ -537,7 +537,7 @@ func taskUsesGrainCI(ctx context.Context, store *model.Store, task *model.Task) 
 			// failing here would cost this task its run over a marker the
 			// no-status path below clears again.
 			if err := store.ClearGrantWait(ctx, task.ID); err != nil {
-				log.Printf("orchestrator: clearing the grain-ci grant wait on %s: %v", task.ID, err)
+				log.Printf("orchestrator: clearing the grain#ci grant wait on %s: %v", task.ID, err)
 			}
 		}
 		return true, "", nil
@@ -983,7 +983,7 @@ func announceCIRun(ctx context.Context, deps Deps, task model.Task, run ci.Run,
 		return nil
 	}
 	body := ciCommentBody(run, faults, ciFaultFixes(ctx, deps))
-	if _, err := deps.Client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, body); err != nil {
+	if _, err := deps.Client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, body); err != nil {
 		return fmt.Errorf("orchestrator: commenting grain CI's verdict on %s: %w", ref, err)
 	}
 	return nil

@@ -167,7 +167,7 @@ func (s PullRequestScope) prRepo() string {
 
 func (s PullRequestScope) prHead() string {
 	if s.hasUpstream() && s.Branch != "" && !strings.Contains(s.Branch, ":") {
-		return s.Owner + ":" + s.Branch
+		return github.BareOwner(s.Owner) + ":" + s.Branch
 	}
 	return s.Branch
 }
@@ -315,8 +315,10 @@ func gateIsGrainCINotice(judged bool) string {
 	if judged {
 		return notice + " What decides this branch is below."
 	}
-	return notice + " Nor does anything else: this run does not hold the grain-ci " +
-		"capability, so no grain CI verdict will be recorded for the commit you push, " +
+	return notice + " Nor does anything else: this run does not hold the " +
+		"https://grain.dev/capabilities/grain#ci capability -- grain grants that from the " +
+		"repository's CI mode, and nobody attaches it by hand -- so no grain CI verdict will be " +
+		"recorded for the commit you push, " +
 		"and the merge queue will wait for one until it gives up and asks a person. " +
 		"That is a fact about how this task was filed, not about your change -- say so " +
 		"in what you report."

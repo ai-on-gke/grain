@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -675,6 +676,18 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 		}
 		return *held, nil
 	}
+	// A condition the schedule declared (Schedule.SkipWhen), after both:
+	// a previous firing still going is the more useful thing to name.
+	base := comp.Base
+	if base == "" {
+		base = sched.Base
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, base, now, advance); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
 
 	// What a repository's declaration asked for, recorded as of this
 	// firing, is what Settings -> Capabilities offers a person to
@@ -719,18 +732,48 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 // (Schedule.TemplateID's own doc comment): what a firing does after it
 // files, and what ResyncTemplateSchedules does when the template itself
 // is saved.
+//
+// Admission, Hosting and Grants are not part of that cache, and are left
+// as they are. On a template-backed schedule they are what the schedule
+// adds to its template -- a raise of its admission or hosting, and
+// capabilities beside its grants -- which ComposeScheduleTask merges with
+// the template's at every firing, and which a repository's declared
+// schedule (`admission:`, `hosting:`, `grants:` beside `template:`) or a
+// settings row says. Copying the template's over them, as this used to,
+// filed the schedule's own raise and grants on its first firing only:
+// the row it was read back from next time held the template's, which
+// cannot be told apart from the schedule's own (2026-11-11 capabilities
+// walkthrough, tasks 4519 and 4607).
 func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.Title, sc.Body = tmpl.FilledTitleBody()
-	sc.AutoMerge, sc.Reads, sc.Writes, sc.Grants, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning, sc.Admission, sc.Hosting =
-		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes,
-		tmpl.Grants, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning, tmpl.Admission, tmpl.Hosting
-	// Model is not part of that cache: it is the schedule's own
+	sc.AutoMerge, sc.Reads, sc.Writes, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning =
+		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning
+	// Model is not part of that cache either: it is the schedule's own
 	// choice, which beats the template's (Schedule.Model), and
 	// copying the template's over it would erase that choice.
 	// Target and Base are part of that cache only while the template
 	// is bound: an unbound one composes against the schedule's own,
 	// so this writes back what was already there.
 	sc.Target, sc.Base = tmpl.FiringTarget(sc.Target, sc.Base)
+}
+
+// WithTemplateSettings is sc's admission, hosting and grants as its
+// firings hold them: tmpl's admission and hosting raised by sc's own, and
+// tmpl's grants with sc's own beside them -- what ComposeScheduleTask
+// files. A template-backed schedule's own columns hold only what it adds
+// to its template (Schedule.Grants), so this is what it is shown as, and
+// what a request resending it is measured against (ui.scheduleFrom).
+func (sc Schedule) WithTemplateSettings(tmpl Template) Schedule {
+	sc.Admission = MaxAdmission(tmpl.Admission, sc.Admission)
+	sc.Hosting = MaxHosting(tmpl.Hosting, sc.Hosting)
+	grants := slices.Clone(tmpl.Grants)
+	for _, g := range sc.Grants {
+		if !slices.ContainsFunc(grants, func(have Grant) bool { return have.Capability == g.Capability }) {
+			grants = append(grants, g)
+		}
+	}
+	sc.Grants = grants
+	return sc
 }
 
 // ResyncTemplateSchedules refreshes the display cache of every schedule
@@ -769,6 +812,9 @@ func (s *Store) ResyncTemplateSchedules(ctx context.Context, tmpl Template) erro
 func (s *Store) putScheduleTask(ctx context.Context, comp Composition, tags []string,
 	now time.Time) (string, error) {
 
+	if err := refuseCompositionSandboxAboveMax(ctx, s.db, comp); err != nil {
+		return "", err
+	}
 	id, err := s.NewTaskID(ctx)
 	if err != nil {
 		return "", fmt.Errorf("allocating an id for %q: %w", comp.Title, err)
@@ -881,6 +927,12 @@ func (s *Store) fireWorkflowSchedule(ctx context.Context, sched Schedule, stem s
 		abandoned = hold.Review
 	}
 	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}
@@ -1251,6 +1303,12 @@ func (s *Store) fireSuiteSchedule(ctx context.Context, sched Schedule, now time.
 		}
 	}
 	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}

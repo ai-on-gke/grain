@@ -258,3 +258,54 @@ describe("TemplateOverlay hosting", () => {
     expect(sentBody("PATCH")).not.toHaveProperty("hosting");
   });
 });
+
+// The sandbox shape every task the template files asks for
+// (ui.Template.sandbox, grain/task-4591).
+describe("TemplateOverlay sandbox shape", () => {
+  afterEach(() => api.mockReset());
+
+  it("shows a saved shape in its boxes", () => {
+    overlay({ ...saved, sandbox: { cpus: 4, diskGb: 100 } });
+    expect(
+      screen.getByRole("spinbutton", { name: "Sandbox vCPUs" }),
+    ).toHaveValue(4);
+    expect(
+      screen.getByRole("spinbutton", { name: "Sandbox memory (MiB)" }),
+    ).toHaveValue(null);
+    expect(
+      screen.getByRole("spinbutton", { name: "Sandbox disk (GiB)" }),
+    ).toHaveValue(100);
+  });
+
+  it("leaves an unsized new template's shape out", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    submitWithPriority("");
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).not.toHaveProperty("sandbox");
+  });
+
+  it("sends the dimensions that are filled in", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Sandbox disk (GiB)" }),
+      { target: { value: "100" } },
+    );
+    submitWithPriority("");
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST").sandbox).toEqual({ diskGb: 100 });
+  });
+
+  it("clears a saved shape with {} when every box is emptied", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, sandbox: { diskGb: 100 } });
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Sandbox disk (GiB)" }),
+      { target: { value: "" } },
+    );
+    submitWithPriority("");
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH").sandbox).toEqual({});
+  });
+});

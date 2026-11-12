@@ -57,6 +57,7 @@ git:
     host: github.com            # optional; the deployment's default host
     scope: ""                   # "" (host default), "owner" or "owner/repo"
     token_file: /run/bot.token  # optional; stored as secrets/github/bot.token
+    merge_credential: ""        # optional; a credential (a GitHub App's) to merge with instead
 ```
 
 (the same file can carry model connections, see
@@ -185,6 +186,7 @@ schema 22), and the state repo exports it as one more column of
 | `credential` | a credential name in the credential store                                |
 | `host`       | the host it is used for; empty means the deployment's default host       |
 | `scope`      | empty means the host default; `owner` (or `owner/*`); `owner/repo`       |
+| `merge_credential` | optional: the credential pull requests are merged with instead of `credential` -- a GitHub App's, so merges are `<app>[bot]`'s and not the pushing person's ([github-actions-ci.md](github-actions-ci.md#a-merge-identity-of-grains-own)) |
 
 A credential for several specific repos is several connections.
 
@@ -294,7 +296,9 @@ One team, two fake GitHub instances and a plain git server:
 - legacy single-credential teams and host-less repos behave exactly as
   before.
 
-This is `tests/e2e/git_hosts_lifecycle_test.go` (grain/task-4345). One
+This is `tests/e2e/git_hosts_lifecycle_test.go` (grain/task-4345), backed by
+the importable `tests/e2e/hostsrig` package so editions can run the same
+scenarios against a real command-backed source and scratch repository. One
 deployment holds acme/widgets on four hosts side by side: the default
 host, a second GitHub-kind host on its own token and base URL, a plain
 git server (kind `git`, no forge API, added once more with a clone URL),
@@ -314,9 +318,53 @@ while a task on it is running (a refusal naming the host, with nothing
 sent anywhere). It runs in the per-PR `Tests` workflow's `go e2e` job: it
 takes about two seconds.
 
-Opening the pull request, its status and checks, the merge queue and grain
-CI on a command-backed host go through the daemon's forge router, and are
-`pkg/daemon/forgeroute_test.go`'s. Adding and removing connections and
+What happens to a pushed branch on those hosts goes through the daemon's
+forge router, so `tests/e2e/git_hosts_daemon_test.go` (grain/task-4378)
+runs it through a real `daemon.Run`: a githubsim behind the second GitHub
+host's loopback base URL (git at its root, REST under `/api/v3`), a
+second githubsim behind the `forgecli` forge, the plain git server, and a
+default host that records every request. Every host holds the same
+owner/name, `acme/widgets` (see below). A stub agent pushes on each host, and the
+test checks that the daemon's finish path opens the pull request on that
+host's own forge with that host's credential only. It also checks that the
+task records the pull request with its host, that the pull request's
+checks are read from that host at the pushed head, and that a task on the
+plain git server ends with its branch pushed, no pull request, and the
+"no pull request opened because ... is a plain git host" note. Nothing may
+reach the default host. A second test removes a host's connection
+between filing and approval and checks the reason a person sees in the
+task's conversation: the clone refused, naming the host, with the task
+parked awaiting a reply rather than retried. Both run in the per-PR `go
+e2e` job: together they take a few seconds.
+
+Writing that test found three gaps, fixed beside it:
+
+- the orchestrator looked for a plain git host (`GitOnlySource`) and read
+  its branches over git (`GitBranchSource`) only on a bare
+  `*github.RESTClient`, and the daemon's client is a
+  `StateRepoPullRequestClient` around one. So in a real daemon a run on a
+  plain git server failed its finish ("no forge API") rather than ending
+  with the note. Both are now asked of the client itself.
+- the forge router's owner/name-to-host cache (`storeRepoHosts`) was
+  trusted for 30 seconds even for a repository it had never seen. A task
+  filed on another host just after the last read then had its first
+  finish read its branch from the default host, a 404, and was retried.
+  A miss now re-reads the store (at most every 100ms).
+- the reconcile loop, review threads, the finish path's branch check and
+  most other forge calls named a repository by its bare owner. When one
+  owner/name was on two hosts, the router could not tell which and sent
+  them to the default host, so a pull request on such a host was synced
+  against the wrong forge (a 404 every cycle). Every caller holding a
+  `RepoRef` now passes `StoredOwner()` ("host/owner"), which the router
+  takes apart (grain/task-4463); `storeRepoHosts` is left for callers that
+  hold no `RepoRef`. The daemon test gives every host the same repository
+  name so a call that loses its host reaches the default host and fails
+  it.
+
+Merge-queue landing, review-thread replies, issue import, `propose_task`
+targets, reachable repositories and UI links on a non-default host are not
+yet covered end to end. The merge queue and grain CI on a command-backed
+host are still `pkg/daemon/forgeroute_test.go`'s, one layer down. Adding and removing connections and
 repositories is `pkg/ui/repo_connection_lifecycle_test.go`'s
 (grain/task-4249).
 

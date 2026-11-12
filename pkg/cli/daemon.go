@@ -193,6 +193,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	postgresURL := fs.String("postgres-url", "", "PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)")
 	secretsBackend := fs.String("secrets-backend", secrets.BackendFile, "secret store backend (\"file\" or \"secretmanager\"); defaults to $GRAIN_SECRETS_BACKEND, then \"file\"")
 	secretsSMPrefix := fs.String("secrets-sm-prefix", "", "Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX")
+	releaseApprovalKMSKey := fs.String("release-approval-kms-key", "", "Cloud KMS EC_SIGN_P256_SHA256 key version "+
+		"(projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; "+
+		"empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's "+
+		"GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY")
 	objectStoreURI := fs.String("object-store", "", "object store URI (gs://<bucket>/instances/<name>/ or file:///abs/dir) for flushing run transcripts, uploaded CI artifacts, and durable agent-sessions archives with local read-through caching (defaults to $GRAIN_OBJECT_STORE)")
 	sandboxDir := fs.String("sandbox-dir", "", "root directory for this deployment's disposable scratch space -- host-sandbox run directories, "+
 		"and the package and Actions caches default under it, and the UI reports its disk as the sandboxes' own (scripts/setup.sh installs it "+
@@ -400,6 +404,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		hostd.RemotePath+" with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability "+
 		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, "+
 		"which gives it a token of its own")
+	ciWakeBackstop := fs.Duration("ci-wake-backstop", orchestrator.DefaultCIWakeStallBound,
+		"how long a task that resume_later deferred on a CI verdict may wait before grain wakes it anyway, with a note on the task and a stall notification; a negative duration, such as -1s, disables the backstop")
 	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a host whose "+
 		"connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
 		"re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once")
@@ -775,7 +781,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	k8sRunHostSA := fs.String("k8s-run-host-service-account", "grain", "the service account run pods run as")
 	var localScripts stringList
 	fs.Var(&localScripts, "local-scripts", "NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed "+
-		"local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). "+
+		"local-scripts declaration, each of whose scripts a task holding its host-script grant is served "+
+		"(https://grain.dev/capabilities/host-script#host-script {script}; docs/local-scripts.md). "+
 		"Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml")
 	granuleStateDir := fs.String("granule-state-dir", granule.DefaultStateDir,
 		"granule's VM state directory (only used with -granule-sandboxes)")
@@ -957,7 +964,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"assert that this cluster's CNI actually enforces NetworkPolicy objects, and that "+
 			"deploy/kubernetes/networkpolicy.yaml is installed. Without it a task asking for no network access "+
 			"is refused rather than silently given a networked pod, since a policy object is accepted by every "+
-			"cluster and enforced by only some. Only used with -k8s-sandboxes"+seedOnly)
+			"cluster and enforced by only some, and attempts holding an external capability grant are refused "+
+			"because nothing then keeps an open-network pod off the metadata server and the cluster. Only used "+
+			"with -k8s-sandboxes and -k8s-granule-sandboxes"+seedOnly)
 	k8sDeployment := fs.String("k8s-deployment", "grain",
 		"name of the Kubernetes Deployment running grain itself, which the Upgrade button repoints at a new "+
 			"image (only used with -k8s-sandboxes and -upgrade-image). deploy/kubernetes/grain.yaml calls it "+
@@ -1044,6 +1053,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	slices.Sort(unitFlags)
 	envDefault(passed, "secrets-backend", "GRAIN_SECRETS_BACKEND", secretsBackend)
 	envDefault(passed, "secrets-sm-prefix", "GRAIN_SECRETS_SM_PREFIX", secretsSMPrefix)
+	envDefault(passed, "release-approval-kms-key", "GRAIN_RELEASE_APPROVAL_KMS_KEY", releaseApprovalKMSKey)
 	if !passed["db-driver"] {
 		if env := os.Getenv("GRAIN_DB_DRIVER"); env != "" {
 			*dbDriver = env
@@ -1201,8 +1211,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
 		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN,
 		SecretsBackend: *secretsBackend, SecretsSMPrefix: *secretsSMPrefix,
-		ObjectStoreURI: *objectStoreURI,
-		SandboxDir:     *sandboxDir, DockerRootDir: *dockerRootDir,
+		ReleaseApprovalKMSKey: strings.TrimSpace(*releaseApprovalKMSKey),
+		ObjectStoreURI:        *objectStoreURI,
+		SandboxDir:            *sandboxDir, DockerRootDir: *dockerRootDir,
 		MaxWorkers: *maxWorkers, MaxMergers: *maxMergers, MaxCIJobs: model.DefaultMaxCIJobs,
 		Ledger:        &model.Ledger{},
 		CpuOvercommit: *cpuOvercommit, MemoryOvercommit: *memoryOvercommit, MemoryReserveMB: *memoryReserveMB,
@@ -1237,6 +1248,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		ClaudeRun: *claudeRun, CodexRun: *codexRun, AgyRun: *agyRun,
 		HostdSocket:          *hostdSocket,
 		HostdReattachTimeout: *hostdReattachTimeout,
+		CIWakeBackstop:       *ciWakeBackstop,
 		GithubHost:           *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
 		CheckpostURL: *checkpostURL, CheckpostExpect: *checkpostExpect,
 		GithubWebhookURL: *githubWebhookURL, GithubWebhookAddr: *githubWebhookAddr,

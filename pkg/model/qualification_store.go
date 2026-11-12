@@ -32,7 +32,7 @@ func getQualificationPlan(ctx context.Context, q querier, repo RepoRef) (*Qualif
 	var requireApproval, autoPromote bool
 	err := q.QueryRowContext(ctx,
 		"SELECT `require_approval`,`auto_promote` FROM `qualification_config` WHERE `owner` = ? AND `name` = ?",
-		repo.Owner, repo.Name).Scan(&requireApproval, &autoPromote)
+		repo.StoredOwner(), repo.Name).Scan(&requireApproval, &autoPromote)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -55,7 +55,7 @@ func qualificationItemsOf(ctx context.Context, q querier, repo RepoRef) ([]Quali
 	err := each(ctx, q,
 		"SELECT `template_id`,`repeat_count` FROM `qualification_item` "+
 			"WHERE `owner` = ? AND `name` = ? ORDER BY `order_key`",
-		[]any{repo.Owner, repo.Name},
+		[]any{repo.StoredOwner(), repo.Name},
 		func(rows *sql.Rows) error {
 			var it QualificationItem
 			if err := rows.Scan(&it.TemplateID, &it.Repeat); err != nil {
@@ -82,7 +82,7 @@ func qualificationItemDependsOnOf(ctx context.Context, q querier, repo RepoRef, 
 	err := each(ctx, q,
 		"SELECT `depends_on_template_id` FROM `qualification_item_depends_on` "+
 			"WHERE `owner` = ? AND `name` = ? AND `template_id` = ? ORDER BY `depends_on_template_id`",
-		[]any{repo.Owner, repo.Name, templateID},
+		[]any{repo.StoredOwner(), repo.Name, templateID},
 		func(rows *sql.Rows) error {
 			var dep string
 			if err := rows.Scan(&dep); err != nil {
@@ -109,7 +109,7 @@ func (s *Store) PutQualificationPlan(ctx context.Context, plan QualificationPlan
 }
 
 func putQualificationPlan(ctx context.Context, tx *sql.Tx, plan QualificationPlan) error {
-	owner, name := plan.Repo.Owner, plan.Repo.Name
+	owner, name := plan.Repo.StoredOwner(), plan.Repo.Name
 	if _, err := tx.ExecContext(ctx,
 		"REPLACE INTO `qualification_config` (`owner`,`name`,`require_approval`,`auto_promote`) VALUES (?,?,?,?)",
 		owner, name, plan.RequireApproval, plan.AutoPromote); err != nil {
@@ -150,11 +150,11 @@ func (s *Store) QualificationPlansUsingTemplate(ctx context.Context, templateID 
 	err := each(ctx, s.db,
 		"SELECT DISTINCT `owner`,`name` FROM `qualification_item` WHERE `template_id` = ? ORDER BY `owner`,`name`",
 		templateID, func(rows *sql.Rows) error {
-			var r RepoRef
-			if err := rows.Scan(&r.Owner, &r.Name); err != nil {
+			var owner, name string
+			if err := rows.Scan(&owner, &name); err != nil {
 				return err
 			}
-			out = append(out, r)
+			out = append(out, RepoFromStored(owner, name))
 			return nil
 		})
 	return out, err
@@ -180,6 +180,7 @@ func candidateQualificationRun(ctx context.Context, q querier, candidateID int64
 		}
 		return nil, fmt.Errorf("reading qualification run for candidate %d: %w", candidateID, err)
 	}
+	run.Repo = RepoFromStored(run.Repo.Owner, run.Repo.Name)
 	tasks, err := qualificationTaskStatusesOf(ctx, q, run.ID)
 	if err != nil {
 		return nil, err
@@ -324,7 +325,7 @@ func (s *Store) CreateQualificationRun(ctx context.Context, candidate Candidate,
 	err = s.write(ctx, fmt.Sprintf("create qualification run for candidate %d", candidate.ID), func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			"INSERT INTO `qualification_run` (`owner`,`name`,`candidate_id`,`created_at`) VALUES (?,?,?,?)",
-			candidate.Repo.Owner, candidate.Repo.Name, candidate.ID, now.UTC())
+			candidate.Repo.StoredOwner(), candidate.Repo.Name, candidate.ID, now.UTC())
 		if err != nil {
 			return fmt.Errorf("recording qualification run: %w", err)
 		}
@@ -345,17 +346,20 @@ func (s *Store) CreateQualificationRun(ctx context.Context, candidate Candidate,
 			// and branch, landing the way the plan and the template say
 			// (ComposeQualificationTask).
 			comp := ComposeQualificationTask(tmpl, candidate.Repo, candidate.Branch, plan.RequireApproval)
+			if err := refuseCompositionSandboxAboveMax(ctx, tx, comp); err != nil {
+				return err
+			}
 			customFields, err := declarations.apply(ctx, comp.CustomFields)
 			if err != nil {
 				return err
 			}
 			comp.CustomFields = customFields
 			if comp.Target != nil {
-				usesGrainCI, err := querierRepoUsesGrainCI(ctx, tx, *comp.Target)
+				ciDefaults, err := querierRepoCIDefaults(ctx, tx, *comp.Target)
 				if err != nil {
 					return err
 				}
-				applyGrainCIGrant(&comp, usesGrainCI)
+				applyRepoCIGrants(&comp, ciDefaults)
 			}
 
 			var links []Link

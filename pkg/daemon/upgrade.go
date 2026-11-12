@@ -19,12 +19,14 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -449,6 +451,8 @@ func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
 		// A file that cannot be read leaves the token empty, and the
 		// forge's refusal of the anonymous read says why.
 		forge.Token = readTrimmed(path)
+	} else if client, ok := reviewedMergeAmbientClient(repo); ok {
+		forge.Client = client
 	}
 	return &upgrade.ReviewedMergeConfig{
 		Policy: reviewedmerge.Policy{
@@ -460,6 +464,26 @@ func upgradeReviewedMerge(cfg Config) *upgrade.ReviewedMergeConfig {
 		Compare: forge.Compare,
 	}
 }
+
+// reviewedMergeAmbientClient is the HTTP client for repo's forge API
+// when its host is one only a host tool reaches (a command-backed
+// ambient source, gitproxy.AmbientHostHTTPClient): every read is one
+// `<tool> api` run as the daemon's account -- through grain hostd's
+// host-git entry when the daemon runs beside it (gitproxy.UseHostGit) --
+// since a plain request there is answered with a login page. ok is false
+// for any other host, which is read over plain HTTPS.
+func reviewedMergeAmbientClient(repo string) (*http.Client, bool) {
+	host, _, _, err := reviewedmerge.SplitRepo(repo)
+	if err != nil {
+		// The forge's own refusal of the repository says why.
+		return nil, false
+	}
+	return gitproxy.AmbientHostHTTPClient(gitproxy.CredentialHost{Host: host, Kind: model.GitHostGitHub}, "", reviewedMergeAPITimeout)
+}
+
+// reviewedMergeAPITimeout bounds one read of the reviewed-merge check's
+// forge API through a host tool.
+const reviewedMergeAPITimeout = 60 * time.Second
 
 func readTrimmed(path string) string {
 	b, err := os.ReadFile(path)

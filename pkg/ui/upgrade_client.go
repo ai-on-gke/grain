@@ -152,6 +152,18 @@ func (c *HTTPClient) StartUpgradeImage(
 	return upgradeStatusFrom(resp), nil
 }
 
+// StartUpgradeRollback posts POST /api/upgrade with rollback set: the
+// one-click rollback onto the build the last upgrade replaced, which the
+// daemon reads from its own status file rather than from this request
+// (upgrade.Upgrader.StartRollback). It always starts now.
+func (c *HTTPClient) StartUpgradeRollback(ctx context.Context) (UpgradeStatus, error) {
+	var resp upgradeStatusResponse
+	if err := c.do(ctx, http.MethodPost, "/api/upgrade", startUpgradeRequest{Rollback: true}, &resp); err != nil {
+		return UpgradeStatus{}, err
+	}
+	return upgradeStatusFrom(resp), nil
+}
+
 // CancelCurrentUpgrade stops an in-progress upgrade via DELETE
 // /api/upgrade/current and reports whether one was running and cancelled. Once
 // the upgrade has passed its point of no return, the daemon answers 409

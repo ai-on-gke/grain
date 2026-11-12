@@ -22,6 +22,7 @@ import {
 } from "react";
 import { kindNarrowing } from "./processFilters.js";
 import api, {
+  forgetETag,
   isUnreachable,
   isVerifierUnavailable,
   RESTARTING_REASON,
@@ -62,8 +63,10 @@ import { boardMoves } from "./boardOrder.js";
 import { panelMove } from "./panelOrder.js";
 import { sectionMove } from "./sectionOrder.js";
 import { TimeZoneProvider } from "./TimeZoneContext.jsx";
+import { ViewerProvider } from "./ViewerContext.jsx";
 import {
   mergeFreshDetail,
+  fetchEarlier,
   prependEarlierPage,
   taskDetailPath,
   taskEarlierPath,
@@ -1457,22 +1460,37 @@ function AppContent({ onReload = () => window.location.reload() }) {
         setSessionTask(null);
         return;
       }
-      let detail = await api(taskDetailPath(taskId), {
+      const path = taskDetailPath(taskId);
+      let detail = await api(path, {
         poll: true,
       });
+      // A read a later one has superseded is dropped -- but a full
+      // answer dropped here has still advanced the ETag api.js keeps for
+      // the path, and the next poll would be told 304 about a body this
+      // pane never took. That is how a message sent as a new session
+      // opened stayed missing from it until a reload: the opening poll,
+      // answered just after the message landed, was superseded by the
+      // send's own re-read, which then asked "still this?" of the
+      // dropped answer and kept the older conversation.
+      const answered = detail !== UNCHANGED;
+      const drop = () => {
+        if (answered) forgetETag(path);
+      };
       if (seq !== sessionTaskSeq.current) {
+        drop();
         return;
       }
       if (detail === UNCHANGED) {
         if (String(sessionTaskRef.current?.id) === String(taskId)) {
           return;
         }
-        detail = await api(taskDetailPath(taskId));
+        detail = await api(path);
         if (seq !== sessionTaskSeq.current) {
           return;
         }
       }
       if (String(openSessionTaskIdRef.current) !== String(taskId)) {
+        drop();
         return;
       }
       setSessionTask((prev) =>
@@ -1622,6 +1640,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         // on both).
         setConfig((prev) => keepIfSame(prev, next));
         setConfigError(null);
+        return next;
       } catch (err) {
         setConfigError(err);
         if (
@@ -1760,7 +1779,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
         Array.isArray(current.attempts) &&
         current.attempts.length > 0;
       try {
-        const earlier = await api(path);
+        const earlier = await fetchEarlier(api, current, opts);
+        if (!earlier) return null;
         const merge = (prev) =>
           prev && String(prev.id) === String(targetId)
             ? prependEarlierPage(prev, earlier, {
@@ -2848,8 +2868,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
             console.warn("grain: task still failing to load", err);
           }
         } else if (openTaskId !== null) {
-          const detail = await api(taskDetailPath(openTaskId), { poll: true });
-          if (detail !== UNCHANGED) {
+          // A read that an act()'s own re-read (loadTask) overtook is
+          // dropped, as the session pane's is: answered from before the
+          // mutation, it would put back what the mutation just changed --
+          // a grant just removed reappearing, or one just given vanishing,
+          // until the next tick (task 4828). Dropping a full answer also
+          // drops the ETag it advanced, so the next poll is answered again.
+          const seq = openSeq.current;
+          const path = taskDetailPath(openTaskId);
+          const detail = await api(path, { poll: true });
+          if (detail !== UNCHANGED && seq !== openSeq.current) {
+            forgetETag(path);
+          } else if (detail !== UNCHANGED) {
             setDetail((prev) =>
               prev && String(prev.id) === String(detail?.id)
                 ? keepIfSame(prev, mergeFreshDetail(prev, detail))
@@ -4561,7 +4591,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
       </div>
     </TimeZoneProvider>
   );
-  return <AccessConfigProvider config={config}>{shell}</AccessConfigProvider>;
+  return (
+    <AccessConfigProvider config={config}>
+      <ViewerProvider whoami={whoami}>{shell}</ViewerProvider>
+    </AccessConfigProvider>
+  );
 }
 
 // DEPLOYMENT_SETTINGS_TAB maps a Team settings tab an older link or

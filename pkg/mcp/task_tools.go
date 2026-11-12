@@ -287,8 +287,11 @@ type TaskRecord struct {
 	AuthorLabel string
 	// Provenance is ui.Task.Provenance: "filed from <filed_via> by <owner>"
 	// when filed_via was recorded (#XC-15).
-	Provenance   string
-	Base         string
+	Provenance string
+	Base       string
+	// FoundIn is ui.Task.FoundIn: the release this task is filed
+	// against (vX.Y.Z or vX.Y.Z-rc.N), "" when none is recorded.
+	FoundIn      string
 	Capabilities []string
 	PullRequest  string
 	// PullRequestMergedAt and PullRequestClosedAt are when grain saw that
@@ -310,8 +313,8 @@ type TaskRecord struct {
 	// is a question asked of a task that looks stuck, and until now the
 	// only way to answer it was to ask the operator to read their own
 	// screen. Unlike MergeQueue it is not on the list shape -- see
-	// renderTaskList on why one task's sentence does not belong on fifty
-	// rows.
+	// renderFilteredTaskList on why one task's sentence does not belong on
+	// fifty rows.
 	Activity TaskActivity
 }
 
@@ -374,7 +377,7 @@ func NewTaskTools(reader TaskReader) []Tool {
 // no route to the store -- a sentence about this run rather than "unknown
 // tool", which would read like a bug in grain rather than a fact about
 // how this one was dispatched.
-const noTaskReader = "This run cannot read grain's other tasks: it holds the self-debug grant but was " +
+const noTaskReader = "This run cannot read grain's other tasks: it holds the https://grain.dev/capabilities/api#self-debug grant but was " +
 	"dispatched with no route back to the grain daemon that owns the task store. Say so if it " +
 	"matters to what you were asked to do; nothing you can do from here will change it."
 
@@ -559,7 +562,7 @@ func listTasksTool(reader TaskReader) Tool {
 	}
 }
 
-// renderTaskList is one line per task, oldest first and newest last by
+// renderFilteredTaskList is one line per task, oldest first and newest last by
 // filing time, with a count and any elision stated outright: a list that
 // silently stopped at 50 would have the reader concluding there are 50
 // tasks. A limit keeps the newest rows, because a debugging question is
@@ -583,10 +586,6 @@ func listTasksTool(reader TaskReader) Tool {
 // asking about. So does the age: "since when" is what a person asks
 // after they have found the row that is stuck, and fifty timestamps to
 // find one is the wrong trade for a list.
-func renderTaskList(tasks []TaskSummary, state string, limit int) string {
-	return renderFilteredTaskList(tasks, taskListFilter{State: state}, limit)
-}
-
 func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit int) string {
 	shown, matched := selectTasks(tasks, filter, limit)
 	if matched == 0 {
@@ -882,6 +881,9 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 			fmt.Fprintf(&b, " (base %s)", t.Base)
 		}
 		b.WriteByte('\n')
+	}
+	if t.FoundIn != "" {
+		fmt.Fprintf(&b, "Found in: %s\n", t.FoundIn)
 	}
 	if t.Configuration {
 		b.WriteString("Kind: configuration agent\n")

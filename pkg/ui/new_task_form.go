@@ -74,6 +74,8 @@ func applyHiddenFormDefaults(req *CreateTaskRequest, form *model.NewTaskForm) er
 			req.NoPort = formBool(def)
 		case "fixesBaseBranch":
 			req.FixesBaseBranch = formBool(def)
+		case "foundIn":
+			req.FoundIn = formString(def)
 		case "approved":
 			req.Approved = formBool(def)
 		case "atFront":

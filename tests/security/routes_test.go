@@ -199,10 +199,12 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/local-script-approvals":                               trusted,
 	"GET /api/declarations":                                         trusted,
 	"POST /api/declarations/accept":                                 trusted,
+	"POST /api/declarations/revoke":                                 trusted,
 	"POST /api/tasks/{id}/delivered":                                trusted,
 	"GET /api/tasks/{id}/attempts/{number}/transcript":              trusted,
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":        trusted,
 	"GET /api/tasks/{id}/prompt":                                    trusted,
+	"GET /api/tasks/{id}/diff-preview":                              trusted,
 	"GET /api/tasks/{id}/tree":                                      trusted,
 
 	"GET /api/memory":                           trusted,
@@ -479,6 +481,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/ci/faults":                           trusted,
 	"GET /api/ci/runs/{id}":                        trusted,
 	"DELETE /api/ci/runs/{id}":                     trusted,
+	"POST /api/ci/runs/{id}/rerun":                 trusted,
 	"GET /api/ci/runs/{id}/log":                    trusted,
 	"GET /api/ci/runs/{id}/artifacts":              trusted,
 	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": trusted,
@@ -505,9 +508,11 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/hostd/renew":          public,
 	// The script that installs one: grain's own, with no token in it
 	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
-	"GET /api/hostd/install.sh": public,
-	"GET /hostd/install":        public,
-	"GET /cli/install.sh":       public,
+	"GET /api/hostd/install.sh":                       public,
+	"GET /hostd/install":                              public,
+	"GET /api/hostd/agentd/{os}/{arch}":               public,
+	"GET /api/hostd/agentd/{os}/{arch}/manifest.json": public,
+	"GET /cli/install.sh":                             public,
 }
 
 // The people the fixtures name. On the single-tenant daemon

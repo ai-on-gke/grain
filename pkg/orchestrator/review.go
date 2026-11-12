@@ -463,25 +463,19 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 	}
 	grants := slices.Clip(tmpl.Grants)
 	if task.Target != nil {
-		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *task.Target)
+		ciDefaults, err := store.RepoCIDefaults(ctx, *task.Target)
 		if err != nil {
 			return model.Task{}, fmt.Errorf("orchestrator: checking CI mode for %s review of %s: %w", *task.Target, task.ID, err)
 		}
 		// Only a review that opens a stacked pull request of its own on a
 		// grain-CI repository runs grain CI; an in-place review shares the
 		// reviewed task's branch and CI run (reviewsInPlace), and on a
-		// ci_mode: github repository grain#ci never gates.
-		if usesGrainCI && !inPlace {
-			found := false
-			for _, g := range grants {
-				if grainci.IsGrant(g.Capability) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
-			}
+		// ci_mode: github repository grain#ci never gates. Every review
+		// reads its repository's CI through ensureReviewCIReadGrant, so
+		// the default api:ci-read (model.RepoCIDefaults) is not attached
+		// beside it.
+		if ciDefaults.GrainCI && !inPlace {
+			grants = model.AdjustRepoCIGrants(grants, *task.Target, ciDefaults)
 		} else {
 			grants = withoutGrainCIGrants(grants)
 		}
@@ -501,8 +495,11 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 			task.ID, tmpl.Admission, tmpl.ID, admission)
 	}
 	reviewTask := model.Task{
-		ID:        id,
-		Intent:    model.IntentImplement,
+		ID:     id,
+		Intent: model.IntentImplement,
+		// A review gates the change it reviews, so it runs at that
+		// change's priority, and never below model.ReviewPriorityFloor.
+		Priority:  model.ReviewPriority(task),
 		Title:     title,
 		Body:      body,
 		Admission: admission,

@@ -24,6 +24,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
@@ -45,7 +46,7 @@ const TaskListNoteHeader = "Grain-Task-List-Note"
 func (p *GitProxy) serveTasks(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
 	own := strings.TrimSpace(scope.TaskIDStr)
 	if !scope.MayReadAllTasks && own == "" {
-		cliError(w, namespace.RefuseCapability("grain task list", "api:tasks:read"))
+		cliError(w, namespace.RefuseCapability("grain task list", model.APIRef("tasks:read")))
 		return
 	}
 	query, err := taskListQuery(r.URL.Query(), time.Now())

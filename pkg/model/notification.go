@@ -250,6 +250,18 @@ const (
 	// (orchestrator's stage1repair.go). It clears when the repair runs or
 	// Stage 1 is green again.
 	FamilyNightlyRedUnattended = "pipeline.nightly-red-unattended"
+	// FamilyBaseRedUnattended is a red default branch on GitHub Actions
+	// (a gating workflow such as tests.yml concluded failure on it) whose
+	// repair task nobody is working on, on the same patience as
+	// FamilyNightlyRedUnattended, "<repo>" (orchestrator's
+	// githubbaserepair.go). It clears when the repair runs or closes.
+	FamilyBaseRedUnattended = "pipeline.base-red-unattended"
+	// FamilyBaseNoVerdict is a default branch on GitHub Actions whose
+	// gating workflows have run but reached no verdict -- every run
+	// cancelled by the next push -- for orchestrator.GitHubBaseNoVerdictAfter, which
+	// stalls a release train that cuts only from a green commit, "<repo>"
+	// (orchestrator's githubbaserepair.go). It clears on the next verdict.
+	FamilyBaseNoVerdict = "pipeline.base-no-verdict"
 	// FamilyReleaseLoopIdle is a repository running the continuous release
 	// loop (design/playbook/releases.playbook.md §15) that has had no
 	// release candidate in qualification past ReleaseLoopIdleAfter while
@@ -461,7 +473,7 @@ func (s *Store) RaiseNotification(ctx context.Context, n Notification) (Notifica
 			}
 			n.ID, n.RaisedAt, n.LastRaisedAt, n.RaiseCount = id, now, now, 1
 			out = NotificationRaise{Notification: n, New: true}
-			return nil
+			return notificationEventTx(ctx, tx, IntegrationEventNotificationRaised, n, now)
 		}
 		severity := open.Severity
 		rose := n.Severity.Rank() > severity.Rank()
@@ -484,7 +496,12 @@ func (s *Store) RaiseNotification(ctx context.Context, n Notification) (Notifica
 			return err
 		}
 		out = NotificationRaise{Notification: *bumped, Rose: rose}
-		return nil
+		// Only a raise that re-surfaces it is news to a reader; one that
+		// merely bumps its count is not.
+		if !rose {
+			return nil
+		}
+		return notificationEventTx(ctx, tx, IntegrationEventNotificationRaised, *bumped, now)
 	})
 	return out, err
 }
@@ -517,30 +534,45 @@ func (s *Store) OpenNotification(ctx context.Context, subject string) (*Notifica
 func (s *Store) ClearNotification(ctx context.Context, subject, by string) (bool, error) {
 	var cleared bool
 	err := s.write(ctx, "clear notification "+subject, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "UPDATE `notification` SET `cleared_at` = ?, `cleared_by` = ? "+
-			"WHERE `subject` = ? AND `cleared_at` IS NULL", time.Now().UTC(), by, subject)
+		open, err := openNotificationBySubject(ctx, tx, subject)
 		if err != nil {
-			return fmt.Errorf("clearing notification %s: %w", subject, err)
+			return fmt.Errorf("reading notification %s: %w", subject, err)
 		}
-		n, _ := res.RowsAffected()
-		cleared = n > 0
-		return nil
+		if open == nil {
+			return nil
+		}
+		cleared, err = clearNotificationTx(ctx, tx, open.ID, by)
+		return err
 	})
 	return cleared, err
+}
+
+// clearNotificationTx clears notification id if it is open, recording a
+// notification.cleared event when it does.
+func clearNotificationTx(ctx context.Context, tx *sql.Tx, id int64, by string) (bool, error) {
+	now := time.Now().UTC()
+	res, err := tx.ExecContext(ctx, "UPDATE `notification` SET `cleared_at` = ?, `cleared_by` = ? "+
+		"WHERE `id` = ? AND `cleared_at` IS NULL", now, by, id)
+	if err != nil {
+		return false, fmt.Errorf("clearing notification %d: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	n, err := getNotification(ctx, tx, id)
+	if err != nil || n == nil {
+		return true, err
+	}
+	return true, notificationEventTx(ctx, tx, IntegrationEventNotificationCleared, *n, now)
 }
 
 // ClearNotificationByID clears notification id if it is open.
 func (s *Store) ClearNotificationByID(ctx context.Context, id int64, by string) (bool, error) {
 	var cleared bool
 	err := s.write(ctx, fmt.Sprintf("clear notification %d", id), func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "UPDATE `notification` SET `cleared_at` = ?, `cleared_by` = ? "+
-			"WHERE `id` = ? AND `cleared_at` IS NULL", time.Now().UTC(), by, id)
-		if err != nil {
-			return fmt.Errorf("clearing notification %d: %w", id, err)
-		}
-		n, _ := res.RowsAffected()
-		cleared = n > 0
-		return nil
+		var err error
+		cleared, err = clearNotificationTx(ctx, tx, id, by)
+		return err
 	})
 	return cleared, err
 }
@@ -549,12 +581,19 @@ func (s *Store) ClearNotificationByID(ctx context.Context, id int64, by string) 
 // acknowledged one keeps the first acknowledgement.
 func (s *Store) AckNotification(ctx context.Context, id int64, by string, at time.Time) error {
 	return s.write(ctx, fmt.Sprintf("acknowledge notification %d", id), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "UPDATE `notification` SET `acked_at` = ?, `acked_by` = ? "+
+		res, err := tx.ExecContext(ctx, "UPDATE `notification` SET `acked_at` = ?, `acked_by` = ? "+
 			"WHERE `id` = ? AND `acked_at` IS NULL", at.UTC(), by, id)
 		if err != nil {
 			return fmt.Errorf("acknowledging notification %d: %w", id, err)
 		}
-		return nil
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil
+		}
+		n, err := getNotification(ctx, tx, id)
+		if err != nil || n == nil {
+			return err
+		}
+		return notificationEventTx(ctx, tx, IntegrationEventNotificationAcked, *n, at)
 	})
 }
 

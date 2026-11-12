@@ -75,8 +75,8 @@ func notifyOperatorTool(notifier OperatorNotifier) Tool {
 			"and on the Inbox, and a warning or critical one reaches the director chat. subject is a short " +
 			"key for what it is about (\"flaky-e2e\", \"port-stale\"): raising the same subject again " +
 			"bumps the open notification rather than adding another, and it is namespaced to this task " +
-			"unless the task holds api:task-admin. severity is info, warning (the default) or critical; " +
-			"critical needs api:task-admin. clears_when makes it clear itself: {\"kind\": \"task\", \"task\": " +
+			"unless the task holds https://grain.dev/capabilities/api#task-admin. severity is info, warning (the default) or critical; " +
+			"critical needs https://grain.dev/capabilities/api#task-admin. clears_when makes it clear itself: {\"kind\": \"task\", \"task\": " +
 			"\"123\", \"until\": \"closed\"|\"merged\"}, {\"kind\": \"base-green\", \"repo\": \"owner/name\", " +
 			"\"branch\": \"main\"}, or {\"kind\": \"ttl\", \"ttl\": \"6h\"}. A run may raise at most 10, and a " +
 			"task have at most 20 open. Links in body must be root-relative (/tasks/12).",
@@ -131,7 +131,7 @@ func messageTaskTool(notifier OperatorNotifier) Tool {
 			"from this task's agent; it never parks that task or changes its state. A run that task has " +
 			"going is handed it with its next tool result, a resting durable task is woken by it, and " +
 			"otherwise its next run reads it in its prompt. Only for this task's parent or its children, " +
-			"unless this task holds api:task-admin. To tell a person something, use notify_operator.",
+			"unless this task holds https://grain.dev/capabilities/api#task-admin. To tell a person something, use notify_operator.",
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,

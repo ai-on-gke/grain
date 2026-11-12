@@ -159,7 +159,8 @@ runs() {
 # grain/release-qualification check run, posted by app (grain's own,
 # grain-test, unless it names another).
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
-  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test)
+  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test kvm-sandboxes kvm-route-stress
+  real-kubernetes)
 qualification() {
   local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success check2="" attempts=() a id t jobs runs=() ids
   [ "$app" = grain-test ] || app_id=15368
@@ -512,6 +513,17 @@ expect "nothing newer" "exits 0" eq "$status" 0
 expect "nothing newer" "says there is nothing to cut" has "no new LKG commit on main since ${c3:0:12}; nothing to cut"
 expect "nothing newer" "cuts no rc.2 on an older green commit" eq "$(remote_tag v2.3.0-rc.2)" ""
 expect "nothing newer" "only marks the dropped rc" images_were "discard-rc v2.3.0-rc.1"
+
+# --- nothing newer while main's red has an open repair: the reason names it ---
+setup "v2.3.0-rc.1"
+tag_remote v2.3.0-rc.1 "$c3" 40
+runs "$c2" "$c3"
+jq '. + {grain_note: "GitHub Actions: repair task 4801 is open for the red main; GitHub Actions: repair task 4801 is open for the red main"}' \
+  "$work/runs.json" > "$work/runs.noted.json" && mv "$work/runs.noted.json" "$work/runs.json"
+train
+expect "nothing newer, repair open" "exits 0" eq "$status" 0
+expect "nothing newer, repair open" "names the repair once" \
+  has "no new LKG commit on main since ${c3:0:12}; nothing to cut (repair task 4801 is open for the red main)"
 
 # --- grain/rc-hold: held while open, released after completion, absent cuts ---
 setup ""
@@ -1072,12 +1084,12 @@ if [ -n "$api" ]; then
   mkdir -p "$work/www/gh/repos/o/r/actions/workflows/nightly.yml" "$work/www/gh/repos/o/r/actions/runs/7" "$work/www/gh/repos/o/r/commits/$c2"
   printf '{"total_count":1,"workflow_runs":[{"id":7,"head_sha":"%s"}]}' "$c2" > "$work/www/gh/repos/o/r/actions/workflows/nightly.yml/runs"
   {
-    printf '{"total_count":16,"jobs":['
+    printf '{"total_count":19,"jobs":['
     first=1
     for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
       "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
       "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
-      "pkg/cli stress under load" "upgrade from previous versions"; do
+      "pkg/cli stress under load" "upgrade from previous versions" "real KVM sandboxes" "twenty two-VM boots" "real kubernetes"; do
       [ $first = 1 ] || printf ','
       first=0
       printf '{"run_id":7,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"%s","created_at":"%s"}' \
@@ -1137,12 +1149,12 @@ tag_remote v2.3.0-rc.1 "$c2" 3
 git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
 runs "$c2" "$c4"
 {
-  printf '{"total_count":15,"jobs":['
+  printf '{"total_count":18,"jobs":['
   first=1
   for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
     "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
     "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
-    "pkg/cli stress under load" "upgrade from previous versions"; do
+    "pkg/cli stress under load" "upgrade from previous versions" "real KVM sandboxes" "twenty two-VM boots" "real kubernetes"; do
     [ $first = 1 ] || printf ','
     first=0
     printf '{"id":%s,"run_id":7,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"%s","created_at":"%s","started_at":null,"completed_at":null}' \

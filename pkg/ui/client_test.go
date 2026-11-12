@@ -756,14 +756,14 @@ func TestCreateTaskCarriesCapabilityGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubSandboxRepoGrant {
+	if len(withoutDefaultCIRead(task.Capabilities)) != 1 || withoutDefaultCIRead(task.Capabilities)[0] != model.GitHubSandboxRepoGrant {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 || stored.Grants[0].Capability != model.GitHubSandboxRepoGrant {
+	if len(withoutDefaultCIReadGrants(stored.Grants)) != 1 || withoutDefaultCIReadGrants(stored.Grants)[0].Capability != model.GitHubSandboxRepoGrant {
 		t.Fatalf("grants = %+v, want one gemini-key grant", stored.Grants)
 	}
 }
@@ -835,7 +835,7 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 || stored.Grants[0].Via != model.GrantByDefault {
+	if len(withoutDefaultCIReadGrants(stored.Grants)) != 1 || withoutDefaultCIReadGrants(stored.Grants)[0].Via != model.GrantByDefault {
 		t.Fatalf("grants = %+v, want one gcp-key grant recorded as %q", stored.Grants, model.GrantByDefault)
 	}
 	// Detachable like any other grant: a default is a starting point, not
@@ -847,7 +847,7 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(detached.Grants) != 0 {
+	if len(withoutDefaultCIReadGrants(detached.Grants)) != 0 {
 		t.Fatalf("grants after detaching = %+v, want none", detached.Grants)
 	}
 }
@@ -868,14 +868,14 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(named.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(named.Capabilities), []string{model.GitHubSandboxRepoGrant}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone", named.Capabilities)
 	}
 	stored, err := store.GetTask(ctx, named.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 || stored.Grants[0].Via != model.GrantByLabel {
+	if len(withoutDefaultCIReadGrants(stored.Grants)) != 1 || withoutDefaultCIReadGrants(stored.Grants)[0].Via != model.GrantByLabel {
 		t.Errorf("grants = %+v, want one gemini-key grant recorded as %q", stored.Grants, model.GrantByLabel)
 	}
 
@@ -885,7 +885,7 @@ func TestCreateTaskCapabilitiesOverrideDeploymentDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(none.Capabilities) != 0 {
+	if len(withoutDefaultCIRead(none.Capabilities)) != 0 {
 		t.Errorf("capabilities = %v, want none: an empty list is a choice, not an absent one", none.Capabilities)
 	}
 }
@@ -905,7 +905,7 @@ func TestCreateTaskSkipsRetiredDefaultCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("filing a task on a deployment defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(task.Capabilities), []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]: the retired id is skipped, the rest still granted",
 			task.Capabilities)
 	}
@@ -944,7 +944,7 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	// Compared sorted: a task's capabilities come back in the order
 	// Store.grantsOf reads them (by capability), not in the order they
 	// were seeded.
-	if !reflect.DeepEqual(here.Capabilities, []string{model.GCPKeySandboxAgentGrant, model.GitHubSandboxRepoGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(here.Capabilities), []string{model.GCPKeySandboxAgentGrant, model.GitHubSandboxRepoGrant}) {
 		t.Errorf("capabilities = %v, want both the deployment's github#sandbox-repo and the repo's %s",
 			here.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
@@ -966,7 +966,7 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(elsewhere.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(elsewhere.Capabilities), []string{model.GitHubSandboxRepoGrant}) {
 		t.Errorf("capabilities = %v, want [gemini-key] alone on a repo with no defaults of its own",
 			elsewhere.Capabilities)
 	}
@@ -985,7 +985,7 @@ func TestCreateTaskUsesDefaultTargetRepoDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(task.Capabilities), []string{model.GCPKeySandboxAgentGrant}) {
 		t.Fatalf("capabilities = %v, want [%s]: the default target repo's own defaults", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 }
@@ -1022,7 +1022,7 @@ func TestCreateTaskSkipsRetiredRepoDefaultCapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("filing a task against a repo defaulting a retired capability: %v", err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(task.Capabilities), []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]", task.Capabilities)
 	}
 }
@@ -1040,14 +1040,14 @@ func TestCreateTaskDeduplicatesOverlappingDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(task.Capabilities), []string{model.GCPKeySandboxAgentGrant}) {
 		t.Fatalf("capabilities = %v, want [%s] once", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 {
+	if len(withoutDefaultCIReadGrants(stored.Grants)) != 1 {
 		t.Fatalf("grants = %+v, want exactly one", stored.Grants)
 	}
 }
@@ -1147,7 +1147,7 @@ func TestCreateTaskCapabilitiesOverrideRepoDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(task.Capabilities), []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key] alone", task.Capabilities)
 	}
 }
@@ -1449,7 +1449,7 @@ func TestCreateTaskCarriesReadOnlyRepos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 0 {
+	if len(withoutDefaultCIReadGrants(stored.Grants)) != 0 {
 		t.Fatalf("grants = %+v, want none: a read-only repo must grant nothing", stored.Grants)
 	}
 }
@@ -1530,7 +1530,7 @@ func TestCreateTaskCarriesExtraWriteTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 0 {
+	if len(withoutDefaultCIReadGrants(stored.Grants)) != 0 {
 		t.Fatalf("grants = %+v, want none: an extra write target must grant nothing", stored.Grants)
 	}
 	// The repo the task's own runs push to is unchanged by any of this.
@@ -2123,7 +2123,7 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Capabilities) != 1 {
+	if len(withoutDefaultCIRead(got.Capabilities)) != 1 {
 		t.Fatalf("capabilities = %v, want one", got.Capabilities)
 	}
 
@@ -2131,14 +2131,14 @@ func TestSetCapabilityAttachesAndDetaches(t *testing.T) {
 	if err := c.SetCapability(ctx, task.ID, model.GitHubSandboxRepoGrant, true); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 1 {
+	if got, _ = c.Task(ctx, task.ID); len(withoutDefaultCIRead(got.Capabilities)) != 1 {
 		t.Fatalf("capabilities after a second attach = %v, want still one", got.Capabilities)
 	}
 
 	if err := c.SetCapability(ctx, task.ID, model.GitHubSandboxRepoGrant, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = c.Task(ctx, task.ID); len(got.Capabilities) != 0 {
+	if got, _ = c.Task(ctx, task.ID); len(withoutDefaultCIRead(got.Capabilities)) != 0 {
 		t.Fatalf("capabilities after detach = %v, want none", got.Capabilities)
 	}
 	// Detaching one that is not attached is a no-op, matching what
@@ -2203,7 +2203,7 @@ func TestSetCapabilityDetachesAnIDNoLongerOffered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Capabilities) != 0 {
+	if len(withoutDefaultCIRead(got.Capabilities)) != 0 {
 		t.Fatalf("capabilities after detach = %v, want none", got.Capabilities)
 	}
 

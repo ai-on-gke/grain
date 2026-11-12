@@ -194,3 +194,114 @@ func TestParseHostAccounts(t *testing.T) {
 		t.Fatalf("WithDaemonAccount = %s; an explicit mapping should win", m)
 	}
 }
+
+// The socket's directory is the gate (0700, widened only by an
+// operator's setfacl), so the socket itself is open to whoever gets
+// through it: at 0600 connect(2) refused every account -host-accounts
+// mapped except the daemon's own, even after the documented setfacl
+// (docs/test-runs/2026-11-11-caller-identity.md, F4).
+func TestAPISocketIsOpenToAccountsItsDirectoryAdmits(t *testing.T) {
+	dir, err := os.MkdirTemp("", "gsock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := ui.APISocketPath(dir)
+	ln, err := ui.ListenAPISocket(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if fi, err := os.Stat(filepath.Dir(path)); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("socket directory: %v, %v; want mode 0700", fi.Mode(), err)
+	}
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSocket == 0 || fi.Mode().Perm() != 0o666 {
+		t.Errorf("socket %s mode %v, want a socket at 0666 behind its 0700 directory", path, fi.Mode())
+	}
+}
+
+// A restart must not undo the operator's setfacl -m u:<account>:x on the
+// socket's directory (chmod 0700 zeroes the ACL mask, which lives in the
+// group bits), and must not chmod a directory other accounts share: it
+// refuses one instead (docs/test-runs/2026-11-11-caller-identity.md, F5).
+func TestAPISocketKeepsGrantedSearchAndRefusesASharedDirectory(t *testing.T) {
+	dir, err := os.MkdirTemp("", "gsock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := ui.APISocketPath(dir)
+	ln, err := ui.ListenAPISocket(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	// With no ACL on it the group bits are the owning group's own, so
+	// search for the group goes with everything else
+	// (TestAPISocketKeepsAnACLGrantAcrossARestart has the ACL case).
+	if err := os.Chmod(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ln, err = ui.ListenAPISocket(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	if fi, _ := os.Stat(filepath.Dir(path)); fi.Mode().Perm() != 0o700 {
+		t.Errorf("a 0755 socket directory with no ACL was left at %v, want 0700", fi.Mode())
+	}
+	// Nor may it leave the daemon's own account short of what it needs
+	// to create the socket: the 0700 this replaced put owner rwx back.
+	if err := os.Chmod(filepath.Dir(path), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	ln, err = ui.ListenAPISocket(path)
+	if err != nil {
+		t.Fatalf("restarting on a 0500 socket directory: %v", err)
+	}
+	ln.Close()
+	if fi, _ := os.Stat(filepath.Dir(path)); fi.Mode().Perm() != 0o700 {
+		t.Errorf("a 0500 socket directory was left at %v, want 0700", fi.Mode())
+	}
+
+	shared := filepath.Join(dir, "shared")
+	if err := os.Mkdir(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o1777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if ln, err := ui.ListenAPISocket(filepath.Join(shared, "grain.sock")); err == nil {
+		ln.Close()
+		t.Fatal("ListenAPISocket in a world-writable sticky directory succeeded, want it refused")
+	} else if !strings.Contains(err.Error(), "shared with other accounts") {
+		t.Errorf("refusal = %v, want it to say the directory is shared", err)
+	}
+	if fi, _ := os.Stat(shared); fi.Mode().Perm() != 0o777 || fi.Mode()&os.ModeSticky == 0 {
+		t.Errorf("the shared directory was changed to %v", fi.Mode())
+	}
+
+	// A directory of this account's own that holds anything besides the
+	// socket -- the data directory, $HOME, /run as root -- is refused and
+	// left as it was, not tightened to 0710 under whatever else uses it.
+	busy := filepath.Join(dir, "busy")
+	if err := os.Mkdir(busy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(busy, "grain.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ln, err := ui.ListenAPISocket(filepath.Join(busy, "grain.sock")); err == nil {
+		ln.Close()
+		t.Fatal("ListenAPISocket in a directory holding other files succeeded, want it refused")
+	} else if !strings.Contains(err.Error(), "holds other files") {
+		t.Errorf("refusal = %v, want it to say the directory holds other files", err)
+	}
+	if fi, _ := os.Stat(busy); fi.Mode().Perm() != 0o755 {
+		t.Errorf("the busy directory was changed to %v, want 0755 left alone", fi.Mode())
+	}
+}

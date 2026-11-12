@@ -53,9 +53,12 @@ import (
 // something the existing suite asserts rather than something this commit
 // message claims.
 
-// forgeRef is model.PullRequestRef in pkg/forge's spelling.
+// forgeRef is model.PullRequestRef in pkg/forge's spelling. Its Owner is
+// the repository's StoredOwner -- "host/owner" off the default host -- so
+// the forge calls pkg/forge makes with it reach the pull request's own
+// host even when the same owner/name is on another host too.
 func forgeRef(ref model.PullRequestRef) forge.Ref {
-	return forge.Ref{Owner: ref.Repo.Owner, Repo: ref.Repo.Name, Number: ref.Number}
+	return forge.Ref{Owner: ref.Repo.StoredOwner(), Repo: ref.Repo.Name, Number: ref.Number}
 }
 
 // grainCIVerdict is pkg/forge's, aliased rather than converted: it is
@@ -1860,7 +1863,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// reads conflicted, and only one still clean on the same head goes
 		// on to merge.
 		if member && !forcing && walk.mergedThisCycle(lane) {
-			fresh, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+			fresh, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 			if err != nil {
 				return fmt.Errorf("orchestrator: re-reading %s after this cycle's merge into %s: %w", ref, detail.BaseRef, err)
 			}
@@ -1968,10 +1971,11 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// than assume, since GitHub applies it asynchronously the same way
 		// it computes Mergeable asynchronously (detail.Mergeable's own doc
 		// comment).
-		detail, err = client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err = client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			return fmt.Errorf("orchestrator: re-reading %s after merge: %w", ref, err)
 		}
+		recordMergedAs(ctx, store, client, task.ID, ref, detail, now)
 		health = healthOf(detail, checks, e.requiredCheck, checksKnown, checksSettled, grain)
 		if member {
 			// Under MergeRecheckEnforce, each entry in the lane is checked
@@ -2259,7 +2263,7 @@ func recordPostMergeCI(ctx context.Context, store *model.Store, client github.Cl
 			task.ID, branch, ref.Repo, branch)
 		return nil
 	}
-	head, err := client.GetBranchHead(ref.Repo.Owner, ref.Repo.Name, branch)
+	head, err := client.GetBranchHead(ref.Repo.StoredOwner(), ref.Repo.Name, branch)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's post-merge head on %s: %w", branch, ref.Repo, err)
 	}
@@ -2505,6 +2509,15 @@ func advanceMergeQueueHead(ctx context.Context, store *model.Store, client githu
 		var ev buildEvidence
 		if health == model.PrFailing && !gateIsGrainCI && !model.IsConfigRepo(ref.Repo) {
 			ev = readBuildEvidence(client, ref, detail.HeadSHA)
+		}
+		// A red whose every failing job died on the runner -- its DNS, a
+		// package mirror it could not reach, the runner itself lost --
+		// is waited out with re-runs of the failed jobs, not repaired:
+		// no commit clears it, and an outage longer than the repair
+		// budget used to leave every queued pull request in
+		// merge_failed (prinfra.go, 2026-11-11).
+		if held, err := waitOutInfraFailure(ctx, store, client, e, ev, now); err != nil || held {
+			return err
 		}
 		// Startup failures, from either direction: this pull request's
 		// own runs all died before a step (github.OnlyStartupFailures),
@@ -2820,7 +2833,7 @@ func bringHeadUpToDate(ctx context.Context, store *model.Store, client github.Cl
 		return false, err
 	}
 
-	result, err := client.MergeBranch(ref.Repo.Owner, ref.Repo.Name,
+	result, err := client.MergeBranch(ref.Repo.StoredOwner(), ref.Repo.Name,
 		detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail))
 	switch {
 	case err == nil:
@@ -3007,7 +3020,7 @@ func refreshStaleHead(ctx context.Context, store *model.Store, client github.Cli
 		return refreshUnreachable, nil
 	}
 
-	result, err := client.MergeBranch(ref.Repo.Owner, ref.Repo.Name,
+	result, err := client.MergeBranch(ref.Repo.StoredOwner(), ref.Repo.Name,
 		detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail))
 	switch {
 	case err == nil:
@@ -3297,7 +3310,7 @@ func grainCINote(grain grainCIVerdict) string {
 // a build with no log are both "no log here" to every decision, and
 // neither one is a fact anything may go on to explain (readBuildEvidence).
 func failingJobLogs(client github.Client, ref model.PullRequestRef, headSHA string) (logs []github.JobLog, read bool) {
-	logs, err := client.FailedJobLogs(ref.Repo.Owner, ref.Repo.Name, headSHA)
+	logs, err := client.FailedJobLogs(ref.Repo.StoredOwner(), ref.Repo.Name, headSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading the failing job logs for %s: %v -- "+
 			"filing the fix task with the check names alone", ref, err)
@@ -3382,7 +3395,7 @@ func readBuildEvidence(client github.Client, ref model.PullRequestRef, headSHA s
 	if !read || !actionsStateWorthReading(logs) {
 		return ev
 	}
-	state, err := client.ActionsState(ref.Repo.Owner, ref.Repo.Name, headSHA)
+	state, err := client.ActionsState(ref.Repo.StoredOwner(), ref.Repo.Name, headSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading what Actions has against %s at %s: %v -- "+
 			"filing the fix task without saying why there is no log", ref, shortSHA(headSHA), err)
@@ -3438,7 +3451,7 @@ const workflowDir = ".github/workflows/"
 // a person: it costs a request per startup failure to recover the
 // automatic repair in the one case it would have worked.
 func touchedWorkflowFiles(client github.Client, ref model.PullRequestRef) (workflows []string, read bool) {
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches: %v -- "+
 			"escalating its startup failure rather than guessing a workflow edit "+
@@ -3582,7 +3595,7 @@ func noJobLogSection(ev buildEvidence) string {
 			"there is no job log to hand you: the failing check named above comes through " +
 			"the Checks API from something else -- Buildkite, CircleCI, a review bot -- " +
 			"which keeps its own output. Your sandbox cannot reach it and neither can " +
-			"`pull_request_status`, so reproduce the failure in your checkout; if its name " +
+			"`grain ci wait`, so reproduce the failure in your checkout; if its name " +
 			"does not say what to reproduce, say so on this task rather than pushing at " +
 			"it blind."
 	}
@@ -3592,8 +3605,8 @@ func noJobLogSection(ev buildEvidence) string {
 			return heading + "When the queue looked, " + stillRunningPhrase(state) +
 				", and no job of " + runsPronoun(state.Runs) + " had failed yet: the check " +
 				"above concluded ahead of the Actions API, which is ordinary. That read is " +
-				"older than your sandbox, so call `pull_request_status` first -- it " +
-				"fetches the failing jobs' logs for this pull request -- and read what it " +
+				"older than your sandbox, so run `grain ci wait` first -- it " +
+				"fetches the failing jobs' logs for this branch -- and read what it " +
 				"says before going through the code."
 		}
 		return heading + allFinishedPhrase(state.Runs) +
@@ -3610,12 +3623,12 @@ func noJobLogSection(ev buildEvidence) string {
 	if state.Unfinished > 0 {
 		b.WriteString("\nAt that moment " + stillRunningPhrase(state) + ", which is why there " +
 			"is no log here: Actions only serves a job's log once its run has finished. " +
-			"That read is older than your sandbox, so call `pull_request_status` -- it " +
+			"That read is older than your sandbox, so run `grain ci wait` -- it " +
 			"will most likely fetch the log now.")
 	} else {
 		b.WriteString("\nThose runs had all finished and their logs were still not served: a " +
 			"log past Actions' 90-day retention, or a credential that may not fetch one. " +
-			"`pull_request_status` reads the same commit and will find no more, so work " +
+			"`grain ci wait` reads the same commit and will find no more, so work " +
 			"from the failed steps above and reproduce that step in your checkout.")
 	}
 	return b.String()
@@ -3816,7 +3829,7 @@ func baseTipOf(client github.Client, ref model.PullRequestRef, base string) stri
 	if client == nil || base == "" {
 		return ""
 	}
-	head, err := client.GetBranchHead(ref.Repo.Owner, ref.Repo.Name, base)
+	head, err := client.GetBranchHead(ref.Repo.StoredOwner(), ref.Repo.Name, base)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's head on %s: %v", base, ref.Repo, err)
 		return ""

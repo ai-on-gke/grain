@@ -718,7 +718,7 @@ func retryInfraGitHubBaseBranchRelease(ctx context.Context, deps Deps, row *mode
 			"Actions jobs). %s", n, why, row.Detail)
 		return false, nil
 	}
-	if err := rerunner.RerunFailedJobs(row.Repo.Owner, row.Repo.Name, run.RunID); err != nil {
+	if err := rerunner.RerunFailedJobs(row.Repo.StoredOwner(), row.Repo.Name, run.RunID); err != nil {
 		log.Printf("orchestrator: re-running the failed jobs of GitHub release run %d on %s: %v -- "+
 			"recording the release as it ended (the connection needs `actions: write`)", run.RunID, row.Repo, err)
 		row.Detail = fmt.Sprintf("infra, retried %d times (%s; GitHub refused the re-run: %v). %s",
@@ -1013,6 +1013,7 @@ func baseBranchReleaseTriageBody(row model.BaseBranchRelease) string {
 	b.WriteString("- Identify the cause of the failure in the release workflow or codebase.\n")
 	b.WriteString("- Repair the release pipeline or repository files so releases succeed.\n")
 	b.WriteString("\n" + model.RedCIProcedureReminder + "\n")
+	b.WriteString("\n" + model.RepairNeedsAPersonReminder + "\n")
 	return b.String()
 }
 

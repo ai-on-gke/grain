@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -218,5 +219,162 @@ func TestResumeAdoptedHostdRunKeepsItsEarlierAttempts(t *testing.T) {
 	}
 	if runs[0].Outcome == model.InterruptedOutcome || runs[0].Outcome == "failed" {
 		t.Fatalf("outcome = %q (%s), want the run's own ending", runs[0].Outcome, runs[0].Detail)
+	}
+}
+
+// Reproduces the Task #4149 incident: an adopted antigravity run whose hostd
+// drains and hits drain_cap must end as interrupted (no strike against the
+// task, queued again), never as failed.
+func TestAdoptedHostdRunCancelledAtDrainCapEndsInterruptedNotFailed(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no shell: %v", err)
+	}
+	sh, _ = filepath.EvalSymlinks(sh)
+	dir, err := os.MkdirTemp("", "hostd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	allow := filepath.Join(dir, "hostd.yaml")
+	if err := os.WriteFile(allow, []byte(fmt.Sprintf("drain_cap: 300ms\nclis:\n  sh:\n    path: %s\n", sh)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := &hostd.Server{
+		Socket:          filepath.Join(dir, "run", "hostd.sock"),
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        filepath.Join(dir, "state"),
+		DisconnectGrace: 500 * time.Millisecond,
+		Env:             []string{"PATH=" + os.Getenv("PATH")},
+		Logf:            t.Logf,
+	}
+	srvCtx, cancelSrv := context.WithCancel(context.Background())
+	srvDone := make(chan error, 1)
+	go func() { srvDone <- srv.Serve(srvCtx) }()
+	t.Cleanup(func() { cancelSrv(); <-srvDone })
+	client := hostd.Client{Socket: srv.Socket, Build: "test"}
+	for i := 0; ; i++ {
+		if _, err := client.Hello(context.Background()); err == nil {
+			break
+		} else if i > 100 {
+			t.Fatalf("hostd never answered: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	store, ctx := openStore(t)
+	_, gh := newSim(t, "acme", "widgets", "main")
+	task := filedTask(t, ctx, store, "t-drain", model.RepoRef{Owner: "acme", Name: "widgets"})
+	d := dispatch.Dispatch{TaskID: task.ID, RunID: "t-drain-1", Attempt: 1}
+	startRun(t, ctx, store, d, time.Now().UTC().Add(-time.Minute))
+
+	sandboxDir := t.TempDir()
+	if _, err := orchestrator.NewHostSandboxes(sandboxDir).Acquire(ctx, d.RunID, orchestrator.Shape{}); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := &runhost.Hostd{
+		Client:      client,
+		CursorEvery: time.Millisecond,
+		OnCursor: func(ctx context.Context, run string, n int64) {
+			_ = store.SetHostdCursor(ctx, run, n, time.Now().UTC())
+		},
+	}
+	var tee syncBuf
+	runCtx := runhost.WithRun(ctx, runhost.Run{Task: task.ID, Run: d.RunID, Deadline: time.Now().Add(time.Hour)})
+	detached := make(chan error, 1)
+	go func() {
+		_, err := previous.Host(agent.LocalHost{}, "sh").Run(runCtx, agent.Command{Args: []string{"-c", "echo started; sleep 60"}}, &tee)
+		detached <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); tee.String() != "started\n"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the CLI never started: %q", tee.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := previous.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-detached; !errors.Is(err, agent.ErrDetached) {
+		t.Fatalf("Run after Flush = %v, want ErrDetached", err)
+	}
+
+	sandboxes := orchestrator.NewHostSandboxes(sandboxDir)
+	var adopted []orchestrator.AdoptedRun
+	if _, err := orchestrator.RecoverHostd(ctx, store, gh, client, "test", time.Now().UTC(),
+		func(a runhost.Adoption, c int64) bool {
+			sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, a.Claim.Run)
+			if err != nil {
+				t.Errorf("readopting sandbox: %v", err)
+				return false
+			}
+			adopted = append(adopted, orchestrator.AdoptedRun{Adoption: a, Cursor: c, Sandbox: sb})
+			return true
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if len(adopted) != 1 {
+		t.Fatalf("adopted = %+v, want 1", adopted)
+	}
+
+	fw := antigravity.New("/usr/local/bin/agy", "/usr/local/bin/grain")
+	deps := orchestrator.Deps{
+		Store:     store,
+		Client:    gh,
+		Sandboxes: sandboxes,
+		Framework: orchestrator.StaticFramework(fw),
+		Config:    orchestrator.Config{TranscriptDir: t.TempDir()},
+	}
+	next := &runhost.Hostd{Client: client, CursorEvery: time.Millisecond}
+
+	resumeDone := make(chan error, 1)
+	go func() {
+		resumeDone <- orchestrator.ResumeAdoptedRun(ctx, deps, next, adopted[0])
+	}()
+	// Drain only once the resumed run is attached. A drain sent before
+	// then -- the 50ms sleep this replaced, on a loaded runner -- could
+	// reach drain_cap, kill the CLI and exit hostd before the run dialed
+	// it, and with no hostd coming back in this test (no
+	// ReattachTimeout) the attach then failed as unreachable, not
+	// interrupted.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		procs, err := client.Processes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(procs) == 1 && procs[0].Attached {
+			break
+		}
+		select {
+		case err := <-resumeDone:
+			t.Fatalf("ResumeAdoptedRun returned before it attached: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the resumed run never attached: %+v", procs)
+		}
+	}
+	if err := client.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = <-resumeDone
+
+	runs, err := store.Runs(ctx, task.ID)
+	if err != nil || len(runs) != 1 || runs[0].FinishedAt == nil {
+		t.Fatalf("runs = %+v (%v), want 1 finished run", runs, err)
+	}
+	if runs[0].Outcome != model.InterruptedOutcome {
+		t.Fatalf("adopted run killed at drain_cap outcome = %q (%s), want %q",
+			runs[0].Outcome, runs[0].Detail, model.InterruptedOutcome)
+	}
+	st, err := store.State(ctx, task.ID)
+	if err != nil || st != model.StateQueued {
+		t.Fatalf("task state after drain_cap interruption = %q (%v), want %q", st, err, model.StateQueued)
 	}
 }

@@ -276,7 +276,10 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 			if !slices.EqualFunc(liveStored.Grants, relayStored.Grants, model.Grant.Equal) {
 				t.Errorf("stored grants diverged:\n  live:  %+v\n  relay: %+v", liveStored.Grants, relayStored.Grants)
 			}
-			if !slices.EqualFunc(liveStored.Grants, tc.wantGrants, model.Grant.Equal) {
+			// Both paths give a proposal on acme/widgets (GitHub CI) the
+			// default api:ci-read@acme/widgets (model.DefaultCIReadGrant);
+			// what this pins is everything else.
+			if !slices.EqualFunc(model.GrantsBeyondCIReadDefault(*liveStored), tc.wantGrants, model.Grant.Equal) {
 				t.Errorf("stored grants = %+v, want %+v", liveStored.Grants, tc.wantGrants)
 			}
 			if liveState != relayState || liveState != tc.wantState {

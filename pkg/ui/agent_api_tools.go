@@ -39,7 +39,7 @@ import (
 // parameters, its query and its body as arguments. Their names,
 // descriptions and input schemas are what grain_explore_scope advertises
 // on POST /api/mcp (mcp_endpoint.go), where grain_invoke dispatches them
-// in-process through s.mux, and what ExternalAgentAPITools serves as one
+// in-process through s.mux, and what externalAgentAPITools serves as one
 // tool per route on POST /mcp. Either way the route runs exactly as the
 // UI's does -- same handler, same validation, same side effects -- and
 // agentAPIGate holds the call to the caller's grants and records it.
@@ -145,7 +145,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/compact":                                         "Compact a task to a handover, or ask its next run to.",
 	"POST /api/tasks/{id}/brief":                                           "Rewrite a task's current brief.",
 	"POST /api/tasks/{id}/rollover":                                        "Roll a task over to a successor with a fresh record.",
-	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs api:task-admin.",
+	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs https://grain.dev/capabilities/api#task-admin.",
 	"POST /api/notifications":                                              "Raise an operator notification, or bump the open one with the same subject; it never parks anybody.",
 	"POST /api/notifications/{id}/clear":                                   "Clear an operator notification.",
 	"POST /api/tasks/{id}/wait-on":                                         "Make a task wait for the tasks in ids to close; park true ends its run and resumes it when they have.",
@@ -303,7 +303,7 @@ var routeDocs = map[string]string{
 	"DELETE /api/secrets/{secret}":                                         "Delete a secret and every key in it.",
 	"POST /api/state-repo/sync":                                            "Sync the deployment's state repository now.",
 	"POST /api/state-repo/pull-requests":                                   "Open a validated, held grain/config pull request carrying the change a refused configuration write returned (a person only).",
-	"POST /api/state-repo/remote":                                          "Name the external git repository the deployment reads its configuration from, or none: true to go back to the internal one.",
+	"POST /api/state-repo/remote":                                          "Name the external git repository the deployment reads its configuration from, or none: true to go back to the internal one. An agent needs https://grain.dev/capabilities/api#capabilities:admin as well as settings:write for it.",
 	"POST /api/state-repo/secrets-key":                                     "Install the key the deployment's secrets file is sealed to.",
 	"POST /api/state-repo/import-key":                                      "Install the key the deployment's secrets file is sealed to.",
 	"POST /api/state-repo/secrets-key/wrap":                                "Wrap the deployment's secrets key with a Cloud KMS key, verified by a round trip before it is written.",
@@ -331,6 +331,7 @@ var routeDocs = map[string]string{
 	"GET /api/ci/runs/{id}":                                                "Read one CI run in full: a grain CI run's jobs, steps and their log output, or a GitHub Actions run's (gha:...) jobs and steps with their conclusions.",
 	"GET /api/ci/runs/{id}/log":                                            "Read one GitHub Actions job's log (gha:... runs): query job (name or id; default the first that failed) and tail (lines); capped at 256 KiB, keeping the end.",
 	"DELETE /api/ci/runs/{id}":                                             "Cancel a grain CI run.",
+	"POST /api/ci/runs/{id}/rerun":                                         "Re-run a GitHub Actions run (gha:...) as its next attempt, without a commit: its failed and cancelled jobs by default, every job with all, or the jobs named. Each run at one commit is re-run at most 3 times, grain's automatic re-runs included.",
 	"DELETE /api/ci/cache":                                                 "Empty grain CI's job cache, so every job of the next runs does its work again.",
 	"POST /api/tests/quarantine":                                           "Quarantine a flaky or failing test (returning the rendered .grain/quarantine.yml entry to commit in the workspace) and optionally file a held follow-up repair task.",
 	"POST /api/package-cache/flush":                                        "Empty the package cache: query kind (apt, pypi, docker, npm or go) for one ecosystem, or all of them without.",
@@ -483,6 +484,7 @@ var routeBodies = map[string]any{
 	"POST /api/console-sessions/{id}/restart":                           RestartConsoleSessionRequest{},
 	"POST /api/ci/runs":                                                 CIRunRequest{},
 	"DELETE /api/ci/runs/{id}":                                          CICancelRequest{},
+	"POST /api/ci/runs/{id}/rerun":                                      ActionsRerunRequest{},
 	"POST /api/tests/quarantine":                                        QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                          pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                                  CreateExternalAgentTokenRequest{},
@@ -583,6 +585,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/release-notes/stats":                                {"period": "The week whose figures to read; the week just ended without one."},
 	"POST /api/repos":                                             {"team": "The team whose targets to add to; the default team without one."},
 	"DELETE /api/repos/{owner}/{name}":                            {"team": "The team whose targets to remove from; the default team without one."},
+	"GET /api/tasks/{id}/diff-preview":                            {"max": "How many hunks to return (default 6, at most 30)."},
 	"GET /api/repos/{owner}/{name}/compare":                       {"base": "The branch or commit to compare from.", "head": "The branch or commit to compare to."},
 	"GET /api/repos/{owner}/{name}/workflows":                     listObjectQueryDocs("workflow path or name", listPageTiny, nil),
 	"GET /api/repos/{owner}/{name}/releases/{release}/candidates": listQueryDocs("branch, status or release", listPageLarge, nil),

@@ -51,6 +51,8 @@ Usage of grain daemon:
     	how many days a grain CI run's step output may live, whatever room there is under -ci-step-output-mb. 0 uses grain's own default, 14 days; a negative number bounds output by size alone. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
   -ci-step-output-mb MiB
     	ceiling on the step output grain CI keeps across its whole history, in MiB -- whole runs' output is swept, oldest first, until what is left fits, and the runs themselves stay where they are. This is the expensive half and the only one that makes a red run diagnosable rather than merely countable, so it is bounded by disk rather than by a count of runs: what one run prints is between nothing and the -ci-run-output-kb cap. 0 uses grain's own default, 64MiB, which is three or four days of a deployment starting 300 runs a day; a negative number keeps every byte forever. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
+  -ci-wake-backstop duration
+    	how long a task that resume_later deferred on a CI verdict may wait before grain wakes it anyway, with a note on the task and a stall notification; a negative duration, such as -1s, disables the backstop (default 6h0m0s)
   -claude-oauth-token-file string
     	file holding the Claude Code OAuth token the agent authenticates as, passed to the claude subprocess as CLAUDE_CODE_OAUTH_TOKEN. Optional, and the exact counterpart of -gemini-api-key-file above: the UI stores one as the "claude-oauth-token" secret and that wins over this file
   -claude-path string
@@ -212,7 +214,7 @@ Usage of grain daemon:
   -k8s-namespace string
     	namespace sandbox pods are created in (only used with -k8s-sandboxes). Two deployments sharing a cluster must not share this: the sweep for pods a dead process or a failed delete left behind (K8sSandboxes.SweepOrphans, at startup and on every reconcile tick) deletes every grain sandbox pod in the namespace it is not itself holding (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain")
   -k8s-network-policy
-    	assert that this cluster's CNI actually enforces NetworkPolicy objects, and that deploy/kubernetes/networkpolicy.yaml is installed. Without it a task asking for no network access is refused rather than silently given a networked pod, since a policy object is accepted by every cluster and enforced by only some. Only used with -k8s-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+    	assert that this cluster's CNI actually enforces NetworkPolicy objects, and that deploy/kubernetes/networkpolicy.yaml is installed. Without it a task asking for no network access is refused rather than silently given a networked pod, since a policy object is accepted by every cluster and enforced by only some, and attempts holding an external capability grant are refused because nothing then keeps an open-network pod off the metadata server and the cluster. Only used with -k8s-sandboxes and -k8s-granule-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -k8s-node-selector value
     	one "key=value" nodeSelector entry for sandbox pods -- repeat for each. Pins sandboxes to a node pool sized for build workloads, or one whose nodes offer nested virtualization. Only used with -k8s-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -k8s-priority-class-agent string
@@ -258,7 +260,7 @@ Usage of grain daemon:
   -kontur-workspace string
     	former name of -granule-workspace, still accepted so existing systemd unit files keep working
   -local-scripts value
-    	NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml
+    	NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration, each of whose scripts a task holding its host-script grant is served (https://grain.dev/capabilities/host-script#host-script {script}; docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml
   -management-url string
     	optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed (for example its registry entry page), shown in place of in-VM self-upgrade controls when -disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)
   -max-agent-turns int
@@ -343,6 +345,8 @@ Usage of grain daemon:
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-url string
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
+  -release-approval-kms-key string
+    	Cloud KMS EC_SIGN_P256_SHA256 key version (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY
   -repair-reserve-sandboxes int
     	how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) (default 1)
   -repo value
@@ -452,9 +456,9 @@ Usage of grain daemon:
   -upgrade-reviewed-merge-logins string
     	comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed
   -upgrade-reviewed-merge-repo string
-    	owner/name of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked
+    	owner/name (github.com) or host/owner/name (a GitHub Enterprise Server, asked at https://<host>/api/v3) of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked
   -upgrade-reviewed-merge-token-file string
-    	file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read anonymously)
+    	file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read through the host's own forge tool when a command-backed ambient source claims its host, and anonymously otherwise)
   -upgrade-src-dir string
     	git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature
   -upgrade-verify-cmd value

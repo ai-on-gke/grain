@@ -366,6 +366,50 @@ type CLIGitHubCheckActions interface {
 	WaitForGitHubChecks(ctx context.Context, taskID string, timeout, poll time.Duration, onPoll func(waited time.Duration)) (mcp.GitHubCheckWaitResult, error)
 }
 
+// CLIGitHubRerunActions is an optional extension of CLIActions: grain ci
+// retrigger and run-job on a task whose repository gates on GitHub
+// Actions (UsesGitHubChecks), where there is no grain CI run to start.
+// RerunGitHubChecks re-runs req -- its Jobs, or with none its failed jobs
+// (FailedOnly) or every job -- of the Actions runs at the head of the
+// task's own pull request, through the daemon's forge connection, bound
+// per head; it names no repository, branch or run, so a run re-runs its
+// own pull request's checks and nobody else's. Implemented by pkg/ui's
+// SandboxCLIActions.
+type CLIGitHubRerunActions interface {
+	RerunGitHubChecks(ctx context.Context, taskID string, req CIStartRequest) (CLIActionResult, error)
+}
+
+// githubRerun is the CLIGitHubRerunActions to serve a CI action for
+// scope with, when its task's repository gates on GitHub Actions and the
+// daemon can re-run them; nil sends the action to grain CI as before.
+func (p *GitProxy) githubRerun(ctx context.Context, scope namespace.Scope) (CLIGitHubRerunActions, error) {
+	checks, ok := p.CLIActions.(CLIGitHubCheckActions)
+	if !ok {
+		return nil, nil
+	}
+	rerun, ok := p.CLIActions.(CLIGitHubRerunActions)
+	if !ok {
+		return nil, nil
+	}
+	uses, err := checks.UsesGitHubChecks(ctx, scope.TaskIDStr)
+	if err != nil || !uses {
+		return nil, err
+	}
+	if scope.TaskRepo == "" || scope.TaskBranch == "" {
+		return nil, errNoTaskRepo
+	}
+	return rerun, nil
+}
+
+// CLIReportChecker checks a draft closing report against the records the
+// run has read so far: the check grain runs on the report once it is posted
+// (orchestrator's stewardReportCheck), run early so the agent can fix the
+// report first. failed is whether that check would flag it; text says why,
+// line by line.
+type CLIReportChecker interface {
+	CheckReportDraft(ctx context.Context, taskID, runID, report string) (text string, failed bool, err error)
+}
+
 // proxyHandoverWriter writes a standing handover comment for a task run.
 // Implemented by *model.Store.
 type proxyHandoverWriter interface {
@@ -402,6 +446,7 @@ var cliActionRoutes = map[string]string{
 	"pr/review-comment": http.MethodPost,
 	"status":            http.MethodPost,
 	"handover":          http.MethodPost,
+	"report/check":      http.MethodPost,
 	"notify":            http.MethodPost,
 	"tasks/wait":        http.MethodPost,
 	"proposals":         http.MethodPost,
@@ -455,6 +500,10 @@ func (p *GitProxy) serveCLIAction(w http.ResponseWriter, r *http.Request, scope 
 	}
 	if route == "handover" {
 		p.serveHandover(w, r, scope)
+		return true
+	}
+	if route == "report/check" {
+		p.serveReportCheck(w, r, scope)
 		return true
 	}
 	if p.CLIActions == nil {
@@ -639,6 +688,15 @@ type CLIWaitResponse struct {
 
 func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope namespace.Scope, single bool) {
 	if single {
+		rerun, err := p.githubRerun(r.Context(), scope)
+		if err != nil {
+			cliError(w, err)
+			return
+		}
+		if rerun != nil {
+			p.serveGitHubRunJob(w, r, scope, rerun)
+			return
+		}
 		if err := requireOwnCI(scope); err != nil {
 			cliError(w, err)
 			return
@@ -1091,9 +1149,16 @@ type cliRetriggerRequest struct {
 }
 
 func (p *GitProxy) serveCIRetrigger(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
-	if err := requireOwnCI(scope); err != nil {
+	rerun, err := p.githubRerun(r.Context(), scope)
+	if err != nil {
 		cliError(w, err)
 		return
+	}
+	if rerun == nil {
+		if err := requireOwnCI(scope); err != nil {
+			cliError(w, err)
+			return
+		}
 	}
 	var req cliRetriggerRequest
 	if !readCLIJSON(w, r, &req) {
@@ -1108,13 +1173,21 @@ func (p *GitProxy) serveCIRetrigger(w http.ResponseWriter, r *http.Request, scop
 		http.Error(w, fmt.Sprintf("commit %q is not a hex commit SHA", commit), http.StatusBadRequest)
 		return
 	}
-	run, err := p.CLIActions.StartTaskCI(r.Context(), scope.TaskIDStr, CIStartRequest{
+	start := CIStartRequest{
 		Jobs:       jobs,
 		Workflow:   strings.TrimSpace(req.Workflow),
 		Commit:     commit,
 		Recheck:    true,
 		FailedOnly: len(jobs) == 0 && !req.All,
-	})
+	}
+	if rerun != nil {
+		// GitHub Actions: the runs at the pull request's head start
+		// their next attempt, and no commit is pushed.
+		res, err := rerun.RerunGitHubChecks(r.Context(), scope.TaskIDStr, start)
+		writeActionResult(w, res, err)
+		return
+	}
+	run, err := p.CLIActions.StartTaskCI(r.Context(), scope.TaskIDStr, start)
 	if err != nil {
 		cliError(w, err)
 		return
@@ -1125,6 +1198,60 @@ func (p *GitProxy) serveCIRetrigger(w http.ResponseWriter, r *http.Request, scop
 		fmt.Fprintf(w, "  %s\n", job.Name)
 	}
 	fmt.Fprintf(w, "Wait for it with: grain ci wait --resume %s\n", run.ID)
+}
+
+// serveGitHubRunJob is grain ci run-job <job> on GitHub Actions: the job
+// re-run at the pull request's head, answered at once as a wait still
+// running, so the CLI prints what was re-run and how to wait for it --
+// grain ci wait, which reads the pull request's checks.
+func (p *GitProxy) serveGitHubRunJob(w http.ResponseWriter, r *http.Request, scope namespace.Scope, rerun CLIGitHubRerunActions) {
+	var req cliWaitRequest
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	job := strings.TrimSpace(req.Job)
+	if job == "" {
+		http.Error(w, "a job name is required: grain ci run-job <job>", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.ResumeRunID) != "" {
+		// --resume keeps waiting on the re-run already asked for: re-running
+		// the job again would spend another of the head's attempts.
+		checks, ok := p.CLIActions.(CLIGitHubCheckActions)
+		if !ok {
+			cliError(w, fmt.Errorf("%w: this proxy cannot read GitHub checks", namespace.ErrBadRequest))
+			return
+		}
+		start := time.Now()
+		end := start.Add(DefaultCLIWaitSlice)
+		if req.TimeoutSeconds > 0 {
+			end = start.Add(min(DefaultCLIWaitSlice, time.Duration(req.TimeoutSeconds)*time.Second))
+		}
+		if deadline, ok := r.Context().Deadline(); ok {
+			if d := deadline.Add(-cliWaitDeadlineMargin); d.Before(end) {
+				end = d
+			}
+		}
+		p.serveGitHubCIWait(w, r.Context(), scope, start, end, checks)
+		return
+	}
+	res, err := rerun.RerunGitHubChecks(r.Context(), scope.TaskIDStr, CIStartRequest{Jobs: []string{job}, Recheck: true})
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	if res.Refused {
+		writeActionResult(w, res, nil)
+		return
+	}
+	writeCLIJSON(w, http.StatusOK, CLIWaitResponse{
+		Status:      "running",
+		RunID:       "github",
+		ResumeRunID: model.ResumeOnMyBranch,
+		Report:      res.Text,
+		Selective:   true,
+		Jobs:        []CLIJobVerdict{{Name: job, Conclusion: "running"}},
+	})
 }
 
 func isHexSHA(s string) bool {
@@ -1259,6 +1386,36 @@ func (p *GitProxy) serveHandover(w http.ResponseWriter, r *http.Request, scope n
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, "Recorded standing handover summary (%d bytes).\n", len(handover))
+}
+
+// serveReportCheck answers POST /cli/report/check (check_report). A report
+// the check flags is answered 422, so grain report check exits non-zero.
+func (p *GitProxy) serveReportCheck(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	var req struct {
+		Report string `json:"report"`
+	}
+	if !readCLIJSON(w, r, &req) {
+		return
+	}
+	report := strings.TrimSpace(req.Report)
+	if report == "" {
+		http.Error(w, "report text is required: grain report check (<text> | --file <f> | -)", http.StatusBadRequest)
+		return
+	}
+	if p.ReportChecker == nil || scope.RunID == "" {
+		http.Error(w, "this deployment's sandbox proxy cannot check reports", http.StatusNotImplemented)
+		return
+	}
+	text, failed, err := p.ReportChecker.CheckReportDraft(r.Context(), scope.TaskIDStr, scope.RunID, report)
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if failed {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}
+	fmt.Fprint(w, strings.TrimRight(text, "\n")+"\n")
 }
 
 // serveNotify answers POST /cli/notify (notify_operator).
@@ -1525,7 +1682,7 @@ func (p *GitProxy) serveProposals(w http.ResponseWriter, r *http.Request, scope 
 // serveQuarantine answers POST /cli/quarantine (and POST /cap/quarantine).
 func (p *GitProxy) serveQuarantine(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
 	if !model.SandboxAPIGrantsOf(scope.Grants).Allows("tests:write", scope.TaskRepo) {
-		cliError(w, namespace.RefuseCapability("grain quarantine", "api:test-quarantine"))
+		cliError(w, namespace.RefuseCapability("grain quarantine", model.APIRef("test-quarantine")))
 		return
 	}
 	var req CLIQuarantineRequest

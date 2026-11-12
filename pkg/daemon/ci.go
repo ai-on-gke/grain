@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/actionscache"
+	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -45,6 +46,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
 )
@@ -365,6 +367,18 @@ type CiSandboxes struct {
 	ActionsCache func(scope actionscache.Scope) (url string, revoke func(), err error)
 	// Stopping, when non-nil, is closed when the daemon begins shutting down.
 	Stopping <-chan struct{}
+	// GoCacheJobs is the package cache's Go build-cache writer registry
+	// (PackageCache.GoCacheJobs). A job on a trusted ref is registered in
+	// it as Trusted for as long as its sandbox lives, and its GOCACHEPROG
+	// carries the token (ciGoCacheWriteRefusal, grantGoCacheWrites). nil
+	// registers nobody: every job then reads the shared Go build cache and
+	// writes none of it, exactly as a task sandbox does.
+	GoCacheJobs *pkgcache.JobTokenSet
+	// GoCacheRefRefusal says why a job on repo's ref may not write the
+	// shared Go build cache -- "" when it may. The daemon's is
+	// CiReleaseRefRefusal: the default branch, a paired branch or an open
+	// release's branch, never a task's. nil trusts no ref.
+	GoCacheRefRefusal func(ctx context.Context, repo, ref string) (string, error)
 }
 
 // ciActionsCacheScope is the corner of the Actions cache a job may use:
@@ -694,6 +708,10 @@ func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if prep := orchestrator.PrepareSandbox(ctx, cache, backing); prep.Err != nil {
 		s.log("grain ci: %s: configuring package cache at %s: %v", sandbox.SandboxName, prep.Base, prep.Err)
 	}
+	// A job on a trusted ref writes the shared Go build cache every
+	// sandbox reads; every other job keeps the token-less GOCACHEPROG
+	// PrepareSandbox just gave it, and reads only.
+	sandbox.revokeGoCache = s.grantGoCacheWrites(ctx, req, backing)
 	// Where this deployment keeps an Actions cache, this job is told
 	// where to find its own repository's corner of it -- one file, read
 	// by the act invocation grain generates for an Actions job
@@ -778,6 +796,9 @@ func (s CiSandboxes) Readopt(ctx context.Context, req ci.SandboxRequest) (ci.San
 		}
 		s.log("grain ci: %s: refreshing package cache on readopt: %v", sandbox.SandboxName, err)
 	}
+	// The token the job was given before the restart died with the old
+	// daemon's registry, so a trusted job is given a fresh one.
+	sandbox.revokeGoCache = s.grantGoCacheWrites(ctx, req, backing)
 	return sandbox, nil
 }
 
@@ -843,7 +864,11 @@ type CiSandbox struct {
 	SandboxName       string
 	capabilityContext model.CapabilityContext
 	materialized      []model.Materialized
-	reservation       *ciGrantReservation
+	// stepEnv is what the job's capabilities export in every step --
+	// GRAIN_API_URL and GRAIN_API_TOKEN for an api grant (ciapi.StepEnv)
+	// -- under whatever the step sets itself.
+	stepEnv     map[string]string
+	reservation *ciGrantReservation
 	// counted closes this sandbox's entry in the lifetime figures: how
 	// long it lived, added to the CI total. orchestrator.SandboxMeter
 	// hands it back from Acquire and it is called from Release, once --
@@ -854,6 +879,10 @@ type CiSandbox struct {
 	// that the URL written into the sandbox is worth nothing the moment
 	// the sandbox is gone. nil where this deployment keeps no cache.
 	revokeActionsCache func()
+	// revokeGoCache gives back this job's Go build-cache writer token
+	// (CiSandboxes.grantGoCacheWrites). nil for a job that was not
+	// trusted to write the shared Go build cache.
+	revokeGoCache func()
 	// run is the sandbox's own run_command tool, the transport an
 	// agent's tool call goes over.
 	Run func(context.Context, map[string]any) mcp.Result
@@ -1016,6 +1045,7 @@ func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref stri
 		if err != nil {
 			return fmt.Errorf("materializing CI capabilities: %w", err)
 		}
+		s.stepEnv = ciapi.StepEnv(s.materialized)
 		s.grantRepoAccess(event, trustedSchedule, ids, withholdEventGated)
 		s.recordWithheldCapabilities(reg, event, trustedSchedule, withholdEventGated, ids, true)
 	}
@@ -1641,6 +1671,7 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 		// (sandboxaccess.SandboxLostFault) and re-runs as infra.
 		return ci.CommandResult{ExitCode: 2, Output: fmt.Sprintf("%q is not a usable working directory\n", cmd.Dir)}, nil
 	}
+	cmd.Env = s.withStepEnv(cmd.Env)
 	var prefix string
 	if cmd.Attach == nil || cmd.Attach.ExecID == "" {
 		prefix = s.takeStepPrefix()
@@ -1701,6 +1732,22 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 			s.SandboxName, mcp.SessionCutOffNotice)
 	}
 	return ci.CommandResult{Output: prefix + result.Text, ExitCode: code}, nil
+}
+
+// withStepEnv is env with s.stepEnv beneath it: a name the step sets
+// itself keeps the step's value.
+func (s *CiSandbox) withStepEnv(env map[string]string) map[string]string {
+	if len(s.stepEnv) == 0 {
+		return env
+	}
+	out := make(map[string]string, len(env)+len(s.stepEnv))
+	for name, value := range s.stepEnv {
+		out[name] = value
+	}
+	for name, value := range env {
+		out[name] = value
+	}
+	return out
 }
 
 // ciStepFollower adapts pkg/ci's chunk-at-a-time sink to the io.Writer a
@@ -1772,6 +1819,9 @@ func (s *CiSandbox) Release(ctx context.Context) error {
 	s.Owner.Teams.Drop(s.SandboxName)
 	if s.revokeActionsCache != nil {
 		s.revokeActionsCache()
+	}
+	if s.revokeGoCache != nil {
+		s.revokeGoCache()
 	}
 	capErr := s.revokeCapabilities(ctx)
 	err := errors.Join(capErr, s.Backing.Release(ctx))
@@ -2679,6 +2729,12 @@ func ciJobStuck(store *model.Store, limits func() model.Limits, jobs *ciStuckJob
 // on the data disk (liveConfig.ciStorageBounds). Funcs for the same
 // reason, and nil is allowed for either -- a test wiring an engine gets
 // grain's own defaults rather than having to know them.
+//
+// beforeAdopt functions run after the service and its engine are wired
+// and before AdoptCIRuns resumes any unconcluded run in the store, so
+// post-construction wiring (Go build-cache writers, capability servers
+// and ports, SandboxImage, ReleaseRefRefusal) is in place before an
+// adopted run's goroutine reads it.
 func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits, retention func() ci.StoredRunRetention,
 	bounds func() ci.StorageBounds, store *model.Store,
 	sandboxes orchestrator.Sandboxes,
@@ -2688,7 +2744,8 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	packageCache func(context.Context) string,
 	packageCacheCA func(context.Context) []byte,
 	packageCacheDNS func(context.Context) string,
-	actionsCache func(actionscache.Scope) (string, func(), error)) *ci.Service {
+	actionsCache func(actionscache.Scope) (string, func(), error),
+	beforeAdopt ...func(*ci.Service)) *ci.Service {
 
 	var teamGitCredential func(context.Context, string, string, string) (string, error)
 	var teamGitCredentialOn func(context.Context, string, string, string, string) (string, error)
@@ -2897,11 +2954,39 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	if attachments, ok := service.Runs.(ci.StepAttachments); ok {
 		service.Engine.Attachments = attachments
 	}
+	for _, fn := range beforeAdopt {
+		if fn != nil {
+			fn(service)
+		}
+	}
 	adopted, lost := AdoptCIRuns(ctx, service)
 	if cfg.runHostUpgrade != nil && (len(adopted) > 0 || len(lost) > 0) {
 		cfg.runHostUpgrade.setCIAdoption(adopted, lost)
 	}
 	return service
+}
+
+// WithDaemonCIWiring returns a BuildCIService beforeAdopt hook that attaches
+// the daemon's live sandbox image, reviewed-branch release and Go build-cache
+// rules, and capability server and port relays before AdoptCIRuns resumes any
+// in-flight run.
+func WithDaemonCIWiring(sandboxImage func() string,
+	releaseRefRefusal func(ctx context.Context, repo, ref string) (string, error),
+	pkgCache *PackageCache,
+	servers func() orchestrator.CapabilityServers,
+	ports *portforward.Relay, portsURL string) func(*ci.Service) {
+
+	return func(service *ci.Service) {
+		if sandboxImage != nil {
+			service.SandboxImage = sandboxImage
+		}
+		service.ReleaseRefRefusal = releaseRefRefusal
+		if pkgCache != nil {
+			WithCIGoCacheWriters(service, pkgCache.GoCacheJobs, releaseRefRefusal)
+		}
+		WithCICapabilityServers(service, servers)
+		WithCICapabilityPorts(service, ports, portsURL)
+	}
 }
 
 // AdoptCIRuns inspects unconcluded CI runs in service.Runs before ReapOrphans

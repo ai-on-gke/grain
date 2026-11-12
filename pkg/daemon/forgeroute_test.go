@@ -41,6 +41,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
 
@@ -506,6 +507,39 @@ func TestGrainCIReadsAForgeCLIHostsWorkflowsThroughForgeCLI(t *testing.T) {
 	on, err := src.OnBranch(f.ctx, f.repo.String(), "grain/e1010c47/task-2", commit)
 	if err != nil || !on {
 		t.Fatalf("OnBranch = %v, %v", on, err)
+	}
+}
+
+// A repository filed on another host a moment after the router last read
+// the deployment's repositories is not left on the default host for the
+// rest of the cache's life: the first run on it finishes by reading its
+// branch through this, and the default host has never heard of it.
+func TestForgeRouterFindsARepositoryFiledSinceItsLastRead(t *testing.T) {
+	store, ctx := openStuckTestStore(t)
+	prev := storeRepoHostsMissRetry
+	storeRepoHostsMissRetry = 10 * time.Millisecond
+	t.Cleanup(func() { storeRepoHostsMissRetry = prev })
+	file := func(id string, ref model.RepoRef) {
+		t.Helper()
+		stuckTask(t, ctx, store, id)
+		task, err := store.GetTask(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		task.Target = &ref
+		if err := store.PutTask(ctx, *task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file("first", model.RepoRef{Host: depotTestHost, Owner: "acme", Name: "first"})
+	hostOf := storeRepoHosts(store)
+	if got := hostOf("acme", "first"); got != depotTestHost {
+		t.Fatalf("hostOf(acme/first) = %q, want %q", got, depotTestHost)
+	}
+	file("second", model.RepoRef{Host: depotTestHost, Owner: "acme", Name: "second"})
+	time.Sleep(20 * time.Millisecond)
+	if got := hostOf("acme", "second"); got != depotTestHost {
+		t.Errorf("hostOf(acme/second), filed after the last read, = %q, want %q", got, depotTestHost)
 	}
 }
 

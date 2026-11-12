@@ -391,13 +391,13 @@ func DynamicProvider(endpoint *Endpoint, cfg Config) model.DynamicProvider {
 
 // Spec implements model.CapabilityProvider.
 func (p *Provider) Spec() model.CapabilitySpec {
-	label := "Grain API (CI): " + strings.TrimPrefix(p.grant.Name, model.APIGrantPrefix)
+	label := "Grain API (CI): " + strings.TrimPrefix(strings.TrimPrefix(p.grant.Name, model.APIGrantPrefix), model.APICapabilityServerID+"#")
 	description := "Let a trusted CI job call grain's API for its own repository, through a per-job token " +
 		"worth the routes of " + p.grant.Name + " only"
-	if p.name == model.ReleaseGateReadCapability {
+	if p.name == model.ReleaseGateReadCapability || p.grant.Preset == model.ReleaseGateReadCapability {
 		label = "Release gate (read)"
 		description = "Let a release workflow's job read this deployment's CI runs, persistent sandboxes and tasks " +
-			"for its own repository, and file its release-notes task: the api:release-gate-read preset, held through a per-job token"
+			"for its own repository, and file its release-notes task: the https://grain.dev/capabilities/api#release-gate-read preset, held through a per-job token"
 	}
 	return model.CapabilitySpec{
 		Name:        p.name,
@@ -560,6 +560,40 @@ func placements(listener, token string) []model.Placement {
 		{Side: model.SideSandbox, Path: EnvPath, Content: fmt.Sprintf("export %s=%q\nexport %s=%q\n",
 			URLEnv, listener, TokenEnv, token)},
 	}
+}
+
+// StepEnv is URLEnv and TokenEnv as a job's steps are to see them, read
+// back out of the placements Materialize returned among materialized, and
+// nil when none of them is this provider's.
+//
+// The files alone do not reach every step: a host sandbox writes a
+// placement under its run's own directory, where an absolute
+// /home/debian/.grain-api names nothing and HOME is that directory, not
+// the placement's parent. The CI executor exports these in every step
+// instead, whatever kind of sandbox the job runs in.
+func StepEnv(materialized []model.Materialized) map[string]string {
+	var env map[string]string
+	for _, m := range materialized {
+		for _, pl := range m.Materialization.Placements {
+			if pl.Side != model.SideSandbox {
+				continue
+			}
+			var name string
+			switch pl.Path {
+			case URLPath:
+				name = URLEnv
+			case TokenPath:
+				name = TokenEnv
+			default:
+				continue
+			}
+			if env == nil {
+				env = map[string]string{}
+			}
+			env[name] = strings.TrimSuffix(pl.Content, "\n")
+		}
+	}
+	return env
 }
 
 // Revoke drops the token the lease names.

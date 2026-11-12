@@ -71,10 +71,37 @@ func decodeInto(f file, v any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(f.text))
 	dec.KnownFields(true)
 	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("%s: %w", f.path, err)
+		err = fmt.Errorf("%s: %w", f.path, err)
+		// A file that is well-formed YAML and still does not decode has
+		// a key this build does not know, or a known key in a shape it
+		// does not know -- which is what a file written for a newer
+		// grain looks like to an older one (SchemaError).
+		var doc yaml.Node
+		if yaml.Unmarshal(f.text, &doc) == nil {
+			return &SchemaError{Path: f.path, Err: err}
+		}
+		return err
 	}
 	return nil
 }
+
+// SchemaError is a declaration file this build cannot decode although it
+// is well-formed YAML: an unknown key, or a known key in a shape the
+// decoder has no case for (`overlap: {skip: true}` read by a build that
+// only knows `overlap: skip`). Its message is the decoder's own, unchanged.
+//
+// It is told apart from every other error because it is the one a
+// deployment meets when a repository's `.grain` is newer than the daemon
+// reading it, and LoadForwardCompatible holds back only that file rather
+// than refusing the whole set (docs/declarations.md, "Declarations newer
+// than the daemon").
+type SchemaError struct {
+	Path string
+	Err  error
+}
+
+func (e *SchemaError) Error() string { return e.Err.Error() }
+func (e *SchemaError) Unwrap() error { return e.Err }
 
 // refuse is the whole of what a repository may not say about itself,
 // checked against declschema rather than against a list kept here.
@@ -157,6 +184,10 @@ type rawTemplate struct {
 	// Priority is model.Template.Priority: optional default priority for
 	// tasks filed from this template.
 	Priority *int `yaml:"priority"`
+	// Sandbox is model.Template.Sandbox: the sandbox shape every task
+	// filed from this template asks for, under a workflow job's own
+	// `sandbox:` keys (grain/task-4591).
+	Sandbox *rawSandbox `yaml:"sandbox"`
 	// NothingNeeded is model.Template.NothingNeededAction: "close" (what
 	// empty means) or "ack".
 	NothingNeeded string              `yaml:"nothing-needed"`
@@ -173,6 +204,83 @@ type rawTemplate struct {
 	// filed from this template may update in this repository
 	// (model.RefPush, grain/task-2536; parsePush).
 	Push []rawPush `yaml:"push"`
+}
+
+// rawSandbox is a template's `sandbox:` block -- the same three keys, with
+// the same meaning, as a `.grain/workflows` job's own `sandbox:`
+// (pkg/workflows):
+//
+//	sandbox:
+//	  cpus: 4
+//	  memory-mb: 16384
+//	  disk-gb: 100
+//
+// Each is optional, and pointers so that a key written as 0 is told
+// apart from one left out: 0 is refused, because a dimension nobody
+// wants to change is one to leave out.
+type rawSandbox struct {
+	CPUs     *int
+	MemoryMB *int
+	DiskGB   *int
+}
+
+// rawSandboxKeys is what the block may say. Anything else is refused by
+// name, which -- being a decode error -- is a SchemaError: a block with
+// a key a newer grain added is held back by an older daemon rather than
+// refusing the whole repository (docs/declarations.md).
+var rawSandboxKeys = []string{"cpus", "memory-mb", "disk-gb"}
+
+func (s *rawSandbox) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: sandbox must be a mapping with cpus, memory-mb and/or disk-gb", node.Line)
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if key := node.Content[i].Value; !slices.Contains(rawSandboxKeys, key) {
+			return fmt.Errorf("line %d: sandbox: field %s not found -- sandbox accepts %s",
+				node.Content[i].Line, key, strings.Join(rawSandboxKeys, ", "))
+		}
+	}
+	var m struct {
+		CPUs     *int `yaml:"cpus"`
+		MemoryMB *int `yaml:"memory-mb"`
+		DiskGB   *int `yaml:"disk-gb"`
+	}
+	if err := node.Decode(&m); err != nil {
+		return err
+	}
+	*s = rawSandbox{CPUs: m.CPUs, MemoryMB: m.MemoryMB, DiskGB: m.DiskGB}
+	return nil
+}
+
+// parseSandbox is a template's `sandbox:` as model.Template.Sandbox:
+// every key it writes a positive integer, no larger than the ceiling a
+// task's own sandbox shape is held to (model.ValidateTemplateSandbox).
+func parseSandbox(f file, raw *rawSandbox) (model.SandboxShape, error) {
+	if raw == nil {
+		return model.SandboxShape{}, nil
+	}
+	var out model.SandboxShape
+	var problems []string
+	take := func(name string, v *int, into *int) {
+		if v == nil {
+			return
+		}
+		if *v <= 0 {
+			problems = append(problems, fmt.Sprintf("%s must be a positive integer, got %d", name, *v))
+			return
+		}
+		*into = *v
+	}
+	take("cpus", raw.CPUs, &out.CPUs)
+	take("memory-mb", raw.MemoryMB, &out.MemoryMB)
+	take("disk-gb", raw.DiskGB, &out.DiskGB)
+	if len(problems) > 0 {
+		return model.SandboxShape{}, fmt.Errorf("%s: sandbox: %s", f.path, strings.Join(problems, "; "))
+	}
+	if err := model.ValidateTemplateSandbox(out); err != nil {
+		return model.SandboxShape{}, fmt.Errorf("%s: %w", f.path, err)
+	}
+	return out, nil
 }
 
 // rawPush is one entry of a template's `push:` list: either a ref
@@ -314,6 +422,10 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 			priority = &p
 		}
 	}
+	sandbox, err := parseSandbox(f, raw.Sandbox)
+	if err != nil {
+		return model.Template{}, raw, err
+	}
 	target := repo
 	tmpl := model.Template{
 		ID:            model.RepoDeclaredID(model.DeclaredTemplate, repo, f.stem),
@@ -336,6 +448,7 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 		Hosting:             hosting,
 		Skills:              skills,
 		Priority:            priority,
+		Sandbox:             sandbox,
 		NothingNeededAction: nothingNeeded,
 	}
 	if raw.AutoMerge != nil {
@@ -769,6 +882,7 @@ type rawSchedule struct {
 	OverlapGroup         string               `yaml:"overlap-group"`
 	Review               string               `yaml:"review"`
 	GrainCI              *bool                `yaml:"grain-ci"`
+	SkipWhen             string               `yaml:"skip-when"`
 	Enabled              *bool                `yaml:"enabled"`
 	Model                string               `yaml:"model"`
 	Admission            string               `yaml:"admission"`
@@ -1068,6 +1182,12 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 				"grain CI even on a ci_mode: github repository, and this schedule runs no `workflow:`", f.path)
 		}
 		sched.GrainCI = *raw.GrainCI
+	}
+	// A condition outside the schedule that holds its firings
+	// (model.Schedule.SkipWhen): `skip-when: publishing-held` holds them
+	// while its base branch's publishing is held by a release triage task.
+	if sched.SkipWhen, err = model.ParseScheduleSkipWhen(raw.SkipWhen); err != nil {
+		return model.Schedule{}, fmt.Errorf("%s: skip-when: %w", f.path, err)
 	}
 	if raw.AutoApproveProposals != nil {
 		sched.AutoApproveProposals = *raw.AutoApproveProposals

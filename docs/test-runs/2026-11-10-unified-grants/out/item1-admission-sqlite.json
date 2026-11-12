@@ -1,0 +1,28 @@
+{
+  "legacyTask": {
+    "id": "3",
+    "state": "awaiting_reply",
+    "capabilities": [
+      "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}"
+    ],
+    "comments": [
+      {
+        "author": "grain",
+        "body": "This task could not be dispatched: grain refused the capability `https://grain.dev/capabilities/api#tasks:read`, so no sandbox was built for it: the capability policy denies https://grain.dev/capabilities/api#tasks:read to this task on acme/widgets (rule 1: deny https://grain.dev/capabilities/api#tasks:read).\n\nChange the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again."
+      }
+    ]
+  },
+  "canonicalTask": {
+    "id": "4",
+    "state": "awaiting_reply",
+    "capabilities": [
+      "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}"
+    ],
+    "comments": [
+      {
+        "author": "grain",
+        "body": "This task could not be dispatched: grain refused the capability `https://grain.dev/capabilities/api#tasks:read`, so no sandbox was built for it: the capability policy denies https://grain.dev/capabilities/api#tasks:read to this task on acme/widgets (rule 1: deny https://grain.dev/capabilities/api#tasks:read).\n\nChange the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again."
+      }
+    ]
+  }
+}

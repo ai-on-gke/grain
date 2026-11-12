@@ -41,11 +41,13 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
                                          (time blocked is credited back to this run's deadline)
   grain ci run-job <job> [--timeout 9m] [--resume <run-id>]
                                          Run a single named CI job against the current branch commit and wait
+                                         (on GitHub Actions: re-run that job of your pull request's head)
   grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]
                                          Rerun failed (or named) jobs fresh and uncached
+                                         (on GitHub Actions: re-run your pull request's head, no commit pushed)
   grain pr status [--task <id> | --ref <branch> [--repo <r>]]
-                                         Latest grain CI verdict on this task's branch, or another task's or branch's
-  grain pr base-status                   Latest grain CI verdict on the base branch
+                                         Latest CI verdict on this task's branch (grain CI, or every GitHub Actions workflow), or another task's or branch's
+  grain pr base-status                   Latest CI verdict on the base branch
   grain pr open                          Open or update the pull request for this branch from its commit messages
   grain pr reply <body|--file f> [--comment-id <id>]
                                          Reply to an inline review comment, or post a top-level PR comment
@@ -60,10 +62,12 @@ GIT, TASK & COLLABORATION:
   grain status <one-line-note>           Update this run's live activity status in the UI (<120 chars)
   grain handover write (<text> | --file <f>)
                                          Write or replace the standing handover summary for this task
+  grain report check (<text> | --file <f>)
+                                         Check a draft closing report against the records this run read
   grain task wait <id>... [--until closed|merged] [--timeout 9m]
                                          Block until other task(s) close or merge (with wait credit)
-  grain task message <id> (<body|--file f>)
-                                         Leave a note on a parent or child task's conversation
+  grain task message <id> (<body|--file f>) [--relay]
+                                         Leave a note on a parent or child task's conversation, or (--relay) a person's answer
   grain task propose --title <t> (--body <b> | --file <f>) [flags]
                                          File an unapproved follow-up task proposal (run 'grain help propose' for full reference)
   grain notify --subject <s> --title <t> [--body <b>] [--severity info|warning] [--clears-when <json>]
@@ -83,9 +87,9 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain api <METHOD> <path> [--body '<json>' | --field k=v] [--reason <why>]
                                          Call a granted non-dangerous agent API route
   grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
-                                         Deployment memory and standing docs (api:memory / api:memory:write)
+                                         Deployment memory and standing docs (api#memory / api#memory:write)
   grain release-notes (stats | publish --version <v> <body|--file f>)
-                                         Release notes stats and publishing (api:release-notes)
+                                         Release notes stats and publishing (api#release-notes)
   grain cap list                         Capability tools this run's grants let the sandbox call
   grain cap <server> <tool> [flags | --json '<args>']
                                          Call one (--help lists its flags, generated from its input schema)
@@ -93,16 +97,16 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
                                          Screenshot the app you are working on (light and dark, desktop and phone)
                                          plus a contact sheet to attach to the closing note, where grain shows it
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
-                                         Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api:test-quarantine)
+                                         Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api#test-quarantine)
   grain metrics [<section>] [--window 7d | --since <d> --until <d>]
-                                         grain's own measurements (api:self-debug)
-  grain health                           This deployment's health (deployment-health)
+                                         grain's own measurements (api#self-debug)
+  grain health                           This deployment's health (grain#health)
   grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
-                                         grain's own log, redacted (grain-log)
+                                         grain's own log, redacted (grain#journal)
   grain playbooks [<name>]               Bootstrap playbooks (config-map bootstrap)
   grain issue list | grain issue read <n>
-                                         GitHub issues (read-issues)
-  grain db query <sql>                   Read-only query on grain's database (db-read)
+                                         GitHub issues (github#read-issues)
+  grain db query <sql>                   Read-only query on grain's database (grain#sql)
 
 Run 'grain <command> --help' for flags and examples.
 `
@@ -141,8 +145,10 @@ ARGUMENTS & FLAGS:
                                default branch). Unknown repos are filed against yours with a note.
   --branch <name>              Base branch to target (defaults to the repo's default/declared branch).
   --depends-on <id[,id...]>    Task IDs (including your current task or an earlier proposal's --id)
-                               that must close before this task can start. Standing chat sessions
-                               never complete and are dropped with a note.
+                               that must close before this task can start. A proposal that answers
+                               with a closing note and no pull request closes itself (see
+                               --nothing-needed-action). Standing chat sessions never complete and
+                               are dropped with a note.
   --supersedes <task-id>       (propose_task MCP tool only) Replace an existing task that has never
                                been dispatched and was filed in the same repository. Closes the old
                                task as superseded and moves its open dependents to this proposal;
@@ -184,6 +190,10 @@ ARGUMENTS & FLAGS:
   --template-field <k=v>       Template input field value (repeatable).
   --nothing-needed-action <close|ack>
                                Whether nothing_needed closes the task (default) or leaves it for ack.
+                               For a task your run files it also governs a closing note with no pull
+                               request: close (the default) makes it a report-only sub-task that
+                               closes when it answers, so tasks depending on it start and your next
+                               attempt reads its note; ack leaves its report for a person to close.
   --goal <json>                Goal spec JSON: {"kind":"base-green|pr-merged|tasks-closed|person-closes|pipeline-healthy|cl-submitted","spec":{...},"on_met":"close|rest","on_limit":"hold|notify"}.
 `
 
@@ -247,8 +257,8 @@ var sandboxCommandHelp = map[string]string{
 		"  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n  grain ci log --job go --step Test -n 50\n",
 	"ci test-history": "grain ci test-history <test-name> [--limit N] [--repo owner/name] [--provider grain|github-actions]\n\nPass, fail and flake history of one test across recent CI runs. For a repository whose CI is\nGitHub Actions (ci_mode github) the runs are its workflow runs, with what grain recorded of\ntheir failed jobs' logs, and grain CI's older runs of it are left out (--provider grain reads\nthem). Grain keeps no log of an Actions job that passed, so there a test's failures are counted\nand its passes are not: the report names each source's runs and the window they span.\n",
 	"ci artifact":     "grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo owner/name]\n\nDownload a stored CI artifact, to <dest> or stdout. With no run, the latest run on this task's branch (or --task's).\n",
-	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest grain CI run on this task's branch and each job's verdict -- or on another task's\nbranch (--task), or any branch (--ref, in --repo or this task's repository), where this task may read CI.\n",
-	"pr base-status":  "grain pr base-status\n\nThe latest grain CI run on this task's base branch and each job's verdict.\n",
+	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest CI on this task's branch and each job's verdict -- or on another task's branch (--task),\nor any branch (--ref, in --repo or this task's repository), where this task may read CI. For a\ngrain CI branch that is its newest run; for a GitHub Actions branch, every workflow's newest run at\nthe branch's newest commit.\n",
+	"pr base-status":  "grain pr base-status\n\nThe latest CI on this task's base branch and each job's verdict, as grain pr status reports it.\n",
 	"ci wait": "grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Wait for this task's branch CI verdict: GitHub Actions / check runs on a ci_mode: github\n" +
 		"repository, or grain CI on a ci_mode: grain repository (starting or attaching to the run in\n" +
@@ -263,10 +273,17 @@ var sandboxCommandHelp = map[string]string{
 		"  git push origin HEAD && grain ci wait\n  grain ci wait --jobs go,lint\n",
 	"ci run-job": "grain ci run-job <job> [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Run one named CI job (and its dependencies) against this branch's commit and wait for it,\n" +
-		"with the same 9m slice, resume and wait credit as grain ci wait.\n",
+		"with the same 9m slice, resume and wait credit as grain ci wait. On a repository GitHub\n" +
+		"Actions gates, re-run that job of your pull request's head instead, with no commit pushed,\n" +
+		"then wait for it with grain ci wait.\n",
 	"ci retrigger": "grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]\n\n" +
 		"Rerun this branch's failed jobs fresh and uncached (or the named ones, or --all of them).\n" +
-		"Then wait on it with grain ci wait --resume <run-id>.\n",
+		"Then wait on it with grain ci wait --resume <run-id>.\n\n" +
+		"On a repository GitHub Actions gates (ci_mode: github) it re-runs the GitHub Actions runs at\n" +
+		"your pull request's head instead -- their failed and cancelled jobs, the named jobs, or\n" +
+		"--all -- with no commit pushed, so the head, its approvals and reviews stay put. Each run at\n" +
+		"one commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault\n" +
+		"included. Then wait on it with grain ci wait.\n",
 	"pr open": "grain pr open\n\nOpen the pull request for this task's branch (or find the one already open) and\n" +
 		"report its checks. Its title and description come from the branch's commit messages.\n",
 	"pr reply": "grain pr reply <body|--file f> [--comment-id <id>]\n\n" +
@@ -295,10 +312,15 @@ var sandboxCommandHelp = map[string]string{
 	"status":         "grain status <one-line-note>\n\nSet this run's live one-line status synopsis in grain's UI (at most 120 chars, no newlines).\n",
 	"handover":       "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\n",
 	"handover write": "grain handover write (<text> | --file <f>)\n\nWrite or replace this task's standing handover summary for future runs on this task.\nUse '--file -' to read from stdin.\n",
-	"notify":         "grain notify --subject <key> --title <one-line> [--body <md> | --file <f>] [--severity info|warning|critical] [--task <id>] [--clears-when <json>]\n\nRaise an operator notification without parking this task.\n",
-	"task list":      sandboxTaskListHelp,
-	"task read":      "grain task read <id>\n\nA task's record (task://<id>/record.md). grain ls task://<id> shows its other files.\n",
-	"task prompt":    "grain task prompt <id> [--attempt N] [--tail N] [--offset N --limit N] [--lines N]\n\nA task's latest prompt, or attempt N's.\n\n" + byteRangeHelp,
+	"report":         "grain report check (<text> | --file <f>)\n\nCheck a draft closing report before you post it. Run 'grain help report check'.\n",
+	"report check": "grain report check (<text> | --file <f>)\n\nCheck a draft closing report the way grain checks it once it is posted:\n" +
+		"every claim must cite a task, CI run or batch id, every cited task must have\nbeen read in this run (grain task read, grain read, grain task list, ...), and\n" +
+		"a state or kind a line gives a task must match its record. Lines under an\n\"Unverified\" heading are not checked.\n\n" +
+		"Exits non-zero when the report fails, naming each unread id and offending\nline. Use '--file -' to read from stdin.\n",
+	"notify":      "grain notify --subject <key> --title <one-line> [--body <md> | --file <f>] [--severity info|warning|critical] [--task <id>] [--clears-when <json>]\n\nRaise an operator notification without parking this task.\n",
+	"task list":   sandboxTaskListHelp,
+	"task read":   "grain task read <id>\n\nA task's record (task://<id>/record.md). grain ls task://<id> shows its other files.\n",
+	"task prompt": "grain task prompt <id> [--attempt N] [--tail N] [--offset N --limit N] [--lines N]\n\nA task's latest prompt, or attempt N's.\n\n" + byteRangeHelp,
 	"task transcript": "grain task transcript <id> [--attempt N] [--tail N] [--offset N --limit N] [--lines N]\n\n" +
 		"A task's latest transcript, or attempt N's. How big the whole file is goes to stderr: a\n" +
 		"transcript can run to hundreds of KB, so read part of it.\n\n" + byteRangeHelp + "\n" +
@@ -307,7 +329,7 @@ var sandboxCommandHelp = map[string]string{
 		"Block until every named task has closed (or merged), up to a 9m slice with wait credit.\n" +
 		"To park and free the sandbox VM across a long wait, call the wait_for_task (park: true)\n" +
 		"or resume_later MCP control tool instead.\n",
-	"task message":          "grain task message <id> (<body> | --body <b> | --file <f>)\n\nLeave a note on a parent or child task's conversation (or any task with api:tasks:admin).\n",
+	"task message":          "grain task message <id> (<body> | --body <b> | --file <f>) [--relay]\n\nLeave a note on a parent or child task's conversation (or any task with https://grain.dev/capabilities/api#tasks:admin).\n\nA note is the agent's own words: it never answers a question the task is waiting on a person for.\n--relay is for a director or console session passing on what the person it is talking to said:\nthe comment is written as that person's answer (\"<person> via <session>\") and wakes the task as\ntheir own reply would. Only a console session acting for a signed-in person may relay, and only\nonto a task that person could reply on themselves.\n",
 	"task propose":          sandboxProposeHelp,
 	"propose":               sandboxProposeHelp,
 	"api":                   "grain api routes [--scope <s>]\ngrain api <METHOD> <path> [--body '<json>' | --file <f> | --field k=v] [--reason <why>]\n\nList or call non-dangerous agent API routes granted to this run.\n\nA repository off the default git host goes in a /api/repos/{owner}/{name}/... path\nwith its host and owner escaped into one segment:\n  grain api GET '/api/repos/git.forge.example%2Fexperimental/grain/releases'\n",
@@ -315,21 +337,21 @@ var sandboxCommandHelp = map[string]string{
 	"memory":                "grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)\n",
 	"memory list":           "grain memory list\n\nList entries in deployment memory (memory://).\n",
 	"memory read":           "grain memory read <path>\n\nRead a file from deployment memory (memory://<path>; grain memory list names them).\n",
-	"memory write":          "grain memory write [--repo owner/name] (<text> | --file <f>) [--reason <why>]\n\nReplace the deployment's memory text (or a repository's, with --repo) with <text>. It is one text, not keyed entries: a named entry is grain memory doc-write. Needs api:memory or api:memory:write.\n",
-	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>) [--summary <s>] [--repo <owner/name>] [--reason <why>]\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
-	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs api:memory or api:memory:write.\n",
+	"memory write":          "grain memory write [--repo owner/name] (<text> | --file <f>) [--reason <why>]\n\nReplace the deployment's memory text (or a repository's, with --repo) with <text>. It is one text, not keyed entries: a named entry is grain memory doc-write. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
+	"memory doc-write":      "grain memory doc-write <path> (<content> | --file <f>) [--summary <s>] [--repo <owner/name>] [--reason <why>]\n\nWrite a standing document in the memory repository. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
+	"memory doc":            "grain memory doc write <path> (<content> | --file <f>)\n\nWrite a standing document in the memory repository. Needs https://grain.dev/capabilities/api#memory or https://grain.dev/capabilities/api#memory:write.\n",
 	"release-notes":         "grain release-notes (stats | publish --version <v> <body|--file f>)\n",
-	"release-notes stats":   "grain release-notes stats [<period> | --period <p>]\n\nCompute task and PR statistics for a release window. Needs api:release-notes or api:release-notes:read.\n",
-	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs api:release-notes or api:release-notes:write.\n",
-	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds api:test-quarantine or api:tests:write.\n",
+	"release-notes stats":   "grain release-notes stats [<period> | --period <p>]\n\nCompute task and PR statistics for a release window. Needs https://grain.dev/capabilities/api#release-notes or https://grain.dev/capabilities/api#release-notes:read.\n",
+	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs https://grain.dev/capabilities/api#release-notes or https://grain.dev/capabilities/api#release-notes:write.\n",
+	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds https://grain.dev/capabilities/api#test-quarantine or https://grain.dev/capabilities/api#tests:write.\n",
 	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
-		"grain's own measurements (deploy://metrics). Needs api:self-debug or api:deployment:read.\n\n" +
+		"grain's own measurements (deploy://metrics). Needs https://grain.dev/capabilities/api#self-debug or https://grain.dev/capabilities/api#deployment:read.\n\n" +
 		"  --window   how far back to measure: 36h, 7d, 2w (default: the daemon's own)\n" +
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
-	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
+	"health": "grain health\n\nThis deployment's health (deploy://health). Needs https://grain.dev/capabilities/grain#health.\n",
 	"log": "grain log [<source> | --source daemon|dmesg] [--unit <unit>] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]\n\n" +
-		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
+		"grain's own log, redacted (deploy://grain.log). Needs https://grain.dev/capabilities/grain#journal.\n\n" +
 		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
 		"  --source          which journal: daemon (the default) or dmesg (the kernel's)\n" +
 		"  --unit            for daemon when both grain-daemon.service and grain.service exist: which unit to read\n" +
@@ -340,7 +362,7 @@ var sandboxCommandHelp = map[string]string{
 	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}.\n",
 	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
 	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
-	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
+	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs https://grain.dev/capabilities/grain#sql.\n",
 	"ci":         "grain ci (list | show | checks | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
 	"pr":         "grain pr (status | base-status | open | reply | resolve | threads | review-comment)\n",
 	"task":       "grain task (list | read | prompt | transcript | wait | message | propose) ...\n",
@@ -351,7 +373,7 @@ var sandboxCommandHelp = map[string]string{
 // sandboxTaskListHelp is grain task list --help.
 const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
-	"The tasks this run may read (its own, or every task with api:self-debug or api:tasks:read), one line each:\n" +
+	"The tasks this run may read (its own, or every task with https://grain.dev/capabilities/api#self-debug or https://grain.dev/capabilities/api#tasks:read), one line each:\n" +
 	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +

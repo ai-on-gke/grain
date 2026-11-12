@@ -883,7 +883,7 @@ func scheduledWorkflowRef(deps Deps, row model.ScheduledWorkflowRun) (string, er
 	if deps.Client == nil {
 		return "", fmt.Errorf("no GitHub client to ask %s's default branch of", row.Repo)
 	}
-	def, err := deps.Client.DefaultBranch(row.Repo.Owner, row.Repo.Name)
+	def, err := deps.Client.DefaultBranch(row.Repo.StoredOwner(), row.Repo.Name)
 	if err != nil {
 		return "", fmt.Errorf("reading %s's default branch: %w", row.Repo, err)
 	}
@@ -1045,7 +1045,7 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 		}
 		if openTask != nil {
 			resolved := now
-			_, _ = deps.Store.RecordScheduleSkip(ctx, model.ScheduleSkip{
+			skip := model.ScheduleSkip{
 				ScheduleID: sched.ID,
 				Occurrence: now,
 				At:         now,
@@ -1053,7 +1053,14 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 				TaskID:     openTask.ID,
 				Outcome:    model.ScheduleSkipDropped,
 				ResolvedAt: &resolved,
-			})
+			}
+			// Name the holding task's state, as a timed schedule's skip
+			// does (Store.overlapSkip): without it the record reads
+			// "(state unknown)" while the task is plainly queued.
+			if st, err := deps.Store.State(ctx, openTask.ID); err == nil {
+				skip.TaskState = st
+			}
+			_, _ = deps.Store.RecordScheduleSkip(ctx, skip)
 			return nil
 		}
 		// And another schedule in its overlap group still running
@@ -1068,6 +1075,14 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 				return nil
 			}
 		}
+	}
+	// And a condition the schedule declared, such as its base branch's
+	// publishing being held (model.Schedule.SkipWhen, grain/task-4393).
+	if skip, held, err := deps.Store.PublishingHeldSkip(ctx, sched, run.Repo, sched.Base, now); err != nil {
+		return err
+	} else if held {
+		_, _ = deps.Store.RecordScheduleSkip(ctx, skip)
+		return nil
 	}
 
 	row := model.ScheduledWorkflowRun{

@@ -591,7 +591,7 @@ func (c *Client) authorizeBroadcast(ctx context.Context, taskID string) error {
 	if APIGrantsOf(names).Has(teamBroadcastScope) {
 		return nil
 	}
-	return forbiddenErrorf("task %s does not hold the agent API's %s scope (api:team-broadcast), so its run may not broadcast",
+	return forbiddenErrorf("task %s does not hold the agent API's %s scope (https://grain.dev/capabilities/api#team-broadcast), so its run may not broadcast",
 		taskID, teamBroadcastScope)
 }
 
@@ -810,7 +810,8 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 					if err != nil {
 						return DeploymentRepoConfigResponse{}, err
 					}
-					if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
+					if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef ||
+						model.IsAPIGrantRef(normalized) || model.CapabilityGrantRef(normalized) == model.APICapabilityServerID {
 						if !slices.Contains(cfg.CICapabilities, normalized) && !slices.Contains(cfg.CICapabilities, t) {
 							return DeploymentRepoConfigResponse{}, validationErrorf("ciCapabilities: capability %q is not supported for CI", t)
 						}

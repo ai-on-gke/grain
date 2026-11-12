@@ -462,6 +462,12 @@ type Upgrader struct {
 	// pull instead of the branch's tag (override.go); "" for an ordinary
 	// one, and reset with done.
 	override string
+	// commit is the object id StartRollback asked the upgrade in flight
+	// to check out instead of a branch (rollback.go): the source
+	// pipeline's one-click rollback, which fetches that exact commit and
+	// never a branch of the same name. "" for every other upgrade, and
+	// reset with done.
+	commit string
 	// switching is the edition switch the operator asked the upgrade in
 	// flight to make (StartImageWith's SwitchEdition, edition.go); nil
 	// for an upgrade that must stay in this deployment's edition, and
@@ -814,6 +820,7 @@ func (u *Upgrader) release() {
 	close(u.done)
 	u.done = nil
 	u.override = ""
+	u.commit = ""
 	u.switching = nil
 	u.cancelFn = nil
 	u.cancelled = false
@@ -1541,7 +1548,11 @@ func (u *Upgrader) stageBinary(ctx context.Context, p *progress, branch string) 
 	}
 
 	p.start(stepCheckout)
-	if err := u.checkout(ctx, p, branch); err != nil {
+	checkout := func() error { return u.checkout(ctx, p, branch) }
+	if oid := u.rollbackCommit(); oid != "" {
+		checkout = func() error { return u.checkoutCommit(ctx, p, oid) }
+	}
+	if err := checkout(); err != nil {
 		return failBinary(fmt.Errorf("checkout: %w", err))
 	}
 	head, err := u.headCommit(ctx)
