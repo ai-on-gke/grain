@@ -162,7 +162,8 @@ type Entry struct {
 	CwdUnder []string `yaml:"cwd_under"`
 	// Env are the variable names the daemon may set, exactly, as a
 	// "PREFIX_*" pattern, or "*" for any variable outside the contract's
-	// frozen deny set (EnvDeny: identityEnv, LD_*, and injectionEnv). Any
+	// frozen deny set (EnvDeny: identityEnv, LD_*, and injectionEnv, plus
+	// envDenyV2 under FeatureEnvDenyV2). Any
 	// other name in a request refuses it, and so does a name set_env or
 	// pass_env already supplies. Denied names are admitted only by their
 	// exact name, never by "*" or a pattern; listing one hands the daemon
@@ -576,8 +577,64 @@ func envDenyPatterns() []string {
 	return out
 }
 
+// envDenyV2 is what FeatureEnvDenyV2 adds to envDenyPatterns: the other
+// startup, module-path and command variables of the loaders, shells,
+// interpreters and tools an agent CLI runs, which the 2026-11-11 contract
+// walkthrough found admitted under env: ["*"]
+// (docs/test-runs/2026-11-11-host-agent-contract.md, item 2). A value like
+// "-javaagent:x" or "core.pager=x" is not path-like, so paths_under never
+// sees it, and a module path under paths_under is in the stage directory
+// the daemon writes. A trailing "*" is a prefix. The daemon sends none of
+// these (claude, codex and antigravity's HostdEnv); one a capability needs
+// is listed by exact name. Append only, under a new feature.
+var envDenyV2 = []string{
+	// The macOS dynamic loader (LD_* is Linux's) and glibc's iconv modules.
+	"DYLD_*",
+	"GCONV_PATH",
+	// Shells: options set at startup, and commands run before a prompt or
+	// expanded with every xtrace line.
+	"BASHOPTS",
+	"SHELLOPTS",
+	"PROMPT_COMMAND",
+	"PS4",
+	"ZDOTDIR",
+	// Interpreter module paths.
+	"NODE_PATH",
+	"PYTHONHOME",
+	"PYTHONUSERBASE",
+	"PERL5LIB",
+	"PERLLIB",
+	"PERL5DB",
+	"RUBYLIB",
+	// The JVM's agent and option variables.
+	"JAVA_TOOL_OPTIONS",
+	"JDK_JAVA_OPTIONS",
+	"_JAVA_OPTIONS",
+	// git's config (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and
+	// GIT_CONFIG_KEY_n set core.pager, core.sshCommand, ...) and the
+	// commands it runs (GIT_SSH_COMMAND, GIT_ASKPASS, GIT_EXEC_PATH, ...).
+	"GIT_*",
+}
+
+// envDenyMatches reports whether name is one of patterns, where a
+// trailing "*" is a prefix.
+func envDenyMatches(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if prefix, ok := strings.CutSuffix(p, "*"); ok {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+		} else if name == p {
+			return true
+		}
+	}
+	return false
+}
+
+// envDeniedByPattern reports whether only an exact env entry admits name:
+// the frozen v1 set and envDenyV2, both of which this build enforces.
 func envDeniedByPattern(name string) bool {
-	return slices.Contains(identityEnv, name) || strings.HasPrefix(name, "LD_") || slices.Contains(injectionEnv, name)
+	return envDenyMatches(name, envDenyPatterns()) || envDenyMatches(name, envDenyV2)
 }
 
 // ProbeEnv is the variable the daemon sets to "1" when it starts a stdio
@@ -656,7 +713,7 @@ func redactEnv(kv string) string {
 
 // acceptsEnv reports whether the daemon may set name. hostd's identity
 // variables, the dynamic loader's LD_* and interpreter/shell injection
-// variables change what the child is and what it loads, so only an exact
+// variables (envDeniedByPattern) change what the child is and what it loads, so only an exact
 // entry in env admits one: neither "*" nor a NAME_* pattern ever does.
 // agy's per-run HOME is the case that needs this. A capability entry also
 // accepts ProbeEnv.

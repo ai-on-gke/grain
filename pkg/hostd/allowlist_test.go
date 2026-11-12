@@ -702,6 +702,101 @@ clis:
 	}
 }
 
+// TestEnvDenyV2RefusesLoaderVariablesUnderWildcards holds the names the
+// 2026-11-11 contract walkthrough found admitted under env: ["*"]
+// (docs/test-runs/2026-11-11-host-agent-contract.md, item 2) refused, for
+// CLI and capability entries and under NAME_* patterns, while an exact
+// name still admits one.
+func TestEnvDenyV2RefusesLoaderVariablesUnderWildcards(t *testing.T) {
+	a, root := mustParse(t, `
+clis:
+  open:
+    path: /opt/cli
+    paths_under: [ROOT]
+    env: ["*"]
+  patterned:
+    path: /opt/cli
+    paths_under: [ROOT]
+    env: [GIT_*, JAVA_*, DYLD_*, NODE_*, PYTHON*, PERL*, RUBY*, P*]
+  exact:
+    path: /opt/cli
+    paths_under: [ROOT]
+    env: [JAVA_TOOL_OPTIONS, GIT_TERMINAL_PROMPT, NODE_PATH, "*"]
+capabilities:
+  open-cap:
+    command: /opt/cap
+    paths_under: [ROOT]
+    env: ["*"]
+`)
+	mkfiles(t, root, "stage/", "stage/lib.jar")
+	host := []string{"PATH=/usr/bin", "HOME=/home/me"}
+	stage := root + "/stage"
+
+	denied := []string{
+		// Not path-like, so paths_under never applied to them.
+		"JAVA_TOOL_OPTIONS=-javaagent:" + stage + "/lib.jar",
+		"JDK_JAVA_OPTIONS=-javaagent:" + stage + "/lib.jar",
+		"_JAVA_OPTIONS=-Xmx1g",
+		"GIT_CONFIG_PARAMETERS='core.pager'='touch /tmp/pwned'",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=core.sshCommand",
+		"GIT_SSH_COMMAND=touch /tmp/pwned",
+		"GIT_TERMINAL_PROMPT=0",
+		"PROMPT_COMMAND=touch /tmp/pwned",
+		"SHELLOPTS=xtrace",
+		"BASHOPTS=extdebug",
+		"PS4=$(touch /tmp/pwned)",
+		"DYLD_INSERT_LIBRARIES=" + stage + "/lib.jar",
+		"PERL5DB=BEGIN{}",
+		// Admitted before only because they sat under paths_under: the stage
+		// directory, which the daemon writes.
+		"GCONV_PATH=" + stage,
+		"NODE_PATH=" + stage,
+		"PYTHONHOME=" + stage,
+		"PYTHONUSERBASE=" + stage,
+		"PERL5LIB=" + stage,
+		"PERLLIB=" + stage,
+		"RUBYLIB=" + stage,
+		"ZDOTDIR=" + stage,
+	}
+	for _, kv := range denied {
+		for _, req := range []Request{
+			{Kind: KindCLI, Name: "open"},
+			{Kind: KindCLI, Name: "patterned"},
+			{Kind: KindCapability, Name: "open-cap"},
+		} {
+			req.Env = []string{kv}
+			_, err := a.Check(&req, host)
+			wantRefused(t, err, "not one this entry accepts")
+		}
+	}
+
+	// Names beside the deny set are still open: GITHUB_* is not GIT_*.
+	if _, err := a.Check(&Request{Kind: KindCLI, Name: "open", Env: []string{
+		"GITHUB_TOKEN=x", "GITLAB_HOST=x", "JAVA_HOME=" + stage, "NODE_ENV=production", "PYTHONUNBUFFERED=1", "PS1=$ ",
+	}}, host); err != nil {
+		t.Fatalf("open check of names outside the deny set failed: %v", err)
+	}
+	if _, err := a.Check(&Request{Kind: KindCLI, Name: "patterned", Env: []string{"JAVA_HOME=" + stage, "PS1=$ "}}, host); err != nil {
+		t.Fatalf("patterned check of names outside the deny set failed: %v", err)
+	}
+
+	// An exact name admits a denied one, as it does for v1's.
+	spec, err := a.Check(&Request{Kind: KindCLI, Name: "exact", Env: []string{
+		"JAVA_TOOL_OPTIONS=-Xss4m", "GIT_TERMINAL_PROMPT=0", "NODE_PATH=" + stage,
+	}}, host)
+	if err != nil {
+		t.Fatalf("exact check failed: %v", err)
+	}
+	for _, want := range []string{"JAVA_TOOL_OPTIONS=-Xss4m", "GIT_TERMINAL_PROMPT=0"} {
+		if !slices.Contains(spec.Env, want) {
+			t.Errorf("spec.Env %q lacks %q", spec.Env, want)
+		}
+	}
+	_, err = a.Check(&Request{Kind: KindCLI, Name: "exact", Env: []string{"GIT_SSH_COMMAND=true"}}, host)
+	wantRefused(t, err, "not one this entry accepts")
+}
+
 func TestParseAllowlistIgnoresXAnnotationKeysAndKeepsStrictnessElsewhere(t *testing.T) {
 	root := testRoot(t)
 	yamlWithAnnotations := strings.ReplaceAll(`
