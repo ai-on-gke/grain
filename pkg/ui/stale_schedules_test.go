@@ -59,11 +59,12 @@ func (m staticDefaultBranches) DefaultBranch(owner, repo string) (string, error)
 }
 
 // A `.grain/schedules/` entry that sets `grain-ci: true` and names the
-// repository's default branch explicitly (`base: main`) clears the
+// repository's default branch explicitly (`base: trunk` on a repository
+// whose default branch is trunk) clears the
 // workflow's dropped cron (`Base: ""`) from the stale-schedules endpoint.
 func TestStaleSchedulesAlignsExplicitDefaultBranchWithWorkflowCron(t *testing.T) {
 	srv, client := testServer(t)
-	client.Config.GitHubDefaultBranches = staticDefaultBranches{"acme/widgets": "main"}
+	client.Config.GitHubDefaultBranches = staticDefaultBranches{"acme/widgets": "trunk"}
 	ctx := context.Background()
 	now := time.Now()
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
@@ -73,7 +74,7 @@ func TestStaleSchedulesAlignsExplicitDefaultBranchWithWorkflowCron(t *testing.T)
 	daily := model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53}
 	live := model.WorkflowReviewTemplateID("live-secrets-repo")
 	if err := client.Store.PutSchedule(ctx, model.Schedule{
-		ID: "workflow.live-secrets-repo", Title: "live-secrets-repo", Target: repo,
+		ID: model.RepoDeclaredID(model.DeclaredSchedule, repo, "workflow.live-secrets-repo"), Title: "live-secrets-repo", Target: repo,
 		TemplateID: &live, Recurrence: daily, Enabled: true,
 		CreatedAt: now.Add(-10 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
 	}); err != nil {
@@ -82,13 +83,13 @@ func TestStaleSchedulesAlignsExplicitDefaultBranchWithWorkflowCron(t *testing.T)
 	ran := now.Add(-time.Hour)
 	if err := client.Store.PutSchedule(ctx, model.Schedule{
 		ID: "live-secrets-repo", Title: "Live secrets repository", Target: repo,
-		TemplateID: &live, Base: "main", GrainCI: true, Recurrence: daily, Enabled: true,
+		TemplateID: &live, Base: "trunk", GrainCI: true, Recurrence: daily, Enabled: true,
 		CreatedAt: now.Add(-10 * 24 * time.Hour), LastRunAt: &ran, NextRunAt: now.Add(time.Hour),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	got := decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes?section=staleSchedules", ""))
 	if len(got.StaleSchedules) != 0 {
-		t.Fatalf("staleSchedules = %+v, want dropped cron cleared by explicit base: main schedule", got.StaleSchedules)
+		t.Fatalf("staleSchedules = %+v, want dropped cron cleared by explicit base: trunk schedule", got.StaleSchedules)
 	}
 }
