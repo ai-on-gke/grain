@@ -22,34 +22,26 @@ import { expect, test } from "./fixtures.js";
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
+// A demo of its own (a demoArgs no other file uses): every configuration
+// write through the API adds a config_audit row, and on a worker's shared
+// server the suite's other files make enough of them to push the seeded
+// rows -- the operator's a day old -- off the newest the page reads,
+// however many that is.
+test.use({ demoArgs: ["-open=false", "-as", "audit-settings-layout"] });
+
 for (const [name, viewport] of [
   ["desktop", DESKTOP],
   ["phone", PHONE],
 ]) {
   test(`Settings → Audit fits a ${name} screen`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    // The page asks for the newest 100 config changes, and by the time
-    // this spec runs the suite's other settings saves can have pushed the
-    // seeded rows -- a day old -- past them. Ask the real server for its
-    // most (pkg/ui maxConfigAudit) instead, so they are still on the page.
-    await page.route(/\/api\/deployment\/config-audit\?/, async (route) => {
-      const url = new URL(route.request().url());
-      url.searchParams.set("limit", "500");
-      try {
-        await route.continue({ url: url.toString() });
-      } catch (err) {
-        if (!/closed|handled/i.test(String(err))) throw err;
-      }
-    });
     await page.goto("/settings/audit");
 
     const config = page.getByTestId("config-audit-table");
     await expect(config).toBeVisible();
     // A table on a wide screen, one block per entry on a phone.
     const rows = config.locator('[data-testid^="config-audit-row-"]');
-    // The demo server is shared by the suite's workers, so other specs'
-    // settings saves add rows of their own: find the seeded ones by what
-    // they say rather than counting.
+    // Find the seeded rows by what they say rather than counting them.
     const alice = rows.filter({ hasText: "max concurrent runs 4 → 6" });
     const operator = rows.filter({ hasText: "default model set to" });
     await expect(alice).toContainText("alice@example.com");

@@ -141,7 +141,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-go-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -902,10 +902,11 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
-    # The suite alone runs about 32 minutes now (887 tests, one worker per
+    # The suite alone runs about 41 minutes now (1150 tests, one worker per
     # two cores), and the frontend build and browser download come on top:
-    # at 35 a slow runner was cancelled mid-suite with no verdict at all.
-    timeout-minutes: 50
+    # at 35, and again at 50, a slow runner was cancelled mid-suite with no
+    # verdict at all.
+    timeout-minutes: 65
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
