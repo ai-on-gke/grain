@@ -51,7 +51,9 @@ const ONLY = process.env.GRANT_MATRIX_ONLY
 
 async function methodsToWalk(request) {
   const all = await listCapabilityMethods(request);
-  return ONLY ? all.filter((m) => ONLY.test(m.ref)) : all;
+  const allRefs = new Set(all.map((m) => m.ref));
+  const list = ONLY ? all.filter((m) => ONLY.test(m.ref)) : all;
+  return { list, allRefs };
 }
 
 function heldLocator(grants, ref) {
@@ -80,16 +82,27 @@ async function held(request, id, ref) {
 // under "Grain API presets/scopes" by their api:<name> id, not by ref.
 const API_REF = "https://grain.dev/capabilities/api#";
 
+function menuRowLocator(page, ref) {
+  if (ref.startsWith(API_REF)) {
+    const name = ref.slice(API_REF.length);
+    return page.locator(`[role^="menuitem"][data-api-grant="api:${name}"]`);
+  }
+  return page.locator(`[role^="menuitem"][data-method="${ref}"]`);
+}
+
 async function openMenu(page, grants, method) {
   await grants.getByRole("button", { name: "Add grant…" }).click();
   const search = page.getByRole("textbox", { name: "Search grants" });
   if (method.ref.startsWith(API_REF)) {
     const name = method.ref.slice(API_REF.length);
     await search.fill(name);
-    return page.locator(`[role^="menuitem"][data-api-grant="api:${name}"]`);
+    return menuRowLocator(page, method.ref);
   }
+  await expect(
+    page.locator('[role="menu"][data-methods-loaded="true"]'),
+  ).toBeVisible();
   await search.fill(method.ref);
-  return page.locator(`[role^="menuitem"][data-method="${method.ref}"]`);
+  return menuRowLocator(page, method.ref);
 }
 
 // fillRequired types the required arguments of args into the draft's
@@ -155,28 +168,56 @@ async function closePopovers(page) {
 // walkCell gives method on the grants region of one surface and takes it
 // away again, returning {outcome, detail}. onSaved runs once the grant
 // is held, for the surface's own save-and-reload.
-async function walkCell(page, request, grants, method, surface, onSaved) {
+async function walkCell(
+  page,
+  request,
+  grants,
+  method,
+  surface,
+  onSaved,
+  allRefs,
+) {
   const ref = method.ref;
   const [{ variant, args }] = argVariants(method);
   const policy = policyFor(method, surface);
   const refusal = expectedRefusal(ref, variant);
   const item = await openMenu(page, grants, method);
+  if (Array.isArray(method.aliasOf) && method.aliasOf.length > 0) {
+    // A method GET /api/capability-methods marks as an alias of another
+    // (such as api#grain/task-admin -> api#task-admin) is offered once
+    // under its canonical row, which searching by the alias still finds.
+    for (const target of method.aliasOf) {
+      expect(allRefs.has(target), `alias target ${target} listed`).toBe(true);
+      await expect(menuRowLocator(page, target)).toHaveCount(1);
+    }
+    await closePopovers(page);
+    return {
+      outcome: "pass",
+      variant,
+      detail: `alias of ${method.aliasOf.join(", ")}`,
+    };
+  }
   if (policy === "ci_only") {
     // Listed, disabled, saying it is a CI capability -- or not listed at
     // all where a task holds the same access another way (repo#read is
     // a task's reads list, offered as "Read a repository").
     if ((await item.count()) === 0) {
-      await page.keyboard.press("Escape");
+      if (ref === "https://grain.dev/capabilities/repo#read") {
+        await expect(
+          page.locator('[role^="menuitem"][data-repo-grant="read"]'),
+        ).toHaveCount(1);
+      }
+      await closePopovers(page);
       return { outcome: "refused", variant, detail: "not offered: CI-only" };
     }
     await expect(item).toHaveCount(1);
     await expect(item).toHaveAttribute("data-ci-only", "true");
     await expect(item).toHaveAttribute("aria-disabled", "true");
-    await page.keyboard.press("Escape");
+    await closePopovers(page);
     return { outcome: "refused", variant, detail: "listed disabled: CI-only" };
   }
   if ((await item.count()) === 0) {
-    await page.keyboard.press("Escape");
+    await closePopovers(page);
     if (refusal) return { outcome: "refused", variant, detail: "not offered" };
     return { outcome: "fail", variant, detail: "not offered in Add grant…" };
   }
@@ -295,7 +336,7 @@ test("every method is given and removed through the task pane's Add grant…", a
   request,
 }) => {
   test.setTimeout(20 * 60_000);
-  const methods = await methodsToWalk(request);
+  const { list: methods, allRefs } = await methodsToWalk(request);
   const surface = TASK_KIND;
   const created = await request.post("/api/tasks", {
     data: {
@@ -313,12 +354,20 @@ test("every method is given and removed through the task pane's Add grant…", a
   const failures = [];
   for (const method of methods) {
     const cell = await runCell(page, request, method, surface, () =>
-      walkCell(page, request, grantsOf(), method, surface, async (stored) => {
-        expect(await held(request, task.id, method.ref)).toEqual([stored]);
-        await page.reload();
-        await expect(grantsOf()).toBeVisible();
-        return grantsOf();
-      }),
+      walkCell(
+        page,
+        request,
+        grantsOf(),
+        method,
+        surface,
+        async (stored) => {
+          expect(await held(request, task.id, method.ref)).toEqual([stored]);
+          await page.reload();
+          await expect(grantsOf()).toBeVisible();
+          return grantsOf();
+        },
+        allRefs,
+      ),
     );
     if (cell.outcome === "fail") failures.push(`${method.ref}: ${cell.detail}`);
     // Whatever the cell did, the next starts from a task holding nothing,
@@ -342,9 +391,13 @@ test("one method of each argument shape is given and removed through the New tas
   request,
 }) => {
   test.setTimeout(10 * 60_000);
-  const methods = await methodsToWalk(request);
+  const { list: methods, allRefs } = await methodsToWalk(request);
   const seen = new Set();
-  const shapes = methods.filter((m) => {
+  const ordered = [
+    ...methods.filter((m) => !m.aliasOf?.length),
+    ...methods.filter((m) => m.aliasOf?.length),
+  ];
+  const shapes = ordered.filter((m) => {
     const key = shapeKey(m);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -358,7 +411,15 @@ test("one method of each argument shape is given and removed through the New tas
     await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
     const grants = page.getByTestId("new-task-grants");
     const cell = await runCell(page, request, method, surface, () =>
-      walkCell(page, request, grants, method, surface, async () => grants),
+      walkCell(
+        page,
+        request,
+        grants,
+        method,
+        surface,
+        async () => grants,
+        allRefs,
+      ),
     );
     if (cell.outcome === "fail") failures.push(`${method.ref}: ${cell.detail}`);
     await page.keyboard.press("Escape").catch(() => {});

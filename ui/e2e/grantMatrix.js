@@ -54,30 +54,10 @@ const KNOWN_GAPS = {
   // (repoGrants.js), not as this method; the walk does not drive that
   // path yet (follow-up filed from grain/task-4401).
   "https://grain.dev/capabilities/repo#target *": "4401 follow-up",
-  // Its one-value credential select did not take the pick within 5s on
-  // the task pane (2026-11-11 run; follow-up filed from grain/task-4401).
-  "https://grain.dev/capabilities/repo#credential *": "4401 follow-up",
-  // Picked but never held, or the menu did not take the pick, on the
-  // task pane (2026-11-11 run; follow-up filed from grain/task-4401).
-  "https://grain.dev/capabilities/api#ci:read *": "4401 follow-up",
-  "https://grain.dev/capabilities/api#memory *": "4401 follow-up",
-  "https://grain.dev/capabilities/repo#read *": "4401 follow-up",
 };
 
-// KNOWN_GAP_PREFIXES are KNOWN_GAPS for every method under a prefix.
-const KNOWN_GAP_PREFIXES = [
-  // The grain/* api presets GET /api/capability-methods lists are not
-  // offered by Add grant… on a task pane (2026-11-11 run; follow-up
-  // filed from grain/task-4401).
-  ["https://grain.dev/capabilities/api#grain/", "4401 follow-up"],
-];
-
 export function knownGap(ref, variant) {
-  return (
-    lookup(KNOWN_GAPS, ref, variant) ||
-    KNOWN_GAP_PREFIXES.find(([prefix]) => ref.startsWith(prefix))?.[1] ||
-    ""
-  );
+  return lookup(KNOWN_GAPS, ref, variant) || "";
 }
 
 // KNOWN_API_GAPS are the API's own: cells where POST

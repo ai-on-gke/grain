@@ -62,6 +62,10 @@ type CapabilityMethod struct {
 	// why the capability policy (§4.2.2) denies this method to that run;
 	// empty where it admits it, and on a listing that names no run.
 	PolicyRefusal string `json:"policyRefusal,omitempty"`
+	// AliasOf, when non-empty, names the canonical method Ref(s) this
+	// method aliases (for example api#grain/task-admin -> [api#task-admin],
+	// which pickers offer once under the unprefixed preset).
+	AliasOf []string `json:"aliasOf,omitempty"`
 	// DescriptionTruncated and ArgsTruncated say a paged call cut this
 	// row to fit an agent's tool-result budget: Description to its first
 	// pageRowDescriptionBytes bytes, and each array in Args (an enum of
@@ -115,6 +119,14 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 	for _, s := range statuses {
 		for _, m := range s.MethodDetails {
 			ref := s.ID + "#" + m.Name
+			var aliasOf []string
+			if s.ID == grainserver.APIID {
+				if unprefixed, ok := strings.CutPrefix(m.Name, model.APIScopeSetBuiltinPrefix); ok {
+					if _, isPreset := model.APIPresetNamed(unprefixed); isPreset {
+						aliasOf = []string{grainserver.APIID + "#" + unprefixed}
+					}
+				}
+			}
 			out = append(out, CapabilityMethod{
 				Ref:          ref,
 				Capability:   s.ID,
@@ -124,6 +136,7 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 				RequiresArgs: !protocol.ArgsHaveNoRequirement(m.Args),
 				Releasable:   m.Releasable,
 				Policy:       policy.Verdicts(ref, configured),
+				AliasOf:      aliasOf,
 			})
 		}
 	}

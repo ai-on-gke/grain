@@ -122,20 +122,24 @@ func apiCapability(id string) (Capability, bool) {
 }
 
 // APICapabilities is every api grant a picker offers: the presets first,
-// then the deployment's own scope sets, then each scope, the dangerous
-// ones flagged in their names.
+// then built-in role scope sets with no unprefixed preset (grain/operator,
+// grain/viewer, grain/contributor, grain/delegated) and the deployment's
+// own scope sets, then each scope, the dangerous ones flagged in their names.
 func APICapabilities() []Capability {
 	var out []Capability
 	for _, p := range model.APIPresets() {
 		row, _ := apiCapability(APIGrantPrefix + p.Name)
 		out = append(out, row)
 	}
-	// The deployment's own scope sets, after grain's presets: grain's
-	// built-in sets are those presets under grain/, so they are not
-	// offered twice.
+	// Built-in scope sets that mirror an unprefixed preset stay offered
+	// once under that preset (GET /api/capability-methods marks the
+	// grain/<preset> method as an alias of it); built-in role sets with no
+	// unprefixed preset and the deployment's own scope sets are offered here.
 	for _, set := range model.APIScopeSetsInEffect() {
 		if set.Builtin {
-			continue
+			if _, dup := apiPreset(strings.TrimPrefix(set.Name, model.APIScopeSetBuiltinPrefix)); dup {
+				continue
+			}
 		}
 		if row, ok := apiCapability(APIGrantPrefix + set.Name); ok {
 			out = append(out, row)
