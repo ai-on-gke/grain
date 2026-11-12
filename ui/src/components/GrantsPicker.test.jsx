@@ -1300,4 +1300,59 @@ describe("GrantsPicker", () => {
       { timeout: 2000 },
     );
   });
+
+  it("does not fold a grain/<name> row of its own onto a deployment set of the same name", async () => {
+    api.mockImplementation(async (path) => {
+      if (path.startsWith("/api/capability-methods")) return [];
+      if (path === "/api/capability-grants/check") return [];
+      throw new Error(`unexpected ${path}`);
+    });
+    const config = {
+      capabilityMethods: 0,
+      capabilities: [
+        {
+          id: "api:grain/operator",
+          preset: true,
+          dangerous: true,
+          scopes: ["tasks:admin"],
+          summary: "Operate grain",
+          description: "Operate grain",
+        },
+        {
+          id: "api:operator",
+          preset: true,
+          dangerous: false,
+          scopes: ["tasks:read"],
+          summary: "The deployment's own operator set",
+          description: "The deployment's own operator set",
+        },
+      ],
+    };
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={["https://grain.dev/capabilities/api#grain/operator"]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue()}
+        onRemove={onRemove}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Search grants" }),
+      "operator",
+    );
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "grain/operator" }),
+    ).toHaveAttribute("aria-checked", "true");
+    const deploymentRow = screen.getByRole("menuitemcheckbox", {
+      name: "operator",
+    });
+    expect(deploymentRow).toHaveAttribute("aria-checked", "false");
+    await user.click(deploymentRow);
+    expect(onRemove).not.toHaveBeenCalled();
+  });
 });
