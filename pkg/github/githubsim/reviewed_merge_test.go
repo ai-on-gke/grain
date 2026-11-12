@@ -66,6 +66,7 @@ func TestReviewedMergeCheckReadsTheSim(t *testing.T) {
 		Author: "alice", MergedBy: "alice", MergeCommitSHA: merge,
 	}}
 	sim.PullRequests[0].MergedAt = sim.now()
+	sim.MergedPullRequestForCommit = map[string]int{merge: 7}
 	srv := httptest.NewServer(sim.Handler())
 	defer srv.Close()
 
@@ -88,7 +89,7 @@ func TestReviewedMergeCheckReadsTheSim(t *testing.T) {
 	}
 
 	// A collaborator's approval of the merged head: allowed.
-	sim.PullReviews = map[int][]PullReview{7: {{Login: "bob", State: "APPROVED", CommitID: head, Association: "COLLABORATOR"}}}
+	sim.SubmittedReviews = map[int][]SubmittedReview{7: {{Login: "bob", State: "APPROVED", CommitID: head, AuthorAssociation: "COLLABORATOR"}}}
 	rec, err := policy.CheckChain(ctx, forge, merge, base, 10)
 	if err != nil {
 		t.Fatalf("reviewed chain refused: %v", err)
@@ -98,13 +99,13 @@ func TestReviewedMergeCheckReadsTheSim(t *testing.T) {
 	}
 
 	// An approval of an earlier head is stale.
-	sim.PullReviews = map[int][]PullReview{7: {{Login: "bob", State: "APPROVED", CommitID: base, Association: "COLLABORATOR"}}}
+	sim.SubmittedReviews = map[int][]SubmittedReview{7: {{Login: "bob", State: "APPROVED", CommitID: base, AuthorAssociation: "COLLABORATOR"}}}
 	if _, err := policy.CheckChain(ctx, forge, merge, base, 10); err == nil || !strings.Contains(err.Error(), "earlier head") {
 		t.Fatalf("stale approval: err = %v, want a refusal naming the earlier head", err)
 	}
 
 	// Merged by grain's own login: allowed with no review.
-	sim.PullReviews = nil
+	sim.SubmittedReviews = nil
 	sim.PullRequests[0].MergedBy = "grain-bot"
 	if rec, err := policy.CheckChain(ctx, forge, merge, base, 10); err != nil || rec.Merges[0].Via != "grain" {
 		t.Fatalf("grain's merge: rec = %+v, err = %v; want Via grain", rec, err)

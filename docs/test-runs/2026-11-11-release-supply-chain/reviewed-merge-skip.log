@@ -1,0 +1,6 @@
+release-images.sh: WARNING: REQUIRE_REVIEWED_MERGE=false, so abc1234 is published without checking that it reached refs/heads/main through a reviewed merge
+REQUIRE_REVIEWED_MERGE=false -> exit 0 record=''
+release-images.sh: WARNING: REQUIRE_REVIEWED_MERGE=false, so abc1234 is published without checking that it reached refs/heads/main through a reviewed merge
+REQUIRE_REVIEWED_MERGE=0 -> exit 0 record=''
+release-images.sh: WARNING: REQUIRE_REVIEWED_MERGE=false, so abc1234 is published without checking that it reached refs/heads/main through a reviewed merge
+REQUIRE_REVIEWED_MERGE=no -> exit 0 record=''

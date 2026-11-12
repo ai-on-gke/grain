@@ -143,22 +143,6 @@ func WithSQLPoolAllocator(alloc SQLPoolAllocator) ResourcesOption {
 	}
 }
 
-// WithSQLDBOpener wires a custom `SQLDBOpener` for executing PostgreSQL DDL/ACL statements (`REVOKE ... FROM PUBLIC`, `CONNECTION LIMIT 20`, etc.).
-func WithSQLDBOpener(opener SQLDBOpener) ResourcesOption {
-	return func(r *GCPInstanceResources) {
-		r.sqlOpener = opener
-	}
-}
-
-// WithResourcesNow overrides the clock used for expiring SSH grants.
-func WithResourcesNow(fn func() time.Time) ResourcesOption {
-	return func(r *GCPInstanceResources) {
-		if fn != nil {
-			r.nowFn = fn
-		}
-	}
-}
-
 // GCPInstanceResources implements `registry.InstanceResources` and `registry.SecretWriter`,
 // provisioning per-instance GCP Service Accounts, shared Cloud SQL databases + IAM roles
 // (`REVOKE ALL ON DATABASE ... FROM PUBLIC`, `CONNECTION LIMIT 20`), GCS Managed Folders,

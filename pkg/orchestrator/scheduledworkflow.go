@@ -1045,7 +1045,7 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 		}
 		if openTask != nil {
 			resolved := now
-			_, _ = deps.Store.RecordScheduleSkip(ctx, model.ScheduleSkip{
+			skip := model.ScheduleSkip{
 				ScheduleID: sched.ID,
 				Occurrence: now,
 				At:         now,
@@ -1053,7 +1053,14 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 				TaskID:     openTask.ID,
 				Outcome:    model.ScheduleSkipDropped,
 				ResolvedAt: &resolved,
-			})
+			}
+			// Name the holding task's state, as a timed schedule's skip
+			// does (Store.overlapSkip): without it the record reads
+			// "(state unknown)" while the task is plainly queued.
+			if st, err := deps.Store.State(ctx, openTask.ID); err == nil {
+				skip.TaskState = st
+			}
+			_, _ = deps.Store.RecordScheduleSkip(ctx, skip)
 			return nil
 		}
 		// And another schedule in its overlap group still running

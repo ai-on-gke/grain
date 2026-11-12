@@ -76,8 +76,11 @@ var (
 	// commitPullsRe: the pull requests a commit belongs to
 	// (github.RESTClient.MergedPullRequestForCommit), answered from
 	// MergedPullRequestForCommit.
-	commitPullsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/pulls$`)
-	commitRe       = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)$`)
+	commitPullsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/pulls$`)
+	commitRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)$`)
+	// gitCommitRe: the git database's view of one commit, with its
+	// parents in order (pkg/reviewedmerge's first-parent walk).
+	gitCommitRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/commits/([0-9a-f]{7,40})$`)
 	issueCommentRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/issues/comments/(\d+)$`)
 	// repoRe: the target repo's own default branch, read once per
 	// dispatch so the PR base comes from the repo itself rather than a
@@ -162,9 +165,6 @@ var (
 	// repoTagsRe is GET .../tags, the repository's tags (Sim.tagsJSON).
 	repoTagsRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/tags$`)
 	gitTagObjectRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/tags/([0-9a-f]+)$`)
-	// gitCommitRe is the git-database API's read of one commit, which
-	// names its parents in order (the first is the first parent).
-	gitCommitRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/commits/([0-9a-f]+)$`)
 	// mergesRe: the branch-into-branch merge the merge queue makes to
 	// bring a stale head up to date with its base
 	// (github.RESTClient.MergeBranch, orchestrator.refreshStaleHead).
@@ -212,6 +212,15 @@ type CommentReaction struct {
 	CommentID int64
 	Content   string
 	Review    bool
+}
+
+// SubmittedReview is one pull request review GET .../pulls/N/reviews
+// answers (Sim.SubmittedReviews).
+type SubmittedReview struct {
+	Login             string
+	State             string // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
+	CommitID          string // the head the review was of
+	AuthorAssociation string // OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE
 }
 
 // PullRequest is one pull request Sim recorded through CreatePullRequest.
@@ -275,9 +284,10 @@ type PullRequest struct {
 	// standing in for a merge done by hand (a squash merge, say), and
 	// omitted from the response when empty.
 	MergeCommitSHA string
-	// MergedBy is the login GitHub reports as merged_by on a merged pull
-	// request's own read, omitted when empty: who pressed merge, which
-	// the reviewed-merge check (pkg/reviewedmerge) asks about.
+	// MergedBy is GitHub's merged_by login on the pull request detail,
+	// omitted when empty. land sets it from Sim.MergeAs when a merge goes
+	// through the API; a test standing in for a merge done on GitHub's
+	// own button (by its author, say) sets it directly.
 	MergedBy string
 	// Labels are the labels applied through POST .../issues/N/labels,
 	// which real GitHub serves for a pull request's number as well as an
@@ -374,19 +384,6 @@ type WorkflowRun struct {
 	// run, when it finished. Unset, a run with a CreatedAt serves that.
 	UpdatedAt time.Time
 	Jobs      []WorkflowJob
-}
-
-// PullReview is one review of a pull request, as GET .../pulls/N/reviews
-// lists it.
-type PullReview struct {
-	Login string
-	// State is APPROVED, CHANGES_REQUESTED, DISMISSED or COMMENTED.
-	State string
-	// CommitID is the head the review was of.
-	CommitID string
-	// Association is the reviewer's author_association: OWNER, MEMBER,
-	// COLLABORATOR, CONTRIBUTOR, NONE.
-	Association string
 }
 
 // Sim is a github.Transport backed by an in-memory set of issues and pull
@@ -593,12 +590,20 @@ type Sim struct {
 	// Approvals is who has approved each pull request, keyed by number:
 	// what GET .../pulls/N/reviews answers, as APPROVED reviews.
 	Approvals map[int][]string
-	// PullReviews is each pull request's reviews as GitHub lists them,
-	// keyed by number and oldest first, with the reviewed head
-	// (commit_id) and the reviewer's author_association that Approvals
-	// leaves out. GET .../pulls/N/reviews answers Approvals' entries
-	// first, then these.
-	PullReviews map[int][]PullReview
+	// SubmittedReviews are further reviews GET .../pulls/N/reviews answers after
+	// Approvals', keyed by number, for a test that wants a review of an
+	// earlier head, a change request or a reviewer with no standing
+	// (pkg/reviewedmerge reads commit_id and author_association). Each
+	// Approvals entry is answered as an APPROVED review of the pull
+	// request's current head by a COLLABORATOR.
+	SubmittedReviews map[int][]SubmittedReview
+	// MergeAs is the login a merge through PUT .../pulls/N/merge (or the
+	// merge queue) is recorded as having been made by (merged_by).
+	MergeAs string
+	// RecordMergeCommits has a merge through the API record the commit it
+	// made on the base as the pull request's merge_commit_sha and in
+	// MergedPullRequestForCommit, as GitHub does.
+	RecordMergeCommits bool
 	// RequestedReviewers is each pull request's outstanding review
 	// requests, keyed by number: a login, or "org/team" for a team (the
 	// code owners GitHub requests on its own).
@@ -1548,15 +1553,19 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		}
 		if m := pullReviewsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
-			var reviews []map[string]any
-			for _, login := range s.Approvals[mustAtoi(m[3])] {
-				reviews = append(reviews, map[string]any{"user": map[string]string{"login": login}, "state": "APPROVED"})
+			number := mustAtoi(m[3])
+			head := ""
+			if pr, ok := s.pullRequest(number); ok {
+				head = s.prHeadSHA(pr)
 			}
-			for _, r := range s.PullReviews[mustAtoi(m[3])] {
-				reviews = append(reviews, map[string]any{
-					"user": map[string]string{"login": r.Login}, "state": r.State,
-					"commit_id": r.CommitID, "author_association": r.Association,
-				})
+			var reviews []map[string]any
+			for _, login := range s.Approvals[number] {
+				reviews = append(reviews, map[string]any{"user": map[string]string{"login": login}, "state": "APPROVED",
+					"commit_id": head, "author_association": "COLLABORATOR"})
+			}
+			for _, r := range s.SubmittedReviews[number] {
+				reviews = append(reviews, map[string]any{"user": map[string]string{"login": r.Login}, "state": r.State,
+					"commit_id": r.CommitID, "author_association": r.AuthorAssociation})
 			}
 			return jsonResponse(200, append([]map[string]any{}, reviews...)), nil
 		}
@@ -1607,38 +1616,23 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			number := mustAtoi(m[3])
 			return jsonResponse(200, commentsJSON(s.Comments[number])), nil
 		}
-		if m := gitCommitRe.FindStringSubmatch(p); m != nil {
-			s.mustOwn(m[1], m[2])
-			out, err := s.gitOutput(nil, nil, "rev-list", "--parents", "-n", "1", "--end-of-options", m[3]+"^{commit}", "--")
-			if err != nil || out == "" {
-				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
-			}
-			fields := strings.Fields(out)
-			parents := []map[string]string{}
-			for _, sha := range fields[1:] {
-				parents = append(parents, map[string]string{"sha": sha})
-			}
-			return jsonResponse(200, map[string]any{"sha": fields[0], "parents": parents}), nil
-		}
 		if m := commitPullsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			if n, ok := s.MergedPullRequestForCommit[m[3]]; ok {
-				return jsonResponse(200, []map[string]any{{"number": n, "merged_at": "2026-01-01T00:00:00Z"}}), nil
-			}
-			// A pull request merged as this commit (its MergeCommitSHA),
-			// in the list's own shape: the reviewed-merge check reads
-			// state, merged_at, merge_commit_sha, base, head and user
-			// from it.
-			pulls := []map[string]any{}
-			for _, pr := range s.PullRequests {
-				if pr.MergeCommitSHA == "" || pr.MergeCommitSHA != m[3] {
-					continue
+				// GitHub lists the full pull request here; the fields a
+				// reader of a merge needs (merge_commit_sha, base, head,
+				// user) are the detail endpoint's own.
+				entry := map[string]any{"number": n, "merged_at": "2026-01-01T00:00:00Z"}
+				if pr, ok := s.pullRequest(n); ok {
+					entry = pullRequestDetailJSON(pr, s.prHeadSHA(pr))
+					delete(entry, "merged_by") // the list does not say who merged
+					if _, ok := entry["merged_at"]; !ok {
+						entry["merged_at"] = "2026-01-01T00:00:00Z"
+					}
 				}
-				item := pullRequestDetailJSON(pr, s.prHeadSHA(pr))
-				delete(item, "merged_by")
-				pulls = append(pulls, item)
+				return jsonResponse(200, []map[string]any{entry}), nil
 			}
-			return jsonResponse(200, pulls), nil
+			return jsonResponse(200, []map[string]any{}), nil
 		}
 		if m := pullsRe.FindStringSubmatch(p); m != nil && qs.Get("head") != "" {
 			s.mustOwn(m[1], m[2])
@@ -1713,6 +1707,21 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				runs = named
 			}
 			return jsonResponse(200, checkRunsJSON(runs)), nil
+		}
+		if m := gitCommitRe.FindStringSubmatch(p); m != nil && s.BareRepo != "" {
+			s.mustOwn(m[1], m[2])
+			cmd := exec.Command("git", "--git-dir", s.BareRepo, "rev-list", "--parents", "-n", "1", "--end-of-options", m[3]+"^{commit}")
+			cmd.Env = os.Environ()
+			out, err := cmd.Output()
+			fields := strings.Fields(string(out))
+			if err != nil || len(fields) == 0 {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			parents := make([]map[string]string, 0, len(fields)-1)
+			for _, parent := range fields[1:] {
+				parents = append(parents, map[string]string{"sha": parent})
+			}
+			return jsonResponse(200, map[string]any{"sha": fields[0], "parents": parents}), nil
 		}
 		if m := commitRe.FindStringSubmatch(p); m != nil {
 			if m[1] != s.Owner || m[2] != s.Repo {
@@ -2796,6 +2805,24 @@ func (s *Sim) land(i int, message string) error {
 	s.PullRequests[i].State = "closed"
 	s.PullRequests[i].Merged = true
 	s.PullRequests[i].MergedAt = s.now()
+	if s.PullRequests[i].MergedBy == "" {
+		s.PullRequests[i].MergedBy = s.MergeAs
+	}
+	// GitHub records the commit the merge made on the base as
+	// merge_commit_sha, and lists the pull request for it. Opt-in
+	// (RecordMergeCommits), since a test written before it reads a
+	// commit landed here as belonging to no pull request.
+	if s.RecordMergeCommits && s.PullRequests[i].MergeCommitSHA == "" {
+		if sha := s.branchSHA(s.PullRequests[i].Base); sha != "" {
+			s.PullRequests[i].MergeCommitSHA = sha
+			if s.MergedPullRequestForCommit == nil {
+				s.MergedPullRequestForCommit = map[string]int{}
+			}
+			if _, ok := s.MergedPullRequestForCommit[sha]; !ok {
+				s.MergedPullRequestForCommit[sha] = s.PullRequests[i].Number
+			}
+		}
+	}
 	s.closeLinkedIssues(s.PullRequests[i])
 	return nil
 }

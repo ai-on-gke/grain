@@ -117,9 +117,10 @@ func main() {
 		{Number: 2, Head: "mallory-change", Base: "release/v9.9", State: "closed", Merged: true, MergedAt: now, Author: "mallory", MergedBy: "mallory", MergeCommitSHA: s},
 		{Number: 3, Head: "carol-change", Base: "main", State: "closed", Merged: true, MergedAt: now, Author: "carol", MergedBy: "carol", MergeCommitSHA: tc},
 	}
-	sim.PullReviews = map[int][]githubsim.PullReview{
-		1: {{Login: "bob", State: "APPROVED", CommitID: h1, Association: "COLLABORATOR"}},
-		3: {{Login: "bob", State: "APPROVED", CommitID: h3a, Association: "COLLABORATOR"}},
+	sim.MergedPullRequestForCommit = map[string]int{r: 1, s: 2, tc: 3}
+	sim.SubmittedReviews = map[int][]githubsim.SubmittedReview{
+		1: {{Login: "bob", State: "APPROVED", CommitID: h1, AuthorAssociation: "COLLABORATOR"}},
+		3: {{Login: "bob", State: "APPROVED", CommitID: h3a, AuthorAssociation: "COLLABORATOR"}},
 	}
 
 	// A throwaway CA and a leaf for the listen address.

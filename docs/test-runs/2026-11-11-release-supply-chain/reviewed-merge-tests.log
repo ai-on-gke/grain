@@ -1,0 +1,16 @@
+--- PASS: TestAMergeByGrainIsReviewed (0.00s)
+--- PASS: TestAForgeApprovalOfTheMergedHeadIsReviewed (0.00s)
+--- PASS: TestAChangeRequestByAnOutsiderDoesNotWithdrawAnApproval (0.00s)
+--- PASS: TestUnreviewedMergesAreRefused (0.00s)
+--- PASS: TestTheChainCarriesAnUnreviewedMergeBelowAReviewedOne (0.00s)
+--- PASS: TestRESTReadsGitHubsShapes (0.00s)
+--- PASS: TestRESTRefusesAReviewListTooLongToRead (0.01s)
+--- PASS: TestRESTRidesOutATransientOutage (0.01s)
+--- PASS: TestRESTGivesUpOnALastingOutage (0.02s)
+--- PASS: TestRESTDoesNotRetryAnAnswer (0.00s)
+--- PASS: TestSplitRepoTakesOwnerNameAndHostOwnerName (0.00s)
+--- PASS: TestRESTAsksAnEnterpriseRepositorysOwnAPI (0.00s)
+--- PASS: TestReviewedMergeAgainstTheGitHubSimulator (1.09s)
+ok  	github.com/ai-on-gke/grain/pkg/reviewedmerge	1.142s
+--- PASS: TestPrintsTheRecordOrRefuses (0.00s)
+ok  	github.com/ai-on-gke/grain/cmd/reviewed-merge	0.009s
