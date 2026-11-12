@@ -136,6 +136,12 @@ func (g GoogleConnector) credentials(ctx context.Context, a Admin) (*google.Cred
 		if err != nil {
 			return nil, &CredentialError{Admin: a.Name, Source: a.CredentialSource, Kind: CredentialMissing, Err: err}
 		}
+		// The metadata server's client is its own, not tctx's: under
+		// test endpoints its token would be a real one, fetched from the
+		// machine and handed to a stub.
+		if len(g.Endpoints) > 0 && len(c.JSON) == 0 {
+			return nil, &CredentialError{Admin: a.Name, Source: a.CredentialSource, Kind: CredentialMissing, Err: fmt.Errorf("%s: ambient credentials from the metadata server are not something the test endpoints stand in for; give the admin a credential file", TestEndpointsEnv)}
+		}
 		creds = c
 	default:
 		return nil, fmt.Errorf("admin %s: unknown credential_source %q", a.Name, a.CredentialSource)
