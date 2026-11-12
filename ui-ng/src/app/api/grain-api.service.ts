@@ -132,11 +132,18 @@ export class GrainApi {
     key: RouteKey,
     params?: RouteParams,
     body?: unknown,
+    query?: string,
   ): Promise<T> {
+    const url = routePath(key, params) + (query ? `?${query}` : "");
     return firstValueFrom(
-      this.http.request<T>(method, routePath(key, params), {
+      this.http.request<T>(method, url, {
         headers: JSON_HEADERS,
-        body: method === "delete" ? undefined : (body ?? null),
+        body:
+          method === "delete"
+            ? body === undefined
+              ? undefined
+              : body
+            : (body ?? null),
       }),
     );
   }
@@ -161,12 +168,18 @@ export class GrainApi {
     key: RouteKey,
     params?: RouteParams,
     body?: unknown,
+    query?: string,
   ): Promise<T> {
-    return this.send<T>("post", key, params, body);
+    return this.send<T>("post", key, params, body, query);
   }
 
-  delete<T = unknown>(key: RouteKey, params?: RouteParams): Promise<T> {
-    return this.send<T>("delete", key, params);
+  delete<T = unknown>(
+    key: RouteKey,
+    params?: RouteParams,
+    body?: unknown,
+    query?: string,
+  ): Promise<T> {
+    return this.send<T>("delete", key, params, body, query);
   }
 
   config(): Promise<GrainConfig> {

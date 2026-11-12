@@ -99,6 +99,26 @@ const VIEW_GUIDES: Record<string, ViewGuide> = {
       "When context grows crowded, Start a fresh chat carries the latest handover note forward cleanly.",
     ],
   },
+  ci: {
+    title: "CI",
+    summary:
+      "Grain CI and external checks in one split workspace, separating shared infrastructure faults (Errored) from isolated branch code failures (Failed).",
+    steps: [
+      "Shared infrastructure faults surface in the top banner with affected run and branch counts plus assigned repair tasks.",
+      "Filter by conclusion, repository, branch, or provider (Grain CI vs GitHub Actions) and inspect step logs in the recessed log viewer.",
+      "Trigger manual workflows, re-run failed jobs, flush caches, or quarantine flaky tests with a follow-up repair task.",
+    ],
+  },
+  processes: {
+    title: "Processes",
+    summary:
+      "Standing automation: recurring schedules, event triggers, parameterized templates, multi-pass suites, and repository .grain/ declarations.",
+    steps: [
+      "Schedules & Triggers lists recurring cadences and GitHub/git-ref triggers with Run now, Pause/Resume, and live composition previews.",
+      "Templates browses deployment, repo-declared, and built-in templates and launches tasks with parameter validation.",
+      "Suites & Runs manages multi-template suites and inspects pass-by-pass child tasks; Repo Declarations manages .grain/ sync and capability acceptances.",
+    ],
+  },
   default: {
     title: "Grain",
     summary:

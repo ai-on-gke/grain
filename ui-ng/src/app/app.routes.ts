@@ -81,5 +81,36 @@ export const routes: Routes = [
         (m) => m.SessionsPageComponent,
       ),
   },
+  {
+    path: "ci",
+    title: "CI · grain",
+    loadComponent: () =>
+      import("./ci/ci-page.component").then((m) => m.CIPageComponent),
+  },
+  {
+    path: "ci/runs/:id",
+    title: "CI run · grain",
+    loadComponent: () =>
+      import("./ci/ci-page.component").then((m) => m.CIPageComponent),
+  },
+  {
+    path: "processes",
+    title: "Processes · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
+  {
+    path: "processes/:tab",
+    title: "Processes · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
+  { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
+  { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
+  { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
   { path: "**", redirectTo: "inbox" },
 ];

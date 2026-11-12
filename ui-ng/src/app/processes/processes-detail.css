@@ -1,0 +1,184 @@
+/* Processes right-pane detail inspector, composition table, and GM3 drawer/dialogs. */
+
+.proc-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px 24px 32px;
+  background: var(--md-sys-color-surface);
+}
+
+.proc-insp-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.proc-insp-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.proc-insp-title {
+  margin: 0;
+  font-family: var(--grain-font-display);
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+}
+
+.proc-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.proc-card {
+  padding: 14px 16px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+:root[data-theme="dark"] .proc-card {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.proc-prompt-well {
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.proc-yaml-editor {
+  width: 100%;
+  min-height: 180px;
+  padding: 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid #2e3340;
+  background: #13151a;
+  color: #e4e6eb;
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.comp-box {
+  padding: 12px 14px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-low);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.comp-task {
+  padding-top: 8px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.comp-task-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.comp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.comp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comp-row dt {
+  color: var(--md-sys-color-on-surface-variant);
+  font-weight: 500;
+}
+
+.comp-row dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--md-sys-color-on-surface);
+}
+
+.comp-layer {
+  padding: 1px 6px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.proc-kv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.proc-kv-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-small);
+  font-size: 13px;
+}
+
+.g-dialog.is-drawer {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.proc-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}

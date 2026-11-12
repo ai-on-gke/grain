@@ -1,0 +1,87 @@
+/* Processes workspace list, tabs, and split layout (D-9). */
+
+g-processes-page {
+  display: contents;
+}
+
+.proc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.proc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  cursor: pointer;
+  transition: background-color 120ms var(--md-sys-motion-effects);
+}
+
+.proc-row:hover {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.proc-row.is-selected {
+  background: var(--md-sys-color-secondary-container);
+}
+
+.proc-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.proc-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface);
+}
+
+.proc-row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.proc-subbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: var(--md-sys-color-surface-container-low);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.proc-mobile-back {
+  display: none;
+}
+
+@media (max-width: 599.95px) {
+  .proc-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .proc-split.has-mobile-detail .queue-pane {
+    display: none;
+  }
+  .proc-split:not(.has-mobile-detail) .proc-inspector {
+    display: none;
+  }
+  .proc-mobile-back {
+    display: inline-flex;
+  }
+}
