@@ -1449,7 +1449,14 @@ func TestWorkflowGrainCIOffSuppressionReportsCIModeRatherThanStandingWork(t *tes
 func TestAWithdrawnGrainCIScheduleSaysWhyItsRunWasCancelled(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: declaringRepo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
 	sched := workflowSchedule(t, store, baseTime.Add(-time.Minute))
+	sched.GrainCI = true
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
 	runner := newFakeCI()
 	deps := workflowDeps(store, runner)
 	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
@@ -1457,9 +1464,6 @@ func TestAWithdrawnGrainCIScheduleSaysWhyItsRunWasCancelled(t *testing.T) {
 	}
 	if len(runner.requests) != 1 {
 		t.Fatalf("started %d runs, want 1", len(runner.requests))
-	}
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: declaringRepo, CIMode: model.CIModeGitHub}); err != nil {
-		t.Fatal(err)
 	}
 	if err := store.DeleteSchedule(ctx, sched.ID); err != nil {
 		t.Fatal(err)

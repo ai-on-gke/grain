@@ -51,3 +51,44 @@ func TestSandboxHealthStaleSchedulesSection(t *testing.T) {
 		}
 	}
 }
+
+type staticDefaultBranches map[string]string
+
+func (m staticDefaultBranches) DefaultBranch(owner, repo string) (string, error) {
+	return m[owner+"/"+repo], nil
+}
+
+// A `.grain/schedules/` entry that sets `grain-ci: true` and names the
+// repository's default branch explicitly (`base: main`) clears the
+// workflow's dropped cron (`Base: ""`) from the stale-schedules endpoint.
+func TestStaleSchedulesAlignsExplicitDefaultBranchWithWorkflowCron(t *testing.T) {
+	srv, client := testServer(t)
+	client.Config.GitHubDefaultBranches = staticDefaultBranches{"acme/widgets": "main"}
+	ctx := context.Background()
+	now := time.Now()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	daily := model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53}
+	live := model.WorkflowReviewTemplateID("live-secrets-repo")
+	if err := client.Store.PutSchedule(ctx, model.Schedule{
+		ID: "workflow.live-secrets-repo", Title: "live-secrets-repo", Target: repo,
+		TemplateID: &live, Recurrence: daily, Enabled: true,
+		CreatedAt: now.Add(-10 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ran := now.Add(-time.Hour)
+	if err := client.Store.PutSchedule(ctx, model.Schedule{
+		ID: "live-secrets-repo", Title: "Live secrets repository", Target: repo,
+		TemplateID: &live, Base: "main", GrainCI: true, Recurrence: daily, Enabled: true,
+		CreatedAt: now.Add(-10 * 24 * time.Hour), LastRunAt: &ran, NextRunAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes?section=staleSchedules", ""))
+	if len(got.StaleSchedules) != 0 {
+		t.Fatalf("staleSchedules = %+v, want dropped cron cleared by explicit base: main schedule", got.StaleSchedules)
+	}
+}
