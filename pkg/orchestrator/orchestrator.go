@@ -985,6 +985,13 @@ type Config struct {
 	// The release-triggered automatic upgrade (reconcileReleaseUpgrade)
 	// follows it; nil leaves that mode with nothing to follow.
 	LatestRelease func(ctx context.Context) (string, error)
+	// ReleaseUpgradeClockOffset, when set, is how far ahead of the real
+	// clock the release-triggered upgrade measures its settle window and
+	// minimum interval (reconcileReleaseUpgrade, watchAutoUpgrade). It is
+	// test-only: a deployment's daemon leaves it nil, and only a grain
+	// built with the grain_debugclock tag sets it (daemon.DebugClockOffset),
+	// so a walkthrough can step past hours of waiting in minutes.
+	ReleaseUpgradeClockOffset func() time.Duration
 	// UpgradeDrainWindow, when non-zero, bounds how long a scheduled upgrade
 	// will wait for in-flight tasks and CI jobs to complete before proceeding
 	// with the upgrade. If the draining window elapses and runs are still active,
