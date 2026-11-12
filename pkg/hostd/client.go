@@ -239,8 +239,26 @@ func (c Client) dial(ctx context.Context) (net.Conn, error) {
 	}
 }
 
+// ErrUnreachable is matched (errors.Is) by the error of a request that
+// never reached hostd: the dial failed, so nothing was sent, and a
+// process already running there goes on as it was. An attach that fails
+// this way is a hostd away for now -- restarting onto a new build, or not
+// yet dialed back in -- not a process that is gone.
+var ErrUnreachable = errors.New("hostd: not reached")
+
+// unreachedError is dial's error: why hostd did not answer, which also
+// matches ErrUnreachable.
+type unreachedError struct{ err error }
+
+func (e unreachedError) Error() string   { return e.err.Error() }
+func (e unreachedError) Unwrap() []error { return []error{e.err, ErrUnreachable} }
+
 // unreachable says why hostd did not answer, and what to do about it.
 func (c Client) unreachable(err error, down bool) error {
+	return unreachedError{c.whyUnreachable(err, down)}
+}
+
+func (c Client) whyUnreachable(err error, down bool) error {
 	if c.Dial != nil {
 		if down {
 			return fmt.Errorf("the host agent is not reachable: %w; on the host, run grain host -server with this daemon's URL "+

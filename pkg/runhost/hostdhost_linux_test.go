@@ -596,3 +596,95 @@ func TestHostdDrainCapKillSurfacesErrHostdDrainingOnRunAndAttach(t *testing.T) {
 		}
 	})
 }
+
+// gatedLink is a hostd that cannot be reached at all until open is
+// closed: every dial before then fails, as one does while hostd restarts
+// onto a new build -- a drain's exit, systemd's Restart= -- or while a
+// hostd that dials in has not reconnected yet.
+type gatedLink struct {
+	socket string
+	open   chan struct{}
+	failed chan struct{} // closed at the first dial that failed
+	once   sync.Once
+}
+
+func (g *gatedLink) dial(ctx context.Context) (net.Conn, error) {
+	select {
+	case <-g.open:
+	default:
+		g.once.Do(func() { close(g.failed) })
+		return nil, errors.New("gated: the host agent is restarting")
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, "unix", g.socket)
+}
+
+// An adopted run whose hostd cannot be reached when the next daemon first
+// attaches to it -- hostd is restarting under it, onto the build a drain
+// or cutover is installing -- waits for hostd within the reattach timeout,
+// as a stream that drops does, rather than failing the run at once: the
+// process it adopts is still running there, or its exit is in its spool.
+func TestAnAdoptedHostdRunWaitsForAHostdThatIsNotBackYet(t *testing.T) {
+	client := serveHostd(t)
+	first := &Hostd{Client: client, CursorEvery: time.Millisecond}
+	ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-g", Deadline: time.Now().Add(time.Hour)})
+	var tee lockedBuf
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", "echo up; sleep 0.2; echo down"}}, &tee)
+		done <- err
+	}()
+	for !strings.Contains(tee.String(), "up\n") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := first.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, agent.ErrDetached) {
+		t.Fatalf("Run after the flush = %v, want ErrDetached", err)
+	}
+	procs, err := client.Processes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	infos := HostdInfos(procs, hostd.ThisHello("test"))
+	if len(infos) != 1 {
+		t.Fatalf("listing after the flush = %+v", infos)
+	}
+
+	gate := &gatedLink{socket: client.Socket, open: make(chan struct{}), failed: make(chan struct{})}
+	gated := client
+	gated.Dial = gate.dial
+	waiting := make(chan struct{})
+	var waitOnce sync.Once
+	next := &Hostd{Client: gated, ReattachTimeout: time.Minute,
+		Reconnected: func(ctx context.Context) error {
+			waitOnce.Do(func() { close(waiting) })
+			select {
+			case <-gate.open:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+	type result struct {
+		out string
+		err error
+	}
+	attached := make(chan result, 1)
+	go func() {
+		out, err := next.Attach(context.Background(), infos[0], int64(len("up\n")), nil)
+		attached <- result{out, err}
+	}()
+	<-gate.failed
+	select {
+	case r := <-attached:
+		t.Fatalf("Attach with hostd not back yet = %q, %v; want it to wait for hostd", r.out, r.err)
+	case <-waiting:
+	}
+	close(gate.open)
+	r := <-attached
+	if r.err != nil || r.out != "up\ndown\n" {
+		t.Fatalf("Attach once hostd was back = %q, %v; want the run's whole stdout", r.out, r.err)
+	}
+}
