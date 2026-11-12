@@ -2445,6 +2445,10 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		if *req.AutoUpgradeMinIntervalHours < 0 {
 			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at least 0")
 		}
+		if *req.AutoUpgradeMinIntervalHours > model.MaxAutoUpgradeMinIntervalHours {
+			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at most %d (about 292 years; 0 turns the minimum interval off)",
+				model.MaxAutoUpgradeMinIntervalHours)
+		}
 		cfg.AutoUpgradeMinIntervalHours = *req.AutoUpgradeMinIntervalHours
 	}
 	if req.OwnerTrust != nil {

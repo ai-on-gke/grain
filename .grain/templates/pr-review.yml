@@ -45,6 +45,14 @@ body: |
     repository conventions in `PROMPT.md` and `.grain/settings.yml`,
     for example conventional-commit subjects, no Google-internal tokens
     in core, and "hosts" rather than `hostd` in user-facing text.
+  - **Which UI.** Follow "Two UIs" in `PROMPT.md`: `ui-ng/` (served at
+    `/next/`) is the new experience and the classic `ui/` is being
+    deprecated. Flag a new UI feature built in `ui/` instead of `ui-ng/`
+    (unless the feature can't work without it), a classic bug fix that
+    leaves the same page broken in `ui-ng/`, new e2e coverage or
+    screenshots added for classic pages instead of `/next/`, deleted
+    classic tests, and an API change that breaks either UI or leaves
+    `ui-ng/src/app/api/generated-routes.ts` out of date.
 
   ## Keep the review cheap
 

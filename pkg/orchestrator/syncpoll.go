@@ -93,7 +93,7 @@ var syncSeens sync.Map
 
 func syncPollKey(store *model.Store, ref model.PullRequestRef) github.PollKey {
 	return github.PollKey{Scope: storeScope(store),
-		Subject: github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number), Aspect: syncPollAspect}
+		Subject: github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number), Aspect: syncPollAspect}
 }
 
 // syncGrainSummary is grain CI's verdict on head, as a string a later

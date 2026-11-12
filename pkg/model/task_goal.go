@@ -59,10 +59,13 @@ const (
 	// observes it.
 	GoalCLSubmitted GoalKind = "cl-submitted"
 	// GoalNightlyGreen is met by the next fully green run of a GitHub
-	// Actions workflow -- a release train's Stage 1, nightly.yml -- on the
+	// Actions workflow -- a release train's Stage 1, nightly.yml, or a
+	// default branch's gating workflow such as tests.yml -- on the
 	// repository's default branch or one of its release candidates
 	// (design/playbook/releases.playbook.md, section 15), concluded after
-	// the goal was declared. Grain's own Stage 1 repairs carry it.
+	// the goal was declared; a run cancelled before its verdict does not
+	// count either way. Grain's own Stage 1 repairs and default-branch
+	// repairs (orchestrator's githubbaserepair.go) carry it.
 	GoalNightlyGreen GoalKind = "nightly-green"
 )
 

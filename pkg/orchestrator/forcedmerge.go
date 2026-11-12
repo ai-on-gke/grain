@@ -188,7 +188,7 @@ func recordForcedMerge(ctx context.Context, store *model.Store, client github.Cl
 	})
 	body := forcedMergeNote(ref, branch, commit, by, f, forcedMergesLately(ctx, store, now))
 	errs = append(errs, queueComment(ctx, store, task.ID, body, now))
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, body); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, body); err != nil {
 		errs = append(errs, fmt.Errorf("orchestrator: noting the forced merge on %s: %w", ref, err))
 	}
 	return errors.Join(errs...)

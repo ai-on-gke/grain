@@ -333,7 +333,7 @@ func reviewDelta(client github.Client, ref model.PullRequestRef, baseRef, since,
 	if client == nil {
 		return nil, ""
 	}
-	cmp, err := client.CompareRefs(ref.Repo.Owner, ref.Repo.Name, since, head)
+	cmp, err := client.CompareRefs(ref.Repo.StoredOwner(), ref.Repo.Name, since, head)
 	if err != nil {
 		log.Printf("orchestrator: comparing %s %s..%s for an incremental review: %v -- reviewing it in full",
 			ref, shortCommit(since), shortCommit(head), err)
@@ -362,7 +362,7 @@ func reviewDelta(client github.Client, ref model.PullRequestRef, baseRef, since,
 		if baseRef == "" {
 			return nil, ""
 		}
-		prevPR, err := client.CompareRefs(ref.Repo.Owner, ref.Repo.Name, baseRef, since)
+		prevPR, err := client.CompareRefs(ref.Repo.StoredOwner(), ref.Repo.Name, baseRef, since)
 		if err != nil || prevPR.FilesTruncated {
 			return nil, ""
 		}

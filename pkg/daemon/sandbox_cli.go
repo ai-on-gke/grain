@@ -257,11 +257,11 @@ func (o *PullRequestOpener) reviewScope(ctx context.Context, taskID string) (mcp
 	if task == nil || task.Target == nil {
 		return mcp.PullRequestScope{}, fmt.Errorf("task %s has no repository of its own", taskID)
 	}
-	scope := mcp.PullRequestScope{Owner: task.Target.Owner, Repo: task.Target.Name, Branch: task.BranchName()}
+	scope := mcp.PullRequestScope{Owner: task.Target.StoredOwner(), Repo: task.Target.Name, Branch: task.BranchName()}
 	if o.Store != nil {
 		if rc, err := o.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
 			if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
-				scope.UpstreamOwner = prRepo.Owner
+				scope.UpstreamOwner = prRepo.StoredOwner()
 				scope.UpstreamRepo = prRepo.Name
 			}
 		}

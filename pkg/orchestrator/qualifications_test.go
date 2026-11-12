@@ -537,3 +537,79 @@ func TestSyncQualificationsDeepRCQualificationPlan(t *testing.T) {
 		t.Fatalf("candidate status = %q, want still %q (auto_promote: false)", current.Status, model.CandidateActive)
 	}
 }
+
+// A candidate cut for a repository on another host is qualified against
+// that repository's own plan, files its tasks there, and is promoted
+// there -- not on the default host's same-named repository, which has a
+// plan of its own here that must not be the one used (grain/task-4489).
+func TestSyncQualificationsQualifiesAnOffHostCandidate(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	home := model.RepoRef{Owner: "acme", Name: "widgets"}
+	away := model.RepoRef{Host: "ghe.example.com", Owner: "acme", Name: "widgets"}
+
+	if err := store.PutTemplate(ctx, smokeTestTemplate()); err != nil {
+		t.Fatalf("put template: %v", err)
+	}
+	other := model.Template{
+		ID: "template-other", Name: "Other", Title: "Other", Body: "not this one", CreatedAt: baseTime,
+	}
+	if err := store.PutTemplate(ctx, other); err != nil {
+		t.Fatalf("put template: %v", err)
+	}
+	candidate := cutFirstCandidate(t, ctx, store, away)
+	if candidate.Repo != away {
+		t.Fatalf("candidate repo = %s, want %s", candidate.Repo, away)
+	}
+	if err := store.MarkCandidateCut(ctx, candidate.ID); err != nil {
+		t.Fatalf("mark cut: %v", err)
+	}
+	if releases, err := store.ListReleases(ctx, home); err != nil || len(releases) != 0 {
+		t.Fatalf("releases of %s = (%+v, %v), want none: the release is %s's", home, releases, err, away)
+	}
+	homePlan := model.QualificationPlan{
+		Repo: home, Configured: true, AutoPromote: true,
+		Items: []model.QualificationItem{{TemplateID: "template-other", Repeat: 2}},
+	}
+	awayPlan := onePassingItem()
+	awayPlan.Repo = away
+	for _, plan := range []model.QualificationPlan{homePlan, awayPlan} {
+		if err := store.PutQualificationPlan(ctx, plan); err != nil {
+			t.Fatalf("put plan: %v", err)
+		}
+	}
+
+	if err := orchestrator.SyncQualifications(ctx, store, baseTime); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	run, err := store.CandidateQualificationRun(ctx, candidate.ID)
+	if err != nil || run == nil {
+		t.Fatalf("run: (%+v, %v)", run, err)
+	}
+	if run.Repo != away {
+		t.Fatalf("run repo = %s, want %s", run.Repo, away)
+	}
+	if len(run.Tasks) != 1 || run.Tasks[0].TemplateID != "template-smoke" {
+		t.Fatalf("run tasks = %+v, want one from %s's own plan", run.Tasks, away)
+	}
+	task, err := store.GetTask(ctx, run.Tasks[0].TaskID)
+	if err != nil || task == nil || task.Target == nil || *task.Target != away {
+		t.Fatalf("qualification task = (%+v, %v), want it targeting %s", task, err, away)
+	}
+
+	completedAt := baseTime
+	if err := store.Observe(ctx, model.Observation{TaskID: run.Tasks[0].TaskID, CompletedAt: &completedAt}); err != nil {
+		t.Fatalf("observe completion: %v", err)
+	}
+	if err := orchestrator.SyncQualifications(ctx, store, baseTime); err != nil {
+		t.Fatalf("SyncQualifications after completion: %v", err)
+	}
+	current := currentCandidate(t, ctx, store, away)
+	if current.Status != model.CandidatePromoting || current.Repo != away {
+		t.Fatalf("candidate after every task completed = %+v, want promoting in %s", current, away)
+	}
+	pending, err := store.PendingCandidates(ctx)
+	if err != nil || len(pending) != 1 || pending[0].Repo != away {
+		t.Fatalf("pending candidates = (%+v, %v), want the one in %s", pending, err, away)
+	}
+}

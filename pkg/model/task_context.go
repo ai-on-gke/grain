@@ -331,6 +331,14 @@ func (s *Store) TaskBriefEdits(ctx context.Context, taskID string) ([]TaskBriefE
 // since: the runs started after it was written or last confirmed,
 // whichever is later, and the comments posted after it that are not
 // handovers themselves.
+//
+// Only comments from people and agents count -- grain's own notices
+// (automation on nobody's behalf, such as "this task's run parked it
+// until ...") are left out, as DueMessageResumes leaves them out, since
+// a durable task that parks collects two or three of them every run and
+// would otherwise go stale by comments with nobody having said anything
+// (docs/test-runs/2026-11-11-durable-tasks.md, follow-up B). Grain
+// relaying somebody's words (automation on their behalf) still counts.
 func (s *Store) TaskHandoverAge(ctx context.Context, taskID string) (HandoverAge, error) {
 	latest, err := s.LatestHandover(ctx, taskID)
 	if err != nil {
@@ -348,8 +356,9 @@ func (s *Store) TaskHandoverAge(ctx context.Context, taskID string) (HandoverAge
 		age.At = *tc.HandoverConfirmedAt
 	}
 	if err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM `task_comment` WHERE `task_id` = ? AND `id` > ? AND `handover` = 0 AND `created_at` > ?",
-		taskID, latest.ID, age.At.UTC()).Scan(&age.Comments); err != nil {
+		"SELECT COUNT(*) FROM `task_comment` WHERE `task_id` = ? AND `id` > ? AND `handover` = 0 AND `created_at` > ? "+
+			"AND NOT (`author_kind` = ? AND COALESCE(`author_behalf_kind`, '') = '')",
+		taskID, latest.ID, age.At.UTC(), string(PrincipalAutomation)).Scan(&age.Comments); err != nil {
 		return HandoverAge{}, fmt.Errorf("model: counting comments since the handover on %s: %w", taskID, err)
 	}
 	if err := s.db.QueryRowContext(ctx,
