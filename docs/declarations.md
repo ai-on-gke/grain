@@ -810,6 +810,9 @@ priority, its open reviews follow, but never below 7. A review whose own
 priority a person has set is tagged `priority-set-by-hand`. A later raise
 of the gated task can still lift it, but a lowered priority is not carried
 over to it.
+The floor is grain's, not a person's: a review only it raised may still
+file follow-ups at no more than the default priority without a person's
+approval.
 
 **Incremental, debounced re-review.** When the head moves, the review of
 each kind is filed again for the new head:

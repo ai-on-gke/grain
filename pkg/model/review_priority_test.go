@@ -60,3 +60,31 @@ func TestCarriedReviewPriority(t *testing.T) {
 		}
 	}
 }
+
+// A review's lift to ReviewPriorityFloor is grain's, not a person's: it
+// must not let the review's run file follow-ups above the default on
+// its own permission. A review that inherited more from the change it
+// gates, or whose priority a person set, keeps its own ceiling.
+func TestReviewFloorIsNotAProposalCeiling(t *testing.T) {
+	t.Parallel()
+	review := func(priority int, tags ...string) model.Task {
+		return model.Task{ID: "9", Priority: priority, Tags: tags, Origin: model.Origin{Reason: model.ReasonReview}}
+	}
+	for _, tc := range []struct {
+		name     string
+		parent   model.Task
+		priority int
+		held     bool
+	}{
+		{"floored review files at the default", review(model.ReviewPriorityFloor), model.DefaultTaskPriority, false},
+		{"floored review files above the default", review(model.ReviewPriorityFloor), model.ReviewPriorityFloor, true},
+		{"inherited 9 files at 9", review(9), 9, false},
+		{"hand-set 7 files at 7", review(7, model.ReviewPriorityHandSetTag), 7, false},
+		{"ordinary task at 7 files at 7", model.Task{ID: "9", Priority: 7}, 7, false},
+	} {
+		why := model.PersonOnlyProposalSettings(model.Task{Priority: tc.priority}, tc.parent)
+		if held := why != ""; held != tc.held {
+			t.Errorf("%s: held = %v (%q), want %v", tc.name, held, why, tc.held)
+		}
+	}
+}
