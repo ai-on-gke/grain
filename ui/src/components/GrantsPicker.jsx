@@ -203,17 +203,23 @@ export default function GrantsPicker({
   const refs = useMemo(() => all.filter(isCapabilityRef), [all]);
   const offered = config?.capabilities || [];
   const { presets, areas } = groupApiRows(offered);
+  // The api:grain/<name> grant a preset row also stands for: grain's
+  // built-in copy of an unprefixed preset (grain/task-admin under
+  // task-admin). A grain/<name> offered as a row of its own
+  // (grain/operator) is no alias, even beside a deployment set of the
+  // same unprefixed name.
+  const apiBuiltinAlias = (row) => {
+    const short = apiShortName(row.id);
+    if (!row.preset || short.includes("/")) return "";
+    const alias = `api:grain/${short}`;
+    return offered.some((c) => splitApiGrant(c.id)[0] === alias) ? "" : alias;
+  };
   const apiRowOf = (id) => {
     const [target] = splitApiGrant(id);
-    const direct = offered.find((c) => splitApiGrant(c.id)[0] === target);
-    if (direct) return direct;
-    if (target.startsWith("api:grain/")) {
-      const unprefixed = `api:${target.slice("api:grain/".length)}`;
-      return offered.find(
-        (c) => c.preset && splitApiGrant(c.id)[0] === unprefixed,
-      );
-    }
-    return undefined;
+    return (
+      offered.find((c) => splitApiGrant(c.id)[0] === target) ||
+      offered.find((c) => apiBuiltinAlias(c) === target)
+    );
   };
 
   const [methods, setMethods] = useState(null);
@@ -413,8 +419,8 @@ export default function GrantsPicker({
   const toggleApi = (row) => {
     const short = apiShortName(row.id);
     const ref = apiRef(short);
-    const aliasRef =
-      row.preset && !short.includes("/") ? apiRef(`grain/${short}`) : "";
+    const aliasLegacy = apiBuiltinAlias(row);
+    const aliasRef = aliasLegacy ? apiRef(apiShortName(aliasLegacy)) : "";
     const matchesRef = (r) => r === ref || (aliasRef && r === aliasRef);
     const heldRef = refs.includes(ref)
       ? ref
@@ -425,7 +431,6 @@ export default function GrantsPicker({
       removeMethod(heldRef);
       return;
     }
-    const aliasLegacy = aliasRef ? `api:grain/${short}` : "";
     const matchesLegacy = (id) => {
       const [head] = splitApiGrant(id);
       return head === row.id || (aliasLegacy && head === aliasLegacy);
@@ -807,10 +812,6 @@ export default function GrantsPicker({
   const q = query.trim().toLowerCase();
   const matches = (...texts) =>
     !q || texts.some((t) => (t || "").toLowerCase().includes(q));
-  const apiBuiltinAlias = (row) => {
-    const short = apiShortName(row.id);
-    return row.preset && !short.includes("/") ? `api:grain/${short}` : "";
-  };
   const apiMatches = (row) =>
     matches(
       row.id,
@@ -889,9 +890,8 @@ export default function GrantsPicker({
     const short = apiShortName(row.id);
     const name = row.displayLabel || short;
     const ref = apiRef(short);
-    const aliasRef =
-      row.preset && !short.includes("/") ? apiRef(`grain/${short}`) : "";
-    const aliasLegacy = aliasRef ? `api:grain/${short}` : "";
+    const aliasLegacy = apiBuiltinAlias(row);
+    const aliasRef = aliasLegacy ? apiRef(apiShortName(aliasLegacy)) : "";
     const held =
       refs.some((g) => {
         const r = parseGrant(g).ref;
