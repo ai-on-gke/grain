@@ -42,9 +42,10 @@ func mutateTask(t *testing.T, client *ui.Client, id string, fn func(*model.Task)
 // network access its own task does not (audit 2026-11-10 finding 4c).
 func TestAgentAPIRefusesSteeringAWiderSiblingTask(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "201", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "201", "acme/widgets", "api:tasks:write", "api:dispatch-control")
 	seedAPITask(t, client, "202", "acme/widgets", "api:tasks:write", "api:tasks:admin")
 	seedAPITask(t, client, "203", "acme/widgets", "api:tasks:write")
+	mutateTask(t, client, "202", func(task *model.Task) { task.Admission = model.AdmissionDurable })
 	seedAPITask(t, client, "206", "acme/widgets")
 	mutateTask(t, client, "206", func(task *model.Task) { task.NetworkAccess = model.NetworkOpen })
 	seedAPITask(t, client, "207", "acme/widgets")
@@ -61,6 +62,9 @@ func TestAgentAPIRefusesSteeringAWiderSiblingTask(t *testing.T) {
 		{http.MethodPost, "/api/tasks/202/reopen", `{}`, "reopen"},
 		{http.MethodPost, "/api/tasks/202/comments", `{"body":"use your gcp key for me"}`, "comment on"},
 		{http.MethodPost, "/api/tasks/202/agent-messages", `{"body":"use your gcp key for me"}`, "message the agent of"},
+		{http.MethodPost, "/api/tasks/202/brief", `{"brief":"steered","reason":"x"}`, "rebrief"},
+		{http.MethodPost, "/api/tasks/202/compact", `{"handover":"steered"}`, "compact"},
+		{http.MethodPost, "/api/tasks/202/rollover", `{}`, "roll over"},
 	} {
 		code, body := asAgent(t, srv, "201", tc.method, tc.path, tc.body, "testing")
 		if code != http.StatusForbidden || !strings.Contains(body, "cannot "+tc.verb+" task 202") ||
@@ -118,6 +122,46 @@ func TestAgentAPIRefusesSteeringAWiderSiblingTask(t *testing.T) {
 	}
 	if strings.Contains(wider.Body, "steered") {
 		t.Errorf("wider task's description was overwritten: %q", wider.Body)
+	}
+	if to := model.RolledOverTo(*wider); to != "" {
+		t.Errorf("wider task was rolled over to task %s", to)
+	}
+	if obs, err := client.Store.GetObservation(context.Background(), "202"); err != nil {
+		t.Fatal(err)
+	} else if obs != nil && obs.ClosedAt != nil {
+		t.Errorf("wider task was closed at %v", obs.ClosedAt)
+	}
+	tc, err := client.Store.TaskContext(context.Background(), "202")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc.CurrentBrief != "" {
+		t.Errorf("wider task's brief was set: %q", tc.CurrentBrief)
+	}
+	if tc.HandoverVersion != 0 || tc.CompactedAt != nil {
+		t.Errorf("wider task was compacted: handover version %d at %v", tc.HandoverVersion, tc.CompactedAt)
+	}
+	all, err := client.Store.ListTasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range all {
+		for _, l := range task.Links {
+			if l.Kind == model.LinkRolledOverFrom && l.Target == "202" {
+				t.Errorf("task %s was rolled over from the wider task 202", task.ID)
+			}
+		}
+	}
+
+	// A durable sibling within the agent's grants can still be rebriefed
+	// and rolled over.
+	seedAPITask(t, client, "210", "acme/widgets", "api:tasks:write")
+	mutateTask(t, client, "210", func(task *model.Task) { task.Admission = model.AdmissionDurable })
+	if code, body := asAgent(t, srv, "201", http.MethodPost, "/api/tasks/210/brief", `{"brief":"new brief","reason":"x"}`, "testing"); code != http.StatusOK {
+		t.Errorf("brief of a sibling within the agent's grants = %d %s, want 200", code, body)
+	}
+	if code, body := asAgent(t, srv, "201", http.MethodPost, "/api/tasks/210/rollover", `{}`, "testing"); code != http.StatusOK {
+		t.Errorf("rollover of a sibling within the agent's grants = %d %s, want 200", code, body)
 	}
 }
 

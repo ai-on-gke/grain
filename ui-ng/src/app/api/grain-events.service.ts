@@ -47,12 +47,29 @@ export type EventSourceFactory = (url: string) => EventSource;
 export class GrainEvents implements OnDestroy {
   private readonly zone = inject(NgZone);
   private readonly subject = new Subject<GrainEvent>();
+  private readonly ac = new AbortController();
   private source: EventSource | null = null;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private backoff = 1000;
   private subscribers = 0;
   factory: EventSourceFactory = (url) =>
     new EventSource(url, { withCredentials: true });
+
+  constructor() {
+    if (typeof window !== "undefined") {
+      const { signal } = this.ac;
+      // Close the SSE stream on pagehide (navigation/BFCache) so HTTP/1.1
+      // connections are not exhausted across reloads.
+      window.addEventListener("pagehide", () => this.disconnect(), { signal });
+      window.addEventListener(
+        "pageshow",
+        () => {
+          if (this.subscribers > 0 && !this.source) this.connect();
+        },
+        { signal },
+      );
+    }
+  }
 
   readonly url = `${routePath("GET /api/events")}?since=now&stream=1`;
 
@@ -117,11 +134,13 @@ export class GrainEvents implements OnDestroy {
   private disconnect(): void {
     if (this.retry) clearTimeout(this.retry);
     this.retry = null;
+    this.backoff = 1000;
     this.source?.close();
     this.source = null;
   }
 
   ngOnDestroy(): void {
+    this.ac.abort();
     this.disconnect();
     this.subject.complete();
   }
