@@ -1,0 +1,136 @@
+/* Fleet & Host Operations (D-11) component styles (< 6 kB alongside ops-surface.css). */
+
+g-fleet-page {
+  display: contents;
+}
+
+.fleet-host-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.fleet-meter-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.fleet-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fleet-item-card {
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+:root[data-theme="dark"] .fleet-item-card {
+  background: var(--md-sys-color-surface-container);
+}
+
+.fleet-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.fleet-item-title {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.fleet-item-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.fleet-chip-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fleet-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  font: 500 11px/16px var(--grain-font-mono);
+}
+
+.fleet-inline-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fleet-token-banner {
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-secondary);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fleet-token-code {
+  padding: 8px 10px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  background: #13151a;
+  color: #e4e6eb;
+  font: 12px/18px var(--grain-font-mono);
+  overflow-x: auto;
+}
+
+.fleet-log-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.fleet-log-pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fleet-tab-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.fleet-tab-btn[aria-selected="true"] {
+  color: var(--md-sys-color-primary);
+  border-bottom-color: var(--md-sys-color-primary);
+}

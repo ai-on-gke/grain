@@ -40,6 +40,15 @@ export type RouteParams = Record<string, string | number>;
 export function routePath(key: RouteKey, params: RouteParams = {}): string {
   const path = key.slice(key.indexOf(" ") + 1);
   return path.replace(/\{([^}]+)\}/g, (_, name: string) => {
+    if (name.endsWith("...")) {
+      const bare = name.slice(0, -3);
+      const v = params[name] ?? params[bare] ?? "";
+      return String(v)
+        .split("/")
+        .filter(Boolean)
+        .map((seg) => encodeURIComponent(seg))
+        .join("/");
+    }
     const v = params[name];
     if (v === undefined) throw new Error(`${key}: missing {${name}}`);
     return encodeURIComponent(String(v));
@@ -85,6 +94,15 @@ export class GrainApi {
   get<T>(key: RouteKey, params?: RouteParams, query?: string): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
     return firstValueFrom(this.http.get<T>(url, { headers: JSON_HEADERS }));
+  }
+
+  getText(
+    key: RouteKey,
+    params?: RouteParams,
+    query?: string,
+  ): Promise<string> {
+    const url = routePath(key, params) + (query ? `?${query}` : "");
+    return firstValueFrom(this.http.get(url, { responseType: "text" }));
   }
 
   // getIfChanged reads a URL with If-None-Match, the way the server's

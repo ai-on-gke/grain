@@ -1,0 +1,214 @@
+/* Telemetry (D-10 + SPACE D-17/D-18) component styles. Kept lean (< 6 kB)
+   alongside ../shared/ops-surface.css. */
+
+g-telemetry-page {
+  display: contents;
+}
+
+.tel-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.tel-grid-line {
+  stroke: var(--md-sys-color-outline-variant);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.tel-bar-filed {
+  fill: color-mix(in srgb, var(--md-sys-color-outline) 22%, transparent);
+}
+
+.tel-bar-completed {
+  fill: var(--md-sys-color-primary);
+  opacity: 0.85;
+  transition: opacity 140ms var(--md-sys-motion-effects);
+}
+
+.tel-bar-completed:hover {
+  opacity: 1;
+}
+
+.tel-merge-area {
+  fill: color-mix(in srgb, var(--md-sys-color-tertiary) 18%, transparent);
+}
+
+.tel-merge-line {
+  fill: none;
+  stroke: var(--md-sys-color-tertiary);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tel-merge-dot {
+  fill: var(--md-sys-color-tertiary);
+  stroke: var(--md-sys-color-surface);
+  stroke-width: 1.5;
+}
+
+.tel-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.tel-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tel-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.tel-swatch.is-primary {
+  background: var(--md-sys-color-primary);
+}
+
+.tel-swatch.is-tertiary {
+  background: var(--md-sys-color-tertiary);
+}
+
+.tel-swatch.is-filed {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
+}
+
+/* Horizontal stage & tool SVG bars */
+.tel-stage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tel-stage-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.tel-stage-name {
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tel-stage-nums {
+  text-align: right;
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: nowrap;
+}
+
+.tel-stacked-svg {
+  width: 100%;
+  height: 16px;
+  border-radius: var(--md-sys-shape-corner-full);
+  overflow: hidden;
+  display: block;
+}
+
+/* Usage budget editor */
+.tel-budget-editor {
+  padding: 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tel-budget-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tel-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.tel-budget-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(120px, 1fr) 130px auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 839.95px) {
+  .tel-budget-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tel-stage-row {
+    grid-template-columns: minmax(90px, 120px) minmax(0, 1fr);
+  }
+  .tel-stage-nums {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+}
+
+/* Team SPACE alphabetical grid */
+.tel-space-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.tel-space-card {
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tel-space-meta {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.tel-dir-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tel-dir-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-low);
+  font-size: 13px;
+}

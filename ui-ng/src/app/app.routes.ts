@@ -112,5 +112,30 @@ export const routes: Routes = [
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
+    path: "telemetry",
+    title: "Telemetry · grain",
+    loadComponent: () =>
+      import("./telemetry/telemetry-page.component").then(
+        (m) => m.TelemetryPageComponent,
+      ),
+  },
+  { path: "metrics", redirectTo: "telemetry" },
+  {
+    path: "fleet",
+    title: "Fleet · grain",
+    loadComponent: () =>
+      import("./fleet/fleet-page.component").then((m) => m.FleetPageComponent),
+  },
+  { path: "system", redirectTo: "fleet" },
+  { path: "staging", redirectTo: "fleet" },
+  {
+    path: "context",
+    title: "Context · grain",
+    loadComponent: () =>
+      import("./context/context-page.component").then(
+        (m) => m.ContextPageComponent,
+      ),
+  },
+  { path: "memory", redirectTo: "context" },
   { path: "**", redirectTo: "inbox" },
 ];

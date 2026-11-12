@@ -89,6 +89,9 @@ async function render(
         { path: "processes", children: [] },
         { path: "processes/:tab", children: [] },
         { path: "ci", children: [] },
+        { path: "telemetry", children: [] },
+        { path: "context", children: [] },
+        { path: "fleet", children: [] },
       ]),
       { provide: APP_BASE_HREF, useValue: "/next/" },
       { provide: GrainApi, useValue: api },
@@ -169,6 +172,12 @@ describe("AppComponent shell", () => {
     expect(inbox.getAttribute("href")).toBe("/next/inbox");
     const processes = el(f).querySelector('[data-testid="rail-processes"]')!;
     expect(processes.getAttribute("href")).toBe("/next/processes");
+    const telemetry = el(f).querySelector('[data-testid="rail-telemetry"]')!;
+    expect(telemetry.getAttribute("href")).toBe("/next/telemetry");
+    const context = el(f).querySelector('[data-testid="rail-context"]')!;
+    expect(context.getAttribute("href")).toBe("/next/context");
+    const fleet = el(f).querySelector('[data-testid="rail-fleet"]')!;
+    expect(fleet.getAttribute("href")).toBe("/next/fleet");
     const ci = el(f).querySelector('[data-testid="rail-ci"]')!;
     expect(ci.getAttribute("href")).toBe("/next/ci");
     const telemetry = el(f).querySelector('[data-testid="rail-telemetry"]')!;

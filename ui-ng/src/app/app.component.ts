@@ -81,6 +81,8 @@ const ICONS: Record<string, string> = {
   processes:
     "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
   telemetry: "M4 19h16v2H4zM6 10h3v7H6zm5-5h3v12h-3zm5 8h3v4h-3z",
+  context:
+    "M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z",
   fleet:
     "M4 4h16v6H4zm2 2v2h2V6zm-2 8h16v6H4zm2 2v2h2v-2zM10 6v2h8V6zm0 10v2h8v-2z",
   settings:

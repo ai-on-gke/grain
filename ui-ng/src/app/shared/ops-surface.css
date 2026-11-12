@@ -1,0 +1,314 @@
+/* Shared GM3 cards, pill dropdowns (.pop-menu), meters, tables, and
+   recessed #13151a log/code wells for Telemetry, Fleet, and Context.
+   Loaded lazily by those pages (ViewEncapsulation.None). */
+
+.ops-scroll {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ops-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 14px;
+}
+
+.ops-toolbar-end {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Custom GM3 pill dropdown (.pop-menu) — replaces native <select> */
+.pop-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.pop-trigger {
+  min-height: 36px;
+  padding: 0 12px 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--md-sys-shape-corner-full);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font: 500 13px/18px var(--grain-font-body);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pop-trigger:hover {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.pop-trigger.is-active {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-color: var(--md-sys-color-secondary);
+}
+
+.pop-trigger:focus-visible,
+.pop-item:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.pop-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  min-width: 220px;
+  max-width: 340px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 6px;
+  margin: 0;
+  list-style: none;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  box-shadow: var(--md-sys-elevation-dialog);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+:root[data-theme="dark"] .pop-menu {
+  background: var(--md-sys-color-surface-container);
+}
+
+.pop-item {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font: 400 13px/18px var(--grain-font-body);
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.pop-item:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.pop-item[aria-selected="true"] {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-weight: 500;
+}
+
+/* KPI Strip & Cards */
+.ops-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.ops-kpi-card {
+  padding: 14px 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+:root[data-theme="dark"] .ops-kpi-card,
+:root[data-theme="dark"] .ops-card {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.ops-kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ops-kpi-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.ops-kpi-value {
+  font-family: var(--grain-font-display);
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--md-sys-color-on-surface);
+}
+
+.ops-kpi-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.ops-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 1023.95px) {
+  .ops-grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ops-card {
+  padding: 16px 18px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ops-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.ops-card-title {
+  margin: 0;
+  font-family: var(--grain-font-display);
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+}
+
+.ops-card-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Meters */
+.meter-track {
+  width: 100%;
+  height: 6px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--md-sys-color-primary);
+  transition: width 180ms var(--md-sys-motion-spatial);
+}
+
+.meter-fill.is-healthy {
+  background: var(--md-sys-color-tertiary);
+}
+
+.meter-fill.is-warn {
+  background: var(--md-sys-color-warning);
+}
+
+.meter-fill.is-error {
+  background: var(--md-sys-color-error);
+}
+
+/* Tables */
+.ops-table-wrap {
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ops-table th {
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface-variant);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  white-space: nowrap;
+}
+
+.ops-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  vertical-align: middle;
+}
+
+.ops-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Recessed dark #13151a log & code viewer */
+.dark-well {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid #2d323e;
+  background: #13151a;
+  color: #e4e6eb;
+  font: 12px/18px var(--grain-font-mono);
+  overflow: auto;
+  max-height: 440px;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.dark-well:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.ops-input {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: 400 13px/18px var(--grain-font-body);
+  box-sizing: border-box;
+}
+
+.ops-input:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 1px;
+}

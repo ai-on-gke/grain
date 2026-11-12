@@ -18,7 +18,7 @@ import {
   provideHttpClientTesting,
 } from "@angular/common/http/testing";
 import { TestBed } from "@angular/core/testing";
-import { GrainApi } from "./grain-api.service";
+import { GrainApi, routePath } from "./grain-api.service";
 
 describe("GrainApi.getIfChanged", () => {
   let api: GrainApi;
@@ -80,5 +80,41 @@ describe("GrainApi.getIfChanged", () => {
     expect(req.request.headers.has("If-None-Match")).toBe(false);
     req.flush([]);
     await b;
+  });
+
+  it("formats {path...} namespace routes, reads plain text, and passes query strings on post/delete", async () => {
+    expect(routePath("GET /api/fs/memory/{path...}", { path: "" })).toBe(
+      "/api/fs/memory/",
+    );
+    expect(
+      routePath("GET /api/fs/memory/{path...}", {
+        path: "repos/acme/widgets.md",
+      }),
+    ).toBe("/api/fs/memory/repos/acme/widgets.md");
+
+    const txt = api.getText(
+      "GET /api/fs/memory/{path...}",
+      { path: "global.md" },
+      "tail=64",
+    );
+    const reqTxt = http.expectOne("/api/fs/memory/global.md?tail=64");
+    expect(reqTxt.request.responseType).toBe("text");
+    reqTxt.flush("# Global memory\n");
+    expect(await txt).toBe("# Global memory\n");
+
+    const flush = api.post(
+      "POST /api/package-cache/flush",
+      undefined,
+      {},
+      "kind=npm",
+    );
+    http
+      .expectOne("/api/package-cache/flush?kind=npm")
+      .flush({ entries: 2, bytes: 1024 });
+    expect(await flush).toEqual({ entries: 2, bytes: 1024 });
+
+    const lift = api.delete("DELETE /api/pause", undefined, "connection=c1");
+    http.expectOne("/api/pause?connection=c1").flush({ enabled: true });
+    expect(await lift).toEqual({ enabled: true });
   });
 });

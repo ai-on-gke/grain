@@ -119,6 +119,37 @@ const VIEW_GUIDES: Record<string, ViewGuide> = {
       "Suites & Runs manages multi-template suites and inspects pass-by-pass child tasks; Repo Declarations manages .grain/ sync and capability acceptances.",
     ],
   },
+  telemetry: {
+    title: "Telemetry",
+    summary:
+      "Delivery throughput, cycle-time quantiles, CI and merge-queue health, token concurrency budgets, and non-ranked team collaboration stats.",
+    steps: [
+      "Switch between 24h, 7d, and 30d windows and scope to a repository or contributor from the toolbar.",
+      "Inspect throughput, p50/p90 lifecycle stage timings, run outcome shares, and top tool/CI wait causes.",
+      "Configure per-connection token budgets and advisory/auto worker scaling when holding settings:write.",
+      "Review team collaboration and shipped directions alphabetically (A–Z), never leaderboard-ranked.",
+    ],
+  },
+  context: {
+    title: "Context & Standing Memory",
+    summary:
+      "Deployment-wide and per-repository standing agent instructions, 200-character indexed memory packs, and the live /api/fs/memory/ namespace.",
+    steps: [
+      "Switch between This deployment and any repository scope to edit standing instructions injected into every prompt.",
+      "Create and maintain Memory Packs with a crisp <= 200 character index summary fetched on demand by runs.",
+      "Browse and grep memory:// and config:// files directly with syntax-highlighted or Markdown preview.",
+    ],
+  },
+  fleet: {
+    title: "Fleet & Host Operations",
+    summary:
+      "Host CPU/vCPU/memory/disk capacity, live and persistent sandboxes, grain-agentd host daemons, dispatch pauses, caches, and daemon logs.",
+    steps: [
+      "Monitor live task sandboxes, run a throwaway diagnostic probe, or start/restart/rebuild/stop persistent sandboxes.",
+      "Inspect connected grain-agentd hosts and rotate, rename, or revoke host tokens.",
+      "Pause or resume pipeline dispatch, clear quota pauses, flush package/Actions caches, or tail redacted daemon logs.",
+    ],
+  },
   default: {
     title: "Grain",
     summary:
