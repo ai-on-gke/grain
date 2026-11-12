@@ -103,8 +103,10 @@ func forgeReviewTransport(remote string) *github.RealTransport {
 	if err != nil || u.User != nil || !strings.EqualFold(u.Host, f.host) {
 		return nil
 	}
+	var useTLS bool
 	switch strings.ToLower(u.Scheme) {
 	case "https":
+		useTLS = true
 	case "http":
 		if !f.insecureHTTP {
 			return nil
@@ -113,7 +115,7 @@ func forgeReviewTransport(remote string) *github.RealTransport {
 		return nil
 	}
 	t := github.NewRealTransport(f.host)
-	t.UseTLS = !f.insecureHTTP
+	t.UseTLS = useTLS
 	return t
 }
 

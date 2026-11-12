@@ -90,8 +90,12 @@ func TestRequireVerifiedReadsReviewsFromTheDeploymentsForge(t *testing.T) {
 			t.Errorf("%s: stateRepoVerifier = %+v, want one without Reviews", c.name, v)
 		}
 	}
-	// github.com itself is unchanged.
+	// github.com itself is unchanged, and an https:// remote on the forge
+	// never drops TLS even when plain HTTP is allowed.
 	setStateRepoForge(host, true)
+	if tpt := forgeReviewTransport("https://" + host + "/acme/grain-config.git"); tpt == nil || !tpt.UseTLS {
+		t.Errorf("forgeReviewTransport(https://%s/...) with insecureHTTP = %+v, want UseTLS=true", host, tpt)
+	}
 	if v := stateRepoVerifier(dir, staterepo.Settings{Remote: "https://github.com/acme/grain-config.git", RequireVerified: true}); v == nil || v.Reviews == nil {
 		t.Errorf("github.com remote: stateRepoVerifier = %+v, want Reviews", v)
 	}
