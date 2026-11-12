@@ -280,6 +280,12 @@ func adoptAll(ctx context.Context, store *model.Store, client github.Client, hos
 // them together, before deciding without the ones still away.
 const hostdAdoptWait = 30 * time.Second
 
+// hostdAbandonedWait bounds how long the processes of runs a hostd did
+// not answer for at startup are waited on to cancel
+// (orchestrator.CancelWhenBack): past a run's budget and allowance,
+// hostd ends the process itself.
+const hostdAbandonedWait = 24 * time.Hour
+
 // hostdAdoptionTarget is one grain hostd an adoption pass asks, and the
 // live runs it decides there: those whose recorded hostd
 // (model.TaskRunHostd) is this one, or -- for the default hostd -- that
@@ -400,6 +406,23 @@ func adoptHostd(ctx context.Context, store *model.Store, client github.Client, t
 			took[a.Claim.Run] = true
 			return true
 		})
+	var away *orchestrator.HostdAwayError
+	if errors.As(err, &away) && len(away.Runs) > 0 {
+		// Its runs are finished as interrupted by RecoverOrphanedRuns; their
+		// processes run on in hostd until it is back to cancel them.
+		go func() {
+			wctx, cancel := context.WithTimeout(ctx, hostdAbandonedWait)
+			defer cancel()
+			cancelled, err := orchestrator.CancelWhenBack(wctx, store, hd.Client, away.Runs, hd.Reconnected)
+			if err != nil {
+				log.Printf("grain daemon: grain hostd %s: %v", t.name, err)
+			}
+			if len(cancelled) > 0 {
+				log.Printf("grain daemon: grain hostd %s is back; cancelled %d process(es) of runs it did not answer for at startup",
+					t.name, len(cancelled))
+			}
+		}()
+	}
 	if err != nil {
 		err = fmt.Errorf("recovering the host agent %s's host CLIs: %w", t.name, err)
 	}
