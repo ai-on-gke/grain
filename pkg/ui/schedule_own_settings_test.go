@@ -79,6 +79,25 @@ func TestATemplateBackedSchedulesOwnSettingsSurviveTheOverlay(t *testing.T) {
 			saved.Admission, saved.Hosting, saved.Capabilities)
 	}
 
+	// A caller that resends the capabilities it was shown -- the
+	// template's beside the schedule's own -- changes nothing stored:
+	// the template's are not copied onto the row.
+	shown := saved.Capabilities
+	resent, err := c.UpdateSchedule(ctx, created.ID, ui.UpdateScheduleRequest{
+		Capabilities: &shown, Revision: &saved.Revision,
+	})
+	if err != nil {
+		t.Fatalf("resending the capabilities shown: %v", err)
+	}
+	stored, err = store.GetSchedule(ctx, created.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("reading the schedule: (%+v, %v)", stored, err)
+	}
+	if len(stored.Grants) != 1 || stored.Grants[0].Capability != own {
+		t.Errorf("stored after resending capabilities: grants %+v; want only the schedule's own %s", stored.Grants, own)
+	}
+	saved = resent
+
 	detach := ""
 	detached, err := c.UpdateSchedule(ctx, created.ID, ui.UpdateScheduleRequest{TemplateID: &detach, Revision: &saved.Revision})
 	if err != nil {
