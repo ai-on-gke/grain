@@ -496,6 +496,7 @@ export class DeferErrorDirective implements OnInit {
             #directorBtn
             type="button"
             class="director-pill"
+            aria-label="Director"
             [class.is-open]="directorCtx.isOpen()"
             [class.is-live]="directorLive()"
             data-testid="director-trigger"
