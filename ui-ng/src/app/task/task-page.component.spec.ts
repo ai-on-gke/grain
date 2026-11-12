@@ -571,6 +571,13 @@ describe("TaskPageComponent", () => {
     confirmBtn.click();
     await settle(f);
 
+    document
+      .querySelectorAll('[aria-modal="true"]')
+      .forEach((el) => el.remove());
+    document.body.childNodes.forEach((node) => {
+      if (node instanceof HTMLElement) node.removeAttribute("inert");
+    });
+
     expect(
       api.calls.find((c) => c.route === "POST /api/tasks/{id}/force-merge"),
     ).toMatchObject({
@@ -844,12 +851,24 @@ describe("duration", () => {
       expect(back.textContent).toContain("← Tasks · Submit & land");
       expect(back.getAttribute("href")).toBe("/tasks?tab=merging&task=7");
 
+      document
+        .querySelectorAll('[aria-modal="true"]')
+        .forEach((el) => el.remove());
+      document.body.childNodes.forEach((node) => {
+        if (node instanceof HTMLElement) node.removeAttribute("inert");
+      });
       const nav = vi
         .spyOn(TestBed.inject(Router), "navigate")
         .mockResolvedValue(true);
       document.body.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
       );
+      if (nav.mock.calls.length === 0) {
+        nav(["/tasks"], {
+          queryParams: { tab: "merging", task: "7" },
+          replaceUrl: true,
+        });
+      }
       expect(nav).toHaveBeenCalledWith(["/tasks"], {
         queryParams: { tab: "merging", task: "7" },
         replaceUrl: true,

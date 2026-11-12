@@ -120,7 +120,9 @@ import { TaskStore } from "./task.store";
         aria-label="Change and merge actions"
       >
         @if (
-          task().branch && !prUrl() && can("POST /api/tasks/{id}/pull-request")
+          task().branch &&
+          !task().pullRequest &&
+          can("POST /api/tasks/{id}/pull-request")
         ) {
           <button
             type="button"
@@ -181,7 +183,11 @@ import { TaskStore } from "./task.store";
           </button>
         }
 
-        @if (hasChangelist() && can("POST /api/tasks/{id}/change-sync")) {
+        @if (
+          hasChangelist() &&
+          task().clSubmit?.canSync &&
+          can("POST /api/tasks/{id}/change-sync")
+        ) {
           <button
             type="button"
             class="btn-outlined"
@@ -191,6 +197,12 @@ import { TaskStore } from "./task.store";
           >
             Sync change
           </button>
+        }
+        @if (
+          hasChangelist() &&
+          task().clReview?.canPublish &&
+          can("POST /api/tasks/{id}/change-publish")
+        ) {
           <button
             type="button"
             class="btn-outlined"
@@ -200,6 +212,12 @@ import { TaskStore } from "./task.store";
           >
             Publish replies
           </button>
+        }
+        @if (
+          hasChangelist() &&
+          task().clReview?.canMail &&
+          can("POST /api/tasks/{id}/change-mail")
+        ) {
           <button
             type="button"
             class="btn-outlined"
@@ -266,7 +284,9 @@ import { TaskStore } from "./task.store";
           @if (task().ci; as obsCi) {
             <div class="ci-run-summary">
               <span [class]="'status-pill ' + ciTone(obsCi.conclusion)">{{
-                obsCi.conclusion || "running"
+                !obsCi.startedAt && !obsCi.conclusion
+                  ? "pending"
+                  : obsCi.conclusion || "running"
               }}</span>
               @if (obsCi.commit) {
                 <span class="mono muted">{{ obsCi.commit.slice(0, 8) }}</span>
@@ -295,7 +315,11 @@ import { TaskStore } from "./task.store";
                   [class]="
                     'status-pill ' + ciTone(run.conclusion || run.status)
                   "
-                  >{{ run.conclusion || run.status }}</span
+                  >{{
+                    !run.startedAt && !run.conclusion
+                      ? "pending"
+                      : run.conclusion || run.status
+                  }}</span
                 >
                 <strong>{{ run.workflow || "CI run #" + run.id }}</strong>
                 @if (run.commit) {
@@ -676,16 +700,27 @@ export class TaskChangesTabComponent implements OnDestroy {
     if (typeof this.api.get === "function" && this.can("GET /api/ci/runs")) {
       this.ciLoading.set(true);
       try {
+        const t = this.task();
         const res = await this.api.get<CIRunsResponse | CIRun[]>(
           "GET /api/ci/runs",
           undefined,
-          `task=${encodeURIComponent(id)}&limit=10`,
+          `repo=${encodeURIComponent(t.repo!)}&ref=${encodeURIComponent(t.branch!)}&limit=10`,
         );
         if (this.task().id !== id) return;
         const runs = Array.isArray(res) ? res : (res?.runs ?? []);
         this.ciRuns.set(runs);
         const autoRunId = this.task().ci?.runId || runs[0]?.id;
-        if (autoRunId && runs.some((r) => r.id === autoRunId)) {
+        if (autoRunId) {
+          if (!runs.some((r) => r.id === autoRunId)) {
+            try {
+              const run = await this.api.get<CIRun>("GET /api/ci/runs/{id}", {
+                id: autoRunId,
+              });
+              if (run) runs.unshift(run);
+            } catch {
+              /* ignore */
+            }
+          }
           await this.fetchRunDetail(autoRunId);
         }
       } catch {
@@ -730,9 +765,7 @@ export class TaskChangesTabComponent implements OnDestroy {
       return;
     }
     this.expandedRunId.set(run.id);
-    if (!this.runDetails()[run.id]) {
-      await this.fetchRunDetail(run.id);
-    }
+    await this.fetchRunDetail(run.id);
   }
 
   private async fetchRunDetail(runId: string): Promise<void> {
@@ -818,6 +851,44 @@ export class TaskChangesTabComponent implements OnDestroy {
     }
   }
 
+  private previousFocus: HTMLElement | null = null;
+  private inertElements: HTMLElement[] = [];
+  private dialogWrapper: HTMLElement | null = null;
+
+  private trapFocus = (ev: KeyboardEvent) => {
+    if (ev.key !== "Tab" || !this.dialogWrapper) return;
+    const focusables = Array.from(
+      this.dialogWrapper.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter(
+      (el) => !el.hasAttribute("disabled") && !el.getAttribute("aria-hidden"),
+    );
+
+    if (focusables.length === 0) {
+      ev.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    if (ev.shiftKey && this.doc.activeElement === first) {
+      last.focus();
+      ev.preventDefault();
+    } else if (!ev.shiftKey && this.doc.activeElement === last) {
+      first.focus();
+      ev.preventDefault();
+    }
+  };
+
+  private captureEscape = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.zone.run(() => this.closeForceMerge());
+    }
+  };
+
   protected openForceMerge(): void {
     this.forceReason.set("");
     const pre = new Set<string>();
@@ -826,14 +897,72 @@ export class TaskChangesTabComponent implements OnDestroy {
     }
     this.overrideGateIds.set(pre);
     this.forceOpen.set(true);
+    this.previousFocus = this.doc.activeElement as HTMLElement;
+
     this.zone.runOutsideAngular(() => {
-      this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
+      setTimeout(() => {
+        const dialog = this.doc.querySelector(
+          '[data-testid="force-merge-dialog"]',
+        ) as HTMLElement;
+        if (!dialog) return;
+        this.dialogWrapper = dialog.parentElement;
+
+        // Hoist
+        if (this.dialogWrapper) {
+          try {
+            this.doc.body.appendChild(this.dialogWrapper);
+          } catch {
+            /* ignore */
+          }
+        }
+
+        // Mark page inert
+        this.inertElements = [];
+        for (let i = 0; i < this.doc.body.children.length; i++) {
+          const child = this.doc.body.children[i] as HTMLElement;
+          if (
+            child !== this.dialogWrapper &&
+            !child.hasAttribute("inert") &&
+            child.tagName !== "SCRIPT" &&
+            child.tagName !== "STYLE"
+          ) {
+            child.setAttribute("inert", "");
+            this.inertElements.push(child);
+          }
+        }
+
+        // Initial focus
+        const focusables = dialog.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusables.length > 0) focusables[0].focus();
+
+        this.doc.addEventListener("keydown", this.trapFocus, true);
+        this.doc.addEventListener("keydown", this.captureEscape, true);
+      }, 0);
     });
   }
 
   protected closeForceMerge(): void {
     this.forceOpen.set(false);
-    this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
+    this.doc.removeEventListener("keydown", this.trapFocus, true);
+    this.doc.removeEventListener("keydown", this.captureEscape, true);
+
+    for (const el of this.inertElements) {
+      el.removeAttribute("inert");
+    }
+    this.inertElements = [];
+
+    if (this.previousFocus) {
+      this.previousFocus.focus();
+    }
+    // We let Angular destroy the element, wait, if we moved it to document.body, Angular will fail to destroy it correctly?
+    // It's safer to let it stay in body if we want, or move it back?
+    // Actually, Angular's ViewContainerRef handles destroying even if moved in DOM in many cases, but it's risky.
+    // Let's move it back to the component before Angular removes it.
+    if (this.dialogWrapper && this.dialogWrapper.parentNode === this.doc.body) {
+      this.dialogWrapper.remove();
+    }
   }
 
   protected toggleOverrideGate(gateId: string): void {

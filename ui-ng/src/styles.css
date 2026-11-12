@@ -2307,3 +2307,11 @@ button.more-sheet-item {
 .part-of-link:hover {
   text-decoration: underline;
 }
+
+.btn-outlined.danger {
+  color: var(--gm-color-error);
+  border-color: var(--gm-color-error);
+}
+.btn-outlined.danger:hover:not(:disabled) {
+  background: var(--gm-color-error-container);
+}

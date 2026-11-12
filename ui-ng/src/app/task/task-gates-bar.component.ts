@@ -34,7 +34,6 @@ import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
-import { PillSelectComponent } from "../shared/pill-select.component";
 import { TaskStore } from "./task.store";
 
 const REVIEW_CATEGORIES = [
@@ -46,7 +45,7 @@ const REVIEW_CATEGORIES = [
 
 @Component({
   selector: "g-task-gates-bar",
-  imports: [DiffViewerComponent, PillSelectComponent],
+  imports: [DiffViewerComponent],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-gates-bar.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -416,7 +415,10 @@ const REVIEW_CATEGORIES = [
               <h2 id="gate-hr-h" class="gate-card-title">
                 Held for human review
               </h2>
-              @if (can("POST /api/tasks/{id}/human-review/release")) {
+              @if (
+                can("POST /api/tasks/{id}/human-review/release") &&
+                access.isFullAccess()
+              ) {
                 <button
                   type="button"
                   class="btn-primary"
@@ -442,69 +444,6 @@ const REVIEW_CATEGORIES = [
         }
 
         <!-- 6. Request Human Review (for review tasks) -->
-        @if (task().review && can("POST /api/tasks/{id}/human-review")) {
-          <section class="gate-card" data-testid="request-human-review-card">
-            @if (!requestHoldOpen()) {
-              <div class="gate-card-head">
-                <span class="muted"
-                  >Need a person to inspect the reviewed change before
-                  merge?</span
-                >
-                <button
-                  type="button"
-                  class="btn-outlined"
-                  data-testid="request-hold-open"
-                  (click)="requestHoldOpen.set(true)"
-                >
-                  Request human review hold
-                </button>
-              </div>
-            } @else {
-              <h2 class="gate-card-title">
-                Hold reviewed task for human review
-              </h2>
-              <div class="gate-input-row">
-                <g-pill-select
-                  [options]="reviewCategories"
-                  [value]="holdCategory()"
-                  ariaLabel="Hold category"
-                  align="left"
-                  testid="hold-category"
-                  (valueChange)="holdCategory.set($event)"
-                />
-                <input
-                  type="text"
-                  class="gate-input"
-                  data-testid="hold-reason-input"
-                  placeholder="Short reason for holding the change"
-                  [value]="holdReason()"
-                  (input)="holdReason.set($any($event.target).value)"
-                />
-              </div>
-              <div class="gate-actions">
-                <button
-                  type="button"
-                  class="btn-primary"
-                  data-testid="request-hold-submit"
-                  [disabled]="
-                    !holdReason().trim() ||
-                    store.isBusy('request-hold', task().id)
-                  "
-                  (click)="requestHold()"
-                >
-                  Place hold
-                </button>
-                <button
-                  type="button"
-                  class="btn-text"
-                  (click)="requestHoldOpen.set(false)"
-                >
-                  Cancel
-                </button>
-              </div>
-            }
-          </section>
-        }
       </div>
     }
   `,
@@ -512,7 +451,7 @@ const REVIEW_CATEGORIES = [
 export class TaskGatesBarComponent {
   protected readonly store = inject(TaskStore);
   private readonly api = inject(GrainApi);
-  private readonly access = inject(AccessService);
+  protected readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
 
   readonly task = input.required<TaskDetail>();
@@ -646,15 +585,15 @@ export class TaskGatesBarComponent {
 
   protected async recheckAccess(): Promise<void> {
     const t = this.task();
-    const items = t.pendingAccess?.items ?? [];
     await this.store.act(
       "access-check",
       async (id) => {
-        const res = await this.api.post<
-          AccessRequestItem[] | { items?: AccessRequestItem[] }
-        >("POST /api/tasks/{id}/access-request/check", { id }, { items });
-        const list = Array.isArray(res) ? res : (res?.items ?? null);
-        if (list) this.checkedOverride.set(list);
+        const res = await this.api.get<TaskDetail>("GET /api/tasks/{id}", {
+          id,
+        });
+        if (res?.pendingAccess?.items) {
+          this.checkedOverride.set(res.pendingAccess.items);
+        }
       },
       t.id,
     );

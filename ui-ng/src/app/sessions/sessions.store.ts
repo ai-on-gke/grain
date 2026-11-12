@@ -73,6 +73,7 @@ export interface UpdateSessionPatch {
   networkAccess?: string;
   tasksApproved?: boolean;
   keepRunning?: boolean;
+  readsAll?: boolean;
   adoptShippedDefaults?: boolean;
   reads?: string[];
   writes?: { repo: string; base?: string }[];
@@ -515,11 +516,24 @@ export class SessionsStore {
 
   async updateSettings(patch: UpdateSessionPatch): Promise<boolean> {
     const id = this.selectedId();
+    const sessionObj = this.selected()?.session;
     const touchesRunFixed = RUN_FIXED_KEYS.some((k) => patch[k] !== undefined);
     if (touchesRunFixed) this.markLiveRunStale(id);
-    return this.run("settings", () =>
-      this.api.put("PUT /api/console-sessions/{id}", { id }, patch),
-    );
+    return this.run("settings", async () => {
+      const p = { ...patch };
+      if (p.tasksApproved !== undefined && sessionObj?.taskId) {
+        await this.api.post("POST /api/tasks/{id}/approve", {
+          id: sessionObj.taskId,
+        });
+        delete p.tasksApproved;
+        if (Object.keys(p).length === 0) return;
+      }
+      if (!sessionObj?.taskId || p.readsAll !== undefined) {
+        await this.api.post("POST /api/settings", undefined, p);
+      } else {
+        await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
+      }
+    });
   }
 
   private async run(

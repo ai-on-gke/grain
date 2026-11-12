@@ -160,7 +160,7 @@
   padding: 0 6px 0 4px;
   text-align: right;
   color: var(--md-sys-color-on-surface-variant);
-  opacity: 0.78;
+
   user-select: none;
   flex-shrink: 0;
   border-right: 1px solid var(--md-sys-color-outline-variant);

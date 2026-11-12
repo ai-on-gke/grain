@@ -367,6 +367,50 @@ export function clock(iso: string | undefined, now = new Date()): string {
                       (valueChange)="saveNetwork($event)"
                     />
                   </div>
+                  <label class="check-row session-setting-field">
+                    <input
+                      type="checkbox"
+                      data-testid="session-keep-running"
+                      [checked]="row.session.keepRunning"
+                      [disabled]="
+                        store.isBusy('settings') || !access.isFullAccess()
+                      "
+                      (change)="
+                        store.updateSettings({
+                          keepRunning: $any($event.target).checked,
+                        })
+                      "
+                    />
+                    <span>Keep running (prevent sleep)</span>
+                  </label>
+                  <label class="check-row session-setting-field">
+                    <input
+                      type="checkbox"
+                      data-testid="session-tasks-approved"
+                      [checked]="row.session.tasksApproved"
+                      [disabled]="store.isBusy('settings')"
+                      (change)="
+                        store.updateSettings({
+                          tasksApproved: $any($event.target).checked,
+                        })
+                      "
+                    />
+                    <span>Tasks approved (auto-approve all tasks)</span>
+                  </label>
+                  <label class="check-row session-setting-field">
+                    <input
+                      type="checkbox"
+                      data-testid="session-reads-all"
+                      [checked]="row.session.readsAll"
+                      [disabled]="store.isBusy('settings')"
+                      (change)="
+                        store.updateSettings({
+                          readsAll: $any($event.target).checked,
+                        })
+                      "
+                    />
+                    <span>Reads all (read access to all repos)</span>
+                  </label>
                   <label class="session-setting-field">
                     <span>Visible to team / members</span>
                     <div style="display: flex; gap: 6px">
@@ -715,7 +759,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
 })
 export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(SessionsStore);
-  private readonly access = inject(AccessService);
+  protected readonly access = inject(AccessService);
   private readonly router = inject(Router);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);

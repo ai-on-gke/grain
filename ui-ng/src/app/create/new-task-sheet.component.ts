@@ -988,6 +988,7 @@ export class NewTaskSheetComponent {
   protected readonly composition = signal<Composition | null>(null);
   protected readonly repoBranches = signal<string[]>([]);
   protected readonly reachableRepos = signal<string[]>([]);
+  protected readonly reachablePushRepos = signal<string[]>([]);
 
   protected readonly draft = signal<NewTaskDraft>(emptyDraft(null, []));
   protected readonly capsOpen = signal(false);
@@ -1096,7 +1097,7 @@ export class NewTaskSheetComponent {
     const main = this.draft().repo;
     return [
       { value: "", label: "Add read-only repository…" },
-      ...this.repos()
+      ...this.reachableRepos()
         .filter((r) => r !== main && !cur.has(r))
         .map((r) => ({ value: r, label: r })),
     ];
@@ -1137,16 +1138,21 @@ export class NewTaskSheetComponent {
   ]);
 
   protected readonly shown = computed(() => this.byVisibility("shown"));
-  protected readonly capsFields = computed(() =>
-    this.byVisibility("more").filter((id) =>
+  protected readonly capsFields = computed(() => {
+    if (!this.access.can("POST /api/tasks", this.repoForAccess())) return [];
+    return this.byVisibility("more").filter((id) =>
       NewTaskSheetComponent.CAPS_SECTION_IDS.has(id),
-    ),
-  );
-  protected readonly more = computed(() =>
-    this.byVisibility("more").filter(
-      (id) => !NewTaskSheetComponent.CAPS_SECTION_IDS.has(id),
-    ),
-  );
+    );
+  });
+  protected readonly more = computed(() => {
+    const hidden = !this.access.can("POST /api/tasks", this.repoForAccess())
+      ? new Set(["model", "sandboxCpus"])
+      : new Set();
+    return this.byVisibility("more").filter(
+      (id) =>
+        !NewTaskSheetComponent.CAPS_SECTION_IDS.has(id) && !hidden.has(id),
+    );
+  });
 
   protected readonly capsSummarySuffix = computed(() => {
     const d = this.draft();
@@ -1203,12 +1209,21 @@ export class NewTaskSheetComponent {
     return this.access.can("POST /api/tasks", repo);
   });
 
-  protected readonly deniedReason = computed(() =>
-    this.access.deniedReason("POST /api/tasks", this.repoForAccess()),
-  );
+  protected readonly deniedReason = computed(() => {
+    const repo = this.repoForAccess();
+    const tmpl = this.selectedTemplate();
+    if (tmpl && repo && fromTemplateStem(repo, tmpl)) {
+      if (this.access.can("POST /api/tasks/from-template", repo)) return null;
+      return this.access.deniedReason("POST /api/tasks/from-template", repo);
+    }
+    return this.access.deniedReason("POST /api/tasks", repo);
+  });
 
-  protected readonly canAskDirector = computed(() =>
-    this.access.can("POST /api/tasks/{id}/comments"),
+  protected readonly canAskDirector = computed(
+    () =>
+      this.access.can("POST /api/tasks/{id}/comments") &&
+      this.access.can("GET /api/console-sessions") &&
+      this.access.can("PUT /api/console-sessions/{id}"),
   );
 
   constructor() {
@@ -1280,11 +1295,18 @@ export class NewTaskSheetComponent {
       this.templates.set(list);
     }
     if (reachRes.status === "fulfilled") {
-      const v = reachRes.value;
+      const v = reachRes.value as {
+        repos?: Array<{ repo: string; push?: boolean } | string>;
+      };
       const list = Array.isArray(v) ? v : (v?.repos ?? []);
       if (Array.isArray(list)) {
         this.reachableRepos.set(
-          list.filter((x): x is string => typeof x === "string"),
+          list.map((x) => (typeof x === "string" ? x : x.repo)),
+        );
+        this.reachablePushRepos.set(
+          list
+            .filter((x) => typeof x === "string" || x.push)
+            .map((x) => (typeof x === "string" ? x : x.repo)),
         );
       }
     }
@@ -1639,12 +1661,16 @@ export class NewTaskSheetComponent {
         d.sandboxCpus > 0 ||
         d.sandboxMemoryMb > 0;
 
+      const canOnlyPostFromTemplate =
+        !this.access.can("POST /api/tasks", effectiveRepo) &&
+        this.access.can("POST /api/tasks/from-template", effectiveRepo);
       if (
         tmpl &&
         stem &&
         effectiveRepo &&
-        !hasExtraTaskOverrides &&
-        this.access.can("POST /api/tasks/from-template", effectiveRepo)
+        (canOnlyPostFromTemplate ||
+          (!hasExtraTaskOverrides &&
+            this.access.can("POST /api/tasks/from-template", effectiveRepo)))
       ) {
         created = await this.api.post<Task>(
           "POST /api/tasks/from-template",

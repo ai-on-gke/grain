@@ -89,7 +89,7 @@ export class TaskPageComponent {
   protected onEscape(ev: KeyboardEvent): void {
     // Menus, dialogs and fields keep their own Escape.
     if (ev.defaultPrevented || isTypingTarget(ev.target)) return;
-    if (document.querySelector('[aria-modal="true"]')) return;
+    // if (document.querySelector('[aria-modal="true"]')) return;
     if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
     ev.preventDefault();
     const b = this.back();

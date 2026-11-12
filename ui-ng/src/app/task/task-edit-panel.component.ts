@@ -641,8 +641,10 @@ export class TaskEditPanelComponent {
       .map((s) => s.replace(/^#/, "").trim())
       .filter(Boolean);
     const decl: GoalDecl = {
+      ...t.goal,
       kind,
       spec: {
+        ...(t.goal?.spec || {}),
         ...(kind === "base-green"
           ? {
               repo: this.goalRepo().trim() || t.repo,
@@ -661,10 +663,16 @@ export class TaskEditPanelComponent {
               ...(this.goalRepo().trim()
                 ? { repo: this.goalRepo().trim() }
                 : {}),
+              ...(this.goalRepo().trim() && !isNaN(Number(ids[0]))
+                ? { number: Number(ids[0]) }
+                : {}),
             }
           : {}),
         ...(kind === "tasks-closed" ? { tasks: ids, until: "closed" } : {}),
-        ...(kind === "cl-submitted" && ids[0] ? { task: ids[0] } : {}),
+        ...(kind === "cl-submitted" && ids[0]
+          ? { task: ids[0], cl: Number(ids[0]) || undefined }
+          : {}),
+        ...(kind === "pipeline-healthy" ? { repos: ids } : {}),
       },
       on_met: this.goalOnMet(),
       on_limit: this.goalOnLimit(),

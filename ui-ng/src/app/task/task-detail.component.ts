@@ -502,7 +502,7 @@ export function duration(from?: string, to?: string): string {
                 </button>
                 @if (moreMenuOpen()) {
                   <ul
-                    class="pop-menu align-left"
+                    class="pop-menu pill-select-menu align-left"
                     role="menu"
                     aria-label="More lifecycle actions"
                     data-testid="act-more-menu"
@@ -538,10 +538,7 @@ export function duration(from?: string, to?: string): string {
                         </button>
                       </li>
                     }
-                    @if (
-                      t.state !== "closed" &&
-                      can("POST /api/tasks/{id}/rollover")
-                    ) {
+                    @if (canRollover()) {
                       <li>
                         <button
                           type="button"
@@ -553,7 +550,7 @@ export function duration(from?: string, to?: string): string {
                         </button>
                       </li>
                     }
-                    @if (can("POST /api/tasks/{id}/sandbox/recreate")) {
+                    @if (canRecreateSandbox()) {
                       <li>
                         <button
                           type="button"
@@ -1431,14 +1428,33 @@ export class TaskDetailComponent implements OnDestroy {
       (!!t.turnStopped || t.reason?.reason === "awaiting_reply/stopped")
     );
   });
+  protected readonly canRollover = computed(() => {
+    const t = this.t();
+    if (!t) return false;
+    return (
+      (t.admission === "durable" || !!t.goal) &&
+      !t.consoleSession &&
+      t.state !== "running" &&
+      t.state !== "closed" &&
+      this.can("POST /api/tasks/{id}/rollover")
+    );
+  });
+
+  protected readonly canRecreateSandbox = computed(() => {
+    const t = this.t();
+    if (!t) return false;
+    return (
+      t.state === "running" && this.can("POST /api/tasks/{id}/sandbox/recreate")
+    );
+  });
+
   protected readonly hasOverflowActions = computed(() => {
     const t = this.t();
     if (!t) return false;
     return (
-      (t.state !== "closed" &&
-        (this.can("POST /api/tasks/{id}/compact") ||
-          this.can("POST /api/tasks/{id}/rollover"))) ||
-      this.can("POST /api/tasks/{id}/sandbox/recreate") ||
+      (t.state !== "closed" && this.can("POST /api/tasks/{id}/compact")) ||
+      this.canRollover() ||
+      this.canRecreateSandbox() ||
       (t.state === "running" &&
         !t.paused &&
         this.can("POST /api/tasks/{id}/pause"))

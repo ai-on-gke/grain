@@ -329,11 +329,19 @@ export class GrantsPickerComponent {
   protected onToggle(id: string, nextOn: boolean): void {
     if (this.disabled()) return;
     const cur = this.held();
-    const next = nextOn
-      ? cur.includes(id)
-        ? [...cur]
-        : [...cur, id]
-      : cur.filter((x) => x !== id);
+    const method = this.methods().find((m) => m.ref === id);
+    const idsToAdd =
+      method?.aliasOf?.length && method.aliasOf.length > 1
+        ? method.aliasOf
+        : [id];
+    let next: string[] = [...cur];
+    if (nextOn) {
+      for (const alias of idsToAdd) {
+        if (!next.includes(alias)) next.push(alias);
+      }
+    } else {
+      next = next.filter((x) => !idsToAdd.includes(x));
+    }
     this.heldChange.emit(next);
     if (nextOn) {
       this.attachGrant.emit({ id, recorded: id });
@@ -362,12 +370,12 @@ export class GrantsPickerComponent {
         ? this.api.get<APIScopeSetsResponse>("GET /api/api-scope-sets")
         : Promise.resolve({ sets: [] }),
       this.access.can("GET /api/capability-methods", repo)
-        ? this.api.get<CapabilityMethod[] | { methods?: CapabilityMethod[] }>(
+        ? this.api.get<{ items?: CapabilityMethod[] }>(
             "GET /api/capability-methods",
             undefined,
             query,
           )
-        : Promise.resolve([]),
+        : Promise.resolve({ items: [] }),
     ]);
     if (setsRes.status === "fulfilled") {
       const sets = setsRes.value?.sets ?? [];
@@ -377,8 +385,13 @@ export class GrantsPickerComponent {
       }
     }
     if (methodsRes.status === "fulfilled") {
-      const val = methodsRes.value;
-      const list = Array.isArray(val) ? val : (val?.methods ?? []);
+      const val = methodsRes.value as {
+        items?: CapabilityMethod[];
+        methods?: CapabilityMethod[];
+      };
+      const list = Array.isArray(val)
+        ? val
+        : (val?.items ?? val?.methods ?? []);
       this.methods.set(list);
       if (!this.selectedMethod() && list[0]) {
         this.selectedMethod.set(list[0].ref);

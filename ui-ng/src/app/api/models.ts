@@ -240,8 +240,12 @@ export interface Task {
   filedVia?: string;
   changelists?: string[];
   changeTargetKind?: string;
-  clReview?: unknown;
-  clSubmit?: unknown;
+  clReview?: {
+    canPublish?: boolean;
+    canMail?: boolean;
+    [key: string]: unknown;
+  };
+  clSubmit?: { canSync?: boolean; [key: string]: unknown };
   derivedFrom?: string[];
   designs?: string[];
   // Open dependencies and the state of each (GET /api/tasks).
@@ -281,6 +285,7 @@ export interface AccessRequestItem {
   requiresPerson?: boolean;
   held?: boolean;
   error?: string;
+  substitute?: boolean;
   substituteGrant?: string;
 }
 
@@ -379,6 +384,7 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  aliasOf?: string[];
 }
 
 export interface APIScopeSetRow {

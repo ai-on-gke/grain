@@ -102,3 +102,8 @@
   font-family: var(--grain-font-mono);
   font-size: 12px;
 }
+
+.grants-mode-tabs {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
