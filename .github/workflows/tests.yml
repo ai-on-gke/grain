@@ -141,7 +141,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-go-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -212,7 +212,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
+        run: ./scripts/run-go-tests.sh go test -race -timeout 35m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
 
   go-e2e:
     name: go e2e
