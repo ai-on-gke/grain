@@ -1847,7 +1847,6 @@ esac`
 // wait for the route, then take it away -- which also means this cannot
 // race the units that install it.
 func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string, runner sandboxRunner, shape Shape, addr netip.Addr) error {
-	k.registerGuestClient(ctx, name, addr)
 	if model.NormalizeNetworkAccess(shape.NetworkAccess) != model.NetworkNone {
 		if err := k.enforceGranuleHostIsolation(ctx, name, addr, true); err != nil {
 			return fmt.Errorf("orchestrator: granule VM %q has open network access, and this host's firewall "+
@@ -1856,6 +1855,7 @@ func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string,
 				"sandbox needs nft on this host, and this daemon able to run it as root (directly, with "+
 				"CAP_NET_ADMIN, or through `sudo -n nft`)", name, err)
 		}
+		k.registerGuestClient(ctx, name, addr)
 		return nil
 	}
 	if err := k.restrictGuestDNS(ctx, name); err != nil {
@@ -1879,6 +1879,7 @@ func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string,
 		// Nothing to check against, which is a deployment that named no
 		// -granule-git-proxy-host -- it has no git proxy for a guest to
 		// reach either, so there is no reachability left to lose.
+		k.registerGuestClient(ctx, name, addr)
 		return nil
 	}
 	if _, stderr, exitCode := runner.Run(ctx,
@@ -1889,6 +1890,7 @@ func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string,
 			"directly connected to for a sandbox with no default route to reach it",
 			name, k.cfg.GitProxyHost, guestCommandDetail(stderr, exitCode))
 	}
+	k.registerGuestClient(ctx, name, addr)
 	log.Printf("orchestrator: granule VM %q: dropped the guest's default route, so this sandbox reaches "+
 		"this deployment's own services and nothing else", name)
 	return nil
@@ -2295,6 +2297,7 @@ func (k *GranuleSandboxes) Readopt(ctx context.Context, sandbox string) (Sandbox
 			return nil, fmt.Errorf("orchestrator: readopting granule VM %q: %w", name, err)
 		}
 	}
+	k.registerGuestClient(ctx, name, addr)
 	sb := &granuleSandbox{owner: k, name: sandbox, vmName: name, runner: k.execRunner(name), shape: k.defaultShape(), addr: addr, startedAt: k.now()}
 	k.mu.Lock()
 	k.live[sandbox] = sb

@@ -324,12 +324,16 @@ func NewServer(cfg Config) *Server {
 	if s.logf == nil {
 		s.logf = log.Printf
 	}
-	s.dockerClient, _ = newDockerClient(s.client, s.dockerRegistry(), s.credentials)
+	// Only GHCR's pull client carries the deployment's GitHub credential,
+	// and only after scopedOCIClient has checked RepoScope; every other
+	// registry client runs anonymously so neither a trailing-dot host nor a
+	// custom mirror URL can spend Credentials outside RepoScope.
+	s.dockerClient, _ = newDockerClient(s.client, s.dockerRegistry(), nil)
 	s.ghcrClient, s.ghcrAuth = newDockerClient(s.client, s.ghcrRegistry(), s.credentials)
 	// The same registry with no credential behind it, for every request
 	// whose sandbox may not spend the deployment's (mayUseCredentials).
 	s.ghcrAnonClient, _ = newDockerClient(s.client, s.ghcrRegistry(), nil)
-	s.gcrClient, _ = newDockerClient(s.client, s.gcrRegistry(), s.credentials)
+	s.gcrClient, _ = newDockerClient(s.client, s.gcrRegistry(), nil)
 	return s
 }
 
@@ -344,6 +348,7 @@ func (s *Server) dockerScheme() string {
 
 // ociClient returns the upstream registry URL and authenticating client for an OCI registry host.
 func (s *Server) ociClient(host string) (registryURL string, client *http.Client) {
+	host = strings.TrimSuffix(hostKey(host), ".")
 	switch host {
 	case "registry-1.docker.io", "docker.io":
 		return s.dockerRegistry(), s.dockerClient
@@ -360,7 +365,7 @@ func (s *Server) ociClient(host string) (registryURL string, client *http.Client
 		}
 		c, ok := s.ociClients[host]
 		if !ok {
-			c, _ = newDockerClient(s.client, regURL, s.credentials)
+			c, _ = newDockerClient(s.client, regURL, nil)
 			s.ociClients[host] = c
 		}
 		return regURL, c
@@ -438,7 +443,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h, _, err := net.SplitHostPort(reqHost); err == nil {
 		reqHost = h
 	}
-	reqHost = strings.ToLower(strings.TrimSpace(reqHost))
+	reqHost = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(reqHost)), ".")
 
 	// Check if this is a transparent request matching an intercepted ecosystem domain
 	if reqHost != "" && !strings.HasPrefix(reqHost, "127.") && reqHost != "localhost" && reqHost != "172.17.0.1" && reqHost != "0.0.0.0" {

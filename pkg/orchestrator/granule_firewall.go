@@ -1100,7 +1100,17 @@ func (k *GranuleSandboxes) registerGuestClient(ctx context.Context, vmName strin
 		ips = nil
 	}
 	if addr.IsValid() {
-		ips = append(ips, net.IP(addr.Unmap().AsSlice()))
+		allocated := net.IP(addr.Unmap().AsSlice())
+		seen := false
+		for _, ip := range ips {
+			if ip.Equal(allocated) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			ips = append(ips, allocated)
+		}
 	}
 	sandbox := strings.TrimPrefix(vmName, VMNamePrefix)
 	k.mu.Lock()

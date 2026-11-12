@@ -73,6 +73,11 @@ var DefaultGitHubFileHosts = []string{
 // maxGitRequestBodyBytes bounds a git upload-pack request body read into memory.
 const maxGitRequestBodyBytes = 32 << 20
 
+// githubAnonKeyPrefix namespaces anonymous GitHub GET cache entries so any
+// release asset, archive, or raw file cached before githubAnonymous existed
+// (possibly fetched with a caller's credential) is never served again.
+const githubAnonKeyPrefix = "anon:"
+
 // githubMethodAllowed reports whether r is a request this cache forwards
 // to GitHub at all: GET and HEAD anywhere, which is every archive, raw
 // file, release asset and ref advertisement, and POST only to git's own
@@ -149,7 +154,7 @@ func (s *Server) serveGitHub(w http.ResponseWriter, r *http.Request) {
 		// Push operation: pass through uncached
 		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: false})
 	default:
-		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: githubCacheable("github.com", cleanPath) && githubAnonymous(r)})
+		s.serve(w, r, object{kind: KindGitHub, url: upstream, key: githubAnonKeyPrefix + upstream, cacheable: githubCacheable("github.com", cleanPath) && githubAnonymous(r)})
 	}
 }
 
@@ -202,7 +207,7 @@ func (s *Server) serveTransparentGitHub(w http.ResponseWriter, r *http.Request, 
 	case strings.HasSuffix(cleanPath, "/git-receive-pack"):
 		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: false})
 	default:
-		s.serve(w, r, object{kind: KindGitHub, url: upstream, cacheable: githubCacheable(host, cleanPath) && githubAnonymous(r)})
+		s.serve(w, r, object{kind: KindGitHub, url: upstream, key: githubAnonKeyPrefix + upstream, cacheable: githubCacheable(host, cleanPath) && githubAnonymous(r)})
 	}
 }
 

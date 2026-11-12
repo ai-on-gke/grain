@@ -943,6 +943,7 @@ func TestDockerPullOnlyScope(t *testing.T) {
 		"repository:a/b/c:push repository:x/y:*":   "repository:a/b/c:pull repository:x/y:pull",
 		"registry:catalog:* repository:a/b:delete": "repository:a/b:pull",
 		"repository:ghcr.io:443/a/b:push":          "repository:ghcr.io:443/a/b:pull",
+		"repository:a/b/sub:push,delete:pull":      "repository:a/b/sub:pull",
 		"":                                         "",
 		"repository:nonsense":                      "",
 	} {

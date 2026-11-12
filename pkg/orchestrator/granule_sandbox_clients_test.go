@@ -19,7 +19,11 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // recordingSandboxClients is a SandboxClientRegistry that keeps what it
@@ -56,6 +60,9 @@ func TestGranuleGuestIsRegisteredWithThePackageCacheUnderItsSandboxName(t *testi
 			t.Fatalf("address %s registered as %q, want run-41", addr, got)
 		}
 	}
+	if got := len(k.clientRegistered[vm]); got != 2 {
+		t.Fatalf("clientRegistered[%s] has %d entries (%v), want 2 deduplicated addresses", vm, got, k.clientRegistered[vm])
+	}
 	k.cleanupGranuleHostIsolation(ctx, vm)
 	if len(clients.names) != 0 {
 		t.Fatalf("after cleanup still registered: %v", clients.names)
@@ -69,5 +76,51 @@ func TestGranuleGuestIsRegisteredWithThePackageCacheUnderItsSandboxName(t *testi
 	k.registerGuestClient(ctx, vm, netip.Addr{})
 	if len(clients.names) != 0 {
 		t.Fatalf("registered with no address found: %v", clients.names)
+	}
+}
+
+// TestGranuleReadoptReRegistersGuestClientsAndFailedIsolationNeverRegisters
+// checks both halves of lifecycle safety: Readopt across a daemon restart
+// restores the adopted VM's addresses in SandboxClients, while a VM whose
+// host isolation fails never overwrites an address held by another sandbox.
+func TestGranuleReadoptReRegistersGuestClientsAndFailedIsolationNeverRegisters(t *testing.T) {
+	stateDir := t.TempDir()
+	vm := VMNamePrefix + "41-1"
+	if err := os.WriteFile(filepath.Join(stateDir, vm+".json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	clients := &recordingSandboxClients{names: map[string]string{}}
+	k := NewGranuleSandboxes(GranuleConfig{StateDir: stateDir, SandboxClients: clients})
+	k.guestIPs = func(ctx context.Context, vmName string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("172.18.0.19")}, nil
+	}
+
+	ctx := context.Background()
+	if _, err := ReadoptSandbox(ctx, k, "41-1"); err != nil {
+		t.Fatalf("ReadoptSandbox: %v", err)
+	}
+	if got := clients.names["172.18.0.19"]; got != "41-1" {
+		t.Fatalf("after Readopt, 172.18.0.19 registered as %q, want 41-1", got)
+	}
+	k.cleanupGranuleHostIsolation(ctx, vm)
+	if len(clients.names) != 0 {
+		t.Fatalf("after cleanup still registered: %v", clients.names)
+	}
+
+	// Now simulate another live sandbox holding 10.77.0.2 while a new VM
+	// fails checkAllocatedAddress inside enforceGranuleHostIsolation:
+	// 10.77.0.2 must remain registered to the existing sandbox.
+	withHostFirewall(t, nil, fixedNetworks("172.17.0.9|16|172.17.0.1|||\n"))
+	clients.names["10.77.0.2"] = "existing-run"
+	k.guestIPs = func(ctx context.Context, vmName string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("172.17.0.9")}, nil
+	}
+	err := k.enforceGuestNetwork(ctx, VMNamePrefix+"42-1", okRunner{}, Shape{NetworkAccess: model.NetworkOpen}, netip.MustParseAddr("10.77.0.2"))
+	if err == nil {
+		t.Fatal("enforceGuestNetwork succeeded despite allocated address mismatch")
+	}
+	if got := clients.names["10.77.0.2"]; got != "existing-run" {
+		t.Fatalf("failed enforceGuestNetwork clobbered 10.77.0.2 registration: got %q, want existing-run", got)
 	}
 }

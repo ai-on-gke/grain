@@ -73,7 +73,7 @@ type ClientNames struct {
 
 // RegisterClient records that requests from ip come from sandbox.
 func (c *ClientNames) RegisterClient(ip net.IP, sandbox string) {
-	if c == nil || ip == nil || sandbox == "" {
+	if c == nil || len(ip) == 0 || ip.IsUnspecified() || sandbox == "" {
 		return
 	}
 	c.mu.Lock()
