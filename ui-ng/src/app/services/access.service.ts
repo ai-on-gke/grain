@@ -18,11 +18,11 @@ import { routeScope } from "../api/grain-api.service";
 import type { GrainConfig, WhoamiResponse } from "../api/models";
 
 export function initialsFromIdentity(raw: string): string {
-  const clean = (raw || "").trim();
+  const clean = (raw || "").replace(/\s*\([^)]*\)\s*/g, " ").trim();
   if (!clean) return "G";
   const local = clean.includes("@") ? clean.split("@")[0] : clean;
   const words = local
-    .replace(/[._-]+/g, " ")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
     .trim()
     .split(/\s+/)
     .filter(Boolean);

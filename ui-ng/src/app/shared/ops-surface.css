@@ -278,6 +278,12 @@
   min-width: 0;
 }
 
+.ops-table-wrap:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 .ops-table {
   width: 100%;
   border-collapse: collapse;

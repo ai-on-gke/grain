@@ -314,46 +314,46 @@ type SuitesPaneView = "suites" | "runs";
                 <ul class="proc-list">
                   @for (s of filteredSchedules(); track s.id) {
                     @let badge = schedBadge(s);
-                    <li
-                      class="proc-row"
-                      [class.is-selected]="selectedScheduleId() === s.id"
-                      [attr.aria-current]="
-                        selectedScheduleId() === s.id ? 'true' : null
-                      "
-                      [attr.data-testid]="'sched-row-' + s.id"
-                      tabindex="0"
-                      role="button"
-                      (click)="selectSchedule(s.id, true)"
-                      (keydown.enter)="selectSchedule(s.id, true)"
-                      (keydown.space)="
-                        selectSchedule(s.id, true); $event.preventDefault()
-                      "
-                    >
-                      <div class="proc-row-top">
-                        <span [class]="'status-pill ' + badge.tone">
-                          <g-status-icon
-                            [tone]="badge.tone"
-                            [kind]="badge.iconKind"
-                          />
-                          {{ badge.label }}
-                        </span>
-                        <span class="proc-row-title">{{
-                          s.title || s.templateName || s.suiteName || s.id
-                        }}</span>
-                        @if (isTrigger(s)) {
-                          <span class="ci-provider-tag">Trigger</span>
-                        }
-                        @if (s.declaredIn) {
-                          <span class="ci-provider-tag">.grain</span>
-                        }
-                      </div>
-                      <div class="proc-row-sub">
-                        <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
-                        @if (s.repo) {
-                          <span class="tabular">· {{ s.repo }}</span>
-                        }
-                        <span>· overlap: {{ s.overlap || "skip" }}</span>
-                      </div>
+                    <li class="proc-li">
+                      <button
+                        type="button"
+                        class="proc-row"
+                        [class.is-selected]="selectedScheduleId() === s.id"
+                        [attr.aria-current]="
+                          selectedScheduleId() === s.id ? 'true' : null
+                        "
+                        [attr.data-testid]="'sched-row-' + s.id"
+                        (click)="selectSchedule(s.id, true)"
+                        (keydown.space)="
+                          selectSchedule(s.id, true); $event.preventDefault()
+                        "
+                      >
+                        <div class="proc-row-top">
+                          <span [class]="'status-pill ' + badge.tone">
+                            <g-status-icon
+                              [tone]="badge.tone"
+                              [kind]="badge.iconKind"
+                            />
+                            {{ badge.label }}
+                          </span>
+                          <span class="proc-row-title">{{
+                            s.title || s.templateName || s.suiteName || s.id
+                          }}</span>
+                          @if (isTrigger(s)) {
+                            <span class="ci-provider-tag">Trigger</span>
+                          }
+                          @if (s.declaredIn) {
+                            <span class="ci-provider-tag">.grain</span>
+                          }
+                        </div>
+                        <div class="proc-row-sub">
+                          <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
+                          @if (s.repo) {
+                            <span class="tabular">· {{ s.repo }}</span>
+                          }
+                          <span>· overlap: {{ s.overlap || "skip" }}</span>
+                        </div>
+                      </button>
                     </li>
                   }
                 </ul>
@@ -386,50 +386,50 @@ type SuitesPaneView = "suites" | "runs";
                 <ul class="proc-list">
                   @for (t of filteredTemplates(); track t.id) {
                     @let badge = tmplBadge(t);
-                    <li
-                      class="proc-row"
-                      [class.is-selected]="selectedTemplateId() === t.id"
-                      [attr.aria-current]="
-                        selectedTemplateId() === t.id ? 'true' : null
-                      "
-                      [attr.data-testid]="'tmpl-row-' + t.id"
-                      tabindex="0"
-                      role="button"
-                      (click)="selectTemplate(t.id, true)"
-                      (keydown.enter)="selectTemplate(t.id, true)"
-                      (keydown.space)="
-                        selectTemplate(t.id, true); $event.preventDefault()
-                      "
-                    >
-                      <div class="proc-row-top">
-                        <span [class]="'status-pill ' + badge.tone">
-                          <g-status-icon
-                            [tone]="badge.tone"
-                            [kind]="badge.iconKind"
-                          />
-                          {{ badge.label }}
-                        </span>
-                        <span class="proc-row-title">{{
-                          t.name || t.title || t.id
-                        }}</span>
-                        @if ((t.fields ?? []).length > 0) {
-                          <span class="ci-provider-tag tabular"
-                            >{{ (t.fields ?? []).length }} params</span
-                          >
-                        }
-                      </div>
-                      <div class="proc-row-sub">
-                        <span>{{ t.title }}</span>
-                        @if (t.declaredIn) {
-                          <span class="tabular"
-                            >· {{ t.declaredIn.repo }} ({{
-                              t.declaredIn.path
-                            }})</span
-                          >
-                        } @else if (t.repo) {
-                          <span class="tabular">· bound to {{ t.repo }}</span>
-                        }
-                      </div>
+                    <li class="proc-li">
+                      <button
+                        type="button"
+                        class="proc-row"
+                        [class.is-selected]="selectedTemplateId() === t.id"
+                        [attr.aria-current]="
+                          selectedTemplateId() === t.id ? 'true' : null
+                        "
+                        [attr.data-testid]="'tmpl-row-' + t.id"
+                        (click)="selectTemplate(t.id, true)"
+                        (keydown.space)="
+                          selectTemplate(t.id, true); $event.preventDefault()
+                        "
+                      >
+                        <div class="proc-row-top">
+                          <span [class]="'status-pill ' + badge.tone">
+                            <g-status-icon
+                              [tone]="badge.tone"
+                              [kind]="badge.iconKind"
+                            />
+                            {{ badge.label }}
+                          </span>
+                          <span class="proc-row-title">{{
+                            t.name || t.title || t.id
+                          }}</span>
+                          @if ((t.fields ?? []).length > 0) {
+                            <span class="ci-provider-tag tabular"
+                              >{{ (t.fields ?? []).length }} params</span
+                            >
+                          }
+                        </div>
+                        <div class="proc-row-sub">
+                          <span>{{ t.title }}</span>
+                          @if (t.declaredIn) {
+                            <span class="tabular"
+                              >· {{ t.declaredIn.repo }} ({{
+                                t.declaredIn.path
+                              }})</span
+                            >
+                          } @else if (t.repo) {
+                            <span class="tabular">· bound to {{ t.repo }}</span>
+                          }
+                        </div>
+                      </button>
                     </li>
                   }
                 </ul>
@@ -466,48 +466,48 @@ type SuitesPaneView = "suites" | "runs";
                 } @else {
                   <ul class="proc-list">
                     @for (st of filteredSuites(); track st.id) {
-                      <li
-                        class="proc-row"
-                        [class.is-selected]="
-                          selectedSuiteRunId() === null &&
-                          selectedSuiteId() === st.id
-                        "
-                        [attr.aria-current]="
-                          selectedSuiteRunId() === null &&
-                          selectedSuiteId() === st.id
-                            ? 'true'
-                            : null
-                        "
-                        [attr.data-testid]="'suite-row-' + st.id"
-                        tabindex="0"
-                        role="button"
-                        (click)="selectSuite(st.id, true)"
-                        (keydown.enter)="selectSuite(st.id, true)"
-                        (keydown.space)="
-                          selectSuite(st.id, true); $event.preventDefault()
-                        "
-                      >
-                        <div class="proc-row-top">
-                          <span class="status-pill proposal">
-                            <g-status-icon tone="proposal" kind="proposal" />
-                            {{ suiteModeOf(st.mode, st.count, st.maxPasses) }}
-                          </span>
-                          <span class="proc-row-title">{{ st.name }}</span>
-                          @if (st.declaredIn) {
-                            <span class="ci-provider-tag">.grain</span>
-                          }
-                        </div>
-                        <div class="proc-row-sub">
-                          <span class="tabular"
-                            >{{ st.items.length }} templates</span
-                          >
-                          @if (st.autoMerge) {
-                            <span>· auto-merge</span>
-                          }
-                          @if (st.requireApproval) {
-                            <span>· requires approval</span>
-                          }
-                        </div>
+                      <li class="proc-li">
+                        <button
+                          type="button"
+                          class="proc-row"
+                          [class.is-selected]="
+                            selectedSuiteRunId() === null &&
+                            selectedSuiteId() === st.id
+                          "
+                          [attr.aria-current]="
+                            selectedSuiteRunId() === null &&
+                            selectedSuiteId() === st.id
+                              ? 'true'
+                              : null
+                          "
+                          [attr.data-testid]="'suite-row-' + st.id"
+                          (click)="selectSuite(st.id, true)"
+                          (keydown.space)="
+                            selectSuite(st.id, true); $event.preventDefault()
+                          "
+                        >
+                          <div class="proc-row-top">
+                            <span class="status-pill proposal">
+                              <g-status-icon tone="proposal" kind="proposal" />
+                              {{ suiteModeOf(st.mode, st.count, st.maxPasses) }}
+                            </span>
+                            <span class="proc-row-title">{{ st.name }}</span>
+                            @if (st.declaredIn) {
+                              <span class="ci-provider-tag">.grain</span>
+                            }
+                          </div>
+                          <div class="proc-row-sub">
+                            <span class="tabular"
+                              >{{ st.items.length }} templates</span
+                            >
+                            @if (st.autoMerge) {
+                              <span>· auto-merge</span>
+                            }
+                            @if (st.requireApproval) {
+                              <span>· requires approval</span>
+                            }
+                          </div>
+                        </button>
                       </li>
                     }
                   </ul>
@@ -521,47 +521,49 @@ type SuitesPaneView = "suites" | "runs";
                   <ul class="proc-list">
                     @for (sr of filteredSuiteRuns(); track sr.id) {
                       @let rBadge = runBadgeOf(sr.status);
-                      <li
-                        class="proc-row"
-                        [class.is-selected]="selectedSuiteRunId() === sr.id"
-                        [attr.aria-current]="
-                          selectedSuiteRunId() === sr.id ? 'true' : null
-                        "
-                        [attr.data-testid]="'suite-run-row-' + sr.id"
-                        tabindex="0"
-                        role="button"
-                        (click)="selectSuiteRun(sr.id, true)"
-                        (keydown.enter)="selectSuiteRun(sr.id, true)"
-                        (keydown.space)="
-                          selectSuiteRun(sr.id, true); $event.preventDefault()
-                        "
-                      >
-                        <div class="proc-row-top">
-                          <span [class]="'status-pill ' + rBadge.tone">
-                            <g-status-icon
-                              [tone]="rBadge.tone"
-                              [kind]="rBadge.iconKind"
-                            />
-                            {{ rBadge.label }}
-                          </span>
-                          <span class="proc-row-title"
-                            >{{ sr.suiteName || sr.suiteId }} #{{ sr.id }}</span
-                          >
-                          <span class="ci-provider-tag tabular"
-                            >Pass {{ sr.pass }}</span
-                          >
-                        </div>
-                        <div class="proc-row-sub">
-                          <span class="tabular"
-                            >{{ sr.repo }} &#64;
-                            {{ sr.base || "default" }}</span
-                          >
-                          <span class="tabular"
-                            >·
-                            {{ sr.taskCount ?? sr.tasks.length }}
-                            tasks</span
-                          >
-                        </div>
+                      <li class="proc-li">
+                        <button
+                          type="button"
+                          class="proc-row"
+                          [class.is-selected]="selectedSuiteRunId() === sr.id"
+                          [attr.aria-current]="
+                            selectedSuiteRunId() === sr.id ? 'true' : null
+                          "
+                          [attr.data-testid]="'suite-run-row-' + sr.id"
+                          (click)="selectSuiteRun(sr.id, true)"
+                          (keydown.space)="
+                            selectSuiteRun(sr.id, true); $event.preventDefault()
+                          "
+                        >
+                          <div class="proc-row-top">
+                            <span [class]="'status-pill ' + rBadge.tone">
+                              <g-status-icon
+                                [tone]="rBadge.tone"
+                                [kind]="rBadge.iconKind"
+                              />
+                              {{ rBadge.label }}
+                            </span>
+                            <span class="proc-row-title"
+                              >{{ sr.suiteName || sr.suiteId }} #{{
+                                sr.id
+                              }}</span
+                            >
+                            <span class="ci-provider-tag tabular"
+                              >Pass {{ sr.pass }}</span
+                            >
+                          </div>
+                          <div class="proc-row-sub">
+                            <span class="tabular"
+                              >{{ sr.repo }} &#64;
+                              {{ sr.base || "default" }}</span
+                            >
+                            <span class="tabular"
+                              >·
+                              {{ sr.taskCount ?? sr.tasks.length }}
+                              tasks</span
+                            >
+                          </div>
+                        </button>
                       </li>
                     }
                   </ul>
@@ -581,56 +583,58 @@ type SuitesPaneView = "suites" | "runs";
                 <ul class="proc-list">
                   @for (repo of filteredDeclRepos(); track repo) {
                     @let pendingCount = repoPendingAcceptances(repo);
-                    <li
-                      class="proc-row"
-                      [class.is-selected]="selectedDeclRepo() === repo"
-                      [attr.aria-current]="
-                        selectedDeclRepo() === repo ? 'true' : null
-                      "
-                      [attr.data-testid]="'decl-repo-row-' + repo"
-                      tabindex="0"
-                      role="button"
-                      (click)="selectDeclRepo(repo, true)"
-                      (keydown.enter)="selectDeclRepo(repo, true)"
-                      (keydown.space)="
-                        selectDeclRepo(repo, true); $event.preventDefault()
-                      "
-                    >
-                      <div class="proc-row-top">
-                        <span
-                          [class]="
-                            pendingCount > 0
-                              ? 'status-pill blast'
-                              : 'status-pill healthy'
-                          "
-                        >
-                          <g-status-icon
-                            [tone]="pendingCount > 0 ? 'blast' : 'healthy'"
-                            [kind]="pendingCount > 0 ? 'blast' : 'healthy'"
-                          />
-                          {{
-                            pendingCount > 0
-                              ? pendingCount + " awaiting acceptance"
-                              : "Synced"
-                          }}
-                        </span>
-                        <span class="proc-row-title tabular">{{ repo }}</span>
-                      </div>
-                      <div class="proc-row-sub">
-                        @if (store.repoDefaults()[repo]; as def) {
-                          <span>
-                            .grain declarations:
-                            {{ def.declarations ? "enabled" : "disabled" }}
+                    <li class="proc-li">
+                      <button
+                        type="button"
+                        class="proc-row"
+                        [class.is-selected]="selectedDeclRepo() === repo"
+                        [attr.aria-current]="
+                          selectedDeclRepo() === repo ? 'true' : null
+                        "
+                        [attr.data-testid]="'decl-repo-row-' + repo"
+                        (click)="selectDeclRepo(repo, true)"
+                        (keydown.space)="
+                          selectDeclRepo(repo, true); $event.preventDefault()
+                        "
+                      >
+                        <div class="proc-row-top">
+                          <span
+                            [class]="
+                              pendingCount > 0
+                                ? 'status-pill blast'
+                                : 'status-pill healthy'
+                            "
+                          >
+                            <g-status-icon
+                              [tone]="pendingCount > 0 ? 'blast' : 'healthy'"
+                              [kind]="pendingCount > 0 ? 'blast' : 'healthy'"
+                            />
+                            {{
+                              pendingCount > 0
+                                ? pendingCount + " awaiting acceptance"
+                                : "Synced"
+                            }}
                           </span>
-                          @if (def.declarationsStatus?.error) {
-                            <span style="color: var(--md-sys-color-error)"
-                              >· sync error</span
+                          <span class="proc-row-title tabular">{{ repo }}</span>
+                        </div>
+                        <div class="proc-row-sub">
+                          @if (store.repoDefaults()[repo]; as def) {
+                            <span>
+                              .grain declarations:
+                              {{ def.declarations ? "enabled" : "disabled" }}
+                            </span>
+                            @if (def.declarationsStatus?.error) {
+                              <span style="color: var(--md-sys-color-error)"
+                                >· sync error</span
+                              >
+                            }
+                          } @else {
+                            <span
+                              >Inspect .grain/ declarations & workflows</span
                             >
                           }
-                        } @else {
-                          <span>Inspect .grain/ declarations & workflows</span>
-                        }
-                      </div>
+                        </div>
+                      </button>
                     </li>
                   }
                 </ul>

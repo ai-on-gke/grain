@@ -461,7 +461,12 @@ const PERSISTENT_ACTIONS: readonly {
                     No active task sandboxes right now.
                   </p>
                 } @else {
-                  <div class="ops-table-wrap">
+                  <div
+                    class="ops-table-wrap"
+                    tabindex="0"
+                    role="region"
+                    aria-label="Fleet table"
+                  >
                     <table class="ops-table">
                       <thead>
                         <tr>

@@ -752,7 +752,12 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
               }
 
               @if ((report()?.agents?.templates?.length ?? 0) > 0) {
-                <div class="ops-table-wrap">
+                <div
+                  class="ops-table-wrap"
+                  tabindex="0"
+                  role="region"
+                  aria-label="Agent template wake efficiency"
+                >
                   <table class="ops-table">
                     <thead>
                       <tr>
@@ -1105,7 +1110,12 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
               }
 
               @if (u.scopes.length > 0) {
-                <div class="ops-table-wrap">
+                <div
+                  class="ops-table-wrap"
+                  tabindex="0"
+                  role="region"
+                  aria-label="Token usage by connection"
+                >
                   <table class="ops-table" data-testid="usage-scopes-table">
                     <thead>
                       <tr>

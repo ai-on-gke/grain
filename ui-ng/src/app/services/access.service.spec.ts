@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { TestBed } from "@angular/core/testing";
-import { AccessService } from "./access.service";
+import { AccessService, initialsFromIdentity } from "./access.service";
 
 describe("AccessService", () => {
   let svc: AccessService;
@@ -70,5 +70,12 @@ describe("AccessService", () => {
     });
     expect(svc.can("POST /api/tasks/{id}/close", "acme/widgets")).toBe(true);
     expect(svc.can("POST /api/tasks/{id}/close", "acme/other")).toBe(false);
+  });
+
+  it("derives crisp initials and ignores parenthetical suffixes", () => {
+    expect(initialsFromIdentity("")).toBe("G");
+    expect(initialsFromIdentity("operator (local)")).toBe("OP");
+    expect(initialsFromIdentity("Alice Example (access code)")).toBe("AE");
+    expect(initialsFromIdentity("bob.smith@example.com")).toBe("BS");
   });
 });
