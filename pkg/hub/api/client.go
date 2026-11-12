@@ -92,12 +92,6 @@ func IsRateLimited(err error) bool {
 	return errors.As(err, &ae) && ae.StatusCode == http.StatusTooManyRequests
 }
 
-// IsServiceUnavailable reports whether err is an HTTP 503 APIError.
-func IsServiceUnavailable(err error) bool {
-	var ae *APIError
-	return errors.As(err, &ae) && ae.StatusCode == http.StatusServiceUnavailable
-}
-
 func parseAPIError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
 	ae := &APIError{
@@ -363,15 +357,6 @@ func (c *Client) Me(ctx context.Context) (*MeResponse, error) {
 	return &out, nil
 }
 
-// Shapes fetches GET /api/shapes (available hosted VM shapes).
-func (c *Client) Shapes(ctx context.Context) ([]Shape, error) {
-	var out ShapesResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/api/shapes", nil, nil, &out); err != nil {
-		return nil, err
-	}
-	return out.Shapes, nil
-}
-
 // CheckName fetches GET /api/entries/<name>/availability.
 func (c *Client) CheckName(ctx context.Context, name string) (*NameAvailabilityResponse, error) {
 	var out NameAvailabilityResponse
@@ -522,15 +507,6 @@ func (c *Client) Heartbeat(ctx context.Context, name string, req HeartbeatReques
 	return &out, nil
 }
 
-// InstanceStatus fetches GET /api/registry/status from a grain instance.
-func (c *Client) InstanceStatus(ctx context.Context) (*InstanceStatusResponse, error) {
-	var out InstanceStatusResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/api/registry/status", nil, nil, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 // RotateCredential sends POST /api/entries/<name>/credentials/rotate.
 func (c *Client) RotateCredential(ctx context.Context, name string, req RotateCredentialRequest) (*RotateCredentialResponse, error) {
 	var out RotateCredentialResponse
@@ -539,12 +515,6 @@ func (c *Client) RotateCredential(ctx context.Context, name string, req RotateCr
 		return nil, err
 	}
 	return &out, nil
-}
-
-// RevokeCredential sends DELETE /api/entries/<name>/credentials/<credentialID>.
-func (c *Client) RevokeCredential(ctx context.Context, name, credentialID string) error {
-	path := "/api/entries/" + url.PathEscape(name) + "/credentials/" + url.PathEscape(credentialID)
-	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
 }
 
 // UpgradeEntry sends POST /api/entries/<name>/upgrade.
