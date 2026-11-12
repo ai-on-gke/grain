@@ -103,7 +103,9 @@ type ActionsRerunRun struct {
 	Attempt int `json:"attempt"`
 }
 
-// Text is the result as grain ci retrigger prints it.
+// Text is the result as grain ci retrigger prints it, without the line
+// saying how to wait for it, which differs between the sandbox's grain ci
+// wait (the pull request's checks) and the host's (a run id).
 func (r ActionsRerunResult) Text() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Re-ran GitHub Actions on %s at %s:\n", r.Repo, shortHead(r.Head))
@@ -124,7 +126,6 @@ func (r ActionsRerunResult) Text() string {
 	fmt.Fprintf(&b, "No commit was pushed: the pull request's head, approvals and reviews are unchanged.\n")
 	fmt.Fprintf(&b, "Each run at a commit is re-run at most %d times, grain's own automatic re-runs of a runner fault included; "+
 		"past that, the failure is the change's to fix.\n", r.Bound)
-	fmt.Fprintf(&b, "Wait for it with: grain ci wait\n")
 	return b.String()
 }
 
@@ -142,7 +143,7 @@ func (a SandboxCLIActions) RerunGitHubChecks(ctx context.Context, taskID string,
 	if err != nil {
 		return gitproxy.CLIActionResult{}, cliActionError(err)
 	}
-	return gitproxy.CLIActionResult{Text: res.Text()}, nil
+	return gitproxy.CLIActionResult{Text: res.Text() + "Wait for it with: grain ci wait\n"}, nil
 }
 
 // RerunTaskActions re-runs taskID's own Actions runs (RerunGitHubChecks).

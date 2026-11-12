@@ -752,6 +752,9 @@ func (p *printer) actionsRerun(res ui.ActionsRerunResult) {
 		return
 	}
 	fmt.Print(res.Text())
+	for _, run := range res.Runs {
+		fmt.Printf("wait for it with \"grain ci wait %s\"\n", run.ID)
+	}
 }
 
 // ciTestHistory is `grain ci test-history`: the report as the in-sandbox
