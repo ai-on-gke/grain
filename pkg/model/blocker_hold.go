@@ -108,7 +108,7 @@ func (s *Store) BlockerHolds(ctx context.Context, ids []string) (map[string]Bloc
 		if state == StateDeferred && t.DeferredUntil == nil {
 			g, err := s.TaskGoal(ctx, id)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("reading blocker %s's goal: %w", id, err)
 			}
 			resumes, err := s.heldResumes(ctx, id)
 			if err != nil {
