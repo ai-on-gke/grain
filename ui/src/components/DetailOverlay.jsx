@@ -23,6 +23,7 @@ import {
 import api from "../api.js";
 import {
   mergeFreshDetail,
+  fetchEarlier,
   prependEarlierPage,
   taskEarlierPath,
 } from "../taskDetailPages.js";
@@ -232,7 +233,7 @@ export default function DetailOverlay({
         Array.isArray(cur.attempts) &&
         cur.attempts.length > 0;
       try {
-        const earlier = await api(path);
+        const earlier = await fetchEarlier(api, cur, opts);
         if (!earlier) return null;
         setLocalTask((prev) =>
           prependEarlierPage(prev || propTask, earlier, {

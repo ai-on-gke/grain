@@ -665,7 +665,7 @@ func TestOpenPullRequestForTaskRefusesPlainGitHost(t *testing.T) {
 	pushBranch(t, sim.BareRepo, branch)
 
 	fakeClient := &github.RESTClient{
-		Transport: sim,
+		Transport: hostStrippingTransport{sim},
 		Tokens: fakeGitOnlyTokens{
 			wantOwner: "git.example.com/acme",
 			reason:    "repository git.example.com/acme/widgets is on a plain git host",
@@ -688,7 +688,7 @@ func TestSalvagePushedBranchCompletesTaskOnPlainGitHostWithoutPullRequest(t *tes
 	pushBranch(t, sim.BareRepo, branch)
 
 	fakeClient := &github.RESTClient{
-		Transport: sim,
+		Transport: hostStrippingTransport{sim},
 		Tokens: fakeGitOnlyTokens{
 			wantOwner: "git.example.com/acme",
 			reason:    "repository git.example.com/acme/widgets is on a plain git host",
@@ -1157,4 +1157,21 @@ func TestRunCycleForkToUpstreamCheckoutFinishAndLanded(t *testing.T) {
 	if obs == nil || obs.PrMergedAt == nil {
 		t.Fatalf("PrMergedAt = %v, want non-nil after upstream PR merge", obs)
 	}
+}
+
+// hostStrippingTransport stands in for the daemon's forge router in a
+// test that drives a githubsim directly: a caller holding a RepoRef off
+// the default host names it by StoredOwner, so the path arrives as
+// /repos/<host>/<owner>/<name>/..., and the router takes the host back
+// out before the request reaches the host's API. githubsim knows only
+// /repos/<owner>/<name>/..., so this does the same.
+type hostStrippingTransport struct{ github.Transport }
+
+func (t hostStrippingTransport) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	if tail, ok := strings.CutPrefix(path, "/repos/"); ok {
+		if host, rest, ok := strings.Cut(tail, "/"); ok && strings.ContainsAny(host, ".:") {
+			path = "/repos/" + rest
+		}
+	}
+	return t.Transport.Request(method, path, headers, body)
 }

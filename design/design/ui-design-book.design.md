@@ -214,6 +214,16 @@ inspector and Task Detail. Sessions shares its message styles.
   Send share one row. A "New messages ↓" pill appears when something arrives
   while you are scrolled up.
 
+### Settings
+
+Settings uses a 280px grouped section drawer beside flat `.s-card` forms capped
+at 1180px. Single-choice pickers use `<g-pill-select>`, booleans use `.g-switch`
+(`role="switch"`), and edits stage into `.settings-save-bar` (`Discard` /
+`Save changes` with a `POST /api/settings/plan` diff preview). Opt-in workflow
+controls (such as quality control PR rollout in `Settings -> Tasks`) live inside
+their section's `.s-card` with dependent fields disabled while off — never as
+persistent topbar or bottombar status badges.
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`

@@ -219,11 +219,11 @@ func guardTemplatePush(client github.Client, repo model.RepoRef, headSHA string,
 		return trustboundary.Match{Category: trustboundary.TemplatePush, Paths: templates}, true
 	}
 	baseRef := "main"
-	if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && strings.TrimSpace(def) != "" {
+	if def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && strings.TrimSpace(def) != "" {
 		baseRef = strings.TrimSpace(def)
 	}
 	pushAt := func(ref, f string) (model.RefPushSet, error) {
-		data, exists, err := reader.ReadFile(repo.Owner, repo.Name, ref, f)
+		data, exists, err := reader.ReadFile(repo.StoredOwner(), repo.Name, ref, f)
 		if err != nil || !exists {
 			return nil, err
 		}
@@ -409,7 +409,7 @@ func releaseFixedRulesHold(ctx context.Context, store *model.Store, client githu
 	if rules.Broken != "" || ref == nil {
 		return nil
 	}
-	detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's head to judge it under its base's fixed rules: %v -- "+
 			"trying again next cycle", ref, err)

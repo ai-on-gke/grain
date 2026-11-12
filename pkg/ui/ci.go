@@ -306,14 +306,14 @@ func (c *Client) reconcileTaskBase(ctx context.Context, task *model.Task) {
 	oldBase := task.Base
 	targetBase, _, merged, _ := c.Store.MergedUpstreamTaskBase(ctx, *task.Target, oldBase)
 	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo.Same(*task.Target) && c.Config.GitHubPullRequests != nil {
-		if detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number); err == nil && detail.BaseRef != "" && detail.BaseRef != oldBase {
+		if detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil && detail.BaseRef != "" && detail.BaseRef != oldBase {
 			if merged {
 				targetBase = detail.BaseRef
 			} else {
 				if checker, ok := c.Config.GitHubPullRequests.(interface {
 					BranchExists(owner, repo, branch string) (bool, error)
 				}); ok {
-					if exists, err := checker.BranchExists(task.Target.Owner, task.Target.Name, oldBase); err == nil && !exists {
+					if exists, err := checker.BranchExists(task.Target.StoredOwner(), task.Target.Name, oldBase); err == nil && !exists {
 						merged = true
 						targetBase = detail.BaseRef
 					}
@@ -2010,7 +2010,7 @@ func resetPullRequestPolls(task model.Task) {
 			continue
 		}
 		if ref, err := model.ParsePullRequestRef(l.Target); err == nil {
-			github.Polls().Reset(github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number))
+			github.Polls().Reset(github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number))
 		}
 	}
 }

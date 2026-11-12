@@ -233,7 +233,7 @@ func comparedPaths(files []github.ComparedFile) []string {
 // than a guess: the caller decides what an unanswerable rule means.
 func recheckFor(client github.Client, repo model.RepoRef, branch, tip, head string) (overlapVerdict, error) {
 	if tip == "" {
-		h, err := client.GetBranchHead(repo.Owner, repo.Name, branch)
+		h, err := client.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 		if err != nil {
 			return overlapVerdict{}, fmt.Errorf("reading %s's tip on %s: %w", branch, repo, err)
 		}
@@ -242,7 +242,7 @@ func recheckFor(client github.Client, repo model.RepoRef, branch, tip, head stri
 		}
 		tip = h.SHA
 	}
-	change, err := client.CompareRefs(repo.Owner, repo.Name, tip, head)
+	change, err := client.CompareRefs(repo.StoredOwner(), repo.Name, tip, head)
 	if err != nil {
 		return overlapVerdict{}, fmt.Errorf("comparing %s with %s on %s: %w", shortSHA(head), branch, repo, err)
 	}
@@ -254,7 +254,7 @@ func recheckFor(client github.Client, repo model.RepoRef, branch, tip, head stri
 	if fork == tip {
 		return overlapVerdict{fork: fork, tip: tip, head: head, hasFiles: len(change.Files) > 0}, nil
 	}
-	landed, err := client.CompareRefs(repo.Owner, repo.Name, fork, tip)
+	landed, err := client.CompareRefs(repo.StoredOwner(), repo.Name, fork, tip)
 	if err != nil {
 		return overlapVerdict{}, fmt.Errorf("comparing %s with %s's tip on %s: %w", shortSHA(fork), branch, repo, err)
 	}
@@ -464,7 +464,7 @@ func advanceMergeRecheck(ctx context.Context, deps Deps, row model.MergeBatch, n
 	if !run.Conclusion.Done() {
 		return nil
 	}
-	head, err := deps.Client.GetBranchHead(row.Repo.Owner, row.Repo.Name, row.Branch)
+	head, err := deps.Client.GetBranchHead(row.Repo.StoredOwner(), row.Repo.Name, row.Branch)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's head on %s: %w", row.Branch, row.Repo, err)
 	}
@@ -520,7 +520,7 @@ func stillHoldsOn(client github.Client, row model.MergeBatch, m model.MergeBatch
 	if m.HeadSHA == "" || row.BaseCommit == "" {
 		return false
 	}
-	landed, err := client.CompareRefs(row.Repo.Owner, row.Repo.Name, row.BaseCommit, tip)
+	landed, err := client.CompareRefs(row.Repo.StoredOwner(), row.Repo.Name, row.BaseCommit, tip)
 	if err != nil {
 		log.Printf("orchestrator: comparing %s's re-check base %s with %s on %s: %v",
 			m.TaskID, shortSHA(row.BaseCommit), shortSHA(tip), row.Repo, err)
@@ -529,7 +529,7 @@ func stillHoldsOn(client github.Client, row model.MergeBatch, m model.MergeBatch
 	if landed.MergeBase != row.BaseCommit {
 		return false
 	}
-	change, err := client.CompareRefs(row.Repo.Owner, row.Repo.Name, row.BaseCommit, m.HeadSHA)
+	change, err := client.CompareRefs(row.Repo.StoredOwner(), row.Repo.Name, row.BaseCommit, m.HeadSHA)
 	if err != nil {
 		log.Printf("orchestrator: comparing %s with its re-check base %s on %s: %v",
 			m.TaskID, shortSHA(row.BaseCommit), row.Repo, err)
@@ -602,7 +602,7 @@ func mergeRecheckedMember(ctx context.Context, deps Deps, row model.MergeBatch,
 		return discardMergeRecheck(ctx, deps, row, m.TaskID, now)
 	}
 	pr := model.PullRequestRef{Repo: row.Repo, Number: m.Number}
-	if detail, err := deps.Client.GetPullRequest(row.Repo.Owner, row.Repo.Name, m.Number); err == nil {
+	if detail, err := deps.Client.GetPullRequest(row.Repo.StoredOwner(), row.Repo.Name, m.Number); err == nil {
 		recordMergedAs(ctx, deps.Store, deps.Client, m.TaskID, pr, detail, now)
 	}
 	observeRecheck(ctx, deps.Store, deps.Client, row.Repo, row.Branch, row.BaseCommit, m.HeadSHA,
@@ -726,7 +726,7 @@ func blockErroredMergeRecheck(ctx context.Context, deps Deps, row model.MergeBat
 func startMergeRecheck(ctx context.Context, deps Deps, repo model.RepoRef, branch string,
 	m model.MergeBatchMember, now time.Time) (bool, error) {
 
-	head, err := deps.Client.GetBranchHead(repo.Owner, repo.Name, branch)
+	head, err := deps.Client.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's head on %s: %w", branch, repo, err)
 	}
@@ -741,7 +741,7 @@ func startMergeRecheck(ctx context.Context, deps Deps, repo model.RepoRef, branc
 	if err := resetRecheckRef(deps, repo, ref, head.SHA); err != nil {
 		return false, err
 	}
-	detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, m.Number)
+	detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, m.Number)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s#%d for the overlap re-check on %s: %w",
 			repo, m.Number, branch, err)
@@ -758,7 +758,7 @@ func startMergeRecheck(ctx context.Context, deps Deps, repo model.RepoRef, branc
 		return false, nil
 	}
 	m.HeadRef = detail.HeadRef
-	result, err := deps.Client.MergeBranch(repo.Owner, repo.Name, ref, m.HeadRef,
+	result, err := deps.Client.MergeBranch(repo.StoredOwner(), repo.Name, ref, m.HeadRef,
 		fmt.Sprintf("grain merge queue: %s (%s) onto %s", m.TaskID, shortSHA(m.HeadSHA), branch))
 	switch {
 	case err == nil:
@@ -801,17 +801,17 @@ func startMergeRecheck(ctx context.Context, deps Deps, repo model.RepoRef, branc
 }
 
 func resetRecheckRef(deps Deps, repo model.RepoRef, ref, sha string) error {
-	exists, err := deps.Client.BranchExists(repo.Owner, repo.Name, ref)
+	exists, err := deps.Client.BranchExists(repo.StoredOwner(), repo.Name, ref)
 	if err != nil {
 		return fmt.Errorf("orchestrator: looking for %s on %s: %w", ref, repo, err)
 	}
 	if !exists {
-		if err := deps.Client.CreateBranch(repo.Owner, repo.Name, ref, sha); err != nil {
+		if err := deps.Client.CreateBranch(repo.StoredOwner(), repo.Name, ref, sha); err != nil {
 			return fmt.Errorf("orchestrator: creating %s on %s at %s: %w", ref, repo, shortSHA(sha), err)
 		}
 		return nil
 	}
-	if err := deps.Client.UpdateBranch(repo.Owner, repo.Name, ref, sha, true); err != nil {
+	if err := deps.Client.UpdateBranch(repo.StoredOwner(), repo.Name, ref, sha, true); err != nil {
 		return fmt.Errorf("orchestrator: resetting %s on %s to %s: %w", ref, repo, shortSHA(sha), err)
 	}
 	return nil
@@ -821,7 +821,7 @@ func dropRecheckRef(deps Deps, row model.MergeBatch) error {
 	if deps.Client == nil || row.Ref == "" {
 		return nil
 	}
-	if err := deps.Client.DeleteBranch(row.Repo.Owner, row.Repo.Name, row.Ref); err != nil {
+	if err := deps.Client.DeleteBranch(row.Repo.StoredOwner(), row.Repo.Name, row.Ref); err != nil {
 		return fmt.Errorf("orchestrator: destroying %s on %s: %w", row.Ref, row.Repo, err)
 	}
 	return nil

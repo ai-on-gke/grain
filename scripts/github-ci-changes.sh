@@ -107,6 +107,13 @@ sync_jobs_from_groups() {
   job_real_kubernetes="$go_backend"
 
   job_go_unit="$go_unit"
+
+  # ui-ng e2e also drives the whole Go server under /next/, so a backend
+  # change runs it as it ran the /next/ specs inside ui e2e; only a change
+  # to the classic ui/ or ui-hub/ alone leaves it out.
+  if [[ "$go_backend" == "true" ]]; then
+    job_ui_ng_e2e=true
+  fi
 }
 
 # Mirrors *not-read-by-the-go-program in .grain/workflows/tests.yml:
