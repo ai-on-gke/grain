@@ -759,6 +759,53 @@ func TestAProtocol1StartIsListedButNotAttachable(t *testing.T) {
 	<-done
 }
 
+// A handover whose exec onto the new build fails ends the runs it had
+// let go of, as hostd stopping does: each is reaped with its exit
+// recorded as Draining, in this hostd and at once, so that Serve returns
+// for systemd to restart it without waiting out each process in turn.
+// Before, the watchers the handover released were never started again:
+// nothing reaped the killed runs or wrote their exits, and Serve waited
+// WaitDelay and a second for every one of them.
+func TestAFailedHandoverReexecEndsItsRunsAsDraining(t *testing.T) {
+	ts := startServer(t, "", func(s *Server) {
+		s.Reexec = func() error { return errors.New("the new build is not there") }
+	})
+	var sts []Started
+	for _, run := range []string{"a", "b"} {
+		started := make(chan Started, 1)
+		c := detachedClient(ts, started)
+		ctx, cancel := context.WithCancel(context.Background())
+		ran := make(chan struct{})
+		go func() {
+			defer close(ran)
+			_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 60"}, Detach: true, Run: run}, nil, nil, nil)
+		}()
+		sts = append(sts, <-started)
+		cancel()
+		<-ran
+	}
+	spools := map[string]string{}
+	for _, st := range sts {
+		spools[st.ID] = listed(t, ts, st.ID).Spool
+	}
+	if err := ts.client.Handover(context.Background()); err != nil {
+		t.Fatalf("Handover: %v", err)
+	}
+	err := <-ts.done
+	ts.done <- err
+	if err == nil {
+		t.Fatal("Serve after a failed exec = nil, want its error")
+	}
+	for _, st := range sts {
+		b, rerr := os.ReadFile(filepath.Join(spools[st.ID], spoolExit))
+		var exit Exit
+		if rerr != nil || json.Unmarshal(b, &exit) != nil || !exit.Draining {
+			t.Errorf("run %s's exit once Serve returned = %s (%v), want it recorded as Draining", st.ID, b, rerr)
+		}
+		waitGone(t, st.PID, 10*time.Second)
+	}
+}
+
 func TestHandoverAdoptsLiveDetachedRunsAcrossServerReplacement(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	var sock string

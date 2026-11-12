@@ -88,4 +88,5 @@ How the daemon reads an exit (`pkg/agent/hostd.go`, `runhost.Hostd.Attach`,
 | Handover close vs attach loop | `handoverCh` in the attach select; `handedOverNow` | stream detaches, the daemon reattaches |
 | Hostd away when an adopted run attaches | `runhost.Hostd.stream` | waits out ReattachTimeout (task 4821) |
 | Reattach before an adopted attach has re-read its cursor | `cursorWriter.written` | resumes from what reached the parsed stdout, not the cursor (task 4821) |
-| Reexec fails after watchers were released | `Serve` | processes are killed without reaping; the next hostd marks them Draining. `waitRunningDone` waits `WaitDelay+1s` per process in turn (follow-up) |
+| Reexec fails after watchers were released | `Serve`, `rewatchHandedOver` | the watchers start again, so each run is reaped with a Draining exit and Serve returns at once (task 4821; before, nothing reaped them and Serve waited `WaitDelay+1s` per run in turn) |
+| Old Serve's socket cleanup vs the replacement binding the same path | `Serve` | Serve waits for the remove before it returns (task 4821; before, a late remove could unlink the new hostd's socket) |

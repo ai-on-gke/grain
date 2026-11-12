@@ -350,6 +350,7 @@ func (s *Server) Serve(ctx context.Context) error {
 			s.logf("hostd: execing new build in place (pid %d)", os.Getpid())
 			if err := s.Reexec(); err != nil {
 				s.logf("hostd: exec onto the new build failed (%v); stopping so systemd restarts it", err)
+				s.rewatchHandedOver()
 				s.cancelRunning(killDraining)
 				s.waitRunningDone()
 				return err
@@ -428,6 +429,27 @@ func (s *Server) releaseHandoverWatchers() {
 	}
 	for _, p := range live {
 		<-p.watchDone
+	}
+}
+
+// rewatchHandedOver starts again the watchers releaseHandoverWatchers
+// let go of, for a handover that did not happen after all (Reexec
+// failed): the processes are this hostd's to reap again, so that a
+// cancel ends each with its exit recorded and waitRunningDone sees it
+// done, rather than leaving them unreaped and waiting out each one.
+func (s *Server) rewatchHandedOver() {
+	s.mu.Lock()
+	var live []*proc
+	for _, p := range s.procs {
+		if p.detached && !p.info.Exited && p.handover != nil {
+			p.handover = make(chan struct{})
+			p.watchDone = make(chan struct{})
+			live = append(live, p)
+		}
+	}
+	s.mu.Unlock()
+	for _, p := range live {
+		go s.watchDetached(p)
 	}
 }
 
