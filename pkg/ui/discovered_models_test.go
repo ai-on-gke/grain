@@ -453,6 +453,11 @@ func TestModelDiscoveryKeepsReposAddedWhileItWrites(t *testing.T) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
+	// Stopped on every way out, a t.Fatal below among them: a pass still
+	// running once the test's store is closed would fail on it, and
+	// t.Error after the test has returned panics.
+	halt := sync.OnceFunc(func() { close(stop); wg.Wait() })
+	defer halt()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -474,8 +479,7 @@ func TestModelDiscoveryKeepsReposAddedWhileItWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	close(stop)
-	wg.Wait()
+	halt()
 
 	stored, err := client.Store.TargetRepos(ctx)
 	if err != nil {
