@@ -120,9 +120,9 @@ func processGitHubEvent(ctx context.Context, deps Deps, allowedRepos []string,
 	}
 
 	if ev.Number > 0 {
-		github.Polls().Reset(github.PullRequestSubject(repo.Owner, repo.Name, ev.Number))
+		github.Polls().Reset(github.PullRequestSubject(repo.StoredOwner(), repo.Name, ev.Number))
 	} else {
-		github.Polls().ResetRepo(repo.Owner, repo.Name)
+		github.Polls().ResetRepo(repo.StoredOwner(), repo.Name)
 	}
 
 	switch ev.Event {
@@ -188,7 +188,7 @@ func senderTrusted(client github.Client, cache map[string]bool, repo model.RepoR
 	if login == "" || client == nil {
 		return false, nil
 	}
-	key := strings.ToLower(repo.Owner + "/" + repo.Name + ":" + login)
+	key := strings.ToLower(repo.StoredOwner() + "/" + repo.Name + ":" + login)
 	if trusted, ok := cache[key]; ok {
 		return trusted, nil
 	}

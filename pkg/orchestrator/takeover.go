@@ -207,7 +207,8 @@ func handleTakeoverCommand(ctx context.Context, deps Deps, repo model.RepoRef, n
 // allows maintainers to modify it -- is out of its reach, and gets a
 // replacement pull request instead.
 func headPushable(client github.Client, repo model.RepoRef, detail github.PullRequestDetail) bool {
-	if detail.HeadRepo != "" && !strings.EqualFold(detail.HeadRepo, repo.String()) {
+	if detail.HeadRepo != "" && !strings.EqualFold(detail.HeadRepo, repo.Owner+"/"+repo.Name) &&
+		!strings.EqualFold(detail.HeadRepo, repo.String()) {
 		return false
 	}
 	exists, err := client.BranchExists(repo.StoredOwner(), repo.Name, detail.HeadRef)

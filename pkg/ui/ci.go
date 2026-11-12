@@ -2010,7 +2010,7 @@ func resetPullRequestPolls(task model.Task) {
 			continue
 		}
 		if ref, err := model.ParsePullRequestRef(l.Target); err == nil {
-			github.Polls().Reset(github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number))
+			github.Polls().Reset(github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number))
 		}
 	}
 }

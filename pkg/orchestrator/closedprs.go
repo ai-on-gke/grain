@@ -86,7 +86,7 @@ func syncClosedPullRequests(ctx context.Context, store *model.Store, client gith
 			continue
 		}
 		key := github.PollKey{Scope: storeScope(store),
-			Subject: github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number), Aspect: closedPollAspect}
+			Subject: github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number), Aspect: closedPollAspect}
 		if !github.Polls().Due(key, github.PollNormal, false, now) {
 			continue
 		}

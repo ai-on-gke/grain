@@ -254,7 +254,8 @@ func sameRepoHeadBranch(repo model.RepoRef, detail github.PullRequestDetail) boo
 	if detail.HeadRef == "" || detail.BaseRef == "" || detail.HeadRef == detail.BaseRef {
 		return false
 	}
-	if detail.HeadRepo != "" && !strings.EqualFold(detail.HeadRepo, repo.String()) {
+	if detail.HeadRepo != "" && !strings.EqualFold(detail.HeadRepo, repo.Owner+"/"+repo.Name) &&
+		!strings.EqualFold(detail.HeadRepo, repo.String()) {
 		return false
 	}
 	return true

@@ -377,12 +377,18 @@ func noteWrite(method, path string) {
 	}
 }
 
-// splitRepoPath is /repos/{owner}/{repo}/{rest}, query dropped.
+// splitRepoPath is /repos/{owner}/{repo}/{rest} (or
+// /repos/{host}/{owner}/{repo}/{rest} when the caller named a repository by
+// its StoredOwner, keeping owner as "{host}/{owner}"), query dropped.
 func splitRepoPath(path string) (owner, repo, rest string, ok bool) {
 	if i := strings.IndexByte(path, '?'); i >= 0 {
 		path = path[:i]
 	}
-	parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 4)
+	parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 5)
+	if len(parts) >= 5 && parts[0] == "repos" && strings.ContainsAny(parts[1], ".:") {
+		return parts[1] + "/" + parts[2], parts[3], parts[4], true
+	}
+	parts = strings.SplitN(strings.TrimPrefix(path, "/"), "/", 4)
 	if len(parts) < 4 || parts[0] != "repos" {
 		return "", "", "", false
 	}

@@ -136,7 +136,7 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	// less often (github.PollSchedule): any new comment, or anything
 	// grain writes to it, puts it back on every cycle.
 	poll := github.PollKey{Scope: storeScope(store),
-		Subject: github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number), Aspect: "review comments"}
+		Subject: github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number), Aspect: "review comments"}
 	if !github.Polls().Due(poll, github.PollNormal, false, now) {
 		return nil
 	}
