@@ -437,7 +437,9 @@ func writeExitFile(dir string, e Exit) error {
 }
 
 // attach streams p's spool to conn from cur until p has ended, then its
-// exit, after which p is released: the daemon has all of it. stdin, when
+// exit, after which p is released once the daemon hangs up: it has all of
+// it. A daemon that has not hung up within DrainExitGrace leaves p and its
+// spool kept for the next attach or the retention sweep. stdin, when
 // not nil, is the process's, fed from the connection's stdin frames and
 // closed when the connection ends. Signals act on the process's group.
 //
@@ -538,6 +540,11 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			select {
 			case <-gone:
 			case <-time.After(DrainExitGrace):
+				// Not known to have been read: keep the spool for the
+				// daemon to attach again, or for the retention sweep.
+				s.logf("hostd: the daemon did not hang up within %s of %s %q's exit (pid %d, id %s); keeping its spool",
+					DrainExitGrace, info.Kind, info.Name, info.PID, info.ID)
+				return
 			}
 			// A daemon that lost this stream before reading the Exit may
 			// have attached again meanwhile; that stream delivers the Exit

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1075,4 +1076,59 @@ func TestAnUnadoptableSurvivingDetachedRunIsReaped(t *testing.T) {
 		t.Fatalf("orphaned spool listing = %+v, want Exited with Draining=true", p)
 	}
 	waitGone(t, pid, 10*time.Second)
+}
+
+// A daemon that has been written a process's Exit but does not hang up
+// within DrainExitGrace is not known to have read it: hostd keeps the
+// process and its spool, so the next attach still gets the Exit.
+func TestAnExitNobodyHungUpOnKeepsItsSpoolForTheNextAttach(t *testing.T) {
+	ts := startServer(t, "", nil)
+	started := make(chan Started, 1)
+	c := detachedClient(ts, started)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 0.3; echo kept; exit 5"},
+			Detach: true, Run: "run-1", Task: "42", Deadline: time.Now().Add(time.Minute)}, nil, nil, nil)
+		done <- err
+	}()
+	st := <-started
+	cancel()
+	if err := <-done; !errors.Is(err, ErrDetached) {
+		t.Fatalf("Run after the daemon stopped = %v, want ErrDetached", err)
+	}
+	// A daemon reads the Exit and then holds the connection open.
+	conn, err := net.Dial("unix", ts.srv.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := writeJSON(conn, frameRequest, Request{Op: OpAttach, ID: st.ID}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		typ, _, err := readFrame(conn)
+		if err != nil {
+			t.Fatalf("reading the attach before its Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
+		}
+	}
+	deadline := time.Now().Add(DrainExitGrace + 10*time.Second)
+	for !strings.Contains(ts.logs.String(), "did not hang up") {
+		if time.Now().After(deadline) {
+			t.Fatalf("hostd never gave up waiting for the daemon to hang up; logs:\n%s", ts.logs.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	p := listed(t, ts, st.ID)
+	if _, err := os.Stat(p.Spool); err != nil || !p.Exited || p.Attached {
+		t.Fatalf("after the unacknowledged Exit: listing %+v, spool stat %v; want it kept, exited and not attached", p, err)
+	}
+	var out bytes.Buffer
+	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 5 || out.String() != "kept\n" {
+		t.Fatalf("the next attach = %+v, %v, stdout %q; want the kept Exit (code 5) and output", exit, err, out.String())
+	}
 }
